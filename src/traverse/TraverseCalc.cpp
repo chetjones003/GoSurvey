@@ -382,8 +382,12 @@ void ComputeTraverse(TraverseData& td) {
                 break;
             }
             hasVA = true;  // slope distances always carry a vertical angle
-            hd = TraverseReduceToHoriz(leg.slopeDist, va, leg.isZenithAngle);
-            dz = TraverseReduceToVert(leg.slopeDist, va, leg.isZenithAngle);
+            // Prism constant (GitHub issue #845 follow-up): a real EDM correction,
+            // applied before reduction — only meaningful for a measured slope
+            // distance, not one already entered as a reduced horizontal distance.
+            const double correctedSd = leg.slopeDist + (leg.hasPrismConstant ? leg.prismConstant : 0.0);
+            hd = TraverseReduceToHoriz(correctedSd, va, leg.isZenithAngle);
+            dz = TraverseReduceToVert(correctedSd, va, leg.isZenithAngle);
             hasHD = true;
         }
 

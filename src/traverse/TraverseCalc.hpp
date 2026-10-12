@@ -1,5 +1,7 @@
 #pragma once
 
+#include "TraverseLeastSquares.hpp"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -72,6 +74,30 @@ struct TraverseLeg {
     // Raw per-set F1/F2 observations from a raw-data import (FBK, RW5, …).
     // Empty for manually entered legs; the editor can expand these as detail rows.
     std::vector<TraverseMeasSet> rawSets;
+
+    // --- Per-leg equipment corrections/errors (GitHub issue #845 follow-up) ---
+    // A prism constant is a real geometric correction (manufacturer's reflector
+    // offset): added to the raw slope distance before it is reduced to horizontal/
+    // vertical. It only applies when the leg's distance was entered as a slope
+    // distance (SDIST) — a directly-entered horizontal distance has already been
+    // reduced and has no slope-distance step to correct.
+    double prismConstant = 0.0;
+    bool   hasPrismConstant = false;
+    // The remaining three are pure a-priori uncertainty contributions for this
+    // leg's least-squares distance weight — there is no deterministic correction
+    // for a prism's rated accuracy or a pole's centering/plumb error, matching
+    // how a real geodetic adjustment package (e.g. MicroSurvey StarNet, SALSA)
+    // treats them. They combine with the angle/distance a-priori sigma (below,
+    // or the traverse-wide LsaWeights if this leg has none of its own) in
+    // quadrature: effective_dist_const = sqrt(dist_const² + prismError² + poleError²).
+    double prismError = 0.0;
+    bool   hasPrismError = false;
+    double poleError = 0.0;
+    bool   hasPoleError = false;
+    /// This leg's own equipment accuracy spec (angle σ, dist σ, dist ppm), overriding
+    /// the traverse-wide LsaWeights for just this leg's observations when set.
+    LsaWeights tsWeights;
+    bool       hasTsWeights = false;
 
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;

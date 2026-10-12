@@ -9,6 +9,7 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/TraverseCommandLang.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -625,4 +626,377 @@ TEST_CASE("TraverseIo: a missing file fails Load with a reason", "[io][REQ-403]"
     std::string err;
     CHECK_FALSE(traverseio::Load((TraverseIoTestDir() / "does-not-exist.gstrav").string(), td, weights, err));
     CHECK_FALSE(err.empty());
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #845 (Phase A) — GoSurvey's own traverse command language
+// (travcmd::), the two-way-synced text view in the Traverse Editor's Command
+// tab. Only fields the form panel can manually edit round-trip here; raw
+// per-set F1/F2 import detail (rawSets) has no manual-entry counterpart
+// either, so it is out of scope by design (see TraverseCommandLang.hpp).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+TraverseData MakeCommandLangFixture() {
+    TraverseData td;
+    td.startStationId = 100;
+    td.startEasting = 5000.25;
+    td.startNorthing = 10000.75;
+    td.startElevation = 123.4;
+    td.startBearingDeg = 45.5;
+    td.hasStartBearing = true;
+    td.startBearingBuf = TraverseFormatBearing(td.startBearingDeg);
+    td.isClosedLoop = true;
+    td.applyScaleFactor = true;
+    td.scaleFactorKind = TraverseData::ScaleFactorKind::GridOnly;
+
+    TraverseLeg leg1;
+    leg1.stationId = 101;
+    leg1.description = "MH 1";
+    leg1.horizAngleDeg = 90.0;
+    leg1.hasHorizAngle = true;
+    leg1.horizDist = 150.25;
+    leg1.hasHorizDist = true;
+    leg1.vertAngleDeg = 90.0;
+    leg1.hasVertAngle = true;
+    leg1.isZenithAngle = true;
+    td.legs.push_back(leg1);
+
+    TraverseLeg leg2;
+    leg2.stationId = 102;
+    leg2.description = "CB2";
+    leg2.horizAngleDeg = 270.5;
+    leg2.hasHorizAngle = true;
+    leg2.slopeDist = 200.1;
+    leg2.hasSlopeDist = true;
+    leg2.vertAngleDeg = 2.5;
+    leg2.hasVertAngle = true;
+    leg2.isZenithAngle = false;
+    td.legs.push_back(leg2);
+
+    return td;
+}
+
+}  // namespace
+
+TEST_CASE("TraverseCommandLang: Serialize then Parse round-trips every editable field", "[traverse][REQ-404]") {
+    const TraverseData original = MakeCommandLangFixture();
+    const LsaWeights originalWeights = MakeRoundTripWeights();
+
+    const std::string text = travcmd::Serialize(original, originalWeights);
+
+    TraverseData parsed;
+    LsaWeights parsedWeights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, parsed, parsedWeights, err));
+    CHECK(err.empty());
+
+    CHECK(parsed.startStationId == original.startStationId);
+    CHECK(parsed.startEasting == Approx(original.startEasting));
+    CHECK(parsed.startNorthing == Approx(original.startNorthing));
+    CHECK(parsed.startElevation == Approx(original.startElevation));
+    CHECK(parsed.hasStartBearing == original.hasStartBearing);
+    CHECK(parsed.startBearingDeg == Approx(original.startBearingDeg));
+    CHECK(parsed.isClosedLoop == original.isClosedLoop);
+    CHECK(parsed.applyScaleFactor == original.applyScaleFactor);
+    CHECK(parsed.scaleFactorKind == original.scaleFactorKind);
+
+    REQUIRE(parsed.legs.size() == original.legs.size());
+    for (size_t i = 0; i < original.legs.size(); ++i) {
+        const TraverseLeg& a = original.legs[i];
+        const TraverseLeg& b = parsed.legs[i];
+        CHECK(b.stationId == a.stationId);
+        CHECK(b.description == a.description);
+        CHECK(b.hasHorizAngle == a.hasHorizAngle);
+        CHECK(b.horizAngleDeg == Approx(a.horizAngleDeg));
+        CHECK(b.hasHorizDist == a.hasHorizDist);
+        if (a.hasHorizDist) CHECK(b.horizDist == Approx(a.horizDist));
+        CHECK(b.hasSlopeDist == a.hasSlopeDist);
+        if (a.hasSlopeDist) CHECK(b.slopeDist == Approx(a.slopeDist));
+        CHECK(b.hasVertAngle == a.hasVertAngle);
+        CHECK(b.vertAngleDeg == Approx(a.vertAngleDeg));
+        CHECK(b.isZenithAngle == a.isZenithAngle);
+    }
+
+    CHECK(parsedWeights.sigmaAngleSec == Approx(originalWeights.sigmaAngleSec));
+    CHECK(parsedWeights.sigmaDistConstFt == Approx(originalWeights.sigmaDistConstFt));
+    CHECK(parsedWeights.sigmaDistPpm == Approx(originalWeights.sigmaDistPpm));
+}
+
+TEST_CASE("TraverseCommandLang: a traverse with no legs still round-trips", "[traverse][REQ-404]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 1000.0;
+    td.startNorthing = 2000.0;
+    td.startElevation = 50.0;
+    LsaWeights weights;
+
+    const std::string text = travcmd::Serialize(td, weights);
+
+    TraverseData parsed;
+    LsaWeights parsedWeights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, parsed, parsedWeights, err));
+    CHECK(parsed.legs.empty());
+    CHECK(parsed.startStationId == 1);
+}
+
+TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[traverse][REQ-404]") {
+    const std::string text =
+        "# a leading comment\n"
+        "\n"
+        "STATION 5 100 200 10\n"
+        "   # an indented comment\n"
+        "STN 5 6\n"
+        "HANG REF 5 6 90\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    CHECK(td.startStationId == 5);
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].stationId == 6);
+}
+
+TEST_CASE("TraverseCommandLang: DESC takes the rest of the line verbatim", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "DESC 1 2 Manhole 1\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].description == "Manhole 1");
+}
+
+TEST_CASE("TraverseCommandLang: HANG's FROM for leg 2+ must match the previous leg's station", "[traverse][REQ-404]") {
+    const std::string good =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "STN 2 3\n"
+        "HANG 1 2 3 180\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK(travcmd::Parse(good, td, weights, err));
+
+    const std::string bad =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "STN 2 3\n"
+        "HANG 99 2 3 180\n";  // wrong FROM — should have been 1
+    CHECK_FALSE(travcmd::Parse(bad, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects an observation line for an undeclared station", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "HDIST 1 2 50\n";  // no STN 1 2 first
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects a STN whose AT breaks the chain", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 99 2\n";  // should be AT 1 (the start station) for the first leg
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects an unknown directive", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "BOGUS 1\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects text with no STATION directive", "[traverse][REQ-404]") {
+    const std::string text = "STN 1 2\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: a malformed token is reported with its line number", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 1 garbage\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK(err.find("line 2") != std::string::npos);
+}
+
+TEST_CASE("TraverseCommandLang: no '=' anywhere in generated text", "[traverse][REQ-404]") {
+    const TraverseData td = MakeCommandLangFixture();
+    const LsaWeights weights = MakeRoundTripWeights();
+    const std::string text = travcmd::Serialize(td, weights);
+    CHECK(text.find('=') == std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #845 follow-up — per-leg equipment corrections/errors: PRISM
+// constant+error, POLE error, TSERR (per-leg a-priori weights).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TraverseCommandLang: PRISM/POLE/TSERR round-trip", "[traverse][REQ-405]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "HDIST 1 2 50\n"
+        "PRISM 1 2 -0.0100 0.0030\n"
+        "POLE 1 2 0.0050\n"
+        "TSERR 1 2 3.5 0.0100 1.5\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.legs.size() == 1);
+    const TraverseLeg& leg = td.legs[0];
+
+    CHECK(leg.hasPrismConstant);
+    CHECK(leg.prismConstant == Approx(-0.0100));
+    CHECK(leg.hasPrismError);
+    CHECK(leg.prismError == Approx(0.0030));
+    CHECK(leg.hasPoleError);
+    CHECK(leg.poleError == Approx(0.0050));
+    CHECK(leg.hasTsWeights);
+    CHECK(leg.tsWeights.sigmaAngleSec == Approx(3.5));
+    CHECK(leg.tsWeights.sigmaDistConstFt == Approx(0.0100));
+    CHECK(leg.tsWeights.sigmaDistPpm == Approx(1.5));
+
+    // Round-trip through Serialize too.
+    const std::string regenerated = travcmd::Serialize(td, weights);
+    TraverseData reparsed;
+    LsaWeights reparsedWeights;
+    REQUIRE(travcmd::Parse(regenerated, reparsed, reparsedWeights, err));
+    REQUIRE(reparsed.legs.size() == 1);
+    CHECK(reparsed.legs[0].prismConstant == Approx(leg.prismConstant));
+    CHECK(reparsed.legs[0].prismError == Approx(leg.prismError));
+    CHECK(reparsed.legs[0].poleError == Approx(leg.poleError));
+    CHECK(reparsed.legs[0].tsWeights.sigmaAngleSec == Approx(leg.tsWeights.sigmaAngleSec));
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects malformed PRISM/POLE/TSERR lines", "[traverse][REQ-405]") {
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nPRISM 1 2 -0.01\n", td, weights, err));  // missing <error>
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nPOLE 1 2\n", td, weights, err));          // missing <error>
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nTSERR 1 2 3.5 0.01\n", td, weights, err)); // missing <ppm>
+}
+
+TEST_CASE("ComputeTraverse: PRISM constant corrects the slope distance before reduction", "[traverse][REQ-405]") {
+    TraverseData base;
+    base.startStationId = 1;
+    base.hasStartBearing = true;
+    base.startBearingDeg = 0.0;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    leg.hasSlopeDist = true;
+    leg.slopeDist = 100.0;
+    leg.hasVertAngle = true;
+    leg.vertAngleDeg = 85.0;
+    leg.isZenithAngle = true;
+    base.legs.push_back(leg);
+
+    TraverseData withCorrection = base;
+    withCorrection.legs[0].hasPrismConstant = true;
+    withCorrection.legs[0].prismConstant = 0.05;  // +0.05 ft
+
+    ComputeTraverse(base);
+    ComputeTraverse(withCorrection);
+
+    REQUIRE(base.legs[0].computed);
+    REQUIRE(withCorrection.legs[0].computed);
+
+    const double expectedUncorrected = TraverseReduceToHoriz(100.0, 85.0, true);
+    const double expectedCorrected   = TraverseReduceToHoriz(100.05, 85.0, true);
+    CHECK(base.legs[0].computedGroundHorizDist == Approx(expectedUncorrected));
+    CHECK(withCorrection.legs[0].computedGroundHorizDist == Approx(expectedCorrected));
+    CHECK(withCorrection.legs[0].computedGroundHorizDist > base.legs[0].computedGroundHorizDist);
+}
+
+TEST_CASE("ComputeTraverse: PRISM constant does not apply to a directly-entered HDIST", "[traverse][REQ-405]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    leg.hasHorizDist = true;
+    leg.horizDist = 100.0;
+    leg.hasPrismConstant = true;
+    leg.prismConstant = 0.5;  // should be ignored — no slope-distance step to correct.
+    td.legs.push_back(leg);
+
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    CHECK(td.legs[0].computedGroundHorizDist == Approx(100.0));
+}
+
+TEST_CASE("Least squares: a leg's TSERR tightens its own distance weight", "[lsa][REQ-405]") {
+    TraverseData baseline = MakeSquareLoop(100.10);
+    const LsaResult rBase = ComputeTraverseLeastSquares(baseline, LsaWeights{});
+    REQUIRE(rBase.ok);
+
+    TraverseData tightened = MakeSquareLoop(100.10);
+    tightened.legs[0].hasTsWeights = true;
+    tightened.legs[0].tsWeights = LsaWeights{5.0, 0.0001, 0.01};  // far tighter than the default.
+    const LsaResult rTight = ComputeTraverseLeastSquares(tightened, LsaWeights{});
+    REQUIRE(rTight.ok);
+
+    // A leg the solver trusts much more should absorb LESS of the misclosure.
+    CHECK(std::abs(rTight.residuals[0].distResidualFt) < std::abs(rBase.residuals[0].distResidualFt));
+    CHECK(rTight.adjClosureLinear < 1e-3);  // still closes.
+}
+
+TEST_CASE("Least squares: PRISM/POLE error loosens a leg's distance weight", "[lsa][REQ-405]") {
+    TraverseData baseline = MakeSquareLoop(100.10);
+    const LsaResult rBase = ComputeTraverseLeastSquares(baseline, LsaWeights{});
+    REQUIRE(rBase.ok);
+
+    TraverseData loosened = MakeSquareLoop(100.10);
+    loosened.legs[0].hasPrismError = true;
+    loosened.legs[0].prismError = 1.0;  // much larger than the 0.02 ft default sigma.
+    const LsaResult rLoose = ComputeTraverseLeastSquares(loosened, LsaWeights{});
+    REQUIRE(rLoose.ok);
+
+    // A leg the solver trusts much less should absorb MORE of the misclosure.
+    CHECK(std::abs(rLoose.residuals[0].distResidualFt) > std::abs(rBase.residuals[0].distResidualFt));
+    CHECK(rLoose.adjClosureLinear < 1e-3);  // still closes.
 }

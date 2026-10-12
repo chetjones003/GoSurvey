@@ -6,6 +6,7 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/TraverseCommandLang.hpp"
 #include "WinFileDialogs.hpp"
 #include "ProjectFiles.hpp"
 
@@ -403,6 +404,60 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     ImGui::End();
 }
 
+// ---- Command-style text view (REQ-404, GitHub issue #845 Phase A) ----
+// A GoSurvey-flavor (travcmd::) text editor for the same TraverseData the Form
+// tab edits. Text is (re)generated from td/weights whenever the form side was
+// last authoritative; typing marks the buffer dirty so the form side doesn't
+// clobber it mid-edit. "Apply" parses the buffer back into td/weights — both
+// tabs are views onto the same data, not a one-way import.
+static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string>& log) {
+    TraverseData& td = cmd.traverseData;
+
+    if (!cmd.traverseCommandTextLoaded) {
+        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
+        cmd.traverseCommandTextLoaded = true;
+        cmd.traverseCommandError.clear();
+    }
+
+    ImGui::TextWrapped(
+        "GoSurvey's own traverse command language (not StarNet's; no \"key=value\", just "
+        "plain words and numbers). Header: STATION, BEARING, LOOP, SCALE, ERRORS. Per leg: "
+        "STN <at> <to>, then HANG <from> <at> <to> <angle>, HDIST/SDIST <at> <to> <dist>, "
+        "VANG <at> <to> <angle> [ZENITH|ELEV], DESC <at> <to> <text>, PRISM <at> <to> "
+        "<constant> <error>, POLE <at> <to> <error>, TSERR <at> <to> <angle-sec> "
+        "<dist-const> <dist-ppm>. Edit below, then Apply.");
+
+    ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, 420.f));
+
+    if (ImGui::Button("Apply")) {
+        TraverseData parsed;
+        LsaWeights parsedWeights;
+        std::string err;
+        if (travcmd::Parse(cmd.traverseCommandText, parsed, parsedWeights, err)) {
+            cmd.traverseData = std::move(parsed);
+            cmd.traverseLsaWeights = parsedWeights;
+            cmd.traverseDataDirty = true;
+            cmd.traverseExpandedLeg = -1;
+            cmd.traverseCommandError.clear();
+            log.push_back("TRAVERSE — applied command text (" +
+                          std::to_string(cmd.traverseData.legs.size()) + " legs).");
+        } else {
+            cmd.traverseCommandError = err;
+        }
+    }
+    ItemHelpTooltip("Parse the text above and replace the current traverse with it.\nThe Form tab will show the result.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Revert to Current Data")) {
+        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
+        cmd.traverseCommandError.clear();
+    }
+    ItemHelpTooltip("Discard edits below and regenerate the text from the traverse's current state.");
+
+    if (!cmd.traverseCommandError.empty())
+        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "Parse error: %s", cmd.traverseCommandError.c_str());
+}
+
 } // namespace
 
 
@@ -430,6 +485,10 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         ComputeTraverse(cmd.traverseData);
         cmd.traverseDataDirty = false;
         cmd.traverseLsaComputed = false;  // inputs changed -> adjustment is stale.
+        // #845 Phase A: the data actually changed (from the Form tab, an import, or a
+        // prior Apply) — regenerate the Command tab's text next time it's drawn. Merely
+        // switching tabs must NOT hit this, or unapplied typed text would be discarded.
+        cmd.traverseCommandTextLoaded = false;
     }
 
     // The closure window is launched from this editor; draw it here so it
@@ -446,6 +505,15 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     cmd.showTraverseEditorWindow = open;
 
     TraverseData& td = cmd.traverseData;
+
+    // GitHub issue #845 (Phase A) — Form vs. Command (GSTC text) view, two-way
+    // synced through the same traverseData/traverseLsaWeights.
+    if (!ImGui::BeginTabBar("traverse_view_tabs")) {
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginTabItem("Form")) {
 
     // ---- Raw data import ----
     if (ImGui::Button("Import .fbk\xe2\x80\xa6")) {
@@ -949,5 +1017,14 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     }
     ItemHelpTooltip("Place all computed traverse stations as survey points in the drawing.\nUse View Points to review or edit them after committing.");
 
+    ImGui::EndTabItem();
+    }  // Form tab
+
+    if (ImGui::BeginTabItem("Command")) {
+        DrawTraverseCommandTab(cmd, log);
+        ImGui::EndTabItem();
+    }
+
+    ImGui::EndTabBar();
     ImGui::End();
 }
