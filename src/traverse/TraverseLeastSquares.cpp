@@ -22,6 +22,28 @@ double WrapPi(double a) {
     return a;
 }
 
+// Per-leg distance standard error (GitHub issue #845 follow-up): the leg's own
+// equipment spec (TSERR) if given, else the traverse-wide weights, with the
+// prism/pole a-priori error contributions combined in quadrature — there is no
+// deterministic correction for a prism's rated accuracy or a pole's centering
+// error, so they only widen the uncertainty, matching how a real geodetic
+// adjustment package (StarNet, SALSA) treats them.
+double LegDistSigma(const TraverseLeg& leg, const LsaWeights& w, double obsDist) {
+    const double distConst = leg.hasTsWeights ? leg.tsWeights.sigmaDistConstFt : w.sigmaDistConstFt;
+    const double distPpm   = leg.hasTsWeights ? leg.tsWeights.sigmaDistPpm    : w.sigmaDistPpm;
+    const double base = distConst + distPpm * 1e-6 * obsDist;
+    const double prismErr = leg.hasPrismError ? leg.prismError : 0.0;
+    const double poleErr  = leg.hasPoleError  ? leg.poleError  : 0.0;
+    return std::sqrt(base * base + prismErr * prismErr + poleErr * poleErr);
+}
+
+// Per-leg angle standard error (radians): the leg's own equipment spec if given,
+// else the traverse-wide weight.
+double LegAngleSigmaRad(const TraverseLeg& leg, const LsaWeights& w, double deg2rad) {
+    const double angleSec = leg.hasTsWeights ? leg.tsWeights.sigmaAngleSec : w.sigmaAngleSec;
+    return (angleSec / 3600.0) * deg2rad;
+}
+
 // Solve the symmetric positive-definite system N x = t in place by Cholesky
 // (N is u*u row-major). Returns false if N is not positive-definite (singular).
 bool SolveCholesky(std::vector<double>& N, std::vector<double>& t, int u) {
@@ -156,7 +178,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
             // --- Distance observation ---
             {
-                const double sigma = w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * obsDist[k];
+                const double sigma = LegDistSigma(td.legs[k], w, obsDist[k]);
                 const double weight = 1.0 / (sigma * sigma);
                 std::vector<Term> row;
                 if (colOf(O) >= 0) {
@@ -173,7 +195,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
             // --- Angle observation ---
             {
-                const double sigmaRad = (w.sigmaAngleSec / 3600.0) * kDeg2Rad;
+                const double sigmaRad = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad);
                 const double weight = 1.0 / (sigmaRad * sigmaRad);
 
                 const double azOF = Azimuth(oe, on, fe, fn);
@@ -242,14 +264,14 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         const double D = std::sqrt((fe - oe) * (fe - oe) + (fn - on) * (fn - on));
 
         const double vDist = D - obsDist[k];
-        const double sigmaD = w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * obsDist[k];
+        const double sigmaD = LegDistSigma(td.legs[k], w, obsDist[k]);
         vtWv += (vDist * vDist) / (sigmaD * sigmaD);
 
         const double azOF = Azimuth(oe, on, fe, fn);
         const double azOB = (k == 0) ? startBrgRad
                                      : Azimuth(oe, on, ne[k - 1], nn[k - 1]);
         const double vAng = WrapPi((azOF - azOB) - obsAng[k]);  // adjusted - observed.
-        const double sigmaA = (w.sigmaAngleSec / 3600.0) * kDeg2Rad;
+        const double sigmaA = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad);
         vtWv += (vAng * vAng) / (sigmaA * sigmaA);
 
         LsaResidual& res = r.residuals[k];

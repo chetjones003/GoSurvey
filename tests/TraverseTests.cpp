@@ -860,3 +860,143 @@ TEST_CASE("TraverseCommandLang: no '=' anywhere in generated text", "[traverse][
     const std::string text = travcmd::Serialize(td, weights);
     CHECK(text.find('=') == std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #845 follow-up — per-leg equipment corrections/errors: PRISM
+// constant+error, POLE error, TSERR (per-leg a-priori weights).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("TraverseCommandLang: PRISM/POLE/TSERR round-trip", "[traverse][REQ-405]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "HDIST 1 2 50\n"
+        "PRISM 1 2 -0.0100 0.0030\n"
+        "POLE 1 2 0.0050\n"
+        "TSERR 1 2 3.5 0.0100 1.5\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.legs.size() == 1);
+    const TraverseLeg& leg = td.legs[0];
+
+    CHECK(leg.hasPrismConstant);
+    CHECK(leg.prismConstant == Approx(-0.0100));
+    CHECK(leg.hasPrismError);
+    CHECK(leg.prismError == Approx(0.0030));
+    CHECK(leg.hasPoleError);
+    CHECK(leg.poleError == Approx(0.0050));
+    CHECK(leg.hasTsWeights);
+    CHECK(leg.tsWeights.sigmaAngleSec == Approx(3.5));
+    CHECK(leg.tsWeights.sigmaDistConstFt == Approx(0.0100));
+    CHECK(leg.tsWeights.sigmaDistPpm == Approx(1.5));
+
+    // Round-trip through Serialize too.
+    const std::string regenerated = travcmd::Serialize(td, weights);
+    TraverseData reparsed;
+    LsaWeights reparsedWeights;
+    REQUIRE(travcmd::Parse(regenerated, reparsed, reparsedWeights, err));
+    REQUIRE(reparsed.legs.size() == 1);
+    CHECK(reparsed.legs[0].prismConstant == Approx(leg.prismConstant));
+    CHECK(reparsed.legs[0].prismError == Approx(leg.prismError));
+    CHECK(reparsed.legs[0].poleError == Approx(leg.poleError));
+    CHECK(reparsed.legs[0].tsWeights.sigmaAngleSec == Approx(leg.tsWeights.sigmaAngleSec));
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects malformed PRISM/POLE/TSERR lines", "[traverse][REQ-405]") {
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nPRISM 1 2 -0.01\n", td, weights, err));  // missing <error>
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nPOLE 1 2\n", td, weights, err));          // missing <error>
+    CHECK_FALSE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\nTSERR 1 2 3.5 0.01\n", td, weights, err)); // missing <ppm>
+}
+
+TEST_CASE("ComputeTraverse: PRISM constant corrects the slope distance before reduction", "[traverse][REQ-405]") {
+    TraverseData base;
+    base.startStationId = 1;
+    base.hasStartBearing = true;
+    base.startBearingDeg = 0.0;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    leg.hasSlopeDist = true;
+    leg.slopeDist = 100.0;
+    leg.hasVertAngle = true;
+    leg.vertAngleDeg = 85.0;
+    leg.isZenithAngle = true;
+    base.legs.push_back(leg);
+
+    TraverseData withCorrection = base;
+    withCorrection.legs[0].hasPrismConstant = true;
+    withCorrection.legs[0].prismConstant = 0.05;  // +0.05 ft
+
+    ComputeTraverse(base);
+    ComputeTraverse(withCorrection);
+
+    REQUIRE(base.legs[0].computed);
+    REQUIRE(withCorrection.legs[0].computed);
+
+    const double expectedUncorrected = TraverseReduceToHoriz(100.0, 85.0, true);
+    const double expectedCorrected   = TraverseReduceToHoriz(100.05, 85.0, true);
+    CHECK(base.legs[0].computedGroundHorizDist == Approx(expectedUncorrected));
+    CHECK(withCorrection.legs[0].computedGroundHorizDist == Approx(expectedCorrected));
+    CHECK(withCorrection.legs[0].computedGroundHorizDist > base.legs[0].computedGroundHorizDist);
+}
+
+TEST_CASE("ComputeTraverse: PRISM constant does not apply to a directly-entered HDIST", "[traverse][REQ-405]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    leg.hasHorizDist = true;
+    leg.horizDist = 100.0;
+    leg.hasPrismConstant = true;
+    leg.prismConstant = 0.5;  // should be ignored — no slope-distance step to correct.
+    td.legs.push_back(leg);
+
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    CHECK(td.legs[0].computedGroundHorizDist == Approx(100.0));
+}
+
+TEST_CASE("Least squares: a leg's TSERR tightens its own distance weight", "[lsa][REQ-405]") {
+    TraverseData baseline = MakeSquareLoop(100.10);
+    const LsaResult rBase = ComputeTraverseLeastSquares(baseline, LsaWeights{});
+    REQUIRE(rBase.ok);
+
+    TraverseData tightened = MakeSquareLoop(100.10);
+    tightened.legs[0].hasTsWeights = true;
+    tightened.legs[0].tsWeights = LsaWeights{5.0, 0.0001, 0.01};  // far tighter than the default.
+    const LsaResult rTight = ComputeTraverseLeastSquares(tightened, LsaWeights{});
+    REQUIRE(rTight.ok);
+
+    // A leg the solver trusts much more should absorb LESS of the misclosure.
+    CHECK(std::abs(rTight.residuals[0].distResidualFt) < std::abs(rBase.residuals[0].distResidualFt));
+    CHECK(rTight.adjClosureLinear < 1e-3);  // still closes.
+}
+
+TEST_CASE("Least squares: PRISM/POLE error loosens a leg's distance weight", "[lsa][REQ-405]") {
+    TraverseData baseline = MakeSquareLoop(100.10);
+    const LsaResult rBase = ComputeTraverseLeastSquares(baseline, LsaWeights{});
+    REQUIRE(rBase.ok);
+
+    TraverseData loosened = MakeSquareLoop(100.10);
+    loosened.legs[0].hasPrismError = true;
+    loosened.legs[0].prismError = 1.0;  // much larger than the 0.02 ft default sigma.
+    const LsaResult rLoose = ComputeTraverseLeastSquares(loosened, LsaWeights{});
+    REQUIRE(rLoose.ok);
+
+    // A leg the solver trusts much less should absorb MORE of the misclosure.
+    CHECK(std::abs(rLoose.residuals[0].distResidualFt) > std::abs(rBase.residuals[0].distResidualFt));
+    CHECK(rLoose.adjClosureLinear < 1e-3);  // still closes.
+}

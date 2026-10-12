@@ -52,6 +52,25 @@
 //       Vertical angle; ZENITH (90° level) is assumed when omitted.
 //   DESC <at> <to> <text to end of line>
 //       Station description / field notes for this leg.
+//   PRISM <at> <to> <constant> <error>
+//       Prism constant: a real EDM correction, added to the leg's slope distance
+//       before reduction (only meaningful alongside SDIST — a directly-entered
+//       HDIST has no slope-distance step to correct). The error is a-priori only
+//       (see TSERR below) — a prism's rated accuracy has no deterministic
+//       correction, only an uncertainty contribution.
+//   POLE <at> <to> <error>
+//       The pole's centering/plumb a-priori error (its rated or estimated
+//       accuracy) — a-priori only, like PRISM's error: there is no deterministic
+//       correction for how well a pole was plumbed over a point.
+//   TSERR <at> <to> <angle-arcsec> <dist-const> <dist-ppm>
+//       This leg's own equipment accuracy spec, overriding the traverse-wide
+//       ERRORS weights for just this leg's least-squares observations.
+//
+// PRISM's error and POLE's error combine with this leg's distance a-priori sigma
+// (TSERR if given, else the traverse-wide ERRORS) in quadrature, matching how a
+// real geodetic adjustment package (e.g. MicroSurvey StarNet, SALSA) treats
+// prism/centering a-priori error: effective = sqrt(dist_const² + prism_error² +
+// pole_error²). They have no effect outside the least-squares adjustment.
 //
 // This format only round-trips what TraverseData already models: a leg's raw F1/F2
 // observation sets (src/traverse/FbkImport.cpp import detail) are not represented

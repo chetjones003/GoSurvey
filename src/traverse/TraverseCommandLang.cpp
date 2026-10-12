@@ -89,6 +89,17 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
                 << " " << (leg.isZenithAngle ? "ZENITH" : "ELEV") << "\n";
         if (!leg.description.empty())
             out << "DESC " << at << " " << to << " " << leg.description << "\n";
+        if (leg.hasPrismConstant || leg.hasPrismError)
+            out << "PRISM " << at << " " << to
+                << " " << Fmt(leg.hasPrismConstant ? leg.prismConstant : 0.0, 4)
+                << " " << Fmt(leg.hasPrismError ? leg.prismError : 0.0, 4) << "\n";
+        if (leg.hasPoleError)
+            out << "POLE " << at << " " << to << " " << Fmt(leg.poleError, 4) << "\n";
+        if (leg.hasTsWeights)
+            out << "TSERR " << at << " " << to
+                << " " << Fmt(leg.tsWeights.sigmaAngleSec, 3)
+                << " " << Fmt(leg.tsWeights.sigmaDistConstFt, 4)
+                << " " << Fmt(leg.tsWeights.sigmaDistPpm, 3) << "\n";
     }
     return out.str();
 }
@@ -179,9 +190,10 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             newLegs.push_back(std::move(leg));
             toIndex[to] = newLegs.size() - 1;
         } else if (directive == "HANG" || directive == "HDIST" || directive == "SDIST" ||
-                   directive == "VANG" || directive == "DESC") {
-            // All five share the same <at> <to> addressing, at a different token offset
-            // for HANG (which carries <from> first).
+                   directive == "VANG" || directive == "DESC" || directive == "PRISM" ||
+                   directive == "POLE" || directive == "TSERR") {
+            // All of these share the same <at> <to> addressing, at a different token
+            // offset for HANG (which carries <from> first).
             const size_t atPos = (directive == "HANG") ? 2 : 1;
             const size_t toPos = atPos + 1;
             if (toks.size() <= toPos)
@@ -239,7 +251,7 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
                 leg.hasVertAngle = true;
                 leg.vertAngleBuf = Fmt(ang);
                 leg.isZenithAngle = (toks.size() < 5) || (ToUpper(toks[4]) != "ELEV");
-            } else {  // DESC — everything after the <to> token, verbatim.
+            } else if (directive == "DESC") {  // everything after the <to> token, verbatim.
                 auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)); };
                 auto skipToken = [&](size_t p) -> size_t {
                     while (p < line.size() && isSpace(line[p])) ++p;
@@ -251,6 +263,29 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
                 pos = skipToken(pos);            // past <to>
                 while (pos < line.size() && isSpace(line[pos])) ++pos;
                 leg.description = (pos < line.size()) ? line.substr(pos) : "";
+            } else if (directive == "PRISM") {
+                double constant, error;
+                if (toks.size() < 5 || !ParseDoubleTok(toks[3], &constant) || !ParseDoubleTok(toks[4], &error))
+                    return fail("expected PRISM <at> <to> <constant> <error>");
+                leg.prismConstant = constant;
+                leg.hasPrismConstant = (constant != 0.0);
+                leg.prismError = error;
+                leg.hasPrismError = (error != 0.0);
+            } else if (directive == "POLE") {
+                double error;
+                if (toks.size() < 4 || !ParseDoubleTok(toks[3], &error))
+                    return fail("expected POLE <at> <to> <error>");
+                leg.poleError = error;
+                leg.hasPoleError = (error != 0.0);
+            } else {  // TSERR
+                double a, d, p;
+                if (toks.size() < 6 || !ParseDoubleTok(toks[3], &a) || !ParseDoubleTok(toks[4], &d) ||
+                    !ParseDoubleTok(toks[5], &p))
+                    return fail("expected TSERR <at> <to> <angle-arcsec> <dist-const> <dist-ppm>");
+                leg.tsWeights.sigmaAngleSec = a;
+                leg.tsWeights.sigmaDistConstFt = d;
+                leg.tsWeights.sigmaDistPpm = p;
+                leg.hasTsWeights = true;
             }
         } else {
             return fail("unknown directive \"" + toks[0] + "\"");

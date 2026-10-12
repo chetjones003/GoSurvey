@@ -423,7 +423,9 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
         "GoSurvey's own traverse command language (not StarNet's; no \"key=value\", just "
         "plain words and numbers). Header: STATION, BEARING, LOOP, SCALE, ERRORS. Per leg: "
         "STN <at> <to>, then HANG <from> <at> <to> <angle>, HDIST/SDIST <at> <to> <dist>, "
-        "VANG <at> <to> <angle> [ZENITH|ELEV], DESC <at> <to> <text>. Edit below, then Apply.");
+        "VANG <at> <to> <angle> [ZENITH|ELEV], DESC <at> <to> <text>, PRISM <at> <to> "
+        "<constant> <error>, POLE <at> <to> <error>, TSERR <at> <to> <angle-sec> "
+        "<dist-const> <dist-ppm>. Edit below, then Apply.");
 
     ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, 420.f));
 
