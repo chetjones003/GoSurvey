@@ -5539,6 +5539,15 @@ struct AppCommandState {
   /// or -1 when none. Accordion: at most one leg is expanded at a time.
   int         traverseExpandedLeg = -1;
 
+  /// GitHub issue #845 (Phase A) — command-style text view, two-way synced with the
+  /// form panel through the same traverseData/traverseLsaWeights.
+  bool        traverseCommandViewActive = false;  ///< Form tab vs. Command tab.
+  std::string traverseCommandText;                ///< Editable buffer (GSTC syntax).
+  /// True once the text has been generated for the currently-active edit session;
+  /// while editing, the form side must not regenerate and clobber unapplied text.
+  bool        traverseCommandTextLoaded = false;
+  std::string traverseCommandError;               ///< Parse error from the last Apply, if any.
+
   // -------------------------------------------------------------------------
   // CLIPBOARD (COPYCLIP / PASTECLIP)
   // -------------------------------------------------------------------------

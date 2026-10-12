@@ -9,6 +9,7 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/TraverseCommandLang.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -625,4 +626,194 @@ TEST_CASE("TraverseIo: a missing file fails Load with a reason", "[io][REQ-403]"
     std::string err;
     CHECK_FALSE(traverseio::Load((TraverseIoTestDir() / "does-not-exist.gstrav").string(), td, weights, err));
     CHECK_FALSE(err.empty());
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #845 (Phase A) — GoSurvey's own traverse command language
+// (travcmd::), the two-way-synced text view in the Traverse Editor's Command
+// tab. Only fields the form panel can manually edit round-trip here; raw
+// per-set F1/F2 import detail (rawSets) has no manual-entry counterpart
+// either, so it is out of scope by design (see TraverseCommandLang.hpp).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+TraverseData MakeCommandLangFixture() {
+    TraverseData td;
+    td.startStationId = 100;
+    td.startEasting = 5000.25;
+    td.startNorthing = 10000.75;
+    td.startElevation = 123.4;
+    td.startBearingDeg = 45.5;
+    td.hasStartBearing = true;
+    td.startBearingBuf = TraverseFormatBearing(td.startBearingDeg);
+    td.isClosedLoop = true;
+    td.applyScaleFactor = true;
+    td.scaleFactorKind = TraverseData::ScaleFactorKind::GridOnly;
+
+    TraverseLeg leg1;
+    leg1.stationId = 101;
+    leg1.description = "MH 1";
+    leg1.horizAngleDeg = 90.0;
+    leg1.hasHorizAngle = true;
+    leg1.horizDist = 150.25;
+    leg1.hasHorizDist = true;
+    leg1.vertAngleDeg = 90.0;
+    leg1.hasVertAngle = true;
+    leg1.isZenithAngle = true;
+    td.legs.push_back(leg1);
+
+    TraverseLeg leg2;
+    leg2.stationId = 102;
+    leg2.description = "CB2";
+    leg2.horizAngleDeg = 270.5;
+    leg2.hasHorizAngle = true;
+    leg2.slopeDist = 200.1;
+    leg2.hasSlopeDist = true;
+    leg2.vertAngleDeg = 2.5;
+    leg2.hasVertAngle = true;
+    leg2.isZenithAngle = false;
+    td.legs.push_back(leg2);
+
+    return td;
+}
+
+}  // namespace
+
+TEST_CASE("TraverseCommandLang: Serialize then Parse round-trips every editable field", "[traverse][REQ-404]") {
+    const TraverseData original = MakeCommandLangFixture();
+    const LsaWeights originalWeights = MakeRoundTripWeights();
+
+    const std::string text = travcmd::Serialize(original, originalWeights);
+
+    TraverseData parsed;
+    LsaWeights parsedWeights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, parsed, parsedWeights, err));
+    CHECK(err.empty());
+
+    CHECK(parsed.startStationId == original.startStationId);
+    CHECK(parsed.startEasting == Approx(original.startEasting));
+    CHECK(parsed.startNorthing == Approx(original.startNorthing));
+    CHECK(parsed.startElevation == Approx(original.startElevation));
+    CHECK(parsed.hasStartBearing == original.hasStartBearing);
+    CHECK(parsed.startBearingDeg == Approx(original.startBearingDeg));
+    CHECK(parsed.isClosedLoop == original.isClosedLoop);
+    CHECK(parsed.applyScaleFactor == original.applyScaleFactor);
+    CHECK(parsed.scaleFactorKind == original.scaleFactorKind);
+
+    REQUIRE(parsed.legs.size() == original.legs.size());
+    for (size_t i = 0; i < original.legs.size(); ++i) {
+        const TraverseLeg& a = original.legs[i];
+        const TraverseLeg& b = parsed.legs[i];
+        CHECK(b.stationId == a.stationId);
+        CHECK(b.description == a.description);
+        CHECK(b.hasHorizAngle == a.hasHorizAngle);
+        CHECK(b.horizAngleDeg == Approx(a.horizAngleDeg));
+        CHECK(b.hasHorizDist == a.hasHorizDist);
+        if (a.hasHorizDist) CHECK(b.horizDist == Approx(a.horizDist));
+        CHECK(b.hasSlopeDist == a.hasSlopeDist);
+        if (a.hasSlopeDist) CHECK(b.slopeDist == Approx(a.slopeDist));
+        CHECK(b.hasVertAngle == a.hasVertAngle);
+        CHECK(b.vertAngleDeg == Approx(a.vertAngleDeg));
+        CHECK(b.isZenithAngle == a.isZenithAngle);
+    }
+
+    CHECK(parsedWeights.sigmaAngleSec == Approx(originalWeights.sigmaAngleSec));
+    CHECK(parsedWeights.sigmaDistConstFt == Approx(originalWeights.sigmaDistConstFt));
+    CHECK(parsedWeights.sigmaDistPpm == Approx(originalWeights.sigmaDistPpm));
+}
+
+TEST_CASE("TraverseCommandLang: a traverse with no legs still round-trips", "[traverse][REQ-404]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 1000.0;
+    td.startNorthing = 2000.0;
+    td.startElevation = 50.0;
+    LsaWeights weights;
+
+    const std::string text = travcmd::Serialize(td, weights);
+
+    TraverseData parsed;
+    LsaWeights parsedWeights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, parsed, parsedWeights, err));
+    CHECK(parsed.legs.empty());
+    CHECK(parsed.startStationId == 1);
+}
+
+TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[traverse][REQ-404]") {
+    const std::string text =
+        "# a leading comment\n"
+        "\n"
+        "STATION id=5 e=100 n=200 z=10\n"
+        "   # an indented comment\n"
+        "LEG stn=6 angle=90 hdist=50\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    CHECK(td.startStationId == 5);
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].stationId == 6);
+}
+
+TEST_CASE("TraverseCommandLang: a quoted description with spaces round-trips", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION id=1 e=0 n=0 z=0\n"
+        "LEG stn=2 desc=\"Manhole 1\" angle=10 hdist=20\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].description == "Manhole 1");
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects a LEG missing stn=", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION id=1 e=0 n=0 z=0\n"
+        "LEG angle=10 hdist=20\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects an unknown directive", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION id=1 e=0 n=0 z=0\n"
+        "BOGUS foo=1\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: Parse rejects text with no STATION directive", "[traverse][REQ-404]") {
+    const std::string text = "LEG stn=2 angle=10 hdist=20\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: a malformed token (no '=') is reported with its line number", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION id=1 e=0 n=0 z=0\n"
+        "LEG stn=2 garbage\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK(err.find("line 2") != std::string::npos);
 }
