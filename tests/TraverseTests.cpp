@@ -256,6 +256,113 @@ TEST_CASE("Face averaging tolerates a missing face", "[engine][REQ-011]") {
     CHECK(td.legs[0].computedHorizDist == Approx(100.0).margin(1e-3));
 }
 
+// ------------------------------------------------------------------ #826 --
+// Earth curvature + atmospheric refraction correction (issue #826).
+// Expected values are hand-computed from C = (1 - k) * hd^2 / (2R),
+// R = 6371000 m — independent of the engine under test.
+namespace {
+
+constexpr double k826Deg2Rad = 3.14159265358979323846 / 180.0;
+
+// Single-leg traverse; returns the computed dZ. useSlope selects the
+// slope-distance path (zenith convention); otherwise horizontal distance
+// with an elevation angle.
+double Run826Leg(double distM, double vertAngleDeg, bool isZenith, bool useSlope,
+                 bool applyCorr, double k) {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startBearingDeg = 0.0;
+    td.hasStartBearing = true;
+    td.applyCurvRefCorr = applyCorr;
+    td.refractionCoeff = k;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    if (useSlope) {
+        leg.hasSlopeDist = true;
+        leg.slopeDist = distM;
+    } else {
+        leg.hasHorizDist = true;
+        leg.horizDist = distM;
+    }
+    leg.hasVertAngle = true;
+    leg.vertAngleDeg = vertAngleDeg;
+    leg.isZenithAngle = isZenith;
+    td.legs.push_back(leg);
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    return td.legs[0].computedDeltaZ;
+}
+
+}  // namespace
+
+TEST_CASE("Curvature+refraction: 1 km leg gains 0.0675 m at k=0.14", "[curvref][issue-826]") {
+    const double dzCorr = Run826Leg(1000.0, 2.0, false, false, true, 0.14);
+    const double dzPlain = Run826Leg(1000.0, 2.0, false, false, false, 0.14);
+    // Hand-computed: (1 - 0.14) * 1000^2 / (2 * 6371000) = 0.067484 m.
+    CHECK(dzCorr - dzPlain == Approx(0.0674933).margin(1e-6));
+    // The trig part itself is untouched by the fix.
+    CHECK(dzPlain == Approx(1000.0 * std::tan(2.0 * k826Deg2Rad)).margin(1e-9));
+}
+
+TEST_CASE("Curvature+refraction: k=0 gives pure curvature 0.0785 m/km", "[curvref][issue-826]") {
+    const double dzCorr = Run826Leg(1000.0, 2.0, false, false, true, 0.0);
+    const double dzPlain = Run826Leg(1000.0, 2.0, false, false, false, 0.0);
+    // Hand-computed: 1000^2 / (2 * 6371000) = 0.078480 m.
+    CHECK(dzCorr - dzPlain == Approx(0.078480).margin(1e-6));
+}
+
+TEST_CASE("Curvature+refraction: custom k=0.20 scales the correction", "[curvref][issue-826]") {
+    const double dzCorr = Run826Leg(1000.0, 2.0, false, false, true, 0.20);
+    const double dzPlain = Run826Leg(1000.0, 2.0, false, false, false, 0.20);
+    // Hand-computed: (1 - 0.20) * 1000^2 / (2 * 6371000) = 0.062784 m.
+    CHECK(dzCorr - dzPlain == Approx(0.062784).margin(1e-6));
+}
+
+TEST_CASE("Curvature+refraction: 300 m leg corrects 6.1 mm", "[curvref][issue-826]") {
+    const double dzCorr = Run826Leg(300.0, 1.0, false, false, true, 0.14);
+    const double dzPlain = Run826Leg(300.0, 1.0, false, false, false, 0.14);
+    // Hand-computed: (1 - 0.14) * 300^2 / (2 * 6371000) = 0.0060736 m.
+    CHECK(dzCorr - dzPlain == Approx(0.00607440).margin(1e-7));
+}
+
+TEST_CASE("Curvature+refraction: downhill sights get a positive correction", "[curvref][issue-826]") {
+    // Curvature dominates regardless of sight direction: the correction is
+    // always added, so a downhill leg becomes less negative.
+    const double dzCorr = Run826Leg(1000.0, -2.0, false, false, true, 0.14);
+    const double dzPlain = Run826Leg(1000.0, -2.0, false, false, false, 0.14);
+    CHECK(dzCorr - dzPlain == Approx(0.0674933).margin(1e-6));
+    CHECK(dzCorr > dzPlain);
+}
+
+TEST_CASE("Curvature+refraction: slope-distance/zenith path matches", "[curvref][issue-826]") {
+    // 1000 m slope at zenith 88 deg: hd = 1000*sin(88) = 999.3908 m.
+    // Hand-computed: (1 - 0.14) * 999.3908^2 / (2 * 6371000) = 0.067402 m.
+    const double dzCorr = Run826Leg(1000.0, 88.0, true, true, true, 0.14);
+    const double dzPlain = Run826Leg(1000.0, 88.0, true, true, false, 0.14);
+    CHECK(dzCorr - dzPlain == Approx(0.0674111).margin(1e-6));
+}
+
+TEST_CASE("Curvature+refraction: legs with no vertical angle are untouched", "[curvref][issue-826]") {
+    // No vertical observation -> legacy flat behavior, bit-identical.
+    TraverseData td;
+    td.startStationId = 1;
+    td.startBearingDeg = 0.0;
+    td.hasStartBearing = true;
+    td.applyCurvRefCorr = true;
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;
+    leg.hasHorizDist = true;
+    leg.horizDist = 1000.0;
+    td.legs.push_back(leg);
+    ComputeTraverse(td);
+    REQUIRE(td.legs[0].computed);
+    CHECK(td.legs[0].computedDeltaZ == Approx(0.0).margin(1e-12));
+}
+
 // REQ-401: the scale-factor option is off by default and must not change anything when left off.
 TEST_CASE("Scale factor off reproduces unscaled coordinates", "[engine][REQ-401]") {
     TraverseData td;

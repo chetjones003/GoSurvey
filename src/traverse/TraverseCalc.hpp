@@ -113,6 +113,8 @@ struct TraverseData {
 
     bool useFace1Face2 = false;   ///< When true, use F1/F2 averages instead of single observations.
     bool isClosedLoop = false;    ///< When true, compute closure back to starting station.
+    bool applyCurvRefCorr = true; ///< Apply combined earth curvature + refraction correction to dZ (#826).
+    double refractionCoeff = 0.14;///< Refraction coefficient k (typical range -2..+2); 0.14 = average conditions.
 
     /// REQ-401: which drawing-settings scale factor the UI resolves into \ref scaleFactor when
     /// \ref applyScaleFactor is on. Not interpreted by ComputeTraverse itself.
