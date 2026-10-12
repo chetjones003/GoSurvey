@@ -10,9 +10,13 @@
  * Routes:
  *   GET /                                  -> dashboard page
  *   GET /api/telemetry/summary             -> installs, 7/30-day actives, version/channel split
+ *   GET /api/telemetry/daily               -> installs/day and active installs/day, last 30 days
  *   GET /api/telemetry/startup-reports      -> paginated, filterable by version/stage
  *   GET /api/telemetry/crash-reports        -> paginated, filterable by version/reason
  *   GET /api/accounts                       -> paginated accounts list
+ *
+ * The dashboard page polls every REFRESH_MS so numbers/tables/charts stay current without a
+ * manual reload -- there is no push channel, this is a small owner-only page, not worth one.
  */
 
 const PAGE_SIZE_DEFAULT = 50;
@@ -79,6 +83,28 @@ async function telemetrySummary(env) {
     byVersion: byVersion.results ?? [],
     byChannel: byChannel.results ?? [],
   };
+}
+
+async function telemetryDaily(env) {
+  const db = env.TELEMETRY_DB;
+
+  const installs = await db
+    .prepare(
+      `SELECT day, COUNT(*) AS n FROM pings
+       WHERE event = 'install' AND day >= date('now', '-30 days')
+       GROUP BY day ORDER BY day`
+    )
+    .all();
+
+  const active = await db
+    .prepare(
+      `SELECT day, COUNT(DISTINCT install_id) AS n FROM pings
+       WHERE event = 'active' AND day >= date('now', '-30 days')
+       GROUP BY day ORDER BY day`
+    )
+    .all();
+
+  return { installs: installs.results ?? [], active: active.results ?? [] };
 }
 
 async function listReports(env, table, allowedFilterColumns, url) {
@@ -148,11 +174,18 @@ const DASHBOARD_HTML = `<!doctype html>
   .stat .label { font-size: 0.75rem; color: #9aa4b2; }
   .report { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 0.75rem; max-width: 60ch; overflow: hidden; text-overflow: ellipsis; }
   a { color: #6cb6ff; }
-  .tabs { margin-bottom: 1rem; }
+  .tabs { margin-bottom: 1rem; display: flex; align-items: center; gap: 1rem; }
   .tabs button { background: #1c2026; color: #e4e6eb; border: 1px solid #2a2f36; padding: 0.4rem 0.9rem; cursor: pointer; }
   .tabs button.active { background: #2a2f36; }
+  .live { font-size: 0.75rem; color: #6ad68a; margin-left: auto; }
+  .live .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #6ad68a; margin-right: 0.35rem; animation: pulse 2s infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   section { display: none; }
   section.active { display: block; }
+  .chart-wrap { background: #1c2026; border-radius: 6px; padding: 1rem; margin: 0.5rem 0 1.5rem; }
+  .chart-wrap svg { display: block; width: 100%; height: 160px; }
+  .chart-legend { display: flex; gap: 1.25rem; font-size: 0.75rem; color: #9aa4b2; margin-top: 0.5rem; }
+  .chart-legend span.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.35rem; }
 </style>
 </head>
 <body>
@@ -162,10 +195,19 @@ const DASHBOARD_HTML = `<!doctype html>
   <button data-tab="startup">Startup failures</button>
   <button data-tab="crash">Crash reports</button>
   <button data-tab="accounts">Accounts</button>
+  <span class="live"><span class="dot"></span>Live &mdash; refreshes every <span id="refresh-secs"></span>s</span>
 </div>
 
 <section id="telemetry" class="active">
   <div class="stats" id="telemetry-stats"></div>
+  <h2>Installs &amp; active installs per day (30d)</h2>
+  <div class="chart-wrap">
+    <svg id="telemetry-chart" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
+    <div class="chart-legend">
+      <span><span class="swatch" style="background:#6cb6ff"></span>Installs</span>
+      <span><span class="swatch" style="background:#6ad68a"></span>Active</span>
+    </div>
+  </div>
   <h2>Versions (30d)</h2>
   <table id="telemetry-versions"></table>
   <h2>Channels (30d)</h2>
@@ -211,8 +253,50 @@ function renderTable(table, columns, rows, cellFn) {
   table.appendChild(tbody);
 }
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs) {
+  const e = document.createElementNS(SVG_NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  return e;
+}
+
+// Renders two day-keyed series as line charts sharing one y-scale, last 30 days, zero-filled.
+function renderDailyChart(svg, seriesA, seriesB, colorA, colorB) {
+  const W = 600, H = 160, PAD = 8;
+  svg.innerHTML = "";
+
+  const days = [];
+  const today = new Date();
+  for (let i = 29; i >= 0; i--) {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - i);
+    days.push(d.toISOString().slice(0, 10));
+  }
+  const toMap = (rows) => Object.fromEntries(rows.map(r => [r.day, r.n]));
+  const mapA = toMap(seriesA), mapB = toMap(seriesB);
+  const valsA = days.map(d => mapA[d] ?? 0);
+  const valsB = days.map(d => mapB[d] ?? 0);
+  const max = Math.max(1, ...valsA, ...valsB);
+
+  const x = (i) => PAD + (i / (days.length - 1)) * (W - 2 * PAD);
+  const y = (v) => H - PAD - (v / max) * (H - 2 * PAD);
+
+  const pathFor = (vals) =>
+    vals.map((v, i) => (i === 0 ? "M" : "L") + " " + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
+
+  svg.appendChild(svgEl("path", {
+    d: pathFor(valsA), fill: "none", stroke: colorA, "stroke-width": "2",
+  }));
+  svg.appendChild(svgEl("path", {
+    d: pathFor(valsB), fill: "none", stroke: colorB, "stroke-width": "2",
+  }));
+}
+
 async function loadTelemetry() {
-  const r = await fetch("/api/telemetry/summary").then(r => r.json());
+  const [summary, daily] = await Promise.all([
+    fetch("/api/telemetry/summary").then(r => r.json()),
+    fetch("/api/telemetry/daily").then(r => r.json()),
+  ]);
   const stats = document.getElementById("telemetry-stats");
   stats.innerHTML = "";
   const add = (label, n) => {
@@ -221,11 +305,12 @@ async function loadTelemetry() {
     d.appendChild(el("span", { class: "label" }, label));
     stats.appendChild(d);
   };
-  add("Installs (all time)", r.installs);
-  add("Active (7d)", r.active7d);
-  add("Active (30d)", r.active30d);
-  renderTable(document.getElementById("telemetry-versions"), ["version", "users"], r.byVersion);
-  renderTable(document.getElementById("telemetry-channels"), ["channel", "users"], r.byChannel);
+  add("Installs (all time)", summary.installs);
+  add("Active (7d)", summary.active7d);
+  add("Active (30d)", summary.active30d);
+  renderTable(document.getElementById("telemetry-versions"), ["version", "users"], summary.byVersion);
+  renderTable(document.getElementById("telemetry-channels"), ["channel", "users"], summary.byChannel);
+  renderDailyChart(document.getElementById("telemetry-chart"), daily.installs, daily.active, "#6cb6ff", "#6ad68a");
 }
 
 async function loadReports(path, tableId, columns) {
@@ -252,10 +337,18 @@ for (const btn of document.querySelectorAll(".tabs button")) {
   });
 }
 
-loadTelemetry();
-loadReports("/api/telemetry/startup-reports", "startup-table", ["ts", "version", "channel", "os", "stage", "country", "report"]);
-loadReports("/api/telemetry/crash-reports", "crash-table", ["ts", "version", "channel", "os", "reason", "country", "report"]);
-loadAccounts();
+const REFRESH_MS = 20000;
+document.getElementById("refresh-secs").textContent = String(REFRESH_MS / 1000);
+
+function refreshAll() {
+  loadTelemetry();
+  loadReports("/api/telemetry/startup-reports", "startup-table", ["ts", "version", "channel", "os", "stage", "country", "report"]);
+  loadReports("/api/telemetry/crash-reports", "crash-table", ["ts", "version", "channel", "os", "reason", "country", "report"]);
+  loadAccounts();
+}
+
+refreshAll();
+setInterval(refreshAll, REFRESH_MS);
 </script>
 </body>
 </html>`;
@@ -270,6 +363,10 @@ export default {
 
     if (url.pathname === "/api/telemetry/summary") {
       return json(await telemetrySummary(env));
+    }
+
+    if (url.pathname === "/api/telemetry/daily") {
+      return json(await telemetryDaily(env));
     }
 
     if (url.pathname === "/api/telemetry/startup-reports") {
