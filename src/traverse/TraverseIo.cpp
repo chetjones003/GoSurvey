@@ -1,0 +1,208 @@
+#include "TraverseIo.hpp"
+
+#include <nlohmann/json.hpp>
+
+#include <fstream>
+
+namespace traverseio {
+
+namespace {
+
+using nlohmann::json;
+
+constexpr const char* kFormat = "gstrav";
+constexpr int kVersion = 1;
+
+json SetToJson(const TraverseMeasSet& s) {
+  json j;
+  j["setNo"] = s.setNo;
+  j["f1HzDec"] = s.f1HzDec;
+  j["f1VaDec"] = s.f1VaDec;
+  j["f1Sd"] = s.f1Sd;
+  j["hasF1"] = s.hasF1;
+  j["f2HzDec"] = s.f2HzDec;
+  j["f2VaDec"] = s.f2VaDec;
+  j["f2Sd"] = s.f2Sd;
+  j["hasF2"] = s.hasF2;
+  return j;
+}
+
+TraverseMeasSet SetFromJson(const json& j) {
+  TraverseMeasSet s;
+  s.setNo = j.value("setNo", 0);
+  s.f1HzDec = j.value("f1HzDec", 0.0);
+  s.f1VaDec = j.value("f1VaDec", 90.0);
+  s.f1Sd = j.value("f1Sd", 0.0);
+  s.hasF1 = j.value("hasF1", false);
+  s.f2HzDec = j.value("f2HzDec", 0.0);
+  s.f2VaDec = j.value("f2VaDec", 90.0);
+  s.f2Sd = j.value("f2Sd", 0.0);
+  s.hasF2 = j.value("hasF2", false);
+  return s;
+}
+
+json LegToJson(const TraverseLeg& leg) {
+  json j;
+  j["stationId"] = leg.stationId;
+  j["description"] = leg.description;
+  j["horizAngleBuf"] = leg.horizAngleBuf;
+  j["horizAngleDeg"] = leg.horizAngleDeg;
+  j["hasHorizAngle"] = leg.hasHorizAngle;
+  j["face1HorizBuf"] = leg.face1HorizBuf;
+  j["face2HorizBuf"] = leg.face2HorizBuf;
+  j["face1HorizDeg"] = leg.face1HorizDeg;
+  j["face2HorizDeg"] = leg.face2HorizDeg;
+  j["backsightCircleDeg"] = leg.backsightCircleDeg;
+  j["hasBacksightCircle"] = leg.hasBacksightCircle;
+  j["horizDist"] = leg.horizDist;
+  j["hasHorizDist"] = leg.hasHorizDist;
+  j["slopeDist"] = leg.slopeDist;
+  j["hasSlopeDist"] = leg.hasSlopeDist;
+  j["vertAngleBuf"] = leg.vertAngleBuf;
+  j["vertAngleDeg"] = leg.vertAngleDeg;
+  j["isZenithAngle"] = leg.isZenithAngle;
+  j["hasVertAngle"] = leg.hasVertAngle;
+  j["face1VertBuf"] = leg.face1VertBuf;
+  j["face2VertBuf"] = leg.face2VertBuf;
+  j["face1VertDeg"] = leg.face1VertDeg;
+  j["face2VertDeg"] = leg.face2VertDeg;
+  j["hasFace1"] = leg.hasFace1;
+  j["hasFace2"] = leg.hasFace2;
+  json sets = json::array();
+  for (const TraverseMeasSet& s : leg.rawSets)
+    sets.push_back(SetToJson(s));
+  j["rawSets"] = std::move(sets);
+  return j;
+}
+
+TraverseLeg LegFromJson(const json& j) {
+  TraverseLeg leg;
+  leg.stationId = j.value("stationId", 0);
+  leg.description = j.value("description", std::string());
+  leg.horizAngleBuf = j.value("horizAngleBuf", std::string());
+  leg.horizAngleDeg = j.value("horizAngleDeg", 0.0);
+  leg.hasHorizAngle = j.value("hasHorizAngle", false);
+  leg.face1HorizBuf = j.value("face1HorizBuf", std::string());
+  leg.face2HorizBuf = j.value("face2HorizBuf", std::string());
+  leg.face1HorizDeg = j.value("face1HorizDeg", 0.0);
+  leg.face2HorizDeg = j.value("face2HorizDeg", 0.0);
+  leg.backsightCircleDeg = j.value("backsightCircleDeg", 0.0);
+  leg.hasBacksightCircle = j.value("hasBacksightCircle", false);
+  leg.horizDist = j.value("horizDist", 0.0);
+  leg.hasHorizDist = j.value("hasHorizDist", false);
+  leg.slopeDist = j.value("slopeDist", 0.0);
+  leg.hasSlopeDist = j.value("hasSlopeDist", false);
+  leg.vertAngleBuf = j.value("vertAngleBuf", std::string());
+  leg.vertAngleDeg = j.value("vertAngleDeg", 0.0);
+  leg.isZenithAngle = j.value("isZenithAngle", true);
+  leg.hasVertAngle = j.value("hasVertAngle", false);
+  leg.face1VertBuf = j.value("face1VertBuf", std::string());
+  leg.face2VertBuf = j.value("face2VertBuf", std::string());
+  leg.face1VertDeg = j.value("face1VertDeg", 0.0);
+  leg.face2VertDeg = j.value("face2VertDeg", 0.0);
+  leg.hasFace1 = j.value("hasFace1", false);
+  leg.hasFace2 = j.value("hasFace2", false);
+  if (j.contains("rawSets") && j["rawSets"].is_array())
+    for (const json& sj : j["rawSets"])
+      leg.rawSets.push_back(SetFromJson(sj));
+  return leg;
+}
+
+}  // namespace
+
+bool Save(const std::string& path, const TraverseData& td, const LsaWeights& weights, std::string& err) {
+  json j;
+  j["format"] = kFormat;
+  j["version"] = kVersion;
+
+  j["startStationId"] = td.startStationId;
+  j["startEasting"] = td.startEasting;
+  j["startNorthing"] = td.startNorthing;
+  j["startElevation"] = td.startElevation;
+  j["startBearingBuf"] = td.startBearingBuf;
+  j["startBearingDeg"] = td.startBearingDeg;
+  j["hasStartBearing"] = td.hasStartBearing;
+
+  j["useFace1Face2"] = td.useFace1Face2;
+  j["isClosedLoop"] = td.isClosedLoop;
+  j["applyScaleFactor"] = td.applyScaleFactor;
+  j["scaleFactorKind"] = static_cast<int>(td.scaleFactorKind);
+  j["scaleFactor"] = td.scaleFactor;
+
+  json legs = json::array();
+  for (const TraverseLeg& leg : td.legs)
+    legs.push_back(LegToJson(leg));
+  j["legs"] = std::move(legs);
+
+  json w;
+  w["sigmaAngleSec"] = weights.sigmaAngleSec;
+  w["sigmaDistConstFt"] = weights.sigmaDistConstFt;
+  w["sigmaDistPpm"] = weights.sigmaDistPpm;
+  j["weights"] = std::move(w);
+
+  std::ofstream f(path, std::ios::binary | std::ios::trunc);
+  if (!f) {
+    err = "Could not open \"" + path + "\" for writing.";
+    return false;
+  }
+  f << j.dump(2);
+  if (!f) {
+    err = "Could not write \"" + path + "\".";
+    return false;
+  }
+  return true;
+}
+
+bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::string& err) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) {
+    err = "Could not open \"" + path + "\".";
+    return false;
+  }
+  json j = json::parse(f, nullptr, false);
+  if (j.is_discarded() || !j.is_object()) {
+    err = "\"" + path + "\" is not a valid .gstrav file (malformed JSON).";
+    return false;
+  }
+  if (j.value("format", std::string()) != kFormat) {
+    err = "\"" + path + "\" is not a GoSurvey traverse file.";
+    return false;
+  }
+  if (!j.contains("version") || !j["version"].is_number_integer() || j["version"].get<int>() > kVersion) {
+    err = "\"" + path + "\" was saved by a newer version of GoSurvey and cannot be read.";
+    return false;
+  }
+
+  TraverseData out;
+  out.startStationId = j.value("startStationId", 1);
+  out.startEasting = j.value("startEasting", 0.0);
+  out.startNorthing = j.value("startNorthing", 0.0);
+  out.startElevation = j.value("startElevation", 0.0);
+  out.startBearingBuf = j.value("startBearingBuf", std::string());
+  out.startBearingDeg = j.value("startBearingDeg", 0.0);
+  out.hasStartBearing = j.value("hasStartBearing", false);
+
+  out.useFace1Face2 = j.value("useFace1Face2", false);
+  out.isClosedLoop = j.value("isClosedLoop", false);
+  out.applyScaleFactor = j.value("applyScaleFactor", false);
+  out.scaleFactorKind = static_cast<TraverseData::ScaleFactorKind>(j.value("scaleFactorKind", 0));
+  out.scaleFactor = j.value("scaleFactor", 1.0);
+
+  if (j.contains("legs") && j["legs"].is_array())
+    for (const json& lj : j["legs"])
+      out.legs.push_back(LegFromJson(lj));
+
+  LsaWeights w;
+  if (j.contains("weights") && j["weights"].is_object()) {
+    const json& wj = j["weights"];
+    w.sigmaAngleSec = wj.value("sigmaAngleSec", w.sigmaAngleSec);
+    w.sigmaDistConstFt = wj.value("sigmaDistConstFt", w.sigmaDistConstFt);
+    w.sigmaDistPpm = wj.value("sigmaDistPpm", w.sigmaDistPpm);
+  }
+
+  td = std::move(out);
+  weights = w;
+  return true;
+}
+
+}  // namespace traverseio

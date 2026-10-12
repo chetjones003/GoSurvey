@@ -5,13 +5,16 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
+#include "traverse/TraverseIo.hpp"
 #include "WinFileDialogs.hpp"
+#include "ProjectFiles.hpp"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
 #include <algorithm>
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -41,6 +44,26 @@ static void ParseVertAngle(TraverseLeg& leg) {
         leg.vertAngleDeg = v;
         leg.hasVertAngle = true;
     }
+}
+
+// REQ-403 (#834): if the active drawing belongs to a project and \p path lies inside that project's
+// folder, track it (the same mechanism PDFs/point clouds use) so it travels with Pack/Turnover. A
+// standalone drawing, or a file saved outside the project folder, is left exactly as saved.
+static void TrackTraverseFileInProject(AppCommandState& cmd, const std::string& path,
+                                       std::vector<std::string>& log) {
+    const int tab = cmd.activeDrawingIdx;
+    if (tab < 1 || tab >= static_cast<int>(cmd.drawingTabs.size()))
+        return;
+    const std::uint32_t uid = cmd.drawingTabs[static_cast<size_t>(tab)].projectUid;
+    if (uid == 0)
+        return;
+    const AppCommandState::ProjectSession* s = nullptr;
+    for (const auto& ps : cmd.openProjects)
+        if (ps.uid == uid)
+            s = &ps;
+    if (s == nullptr || s->readOnly || !projfiles::IsInsideProject(s->project, std::filesystem::u8path(path)))
+        return;
+    TrackProjectFile(cmd, uid, path, log);
 }
 
 static void ParseStartBearing(TraverseData& td) {
@@ -445,6 +468,67 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         "Import an Autodesk Field Book (.fbk) raw data file.\n"
         "Replaces the current traverse with the imported stations, backsight\n"
         "orientation, and face-averaged observations.");
+
+    // ---- Save / Load (REQ-403, GitHub issue #834) ----
+    ImGui::SameLine();
+    const bool haveSavedPath = !cmd.traverseFilePath.empty();
+    if (!haveSavedPath) ImGui::BeginDisabled();
+    if (ImGui::Button("Save")) {
+        std::string err;
+        if (traverseio::Save(cmd.traverseFilePath, td, cmd.traverseLsaWeights, err)) {
+            TrackTraverseFileInProject(cmd, cmd.traverseFilePath, log);
+            log.push_back("TRAVERSE — saved: " + cmd.traverseFilePath);
+        } else {
+            log.push_back("TRAVERSE — save failed: " + err);
+        }
+    }
+    if (!haveSavedPath) ImGui::EndDisabled();
+    ItemHelpTooltip("Save the traverse back to its current .gstrav file.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save As\xe2\x80\xa6")) {
+        char path[1024]{};
+        const char* defaultName = haveSavedPath ? cmd.traverseFilePath.c_str() : nullptr;
+        if (BrowseSaveFileGstravUtf8(path, sizeof(path), defaultName)) {
+            std::string err;
+            if (traverseio::Save(path, td, cmd.traverseLsaWeights, err)) {
+                cmd.traverseFilePath = path;
+                TrackTraverseFileInProject(cmd, cmd.traverseFilePath, log);
+                log.push_back("TRAVERSE — saved: " + cmd.traverseFilePath);
+            } else {
+                log.push_back("TRAVERSE — save failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip(
+        "Save the raw measurements, legs, scale-factor setting, and LSA weights\n"
+        "to a .gstrav file. If this drawing belongs to a GoSurvey Project and the\n"
+        "file is saved inside the project folder, it is added to the project's\n"
+        "tracked files so it travels with Pack Project / Turnover.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Load\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileGstravUtf8(path, sizeof(path))) {
+            TraverseData loaded;
+            LsaWeights loadedWeights;
+            std::string err;
+            if (traverseio::Load(path, loaded, loadedWeights, err)) {
+                cmd.traverseData = std::move(loaded);
+                cmd.traverseLsaWeights = loadedWeights;
+                cmd.traverseFilePath = path;
+                cmd.traverseDataDirty = true;
+                cmd.traverseLsaComputed = false;
+                cmd.traverseLsaAccepted = false;
+                cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
+                log.push_back(std::string("TRAVERSE — loaded (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — load failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip("Load a previously saved .gstrav file, replacing the current traverse.");
 
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
