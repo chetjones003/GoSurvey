@@ -4999,3 +4999,40 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   logic is a pure scheduler and cache that can be unit-tested without a window. Cost: a dense CAD-plot
   PDF page can take longer than one frame to render, so the viewer shows the stand-in first; this is
   the designed behaviour, and the bench reports the worst frame so a regression is visible.
+
+### ADR-068 — Admin dashboard: separate Worker, Cloudflare Access, unlinked subdomain   (2026-10-11, accepted)
+
+- **Status:** accepted (D-2026-10-11-c). Backs REQ-402.
+- **Context.** The operator needs one web view over telemetry (`gosurvey-telemetry` D1, REQ-080),
+  accounts (`gosurveycad-db` D1, REQ-091/092) and Workers logs, reachable only by him. Three candidate
+  auth designs were considered: Cloudflare Access, a shared password checked in Worker code, or reusing
+  Auth0 with a hardcoded allow-listed user id.
+- **Decision.**
+  (a) **Authentication is Cloudflare Access**, not application code. Access sits in front of the
+      request at Cloudflare's edge — a rejected request never reaches the Worker, so there is no
+      password to brute-force and no session logic to get wrong. The alternatives (shared password,
+      Auth0 allow-list) both put the operator's own access control inside code this repo maintains,
+      for no benefit over a config Cloudflare already provides for free.
+  (b) **A separate Worker, `admin-api`** (`tools/admin-worker/`), not a route bolted onto the existing
+      `gosurveycad-api` accounts Worker. It is bound to both D1 databases as **read-only** data access —
+      it has no write path to either. Keeping it separate means the Access policy, and the blast radius
+      of a bug in it, cannot touch the accounts Worker's own `/api/me`/`/api/profile` routes.
+  (c) **Reachable only at an unlinked subdomain, `admin.gosurveycad.com`.** This is defense in depth,
+      not the access control itself (that is (a)): no page on the public site links to it, and it is
+      excluded from `sitemap.xml`/`robots.txt`. A subdomain was chosen over an obscure path so it stays
+      architecturally separate from the public site's own routing and is easy to point Access at as a
+      whole.
+  (d) **The public marketing site moved to a separate private repo** (`chetjones003/gosurveycad-site`)
+      as a prerequisite, so that `admin.gosurveycad.com` (and anything else about this dashboard) never
+      appears in GoSurvey's public git history. This repo's own docs point to the new repo; the deploy
+      mechanism (`wrangler pages deploy`, by hand) is unchanged.
+- **Alternatives.** (1) *Shared password in Worker code:* simplest to build, but it is secret-management
+  the operator must maintain and it can be brute-forced; rejected. (2) *Reuse Auth0 + allow-list:* adds a
+  dependency on the regular user-login system for an owner-only surface; rejected. (3) *Obscure path
+  instead of a subdomain:* works but mixes admin routing into the public site's own Worker/Pages project;
+  rejected in favor of (b)'s clean separation.
+- **Consequences.** No new secrets in this repo (Access is configured in the Cloudflare dashboard/API,
+  outside the build). The admin Worker can be deployed, broken, or redeployed without any risk to the
+  accounts or telemetry Workers' own request paths. Cost: three Cloudflare Workers/Pages projects to
+  operate instead of two, and Access policy/DNS setup lives outside version control — documented in
+  `docs/` instead.
