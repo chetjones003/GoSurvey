@@ -67,3 +67,24 @@ AI-assisted changes (including Claude Code) in this repository follow the same g
 - Commits and PRs produced with AI assistance carry `Co-Authored-By` attribution identifying the model used.
 
 **[Report an issue](https://github.com/chetjones003/GoSurvey/issues)** · **[All releases](https://github.com/chetjones003/GoSurvey/releases)**
+
+---
+
+## Contribute
+
+GoSurvey is built mainly by me and whoever is kind enough to contribute.
+
+It is open source free to use software and as such is depended upon by the help of others. Feel free to help contribute in command implementation, file-format compatibility, testing, documentation, UI/UX, website design, issue triage, or simply by giving me input and feedback.
+
+Currently this project is funded solely by my own means. If you'd like to support development financially, you can buy me a coffee.
+
+- Commands
+- File formats
+- Testing
+- Documentation
+- UI/UX
+- Website
+- Issue triage
+- Feedback
+
+**[Browse the repo](https://github.com/chetjones003/GoSurvey)** · **[Open issues](https://github.com/chetjones003/GoSurvey/issues)** · **[Contact me](mailto:chetjones003@gmail.com)** · **[☕ Buy me a coffee](https://buymeacoffee.com/gosurveycad)**
