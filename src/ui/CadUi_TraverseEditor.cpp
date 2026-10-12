@@ -481,6 +481,10 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         ComputeTraverse(cmd.traverseData);
         cmd.traverseDataDirty = false;
         cmd.traverseLsaComputed = false;  // inputs changed -> adjustment is stale.
+        // #845 Phase A: the data actually changed (from the Form tab, an import, or a
+        // prior Apply) — regenerate the Command tab's text next time it's drawn. Merely
+        // switching tabs must NOT hit this, or unapplied typed text would be discarded.
+        cmd.traverseCommandTextLoaded = false;
     }
 
     // The closure window is launched from this editor; draw it here so it
@@ -506,7 +510,6 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     }
 
     if (ImGui::BeginTabItem("Form")) {
-    cmd.traverseCommandTextLoaded = false;  // form is authoritative again; regenerate text on next Command visit.
 
     // ---- Raw data import ----
     if (ImGui::Button("Import .fbk\xe2\x80\xa6")) {
