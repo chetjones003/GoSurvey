@@ -85,13 +85,17 @@ async function telemetrySummary(env) {
   };
 }
 
-async function telemetryDaily(env) {
+async function telemetryDaily(env, url) {
   const db = env.TELEMETRY_DB;
+  const days = [7, 14, 30].includes(Number(url.searchParams.get("days")))
+    ? Number(url.searchParams.get("days"))
+    : 30;
+  const sinceClause = `date('now', '-${days} days')`;
 
   const installs = await db
     .prepare(
       `SELECT day, COUNT(*) AS n FROM pings
-       WHERE event = 'install' AND day >= date('now', '-30 days')
+       WHERE event = 'install' AND day >= ${sinceClause}
        GROUP BY day ORDER BY day`
     )
     .all();
@@ -99,12 +103,12 @@ async function telemetryDaily(env) {
   const active = await db
     .prepare(
       `SELECT day, COUNT(DISTINCT install_id) AS n FROM pings
-       WHERE event = 'active' AND day >= date('now', '-30 days')
+       WHERE event = 'active' AND day >= ${sinceClause}
        GROUP BY day ORDER BY day`
     )
     .all();
 
-  return { installs: installs.results ?? [], active: active.results ?? [] };
+  return { days, installs: installs.results ?? [], active: active.results ?? [] };
 }
 
 async function listReports(env, table, allowedFilterColumns, url) {
@@ -143,7 +147,7 @@ async function listAccounts(env, url) {
 
   const rows = await db
     .prepare(
-      `SELECT auth0_sub, email, name, created_at, updated_at
+      `SELECT auth0_sub, email, tier, created_at
        FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?`
     )
     .bind(limit, offset)
@@ -182,10 +186,18 @@ const DASHBOARD_HTML = `<!doctype html>
   @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
   section { display: none; }
   section.active { display: block; }
-  .chart-wrap { background: #1c2026; border-radius: 6px; padding: 1rem; margin: 0.5rem 0 1.5rem; }
-  .chart-wrap svg { display: block; width: 100%; height: 160px; }
-  .chart-legend { display: flex; gap: 1.25rem; font-size: 0.75rem; color: #9aa4b2; margin-top: 0.5rem; }
+  .chart-wrap { background: #1c2026; border-radius: 6px; padding: 1rem; margin: 0.5rem 0 1.5rem; position: relative; }
+  .chart-wrap svg { display: block; width: 100%; height: 160px; cursor: crosshair; }
+  .chart-legend { display: flex; align-items: center; gap: 1.25rem; font-size: 0.75rem; color: #9aa4b2; margin-top: 0.5rem; }
   .chart-legend span.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 0.35rem; }
+  .range-btns { margin-left: auto; display: flex; gap: 0.25rem; }
+  .range-btns button { background: #15181c; color: #9aa4b2; border: 1px solid #2a2f36; padding: 0.15rem 0.5rem; font-size: 0.75rem; cursor: pointer; border-radius: 3px; }
+  .range-btns button.active { background: #2a2f36; color: #e4e6eb; }
+  .chart-tip { position: absolute; pointer-events: none; background: #0d0f12; border: 1px solid #2a2f36; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.7rem; white-space: nowrap; display: none; }
+  th[data-sort] { cursor: pointer; user-select: none; }
+  th[data-sort]:after { content: ""; margin-left: 0.3rem; opacity: 0.4; }
+  th[data-sort="asc"]:after { content: "\\2191"; opacity: 1; }
+  th[data-sort="desc"]:after { content: "\\2193"; opacity: 1; }
 </style>
 </head>
 <body>
@@ -200,12 +212,18 @@ const DASHBOARD_HTML = `<!doctype html>
 
 <section id="telemetry" class="active">
   <div class="stats" id="telemetry-stats"></div>
-  <h2>Installs &amp; active installs per day (30d)</h2>
+  <h2>Installs &amp; active installs per day</h2>
   <div class="chart-wrap">
     <svg id="telemetry-chart" viewBox="0 0 600 160" preserveAspectRatio="none"></svg>
+    <div class="chart-tip" id="chart-tip"></div>
     <div class="chart-legend">
       <span><span class="swatch" style="background:#6cb6ff"></span>Installs</span>
       <span><span class="swatch" style="background:#6ad68a"></span>Active</span>
+      <div class="range-btns" id="chart-range">
+        <button data-days="7">7d</button>
+        <button data-days="14">14d</button>
+        <button data-days="30" class="active">30d</button>
+      </div>
     </div>
   </div>
   <h2>Versions (30d)</h2>
@@ -237,15 +255,44 @@ function el(tag, attrs, text) {
   return e;
 }
 
+// Click a header to sort by that column: none -> asc -> desc -> none. Sort state lives on the
+// table element itself so repeated calls (polling) keep whatever order the user picked.
 function renderTable(table, columns, rows, cellFn) {
+  const sortKey = table.dataset.sortKey || "";
+  const sortDir = table.dataset.sortDir || "";
+
+  let sorted = rows;
+  if (sortKey && sortDir) {
+    sorted = rows.slice().sort((a, b) => {
+      const av = a[sortKey], bv = b[sortKey];
+      const cmp = av === bv ? 0 : (av ?? "") < (bv ?? "") ? -1 : 1;
+      return sortDir === "asc" ? cmp : -cmp;
+    });
+  }
+
   table.innerHTML = "";
   const thead = el("thead");
   const headRow = el("tr");
-  for (const c of columns) headRow.appendChild(el("th", null, c));
+  for (const c of columns) {
+    const th = el("th", { "data-sort": c === sortKey ? sortDir : "" }, c);
+    th.addEventListener("click", () => {
+      if (table.dataset.sortKey !== c) {
+        table.dataset.sortKey = c;
+        table.dataset.sortDir = "asc";
+      } else if (table.dataset.sortDir === "asc") {
+        table.dataset.sortDir = "desc";
+      } else {
+        table.dataset.sortKey = "";
+        table.dataset.sortDir = "";
+      }
+      renderTable(table, columns, rows, cellFn);
+    });
+    headRow.appendChild(th);
+  }
   thead.appendChild(headRow);
   table.appendChild(thead);
   const tbody = el("tbody");
-  for (const row of rows) {
+  for (const row of sorted) {
     const tr = el("tr");
     for (const c of columns) tr.appendChild(cellFn ? cellFn(c, row) : el("td", null, String(row[c] ?? "")));
     tbody.appendChild(tr);
@@ -260,14 +307,15 @@ function svgEl(tag, attrs) {
   return e;
 }
 
-// Renders two day-keyed series as line charts sharing one y-scale, last 30 days, zero-filled.
-function renderDailyChart(svg, seriesA, seriesB, colorA, colorB) {
+// Renders two day-keyed series as line charts sharing one y-scale, zero-filled over rangeDays
+// days, with a hover crosshair + tooltip reading out both values for the nearest day.
+function renderDailyChart(svg, tip, seriesA, seriesB, colorA, colorB, rangeDays) {
   const W = 600, H = 160, PAD = 8;
   svg.innerHTML = "";
 
   const days = [];
   const today = new Date();
-  for (let i = 29; i >= 0; i--) {
+  for (let i = rangeDays - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - i);
     days.push(d.toISOString().slice(0, 10));
@@ -278,24 +326,42 @@ function renderDailyChart(svg, seriesA, seriesB, colorA, colorB) {
   const valsB = days.map(d => mapB[d] ?? 0);
   const max = Math.max(1, ...valsA, ...valsB);
 
-  const x = (i) => PAD + (i / (days.length - 1)) * (W - 2 * PAD);
+  const x = (i) => PAD + (i / Math.max(1, days.length - 1)) * (W - 2 * PAD);
   const y = (v) => H - PAD - (v / max) * (H - 2 * PAD);
 
   const pathFor = (vals) =>
     vals.map((v, i) => (i === 0 ? "M" : "L") + " " + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ");
 
-  svg.appendChild(svgEl("path", {
-    d: pathFor(valsA), fill: "none", stroke: colorA, "stroke-width": "2",
-  }));
-  svg.appendChild(svgEl("path", {
-    d: pathFor(valsB), fill: "none", stroke: colorB, "stroke-width": "2",
-  }));
+  svg.appendChild(svgEl("path", { d: pathFor(valsA), fill: "none", stroke: colorA, "stroke-width": "2" }));
+  svg.appendChild(svgEl("path", { d: pathFor(valsB), fill: "none", stroke: colorB, "stroke-width": "2" }));
+
+  const crosshair = svgEl("line", { x1: 0, y1: 0, x2: 0, y2: H, stroke: "#3a4049", "stroke-width": "1", visibility: "hidden" });
+  svg.appendChild(crosshair);
+
+  svg.addEventListener("mousemove", (ev) => {
+    const rect = svg.getBoundingClientRect();
+    const px = ((ev.clientX - rect.left) / rect.width) * W;
+    const i = Math.round(((px - PAD) / (W - 2 * PAD)) * Math.max(1, days.length - 1));
+    const idx = Math.min(days.length - 1, Math.max(0, i));
+    crosshair.setAttribute("x1", x(idx)); crosshair.setAttribute("x2", x(idx));
+    crosshair.setAttribute("visibility", "visible");
+    tip.style.display = "block";
+    tip.style.left = Math.min(rect.width - 140, Math.max(0, (x(idx) / W) * rect.width + 8)) + "px";
+    tip.style.top = "8px";
+    tip.textContent = days[idx] + "  installs " + valsA[idx] + "  active " + valsB[idx];
+  });
+  svg.addEventListener("mouseleave", () => {
+    crosshair.setAttribute("visibility", "hidden");
+    tip.style.display = "none";
+  });
 }
+
+let chartRangeDays = 30;
 
 async function loadTelemetry() {
   const [summary, daily] = await Promise.all([
     fetch("/api/telemetry/summary").then(r => r.json()),
-    fetch("/api/telemetry/daily").then(r => r.json()),
+    fetch("/api/telemetry/daily?days=" + chartRangeDays).then(r => r.json()),
   ]);
   const stats = document.getElementById("telemetry-stats");
   stats.innerHTML = "";
@@ -310,7 +376,19 @@ async function loadTelemetry() {
   add("Active (30d)", summary.active30d);
   renderTable(document.getElementById("telemetry-versions"), ["version", "users"], summary.byVersion);
   renderTable(document.getElementById("telemetry-channels"), ["channel", "users"], summary.byChannel);
-  renderDailyChart(document.getElementById("telemetry-chart"), daily.installs, daily.active, "#6cb6ff", "#6ad68a");
+  renderDailyChart(
+    document.getElementById("telemetry-chart"), document.getElementById("chart-tip"),
+    daily.installs, daily.active, "#6cb6ff", "#6ad68a", chartRangeDays
+  );
+}
+
+for (const btn of document.querySelectorAll("#chart-range button")) {
+  btn.addEventListener("click", () => {
+    chartRangeDays = Number(btn.dataset.days);
+    for (const b of document.querySelectorAll("#chart-range button")) b.classList.remove("active");
+    btn.classList.add("active");
+    loadTelemetry();
+  });
 }
 
 async function loadReports(path, tableId, columns) {
@@ -325,7 +403,7 @@ async function loadReports(path, tableId, columns) {
 }
 
 async function loadAccounts() {
-  await loadReports("/api/accounts", "accounts-table", ["email", "name", "created_at", "updated_at"]);
+  await loadReports("/api/accounts", "accounts-table", ["email", "tier", "created_at"]);
 }
 
 for (const btn of document.querySelectorAll(".tabs button")) {
@@ -366,7 +444,7 @@ export default {
     }
 
     if (url.pathname === "/api/telemetry/daily") {
-      return json(await telemetryDaily(env));
+      return json(await telemetryDaily(env, url));
     }
 
     if (url.pathname === "/api/telemetry/startup-reports") {

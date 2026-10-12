@@ -23,8 +23,8 @@ database_id = "6a6a538a-a9e2-489f-81e8-3908741d0fc5"
 
 [[d1_databases]]
 binding = "ACCOUNTS_DB"
-database_name = "gosurveycad-db"
-database_id = "52901a18-3eb2-4ea4-909c-aa71201ac5e8"
+database_name = "gosurvey-accounts"
+database_id = "eb8a7a88-08bf-4c25-a92e-ed78d8088929"
 
 # Deliberately absent: [observability] (Workers Logs). This Worker only reads D1 data that's
 # already stripped of IPs (REQ-080); no reason to also start retaining request logs here. Turn on
