@@ -3931,14 +3931,25 @@ requirements is a planning failure, not a sign of rigor.
   authority over. The gate below governs SESSION ACCESS, which is a different thing.
 
   **Launch gate (added 2026-08-23, D-2026-08-23-d, reverses this requirement's original
-  "no application feature is gated" condition):** every launch, until the user is signed
-  in, a modal window blocks the rest of the application — no drawing can be opened or
-  started. It offers only Sign In; there is no dismiss, skip, or close. The one
-  exception: when there is no internet connectivity at all, the gate is skipped entirely
-  and the application opens normally, signed out — the same offline exception REQ-077's
-  update-check gate uses, and for the same reason (a surveyor with no signal must not be
-  locked out of a program that has nothing to reach). The gate is resolved once per
-  launch and is not re-imposed if the user signs out later in the same session.
+  "no application feature is gated" condition; amended 2026-10-11, D-2026-10-11-a,
+  GitHub issue #824):** on a launch with no valid stored session and network reachable,
+  a modal window presents a **choice**, not a demand: **Sign In** (opens the system
+  browser to Auth0, as above) or **Don't Sign In** (declines; see below). Unlike the
+  original 2026-08-23 shape, this is not a one-way block — declining is a real, equal
+  option, because signing in does not unlock any feature today (the scope note above
+  still holds) and a no-escape prompt at every launch was found to cost new-user trust
+  for no offsetting benefit (issue #824).
+
+  Choosing **Don't Sign In** permanently opts out: the choice is persisted
+  (`gosurvey-user.json`, same shape as `updateSkippedVersion`/`whatsNewDismissedVersion`)
+  and the launch gate is not shown again on any future launch, with no "every so often"
+  re-nag. The only way back in is the existing Settings ▸ Account "Sign In" entry point
+  (unchanged by this amendment); a successful sign-in there clears the opt-out flag. The
+  offline exception is unchanged: when there is no internet connectivity at all, the gate
+  is skipped entirely and the application opens normally, signed out — the same offline
+  exception REQ-077's update-check gate uses. The gate is resolved once per launch (by
+  Sign In, Don't Sign In, a valid stored session, or no connectivity) and is not
+  re-imposed if the user signs out later in the same session.
 - Acceptance:
   - clicking "Sign In" opens the system browser to Auth0 Universal Login showing all
     three configured options: Google, Microsoft, and email/username/password;
@@ -3954,14 +3965,23 @@ requirements is a planning failure, not a sign of rigor.
   - no individual command or feature is separately gated or blocked by sign-in state or
     tier beyond the launch gate itself (mechanism only, per the scope note above);
   - REQ-080's anonymous telemetry ping is unchanged by this requirement;
-  - **(added 2026-08-23)** on launch, with network reachable and no valid stored
-    session, a modal blocks all other interaction until Sign In succeeds — no close
-    button, no click-away dismissal;
+  - **(added 2026-08-23, amended 2026-10-11 D-2026-10-11-a)** on launch, with network
+    reachable and no valid stored session, a modal blocks all other interaction until
+    the user picks **Sign In** or **Don't Sign In** — no close button, no click-away
+    dismissal, but both buttons are real choices, not just one;
   - **(added 2026-08-23)** on launch, with `HasInternetConnectivity()` reporting no
     route to the internet, the modal does not appear at all and the application opens
     normally;
   - **(added 2026-08-23)** signing out from the Settings panel later in the same
     session does not reopen the launch gate.
+  - **(added 2026-10-11, D-2026-10-11-a, issue #824)** clicking **Don't Sign In**
+    closes the gate for this launch and persists the opt-out; no subsequent launch
+    shows the gate again (checked before the gate would otherwise open), regardless of
+    connectivity or stored-session state, until a sign-in succeeds from Settings;
+  - **(added 2026-10-11)** a successful sign-in from Settings ▸ Account clears a
+    previously-set opt-out, so a later sign-out returns to ordinary signed-out
+    behavior (gate stays closed for the rest of that session, per the existing rule
+    above) rather than silently restoring the permanent opt-out.
   - **(added 2026-09-01, D-2026-09-01-a, issue #182)** while signed in, a **Sign Out**
     control is available on the Start-screen "Connect" card and from a dropdown on the
     far-right menu-bar email; each performs the same sign-out as Settings ▸ Account;
@@ -3982,6 +4002,10 @@ requirements is a planning failure, not a sign of rigor.
                dropdown (Account Details + Sign Out) plus a read-only Account Details
                placeholder window (D-2026-09-01-a, GitHub issue #182). No new identity
                or sign-out mechanism; reuses existing request flags.
+               2026-10-11 — the launch gate becomes a dismissible choice: Sign In or
+               permanently Don't Sign In (D-2026-10-11-a, GitHub issue #824), reversing
+               the 2026-08-23 "no dismiss, skip, or close" condition. Identity/PKCE/
+               Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
@@ -11472,7 +11496,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
        the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
        cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
-       two standalone drawings is unchanged.
+       two standalone drawings (neither in a Project) still warns and offers convert on a **unit**
+       mismatch alone — replicating how AutoCAD scales pasted/inserted content by the source and
+       destination drawings' `INSUNITS` — but never checks or blocks on coordinate system, since no
+       zone concept is attached to a standalone drawing pairing (D-2026-10-11-c, GitHub issue #831).
        Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
      - **Convert pasted content (3).** The copied objects are transformed into the destination
        drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
@@ -11502,6 +11529,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
   (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
+  2026-10-11 — clause 7: a unit (not coordinate-system) mismatch between two standalone drawings now
+  also warns and offers convert (D-2026-10-11-c, GitHub issue #831).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 
@@ -12167,6 +12196,50 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
 - Status: accepted
 - Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
+
+### REQ-400 — Command-line resolution: an exact typed command or alias always wins (GitHub issue #766)
+
+- Purpose: the command line offers autocomplete suggestions while idle (REQ-040), ranked by how closely they match what has been typed so far. Nothing said what Enter submits when the typed text is itself an exact command name or alias AND a suggestion is highlighted — which let a suggestion computed against an earlier, unrelated query (left over because Enter deactivates the input on the very frame it fires, so the suggestion list is not recomputed for the final text before it is used) run instead of the command the user had actually finished typing: `ERASE` (an alias of `DELETE`) ran `DRAWINGSETTINGS`, `RENAME` ran `SURFACERENAME`, `TABLE` ran `VOLTABLE` (findings N2/E5, #751 paper-space audit).
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-10-a.
+- Depends on: REQ-040 (the command line this governs).
+- Statement:
+  1. At the moment Enter submits the command line, the command actually run is resolved **fresh, from the committed text itself** — never from a suggestion state computed on an earlier keystroke or an earlier, unrelated query.
+  2. A single-token typed line that **exactly** names a registered command's primary name or alias (case-insensitive) always resolves to that command. There is never a disparity between an exact typed command and the autocomplete highlight: typing `LINE` highlights and runs `LINE`, not some other entry.
+  3. The existing autocomplete precedent is unchanged by this requirement: when the typed text is not itself an exact match, the highlighted suggestion (ranked as REQ-040's popup already ranks it) still wins on Enter.
+  4. A single token that matches no command exactly and has no ranked suggestion at all is submitted unchanged and reported as an unknown command (REQ-201) — it is never silently replaced by an unrelated leftover highlight.
+  5. A multi-token line (a command plus arguments) is never rewritten by this resolution; only a single bare token is in scope.
+- Acceptance:
+  - Driven through the real command-bar widget (a unit test on the dispatcher alone cannot see this defect — it lives in which text the UI writes into the submit buffer, not in the dispatcher): typing `ERASE` and pressing Enter starts `DELETE`, even immediately after an unrelated query left a different suggestion highlighted.
+  - Typing `RENAME` or `TABLE` (bare words that name no top-level command — `RENAME` is only a `LAYER` sub-verb, `TABLE` only a volume-report sub-verb) and pressing Enter never starts `SURFACERENAME` or runs `VOLTABLE`; the command line stays idle and reports the line as unrecognized.
+  - `headless`/DevShell test `req766-fuzzy-exact-wins`.
+- Owner-layer: UI (`src/ui/CadUi.cpp` `DrawCommandLinePanel`), Commands (`src/commands/CadCommands.cpp`/`.hpp` `ResolveCommandLineSubmission`, built on the existing `FuzzyCommandSuggestions`).
+- Status: accepted.
+- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted.
+
+### REQ-401 — Traverse Editor: reduce ground distances to grid using the drawing's projection (GitHub issue #828)
+
+- Purpose: the Traverse Editor computes station coordinates from field-measured (ground) distances with no option to reduce them to grid distances. A user with a projection set in Drawing Settings (e.g. MGA56/GDA2020, reported via Reddit) has no way to apply that projection's scale factor inside the traverse editor itself, and must correct distances by hand before entering them.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-11-b.
+- Depends on: REQ-358 (drawing coordinate system), REQ-360 (Transformation tab — grid scale factor at a reference point, sea-level factor).
+- Statement:
+  1. **Option, not automatic.** The Traverse Editor has an **"Apply scale factor"** checkbox, off by default. Turning it on does not change any traverse whose checkbox is left off — existing traverses and drawings are unaffected.
+  2. **Factor choice.** While the checkbox is on, the user picks which factor to apply: **Combined** (the Transformation tab's k = k_grid · k_sea at its reference point — grid scale factor times the elevation/sea-level factor, when sea-level reduction is enabled there) or **Grid only** (k_grid alone, ignoring elevation/sea-level reduction even if the Transformation tab has it enabled).
+  3. **Source of the factor.** The factor is read from the active drawing's Drawing Settings (REQ-358 zone, REQ-360 Transformation tab reference point) — never entered or guessed independently inside the traverse editor.
+  4. **Where it applies.** Each leg's reduced horizontal distance (after slope/zenith reduction, REQ-012) is multiplied by the chosen factor before it is used to compute that leg's easting/northing increment, the running coordinates, the closure perimeter and linear closure, and the distances handed to the least-squares adjustment (REQ-015). The original (ground) horizontal distance is still available for display; turning the option off reproduces exactly the distances/coordinates from before this requirement.
+  5. **Not geolocated / not resolvable.** If the drawing has no coordinate system (REQ-358 "No Datum, No Projection"), or the Transformation tab's reference point cannot be resolved to a grid scale factor (REQ-360's own error cases — e.g. point outside the projection's domain), the checkbox is usable but applying it reports the reason and the traverse computes as if the option were off (factor 1.0) until the drawing settings are fixed.
+- Acceptance:
+  - `[req401]` test: checkbox off (default) produces identical computed distances/coordinates/closure to today, for a traverse that is otherwise unchanged.
+  - `[req401]` test: checkbox on + Combined, with a drawing whose Transformation tab resolves a known k, scales every leg's computed horizontal distance (and therefore ΔE/ΔN and closure perimeter) by exactly that k.
+  - `[req401]` test: checkbox on + Grid only uses k_grid alone, differing from Combined when the Transformation tab's sea-level factor is enabled and not 1.
+  - `[req401]` test: a drawing with no coordinate system reports the reason and leaves distances unscaled (factor 1.0).
+  - `[req401]` test: the least-squares adjustment (REQ-015) operates on the scaled distances when the option is on.
+- Owner-layer: Domain (`src/traverse/TraverseCalc.hpp`/`.cpp`), Commands (`src/commands/CadCommands_Geo.cpp`, resolving the factor from `DrawingSettings`/`ResolveDrawingTransform`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-11 — initial (D-2026-10-11-b). 2026-10-11 — accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)

@@ -835,6 +835,16 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
       break;
     }
   }
+  // A line-endpoint grip drag (REQ-356) runs with no active command, so none of the branches above
+  // ever match it — but it has exactly as good a reference as an in-progress LINE does: the line's
+  // OTHER (fixed) endpoint, unmoved since the drag was armed. Dropping a perpendicular foot from
+  // that point is exactly what "stretch this endpoint onto a perpendicular from the line's far end"
+  // means.
+  if (cmd.entityGripMoveActive && cmd.entityGripType == SelectedEntity::Type::LineSeg) {
+    *refX = cmd.entityGripWhich == 0 ? cmd.entityGripOrigX1 : cmd.entityGripOrigX0;
+    *refY = cmd.entityGripWhich == 0 ? cmd.entityGripOrigY1 : cmd.entityGripOrigY0;
+    return true;
+  }
   return false;
 }
 

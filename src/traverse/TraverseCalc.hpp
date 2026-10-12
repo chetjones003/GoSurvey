@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -75,7 +76,12 @@ struct TraverseLeg {
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;
     double computedHorizAngleDeg = 0.0;   ///< Resolved turned angle actually used (F1/F2 avg or single).
+    /// Reduced horizontal distance actually used for ΔE/ΔN (REQ-401): the ground distance below,
+    /// scaled by TraverseData::scaleFactor when applyScaleFactor is set. Equal to
+    /// computedGroundHorizDist when the option is off.
     double computedHorizDist = 0.0;
+    /// Horizontal distance after slope/zenith reduction (REQ-012), before any REQ-401 scale factor.
+    double computedGroundHorizDist = 0.0;
     double computedDeltaE = 0.0;
     double computedDeltaN = 0.0;
     double computedDeltaZ = 0.0;
@@ -109,6 +115,19 @@ struct TraverseData {
     bool isClosedLoop = false;    ///< When true, compute closure back to starting station.
     bool applyCurvRefCorr = true; ///< Apply combined earth curvature + refraction correction to dZ (#826).
     double refractionCoeff = 0.14;///< Refraction coefficient k (typical range -2..+2); 0.14 = average conditions.
+
+    /// REQ-401: which drawing-settings scale factor the UI resolves into \ref scaleFactor when
+    /// \ref applyScaleFactor is on. Not interpreted by ComputeTraverse itself.
+    enum class ScaleFactorKind : std::uint8_t { Combined = 0, GridOnly = 1 };
+    /// REQ-401: off by default — leaves every distance/coordinate exactly as before this option
+    /// existed. When on, each leg's ground horizontal distance is multiplied by \ref scaleFactor
+    /// before it drives coordinates, closure, and the least-squares adjustment.
+    bool applyScaleFactor = false;
+    ScaleFactorKind scaleFactorKind = ScaleFactorKind::Combined;
+    /// The ground→grid multiplier to apply when \ref applyScaleFactor is on. The UI resolves this
+    /// from the drawing's coordinate system (CadCommands_Geo ResolveTraverseScaleFactor); 1.0 when
+    /// unresolved (no coordinate system, or the Transformation tab's reference point fails).
+    double scaleFactor = 1.0;
 
     // --- Closure results (set by ComputeTraverse when isClosedLoop) ---
     double closureDeltaE = 0.0;       ///< End easting − start easting.

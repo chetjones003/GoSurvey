@@ -404,9 +404,12 @@ void ComputeTraverse(TraverseData& td) {
 
         // --- Coordinate increments ---
         const double bearingRad = fwdBearing * kDeg2Rad;
-        leg.computedHorizDist = hd;
-        leg.computedDeltaE    = hd * std::sin(bearingRad);
-        leg.computedDeltaN    = hd * std::cos(bearingRad);
+        // REQ-401: reduce ground to grid when requested; off (the default) reproduces hd exactly.
+        const double gridHd = td.applyScaleFactor ? hd * td.scaleFactor : hd;
+        leg.computedGroundHorizDist = hd;
+        leg.computedHorizDist = gridHd;
+        leg.computedDeltaE    = gridHd * std::sin(bearingRad);
+        leg.computedDeltaN    = gridHd * std::cos(bearingRad);
         leg.computedDeltaZ    = dz;
         leg.computedEasting   = curE + leg.computedDeltaE;
         leg.computedNorthing  = curN + leg.computedDeltaN;
@@ -414,7 +417,7 @@ void ComputeTraverse(TraverseData& td) {
         leg.computed          = true;
         leg.hasSufficientData = true;
 
-        td.closurePerimeter += hd;
+        td.closurePerimeter += gridHd;
 
         curE = leg.computedEasting;
         curN = leg.computedNorthing;

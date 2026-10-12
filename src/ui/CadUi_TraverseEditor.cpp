@@ -260,13 +260,20 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     if (!cmd.traverseLsaComputed)
         recompute();
 
+    // Active drawing's linear unit abbreviation (issue #831): labels below reflect this
+    // instead of hardcoding "ft". The underlying values are unit-agnostic doubles —
+    // whatever unit the project's legs were entered in.
+    const char* distUnit = CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits);
+    char sigmaSdLabel[48];
+    std::snprintf(sigmaSdLabel, sizeof(sigmaSdLabel), "Dist \xcf\x83 (%s)##lsa_sd", distUnit);
+
     // ---- A-priori standard errors (weights) ----
     ImGui::SeparatorText("A-priori Standard Errors");
     bool wChanged = false;
     ImGui::SetNextItemWidth(120.f);
     wChanged |= ImGui::InputDouble("Angle \xcf\x83 (sec)##lsa_sa", &cmd.traverseLsaWeights.sigmaAngleSec, 0., 0., "%.2f");
     ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
-    wChanged |= ImGui::InputDouble("Dist \xcf\x83 (ft)##lsa_sd", &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
+    wChanged |= ImGui::InputDouble(sigmaSdLabel, &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
     ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
     wChanged |= ImGui::InputDouble("Dist ppm##lsa_ppm", &cmd.traverseLsaWeights.sigmaDistPpm, 0., 0., "%.2f");
     ImGui::SameLine(0, 16);
@@ -349,8 +356,10 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
                                                          ImGuiTableFlags_ScrollY)) {
                 ImGui::TableSetupColumn("From");
                 ImGui::TableSetupColumn("To");
+                char distResidLabel[32];
+                std::snprintf(distResidLabel, sizeof(distResidLabel), "Dist resid (%s)", distUnit);
                 ImGui::TableSetupColumn("Angle resid (sec)");
-                ImGui::TableSetupColumn("Dist resid (ft)");
+                ImGui::TableSetupColumn(distResidLabel);
                 ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
                 ImGui::TableHeadersRow();
                 ImGui::PopStyleColor();
@@ -377,6 +386,21 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
 void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log) {
     if (!cmd.showTraverseEditorWindow)
         return;
+
+    // REQ-401: resolve the scale factor every frame (cheap — one CS-MAP lookup, only while the
+    // option is on) so a Drawing Settings change made elsewhere is picked up without a stale
+    // cached factor. Only forces a recompute when the resolved number actually changes.
+    TraverseData& tdPre = cmd.traverseData;
+    std::string scaleFactorError;
+    if (tdPre.applyScaleFactor) {
+        double factor = 1.0;
+        scaleFactorError = ResolveTraverseScaleFactor(cmd, tdPre.scaleFactorKind, &factor);
+        const double resolved = scaleFactorError.empty() ? factor : 1.0;
+        if (resolved != tdPre.scaleFactor) {
+            tdPre.scaleFactor = resolved;
+            cmd.traverseDataDirty = true;
+        }
+    }
 
     // Recompute when inputs change.
     if (cmd.traverseDataDirty) {
@@ -424,6 +448,19 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
 
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
+    // Unit indicator (issue #831): the editor gave no clue which unit entered/displayed
+    // distances were in, so this makes the active drawing's linear unit explicit.
+    {
+        int unitSel = 2;  // Feet, matching kDrawingUnitNames' fallback default (REQ-357).
+        for (int i = 0; i < kDrawingUnitCount; ++i)
+            if (kDrawingUnitCodes[i] == cmd.drawingInsUnits) unitSel = i;
+        ImGui::SameLine();
+        ImGui::TextDisabled("(Units: %s)", kDrawingUnitNames[unitSel]);
+        ItemHelpTooltip(
+            "Distances entered and shown in this editor (H.Dist, S.Dist, perimeter,\n"
+            "misclosure, closure analysis) use the active drawing's linear unit,\n"
+            "set in Drawing Settings or the UNITS command.");
+    }
 
     const float colGap = 14.f;
 
@@ -475,6 +512,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     });
     ItemHelpTooltip(
         "Reference orientation at the start station (° CW from N).\n"
+        "Accepts decimal degrees or DdMmSs (e.g. 45d30m10s).\n"
         "This is the azimuth of the backsight direction (or any reference mark)\n"
         "that the instrument was zeroed on. The forward bearing of the first leg\n"
         "= this value + the first row's H.Angle.\n"
@@ -503,6 +541,33 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         ImGui::SameLine(0, 8);
         ImGui::TextColored(ImVec4(1.0f, 0.65f, 0.0f, 1.0f),
                            "k outside the typical -2..+2 range");
+    }
+
+    // ---- Scale factor (REQ-401, GitHub issue #828) ----
+    ImGui::SameLine(0, 24);
+    CheckboxCol("Scale Factor##trv", &td.applyScaleFactor,
+                "Reduce each leg's horizontal distance from ground to grid using the active\n"
+                "drawing's coordinate system (Drawing Settings > Transformation tab).\n"
+                "Off by default; existing traverses are unaffected unless turned on.");
+    if (td.applyScaleFactor) {
+        ImGui::SameLine();
+        LabeledCol("Factor##trv_sf", 150.f, [&] {
+            int kind = static_cast<int>(td.scaleFactorKind);
+            if (ImGui::Combo("##trv_sf_kind", &kind, "Combined\0Grid only\0")) {
+                td.scaleFactorKind = static_cast<TraverseData::ScaleFactorKind>(kind);
+                cmd.traverseDataDirty = true;
+            }
+        });
+        ItemHelpTooltip(
+            "Combined: grid scale factor x elevation/sea-level factor, as resolved by the\n"
+            "Transformation tab's reference point.\n"
+            "Grid only: the map-projection grid scale factor alone, ignoring elevation/sea-level\n"
+            "reduction even if the Transformation tab has it enabled.");
+        ImGui::SameLine();
+        if (!scaleFactorError.empty())
+            ImGui::TextColored(ImVec4(1.f, 0.55f, 0.3f, 1.f), "(%s)", scaleFactorError.c_str());
+        else
+            ImGui::Text("k = %.6f", td.scaleFactor);
     }
 
     ImGui::SeparatorText("Legs");

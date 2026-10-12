@@ -268,6 +268,10 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
 /// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
 /// resolved member count shown live so an empty or non-matching rule is visible immediately.
 void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Survey Point Database grid (REQ-400): an editable, sortable table of every point in the active
+/// project's database (number, northing, easting, elevation, description, visible-here, source
+/// drawing, point group). Opened from the toolspace Survey Database section.
+void DrawSurveyPointGridWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Connection Modes window (issue #496 follow-up): graphical authoring of a BEDIT connection
 /// point's smart connection modes (snap target, role, engagement, compatibility tag, default) — the
 /// GUI counterpart of the BCONNECTMODE text wizard, for the same underlying data.

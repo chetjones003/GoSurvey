@@ -571,9 +571,12 @@ void AppendSnapTriangleOutline(std::vector<float>& out, const SnapGlyphFrame& f,
   f.seg(out, h, -h, 0.f, h);
 }
 
-void AppendSnapCrossInSquare(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
-  f.seg(out, -h, 0.f, h, 0.f);
-  f.seg(out, 0.f, -h, 0.f, h);
+/// AutoCAD's Perpendicular marker: a right-angle "foot" bracket (two perpendicular legs meeting at
+/// a corner, like a carpenter's square) rather than a closed outline, so it reads as a distinct
+/// shape from the Endpoint square at a glance instead of a square with a faint inner mark.
+void AppendSnapRightAngleFoot(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, -h, -h, h, -h);
+  f.seg(out, -h, -h, -h, h);
 }
 
 /// Two diagonal segments (×); \p halfDiag is half the segment length along each diagonal from center.
@@ -674,8 +677,7 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiagonalCross(out, f, mh * 0.42f);
     break;
   case CadSnap::Kind::Perpendicular:
-    AppendSnapSquareOutline(out, f, mh);
-    AppendSnapCrossInSquare(out, f, mh * 0.55f);
+    AppendSnapRightAngleFoot(out, f, mh);
     break;
   case CadSnap::Kind::Intersection:
     // A plain X — the objects genuinely cross here (REQ-062).

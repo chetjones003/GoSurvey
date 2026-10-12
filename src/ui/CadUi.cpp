@@ -157,7 +157,7 @@ static void UiSubmitViewportPick(AppCommandState& cmd, double x, double y, std::
                                  bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                                  const ray3d::Ray* pickRay = nullptr)
 {
-  DevShell_OnPick(x, y);
+  DevShell_OnPick(static_cast<float>(x), static_cast<float>(y));
   SubmitViewportPick(cmd, x, y, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
 }
 
@@ -1057,7 +1057,7 @@ static void DrawSelectionBoxRect(ImDrawList* dl, const ImVec2& mn, const ImVec2&
     if (len < 1e-3f)
       return;
     const ImVec2 d((b.x - a.x) / len, (b.y - a.y) / len);
-    for (float t = 0.f; t < len; t += kDash + kGap) {
+    for (float t = 0.f; t < len; t += kDash + kGap) {  // NOLINT(clang-analyzer-security.FloatLoopCounter): cosmetic dash-pattern drift, bounded by `len`
       const float t1 = std::min(t + kDash, len);
       dl->AddLine(ImVec2(a.x + d.x * t, a.y + d.y * t), ImVec2(a.x + d.x * t1, a.y + d.y * t1), edge, 1.f);
     }
@@ -2385,7 +2385,7 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddRect(ImVec2(bx0, by0), ImVec2(bx1, by1), col, 0.f, 0, t);
     dl->PushClipRect(ImVec2(bx0, by0), ImVec2(bx1, by1), true);
     const float bw = bx1 - bx0;
-    for (float off = -bw + 0.25f * bw; off < bw; off += 0.28f * bw)  // 45° lines, clipped to the box
+    for (float off = -bw + 0.25f * bw; off < bw; off += 0.28f * bw)  // 45° lines, clipped to the box — NOLINT(clang-analyzer-security.FloatLoopCounter): cosmetic hatch spacing, bounded by `bw`
       dl->AddLine(ImVec2(bx0 + off, by1), ImVec2(bx0 + off + (by1 - by0), by0), acc, t * 0.8f);
     dl->PopClipRect();
     break;
@@ -2635,7 +2635,7 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     // Three dots (left) → arrow → three crisp lines (right)
     const float dotR = std::max(1.5f, w * 0.045f);
     for (int di = 0; di < 3; ++di) {
-      const float y = c.y + (di - 1) * h * 0.22f;
+      const float y = c.y + static_cast<float>(di - 1) * h * 0.22f;
       dl->AddCircleFilled({c.x - w * 0.30f, y}, dotR, col, 8);
     }
     dl->AddLine({c.x - w * 0.08f, c.y}, {c.x + w * 0.04f, c.y}, col, t);
@@ -2643,7 +2643,7 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
                           {c.x - w * 0.02f, c.y - h * 0.07f},
                           {c.x - w * 0.02f, c.y + h * 0.07f}, col);
     for (int li = 0; li < 3; ++li) {
-      const float y = c.y + (li - 1) * h * 0.22f;
+      const float y = c.y + static_cast<float>(li - 1) * h * 0.22f;
       dl->AddLine({c.x + w * 0.16f, y}, {c.x + w * 0.38f, y}, col, t);
     }
     break;
@@ -3425,7 +3425,7 @@ static void RibbonAddCaption(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* 
 }
 
 // Where a button's text label sits relative to its icon.
-enum class RibbonLabel { None, Right, Below };
+enum class RibbonLabel : std::uint8_t { None, Right, Below };
 
 // Flexible ribbon button: icon-only (None), icon + label to the right (Right),
 // or a large icon with the label centered below (Below). Shares the 3D bevel
@@ -3612,7 +3612,7 @@ static int FirstSelectedSurveyPointIndex(const AppCommandState& cmd) {
 
 // REQ-302 increment 2 (ADR-038): measure-then-decide responsive breakpoints for the ribbon's own
 // per-tab sections, plus a shared overflow popup for whatever doesn't fit at Narrow.
-enum class RibbonBreakpoint { Wide, Medium, Narrow };
+enum class RibbonBreakpoint : std::uint8_t { Wide, Medium, Narrow };
 
 // One ribbon section's precomputed Wide/Medium total widths and its deferred render body. `render`
 // must be invoked with `curCompact` (DrawRibbonBar's local) already set to whatever this call site
@@ -4287,8 +4287,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
               columnOfButtons({
                   rowBtn("##CgdPoints", (int)RibbonIconKind::SurveyPoint, nullptr, "Points", false,
                          "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", compact),
-                  rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", true,
-                         "Feature Line — not implemented yet.", compact),
+                  rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", false,
+                         "Feature Line — named 3D design linework.\nCommand bar: FEATURELINE", compact),
                   rowBtn("##CgdTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse", false,
                          "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
                          compact),
@@ -4304,10 +4304,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         };
         const ribbonlayout::RibbonSectionSpec spec = buildSpec(false);
         const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
-        ribbonSpecs.push_back({w, w, [&, spec]() {
+        ribbonSpecs.push_back({w, w, [&, spec]() {  // NOLINT(bugprone-exception-escape): stored in ribbonSpecs as a plain lambda redrawn every frame; a copy/alloc throw here propagates like any other exception in this codebase (no noexcept contract exists to violate).
           drawRibbonSectionSpec("RibbonSecGroundData", "Create Ground Data", spec, [&](const std::string& id) {
             if (id == "##CgdPoints") StartCreatePointsCommand(cmd, log);
             else if (id == "##CgdTraverse") StartTraverseEditorCommand(cmd, log);
+            else if (id == "##CgdFeatureLine") {
+              CancelActiveCommand(cmd, log);
+              StartFeatureLineCommand(cmd, "", log);
+            }
           });
         }, "Create Ground Data", RibbonIconKind::SurveyPoint});
       }
@@ -4317,23 +4321,31 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         auto buildSpec = [&](bool compact) {
           ribbonlayout::RibbonSectionSpec spec;
           spec.groupGapX = 4.f;
-          auto col = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
-                         const char* l2, const char* id3, const char* ic3, const char* l3) {
+          auto col3 = [&](const char* id1, const char* ic1, const char* l1, const char* id2, const char* ic2,
+                          const char* l2, const char* id3, const char* ic3, const char* l3) {
             return columnOfButtons({
                 rowBtn(id1, -1, ic1, l1, true, (std::string(l1) + " — not implemented yet.").c_str(), compact),
                 rowBtn(id2, -1, ic2, l2, true, (std::string(l2) + " — not implemented yet.").c_str(), compact),
                 rowBtn(id3, -1, ic3, l3, true, (std::string(l3) + " — not implemented yet.").c_str(), compact),
             });
           };
+          // Parcel, Assembly, Intersections, Pond, Underground Storage, and Channel were removed
+          // (issue #802) — not planned for implementation, so no placeholder button either.
           spec.groups = {
-              col("##CdParcel", "c3d_parcel", "Parcel", "##CdFeatureLine", "c3d_featureline", "Feature Line",
-                  "##CdGrading", "c3d_grading", "Grading"),
-              col("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
-                  "##CdCorridor", "c3d_corridor", "Corridor"),
-              col("##CdIntersections", "c3d_intersections", "Intersections", "##CdAssembly", "c3d_assembly",
-                  "Assembly", "##CdPipeNetwork", "c3d_pipenet", "Pipe Network"),
-              col("##CdPond", "c3d_pond", "Pond", "##CdUgStorage", "c3d_ugstorage", "Underground Storage",
-                  "##CdChannel", "c3d_channel", "Channel"),
+              columnOfButtons({
+                  rowBtn("##CdFeatureLine", -1, "c3d_featureline", "Feature Line", false,
+                         "Feature Line — named 3D design linework.\nCommand bar: FEATURELINE", compact),
+                  rowBtn("##CdGrading", -1, "c3d_grading", "Grading", true, "Grading — not implemented yet.",
+                         compact),
+              }),
+              col3("##CdAlignment", "c3d_alignment", "Alignment", "##CdProfile", "c3d_profile", "Profile",
+                   "##CdCorridor", "c3d_corridor", "Corridor"),
+              columnOfButtons({
+                  // Pipe Network — GoSurvey's own pipe-routing model already covers this: see the
+                  // Modeling tab's Pipe Run (PIPERUN), not a Civil3D-style network object (issue #802).
+                  rowBtn("##CdPipeNetwork", -1, "c3d_pipenet", "Pipe Network", false,
+                         "Pipe Network — use Pipe Run on the Modeling tab.\nCommand bar: PIPERUN", compact),
+              }),
           };
           return spec;
         };
@@ -4343,7 +4355,15 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         const float mw = ribbonlayout::MeasureRibbonSection(medSpec).size.x + 8.f;
         ribbonSpecs.push_back({w, mw, [&, buildSpec]() {
           const ribbonlayout::RibbonSectionSpec spec = buildSpec(curCompact);
-          drawRibbonSectionSpec("RibbonSecCreateDesign", "Create Design", spec, nullptr);
+          drawRibbonSectionSpec("RibbonSecCreateDesign", "Create Design", spec, [&](const std::string& id) {
+            if (id == "##CdPipeNetwork") {
+              CancelActiveCommand(cmd, log);
+              StartPipeRunAtCurrentSize(cmd, log);
+            } else if (id == "##CdFeatureLine") {
+              CancelActiveCommand(cmd, log);
+              StartFeatureLineCommand(cmd, "", log);
+            }
+          });
         }, "Create Design", RibbonIconKind::Nyi, "c3d_alignment"});
       }
 
@@ -5169,7 +5189,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       spec.groupGapX = 4.f;
       spec.groups = {g1, g2, g3};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
-      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {  // NOLINT(bugprone-exception-escape): stored in ribbonSpecs as a plain lambda redrawn every frame; a copy/alloc throw here propagates like any other exception in this codebase (no noexcept contract exists to violate).
         drawRibbonSectionSpec("RibbonSecTsMod", "Modify", spec, [&](const std::string& id) {
           if (id == "##TsSurfProps") {
             cmd.surfacePropertiesIndex = selSurfIdx;
@@ -5251,7 +5271,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           }),
       };
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
-      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {  // NOLINT(bugprone-exception-escape): stored in ribbonSpecs as a plain lambda redrawn every frame; a copy/alloc throw here propagates like any other exception in this codebase (no noexcept contract exists to violate).
         drawRibbonSectionSpec("RibbonSecTsAnalyze", "Analyze", spec, [&](const std::string& id) {
           if (id == "##TsWaterDrop") StartWaterDropCommand(cmd, surfName, log);
           else if (id == "##TsCatchment") StartCatchmentCommand(cmd, surfName, log);
@@ -5271,7 +5291,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                  "Move to Surface — not implemented yet.", false),
       })};
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
-      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {  // NOLINT(bugprone-exception-escape): stored in ribbonSpecs as a plain lambda redrawn every frame; a copy/alloc throw here propagates like any other exception in this codebase (no noexcept contract exists to violate).
         drawRibbonSectionSpec("RibbonSecTsTools", "Surface Tools", spec, [&](const std::string& id) {
           if (id == "##TsExtract") ImGui::OpenPopup("##TsExtractMenu");
         });
@@ -5309,7 +5329,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           }),
       };
       const float w = ribbonlayout::MeasureRibbonSection(spec).size.x + 8.f;
-      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {
+      ribbonSpecs.push_back({w, w, [&, spec, surfName]() {  // NOLINT(bugprone-exception-escape): stored in ribbonSpecs as a plain lambda redrawn every frame; a copy/alloc throw here propagates like any other exception in this codebase (no noexcept contract exists to violate).
         drawRibbonSectionSpec("RibbonSecTsLaunch", "Launch Pad", spec, [&](const std::string& id) {
           if (id == "##TsQProfile") StartQuickProfileCommand(cmd, surfName, log);
         });
@@ -7106,10 +7126,10 @@ bool ReadLineEndpoints(const AppCommandState& cmd, int idx, float* x0, float* y0
   const size_t k = static_cast<size_t>(idx) * 6;
   if (k + 5 >= cmd.userLinesFlat.size())
     return false;
-  *x0 = cmd.userLinesFlat[k];
-  *y0 = cmd.userLinesFlat[k + 1];
-  *x1 = cmd.userLinesFlat[k + 3];
-  *y1 = cmd.userLinesFlat[k + 4];
+  *x0 = static_cast<float>(cmd.userLinesFlat[k]);
+  *y0 = static_cast<float>(cmd.userLinesFlat[k + 1]);
+  *x1 = static_cast<float>(cmd.userLinesFlat[k + 3]);
+  *y1 = static_cast<float>(cmd.userLinesFlat[k + 4]);
   return true;
 }
 
@@ -7117,9 +7137,9 @@ bool ReadCircle(const AppCommandState& cmd, int idx, float* cx, float* cy, float
   const size_t k = static_cast<size_t>(idx) * 4;
   if (k + 3 >= cmd.userCirclesCxCyZR.size())
     return false;
-  *cx = cmd.userCirclesCxCyZR[k];
-  *cy = cmd.userCirclesCxCyZR[k + 1];
-  *r = cmd.userCirclesCxCyZR[k + 3];
+  *cx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
+  *cy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
+  *r = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
   return true;
 }
 
@@ -7892,7 +7912,7 @@ static char PropRowAxis(const char* label) {
   if (n < 2 || label[n - 2] != ' ')
     return 0;
   const char c = label[n - 1];
-  return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
+  return (c == 'X' || c == 'Y' || c == 'Z') ? c : static_cast<char>(0);
 }
 
 /// Properties-table rows: Annotative + optional Visible scales (requires an open table).
@@ -7948,7 +7968,7 @@ static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id,
 
   // A colored X/Y/Z chip left of the field, as in the reference. It is decoration
   // only — the field keeps the whole remaining width and behaves exactly as before.
-  const char axis = g_chrome.axisBadges ? PropRowAxis(label) : 0;
+  const char axis = g_chrome.axisBadges ? PropRowAxis(label) : static_cast<char>(0);
   if (axis) {
     const float h = ImGui::GetFrameHeight();
     const float w = std::max(h * 0.72f, ImGui::CalcTextSize("X").x + 8.f);
@@ -8006,8 +8026,8 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::EndTable();
   }
 
-  const float dx = *x1 - *x0;
-  const float dy = *y1 - *y0;
+  const float dx = static_cast<float>(*x1 - *x0);
+  const float dy = static_cast<float>(*y1 - *y0);
   const float len = std::sqrt(dx * dx + dy * dy);
   const float bear = BearingDegreesCwFromNorth(dx, dy);
   const std::string lenStr = FormatLinear(static_cast<double>(len), cmd.displayLinearPrecision);
@@ -8022,7 +8042,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     // silently alter a shipped readout that survey work depends on. The slope distance and grade
     // appear only when the line actually has rise, so a flat drawing looks exactly as before.
     PropRow("Length", lenStr.c_str());
-    const float dz = *z1 - *z0;
+    const float dz = static_cast<float>(*z1 - *z0);
     if (dz != 0.f) {
       const float slope = std::sqrt(dx * dx + dy * dy + dz * dz);
       PropRow("Length (slope)", FormatLinear(static_cast<double>(slope), cmd.displayLinearPrecision).c_str());
@@ -8065,9 +8085,9 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
   }
 
   constexpr float kPi = 3.14159265358979323846f;
-  const float diam = 2.f * (*r);
-  const float circ = 2.f * kPi * (*r);
-  const float area = kPi * (*r) * (*r);
+  const float diam = static_cast<float>(2.f * (*r));
+  const float circ = static_cast<float>(2.f * kPi * (*r));
+  const float area = static_cast<float>(kPi * (*r) * (*r));
   const std::string dStr = FormatLinear(static_cast<double>(diam), cmd.displayLinearPrecision);
   const std::string cStr = FormatLinear(static_cast<double>(circ), cmd.displayLinearPrecision);
   const std::string aStr = FormatLinear(static_cast<double>(area), cmd.displayLinearPrecision);
@@ -11333,7 +11353,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       case 0:  // drag grip (two columns of dots)
         for (int gx = 0; gx < 2; ++gx)
           for (int gy = 0; gy < 3; ++gy)
-            d->AddCircleFilled(ImVec2(cx - 2.f + gx * 4.f, cy - 4.f + gy * 4.f), 1.1f, c);
+            d->AddCircleFilled(ImVec2(cx - 2.f + static_cast<float>(gx) * 4.f, cy - 4.f + static_cast<float>(gy) * 4.f),
+                               1.1f, c);
         break;
       case 1:  // close ×
         d->AddLine(ImVec2(cx - r, cy - r), ImVec2(cx + r, cy + r), c, 1.6f);
@@ -11352,6 +11373,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       case 4:  // expand ▲
         d->AddTriangleFilled(ImVec2(cx - r, cy + r * 0.6f), ImVec2(cx + r, cy + r * 0.6f),
                              ImVec2(cx, cy - r * 0.8f), c);
+        break;
+      default:
         break;
       }
       return clicked;
@@ -11377,10 +11400,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static int  s_cmdSel = 0;
   static bool s_cmdDismissed = false;
   static std::string s_cmdLastQuery;
-  // Highlighted suggestion persisted across the Enter frame: a single-line InputText with EnterReturnsTrue
-  // deactivates itself when Enter is pressed, so on that frame the list isn't rebuilt (inputActive is false).
-  // We capture the highlight while the list is open and consume it on submit.
-  static bool s_cmdSugVisible = false;
+  // Highlight shown in the autocomplete popup while it's open (used for display only — e.g. the
+  // at-crosshair dynamic-cursor text via QueryCommandBarFuzzyPrimary). What Enter actually runs is
+  // resolved fresh from the committed text at submit time (ResolveCommandLineSubmission), not from
+  // this persisted value, so a stale highlight from an earlier query can never run instead of what
+  // was just typed (issue #766).
   static std::string s_cmdHighlight;
   static bool s_cmdScrollToSel = false;  // request: scroll the keyboard-selected row into view
   // Suggestions persisted from the frame they were built. Clicking a row deactivates the command
@@ -11479,7 +11503,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))  query.pop_back();
     if (query != s_cmdLastQuery) {
       s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false;
-      s_cmdSugVisible = false; s_cmdHighlight.clear();
+      s_cmdHighlight.clear();
     }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
@@ -11518,7 +11542,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       g_cmdSuggestComplete = cmdSug[s_cmdSel].name;
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
-      s_cmdSugVisible = true;
       s_cmdHighlight  = g_cmdSuggestComplete;
       s_cmdFuzzyPrimaryFrame = s_cmdHighlight;
     } else {
@@ -11527,18 +11550,23 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       // Clear the persisted highlight only when the user is actively in the field with no list (e.g. a
       // full/multi-token command). On the Enter frame the input is already inactive, so the highlight
       // survives to be consumed by the submit branch below.
-      if (inputActive) { s_cmdSugVisible = false; s_cmdHighlight.clear(); }
+      if (inputActive) { s_cmdHighlight.clear(); }
     }
 
     if (exec) {
-      // Enter with the list open runs the highlighted command. The list state is read from the persisted
-      // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
-      if (exec && s_cmdSugVisible && !s_cmdHighlight.empty())
-        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", s_cmdHighlight.c_str());
+      // Resolve fresh against what was actually typed, right here, rather than trusting the
+      // persisted s_cmdHighlight: Enter deactivates the input on this very frame, so the suggestion
+      // block above (gated on inputActive) never re-ran for the final committed text, and the old
+      // highlight could still be left over from an earlier, unrelated query. That staleness is issue
+      // #766 -- ERASE ran DRAWINGSETTINGS, RENAME ran SURFACERENAME, TABLE ran VOLTABLE, none of them
+      // anything the typed word is even a prefix of. ResolveCommandLineSubmission always ranks an
+      // exact command-name or alias match first, so an exact, correctly-typed command never loses to
+      // a stale suggestion.
+      std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s",
+                    ResolveCommandLineSubmission(cmdBuf).c_str());
       s_cmdDismissed = true;
       s_cmdLastQuery.clear();
       cmdShowSug = false;
-      s_cmdSugVisible = false;
       s_cmdHighlight.clear();
       DevShell_OnCommand(cmdBuf);
       UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
@@ -11815,7 +11843,7 @@ static void RotateDrawListVertsAround(ImDrawList* dl, int vtx0, ImVec2 pivot, fl
   const float ca = std::cos(ang);
   const float sa = std::sin(ang);
   for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
-    ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
+    ImVec2& p = dl->VtxBuffer[vi].pos;
     const float dx = p.x - pivot.x;
     const float dy = p.y - pivot.y;
     p.x = pivot.x + dx * ca - dy * sa;
@@ -11974,7 +12002,7 @@ static void MtextTbTip(const char* text) {
 
 /// Pictographic toolbar glyphs. Drawn from primitives (the command-bar iconBtn precedent) rather than font
 /// characters, so the panel does not depend on the loaded font covering ¶, ↔, arrows, and the like.
-enum class MtextTbGlyph {
+enum class MtextTbGlyph : std::uint8_t {
   Annotative, Mask, Undo, Redo, Stack, Ruler, ExpandDown, ExpandUp, Columns, Attach, Paragraph,
   AlignLeft, AlignCenter, AlignRight, AlignJust, AlignDist, LineSpacing, Lists, Field, Oblique,
   Tracking, WidthFactor,
@@ -14537,6 +14565,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.tableCellEditorOpen || cmd.selBoxWaitingSecond ||
                                      cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+      // A grip drag is a view state, not a command (`cmd.active` stays `None` throughout), but it is
+      // just as much "doing something that wants a forced snap" as an active command is — so it must
+      // count as the same kind of "active" for the override popup (REQ-356 grip menu work).
+      const bool gripDragActive = cmd.entityGripMoveActive || cmd.dimGripMoveActive || cmd.mtextGripMoveActive;
       // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d, re-derived post-#103 as
       // D-2026-08-26-e). The snap OVERRIDE menu is a way of forcing a snap, so offering it during an
       // object-selection step offers the user the exact behaviour the rule removes. Picking a
@@ -14545,8 +14577,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // menu-level gate is what stops the lock from being armed off a selection-step pixel at all —
       // otherwise it would silently apply to the next NON-selection snap instead, a smaller but real
       // surprise (the override outliving the click that seemed to have no effect).
-      const bool allowSnapCycle = cmd.active != AK::None && cmd.objectSnapEnabled &&
-                                  !blockSnapPickMenu && !ViewportIsObjectSelectionStep(cmd);
+      //
+      // `blockSnapPickMenu` also blocks the override popup while a grip is hot, because originally a
+      // right-click during a grip drag meant only one thing (cancel the drag) and the two gestures
+      // would otherwise collide on the same click. Shift+right-click is unambiguous, so it is let
+      // through regardless of that block; the plain-right-click cancel sites below each gain their own
+      // Shift guard so the two gestures no longer collide.
+      const bool allowSnapCycle = (cmd.active != AK::None || gripDragActive) && cmd.objectSnapEnabled &&
+                                  (!blockSnapPickMenu || gripDragActive) && !ViewportIsObjectSelectionStep(cmd);
       using DM = AppCommandState::RightClickDefaultMode;
       using EM = AppCommandState::RightClickEditMode;
       using CM = AppCommandState::RightClickCommandMode;
@@ -15283,8 +15321,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).
   if (cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX;
-    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY;
+    const float curWx = static_cast<float>(cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX);
+    const float curWy = static_cast<float>(cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY);
     const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
@@ -15315,8 +15353,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   if (cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX;
-    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY;
+    const float curWx = static_cast<float>(cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX);
+    const float curWy = static_cast<float>(cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY);
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
@@ -15360,18 +15398,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     // Snap to other geometry if OSNAP fired (entity's own geometry is excluded); otherwise raw cursor.
     const float curWxRaw = cmd.viewportSnapPickValid
-        ? cmd.viewportSnapPickLocalX
-        : (outCursorRawX ? static_cast<float>(*outCursorRawX) : static_cast<float>(*outCursorX));
+        ? static_cast<float>(cmd.viewportSnapPickLocalX)
+        : static_cast<float>((outCursorRawX ? static_cast<float>(*outCursorRawX) : static_cast<float>(*outCursorX)));
     const float curWyRaw = cmd.viewportSnapPickValid
-        ? cmd.viewportSnapPickLocalY
-        : (outCursorRawY ? static_cast<float>(*outCursorRawY) : static_cast<float>(*outCursorY));
+        ? static_cast<float>(cmd.viewportSnapPickLocalY)
+        : static_cast<float>((outCursorRawY ? static_cast<float>(*outCursorRawY) : static_cast<float>(*outCursorY)));
 
     // ORTHO constrains the dragged point to the H/V line through the grip's start (REQ-047). An object snap
     // still beats ORTHO, matching the draw commands, so the constraint is skipped on a snapped cursor.
     float curWx = curWxRaw;
     float curWy = curWyRaw;
-    if (!cmd.viewportSnapPickValid)
+    if (cmd.entityGripLengthenMode) {
+      // Lengthen (REQ-356): the endpoint may only move along the line's OWN frozen angle, not
+      // wherever the cursor is — project the raw cursor onto the ray from the anchor along that
+      // angle, ignoring ORTHO and any off-axis snap entirely.
+      const float toCurX = curWxRaw - cmd.entityGripAnchorX;
+      const float toCurY = curWyRaw - cmd.entityGripAnchorY;
+      // How far the moving endpoint has already travelled from its ORIGINAL position along the
+      // line's own direction, plus how much further the cursor asks to go along that same axis.
+      const float along = toCurX * cmd.entityGripLengthenDirX + toCurY * cmd.entityGripLengthenDirY;
+      curWx = cmd.entityGripAnchorX + cmd.entityGripLengthenDirX * along;
+      curWy = cmd.entityGripAnchorY + cmd.entityGripLengthenDirY * along;
+    } else if (!cmd.viewportSnapPickValid) {
       ApplyOrthoConstrainFromAnchor(cmd, cmd.entityGripAnchorX, cmd.entityGripAnchorY, &curWx, &curWy, cmd.orthoMode);
+    }
 
     cmd.entityGripLiveDistance =
         std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
@@ -15382,8 +15432,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
     const int idx = cmd.entityGripEntityIndex;
     switch (cmd.entityGripType) {
     case SelectedEntity::Type::LineSeg: {
@@ -15410,7 +15462,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (static_cast<size_t>(cmd.entityGripOrigPolyBulgeVi) < cmd.userPolylineVertsBulge.size())
           cmd.userPolylineVertsBulge[static_cast<size_t>(cmd.entityGripOrigPolyBulgeVi)] = cmd.entityGripOrigPolyBulge;
       } else if (cmd.entityGripOrigPolylineXIdx >= 0 &&
-                 static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.userPolylineVerts.size()) {
+                 static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1 < cmd.userPolylineVerts.size()) {
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx)] = cmd.entityGripOrigPolyVertX;
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1] = cmd.entityGripOrigPolyVertY;
       }
@@ -15451,8 +15503,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0) {
     AbortMtextGripInteraction(cmd);
     BumpCadGpuCache(cmd);
   }
@@ -15465,8 +15519,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
+  // Shift+right-click is reserved for the snap-override popup above, not the plain-right-click
+  // cancel below it would otherwise collide with on the same click (REQ-356).
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !ImGui::GetIO().KeyShift && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
@@ -15557,8 +15613,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float rawPickYf = static_cast<float>(rawPickY);
 
     const bool useRawWorldForWindowRect = ViewportUseRawWorldForSelectionRectPick(cmd);
-    const float wxPick = useRawWorldForWindowRect ? rawPickXf : *outCursorX;
-    const float wyPick = useRawWorldForWindowRect ? rawPickYf : *outCursorY;
+    const float wxPick = useRawWorldForWindowRect ? rawPickXf : static_cast<float>(*outCursorX);
+    const float wyPick = useRawWorldForWindowRect ? rawPickYf : static_cast<float>(*outCursorY);
     const bool keyShift = ImGui::GetIO().KeyShift;
     constexpr float kFenceDirTolPx = 3.f;
     const float fenceDragDx = mx - cmd.selBoxAnchorScreenX;
@@ -15628,7 +15684,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       UiSubmitViewportPick(cmd, rawPickX, rawPickY, log, false, false, pickRayPtr);
       break;
     case ViewportClickRoute::PdfAttachInsertPoint:
-      SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
+      SubmitPdfAttachInsertPoint(cmd, static_cast<float>(commitX), static_cast<float>(commitY), log);
       break;
     case ViewportClickRoute::InsertBlockPick:
       SubmitInsertBlockPick(cmd, static_cast<float>(commitX), static_cast<float>(commitY), static_cast<float>(commitZ), log);
@@ -15851,8 +15907,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       using TP = AppCommandState::TrimPhase;
       const bool trimCutLinePt =
           cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
-      const float tx = trimCutLinePt ? commitX : rawPickX;
-      const float ty = trimCutLinePt ? commitY : rawPickY;
+      const float tx = static_cast<float>(trimCutLinePt ? commitX : rawPickX);
+      const float ty = static_cast<float>(trimCutLinePt ? commitY : rawPickY);
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log, pickRayPtr);
       break;
     }
@@ -16023,8 +16079,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.dimGripTextAlongT = (ann.insX - dmx) * tx + (ann.insY - dmy) * ty;
         }
         if (outCursorX && outCursorY) {
-          cmd.dimGripDownWorldX = commitX;
-          cmd.dimGripDownWorldY = commitY;
+          cmd.dimGripDownWorldX = static_cast<float>(commitX);
+          cmd.dimGripDownWorldY = static_cast<float>(commitY);
         } else {
           cmd.dimGripDownWorldX = wxPick;
           cmd.dimGripDownWorldY = wyPick;
@@ -16044,8 +16100,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.mtextGripMoveActive = true;
         if (ann.surveyPointLabelForId >= 0 && gripCorner == 4) {
           if (outCursorX && outCursorY) {
-            cmd.mtextGripDownWorldX = commitX;
-            cmd.mtextGripDownWorldY = commitY;
+            cmd.mtextGripDownWorldX = static_cast<float>(commitX);
+            cmd.mtextGripDownWorldY = static_cast<float>(commitY);
           } else {
             cmd.mtextGripDownWorldX = wxPick;
             cmd.mtextGripDownWorldY = wyPick;
@@ -16106,18 +16162,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(sel.index) * 6;
             if (k + 5 < cmd.userLinesFlat.size()) {
-              tryGrip(sel, cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2], 0);
-              tryGrip(sel, cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5], 1);
+              tryGrip(sel, static_cast<float>(cmd.userLinesFlat[k]),     static_cast<float>(cmd.userLinesFlat[k + 1]), static_cast<float>(cmd.userLinesFlat[k + 2]), 0);
+              tryGrip(sel, static_cast<float>(cmd.userLinesFlat[k + 3]), static_cast<float>(cmd.userLinesFlat[k + 4]), static_cast<float>(cmd.userLinesFlat[k + 5]), 1);
             }
             break;
           }
           case SelectedEntity::Type::Circle: {
             const size_t k = static_cast<size_t>(sel.index) * 4;
             if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-              const float cx = cmd.userCirclesCxCyZR[k];
-              const float cy = cmd.userCirclesCxCyZR[k + 1];
-              const float cz = cmd.userCirclesCxCyZR[k + 2];
-              const float r  = cmd.userCirclesCxCyZR[k + 3];
+              const float cx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
+              const float cy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
+              const float cz = static_cast<float>(cmd.userCirclesCxCyZR[k + 2]);
+              const float r  = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
               tryGrip(sel, cx,     cy, cz, 0);
               tryGrip(sel, cx + r, cy, cz, 1);
             }
@@ -16127,12 +16183,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
             if (sel.index >= 0 && sel.index < np) {
               const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-              const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+              const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index) + 1];
               for (int vi = 0; vi < endV - startV; ++vi) {
                 const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
                 if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
-                tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
-                        cmd.userPolylineVerts[xIdx + 2], vi);
+                tryGrip(sel, static_cast<float>(cmd.userPolylineVerts[xIdx]), static_cast<float>(cmd.userPolylineVerts[xIdx + 1]),
+                        static_cast<float>(cmd.userPolylineVerts[xIdx + 2]), vi);
               }
               CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float mz) {
                 tryGrip(sel, mx, my, mz, kPolyBulgeGripBase + seg);  // REQ-316 / ADR-047
@@ -16144,9 +16200,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
               const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
               const float endRad = a.startRad + a.sweepRad;
-              tryGrip(sel, a.cx, a.cy, a.z, 0);
-              tryGrip(sel, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z, 1);
-              tryGrip(sel, a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     a.z, 2);
+              tryGrip(sel, static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z), 0);
+              tryGrip(sel, static_cast<float>(a.cx + a.r * std::cos(a.startRad)), static_cast<float>(a.cy + a.r * std::sin(a.startRad)), static_cast<float>(a.z), 1);
+              tryGrip(sel, static_cast<float>(a.cx + a.r * std::cos(endRad)),     static_cast<float>(a.cy + a.r * std::sin(endRad)),     static_cast<float>(a.z), 2);
             }
             break;
           }
@@ -16221,17 +16277,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           switch (bestSel.type) {
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(bestSel.index) * 6;
-            cmd.entityGripOrigX0 = cmd.userLinesFlat[k];
-            cmd.entityGripOrigY0 = cmd.userLinesFlat[k + 1];
-            cmd.entityGripOrigX1 = cmd.userLinesFlat[k + 3];
-            cmd.entityGripOrigY1 = cmd.userLinesFlat[k + 4];
+            cmd.entityGripOrigX0 = static_cast<float>(cmd.userLinesFlat[k]);
+            cmd.entityGripOrigY0 = static_cast<float>(cmd.userLinesFlat[k + 1]);
+            cmd.entityGripOrigX1 = static_cast<float>(cmd.userLinesFlat[k + 3]);
+            cmd.entityGripOrigY1 = static_cast<float>(cmd.userLinesFlat[k + 4]);
             break;
           }
           case SelectedEntity::Type::Circle: {
             const size_t k = static_cast<size_t>(bestSel.index) * 4;
-            cmd.entityGripOrigCx = cmd.userCirclesCxCyZR[k];
-            cmd.entityGripOrigCy = cmd.userCirclesCxCyZR[k + 1];
-            cmd.entityGripOrigR  = cmd.userCirclesCxCyZR[k + 3];
+            cmd.entityGripOrigCx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
+            cmd.entityGripOrigCy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
+            cmd.entityGripOrigR  = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
             break;
           }
           case SelectedEntity::Type::Polyline: {
@@ -16248,23 +16304,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const int globalV = startV + bestWhich;
             const size_t xIdx = static_cast<size_t>(globalV) * 3;
             cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
-            cmd.entityGripOrigPolyVertX    = cmd.userPolylineVerts[xIdx];
-            cmd.entityGripOrigPolyVertY    = cmd.userPolylineVerts[xIdx + 1];
+            cmd.entityGripOrigPolyVertX    = static_cast<float>(cmd.userPolylineVerts[xIdx]);
+            cmd.entityGripOrigPolyVertY    = static_cast<float>(cmd.userPolylineVerts[xIdx + 1]);
             break;
           }
           case SelectedEntity::Type::Arc: {
             const CadArc& a = cmd.userArcs[static_cast<size_t>(bestSel.index)];
-            cmd.entityGripOrigCx       = a.cx;
-            cmd.entityGripOrigCy       = a.cy;
-            cmd.entityGripOrigR        = a.r;
+            cmd.entityGripOrigCx       = static_cast<float>(a.cx);
+            cmd.entityGripOrigCy       = static_cast<float>(a.cy);
+            cmd.entityGripOrigR        = static_cast<float>(a.r);
             cmd.entityGripOrigStartRad = a.startRad;
             cmd.entityGripOrigSweepRad = a.sweepRad;
             break;
           }
           case SelectedEntity::Type::Ellipse: {
             const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(bestSel.index)];
-            cmd.entityGripOrigEllCx    = el.cx;
-            cmd.entityGripOrigEllCy    = el.cy;
+            cmd.entityGripOrigEllCx    = static_cast<float>(el.cx);
+            cmd.entityGripOrigEllCy    = static_cast<float>(el.cy);
             cmd.entityGripOrigEllMajVx = el.majVx;
             cmd.entityGripOrigEllMajVy = el.majVy;
             cmd.entityGripOrigEllRatio = el.ratio;
@@ -16282,9 +16338,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
 
       if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        const int tIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const int tIx = PickCadTableAt(static_cast<float>(rawPickX), static_cast<float>(rawPickY), cmd, halfH, avail.y);
         if (tIx >= 0 && static_cast<size_t>(tIx) < cmd.cadTables.size()) {
-          const int cell = CadTableHitCell(cmd.cadTables[static_cast<size_t>(tIx)], rawPickX, rawPickY);
+          const int cell = CadTableHitCell(cmd.cadTables[static_cast<size_t>(tIx)], static_cast<float>(rawPickX), static_cast<float>(rawPickY));
           if (cell >= 0) {
             AbortMtextGripInteraction(cmd);
             ClearDimGripInteraction(cmd);
@@ -16303,7 +16359,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
 
       if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-        const int dIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        const int dIx = PickCadAnnotationAt(static_cast<float>(rawPickX), static_cast<float>(rawPickY), cmd, halfH, avail.y);
         const CadAnnotation::Kind dKind =
             (dIx >= 0 && static_cast<size_t>(dIx) < cmd.cadAnnotations.size())
                 ? cmd.cadAnnotations[static_cast<size_t>(dIx)].kind
@@ -16621,9 +16677,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const ImVec2 b(std::max(p0.x, p1.x), std::max(p0.y, p1.y));
     ImDrawList* sdl = ImGui::GetWindowDrawList();
     // Clipped to the drawing Image rect so the white paper does not bleed into surrounding UI (issue #101).
-    const ImVec2 __canvasMin = imgPos;
-    const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
-    sdl->PushClipRect(__canvasMin, __canvasMax, true);
+    const ImVec2 canvasMin = imgPos;
+    const ImVec2 canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+    sdl->PushClipRect(canvasMin, canvasMax, true);
     sdl->AddRectFilled(ImVec2(a.x + 5.f, a.y + 5.f), ImVec2(b.x + 5.f, b.y + 5.f), IM_COL32(0, 0, 0, 90));  // shadow
     sdl->AddRectFilled(a, b, IM_COL32(244, 244, 244, 255));                                                 // sheet
     sdl->AddRect(a, b, IM_COL32(40, 40, 40, 255), 0.f, 0, 1.5f);                                            // border
@@ -16827,7 +16883,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           continue;
         const double ccx = cmd.userCirclesCxCyZR[i] + oX, ccy = cmd.userCirclesCxCyZR[i + 1] + oY;
         const double ccz = cmd.userCirclesCxCyZR[i + 2];
-        const float cr = cmd.userCirclesCxCyZR[i + 3];
+        const float cr = static_cast<float>(cmd.userCirclesCxCyZR[i + 3]);
         ImU32 cc2;
         float cw;
         entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer, attr.color), cc2, cw);
@@ -17274,13 +17330,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           bool ok = false;
           if (cmd.active == AppCommandState::Kind::DimLinear &&
               cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
-            ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+            ok = CadDimLinearBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &draft);
           else if (cmd.active == AppCommandState::Kind::DimAngular &&
                    cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)
-            ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+            ok = CadDimAngularBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &draft);
           else if (cmd.active == AppCommandState::Kind::DimAligned &&
                    cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
-            ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+            ok = CadDimAlignedBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &draft);
           CadDimWorldStrokes dstrokes;
           if (ok && CadDimBuildWorldStrokes(draft, dsp, &dstrokes)) {
             const float hWorld = CadAnnotationHeightWorld(draft, cmd.modelUnitsPerPlottedInch);
@@ -17345,16 +17401,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(sel.index) * 6;
             if (k + 5 < cmd.userLinesFlat.size()) {
-              drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1], hot(0));
-              drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], hot(1));
+              drawGrip(static_cast<float>(cmd.userLinesFlat[k]), static_cast<float>(cmd.userLinesFlat[k + 1]), hot(0));
+              drawGrip(static_cast<float>(cmd.userLinesFlat[k + 3]), static_cast<float>(cmd.userLinesFlat[k + 4]), hot(1));
             }
             break;
           }
           case SelectedEntity::Type::Circle: {
             const size_t k = static_cast<size_t>(sel.index) * 4;
             if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-              drawGrip(cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1], hot(0));
-              drawGrip(cmd.userCirclesCxCyZR[k] + cmd.userCirclesCxCyZR[k + 3], cmd.userCirclesCxCyZR[k + 1], hot(1));
+              drawGrip(static_cast<float>(cmd.userCirclesCxCyZR[k]), static_cast<float>(cmd.userCirclesCxCyZR[k + 1]), hot(0));
+              drawGrip(static_cast<float>(cmd.userCirclesCxCyZR[k] + cmd.userCirclesCxCyZR[k + 3]), static_cast<float>(cmd.userCirclesCxCyZR[k + 1]), hot(1));
             }
             break;
           }
@@ -17362,12 +17418,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
             if (sel.index >= 0 && sel.index < np) {
               const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-              const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+              const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index) + 1];
               for (int vi2 = 0; vi2 < endV - startV; ++vi2) {
                 const size_t xIdx = static_cast<size_t>(startV + vi2) * 3;
                 if (xIdx + 1 >= cmd.userPolylineVerts.size())
                   break;
-                drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], hot(vi2));
+                drawGrip(static_cast<float>(cmd.userPolylineVerts[xIdx]), static_cast<float>(cmd.userPolylineVerts[xIdx + 1]), hot(vi2));
               }
               CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int seg, float mx, float my, float) {
                 drawGrip(mx, my, hot(kPolyBulgeGripBase + seg));  // REQ-316 / ADR-047
@@ -17379,9 +17435,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
               const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
               const float endRad = a.startRad + a.sweepRad;
-              drawGrip(a.cx, a.cy, hot(0));
-              drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), hot(1));
-              drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad), hot(2));
+              drawGrip(static_cast<float>(a.cx), static_cast<float>(a.cy), hot(0));
+              drawGrip(static_cast<float>(a.cx + a.r * std::cos(a.startRad)), static_cast<float>(a.cy + a.r * std::sin(a.startRad)), hot(1));
+              drawGrip(static_cast<float>(a.cx + a.r * std::cos(endRad)), static_cast<float>(a.cy + a.r * std::sin(endRad)), hot(2));
             }
             break;
           }
@@ -17424,12 +17480,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->PopClipRect();
       // Viewport border; clipped to sheet and drawing area so greyed viewport outline does not bleed out of bounds (issue #101).
       {
-        const ImVec2 __vpCanvasMin = imgPos;
-        const ImVec2 __vpCanvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
-        const ImVec2 __vpClipMin(std::max(a.x, __vpCanvasMin.x), std::max(a.y, __vpCanvasMin.y));
-        const ImVec2 __vpClipMax(std::min(b.x, __vpCanvasMax.x), std::min(b.y, __vpCanvasMax.y));
-        const bool __vpClipValid = __vpClipMin.x < __vpClipMax.x && __vpClipMin.y < __vpClipMax.y;
-        if (__vpClipValid) sdl->PushClipRect(__vpClipMin, __vpClipMax, true);
+        const ImVec2 vpCanvasMin = imgPos;
+        const ImVec2 vpCanvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+        const ImVec2 vpClipMin(std::max(a.x, vpCanvasMin.x), std::max(a.y, vpCanvasMin.y));
+        const ImVec2 vpClipMax(std::min(b.x, vpCanvasMax.x), std::min(b.y, vpCanvasMax.y));
+        const bool vpClipValid = vpClipMin.x < vpClipMax.x && vpClipMin.y < vpClipMax.y;
+        if (vpClipValid) sdl->PushClipRect(vpClipMin, vpClipMax, true);
         // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
       const bool selVp = IsViewportSelected(cmd, vi);
       const bool floatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
@@ -17447,7 +17503,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddRectFilled(ImVec2(ctr.x - 4.f, ctr.y - 4.f), ImVec2(ctr.x + 4.f, ctr.y + 4.f),
                            IM_COL32(245, 200, 70, 255));
       }
-        if (__vpClipValid) sdl->PopClipRect();
+        if (vpClipValid) sdl->PopClipRect();
       }
     }
     // Native paper-space geometry (REQ-037): committed sheet lines + text, drawn on top of the viewports
@@ -17456,14 +17512,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // the sheet or outside the drawing area into surrounding UI (issue #101).
     {
       // Sheet rect (a,b) + viewport canvas (imgPos, avail) intersection
-      const ImVec2 __sheetMin = a;
-      const ImVec2 __sheetMax = b;
-      const ImVec2 __canvasMin = imgPos;
-      const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
-      const ImVec2 __clipMin(std::max(__sheetMin.x, __canvasMin.x), std::max(__sheetMin.y, __canvasMin.y));
-      const ImVec2 __clipMax(std::min(__sheetMax.x, __canvasMax.x), std::min(__sheetMax.y, __canvasMax.y));
-      const bool __clipValid = __clipMin.x < __clipMax.x && __clipMin.y < __clipMax.y;
-      if (__clipValid) sdl->PushClipRect(__clipMin, __clipMax, true);
+      const ImVec2 sheetMin = a;
+      const ImVec2 sheetMax = b;
+      const ImVec2 canvasMin = imgPos;
+      const ImVec2 canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+      const ImVec2 clipMin(std::max(sheetMin.x, canvasMin.x), std::max(sheetMin.y, canvasMin.y));
+      const ImVec2 clipMax(std::min(sheetMax.x, canvasMax.x), std::min(sheetMax.y, canvasMax.y));
+      const bool clipValid = clipMin.x < clipMax.x && clipMin.y < clipMax.y;
+      if (clipValid) sdl->PushClipRect(clipMin, clipMax, true);
       constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
       constexpr ImU32 kPaperHoverCol = IM_COL32(130, 180, 240, 255);  // hover pre-highlight (lighter blue), REQ-039
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
@@ -17538,9 +17594,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           for (int k = 0; k < cnt; ++k) {
             const int a = begin + k, b = begin + (k + 1) % cnt;
             const ImVec2 pa =
-                w2s(fr.vertsXyz[static_cast<size_t>(a) * 3], fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]);
+                w2s(static_cast<float>(fr.vertsXyz[static_cast<size_t>(a) * 3]), static_cast<float>(fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]));
             const ImVec2 pb =
-                w2s(fr.vertsXyz[static_cast<size_t>(b) * 3], fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]);
+                w2s(static_cast<float>(fr.vertsXyz[static_cast<size_t>(b) * 3]), static_cast<float>(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]));
             edges.push_back(ImVec4(pa.x, pa.y, pb.x, pb.y));
             yMin = std::min({yMin, pa.y, pb.y});
             yMax = std::max({yMax, pa.y, pb.y});
@@ -17551,7 +17607,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         yMin = std::max(yMin, imgPos.y);
         yMax = std::min(yMax, imgPos.y + avail.y);
         std::vector<float> xs;
-        for (float y = std::floor(yMin) + 0.5f; y < yMax; y += 1.f) {
+        for (float y = std::floor(yMin) + 0.5f; y < yMax; y += 1.f) {  // NOLINT(clang-analyzer-security.FloatLoopCounter): per-scanline hatch fill, bounded by `yMax`
           xs.clear();
           for (const ImVec4& e : edges) {
             const float y0 = e.y, y1 = e.w;
@@ -17607,7 +17663,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         pts.reserve(kSeg + 1);
         for (int s = 0; s <= kSeg; ++s) {
           const float t = a.startRad + a.sweepRad * (static_cast<float>(s) / kSeg);
-          pts.push_back(w2s(a.cx + a.r * std::cos(t), a.cy + a.r * std::sin(t)));
+          pts.push_back(w2s(static_cast<float>(a.cx + a.r * std::cos(t)), static_cast<float>(a.cy + a.r * std::sin(t))));
         }
         strokePaperPath(pts, false, paperCol(sel, PaperEntityRef::Type::Arc, idx), paperWid(sel, PaperEntityRef::Type::Arc, idx));
       }
@@ -17622,7 +17678,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         for (int s = 0; s < kSeg; ++s) {
           const float t = 6.2831853f * (static_cast<float>(s) / kSeg);
           const float ct = std::cos(t), stt = std::sin(t);
-          pts.push_back(w2s(e.cx + e.majVx * ct + mnx * stt, e.cy + e.majVy * ct + mny * stt));
+          pts.push_back(w2s(static_cast<float>(e.cx + e.majVx * ct + mnx * stt), static_cast<float>(e.cy + e.majVy * ct + mny * stt)));
         }
         strokePaperPath(pts, true, paperCol(sel, PaperEntityRef::Type::Ellipse, idx), paperWid(sel, PaperEntityRef::Type::Ellipse, idx));
       }
@@ -17630,11 +17686,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (int pi = 0; pi < nPaperPoly; ++pi) {
         const bool sel = isPaperSel(PaperEntityRef::Type::Polyline, pi);
         const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
-        const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+        const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi) + 1];
         std::vector<ImVec2> pts;
         pts.reserve(static_cast<size_t>(std::max(0, v1 - v0)));
         for (int vi = v0; vi < v1; ++vi)
-          pts.push_back(w2s(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]));
+          pts.push_back(w2s(L.paperPolyVerts[static_cast<size_t>(vi) * 3], L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 1]));
         const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
         strokePaperPath(pts, closed, paperCol(sel, PaperEntityRef::Type::Polyline, pi), paperWid(sel, PaperEntityRef::Type::Polyline, pi));
       }
@@ -17756,7 +17812,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       paperTrueCol(PaperEntityRef::Type::Text, static_cast<int>(ti)));
-      if (__clipValid) sdl->PopClipRect();
+      if (clipValid) sdl->PopClipRect();
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
@@ -17802,18 +17858,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImU32 ghost = IM_COL32(59, 130, 246, 210);
       const CadClipboard& cb = cmd.clipboard;
       for (size_t i = 0; i + 5 < cb.lines.size(); i += 6)
-        sdl->AddLine(w2s(cb.lines[i] + gdx, cb.lines[i + 1] + gdy), w2s(cb.lines[i + 3] + gdx, cb.lines[i + 4] + gdy),
+        sdl->AddLine(w2s(static_cast<float>(cb.lines[i] + gdx), static_cast<float>(cb.lines[i + 1] + gdy)), w2s(static_cast<float>(cb.lines[i + 3] + gdx), static_cast<float>(cb.lines[i + 4] + gdy)),
                      ghost, 1.4f);
       // Clipboard circles are cx,cy,z,r; the paste ghost is drawn in plan, so z is ignored here.
       for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size(); i += 4)
-        sdl->AddCircle(w2s(cb.circlesCxCyZR[i] + gdx, cb.circlesCxCyZR[i + 1] + gdy),
-                       cb.circlesCxCyZR[i + 3] * pxPerPaperIn2, ghost, 0, 1.4f);
+        sdl->AddCircle(w2s(static_cast<float>(cb.circlesCxCyZR[i] + gdx), static_cast<float>(cb.circlesCxCyZR[i + 1] + gdy)),
+                       static_cast<float>(cb.circlesCxCyZR[i + 3] * pxPerPaperIn2), ghost, 0, 1.4f);
       for (const CadArc& a : cb.arcs) {
         constexpr int kSeg = 40;
         ImVec2 prev{};
         for (int s = 0; s <= kSeg; ++s) {
           const float t = a.startRad + a.sweepRad * (static_cast<float>(s) / kSeg);
-          const ImVec2 p = w2s(a.cx + a.r * std::cos(t) + gdx, a.cy + a.r * std::sin(t) + gdy);
+          const ImVec2 p = w2s(static_cast<float>(a.cx + a.r * std::cos(t) + gdx), static_cast<float>(a.cy + a.r * std::sin(t) + gdy));
           if (s > 0)
             sdl->AddLine(prev, p, ghost, 1.4f);
           prev = p;
@@ -17825,8 +17881,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 first{}, prev{};
         for (int s = 0; s < kSeg; ++s) {
           const float t = 6.2831853f * (static_cast<float>(s) / kSeg);
-          const ImVec2 p = w2s(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t) + gdx,
-                               e.cy + e.majVy * std::cos(t) + mny * std::sin(t) + gdy);
+          const ImVec2 p = w2s(static_cast<float>(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t) + gdx),
+                               static_cast<float>(e.cy + e.majVy * std::cos(t) + mny * std::sin(t) + gdy));
           if (s == 0)
             first = p;
           else
@@ -17838,14 +17894,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int nGhostPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
       for (int pi = 0; pi < nGhostPoly; ++pi) {
         const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
-        const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+        const int v1 = cb.polyOffsets[static_cast<size_t>(pi) + 1];
         for (int vi = v0; vi + 1 < v1; ++vi)
-          sdl->AddLine(w2s(cb.polyVerts[static_cast<size_t>(vi * 3)] + gdx, cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + gdy),
-                       w2s(cb.polyVerts[static_cast<size_t>(vi * 3 + 3)] + gdx, cb.polyVerts[static_cast<size_t>(vi * 3 + 4)] + gdy),
+          sdl->AddLine(w2s(static_cast<float>(cb.polyVerts[static_cast<size_t>(vi) * 3] + gdx), static_cast<float>(cb.polyVerts[static_cast<size_t>(vi) * 3 + 1] + gdy)),
+                       w2s(static_cast<float>(cb.polyVerts[static_cast<size_t>(vi) * 3 + 3] + gdx), static_cast<float>(cb.polyVerts[static_cast<size_t>(vi) * 3 + 4] + gdy)),
                        ghost, 1.4f);
         if (static_cast<size_t>(pi) < cb.polyClosed.size() && cb.polyClosed[static_cast<size_t>(pi)] && v1 - v0 >= 2)
-          sdl->AddLine(w2s(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3)] + gdx, cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + gdy),
-                       w2s(cb.polyVerts[static_cast<size_t>(v0 * 3)] + gdx, cb.polyVerts[static_cast<size_t>(v0 * 3 + 1)] + gdy),
+          sdl->AddLine(w2s(static_cast<float>(cb.polyVerts[static_cast<size_t>(v1 - 1) * 3] + gdx), static_cast<float>(cb.polyVerts[static_cast<size_t>(v1 - 1) * 3 + 1] + gdy)),
+                       w2s(static_cast<float>(cb.polyVerts[static_cast<size_t>(v0) * 3] + gdx), static_cast<float>(cb.polyVerts[static_cast<size_t>(v0) * 3 + 1] + gdy)),
                        ghost, 1.4f);
       }
       ImFont* pf = ImGui::GetFont();
@@ -17916,7 +17972,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ImVec2 prev{};
             for (int sgi = 0; sgi <= 40; ++sgi) {
               const float t = a.startRad + a.sweepRad * (static_cast<float>(sgi) / 40.f);
-              const ImVec2 p = xf(a.cx + a.r * std::cos(t), a.cy + a.r * std::sin(t));
+              const ImVec2 p = xf(static_cast<float>(a.cx + a.r * std::cos(t)), static_cast<float>(a.cy + a.r * std::sin(t)));
               if (sgi > 0)
                 sdl->AddLine(prev, p, ghostCol, 1.5f);
               prev = p;
@@ -17931,8 +17987,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ImVec2 first{}, prev{};
             for (int sgi = 0; sgi < 56; ++sgi) {
               const float t = 6.2831853f * (static_cast<float>(sgi) / 56.f);
-              const ImVec2 p = xf(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t),
-                                  e.cy + e.majVy * std::cos(t) + mny * std::sin(t));
+              const ImVec2 p = xf(static_cast<float>(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t)),
+                                  static_cast<float>(e.cy + e.majVy * std::cos(t) + mny * std::sin(t)));
               if (sgi == 0) first = p; else sdl->AddLine(prev, p, ghostCol, 1.5f);
               prev = p;
             }
@@ -17942,12 +17998,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         case PaperEntityRef::Type::Polyline: {
           const int pi = r.index;
-          if (pi >= 0 && static_cast<size_t>(pi + 1) < L.paperPolyOffsets.size()) {
+          if (pi >= 0 && static_cast<size_t>(pi) + 1 < L.paperPolyOffsets.size()) {
             const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
-            const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+            const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi) + 1];
             for (int vi = v0; vi + 1 < v1; ++vi)
-              sdl->AddLine(xf(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]),
-                           xf(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 4)]),
+              sdl->AddLine(xf(L.paperPolyVerts[static_cast<size_t>(vi) * 3], L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 1]),
+                           xf(L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 3], L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 4]),
                            ghostCol, 1.5f);
           }
           break;
@@ -18040,8 +18096,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // what a click commits (REQ-036).
       float drawLX = curLX, drawLY = curLY;
       if (floatingSnapHit.valid) {
-        drawLX = floatingSnapHit.x;
-        drawLY = floatingSnapHit.y;
+        drawLX = static_cast<float>(floatingSnapHit.x);
+        drawLY = static_cast<float>(floatingSnapHit.y);
       }
       if (lineRubber || plineRubber)
         sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(drawLX, drawLY),
@@ -18057,7 +18113,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // The cursor crosshair itself is the full CAD crosshair drawn later (at the raw mouse in floating mode);
       // no small marker here. Keep the snap glyph below.
       if (floatingSnapHit.valid) {  // object-snap glyph (green square), sized to match the model-space glyph
-        const ImVec2 sg = mlToScreen(floatingSnapHit.x, floatingSnapHit.y);
+        const ImVec2 sg = mlToScreen(static_cast<float>(floatingSnapHit.x), static_cast<float>(floatingSnapHit.y));
         const float h = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
         sdl->AddRect(ImVec2(sg.x - h, sg.y - h), ImVec2(sg.x + h, sg.y + h), IM_COL32(120, 220, 120, 255), 0.f,
                      0, 2.0f);
@@ -18094,10 +18150,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   std::vector<CadAnnotation> transformAnnPreviews;
   if (outCursorX && outCursorY)
-    CadAnnotationCollectTransformPreviews(cmd, *outCursorX, *outCursorY, &transformAnnPreviews);
+    CadAnnotationCollectTransformPreviews(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &transformAnnPreviews);
   std::vector<CadTable> transformTablePreviews;
   if (outCursorX && outCursorY)
-    CadTableCollectTransformPreviews(cmd, *outCursorX, *outCursorY, &transformTablePreviews);
+    CadTableCollectTransformPreviews(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &transformTablePreviews);
 
   using AK = AppCommandState::Kind;
   using AMP = AppCommandState::MtextPhase;
@@ -18959,9 +19015,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (showDimCmdDraft) {
       CadAnnotation d{};
       bool ok = false;
-      if (cmd.active == AK::DimLinear) ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d);
-      else if (cmd.active == AK::DimAngular) ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &d);
-      else ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      if (cmd.active == AK::DimLinear) ok = CadDimLinearBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &d);
+      else if (cmd.active == AK::DimAngular) ok = CadDimAngularBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &d);
+      else ok = CadDimAlignedBuildDraft(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &d);
       if (ok) {
         drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
       }
@@ -18971,7 +19027,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float vx = cmd.dimAngVx, vy = cmd.dimAngVy;
       ImVec2 vScreen{}, cScreen{};
       worldToScreen(vx, vy, &vScreen, cmd.anchorZ);
-      worldToScreen(*outCursorX, *outCursorY, &cScreen, cmd.anchorZ);
+      worldToScreen(static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &cScreen, cmd.anchorZ);
       if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay1) {
         dl->AddLine(vScreen, cScreen, kAnnTfPrevCol, 1.2f);
       } else if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay2) {
@@ -19286,7 +19342,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // Survey points are model-only (ADR-009); their IDs use model coordinates, so only label them on the
     // model canvas — never paint them onto a paper sheet at local-coord positions (REQ-038 artifact fix).
     ImDrawList* dlS = ImGui::GetWindowDrawList();
-    const float worldPerPxYL = (worldTop - worldBottom) / std::max(avail.y, 1.f);
+    const float worldPerPxYL = static_cast<float>((worldTop - worldBottom) / std::max(avail.y, 1.f));
     const float hWorldL =
         cmd.surveyPointLabelPlottedHeightInches * std::max(cmd.modelUnitsPerPlottedInch, 1.e-6f);
     const float fontPxL =
@@ -19349,16 +19405,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const size_t k = static_cast<size_t>(sel.index) * 6;
         if (k + 5 < cmd.userLinesFlat.size()) {
           // Each endpoint carries its own Z, so a sloped line's grips sit on its actual ends.
-          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2]);
-          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
+          drawGrip(static_cast<float>(cmd.userLinesFlat[k]), static_cast<float>(cmd.userLinesFlat[k + 1]), static_cast<float>(cmd.userLinesFlat[k + 2]));
+          drawGrip(static_cast<float>(cmd.userLinesFlat[k + 3]), static_cast<float>(cmd.userLinesFlat[k + 4]), static_cast<float>(cmd.userLinesFlat[k + 5]));
         }
       } else if (sel.type == SelectedEntity::Type::Circle) {
         const size_t k = static_cast<size_t>(sel.index) * 4;
         if (k + 3 < cmd.userCirclesCxCyZR.size()) {
-          const float cx = cmd.userCirclesCxCyZR[k];
-          const float cy = cmd.userCirclesCxCyZR[k + 1];
-          const float cz = cmd.userCirclesCxCyZR[k + 2];
-          const float r = cmd.userCirclesCxCyZR[k + 3];
+          const float cx = static_cast<float>(cmd.userCirclesCxCyZR[k]);
+          const float cy = static_cast<float>(cmd.userCirclesCxCyZR[k + 1]);
+          const float cz = static_cast<float>(cmd.userCirclesCxCyZR[k + 2]);
+          const float r = static_cast<float>(cmd.userCirclesCxCyZR[k + 3]);
           drawGrip(cx, cy, cz);
           drawGrip(cx + r, cy, cz);
         }
@@ -19366,14 +19422,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
         if (sel.index >= 0 && sel.index < np) {
           const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-          const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+          const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index) + 1];
           for (int vi = 0; vi < endV - startV; ++vi) {
             const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
             if (xIdx + 2 >= cmd.userPolylineVerts.size())
               break;
             // Each vertex carries its own Z, so a polyline up a slope keeps its grips on it.
-            drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
-                     cmd.userPolylineVerts[xIdx + 2]);
+            drawGrip(static_cast<float>(cmd.userPolylineVerts[xIdx]), static_cast<float>(cmd.userPolylineVerts[xIdx + 1]),
+                     static_cast<float>(cmd.userPolylineVerts[xIdx + 2]));
           }
           // REQ-316 / ADR-047: a midpoint grip on every ARC segment — dragging it changes the bulge.
           CadForEachPolylineArcMidGrip(cmd, sel.index, [&](int, float mx, float my, float mz) {
@@ -19383,10 +19439,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Arc) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
           const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
-          drawGrip(a.cx, a.cy, a.z);
-          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z);
+          drawGrip(static_cast<float>(a.cx), static_cast<float>(a.cy), static_cast<float>(a.z));
+          drawGrip(static_cast<float>(a.cx + a.r * std::cos(a.startRad)), static_cast<float>(a.cy + a.r * std::sin(a.startRad)), static_cast<float>(a.z));
           const float endRad = a.startRad + a.sweepRad;
-          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad), a.z);
+          drawGrip(static_cast<float>(a.cx + a.r * std::cos(endRad)), static_cast<float>(a.cy + a.r * std::sin(endRad)), static_cast<float>(a.z));
         }
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
@@ -19811,7 +19867,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::TextUnformatted(label.c_str());
         ImGui::SameLine(0.f, 4.f);
 
-        ImU32 band = g_chrome.axisX;
+        ImU32 band;
         if (dyninput::IsPolar(s_dyn.mode))
           band = slot == 0 ? g_chrome.axisDistance : g_chrome.axisAngle;
         else
@@ -19868,6 +19924,106 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PopStyleVar(1);
   }
 
+  // Grip hover context menu (REQ-356): resting on a line-endpoint grip for ~0.5s, with nothing
+  // already being dragged, offers Lengthen (extend along the line's existing angle by a typed
+  // distance) and Stretch (today's free-move drag — the menu is purely informational for it,
+  // dismissing itself so the usual click-drag still works). No other grip type has more than one
+  // possible action, so none of them are hover-tested here and none ever show a menu.
+  {
+    const bool gripMenuEligible =
+        modelSpace && hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y &&
+        cmd.active == AppCommandState::Kind::None && !cmd.entityGripMoveActive && !cmd.dimGripMoveActive &&
+        !cmd.mtextGripMoveActive && !cmd.gizmoDragActive && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+        !ImGui::IsMouseDown(ImGuiMouseButton_Right) && !ImGui::IsPopupOpen("##gos_grip_menu");
+
+    int hoverIdx = -1, hoverWhich = -1;
+    if (gripMenuEligible) {
+      const Camera gripMenuCam = CadViewCamera(cmd);
+      const float hitPx = 10.f;
+      float bestD2 = hitPx * hitPx;
+      for (const SelectedEntity& sel : cmd.selection) {
+        if (sel.type != SelectedEntity::Type::LineSeg)
+          continue;
+        const size_t k = static_cast<size_t>(sel.index) * 6;
+        if (k + 5 >= cmd.userLinesFlat.size())
+          continue;
+        const double gx[2] = {cmd.userLinesFlat[k], cmd.userLinesFlat[k + 3]};
+        const double gy[2] = {cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 4]};
+        const double gz[2] = {cmd.userLinesFlat[k + 2], cmd.userLinesFlat[k + 5]};
+        for (int w = 0; w < 2; ++w) {
+          float sx = 0.f, sy = 0.f;
+          gripMenuCam.WorldToScreen(gx[w], gy[w], gz[w], avail.x, avail.y, &sx, &sy);
+          const float dx = mx - sx, dy = my - sy;
+          const float d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            hoverIdx = sel.index;
+            hoverWhich = w;
+          }
+        }
+      }
+    }
+
+    // The hovered grip's IDENTITY changing resets the dwell exactly like a move does — resting on a
+    // different grip (even at the same pixel, impossible here, but also a selection change under a
+    // static cursor) must cost a fresh rest, not inherit one that was timed for something else.
+    if (hoverIdx != cmd.gripMenuHoverEntityIndex || hoverWhich != cmd.gripMenuHoverWhich) {
+      cmd.gripMenuHoverEntityIndex = hoverIdx;
+      cmd.gripMenuHoverWhich = hoverWhich;
+      ResetHoverDwell(&cmd.gripMenuHoverDwell, mx, my, ImGui::GetTime());
+    }
+
+    if (hoverIdx >= 0) {
+      const HoverDwellTick menuTick = UpdateHoverDwell(&cmd.gripMenuHoverDwell, mx, my, ImGui::GetTime(), 3.f, 0.5);
+      if (menuTick.elapsed) {
+        cmd.gripMenuPendingEntityIndex = hoverIdx;
+        cmd.gripMenuPendingWhich = hoverWhich;
+        ImGui::OpenPopup("##gos_grip_menu");
+      }
+    }
+  }
+
+  ImGui::SetNextWindowPos(mouse, ImGuiCond_Appearing);
+  if (ImGui::BeginPopup("##gos_grip_menu", ImGuiWindowFlags_AlwaysAutoResize)) {
+    const int pendIdx = cmd.gripMenuPendingEntityIndex;
+    const int pendWhich = cmd.gripMenuPendingWhich;
+    if (ImGui::Selectable("Stretch")) {
+      // The default free-move drag needs nothing armed here — the usual click-drag on the grip
+      // still does it. This item exists so Stretch is a visible, named choice next to Lengthen.
+      ImGui::CloseCurrentPopup();
+    }
+    if (ImGui::Selectable("Lengthen")) {
+      if (pendIdx >= 0 && static_cast<size_t>(pendIdx) * 6 + 5 < cmd.userLinesFlat.size()) {
+        PushUndoSnapshot(cmd, "Grip edit");
+        const size_t k = static_cast<size_t>(pendIdx) * 6;
+        cmd.entityGripOrigX0 = static_cast<float>(cmd.userLinesFlat[k]);
+        cmd.entityGripOrigY0 = static_cast<float>(cmd.userLinesFlat[k + 1]);
+        cmd.entityGripOrigX1 = static_cast<float>(cmd.userLinesFlat[k + 3]);
+        cmd.entityGripOrigY1 = static_cast<float>(cmd.userLinesFlat[k + 4]);
+        const float fixedX = pendWhich == 0 ? cmd.entityGripOrigX1 : cmd.entityGripOrigX0;
+        const float fixedY = pendWhich == 0 ? cmd.entityGripOrigY1 : cmd.entityGripOrigY0;
+        const float movingX = pendWhich == 0 ? cmd.entityGripOrigX0 : cmd.entityGripOrigX1;
+        const float movingY = pendWhich == 0 ? cmd.entityGripOrigY0 : cmd.entityGripOrigY1;
+        const float ddx = movingX - fixedX, ddy = movingY - fixedY;
+        const float len = std::hypot(ddx, ddy);
+        if (len > 1e-9f) {
+          cmd.entityGripMoveActive = true;
+          cmd.entityGripType = SelectedEntity::Type::LineSeg;
+          cmd.entityGripEntityIndex = pendIdx;
+          cmd.entityGripWhich = pendWhich;
+          cmd.entityGripAnchorX = movingX;
+          cmd.entityGripAnchorY = movingY;
+          cmd.entityGripTypedDistanceValid = false;
+          cmd.entityGripLengthenMode = true;
+          cmd.entityGripLengthenDirX = ddx / len;
+          cmd.entityGripLengthenDirY = ddy / len;
+        }
+      }
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
   // Grip stretch dynamic input (REQ-024 / REQ-047). A grip drag runs with no active command, so the
   // command palette above never appears for it. This is the same box at the cursor, showing the live
   // stretch distance with its text SELECTED — so typing a distance replaces it, exactly like AutoCAD.
@@ -19890,7 +20046,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showGripDynInput) {
     ImGuiIO& ioGrip = ImGui::GetIO();
     const ImGuiViewport* gripViewport = ImGui::GetMainViewport();
-    const char* gripPrompt = cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:";
+    const char* gripPrompt = cmd.entityGripLengthenMode
+        ? "Specify length to extend:"
+        : (cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:");
 
     // The live value the field mirrors until the user types over it.
     const std::string liveText =
@@ -20032,10 +20190,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cx = imgPos.x + sx;
           cy = imgPos.y + sy;
         } else {
-          const float denx = worldRight - worldLeft + 1.e-12f;
-          const float deny = worldTop - worldBottom + 1.e-12f;
-          const float uSnap = (*outCursorX - worldLeft) / denx;
-          const float vSnap = (worldTop - *outCursorY) / deny;
+          const float denx = static_cast<float>(worldRight - worldLeft + 1.e-12f);
+          const float deny = static_cast<float>(worldTop - worldBottom + 1.e-12f);
+          const float uSnap = static_cast<float>((*outCursorX - worldLeft) / denx);
+          const float vSnap = static_cast<float>((worldTop - *outCursorY) / deny);
           cx = imgPos.x + uSnap * avail.x;
           cy = imgPos.y + vSnap * avail.y;
         }
@@ -20333,7 +20491,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double tickInner = ringRadiusWorld * 0.85;
       const double tickOuter = ringRadiusWorld * 1.15;
       if (cmd.polarIncrementDeg >= 1e-6) {
-        for (double a = 0.0; a < 360.0 - 1e-6; a += cmd.polarIncrementDeg) {
+        for (double a = 0.0; a < 360.0 - 1e-6; a += cmd.polarIncrementDeg) {  // NOLINT(clang-analyzer-security.FloatLoopCounter): cosmetic tick-mark angle, bounded by the 360° epsilon above
           pdl->AddLine(toScreen(onRing(a, tickInner)), toScreen(onRing(a, tickOuter)),
                        IM_COL32(235, 175, 90, 200), 1.6f);
         }
@@ -20830,8 +20988,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
 // Property lists per object type (indices into QsProperty enum).
 struct QsTypeProps {
-  const char* label;
-  AppCommandState::QsObjectType type;
+  const char* label = nullptr;
+  AppCommandState::QsObjectType type = AppCommandState::QsObjectType::All;
   // Which properties are valid, as QsProperty values
   std::initializer_list<AppCommandState::QsProperty> props;
 };
@@ -21018,7 +21176,8 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
                                       });
     if (!curValid && !colorOpts.empty())
       std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", colorOpts[0].second.c_str());
-    const char* preview = CadColorDisplayLabel(cmd.qsValueBuf).c_str();
+    const std::string previewLabel = CadColorDisplayLabel(cmd.qsValueBuf);
+    const char* preview = previewLabel.c_str();
     if (ImGui::BeginCombo("##qs_val_color", preview)) {
       for (const auto& opt : colorOpts) {
         const bool sel = (opt.second == cmd.qsValueBuf);

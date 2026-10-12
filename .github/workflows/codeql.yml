@@ -5,14 +5,22 @@
 # every push) and its own job. It shares release.yml's MSVC/Ninja setup because CodeQL's C++ analysis
 # needs the project actually built with tracing, not merely configured.
 #
-# Findings land on the repository's Security tab (code scanning alerts), not as a failing check —
-# tightening that is a future decision, not part of this requirement.
+# Findings land on the repository's Security tab (code scanning alerts) AND fail the PR check
+# (REQ-402) when any new error/critical-severity result is found in the SARIF output — see the
+# "Fail on error-severity findings" step below.
 
 name: codeql
 
-# HOTFIX 2026-09-08: CodeQL disabled — automatic triggers removed, manual-only.
-# Restore the pull_request + schedule triggers below once the underlying issue is resolved.
+# REQ-402 (2026-10-09): re-enabled on pull_request into master only, as a blocking check — see
+# "Fail on error-severity findings" below. NOT run on beta PRs: CodeQL is whole-program analysis
+# (it builds a database from the entire compiled codebase and runs dataflow queries across it —
+# unlike clang-tidy, there is no way to scope it to just a diff), so it runs ~1-3 hours per PR on
+# this codebase. Gating every beta PR on that was blocking routine development; gating the
+# smaller, less frequent master release PRs is the compromise. Still available via manual
+# dispatch too.
 on:
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 concurrency:
@@ -64,6 +72,34 @@ jobs:
         run: cmake --build build
 
       - name: Perform CodeQL analysis
+        id: analyze
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:cpp'
+          output: sarif-results
+
+      - name: Fail on error-severity findings
+        shell: pwsh
+        run: |
+          $sarifFiles = Get-ChildItem -Path sarif-results -Filter *.sarif -Recurse -ErrorAction SilentlyContinue
+          if (-not $sarifFiles) { Write-Host "No SARIF output found - nothing to check."; exit 0 }
+          $errorCount = 0
+          foreach ($file in $sarifFiles) {
+            $sarif = Get-Content $file.FullName -Raw | ConvertFrom-Json
+            foreach ($run in $sarif.runs) {
+              foreach ($result in $run.results) {
+                $level = $result.level
+                if (-not $level) {
+                  $ruleId = $result.ruleId
+                  $rule = $run.tool.driver.rules | Where-Object { $_.id -eq $ruleId } | Select-Object -First 1
+                  $level = $rule.defaultConfiguration.level
+                }
+                if ($level -eq 'error') { $errorCount++ }
+              }
+            }
+          }
+          Write-Host "CodeQL error-severity findings: $errorCount"
+          if ($errorCount -gt 0) {
+            Write-Host "::error::CodeQL found $errorCount error-severity finding(s). See the Security tab for details."
+            exit 1
+          }

@@ -1,0 +1,273 @@
+\documentclass[11pt]{article}
+\usepackage[letterpaper,margin=1.1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[round,authoryear]{natbib}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,
+  pdftitle={Earth Curvature and Refraction in the GoSurvey Traverse Editor},
+  pdfauthor={Chet Jones}}
+\usepackage{enumitem}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55\baselineskip}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{\textbf{Earth Curvature and Refraction in the\\GoSurvey Traverse Editor}}
+\author{Chet Jones \\ \small GoSurvey Project}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+\begin{center}
+\small REQ-826 \quad\textbar\quad GitHub Issue \#826 \quad\textbar\quad Pull Request \#839
+\end{center}
+\vspace{1em}
+
+\begin{abstract}
+\noindent GoSurvey's Traverse Editor reduced a leg's vertical angle to an
+elevation difference ($\Delta Z$) by plain trigonometry alone. Over any leg
+of meaningful length this is not what a level line actually measures: the
+line of sight bends slightly toward the ground through atmospheric
+refraction, and the reference surface itself curves away beneath it. This
+note derives the standard combined correction, works it by hand for several
+leg lengths and refraction conditions, and compares each hand result
+against the value GoSurvey now computes. It also documents the automated
+test suite that keeps the implementation honest going forward, and records
+the resulting change in previously-computed traverse elevations.
+\end{abstract}
+
+\section{What problem this fixes}
+
+A total station measures a vertical angle and a distance to a target, and
+trigonometry converts that pair into a horizontal distance and an elevation
+difference. Plain trigonometry implicitly assumes two things that are not
+true over any real distance: that the line of sight travels in a straight
+line through the atmosphere, and that ``level'' is a flat plane rather than
+a surface curving with the earth. Both effects are well documented in
+standard surveying references \citep{ghilaniwolf2015,bannister1998}, and
+both act in the same direction on a normal (non-grazing) sight: curvature
+makes a level target appear to drop away below the horizontal, while
+atmospheric refraction bends the line of sight downward toward denser air
+near the ground, partially canceling the curvature effect. Left
+uncorrected, this is equivalent to always observing with a refraction
+coefficient of $k \approx 1$ no matter what the atmosphere is actually
+doing, an error that grows with the square of the distance and was reported
+against GoSurvey directly by a user running real traverse legs
+\citep{issue826}. This change adds the standard combined curvature and
+refraction correction to the Traverse Editor's $\Delta Z$ computation.
+
+\section{The governing formula}
+
+The combined curvature and refraction correction to an elevation difference
+observed over a horizontal distance $D$ is
+\begin{equation}
+C \;=\; (1-k)\,\frac{D^{2}}{2R},
+\label{eq:cr}
+\end{equation}
+where $R$ is the mean radius of the earth and $k$ is the refraction
+coefficient, the fraction of the curvature effect that atmospheric
+refraction cancels out \citep{ghilaniwolf2015,bannister1998}. GoSurvey uses
+$R = 6{,}371{,}000$~m, the mean earth radius, and a default
+$k = 0.14$, the value standard references give for average atmospheric
+conditions \citep{ghilaniwolf2015}. $C$ is strictly positive whenever
+$k < 1$ (the normal case): the corrected elevation difference is always
+\emph{higher} than the plain-trigonometric value, for a level or an
+inclined sight in either direction, because curvature and refraction act on
+the vertical reduction independently of which way the sight is pointed.
+
+For each traverse leg, GoSurvey already reduces the field observation
+(whichever of a direct horizontal distance or a slope distance plus
+vertical angle was entered) to a horizontal distance $D$ and a plain-trig
+elevation difference $\Delta Z_{\mathrm{trig}}$. This change adds one term
+after that reduction, at the single point both input paths already share:
+\begin{equation}
+\Delta Z \;=\; \Delta Z_{\mathrm{trig}} \;+\; (1-k)\,\frac{D^{2}}{2R},
+\label{eq:dz}
+\end{equation}
+applied only when a vertical angle was actually resolved for the leg; a leg
+entered with no vertical observation keeps its legacy flat ($\Delta Z = 0$)
+behavior exactly as before. The option defaults on, since the uncorrected
+behavior is a systematic error rather than a deliberate choice, and can be
+switched off to reproduce the exact pre-change numbers.
+
+\emph{Implementation.} \texttt{src/traverse/TraverseCalc.cpp}, function
+\texttt{ComputeTraverse}, in the per-leg loop immediately after the
+horizontal distance is resolved and validated, before it is used for
+anything else (coordinate increments, closure perimeter, or the
+least-squares adjustment's inputs). \texttt{src/traverse/TraverseLeastSquares.cpp}
+performs no vertical reduction of its own, so this single point covers
+every elevation the Traverse Editor produces.
+
+\section{Worked example A: the textbook one-kilometer sight}
+\label{sec:exa}
+
+A $1000.0000$~m leg with a $+2^{\circ}$ elevation angle, at the default
+$k = 0.14$:
+
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Quantity & Formula & Value \\
+\midrule
+Horizontal distance $D$ & measured & $1000.0000$ m \\
+Plain-trig $\Delta Z_{\mathrm{trig}}$ & $D\tan(2^{\circ})$ & $34.9207$ m \\
+Curvature + refraction $C$ & $(1-0.14)D^{2}/(2R)$ & $0.0674933$ m \\
+Corrected $\Delta Z$ & $\Delta Z_{\mathrm{trig}} + C$ & $34.9882$ m \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+This is the textbook anchor value: $C = 0.0675\,K^{2}$ for $K$ in kilometers
+at $k=0.14$ \citep{ghilaniwolf2015}, and $0.0675 \times 1^2 = 0.0675$~m
+agrees with the hand-computed $0.0674933$~m to the fourth decimal (the
+small residual is simply the published constant's own rounding). GoSurvey's
+test suite asserts this exact pair of values:
+\texttt{tests/TraverseTests.cpp}, \emph{``Curvature+refraction: 1 km leg
+gains 0.0675 m at k=0.14''}, which isolates the correction by differencing a
+corrected run against the same leg with the option off, so the test is
+immune to any unrelated change in the plain-trig term.
+
+\section{Worked example B: refraction coefficient and leg length both matter}
+\label{sec:exb}
+
+Because $C$ depends only on $D$ and $k$, not on the vertical angle itself,
+it is straightforward to check the formula's two free parameters
+independently against hand arithmetic.
+
+\begin{center}
+\begin{tabular}{@{}L{0.30\textwidth}L{0.34\textwidth}rr@{}}
+\toprule
+Case & Formula & Hand value & GoSurvey \\
+\midrule
+$D=1000$~m, $k=0$ (pure curvature, no refraction) &
+  $D^{2}/(2R)$ & $0.0784804$ m & $0.078480$ m \\
+$D=1000$~m, $k=0.20$ (hazier air, more bending) &
+  $0.80\,D^{2}/(2R)$ & $0.0627843$ m & $0.062784$ m \\
+$D=300$~m, $k=0.14$ (a short layout leg) &
+  $0.86\,D^{2}/(2R)$ & $0.0060744$ m & $0.0060744$ m \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The $k=0$ row is the full, uncancelled curvature drop, the largest the
+correction can be for a given distance under this formula; the $k=0.20$ row
+shows the correction shrinking as $k$ rises toward $1$, exactly as
+Equation~\ref{eq:cr} predicts; and the $300$~m row shows the term is
+already under a centimeter at ordinary traverse-leg lengths, which is why
+the uncorrected error was easy to miss on short legs and only became
+obvious on the longer legs the original bug report described
+\citep{issue826}. Each row is covered by its own case in
+\texttt{tests/TraverseTests.cpp} under the \texttt{[curvref][issue-826]}
+tag.
+
+\subsection*{Sign check: downhill sights}
+
+Equation~\ref{eq:dz} adds $C$ unconditionally, so a downhill
+($-2^{\circ}$) sight over the same $1000$~m gets the identical
+$+0.0674933$~m correction as the uphill case in
+Section~\ref{sec:exa} --- the corrected $\Delta Z$ is less negative than
+the plain-trig value, not more. This matches the physical picture: a level
+line of sight over a curved earth drops below the tangent plane regardless
+of which way the instrument is tilted, so the curvature term must raise
+the elevation difference in both directions. GoSurvey's test
+\emph{``Curvature+refraction: downhill sights get a positive correction''}
+asserts both the magnitude and the direction of this effect.
+
+\subsection*{The slope-distance path}
+
+A leg entered as a $1000$~m slope distance at a zenith angle of
+$88^{\circ}$ reduces to a horizontal distance of
+$D = 1000\sin(88^{\circ}) = 999.3908$~m before the correction term is
+applied, giving
+$C = 0.86 \times 999.3908^{2}/(2\times 6{,}371{,}000) = 0.0674111$~m, which
+GoSurvey's \emph{``Curvature+refraction: slope-distance/zenith path
+matches''} test confirms to the same precision. This matters because
+GoSurvey has two independent input paths for a leg (an entered horizontal
+distance, or a slope distance reduced through a separate function); the
+test demonstrates both paths reach the same correction code rather than
+only one of them being fixed.
+
+\section{The default (no vertical angle) path is unchanged}
+
+A leg entered with only a horizontal distance and no vertical
+observation --- there being nothing to reduce --- keeps
+$\Delta Z = 0.0000000$~m exactly, bit-for-bit identical to the pre-change
+behavior, confirmed by \emph{``Curvature+refraction: legs with no vertical
+angle are untouched''}. This guards against a plausible implementation
+mistake: applying the curvature term to every leg's horizontal distance
+regardless of whether a vertical angle exists, which would silently invent
+elevation data for legs that never had any.
+
+\section{What changes for existing users}
+
+Because the option defaults on, elevations computed by the Traverse Editor
+for any leg that used a vertical angle will differ from earlier GoSurvey
+versions by exactly the $C$ term above: roughly $+6.75$~cm per kilometer of
+leg length at the default $k=0.14$, falling to about $+6.1$~mm at
+$300$~m and $+0.7$~mm at $100$~m. This is not a new bug; it corrects an
+existing one. Unchecking ``Curv + Refr'' in the Traverse Editor's options
+row restores the exact previous numbers, verified by the no-op test in
+Section~5 applied with the toggle left at its non-default (off) state.
+
+\section{Automated test summary}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{0.27\textwidth}L{0.37\textwidth}L{0.28\textwidth}@{}}
+\toprule
+File & Test case & What it proves \\
+\midrule
+\texttt{TraverseTests.cpp} &
+  1 km leg gains 0.0675 m at k=0.14 &
+  the textbook anchor value, isolated from the plain-trig term \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  k=0 gives pure curvature 0.0785 m/km &
+  the uncancelled upper bound of the correction \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  custom k=0.20 scales the correction &
+  $k$ is a live user input, not a baked-in constant \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  300 m leg corrects 6.1 mm &
+  the term stays correct, and small, at ordinary leg lengths \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  downhill sights get a positive correction &
+  the sign is direction-independent, as the physics requires \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  slope-distance/zenith path matches &
+  both leg-entry paths reach the one correction point \\[0.3em]
+\texttt{TraverseTests.cpp} &
+  legs with no vertical angle are untouched &
+  the correction cannot invent elevation data from nothing \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All seven cases, plus the eight pre-existing traverse test cases, pass
+under the \texttt{GoSurveyTests} executable (Catch2, MSVC release build),
+15 test cases and 97 assertions with no regressions. The source is
+PR~\#839, branch \texttt{fix-826-curv-refr}, requirement entry pending in
+\texttt{spec/requirements.md}.
+
+\begin{thebibliography}{9}
+
+\bibitem[Bannister et al., 1998]{bannister1998}
+Bannister, A., Raymond, S., and Baker, R. (1998). \emph{Surveying}, 7th
+ed. Harlow, UK: Pearson/Prentice Hall.
+
+\bibitem[Ghilani and Wolf, 2015]{ghilaniwolf2015}
+Ghilani, C.~D., and Wolf, P.~R. (2015). \emph{Elementary Surveying: An
+Introduction to Geomatics}, 14th ed. Boston: Pearson.
+
+\bibitem[GoSurvey Issue 826, 2026]{issue826}
+GoSurvey Project (2026). \emph{GitHub Issue \#826: Traverse editor: add
+earth curvature + refraction correction to vertical angle reduction}.
+\url{https://github.com/chetjones003/GoSurvey/issues/826}
+
+\end{thebibliography}
+
+\end{document}

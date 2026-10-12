@@ -377,10 +377,6 @@ int main()
 #endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
-  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
-  // every other panel stays in the main window until it is dragged out.
-  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
@@ -461,6 +457,27 @@ int main()
 #else
   RunStartupSplash(window, 5.0, &updateState);
 #endif
+  // REQ-387 clause 7 / ADR-067 (a): a PDF viewer is a real Windows window (minimize / maximize, another
+  // monitor, docking back). Only windows whose class asks for NoAutoMerge get an OS window on their own;
+  // every other panel stays in the main window until it is dragged out. Enabled only AFTER the splash:
+  // RunStartupSplash's own frame loop (SplashScreen.cpp) calls ImGui::Render() but never
+  // UpdatePlatformWindows()/RenderPlatformWindowsDefault(), so turning this on before the splash runs
+  // desyncs ImGui's internal FrameCount vs FrameCountPlatformEnded for every splash frame — invisible
+  // in a Release build (the check is an assert(), compiled out), but an immediate
+  // `IM_ASSERT(g.FrameCount == 0 || g.FrameCount == g.FrameCountPlatformEnded)` abort in Debug.
+  //
+  // Debug-only (GOSURVEY_DEVELOPER_SHELL) leaves it OFF entirely: the splash fix above stops the
+  // startup-time desync, but the same assert still fires a few seconds into the main loop on a Debug
+  // build with the Developer Shell's Test Engine active — the Test Engine's own frame bookkeeping
+  // does not pair cleanly with ImGui's multi-viewport platform-window updates (confirmed by isolation:
+  // removing this flag is what stops the abort; narrowing to the exact Test Engine interaction is
+  // unresolved and out of scope for the font-tuner work that surfaced it). Debug is the developer/test
+  // build, not what ships, so losing "drag a PDF viewer into its own OS window" there only is an
+  // acceptable trade against an outright crash. Release — what the app actually ships as — is
+  // unaffected.
+#ifndef GOSURVEY_DEVELOPER_SHELL
+  io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+#endif
   // The splash ran in a small (~880x640) window. Maximizing it for the main stage leaves the stale
   // splash front buffer stretched fullscreen for the frames it takes DWM to catch up — the "glitchy
   // maximized splash". Fix: hide the window across the maximize and the entire pre-loop setup, and
@@ -507,8 +524,15 @@ int main()
   // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
   std::unique_ptr<auth::AuthTask> authTask;
   bool                            authLastAttemptInteractive = false;
-  authTask     = auth::BeginSilentRefresh();
-  cmd.authBusy = true;
+  // REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): a permanent "Don't Sign In" means
+  // no auth network activity at all on launch, not just a hidden gate — the user declined sign-in
+  // entirely until they explicitly opt back in from Settings.
+  if (!cmd.authOptedOut) {
+    authTask     = auth::BeginSilentRefresh();
+    cmd.authBusy = true;
+  } else {
+    cmd.authGateResolved = true;
+  }
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
@@ -728,6 +752,16 @@ int main()
         cmd.authError.clear();
       }
     }
+    // REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): "Don't Sign In" at the launch
+    // gate. Persisted immediately (same shape as What's New's dismiss-on-close), not deferred to
+    // the normal exit save, so the choice survives even if the session never exits cleanly.
+    if (cmd.authDeclineRequested)
+    {
+      cmd.authDeclineRequested = false;
+      cmd.authOptedOut         = true;
+      cmd.authGateResolved     = true;
+      (void)SaveUserStartupPrefs(cmd);
+    }
     if (authTask && authTask->done.load(std::memory_order_acquire))
     {
       cmd.authBusy            = false;
@@ -743,6 +777,13 @@ int main()
       // while online, which is what leaves the gate open to show the blocking prompt.
       if (authTask->ok || authTask->skippedNoNetwork)
         cmd.authGateResolved = true;
+      // A successful sign-in (from Settings, after a prior "Don't Sign In") clears the opt-out —
+      // REQ-091 amended: the user is back in, so the permanent decline no longer applies.
+      if (authTask->ok && cmd.authOptedOut)
+      {
+        cmd.authOptedOut = false;
+        (void)SaveUserStartupPrefs(cmd);
+      }
       authTask.reset();
     }
     // REQ-080 (amended, D-2026-08-23-e): fires exactly once per launch, right after the auth
@@ -1232,6 +1273,7 @@ int main()
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawMleaderStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
+    DrawSurveyPointGridWindow(cmd, &cmdLog);  // REQ-400
     DrawConnectionModesWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);

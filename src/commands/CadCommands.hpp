@@ -3310,6 +3310,8 @@ struct AppCommandState {
                                             ///< for the "Waiting for browser..." button label
   std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
   std::string authError;                ///< set only after a user-initiated sign-in attempt fails
+  /// REQ-091 (amended 2026-10-11, issue #824): set by the launch gate's "Don't Sign In" button.
+  bool        authDeclineRequested = false;
   bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
   bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
                                              ///< the menu-bar account dropdown — REQ-091 amendment)
@@ -3328,10 +3330,16 @@ struct AppCommandState {
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
   bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
-  /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
-  /// there is no internet connectivity at all (same offline exception REQ-077's update gate
-  /// uses) — never re-checked mid-session, so signing out later does not reopen the gate.
+  /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
+  /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
+  /// REQ-077's update gate uses) — never re-checked mid-session, so signing out later does not
+  /// reopen the gate.
   bool        authGateResolved = false;
+  /// REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): the user chose "Don't Sign In" at
+  /// the launch gate. Persisted in gosurvey-user.json; checked before the gate would otherwise
+  /// open, so it never reappears once set. Cleared by a successful sign-in from Settings (the
+  /// only remaining way to opt back in).
+  bool        authOptedOut = false;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
@@ -4260,6 +4268,26 @@ struct AppCommandState {
   /// the live stretch distance (REQ-024).
   float entityGripLiveDistance = 0.f;
 
+  // --- Grip hover menu (REQ-356): Lengthen/Stretch for a line-endpoint grip ---
+  /// Set when the drag was armed via the hover menu's "Lengthen" item rather than a plain click-drag:
+  /// the live update and the typed-distance box both measure along \c entityGripLengthenDir instead of
+  /// free cursor position / ORTHO, so the endpoint can only move along the line's own original angle.
+  bool entityGripLengthenMode = false;
+  /// Unit vector from the FIXED endpoint toward the grip being dragged, at the moment "Lengthen" was
+  /// chosen — the line's own angle, frozen for the rest of this drag.
+  float entityGripLengthenDirX = 0.f;
+  float entityGripLengthenDirY = 0.f;
+  /// Dwell timer + identity for the grip hover menu: which selected line-endpoint grip (if any) the
+  /// cursor is currently resting on, used to open the Lengthen/Stretch popup after ~0.5s and to reset
+  /// the timer the instant the hovered grip changes (REQ-356).
+  HoverDwell gripMenuHoverDwell{};
+  int gripMenuHoverEntityIndex = -1;
+  int gripMenuHoverWhich = -1;
+  /// The grip the popup is open for (or was last open for) — latched separately from the hover above
+  /// so the popup's own content doesn't vanish the instant the cursor leaves the grip to reach the menu.
+  int gripMenuPendingEntityIndex = -1;
+  int gripMenuPendingWhich = -1;
+
   // --- MOVE / COPY ---
   enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
 
@@ -4642,6 +4670,15 @@ struct AppCommandState {
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   /// When set, the Point Group manager selects this named group on the next draw.
   std::string pointGroupManagerFocusName;
+  bool showSurveyPointGridWindow = false;  ///< Survey Point Database grid (REQ-400).
+  /// REQ-400 clause 5: a grid edit that retagged a point to a number already in the database, waiting
+  /// on the user's overwrite / renumber / cancel answer. Cleared once answered or the window closes.
+  struct SurveyPointGridConflict {
+    bool        active = false;
+    int         oldNumber = 0;    ///< the row being edited (its number before the edit)
+    int         newNumber = 0;    ///< the number the user typed, already taken
+    SurveyPoint pendingValues;    ///< the rest of the edit, applied once the conflict is resolved
+  } surveyPointGridConflict;
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
   /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
   bool showCreateSurfaceWindow = false;
@@ -6293,6 +6330,16 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
 /// unrecognized \p args reports the current networks). \p args is everything typed after the
 /// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
 void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+
+// --- LAYOUT / VPSCALE / PAGESETUP (REQ-401, issue #751/#753 V3) -----------------------------------
+/// One-shot text dispatch for LAYOUT's NEW/RENAME/DELETE subverbs — the typed equivalent of the
+/// layout tab bar's add/rename/delete (REQ-025). \p args is everything typed after "LAYOUT".
+void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
+/// number; a blank \p args reports the current viewport's scale instead.
+void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
+void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
@@ -6776,6 +6823,7 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripDownWorldX = 0.f;
   st.entityGripDownWorldY = 0.f;
   st.entityGripTypedDistanceValid = false;
+  st.entityGripLengthenMode = false;
 }
 
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
@@ -7650,6 +7698,17 @@ struct DrawingTransformFactors {
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
 
+// --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
+/// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"
+/// option is on: Combined = the Transformation tab's k = k_grid · k_sea at its reference point;
+/// GridOnly = k_grid alone. Reuses \ref ResolveDrawingTransform rather than a second computation.
+/// \p factorOut is left at 1.0 and a non-empty reason is returned when the drawing has no
+/// coordinate system (REQ-358) or the Transformation tab's reference point cannot be resolved
+/// (REQ-360's own failure cases).
+[[nodiscard]] std::string ResolveTraverseScaleFactor(const AppCommandState& st,
+                                                     TraverseData::ScaleFactorKind kind,
+                                                     double* factorOut);
+
 /// WGS 84 latitude/longitude ↔ a LOCAL drawing point (REQ-363 item 3, ADR-064 (b)): the same chain as
 /// \ref DrawingPointToGrid / \ref GridToDrawingPoint plus the datum path to WGS 84, with the zone, the
 /// datum paths and the REQ-360 transformation resolved ONCE by \ref Open, so an online map can place
@@ -8258,6 +8317,16 @@ struct CommandSuggestion {
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
 std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
 
+/// What the command line should actually run for \p typedText, decided fresh against the text
+/// itself rather than a suggestion computed on an earlier keystroke (GitHub issue #766: the UI's
+/// persisted autocomplete highlight could survive from an unrelated earlier query, so typing the
+/// exact alias ERASE ran DRAWINGSETTINGS, RENAME ran SURFACERENAME, and TABLE ran VOLTABLE). A
+/// single-token \p typedText that exactly names a command or alias always resolves to that
+/// command — FuzzyCommandSuggestions ranks an exact match first — so an exact name never loses to
+/// a stale or merely-similar suggestion. A multi-token line (a command plus its arguments) and an
+/// unrecognized single token are both returned unchanged.
+std::string ResolveCommandLineSubmission(const std::string& typedText);
+
 /// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
 /// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
 /// to mean the same thing, which is what produced "click two corners to window-select objects" in
@@ -8322,3 +8391,26 @@ bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float
                          float* r);
 
 bool LoadApplicationFont();
+
+/// DevShell Fonts tab (debug-only live font tuner): one TTF path (or, for the bundled Wiki roles, a
+/// filename under resources/fonts/) and a pixel size per role. Mirrors the roles LoadApplicationFont
+/// wires up at startup.
+struct FontTuningRole {
+  std::string path;
+  float       sizePx = 16.f;
+};
+struct FontTuning {
+  FontTuningRole defaultFont{"C:/Windows/Fonts/arial.ttf", 16.f};
+  FontTuningRole toolspace{"C:/Windows/Fonts/arial.ttf", 16.f};
+  FontTuningRole billboard{"C:/Windows/Fonts/arial.ttf", 20.f};
+  FontTuningRole wikiBody{"IBMPlexSans-Regular.ttf", 16.f};
+  FontTuningRole wikiHeading{"IBMPlexSansCondensed-SemiBold.ttf", 17.f};
+  FontTuningRole wikiMono{"IBMPlexMono-Regular.ttf", 15.f};
+};
+
+/// Rebuilds every FontReg role from \p tuning. Clears and repopulates io.Fonts, but does NOT touch
+/// the GL texture — the caller (DevShell) must follow a successful call with
+/// ImGui_ImplOpenGL3_DestroyFontsTexture + io.Fonts->Build + ImGui_ImplOpenGL3_CreateFontsTexture,
+/// since this file has no OpenGL dependency. False (default font missing) leaves io.Fonts empty;
+/// the caller should not proceed to the texture rebuild in that case.
+bool LoadApplicationFontWithTuning(const FontTuning& tuning);

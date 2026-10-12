@@ -1,0 +1,256 @@
+\documentclass[11pt]{article}
+\usepackage[letterpaper,margin=1.1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage[round,authoryear]{natbib}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=black,
+  pdftitle={AutoCAD-Compatible Unit Scaling in the GoSurvey Traverse Editor and Clipboard},
+  pdfauthor={Chet Jones}}
+\usepackage{enumitem}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55\baselineskip}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\title{\textbf{Is a Drawing Unit Just a Label?\\AutoCAD-Compatible Unit Scaling in\\GoSurvey's Traverse Editor and Clipboard}}
+\author{Chet Jones \\ \small GoSurvey Project}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+\vspace{-1.5em}
+\begin{center}
+\small REQ-357 \quad\textbar\quad REQ-383 \quad\textbar\quad GitHub Issue \#831 \quad\textbar\quad Pull Request \#837
+\end{center}
+\vspace{1em}
+
+\begin{abstract}
+\noindent A Reddit report that the Traverse Closure Analysis panel labelled
+distances \texttt{(ft)} on a meters project led to a harder question: if a
+drawing's linear unit is just a label on a number, does changing it --- or
+moving a number between two drawings with different labels --- ever change
+anything real? This note answers both halves precisely. First, it confirms
+by inspection of GoSurvey's own code that changing a drawing's unit setting
+never rescales existing geometry, which is not a bug but the same
+convention AutoCAD's own \texttt{INSUNITS} system variable uses
+\citep{autodeskInsunits}. Second, it finds and closes a real gap against
+that same convention: AutoCAD scales content pasted or inserted between two
+drawings of different units by the ratio of those units
+\citep{autodeskInsunits}, but GoSurvey's clipboard paste skipped that check
+entirely whenever neither drawing belonged to one of its own ``Projects''.
+This note derives the governing unit-ratio formula, works a numeric example
+by hand, and documents the warn-then-convert implementation and its test
+suite --- deliberately never silent, unlike AutoCAD's own default.
+\end{abstract}
+
+\section{The question: is the unit label load-bearing?}
+\label{sec:question}
+
+GoSurvey stores every drawn length as a plain number with no unit attached
+--- a line ``100 units long'' is stored as the double \texttt{100.0}, full
+stop. The drawing's \texttt{INSUNITS} code (Unitless, Inches, Feet,
+Millimeters or Meters; REQ-357) is a separate setting that says how that
+number should be read: 100 feet, or 100 meters, or something else entirely.
+Changing the setting after the fact does \emph{not} walk back through the
+drawing and rescale every stored number to the new unit --- the number
+\texttt{100.0} stays \texttt{100.0}, now read under the new label.
+
+This is confirmed directly from the source rather than assumed: every
+write site for the drawing's unit setting
+(\texttt{src/ui/CadUiSettings.cpp}, \texttt{src/ui/CadUi\_DrawingSettings.cpp})
+assigns only the integer code itself (\texttt{cmd.drawingInsUnits = ...}); none
+of them touches a coordinate, a distance or any entity array. No code path
+in the program rescales geometry in response to a unit-setting change.
+
+\emph{This is deliberate, not an oversight, and it is the same rule
+AutoCAD follows.} The Autodesk reference for \texttt{INSUNITS} describes it
+as the value AutoCAD uses to \emph{auto-scale} content \textbf{being
+inserted or attached} --- blocks, images, and xrefs --- into a drawing; it
+does not describe \texttt{INSUNITS} as retroactively rescaling anything
+already drawn \citep{autodeskInsunits}. Flipping the unit dropdown on an
+existing drawing, in both programs, only changes how future insertions and
+pastes are scaled and how existing numbers are labelled on screen --- never
+what those numbers already are.
+
+\section{The real gap: paste between two differently-labelled drawings}
+\label{sec:gap}
+
+If the label is informational for an existing drawing, the question moves
+to the boundary where two drawings meet: what happens when you copy an
+object out of a meters drawing and paste it into a feet drawing?
+
+\subsection*{What AutoCAD does}
+
+AutoCAD computes the ratio of the source and destination drawings'
+\texttt{INSUNITS} values and scales the inserted or pasted content by that
+ratio, so that the object keeps its real-world size rather than its raw
+number \citep{autodeskInsunits}. A millimeter-drawn object pasted into an
+inch-based drawing is scaled by $25.4$, the millimeters-per-inch ratio, as a
+direct worked instance of the same rule \citep{autodeskInsunits}. This
+scaling is automatic and, by default, silent: nothing stops to ask first.
+AutoCAD does expose a toggle for it (\texttt{DWGUNITS}'s ``Scale objects
+from other drawings upon insert''), and user reports of surprising scale
+jumps are common enough that the standard community advice is simply to
+turn it off and keep every file in one unit \citep{autodeskInsunits}.
+
+\subsection*{What GoSurvey did, before this change}
+
+GoSurvey already replicated half of this correctly: inserting a
+\textsc{block} compares the block's own recorded unit against the current
+drawing's unit and computes a scale factor automatically
+(\texttt{CadBlockInsertUnitsScale}, gated by the existing REQ-357
+``Scale inserted objects'' toggle --- GoSurvey's own equivalent of
+AutoCAD's \texttt{DWGUNITS} option).
+
+Clipboard \textsc{paste}, however, did not. \texttt{CheckClipboardPaste}
+(\texttt{src/commands/ProjectWarnings.cpp}) returned immediately, with no
+unit check performed at all, whenever neither the source nor the
+destination drawing belonged to a GoSurvey \emph{Project} (its own
+survey-point-sharing feature, unrelated to AutoCAD). REQ-383 clause 7 had
+documented this explicitly: ``a paste between two standalone drawings is
+unchanged.'' Pasting a $100.0000$-unit object from a meters drawing into a
+feet drawing landed it as $100.0000$ feet --- a real $228\%$ oversize,
+silently, because no unit arithmetic ran at all.
+
+\section{The governing formula}
+\label{sec:formula}
+
+GoSurvey already carries a meters-per-unit table for its five
+\texttt{INSUNITS} codes (\texttt{geo::MetersPerInsUnit}):
+\begin{center}
+\begin{tabular}{@{}lcl@{}}
+\toprule
+Code & Unit & Meters per unit \\
+\midrule
+1 & Inches & $0.0254$ \\
+2 & Feet (international) & $0.3048$ \\
+2 & Feet (U.S.\ survey) & $1200/3937 = 0.3048006096\ldots$ \\
+4 & Millimeters & $0.001$ \\
+6 & Meters & $1.0$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+When only the unit differs (no map-projection zone is involved), the
+transform GoSurvey's existing conversion engine computes is a pure uniform
+scale about the world origin \citep{goSurveyRepo}:
+\begin{equation}
+k_{\mathrm{unit}} \;=\; \frac{m_{\mathrm{from}}}{m_{\mathrm{to}}},
+\label{eq:kunit}
+\end{equation}
+where $m_{\mathrm{from}}$ and $m_{\mathrm{to}}$ are the source and
+destination drawings' meters-per-unit values (\texttt{geo::PlanConversion},
+the \texttt{!plan.zoneDiffers} branch). Every pasted coordinate, length and
+height is multiplied by $k_{\mathrm{unit}}$:
+\begin{equation}
+x_{\mathrm{dest}} = k_{\mathrm{unit}} \cdot x_{\mathrm{src}}, \qquad
+y_{\mathrm{dest}} = k_{\mathrm{unit}} \cdot y_{\mathrm{src}}, \qquad
+z_{\mathrm{dest}} = k_{\mathrm{unit}} \cdot z_{\mathrm{src}}.
+\label{eq:scaleapply}
+\end{equation}
+Equation~\ref{eq:kunit} is exactly the same ratio AutoCAD computes for a
+cross-unit insert or paste \citep{autodeskInsunits}; GoSurvey reuses its
+existing conversion engine rather than adding a second formula.
+
+\subsection*{Worked example: meters into feet}
+
+A $100.0000$-unit line, drawn in a meters drawing ($m_{\mathrm{from}} =
+1.0$), copied and pasted into a feet drawing ($m_{\mathrm{to}} = 0.3048$,
+international foot):
+\begin{center}
+\begin{tabular}{@{}llr@{}}
+\toprule
+Quantity & Formula & Value \\
+\midrule
+Source length & drawn & $100.0000$ (m) \\
+$k_{\mathrm{unit}}$ & $m_{\mathrm{from}} / m_{\mathrm{to}} = 1.0 / 0.3048$ & $3.2808398950$ \\
+Pasted length, unconverted (before this change) & no scaling applied & $100.0000$ ft \\
+Pasted length, converted (after this change) & $100.0000 \times k_{\mathrm{unit}}$ & $328.0839895$ ft \\
+\bottomrule
+\end{tabular}
+\end{center}
+A $100$ m line is $328.0839895$ ft by definition ($1$ m $= 1/0.3048$ ft
+exactly); the converted figure matches to the number of decimals shown,
+confirming Equation~\ref{eq:scaleapply} recovers the physically correct
+length rather than an approximation.
+
+\section{What this change does, and deliberately does not do}
+\label{sec:implementation}
+
+\texttt{CheckClipboardPaste} (\texttt{src/commands/ProjectWarnings.cpp}) now
+computes the unit mismatch check \emph{before} the standalone-drawing early
+return, rather than inside the branch that early return used to skip
+entirely. When both drawings are standalone and their units differ, the
+function returns \texttt{PasteCheck::Verdict::Warn} with an explanatory
+message and \texttt{canConvert} set by the same
+\texttt{PlanClipboardConversion} / \texttt{ApplyClipboardConversion} pair
+REQ-383 already uses for a Project-linked units mismatch --- no second
+conversion path was written. The existing paste-prompt UI
+(\texttt{st.pastePrompt}) already handled a non-blocking warning with a
+convert option generically, so no new UI code was needed either.
+
+\textbf{Deliberately unchanged:} a coordinate-system (map-projection zone)
+mismatch between two standalone drawings is still not checked. AutoCAD has
+no equivalent concept to check against for a plain drawing pairing, and
+extending that check would require deciding what a ``zone'' even means for
+two arbitrary standalone drawings --- a materially different, unasked-for
+question from the one this change answers. Equation~\ref{eq:kunit}'s
+scope is unit ratio only.
+
+\textbf{Deliberately not silent:} AutoCAD applies this scaling without
+asking, which its own user community reports as a frequent source of
+surprise \citep{autodeskInsunits}. GoSurvey's version always surfaces the
+warning and lets the user choose \emph{Convert} or \emph{Cancel} ---
+replicating the arithmetic, not the silence.
+
+\section{Automated test summary}
+
+\begin{center}
+\small
+\begin{tabular}{@{}L{0.3\textwidth}L{0.34\textwidth}L{0.28\textwidth}@{}}
+\toprule
+File & Test case & What it proves \\
+\midrule
+\texttt{ProjectWarningsTests.cpp} &
+  two standalone drawings and the same project are never checked &
+  a ZONE-only mismatch between standalone drawings still returns \texttt{Ok} (unchanged) \\[0.3em]
+\texttt{ProjectWarningsTests.cpp} &
+  two standalone drawings with a unit mismatch still warn and offer convert (issue \#831) &
+  a UNIT-only mismatch between standalone drawings now returns \texttt{Warn} with \texttt{canConvert}, and \texttt{StartPasteCommand} opens a non-blocking prompt \\[0.3em]
+\texttt{ProjectWarningsTests.cpp} &
+  a units mismatch warns / can be converted: lengths, heights, radii and the origin all follow &
+  pre-existing Project-linked path is unchanged by this edit \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+All cases pass under the \texttt{GoSurveySnapTests} executable (Catch2,
+MSVC release build); the four unrelated pre-existing \texttt{[req383]}
+failures in this build (point-visibility renumbering, tracked separately)
+are identical before and after this change, confirmed by running the same
+filtered suite against both revisions. The source is PR~\#837, branch
+\texttt{fix/issue831-traverse-closure-units}, amending REQ-383 clause 7 in
+\texttt{spec/requirements.md} (decision \texttt{D-2026-10-11-c} in
+\texttt{spec/project.md}).
+
+\begin{thebibliography}{9}
+
+\bibitem[Autodesk, 2026]{autodeskInsunits}
+Autodesk, Inc.\ (retrieved 2026). \emph{INSUNITS (System Variable)},
+AutoCAD / AutoCAD~LT Help. Autodesk Knowledge Network.
+\url{https://help.autodesk.com/cloudhelp/2022/ENU/AutoCAD-LT-MAC/files/GUID-A58A87BB-482B-4042-A00A-EEF55A2B4FD8.htm}
+
+\bibitem[GoSurvey, 2026]{goSurveyRepo}
+GoSurvey Project (2026). \emph{Source repository}, functions
+\texttt{geo::MetersPerInsUnit}, \texttt{geo::PlanConversion}
+(\texttt{src/geo/DrawingConversion.cpp}), \texttt{CheckClipboardPaste}
+(\texttt{src/commands/ProjectWarnings.cpp}), and
+\texttt{CadBlockInsertUnitsScale} (\texttt{src/commands/CadBlocks.cpp}).
+\url{https://github.com/chetjones003/GoSurvey}
+
+\end{thebibliography}
+
+\end{document}

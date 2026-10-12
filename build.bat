@@ -161,7 +161,7 @@ if "%NEEDCONFIG%"=="1" if errorlevel 1 exit /b 1
 
 rem --- fixup VS CMake path quoting for Ninja POST_BUILD (space in Program Files) ---
 if exist "%BUILDDIR%\build.ninja" (
-  where python >nul 2>&1 && python "%~dp0dev\fix-ninja-quoting.py" "%BUILDDIR%\build.ninja" >nul 2>&1
+  where python >nul 2>&1 && python "%~dp0cmake\fix-ninja-quoting.py" "%BUILDDIR%\build.ninja" >nul 2>&1
 )
 
 if "%VSMULTI%"=="1" (

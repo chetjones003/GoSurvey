@@ -1,0 +1,42 @@
+# clang-tidy config for GoSurvey PR checks (REQ-402).
+#
+# Enforced only against files CHANGED in a PR (.github/workflows/pr-checks.yml diffs against
+# the PR base and runs clang-tidy.exe directly, not a container action) — never against the
+# whole, untriaged codebase. That is what makes it safe to run as a blocking check from day one.
+#
+# Checks are deliberately conservative: bug-finding and correctness checks are on;
+# style/naming checks are off, since this codebase has its own established conventions
+# (spec/coding-standards.md) that do not match clang-tidy's defaults, and a style check
+# flagging every pre-existing identifier style choice on a touched line would be noise,
+# not signal.
+#
+# bugprone-chained-comparison is disabled below: Catch2's CHECK/REQUIRE expand to
+# `Catch::Decomposer() <= lhs == rhs` so it can capture both operands for the failure message
+# (catch_amalgamated.hpp INTERNAL_CATCH_TEST) -- a real chained comparison never appears in the
+# user's code, only in the macro's own decomposition. With --warnings-as-errors=*
+# (.github/workflows/pr-checks.yml) that false positive fires on every single CHECK/REQUIRE in
+# any touched test file, which both fails PRs that touch tests/ for no real bug and makes the job
+# print thousands of diagnostics (each with ~7 lines of macro-expansion notes), turning a
+# few-minute lint into a near-hour one.
+#
+# NOTE: this list is a YAML block scalar (`>`), which folds newlines into spaces and does NOT
+# treat `#` as a comment marker inside it -- an inline comment here (as this field once had)
+# becomes literal text appended to the glob list, corrupting whichever entry follows it. Put
+# every explanation above the `Checks:` key, never inside the block scalar itself.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-branch-clone,
+  -bugprone-chained-comparison,
+  clang-analyzer-*,
+  performance-*,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-pro-type-member-init,
+  modernize-use-override,
+  modernize-use-nullptr,
+  modernize-use-default-member-init
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^(src|include)/'
+FormatStyle: none
