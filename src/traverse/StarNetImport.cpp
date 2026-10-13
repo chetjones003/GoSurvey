@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -143,6 +144,17 @@ bool ParseStarNetBearingOrAzimuth(std::string tok, double* degOut) {
 
 struct KnownPt { double n = 0.0, e = 0.0, z = 0.0; bool has = false, hasZ = false; };
 
+// A GPS vector ("G1" record) plus its optional covariance ("G2"/"G3"), still
+// keyed by station NAME — resolved to GoSurvey's sequential integer ids
+// alongside the traverse legs' own names, after the main parse loop.
+struct RawGpsVector {
+    std::string fromName, toName;
+    double dx = 0.0, dy = 0.0, dz = 0.0;
+    double varX = 0.0, varY = 0.0, varZ = 0.0;
+    double covXY = 0.0, covXZ = 0.0, covYZ = 0.0;
+    bool hasCovariance = false;
+};
+
 }  // namespace
 
 bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
@@ -177,6 +189,18 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     std::string endStation;
     bool haveEndStation = false;
 
+    // --- GPS vectors (GitHub issue #847) ---
+    // StarNet's GPS weighting mode is a file-wide inline option; it must be
+    // declared (and must be COVARIANCE — the alternate "STDERRCORR" encoding's
+    // exact field semantics could not be confirmed against an authoritative
+    // source, see StarNetImport.hpp) before any G-records are read.
+    enum class GpsWeightMode : std::uint8_t { kNone, kCovariance };
+    GpsWeightMode gpsWeightMode = GpsWeightMode::kNone;
+    std::vector<RawGpsVector> rawGpsVectors;
+    bool havePendingG1 = false;
+    RawGpsVector pendingGv;
+    bool pendingHasG2 = false;
+
     std::string line;
     int lineNo = 0;
     while (std::getline(f, line)) {
@@ -193,10 +217,36 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
         const std::string code = ToUpper(toks[0]);
 
+        auto flushPendingGv = [&]() {
+            if (havePendingG1) {
+                rawGpsVectors.push_back(pendingGv);
+                havePendingG1 = false;
+                pendingHasG2 = false;
+                pendingGv = RawGpsVector{};
+            }
+        };
+
         if (!code.empty() && code[0] == '.') {
+            if (code == ".GPS") {
+                if (toks.size() < 3 || ToUpper(toks[1]) != "WEIGHT")
+                    return fail("unsupported \".GPS\" inline option (only \".GPS WEIGHT "
+                                "COVARIANCE\" is supported)");
+                const std::string mode = ToUpper(toks[2]);
+                if (mode == "COVARIANCE") {
+                    gpsWeightMode = GpsWeightMode::kCovariance;
+                } else if (mode == "STDERRCORR") {
+                    return fail("\".GPS WEIGHT STDERRCORR\" is not supported — its exact G2/G3 "
+                                "field semantics (standard errors + correlations vs. raw "
+                                "covariance) could not be confirmed against an authoritative "
+                                "source; re-export the GPS vectors in COVARIANCE mode");
+                } else {
+                    return fail("unrecognized \".GPS WEIGHT\" mode \"" + toks[2] + "\"");
+                }
+                continue;
+            }
             if (code != ".ORDER")
                 return fail("unsupported STAR*NET inline option \"" + toks[0] +
-                            "\" (only .ORDER is supported)");
+                            "\" (only .ORDER and .GPS WEIGHT are supported)");
             for (size_t i = 1; i < toks.size(); ++i) {
                 const std::string a = ToUpper(toks[i]);
                 if (a == "EN") orderEN = true;
@@ -204,6 +254,61 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                 // ATFROMTO/FROMATTO affect only A/M angle-station order, which this
                 // importer doesn't parse (T lines have a single station name).
             }
+            continue;
+        }
+
+        if (code == "G0" || code == "G1" || code == "G2" || code == "G3" || code == "G4") {
+            if (gpsWeightMode != GpsWeightMode::kCovariance)
+                return fail("a G-record (GPS vector) was found before \".GPS WEIGHT "
+                            "COVARIANCE\" was declared");
+
+            if (code == "G0") {
+                // Free-text/date header for the NEXT vector — not used for any
+                // computation, so its exact field layout doesn't need to be known.
+                flushPendingGv();
+                continue;
+            }
+            if (code == "G4")
+                return fail("\"G4\" GPS records are not supported — no authoritative "
+                            "description of this record type could be found");
+
+            if (code == "G1") {
+                flushPendingGv();
+                if (toks.size() < 5) return fail("expected G1 <from>-<to> <dX> <dY> <dZ> [...]");
+                const size_t dash = toks[1].find('-', 1);  // skip a possible leading sign
+                if (dash == std::string::npos)
+                    return fail("G1: expected \"<from>-<to>\" station pair \"" + toks[1] + "\"");
+                pendingGv.fromName = toks[1].substr(0, dash);
+                pendingGv.toName = toks[1].substr(dash + 1);
+                if (!ParseDoubleTok(toks[2], &pendingGv.dx) ||
+                    !ParseDoubleTok(toks[3], &pendingGv.dy) ||
+                    !ParseDoubleTok(toks[4], &pendingGv.dz))
+                    return fail("G1: dX/dY/dZ must be numeric");
+                // A trailing "a/b"-style token (observed in real STAR*NET output,
+                // meaning unconfirmed — likely antenna heights) carries no field this
+                // importer reads into any computation, so it is safely ignored rather
+                // than rejected: nothing downstream depends on understanding it.
+                havePendingG1 = true;
+                continue;
+            }
+            if (code == "G2") {
+                if (!havePendingG1) return fail("\"G2\" record with no preceding \"G1\"");
+                if (toks.size() < 4) return fail("expected G2 <varX> <varY> <varZ>");
+                if (!ParseDoubleTok(toks[1], &pendingGv.varX) ||
+                    !ParseDoubleTok(toks[2], &pendingGv.varY) ||
+                    !ParseDoubleTok(toks[3], &pendingGv.varZ))
+                    return fail("G2: variance values must be numeric");
+                pendingHasG2 = true;
+                continue;
+            }
+            // code == "G3"
+            if (!pendingHasG2) return fail("\"G3\" record with no preceding \"G2\"");
+            if (toks.size() < 4) return fail("expected G3 <covXY> <covXZ> <covYZ>");
+            if (!ParseDoubleTok(toks[1], &pendingGv.covXY) ||
+                !ParseDoubleTok(toks[2], &pendingGv.covXZ) ||
+                !ParseDoubleTok(toks[3], &pendingGv.covYZ))
+                return fail("G3: covariance values must be numeric");
+            pendingGv.hasCovariance = true;
             continue;
         }
 
@@ -331,9 +436,10 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
         }
 
         return fail("unsupported STAR*NET record type \"" + toks[0] +
-                    "\" (this importer handles only C, TB, T, TE — conventional 2D traverse "
-                    "data, per issue #845's scope decision)");
+                    "\" (this importer handles only C, TB, T, TE, and G0-G3 GPS vector "
+                    "records, per issue #845/#847's scope decisions)");
     }
+    if (havePendingG1) rawGpsVectors.push_back(pendingGv);
 
     if (!sawAnyTraverse || !haveEndStation) {
         errorMsg = "no complete TB...TE traverse found";
@@ -356,6 +462,28 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     };
     GetId(firstOccupied);
     for (auto& leg : legs) leg.stationId = GetId(leg.description);
+    // GPS vector endpoints share the same id space as traverse station names,
+    // so a vector tied to a conventional station resolves against it directly.
+    std::vector<TraverseGpsVector> gpsVectors;
+    gpsVectors.reserve(rawGpsVectors.size());
+    for (const auto& rgv : rawGpsVectors) {
+        TraverseGpsVector gv;
+        gv.fromName = rgv.fromName;
+        gv.toName = rgv.toName;
+        gv.fromStationId = GetId(rgv.fromName);
+        gv.toStationId = GetId(rgv.toName);
+        gv.deltaXEcefM = rgv.dx;
+        gv.deltaYEcefM = rgv.dy;
+        gv.deltaZEcefM = rgv.dz;
+        gv.varXM2 = rgv.varX;
+        gv.varYM2 = rgv.varY;
+        gv.varZM2 = rgv.varZ;
+        gv.covXYM2 = rgv.covXY;
+        gv.covXZM2 = rgv.covXZ;
+        gv.covYZM2 = rgv.covYZ;
+        gv.hasCovariance = rgv.hasCovariance;
+        gpsVectors.push_back(std::move(gv));
+    }
 
     td = TraverseData{};
     td.startStationId = GetId(firstOccupied);
@@ -395,6 +523,10 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     }
 
     td.legs = std::move(legs);
+    td.gpsVectors = std::move(gpsVectors);
+    // The GPS tangent-plane origin (td.gpsOriginLatDeg/LonDeg) is not something
+    // this importer can derive from a conventional .dat file — it must be set
+    // by the user before ComputeTraverse will resolve any G-record vectors.
 
     // ---------- closed-loop detection: TE's end station == the first occupied one.
     if (endStation == firstOccupied)

@@ -32,13 +32,31 @@
 ///                                         (a closing angle after the name is a
 ///                                         defined gap, see below).
 ///
+/// Also supports GPS vector records (GitHub issue #847), grounded in MicroSurvey
+/// support documentation (the PRO Edition Supplement's own grammar for these
+/// records is not publicly available):
+///   .GPS WEIGHT COVARIANCE             — required before any G-record; the
+///                                         alternate ".GPS WEIGHT STDERRCORR"
+///                                         encoding is rejected (its exact G2/G3
+///                                         field semantics could not be confirmed).
+///   G0 ...                             — free-text/date header; ignored.
+///   G1 <from>-<to> <dX> <dY> <dZ> [...] — ECEF baseline vector (meters) between
+///                                         two named stations; any trailing
+///                                         token(s) are parsed but discarded
+///                                         (meaning unconfirmed, not used by any
+///                                         computation).
+///   G2 <varX> <varY> <varZ>            — covariance diagonal (meters²).
+///   G3 <covXY> <covXZ> <covYZ>         — covariance off-diagonal (meters²).
+///   G4 ...                             — rejected: no authoritative description
+///                                         of this record type could be found.
+///
 /// 2D conventional traverse data only (angle, horizontal distance, a-priori
 /// errors) — matching GoSurvey's existing TraverseData model, per the scope
 /// decision recorded on issue #845. Everything else in a real STAR*NET file is a
 /// defined SPEC gap, reported as a parse failure rather than silently dropped or
-/// guessed at, including: any record type other than C/TB/T/TE (A, D, V, B, M,
-/// BM, DV, SS, leveling, position/ellipsoid-height types); any inline option
-/// other than .ORDER; a second TB before a TE (multiple/interconnected
-/// traverses); a 3D-looking T line (a third observation token); and a TE line
-/// with a closing angle. \p td is left unchanged on failure.
+/// guessed at, including: any record type other than C/TB/T/TE/G0-G3 (A, D, V, B,
+/// M, BM, DV, SS, leveling, position/ellipsoid-height types, G4); any inline
+/// option other than .ORDER and .GPS WEIGHT COVARIANCE; a second TB before a TE
+/// (multiple/interconnected traverses); a 3D-looking T line (a third observation
+/// token); and a TE line with a closing angle. \p td is left unchanged on failure.
 bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg);

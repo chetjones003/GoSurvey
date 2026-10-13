@@ -1,5 +1,7 @@
 #include "TraverseCalc.hpp"
 
+#include "../geo/EcefTransform.hpp"
+
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -515,6 +517,45 @@ void ComputeTraverse(TraverseData& td) {
             const double dN = ss.computedNorthing - ss.knownNorthing;
             ss.checkDiscrepancy = std::sqrt(dE * dE + dN * dN);
         }
+    }
+
+    // --- GPS vectors (REQ-416, GitHub issue #847) ---
+    // Resolved only when the "from" station already has a known local position
+    // (start station, a computed leg station, or another already-resolved GPS
+    // vector's end station, in file order) — a GPS-only sub-network with no tie
+    // into the conventional traverse is a defined gap, not a guess.
+    constexpr double kMetersToFeet = 1.0 / 0.3048;  // exact international foot.
+    for (auto& gv : td.gpsVectors) {
+        gv.computed = false;
+        gv.errorMsg.clear();
+
+        if (!td.hasGpsOrigin) {
+            gv.errorMsg = "GPS origin latitude/longitude required to resolve vectors";
+            continue;
+        }
+        const auto it = setups.find(gv.fromStationId);
+        if (it == setups.end() || !it->second.valid) {
+            gv.errorMsg = "Origin station \"" + gv.fromName +
+                          "\" has no known position (not the start station, a computed "
+                          "traverse leg, or an already-resolved GPS vector)";
+            continue;
+        }
+
+        double eastM = 0.0, northM = 0.0, upM = 0.0;
+        geo::EcefDeltaToEnu(gv.deltaXEcefM, gv.deltaYEcefM, gv.deltaZEcefM,
+                            td.gpsOriginLatDeg, td.gpsOriginLonDeg, &eastM, &northM, &upM);
+
+        gv.computedDeltaEastFt = eastM * kMetersToFeet;
+        gv.computedDeltaNorthFt = northM * kMetersToFeet;
+        gv.computedDeltaUpFt = upM * kMetersToFeet;
+        gv.computedToEasting = it->second.e + gv.computedDeltaEastFt;
+        gv.computedToNorthing = it->second.n + gv.computedDeltaNorthFt;
+        gv.computedToElevation = it->second.z + gv.computedDeltaUpFt;
+        gv.computed = true;
+
+        // Make the resolved end station available to a later vector chained off it.
+        setups[gv.toStationId] = {gv.computedToEasting, gv.computedToNorthing,
+                                   gv.computedToElevation, 0.0, true};
     }
 
     // --- Closure ---
