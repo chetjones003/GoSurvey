@@ -3385,7 +3385,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
-        // A link means the same thing whichever way the rebuild was driven (ADR-062 (b)): the
+        // A link means the same thing whichever way the rebuild was driven (ADR-069 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
         ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
       } else {
@@ -4332,7 +4332,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
-      ReDrapeLinkedToSurface(st, i, log);  // ADR-062 (b)
+      ReDrapeLinkedToSurface(st, i, log);  // ADR-069 (b)
     }
     BumpCadGpuCache(st);
     return;
@@ -4344,7 +4344,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   PushUndoSnapshot(st, "Rebuild surface");
   BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
-  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-062 (b)
+  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-069 (b)
   BumpCadGpuCache(st);
 }
 
@@ -43558,7 +43558,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
-    // ADR-062 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    // ADR-069 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
     if (plotTok == "drapelinks") {
       ExecuteDrapeLinksCommand(st, log);
       return;
