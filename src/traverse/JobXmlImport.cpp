@@ -338,7 +338,7 @@ bool JobXmlImport(const char* path, TraverseData& td, std::string& errorMsg) {
             } else {
                 ms.hasF1 = true; ms.f1HzDec = s.hz; ms.f1VaDec = s.hasVa ? s.va : 90.0; ms.f1Sd = s.sd;
             }
-            g.rawSets.push_back(std::move(ms));
+            g.rawSets.push_back(ms);
         }
     }
     auto findGroup = [&](const std::string& stationIdAttr, const std::string& name) -> const ShotGroup* {
@@ -379,15 +379,24 @@ bool JobXmlImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
         const ShotGroup* g = findGroup(curId, nextName);
         if (!g) {
-            errorMsg = "no observation found from station " + curName + " to station " + nextName +
-                      " (expected to continue the traverse chain)";
+            errorMsg = "no observation found from station ";
+            errorMsg += curName;
+            errorMsg += " to station ";
+            errorMsg += nextName;
+            errorMsg += " (expected to continue the traverse chain)";
             return false;
         }
         const auto bbIt = backBearings.find(g->backBearingIdAttr);
         if (k > 0 && bbIt != backBearings.end() && bbIt->second.backSight != stationSeq[k - 1].second) {
-            errorMsg = "the observation from station " + curName + " to station " + nextName +
-                      " backsights " + bbIt->second.backSight + ", which doesn't match the station (" +
-                      stationSeq[k - 1].second + ") the traverse chain expects";
+            errorMsg = "the observation from station ";
+            errorMsg += curName;
+            errorMsg += " to station ";
+            errorMsg += nextName;
+            errorMsg += " backsights ";
+            errorMsg += bbIt->second.backSight;
+            errorMsg += ", which doesn't match the station (";
+            errorMsg += stationSeq[k - 1].second;
+            errorMsg += ") the traverse chain expects";
             return false;
         }
 
@@ -422,7 +431,7 @@ bool JobXmlImport(const char* path, TraverseData& td, std::string& errorMsg) {
         }
 
         legs.push_back(std::move(leg));
-        consumed[static_cast<size_t>(groupIndex[curId + "\x1f" + nextName])] = true;
+        consumed[static_cast<size_t>(g - groups.data())] = true;
     }
 
     // ---------- closing leg: the last setup shooting back to the start point.

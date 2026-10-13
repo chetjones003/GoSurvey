@@ -717,7 +717,13 @@ static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
             log.push_back("TRAVERSE — imported " + std::string(formatLabel) + " (" +
                           std::to_string(importedLegs) + " legs): " + path);
         } else {
-            log.push_back("TRAVERSE — " + std::string(formatLabel) + " import failed (" + path + "): " + err);
+            std::string fail = "TRAVERSE — ";
+            fail += formatLabel;
+            fail += " import failed (";
+            fail += path;
+            fail += "): ";
+            fail += err;
+            log.push_back(std::move(fail));
         }
     }
 }
@@ -1821,7 +1827,7 @@ static void DrawHorizontalSplitter(const char* strId, float* height, float minH,
 // immediately (WindowBg, TitleBg, Border), and popped after every exit from
 // DrawTraverseEditorPanel. Returns the number of colors pushed.
 int PushLsaLightTheme() {
-    struct C { ImGuiCol idx; ImVec4 col; };
+    struct C { ImGuiCol idx{}; ImVec4 col; };
     static const C kColors[] = {
         {ImGuiCol_Text,                 ImVec4(0.09f, 0.09f, 0.10f, 1.00f)},
         {ImGuiCol_TextDisabled,         ImVec4(0.50f, 0.50f, 0.52f, 1.00f)},
