@@ -165,9 +165,14 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
             if (!haveOccupied) return fail("BK with no preceding OC");
             std::string op;
             if (!FindFieldStr(fields, "OP", &op)) return fail("expected BK with an OP field");
-            if (op != currentOccupied)
-                return fail("BK's OP (" + op + ") doesn't match the currently occupied station (" +
-                            currentOccupied + ")");
+            if (op != currentOccupied) {
+                std::string msg = "BK's OP (";
+                msg += op;
+                msg += ") doesn't match the currently occupied station (";
+                msg += currentOccupied;
+                msg += ")";
+                return fail(msg);
+            }
 
             std::string bp;
             const bool haveBp = FindFieldStr(fields, "BP", &bp);
@@ -196,9 +201,14 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
             std::string op, fp;
             if (!FindFieldStr(fields, "OP", &op) || !FindFieldStr(fields, "FP", &fp))
                 return fail("expected TR with OP and FP fields");
-            if (op != currentOccupied)
-                return fail("TR's OP (" + op + ") doesn't match the currently occupied station (" +
-                            currentOccupied + ")");
+            if (op != currentOccupied) {
+                std::string msg = "TR's OP (";
+                msg += op;
+                msg += ") doesn't match the currently occupied station (";
+                msg += currentOccupied;
+                msg += ")";
+                return fail(msg);
+            }
 
             // The chain: this leg's AT must be the previous leg's FP (or the start
             // station for the first leg), and its backsight (BK's BP) must be the
@@ -208,17 +218,31 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
             // gap rather than a silently-trusted angle once there's a prior leg to
             // check it against.
             const std::string expectedAt = legs.empty() ? firstOccupied : legs.back().description;
-            if (op != expectedAt)
-                return fail("TR's OP (" + op + ") doesn't continue the traverse chain (expected " +
-                            expectedAt + ")");
+            if (op != expectedAt) {
+                std::string msg = "TR's OP (";
+                msg += op;
+                msg += ") doesn't continue the traverse chain (expected ";
+                msg += expectedAt;
+                msg += ")";
+                return fail(msg);
+            }
             if (!legs.empty()) {
                 const std::string expectedBack = (legs.size() == 1) ? firstOccupied : legs[legs.size() - 2].description;
-                if (!haveCurrentBackPoint)
-                    return fail("this setup's BK has no BP to verify against the traverse chain "
-                                "(expected backsight " + expectedBack + ")");
-                if (currentBackPoint != expectedBack)
-                    return fail("this setup's backsight (" + currentBackPoint + ") doesn't match the "
-                                "station the traverse chain expects (" + expectedBack + ")");
+                if (!haveCurrentBackPoint) {
+                    std::string msg = "this setup's BK has no BP to verify against the traverse chain "
+                                       "(expected backsight ";
+                    msg += expectedBack;
+                    msg += ")";
+                    return fail(msg);
+                }
+                if (currentBackPoint != expectedBack) {
+                    std::string msg = "this setup's backsight (";
+                    msg += currentBackPoint;
+                    msg += ") doesn't match the station the traverse chain expects (";
+                    msg += expectedBack;
+                    msg += ")";
+                    return fail(msg);
+                }
             }
 
             double ar, al;
