@@ -303,6 +303,16 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     wChanged |= ImGui::InputDouble(sigmaSdLabel, &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
     ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
     wChanged |= ImGui::InputDouble("Dist ppm##lsa_ppm", &cmd.traverseLsaWeights.sigmaDistPpm, 0., 0., "%.2f");
+    if (!td.gpsVectors.empty()) {
+        ImGui::SetNextItemWidth(120.f);
+        char sigmaVdLabel[48];
+        std::snprintf(sigmaVdLabel, sizeof(sigmaVdLabel), "Vert \xcf\x83 (%s)##lsa_vd", distUnit);
+        wChanged |= ImGui::InputDouble(sigmaVdLabel, &cmd.traverseLsaWeights.sigmaVertConstFt, 0., 0., "%.4f");
+        ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
+        wChanged |= ImGui::InputDouble("Vert ppm##lsa_vppm", &cmd.traverseLsaWeights.sigmaVertPpm, 0., 0., "%.2f");
+        ImGui::SameLine(0, 16);
+        ImGui::TextDisabled("(used when GPS vectors are present)");
+    }
     ImGui::SameLine(0, 16);
     if (ImGui::Button("Recompute") || wChanged)
         recompute();
@@ -343,6 +353,15 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
                     ImGui::Text("Std dev of unit weight: %.4f", res.refStdDev);
                     ImGui::Text("Adjusted misclosure: %.6f", res.adjClosureLinear);
                     ImGui::Text("Iterations: %d", res.iterations);
+                    if (res.usedGpsVectors) {
+                        ImGui::TextColored(ImVec4(0.4f, 0.75f, 1.f, 1.f),
+                            "GPS vectors folded in: %d (elevation solved)", res.gpsVectorsUsed);
+                        if (res.gpsVectorsSkipped > 0)
+                            ImGui::TextDisabled("GPS vectors skipped (no covariance / degenerate): %d",
+                                                 res.gpsVectorsSkipped);
+                    } else if (!td.gpsVectors.empty()) {
+                        ImGui::TextDisabled("GPS vectors present but none usable (need resolved covariance).");
+                    }
                 } else {
                     ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "Least squares unavailable:");
                     ImGui::TextWrapped("%s", res.message.c_str());
@@ -360,6 +379,8 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
                         if (leg.stationId == res.stationIds[s]) {
                             leg.computedEasting  = res.adjEasting[s];
                             leg.computedNorthing = res.adjNorthing[s];
+                            if (res.usedGpsVectors)
+                                leg.computedElevation = res.adjElevation[s];
                         }
                     }
                 }
@@ -379,25 +400,61 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
         if (ImGui::BeginTabItem("Residuals")) {
             if (!res.ok) {
                 ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "No residuals: %s", res.message.c_str());
-            } else if (ImGui::BeginTable("residuals", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                                         ImGuiTableFlags_ScrollY)) {
-                ImGui::TableSetupColumn("From");
-                ImGui::TableSetupColumn("To");
-                char distResidLabel[32];
+            } else {
+                const int nCols = res.usedGpsVectors ? 5 : 4;
+                char distResidLabel[32], vertResidLabel[32];
                 std::snprintf(distResidLabel, sizeof(distResidLabel), "Dist resid (%s)", distUnit);
-                ImGui::TableSetupColumn("Angle resid (sec)");
-                ImGui::TableSetupColumn(distResidLabel);
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-                ImGui::TableHeadersRow();
-                ImGui::PopStyleColor();
-                for (const LsaResidual& v : res.residuals) {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn(); ImGui::Text("%d", v.fromStationId);
-                    ImGui::TableNextColumn(); ImGui::Text("%d", v.toStationId);
-                    ImGui::TableNextColumn(); ImGui::Text("%+.2f", v.angleResidualSec);
-                    ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.distResidualFt);
+                std::snprintf(vertResidLabel, sizeof(vertResidLabel), "Vert resid (%s)", distUnit);
+                if (ImGui::BeginTable("residuals", nCols, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                             ImGuiTableFlags_ScrollY)) {
+                    ImGui::TableSetupColumn("From");
+                    ImGui::TableSetupColumn("To");
+                    ImGui::TableSetupColumn("Angle resid (sec)");
+                    ImGui::TableSetupColumn(distResidLabel);
+                    if (res.usedGpsVectors) ImGui::TableSetupColumn(vertResidLabel);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                    ImGui::TableHeadersRow();
+                    ImGui::PopStyleColor();
+                    for (const LsaResidual& v : res.residuals) {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn(); ImGui::Text("%d", v.fromStationId);
+                        ImGui::TableNextColumn(); ImGui::Text("%d", v.toStationId);
+                        ImGui::TableNextColumn(); ImGui::Text("%+.2f", v.angleResidualSec);
+                        ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.distResidualFt);
+                        if (res.usedGpsVectors) {
+                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.vertResidualFt);
+                        }
+                    }
+                    ImGui::EndTable();
                 }
-                ImGui::EndTable();
+
+                if (res.usedGpsVectors && !res.gpsResiduals.empty()) {
+                    ImGui::SeparatorText("GPS Vector Residuals (local ENU)");
+                    char gE[32], gN[32], gU[32];
+                    std::snprintf(gE, sizeof(gE), "East resid (%s)", distUnit);
+                    std::snprintf(gN, sizeof(gN), "North resid (%s)", distUnit);
+                    std::snprintf(gU, sizeof(gU), "Up resid (%s)", distUnit);
+                    if (ImGui::BeginTable("gps_residuals", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                                 ImGuiTableFlags_ScrollY)) {
+                        ImGui::TableSetupColumn("From");
+                        ImGui::TableSetupColumn("To");
+                        ImGui::TableSetupColumn(gE);
+                        ImGui::TableSetupColumn(gN);
+                        ImGui::TableSetupColumn(gU);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                        ImGui::TableHeadersRow();
+                        ImGui::PopStyleColor();
+                        for (const LsaGpsResidual& gv : res.gpsResiduals) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::Text("%d", gv.fromStationId);
+                            ImGui::TableNextColumn(); ImGui::Text("%d", gv.toStationId);
+                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.eastResidualFt);
+                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.northResidualFt);
+                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.upResidualFt);
+                        }
+                        ImGui::EndTable();
+                    }
+                }
             }
             ImGui::EndTabItem();
         }

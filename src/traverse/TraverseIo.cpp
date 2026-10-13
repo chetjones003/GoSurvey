@@ -138,6 +138,8 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
   w["sigmaAngleSec"] = weights.sigmaAngleSec;
   w["sigmaDistConstFt"] = weights.sigmaDistConstFt;
   w["sigmaDistPpm"] = weights.sigmaDistPpm;
+  w["sigmaVertConstFt"] = weights.sigmaVertConstFt;
+  w["sigmaVertPpm"] = weights.sigmaVertPpm;
   j["weights"] = std::move(w);
 
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
@@ -198,6 +200,8 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
     w.sigmaAngleSec = wj.value("sigmaAngleSec", w.sigmaAngleSec);
     w.sigmaDistConstFt = wj.value("sigmaDistConstFt", w.sigmaDistConstFt);
     w.sigmaDistPpm = wj.value("sigmaDistPpm", w.sigmaDistPpm);
+    w.sigmaVertConstFt = wj.value("sigmaVertConstFt", w.sigmaVertConstFt);
+    w.sigmaVertPpm = wj.value("sigmaVertPpm", w.sigmaVertPpm);
   }
 
   td = std::move(out);
