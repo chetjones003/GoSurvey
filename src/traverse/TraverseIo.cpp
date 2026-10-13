@@ -108,6 +108,24 @@ TraverseLeg LegFromJson(const json& j) {
   return leg;
 }
 
+json ComponentToJson(const NetworkComponent& component) {
+  json j;
+  j["value"] = component.value;
+  j["fix"] = static_cast<int>(component.fix);
+  j["stdError"] = component.stdError;
+  j["present"] = component.present;
+  return j;
+}
+
+NetworkComponent ComponentFromJson(const json& j) {
+  NetworkComponent component;
+  component.value = j.value("value", 0.0);
+  component.fix = static_cast<NetworkFix>(j.value("fix", 0));
+  component.stdError = j.value("stdError", 0.0);
+  component.present = j.value("present", false);
+  return component;
+}
+
 }  // namespace
 
 bool Save(const std::string& path, const TraverseData& td, const LsaWeights& weights, std::string& err) {
@@ -138,6 +156,40 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
   for (const TraverseLeg& leg : td.legs)
     legs.push_back(LegToJson(leg));
   j["legs"] = std::move(legs);
+
+  json stations = json::array();
+  for (const NetworkStation& station : td.networkStations) {
+    json sj;
+    sj["id"] = station.id;
+    sj["easting"] = ComponentToJson(station.easting);
+    sj["northing"] = ComponentToJson(station.northing);
+    sj["elevation"] = ComponentToJson(station.elevation);
+    stations.push_back(std::move(sj));
+  }
+  j["networkStations"] = std::move(stations);
+  json angles = json::array();
+  for (const NetworkAngleObs& angle : td.networkAngles)
+    angles.push_back(json{{"at", angle.atId}, {"from", angle.fromId}, {"to", angle.toId},
+                          {"deg", angle.angleDeg}, {"std", angle.stdErrorSec}});
+  j["networkAngles"] = std::move(angles);
+  json dists = json::array();
+  for (const NetworkDistObs& dist : td.networkDists)
+    dists.push_back(json{{"from", dist.fromId}, {"to", dist.toId}, {"dist", dist.distance}, {"std", dist.stdError}});
+  j["networkDists"] = std::move(dists);
+  json azimuths = json::array();
+  for (const NetworkAzimuthObs& azimuth : td.networkAzimuths)
+    azimuths.push_back(json{{"from", azimuth.fromId}, {"to", azimuth.toId}, {"deg", azimuth.azimuthDeg},
+                            {"std", azimuth.stdErrorSec}});
+  j["networkAzimuths"] = std::move(azimuths);
+  json diffs = json::array();
+  for (const NetworkElevDiffObs& diff : td.networkElevDiffs)
+    diffs.push_back(json{{"from", diff.fromId}, {"to", diff.toId}, {"dz", diff.deltaZ}, {"std", diff.stdError}});
+  j["networkElevDiffs"] = std::move(diffs);
+  json zeniths = json::array();
+  for (const NetworkZenithObs& zenith : td.networkZeniths)
+    zeniths.push_back(json{{"from", zenith.fromId}, {"to", zenith.toId}, {"deg", zenith.zenithDeg},
+                           {"std", zenith.stdErrorSec}});
+  j["networkZeniths"] = std::move(zeniths);
 
   json w;
   w["sigmaAngleSec"] = weights.sigmaAngleSec;
@@ -203,6 +255,68 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
   if (j.contains("legs") && j["legs"].is_array())
     for (const json& lj : j["legs"])
       out.legs.push_back(LegFromJson(lj));
+
+  if (j.contains("networkStations") && j["networkStations"].is_array()) {
+    for (const json& sj : j["networkStations"]) {
+      NetworkStation station;
+      station.id = sj.value("id", 0);
+      if (sj.contains("easting")) station.easting = ComponentFromJson(sj["easting"]);
+      if (sj.contains("northing")) station.northing = ComponentFromJson(sj["northing"]);
+      if (sj.contains("elevation")) station.elevation = ComponentFromJson(sj["elevation"]);
+      out.networkStations.push_back(station);
+    }
+  }
+  if (j.contains("networkAngles") && j["networkAngles"].is_array()) {
+    for (const json& aj : j["networkAngles"]) {
+      NetworkAngleObs angle;
+      angle.atId = aj.value("at", 0);
+      angle.fromId = aj.value("from", 0);
+      angle.toId = aj.value("to", 0);
+      angle.angleDeg = aj.value("deg", 0.0);
+      angle.stdErrorSec = aj.value("std", 0.0);
+      out.networkAngles.push_back(angle);
+    }
+  }
+  if (j.contains("networkDists") && j["networkDists"].is_array()) {
+    for (const json& dj : j["networkDists"]) {
+      NetworkDistObs dist;
+      dist.fromId = dj.value("from", 0);
+      dist.toId = dj.value("to", 0);
+      dist.distance = dj.value("dist", 0.0);
+      dist.stdError = dj.value("std", 0.0);
+      out.networkDists.push_back(dist);
+    }
+  }
+  if (j.contains("networkAzimuths") && j["networkAzimuths"].is_array()) {
+    for (const json& aj : j["networkAzimuths"]) {
+      NetworkAzimuthObs azimuth;
+      azimuth.fromId = aj.value("from", 0);
+      azimuth.toId = aj.value("to", 0);
+      azimuth.azimuthDeg = aj.value("deg", 0.0);
+      azimuth.stdErrorSec = aj.value("std", 0.0);
+      out.networkAzimuths.push_back(azimuth);
+    }
+  }
+  if (j.contains("networkElevDiffs") && j["networkElevDiffs"].is_array()) {
+    for (const json& dj : j["networkElevDiffs"]) {
+      NetworkElevDiffObs diff;
+      diff.fromId = dj.value("from", 0);
+      diff.toId = dj.value("to", 0);
+      diff.deltaZ = dj.value("dz", 0.0);
+      diff.stdError = dj.value("std", 0.0);
+      out.networkElevDiffs.push_back(diff);
+    }
+  }
+  if (j.contains("networkZeniths") && j["networkZeniths"].is_array()) {
+    for (const json& zj : j["networkZeniths"]) {
+      NetworkZenithObs zenith;
+      zenith.fromId = zj.value("from", 0);
+      zenith.toId = zj.value("to", 0);
+      zenith.zenithDeg = zj.value("deg", 90.0);
+      zenith.stdErrorSec = zj.value("std", 0.0);
+      out.networkZeniths.push_back(zenith);
+    }
+  }
 
   LsaWeights w;
   if (j.contains("weights") && j["weights"].is_object()) {

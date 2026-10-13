@@ -14,6 +14,7 @@
 #include "traverse/Rw5Import.hpp"
 #include "traverse/JobXmlImport.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -103,6 +104,141 @@ TEST_CASE("Least squares: perfect loop yields zero residuals", "[lsa][REQ-016]")
         CHECK(v.distResidualFt == Approx(0.0).margin(1e-6));
         CHECK(v.angleResidualSec == Approx(0.0).margin(1e-3));
     }
+}
+
+TEST_CASE("Chi-square critical values match published tables", "[lsa][req418]") {
+    CHECK(LsaChiSquareCritical(0.975, 1) == Approx(5.023886).epsilon(0.002));
+    CHECK(LsaChiSquareCritical(0.025, 1) == Approx(0.0009820691).epsilon(0.05));
+    CHECK(LsaChiSquareCritical(0.975, 2) == Approx(7.377758908).epsilon(0.002));
+    CHECK(LsaChiSquareCritical(0.025, 2) == Approx(0.050635616).epsilon(0.02));
+    CHECK(LsaChiSquareCritical(0.975, 10) == Approx(20.48317735).epsilon(0.002));
+    CHECK(LsaChiSquareCritical(0.025, 10) == Approx(3.24697278).epsilon(0.002));
+    CHECK(LsaChiSquareCritical(0.0, 10) == Approx(0.0));
+    CHECK(LsaChiSquareCritical(0.975, 0) == Approx(0.0));
+}
+
+TEST_CASE("Each measurement is its own residual row", "[lsa][req418]") {
+    const TraverseData td = MakeSquareLoop();
+    const LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+
+    int angles = 0;
+    int distances = 0;
+    for (const LsaMeasResidual& row : r.measResiduals) {
+        if (row.stdError > 0.0)
+            CHECK(row.stdResidual == Approx(row.residual / row.stdError).margin(1e-9));
+        CHECK_FALSE(row.flagged);
+        CHECK(std::abs(row.stdResidual) <= 3.0);
+        if (row.kind == LsaMeasKind::Angle) ++angles;
+        if (row.kind == LsaMeasKind::Distance) ++distances;
+    }
+    CHECK(angles == 4);
+    CHECK(distances == 4);
+    REQUIRE(!r.measResiduals.empty());
+    CHECK(r.measResiduals.front().kind == LsaMeasKind::Angle);
+    CHECK(r.measResiduals.front().fromStationId == -1);
+
+    CHECK(r.chiSquare.evaluated);
+    CHECK(r.chiSquare.errorFactor == Approx(r.refStdDev).margin(1e-12));
+    CHECK_FALSE(r.chiSquare.passed);
+    CHECK_FALSE(r.chiSquare.exceededUpper);
+    for (const LsaKindSummary& summary : r.kindSummaries) {
+        REQUIRE(summary.count > 0);
+        CHECK(summary.errorFactor ==
+              Approx(std::sqrt(summary.sumSqStdResidual / static_cast<double>(summary.count))).margin(1e-12));
+    }
+}
+
+TEST_CASE("A network of distances and an angle adjusts", "[lsa][req419]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\n"
+        "CTRL 2 100 0 ! !\n"
+        "CTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\n"
+        "DIST 2 3 100\n"
+        "DIST 1 3 100\n"
+        "ANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    CHECK(td.networkStations.size() == 3);
+    CHECK(td.networkDists.size() == 3);
+    CHECK(td.networkAngles.size() == 1);
+
+    const std::string again = travcmd::Serialize(td, weights);
+    TraverseData roundTrip;
+    REQUIRE(travcmd::Parse(again, roundTrip, weights, err));
+    CHECK(roundTrip.networkDists.size() == 3);
+    CHECK(roundTrip.networkAngles.size() == 1);
+
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    CHECK(result.redundancy >= 1);
+    double east = 0.0, north = 0.0;
+    bool found = false;
+    for (size_t i = 0; i < result.stationIds.size(); ++i) {
+        if (result.stationIds[i] != 3) continue;
+        east = result.adjEasting[i];
+        north = result.adjNorthing[i];
+        found = true;
+    }
+    CHECK(found);
+    CHECK(east == Approx(50.0).margin(1e-4));
+    CHECK(north == Approx(86.6025403784).margin(1e-4));
+    for (const LsaMeasResidual& row : result.measResiduals)
+        CHECK(std::abs(row.residual) < 1e-3);
+}
+
+TEST_CASE("A network distance blunder is marked", "[lsa][req419]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\n"
+        "CTRL 2 100 0 ! !\n"
+        "CTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\n"
+        "DIST 2 3 101 0.01\n"
+        "DIST 1 3 100\n"
+        "ANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    bool markedDistance = false;
+    for (const LsaMeasResidual& row : result.measResiduals) {
+        if (row.kind == LsaMeasKind::Distance && row.flagged && row.fromStationId == 2 && row.toStationId == 3)
+            markedDistance = true;
+    }
+    CHECK(markedDistance);
+}
+
+TEST_CASE("A standardized residual over 3 is marked", "[lsa][req418]") {
+    const TraverseData td = MakeSquareLoop(101.0);
+    LsaWeights weights;
+    weights.sigmaAngleSec = 60.0;
+    weights.sigmaDistConstFt = 0.01;
+    weights.sigmaDistPpm = 0.0;
+    const LsaResult r = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(r.ok);
+    CHECK(r.adjClosureLinear < 1e-3);
+    REQUIRE(r.residuals.size() == 4);
+
+    bool marked = false;
+    bool unmarked = false;
+    for (const LsaMeasResidual& row : r.measResiduals) {
+        if (row.stdError > 0.0)
+            CHECK(row.stdResidual == Approx(row.residual / row.stdError).margin(1e-6));
+        if (row.flagged) {
+            marked = true;
+            CHECK(std::abs(row.stdResidual) > 3.0);
+        } else {
+            unmarked = true;
+            CHECK(std::abs(row.stdResidual) <= 3.0);
+        }
+    }
+    CHECK(marked);
+    CHECK(unmarked);
 }
 
 TEST_CASE("Least squares: adjustment drives misclosure to zero", "[lsa][REQ-015]") {
@@ -833,10 +969,10 @@ TEST_CASE("TraverseCommandLang: a traverse with no legs still round-trips", "[tr
 
 TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[traverse][REQ-404]") {
     const std::string text =
-        "# a leading comment\n"
+        "// a leading comment\n"
         "\n"
         "STATION 5 100 200 10\n"
-        "   # an indented comment\n"
+        "   // an indented comment\n"
         "STN 5 6\n"
         "HANG REF 5 6 90\n";
 
@@ -847,6 +983,97 @@ TEST_CASE("TraverseCommandLang: comments and blank lines are ignored", "[travers
     CHECK(td.startStationId == 5);
     REQUIRE(td.legs.size() == 1);
     CHECK(td.legs[0].stationId == 6);
+}
+
+TEST_CASE("TraverseCommandLang: column alignment does not grow the text", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "CTRL 10 1000.5 2000.25 100 ! ! *\n"
+        "DIR 1 10 11 12.345\n"
+        "DIR 1 10 12 90\n"
+        "// IMPORT \"job.dat\"\n";
+    const std::string once = travcmd::AlignColumns(text);
+    const std::string twice = travcmd::AlignColumns(once);
+    CHECK(twice == once);
+    CHECK(std::count(once.begin(), once.end(), '\n') == std::count(text.begin(), text.end(), '\n'));
+    CHECK(once.find("CTRL") != std::string::npos);
+    CHECK(once.find("DIR") != std::string::npos);
+    const std::string marked = "#IMPORT \"job folder\\traverse.dat\"\nCTRL 1 10 20\n";
+    const std::string markedAligned = travcmd::AlignColumns(marked);
+    CHECK(markedAligned.find("#IMPORT \"job folder\\traverse.dat\"") != std::string::npos);
+    CHECK(std::count(markedAligned.begin(), markedAligned.end(), '\n') ==
+          std::count(marked.begin(), marked.end(), '\n'));
+    // A second format of an already-formatted document must not add a blank line.
+    const std::string third = travcmd::AlignColumns(twice + "");
+    CHECK(std::count(third.begin(), third.end(), '\n') == std::count(once.begin(), once.end(), '\n'));
+
+    const std::string shots =
+        "DIR 0 1 5 269.647606 'TH CN\n"
+        "DIST 1 5 262.134139 'TH CN\n"
+        "ZENITH 1 5 91.731956 'TH CN\n";
+    const std::string shotsAligned = travcmd::AlignColumns(shots);
+    CHECK(travcmd::AlignColumns(shotsAligned) == shotsAligned);
+    auto quoteColumn = [](const std::string& text, const char* word) -> size_t {
+        const size_t line = text.find(word);
+        if (line == std::string::npos) return std::string::npos;
+        const size_t end = text.find('\n', line);
+        const size_t quote = text.find('\'', line);
+        if (quote == std::string::npos || (end != std::string::npos && quote > end)) return std::string::npos;
+        return quote - line;
+    };
+    const size_t dirQuote = quoteColumn(shotsAligned, "DIR");
+    const size_t distQuote = quoteColumn(shotsAligned, "DIST");
+    const size_t zenithQuote = quoteColumn(shotsAligned, "ZENITH");
+    REQUIRE(dirQuote != std::string::npos);
+    CHECK(distQuote == dirQuote);
+    CHECK(zenithQuote == dirQuote);
+    // The station before the measurement, and the measurement itself, share a column.
+    auto tokenEnd = [](const std::string& text, const char* word, int fromRight) -> size_t {
+        const size_t line = text.find(word);
+        const size_t quote = text.find('\'', line);
+        if (line == std::string::npos || quote == std::string::npos) return std::string::npos;
+        size_t end = quote;
+        while (end > line && text[end - 1] == ' ') --end;
+        for (int n = 0; n < fromRight; ++n) {
+            while (end > line && text[end - 1] != ' ') --end;
+            while (end > line && text[end - 1] == ' ') --end;
+        }
+        return end - line;
+    };
+    CHECK(tokenEnd(shotsAligned, "DIST", 0) == tokenEnd(shotsAligned, "DIR", 0));
+    CHECK(tokenEnd(shotsAligned, "ZENITH", 0) == tokenEnd(shotsAligned, "DIR", 0));
+    CHECK(tokenEnd(shotsAligned, "DIST", 1) == tokenEnd(shotsAligned, "DIR", 1));
+    CHECK(tokenEnd(shotsAligned, "ZENITH", 1) == tokenEnd(shotsAligned, "DIR", 1));
+
+    // A control point's coordinates must not open a gap on the shot lines.
+    const std::string mixed =
+        "CTRL 1 1640.419948 3280.839895 328.083990 ! ! ! 'TH CN\n"
+        "DIR 0 1 5 269.647606 'TH CN\n"
+        "DIST 1 5 262.134139 'TH CN\n";
+    const std::string mixedAligned = travcmd::AlignColumns(mixed);
+    const size_t dirLine = mixedAligned.find("\nDIR");
+    REQUIRE(dirLine != std::string::npos);
+    const size_t dirStart = dirLine + 1;
+    const size_t setId = mixedAligned.find("0", dirStart);
+    REQUIRE(setId != std::string::npos);
+    CHECK(setId - dirStart < 12);
+}
+
+TEST_CASE("TraverseCommandLang: #IMPORT is a note and keeps the measurements", "[traverse][REQ-404]") {
+    const std::string text =
+        "STATION 1 0 0 0\n"
+        "#IMPORT \"C:\\\\Example Field Job\\260214 TRAVERSE.dat\"\n"
+        "CTRL 10 1000 2000 100 ! ! *\n"
+        "DIR 1 10 11 12.5\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    CHECK(err.empty());
+    REQUIRE(td.networkStations.size() == 1);
+    CHECK(td.networkStations[0].id == 10);
+    REQUIRE(td.networkDirections.size() == 1);
+    CHECK(td.networkDirections[0].toId == 11);
 }
 
 TEST_CASE("TraverseCommandLang: DESC takes the rest of the line verbatim", "[traverse][REQ-404]") {
@@ -1198,12 +1425,63 @@ TEST_CASE("StarNetImport: comments and blank lines are ignored", "[starnet][REQ-
     std::string err;
     REQUIRE(StarNetImport(path.c_str(), td, err));
     REQUIRE(td.legs.size() == 2);
+    const std::string shown = travcmd::Serialize(td, LsaWeights{});
+    const size_t commentAt = shown.find("// a comment");
+    const size_t inlineAt = shown.find("// inline comment");
+    const size_t firstStn = shown.find("\nSTN ");
+    const size_t secondStn = firstStn == std::string::npos ? std::string::npos : shown.find("\nSTN ", firstStn + 1);
+    REQUIRE(commentAt != std::string::npos);
+    REQUIRE(inlineAt != std::string::npos);
+    REQUIRE(firstStn != std::string::npos);
+    REQUIRE(secondStn != std::string::npos);
+    CHECK(commentAt < firstStn);
+    CHECK(firstStn < inlineAt);
+    CHECK(inlineAt < secondStn);
+}
+
+TEST_CASE("StarNetImport: field codes and comments keep their place", "[starnet][req421]") {
+    const std::string text =
+        "# header note\n"
+        "\n"
+        "C 1 0 0 ! ! 'PIN\n"
+        "# between\n"
+        "C 2 0 100 * *\n"
+        "D 1-2 100 'FENCE CORNER\n";
+    const std::string path = WriteStarNetFixture("codes.dat", text);
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    const std::string shown = travcmd::Serialize(td, LsaWeights{});
+    const size_t headerAt = shown.find("// header note");
+    const size_t betweenAt = shown.find("// between");
+    const size_t pinAt = shown.find("'PIN");
+    const size_t fenceAt = shown.find("'FENCE CORNER");
+    REQUIRE(headerAt != std::string::npos);
+    REQUIRE(betweenAt != std::string::npos);
+    REQUIRE(pinAt != std::string::npos);
+    REQUIRE(fenceAt != std::string::npos);
+    CHECK(headerAt < pinAt);
+    CHECK(pinAt < betweenAt);
+    const size_t headerEnd = shown.find('\n', headerAt);
+    REQUIRE(headerEnd != std::string::npos);
+    CHECK(headerEnd + 1 < shown.size());
+    CHECK(shown[headerEnd + 1] == '\n');
+    CHECK(betweenAt < fenceAt);
+
+    TraverseData roundTrip;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(shown, roundTrip, weights, err));
+    const std::string again = travcmd::Serialize(roundTrip, weights);
+    CHECK(again.find("// header note") != std::string::npos);
+    CHECK(again.find("'PIN") != std::string::npos);
+    CHECK(again.find("'FENCE CORNER") != std::string::npos);
+    CHECK(again.find("// header note") < again.find("'PIN"));
 }
 
 TEST_CASE("StarNetImport: an unsupported record type is reported, not dropped", "[starnet][REQ-406]") {
     const std::string text =
         "TB 1\n"
-        "A 1-2-3 45-00-00\n"  // a general network angle — out of scope.
+        "SS 1-2-3 45-00-00 10\n"  // a sideshot is still not part of the adjustment.
         "T 1 90-00-00 100.00\n"
         "TE 2\n";
     const std::string path = WriteStarNetFixture("unsupported_record.dat", text);
@@ -1214,9 +1492,129 @@ TEST_CASE("StarNetImport: an unsupported record type is reported, not dropped", 
     CHECK(err.find("unsupported") != std::string::npos);
 }
 
-TEST_CASE("StarNetImport: an unsupported inline option is reported", "[starnet][REQ-406]") {
+TEST_CASE("StarNetImport: a network of A and D lines adjusts", "[starnet][req419]") {
     const std::string text =
-        ".UNITS Meters\n"
+        "C 1 0 0 ! !\n"
+        "C 2 0 100 ! !\n"
+        "C 3 100 100 * *\n"
+        "A 2-1-3 90-00-00\n"
+        "D 1-2 100\n"
+        "D 2-3 100\n"
+        "D 1-3 141.421356\n";
+    const std::string path = WriteStarNetFixture("network_ad.dat", text);
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(td.networkAngles.size() == 1);
+    CHECK(td.networkDists.size() == 3);
+    const LsaResult result = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(result.ok);
+    int freeId = -1;
+    for (const NetworkStation& station : td.networkStations)
+        if (station.easting.fix == NetworkFix::Free) freeId = station.id;
+    REQUIRE(freeId >= 0);
+    bool found = false;
+    for (size_t i = 0; i < result.stationIds.size(); ++i) {
+        if (result.stationIds[i] != freeId) continue;
+        CHECK(result.adjEasting[i] == Approx(100.0).margin(0.05));
+        CHECK(result.adjNorthing[i] == Approx(100.0).margin(0.05));
+        found = true;
+    }
+    CHECK(found);
+}
+
+TEST_CASE("A zenith angle holds a level sight", "[lsa][req419]") {
+    const char* text =
+        "CTRL 1 0 0 100 ! ! !\n"
+        "CTRL 2 100 0 100 ! ! *\n"
+        "DIST 1 2 100\n"
+        "ZENITH 1 2 90\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    bool found = false;
+    for (size_t i = 0; i < result.stationIds.size(); ++i) {
+        if (result.stationIds[i] != 2) continue;
+        CHECK(result.adjElevation[i] == Approx(100.0).margin(1e-3));
+        found = true;
+    }
+    CHECK(found);
+    bool sawZenith = false;
+    for (const LsaMeasResidual& row : result.measResiduals)
+        if (row.kind == LsaMeasKind::Zenith) sawZenith = true;
+    CHECK(sawZenith);
+}
+
+TEST_CASE("StarNetImport: glued !!! fixes a 3D coordinate", "[starnet][req419]") {
+    const std::string text =
+        ".Units Meters\n"
+        "C 100 1000 500 100 !!!\n"
+        "B 100-103 0-00-00 !\n"
+        ".dat off\n"
+        "DM 999 10-00-00 5 90-00-00\n"
+        ".dat on\n"
+        "DB 100\n"
+        "DM 103 0-00-00 10 90-00-00 1.5/1.5\n"
+        "DE\n";
+    const std::string path = WriteStarNetFixture("glued_fix_direction.dat", text);
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    REQUIRE(td.networkDirections.size() == 1);
+    CHECK(td.networkDirections[0].toId != 0);
+    bool sawFixed = false;
+    for (const NetworkStation& station : td.networkStations) {
+        if (station.easting.fix == NetworkFix::Fixed && station.northing.fix == NetworkFix::Fixed &&
+            station.elevation.present && station.elevation.fix == NetworkFix::Fixed)
+            sawFixed = true;
+    }
+    CHECK(sawFixed);
+    CHECK(td.networkDists.size() == 1);
+    CHECK(td.networkDists[0].distance == Approx(10.0 / 0.3048).epsilon(1e-6));
+    const std::string shown = travcmd::Serialize(td, LsaWeights{});
+    CHECK(shown.find(".dat off") == std::string::npos);
+    CHECK(shown.find("DIR ") != std::string::npos);
+}
+
+TEST_CASE("StarNetImport: field direction-set file loads", "[starnet][field]") {
+    const char* path =
+        "C:\\Users\\chetj\\OneDrive\\Desktop\\Example Field Job w Starnet\\Starnet Data\\260214 TRAVERSE.dat";
+    if (!std::filesystem::exists(path)) return;
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path, td, err));
+    CHECK(td.networkDirections.size() > 10);
+    bool sawMetersAsFeet = false;
+    for (const NetworkStation& station : td.networkStations) {
+        if (station.easting.fix == NetworkFix::Fixed && station.easting.value > 1000.0)
+            sawMetersAsFeet = true;
+    }
+    CHECK(sawMetersAsFeet);
+    const std::string shown = travcmd::Serialize(td, LsaWeights{});
+    const std::string twice = travcmd::AlignColumns(shown);
+    CHECK(twice == shown);
+    CHECK(std::count(shown.begin(), shown.end(), '\n') == std::count(twice.begin(), twice.end(), '\n'));
+    CHECK(shown.find("CTRL") != std::string::npos);
+    CHECK(shown.find("DIR") != std::string::npos);
+    CHECK(shown.find("'TH CN") != std::string::npos);
+    CHECK(shown.find("// STAR*JOBXML") != std::string::npos);
+    CHECK(shown.find("// ORIGINAL UNALTERED JXL") != std::string::npos);
+    CHECK(shown.find("// STAR*JOBXML") < shown.find("CTRL "));
+    TraverseData roundTrip;
+    LsaWeights roundWeights;
+    REQUIRE(travcmd::Parse(shown, roundTrip, roundWeights, err));
+    CHECK(roundTrip.networkDirections.size() == td.networkDirections.size());
+    CHECK(roundTrip.networkStations.size() == td.networkStations.size());
+    const LsaResult result = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(result.ok);
+}
+
+TEST_CASE("StarNetImport: a skipped inline option becomes an editor comment", "[starnet][REQ-406]") {
+    const std::string text =
+        ".INCLUDE other.dat\n"
         "TB 1\n"
         "T 1 90-00-00 100.00\n"
         "TE 2\n";
@@ -1224,8 +1622,17 @@ TEST_CASE("StarNetImport: an unsupported inline option is reported", "[starnet][
 
     TraverseData td;
     std::string err;
-    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
-    CHECK(err.find(".ORDER") != std::string::npos);
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    REQUIRE(td.starnetSkippedInlineOptions.size() == 1);
+    CHECK(td.starnetSkippedInlineOptions[0].find(".INCLUDE") != std::string::npos);
+    const std::string shown = travcmd::Serialize(td, LsaWeights{});
+    CHECK(shown.find("Inline option from STAR*NET (not applied): .INCLUDE other.dat") != std::string::npos);
+
+    TraverseData roundTrip;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(shown, roundTrip, weights, err));
+    REQUIRE(roundTrip.starnetSkippedInlineOptions.size() == 1);
+    CHECK(roundTrip.starnetSkippedInlineOptions[0] == ".INCLUDE other.dat");
 }
 
 TEST_CASE("StarNetImport: a second TB (interconnected traverses) is rejected", "[starnet][REQ-406]") {

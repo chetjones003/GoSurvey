@@ -1641,7 +1641,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `AppCommandState`, not a new global (§11.3). PKCE's SHA-256 needs a byte-buffer overload beside the
   existing file-hashing `ComputeFileSha256` in `HttpFetch.cpp` (same BCrypt call, different input),
   plus a small base64url-encode helper — neither exists today.
-  (e) **A new, separate Cloudflare Worker (`tools/accounts-worker/`) serves REQ-092's license lookup**,
+  (e) **A new, separate Cloudflare Worker (`workers/accounts/` in the private gosurveycad-site repo) serves REQ-092's license lookup**,
   not the existing `telemetry-worker`. The two have opposite trust models: the ping endpoint is
   public and unauthenticated by design (regex-whitelisted anonymous fields); this one requires a
   verified Auth0 JWT (checked against Auth0's JWKS — signature, `exp`, `aud`/`iss`) on every request.
@@ -5013,7 +5013,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
       password to brute-force and no session logic to get wrong. The alternatives (shared password,
       Auth0 allow-list) both put the operator's own access control inside code this repo maintains,
       for no benefit over a config Cloudflare already provides for free.
-  (b) **A separate Worker, `admin-api`** (`tools/admin-worker/`), not a route bolted onto the existing
+  (b) **A separate Worker, `admin-api`** (`workers/admin/` in the private gosurveycad-site repo), not a route bolted onto the existing
       `gosurveycad-api` accounts Worker. It is bound to both D1 databases as **read-only** data access —
       it has no write path to either. Keeping it separate means the Access policy, and the blast radius
       of a bug in it, cannot touch the accounts Worker's own `/api/me`/`/api/profile` routes.

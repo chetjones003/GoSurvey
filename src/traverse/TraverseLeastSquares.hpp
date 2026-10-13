@@ -34,6 +34,62 @@ struct LsaResidual {
     double vertResidualFt   = 0.0;
 };
 
+/// Which measurement a listing row describes (REQ-418).
+enum class LsaMeasKind {
+    Angle,
+    Distance,
+    Vertical,
+    GpsEast,
+    GpsNorth,
+    GpsUp,
+    CoordEast,
+    CoordNorth,
+    CoordUp,
+    Zenith,
+    Direction,
+};
+
+/// One measurement's residual listing row (REQ-418).
+/// Residual convention: residual = adjusted − observed.
+/// An angle's adjusted value is degrees; its residual and standard error are
+/// arc-seconds. Every other kind uses feet for all three.
+/// fromStationId is the backsight for an angle, and -1 when that backsight is
+/// the reference bearing rather than a station. atStationId is the occupied
+/// station for an angle, and -1 for a distance, vertical, or GPS component.
+struct LsaMeasResidual {
+    LsaMeasKind kind = LsaMeasKind::Angle;
+    int atStationId = -1;
+    int fromStationId = -1;
+    int toStationId = 0;
+    double adjusted = 0.0;
+    double residual = 0.0;
+    double stdError = 0.0;
+    double stdResidual = 0.0;
+    bool flagged = false; ///< True when abs(stdResidual) > 3.
+};
+
+/// Count, sum of squared standardized residuals, and error factor for one
+/// measurement kind (REQ-418). errorFactor = sqrt(sumSqStdResidual / count).
+struct LsaKindSummary {
+    LsaMeasKind kind = LsaMeasKind::Angle;
+    int count = 0;
+    double sumSqStdResidual = 0.0;
+    double errorFactor = 0.0;
+};
+
+/// Two-tailed 5% chi-square test of the adjustment's weighted sum of squares
+/// (REQ-418). errorFactor equals LsaResult::refStdDev. The bounds are in the
+/// same error-factor units.
+struct LsaChiSquare {
+    bool evaluated = false;
+    double statistic = 0.0;
+    double errorFactor = 0.0;
+    double lowerFactor = 0.0;
+    double upperFactor = 0.0;
+    bool passed = false;
+    bool exceededUpper = false;
+};
+
 /// One GPS vector's residual from the least-squares adjustment (REQ-417).
 /// Residual convention: residual = adjusted − observed, in the local ENU frame.
 struct LsaGpsResidual {
@@ -89,7 +145,18 @@ struct LsaResult {
 
     std::vector<LsaResidual>    residuals;     ///< One entry per leg.
     std::vector<LsaGpsResidual> gpsResiduals;  ///< One entry per used GPS vector.
+
+    /// One row per measurement (REQ-418), parallel in meaning to residuals and
+    /// gpsResiduals but split so an angle and a distance are not one line.
+    std::vector<LsaMeasResidual> measResiduals;
+    std::vector<LsaKindSummary> kindSummaries;
+    LsaChiSquare chiSquare;
 };
+
+/// Chi-square critical value at \p probability (for example 0.025 or 0.975)
+/// with \p degreesOfFreedom. In-tree; no statistics library (ADR-001, REQ-300).
+/// Returns 0 when the inputs cannot describe a critical value.
+double LsaChiSquareCritical(double probability, int degreesOfFreedom);
 
 /// Adjust a closed-loop OR open traverse by weighted least squares, optionally
 /// folding in GPS vectors (REQ-417, ADR-065; open-traverse support — issue

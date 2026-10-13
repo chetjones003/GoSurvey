@@ -28,6 +28,8 @@ struct TraverseMeasSet {
 struct TraverseLeg {
     int stationId = 0;           ///< Foresight station point number.
     std::string description;     ///< Station description / field notes.
+    std::string code;            ///< Optional field code (`CODE ...`) on this leg's measurement.
+    int sourceOrder = 0;         ///< Source-file order. 0 means this leg was not given one.
 
     // --- Horizontal angle (° CW from backsight direction to this foresight) ---
     std::string horizAngleBuf;   ///< User input — decimal or DdMmSs (e.g. "45d30m10s").
@@ -153,6 +155,8 @@ struct TraverseSideShot {
     double checkDiscrepancy = 0.0;
 
     std::string description;
+    std::string code;
+    int sourceOrder = 0;
     std::string horizAngleBuf;
     std::string vertAngleBuf;
     std::string errorMsg;
@@ -221,6 +225,94 @@ struct TraverseGpsVector {
     int toStationId = 0;
 };
 
+/// How one coordinate component of a network station is held (REQ-419).
+enum class NetworkFix : std::uint8_t { Fixed, Free, Weighted };
+
+/// One easting, northing, or elevation on a network station.
+/// \c present is false when that component was not supplied.
+struct NetworkComponent {
+    double value = 0.0;
+    NetworkFix fix = NetworkFix::Fixed;
+    double stdError = 0.0; ///< Feet. Used when \c fix is Weighted.
+    bool present = false;
+};
+
+/// Approximate or known coordinates for one named station in a network adjustment.
+struct NetworkStation {
+    int id = 0;
+    NetworkComponent easting;
+    NetworkComponent northing;
+    NetworkComponent elevation;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// A turned angle at \c atId, clockwise from \c fromId to \c toId, decimal degrees.
+/// A standard error of 0 uses the traverse-wide angle weight.
+struct NetworkAngleObs {
+    int atId = 0;
+    int fromId = 0;
+    int toId = 0;
+    double angleDeg = 0.0;
+    double stdErrorSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// A horizontal distance, feet. A standard error of 0 uses the constant-plus-ppm weight.
+struct NetworkDistObs {
+    int fromId = 0;
+    int toId = 0;
+    double distance = 0.0;
+    double stdError = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// An azimuth, decimal degrees clockwise from north.
+struct NetworkAzimuthObs {
+    int fromId = 0;
+    int toId = 0;
+    double azimuthDeg = 0.0;
+    double stdErrorSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// An elevation difference, feet, from \c fromId up to \c toId.
+struct NetworkElevDiffObs {
+    int fromId = 0;
+    int toId = 0;
+    double deltaZ = 0.0;
+    double stdError = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// A zenith angle, decimal degrees, from \c fromId to \c toId. 90 is level.
+/// A standard error of 0 uses the traverse-wide angle weight.
+struct NetworkZenithObs {
+    int fromId = 0;
+    int toId = 0;
+    double zenithDeg = 90.0;
+    double stdErrorSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+/// One plate reading in a direction set. \c setId shares one orientation
+/// unknown with the other readings from that setup. The angle is the face-1
+/// equivalent, decimal degrees.
+struct NetworkDirectionObs {
+    int setId = 0;
+    int atId = 0;
+    int toId = 0;
+    double directionDeg = 0.0;
+    double stdErrorSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
 struct TraverseData {
     // --- Starting station ---
     int startStationId = 1;
@@ -255,6 +347,32 @@ struct TraverseData {
     /// Side shots and check shots (GitHub issue #853) — observations from an
     /// already-occupied station that don't advance the traverse chain.
     std::vector<TraverseSideShot> sideShots;
+
+    /// Network stations and observations (REQ-419). When any observation list
+    /// below is non-empty, the least-squares adjustment solves this network
+    /// (and folds the traverse chain in with it) instead of the chain alone.
+    std::vector<NetworkStation> networkStations;
+    std::vector<NetworkAngleObs> networkAngles;
+    std::vector<NetworkDistObs> networkDists;
+    std::vector<NetworkAzimuthObs> networkAzimuths;
+    std::vector<NetworkElevDiffObs> networkElevDiffs;
+    std::vector<NetworkZenithObs> networkZeniths;
+    std::vector<NetworkDirectionObs> networkDirections;
+
+    /// StarNet dotted options we read but do not apply (D-2026-10-13-e).
+    /// Shown in the command editor as comments. Not GoSurvey commands.
+    std::vector<std::string> starnetSkippedInlineOptions;
+
+    /// A comment or a blank line from the source file or the command text,
+    /// shown just before the measurement whose \c sourceOrder equals
+    /// \c beforeOrder. A \c beforeOrder past every measurement is shown after
+    /// the last one. \c blankLine is an empty line, not a `//` comment.
+    struct SourceComment {
+        int beforeOrder = 0;
+        std::string text;
+        bool blankLine = false;
+    };
+    std::vector<SourceComment> sourceComments;
 
     /// GPS vector observations (GitHub issue #847).
     std::vector<TraverseGpsVector> gpsVectors;
