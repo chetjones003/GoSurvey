@@ -48,6 +48,9 @@ bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap);
 /// Carlson SurvCE/SurvPC raw data file (*.rw5) for import (issue #846, Phase B).
 bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap);
 
+/// Trimble JobXML (*.jxl / *.xml) for import (issue #846, Phase B).
+bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap);
+
 /// REQ-403 (#834): a Traverse Editor save file (`.gstrav`) to load.
 bool BrowseOpenFileGstravUtf8(char* utf8Out, size_t utf8Cap);
 

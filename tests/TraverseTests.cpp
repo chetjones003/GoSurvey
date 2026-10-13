@@ -12,6 +12,7 @@
 #include "traverse/TraverseCommandLang.hpp"
 #include "traverse/StarNetImport.hpp"
 #include "traverse/Rw5Import.hpp"
+#include "traverse/JobXmlImport.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -1658,5 +1659,206 @@ TEST_CASE("TraverseCommandLang: PRISM/POLE/TSERR are rejected on a side shot", "
     LsaWeights weights;
     std::string err;
     CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #846 (Phase B) -- Trimble JobXML import. Grounded in Trimble's
+// official JobXMLSchema-5.72.xsd; see JobXmlImport.hpp for exactly what's
+// supported and what's a defined gap. Uses pugixml (third_party/pugixml).
+// ---------------------------------------------------------------------------
+
+namespace {
+
+constexpr double kJxlMetersToFeet = 1.0 / 0.3048;
+
+std::filesystem::path JobXmlTestDir() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-jobxml";
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+std::string WriteJobXmlFixture(const std::string& name, const std::string& content) {
+    const std::filesystem::path path = JobXmlTestDir() / name;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << content;
+    f.close();
+    return path.string();
+}
+
+std::string WrapJobXml(const std::string& fieldBookXml, const std::string& reductionsXml = "") {
+    std::ostringstream out;
+    out << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        << "<JOBFile jobName=\"Test\" version=\"5.72\" product=\"Trimble Access\" productVersion=\"2024.00\">\n"
+        << "<FieldBook>\n" << fieldBookXml << "</FieldBook>\n"
+        << "<Reductions>\n" << reductionsXml << "</Reductions>\n"
+        << "<Environment></Environment>\n</JOBFile>\n";
+    return out.str();
+}
+
+}  // namespace
+
+TEST_CASE("JobXmlImport: closed-loop traverse from the sample fixture", "[jobxml][REQ-410]") {
+    const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/closed_loop_trav.jxl";
+    TraverseData td;
+    std::string err;
+    REQUIRE(JobXmlImport(path.c_str(), td, err));
+    CHECK(err.empty());
+
+    REQUIRE(td.legs.size() == 3);
+    CHECK(td.isClosedLoop);
+    CHECK(td.hasStartBearing);
+    CHECK(td.startBearingDeg == Approx(270.0));
+
+    CHECK(td.legs[0].horizAngleDeg == Approx(100.0));
+    CHECK(td.legs[0].slopeDist == Approx(45.8000 * kJxlMetersToFeet));
+    CHECK(td.legs[0].isZenithAngle);
+    CHECK(td.legs[0].vertAngleDeg == Approx(90.0));
+
+    CHECK(td.legs[1].horizAngleDeg == Approx(240.0));
+    CHECK(td.legs[1].slopeDist == Approx(61.0000 * kJxlMetersToFeet));
+
+    CHECK(td.legs[2].horizAngleDeg == Approx(78.8333));
+    CHECK(td.legs[2].slopeDist == Approx(53.3400 * kJxlMetersToFeet));
+    CHECK(td.legs[2].stationId == td.startStationId);
+
+    ComputeTraverse(td);
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(std::isfinite(r.refStdDev));
+}
+
+TEST_CASE("JobXmlImport: distances and coordinates convert metres to feet", "[jobxml][REQ-410]") {
+    const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/closed_loop_trav.jxl";
+    TraverseData td;
+    std::string err;
+    REQUIRE(JobXmlImport(path.c_str(), td, err));
+    CHECK(td.startEasting == Approx(1600.0 * kJxlMetersToFeet));
+    CHECK(td.startNorthing == Approx(1500.0 * kJxlMetersToFeet));
+}
+
+TEST_CASE("JobXmlImport: a non-terrestrial (keyed-in) PointRecord is skipped, not rejected", "[jobxml][REQ-410]") {
+    const std::string fb =
+        "<PointRecord ID=\"KI1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>CTRL1</Name><Grid><North>100</North><East>100</East><Elevation>0</Elevation></Grid>"
+        "</PointRecord>"
+        "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>1</Station><BackSight>0</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>2</Name><StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>";
+    const std::string path = WriteJobXmlFixture("keyedin.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(JobXmlImport(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+}
+
+TEST_CASE("JobXmlImport: a GPS/WGS84 PointRecord is a defined gap", "[jobxml][REQ-410]") {
+    const std::string fb =
+        "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>1</Station><BackSight>0</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>2</Name><StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle>"
+        "<WGS84><Latitude>0</Latitude><Longitude>0</Longitude><Height>0</Height></WGS84>"
+        "</PointRecord>";
+    const std::string path = WriteJobXmlFixture("gps.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
+    CHECK(err.find("WGS84") != std::string::npos);
+}
+
+TEST_CASE("JobXmlImport: a backsight that doesn't match the traverse chain is rejected", "[jobxml][REQ-410]") {
+    const std::string fb =
+        "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>1</Station><BackSight>0</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>2</Name><StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>"
+        "<StationRecord ID=\"ST2\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>2</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB2\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>2</Station><BackSight>99</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P2\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>3</Name><StationID>ST2</StationID><BackBearingID>BB2</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>";
+    const std::string path = WriteJobXmlFixture("wrong_backsight.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("JobXmlImport: a PointRecord occupying the wrong station is rejected", "[jobxml][REQ-410]") {
+    // The first leg's occupied station is self-defining (nothing to check it
+    // against yet, same as StarNetImport/Rw5Import) -- the chain only becomes
+    // checkable from the SECOND leg on, when it must occupy the first leg's
+    // own foresight ("2") rather than some other station ("99").
+    const std::string fb =
+        "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>1</Station><BackSight>0</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>2</Name><StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>"
+        "<StationRecord ID=\"ST2\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>99</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB2\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>99</Station><BackSight>1</BackSight><Face1HorizontalCircle>0</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P2\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>3</Name><StationID>ST2</StationID><BackBearingID>BB2</BackBearingID>"
+        "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>";
+    const std::string path = WriteJobXmlFixture("wrong_station.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("JobXmlImport: no terrestrial observations is reported", "[jobxml][REQ-410]") {
+    const std::string fb =
+        "<PointRecord ID=\"KI1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>CTRL1</Name><Grid><North>100</North><East>100</East><Elevation>0</Elevation></Grid>"
+        "</PointRecord>";
+    const std::string path = WriteJobXmlFixture("no_obs.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("JobXmlImport: not a JobXML file is reported", "[jobxml][REQ-410]") {
+    const std::string path = WriteJobXmlFixture("notjobxml.jxl", "<?xml version=\"1.0\"?><NotAJob/>");
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("JobXmlImport: a missing file fails with a reason", "[jobxml][REQ-410]") {
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(JobXmlImport((JobXmlTestDir() / "does-not-exist.jxl").string().c_str(), td, err));
     CHECK_FALSE(err.empty());
 }
