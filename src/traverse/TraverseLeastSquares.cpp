@@ -115,8 +115,13 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     LsaResult r;
 
     // ---- Preconditions (REQ-017: surface, never absorb) -------------------
-    if (!td.isClosedLoop) {
-        r.message = "Least squares requires a closed loop.";
+    // Issue #848 follow-up: an OPEN traverse can be adjusted too, but only if
+    // it's tied to a second known point (ENDPOINT) — a plain open chain tied
+    // to just the start consumes exactly 2 unknowns per leg with nothing left
+    // over (zero redundancy), so there's nothing for least squares to do.
+    if (!td.isClosedLoop && !td.hasEndCoordinates) {
+        r.message = "Least squares requires either a closed loop or known end-point "
+                    "coordinates (ENDPOINT) for an open traverse.";
         return r;
     }
     if (!td.hasStartBearing) {
@@ -125,7 +130,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     }
     const int m = static_cast<int>(td.legs.size());
     if (m < 3) {
-        r.message = "Closed loop needs at least 3 legs to adjust.";
+        r.message = "The traverse needs at least 3 legs to adjust.";
         return r;
     }
     for (int k = 0; k < m; ++k) {
@@ -137,13 +142,15 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     }
 
     // ---- Topology -----------------------------------------------------
-    // Station id at loop position 0..m: position 0 and m are the (fixed) start
-    // station (the closing foresight is the start monument, possibly
-    // re-observed under a suffixed name but aliased to the same id on import).
+    // Station id at loop position 0..m: position 0 is always the fixed start.
+    // Position m is the last leg's own foresight — for a closed loop that's
+    // literally the start station again (aliased to the same id on import),
+    // for an open traverse (hasEndCoordinates, guaranteed by the precondition
+    // above) it's the separate ENDPOINT station, fixed below alongside the
+    // start instead of being re-derived from the same id.
     std::vector<int> posId(m + 1);
     posId[0] = td.startStationId;
-    posId[m] = td.startStationId;
-    for (int k = 1; k < m; ++k) posId[k] = td.legs[k - 1].stationId;
+    for (int k = 1; k <= m; ++k) posId[k] = td.legs[k - 1].stationId;
 
     // REQ-417: a usable GPS vector is one ComputeTraverse resolved AND that
     // carries a real a-priori covariance (StarNet COVARIANCE mode). Vectors
@@ -164,6 +171,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     // not part of the loop) comes from ComputeTraverse's GPS resolution pass.
     std::unordered_map<int, Coord> coord;
     coord[td.startStationId] = {td.startEasting, td.startNorthing, td.startElevation};
+    if (td.hasEndCoordinates) coord[posId[m]] = {td.endEasting, td.endNorthing, td.endElevation};
     for (int k = 1; k < m; ++k) {
         if (coord.find(posId[k]) == coord.end()) {
             const auto& leg = td.legs[k - 1];
@@ -185,11 +193,16 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     std::unordered_map<int, int> colOfId;  // station id -> base column (dim-wide block).
     auto addFree = [&](int id) {
         if (id == td.startStationId) return;
+        if (td.hasEndCoordinates && id == posId[m]) return;  // the open traverse's fixed far end.
         if (colOfId.find(id) != colOfId.end()) return;
         colOfId[id] = dim * static_cast<int>(freeIds.size());
         freeIds.push_back(id);
     };
-    for (int k = 1; k < m; ++k) addFree(posId[k]);
+    // Position m is only ever free when it's the closed-loop case (where it's
+    // aliased to the start id and addFree's first check already excludes it);
+    // the open case always has hasEndCoordinates by the precondition above, so
+    // this is safe to run over the full 1..m range uniformly.
+    for (int k = 1; k <= m; ++k) addFree(posId[k]);
     if (hasGps) {
         for (int gi : usableGps) {
             addFree(td.gpsVectors[gi].fromStationId);
@@ -266,6 +279,8 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     // ---- Gauss-Newton iterations -----------------------------------------
     const int kMaxIter = 12;
     int iter = 0;
+    std::vector<double> Nfinal;  // the last iteration's normal matrix, kept for the
+                                  // post-convergence covariance/error-ellipse inversion below.
     for (; iter < kMaxIter; ++iter) {
         std::vector<double> N(static_cast<size_t>(u) * u, 0.0);
         std::vector<double> t(u, 0.0);
@@ -399,6 +414,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
             addBlockObs(rows, e.W, l);
         }
 
+        Nfinal = N;  // SolveCholesky only reads N (via a local Cholesky factor), never mutates it.
         std::vector<double> delta = t;             // SolveCholesky writes solution here.
         if (!SolveCholesky(N, delta, u)) {
             r.message = "Normal equations are singular (check geometry/weights).";
@@ -479,18 +495,64 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
     r.refStdDev = (r.redundancy > 0) ? std::sqrt(vtWv / r.redundancy) : 0.0;
 
-    // ---- Adjusted free-station coordinates -------------------------------
-    for (int id : freeIds) {
+    // ---- Error ellipses (1-sigma): Qxx = N^-1, covariance = Qxx * sigma0^2 ----
+    // N^-1 is built one column at a time by re-solving N x = e_i through the same
+    // Cholesky routine used for the adjustment itself — O(u) solves of an O(u)
+    // system each, fine at traverse scale (tens to low hundreds of unknowns).
+    std::vector<double> Ninv(static_cast<size_t>(u) * u, 0.0);
+    bool haveNinv = true;
+    for (int col = 0; col < u && haveNinv; ++col) {
+        std::vector<double> Ncopy = Nfinal;
+        std::vector<double> e(u, 0.0);
+        e[col] = 1.0;
+        if (!SolveCholesky(Ncopy, e, u)) { haveNinv = false; break; }
+        for (int row = 0; row < u; ++row) Ninv[static_cast<size_t>(row) * u + col] = e[row];
+    }
+
+    // ---- Adjusted free-station coordinates + per-station error ellipse ----
+    for (int fi = 0; fi < static_cast<int>(freeIds.size()); ++fi) {
+        const int id = freeIds[fi];
         const Coord& c = coord[id];
         r.stationIds.push_back(id);
         r.adjEasting.push_back(c.e);
         r.adjNorthing.push_back(c.n);
         r.adjElevation.push_back(dim == 3 ? c.up : 0.0);
+
+        double semiMajor = 0.0, semiMinor = 0.0, azimuthDeg = 0.0;
+        if (haveNinv) {
+            const int ce = dim * fi + 0, cn = dim * fi + 1;
+            const double sigma0Sq = r.refStdDev * r.refStdDev;
+            const double cEE = Ninv[static_cast<size_t>(ce) * u + ce] * sigma0Sq;
+            const double cNN = Ninv[static_cast<size_t>(cn) * u + cn] * sigma0Sq;
+            const double cEN = Ninv[static_cast<size_t>(ce) * u + cn] * sigma0Sq;
+            const double trace = cEE + cNN;
+            const double det = cEE * cNN - cEN * cEN;
+            const double disc = std::sqrt(std::max(0.0, (trace * trace) / 4.0 - det));
+            const double lambda1 = trace / 2.0 + disc;  // major
+            const double lambda2 = trace / 2.0 - disc;  // minor
+            semiMajor = std::sqrt(std::max(0.0, lambda1));
+            semiMinor = std::sqrt(std::max(0.0, lambda2));
+            // Eigenvector angle of the major axis in the (E,N) plane, standard
+            // closed form for a symmetric 2x2; converted from a math angle off
+            // the E axis to an azimuth (degrees clockwise from north).
+            const double angMath = (std::abs(cEN) < 1e-15 && std::abs(cEE - cNN) < 1e-15)
+                                        ? 0.0
+                                        : 0.5 * std::atan2(2.0 * cEN, cEE - cNN);
+            const double dE = std::cos(angMath), dN = std::sin(angMath);
+            azimuthDeg = std::atan2(dE, dN) * (180.0 / kPi);
+            if (azimuthDeg < 0.0) azimuthDeg += 360.0;
+        }
+        r.stationSemiMajorFt.push_back(semiMajor);
+        r.stationSemiMinorFt.push_back(semiMinor);
+        r.stationEllipseAzimuthDeg.push_back(azimuthDeg);
     }
 
     // ---- Closure recomputed from the adjusted observations ----------------
-    // Walk the loop with adjusted angles/distances; a correct adjustment lands
-    // back on the fixed start (REQ-015).
+    // Walk the chain with adjusted angles/distances; a correct adjustment
+    // lands back on the fixed start for a closed loop (REQ-015), or on the
+    // known ENDPOINT for an open traverse (issue #848 follow-up) — comparing
+    // against the start wouldn't mean anything once the chain doesn't loop
+    // back there.
     {
         double curE = td.startEasting, curN = td.startNorthing;
         double prevFwd = td.startBearingDeg - 180.0;
@@ -502,8 +564,10 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
             curN += adjDist * std::cos(fwd * kDeg2Rad);
             prevFwd = fwd;
         }
-        r.adjClosureE = curE - td.startEasting;
-        r.adjClosureN = curN - td.startNorthing;
+        const double closeToE = td.isClosedLoop ? td.startEasting : td.endEasting;
+        const double closeToN = td.isClosedLoop ? td.startNorthing : td.endNorthing;
+        r.adjClosureE = curE - closeToE;
+        r.adjClosureN = curN - closeToN;
         r.adjClosureLinear = std::sqrt(r.adjClosureE * r.adjClosureE +
                                        r.adjClosureN * r.adjClosureN);
     }

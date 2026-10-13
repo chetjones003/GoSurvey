@@ -4290,7 +4290,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                   rowBtn("##CgdFeatureLine", -1, "c3d_featureline", "Feature Line", false,
                          "Feature Line — named 3D design linework.\nCommand bar: FEATURELINE", compact),
                   rowBtn("##CgdTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse", false,
-                         "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
+                         "LSA Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
                          compact),
               }),
               columnOfButtons({
@@ -4973,10 +4973,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonlayout::RibbonSectionSpec spec;
       spec.groupGapX = 4.f;
       ribbonlayout::RibbonGroupSpec traverseGroup;
-      traverseGroup.buttons = {largeBtnSpecEx("##SvyTraverse", (int)RibbonIconKind::Traverse, nullptr, "Traverse\nEditor",
+      traverseGroup.buttons = {largeBtnSpecEx("##SvyTraverse", (int)RibbonIconKind::Traverse, nullptr, "LSA\nEditor",
                                              false,
-                                             "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
-                                             capW("Traverse\nEditor"))};
+                                             "LSA Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE",
+                                             capW("LSA\nEditor"))};
       spec.groups = {
           traverseGroup,
           columnOfButtons({

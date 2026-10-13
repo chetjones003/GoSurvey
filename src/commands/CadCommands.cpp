@@ -6765,7 +6765,7 @@ const CmdEntry kRegistry[] = {
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
     {"exportpoints", "exppts", "Export survey points"},
-    {"traverse", "trav, traverseeditor", "Open the Traverse Editor"},
+    {"traverse", "trav, traverseeditor", "Open the LSA Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
     {"options", "op, settings", "Open the Options dialog"},

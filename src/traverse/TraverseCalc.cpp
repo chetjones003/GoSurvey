@@ -558,10 +558,16 @@ void ComputeTraverse(TraverseData& td) {
                                    gv.computedToElevation, 0.0, true};
     }
 
-    // --- Closure ---
-    if (td.isClosedLoop && !td.legs.empty() && td.legs.back().computed) {
-        td.closureDeltaE = curE - td.startEasting;
-        td.closureDeltaN = curN - td.startNorthing;
+    // --- Closure --- (issue #848 follow-up: an open traverse with known end
+    // coordinates closes against THAT point instead of the start — closing
+    // against the start wouldn't mean anything once the chain doesn't loop
+    // back there).
+    if (!td.legs.empty() && td.legs.back().computed &&
+        (td.isClosedLoop || td.hasEndCoordinates)) {
+        const double closeToE = td.isClosedLoop ? td.startEasting : td.endEasting;
+        const double closeToN = td.isClosedLoop ? td.startNorthing : td.endNorthing;
+        td.closureDeltaE = curE - closeToE;
+        td.closureDeltaN = curN - closeToN;
         td.closureLinear = std::sqrt(td.closureDeltaE * td.closureDeltaE +
                                      td.closureDeltaN * td.closureDeltaN);
         if (td.closureLinear > 1e-10 && td.closurePerimeter > 1e-10)

@@ -17,6 +17,13 @@
 //   BEARING <deg>
 //       Reference orientation at the start station, decimal degrees. Omit the
 //       line if there is none yet.
+//   ENDPOINT <e> <n> <z>
+//       Known coordinates of an OPEN traverse's last station (the final leg's
+//       foresight) — issue #848 follow-up. An open chain tied only to the
+//       start has zero redundant observations and least squares can't adjust
+//       it; tying the far end to a second known point is what gives it some.
+//       Omit for a closed loop (LOOP ON) — the two are mutually exclusive in
+//       practice, though nothing stops both being present.
 //   LOOP ON|OFF
 //       Whether the traverse is a closed loop back to the start station.
 //   SCALE ON|OFF [COMBINED|GRID]

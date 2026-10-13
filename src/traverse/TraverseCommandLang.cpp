@@ -57,6 +57,9 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
         << " " << Fmt(td.startElevation) << "\n";
     if (td.hasStartBearing)
         out << "BEARING " << Fmt(td.startBearingDeg) << "\n";
+    if (td.hasEndCoordinates)
+        out << "ENDPOINT " << Fmt(td.endEasting) << " " << Fmt(td.endNorthing)
+            << " " << Fmt(td.endElevation) << "\n";
 
     out << "LOOP " << (td.isClosedLoop ? "ON" : "OFF") << "\n";
     out << "SCALE " << (td.applyScaleFactor ? "ON" : "OFF")
@@ -179,6 +182,15 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             newTd.startBearingDeg = deg;
             newTd.hasStartBearing = true;
             newTd.startBearingBuf = TraverseFormatBearing(deg);
+        } else if (directive == "ENDPOINT") {
+            double e, n, z;
+            if (toks.size() < 4 || !ParseDoubleTok(toks[1], &e) || !ParseDoubleTok(toks[2], &n) ||
+                !ParseDoubleTok(toks[3], &z))
+                return fail("expected ENDPOINT <e> <n> <z>");
+            newTd.endEasting = e;
+            newTd.endNorthing = n;
+            newTd.endElevation = z;
+            newTd.hasEndCoordinates = true;
         } else if (directive == "LOOP") {
             if (toks.size() < 2) return fail("expected LOOP ON|OFF");
             newTd.isClosedLoop = (ToUpper(toks[1]) == "ON");

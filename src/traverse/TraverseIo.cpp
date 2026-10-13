@@ -123,6 +123,11 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
   j["startBearingDeg"] = td.startBearingDeg;
   j["hasStartBearing"] = td.hasStartBearing;
 
+  j["endEasting"] = td.endEasting;
+  j["endNorthing"] = td.endNorthing;
+  j["endElevation"] = td.endElevation;
+  j["hasEndCoordinates"] = td.hasEndCoordinates;
+
   j["useFace1Face2"] = td.useFace1Face2;
   j["isClosedLoop"] = td.isClosedLoop;
   j["applyScaleFactor"] = td.applyScaleFactor;
@@ -183,6 +188,11 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
   out.startBearingBuf = j.value("startBearingBuf", std::string());
   out.startBearingDeg = j.value("startBearingDeg", 0.0);
   out.hasStartBearing = j.value("hasStartBearing", false);
+
+  out.endEasting = j.value("endEasting", 0.0);
+  out.endNorthing = j.value("endNorthing", 0.0);
+  out.endElevation = j.value("endElevation", 0.0);
+  out.hasEndCoordinates = j.value("hasEndCoordinates", false);
 
   out.useFace1Face2 = j.value("useFace1Face2", false);
   out.isClosedLoop = j.value("isClosedLoop", false);

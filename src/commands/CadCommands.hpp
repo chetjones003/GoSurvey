@@ -5547,6 +5547,17 @@ struct AppCommandState {
   /// while editing, the form side must not regenerate and clobber unapplied text.
   bool        traverseCommandTextLoaded = false;
   std::string traverseCommandError;               ///< Parse error from the last Apply, if any.
+  /// LSA Editor: last path opened/saved as a plain-text `.godat` command document
+  /// (the GSTC source itself — distinct from the structured `.gstrav` save format),
+  /// "" until one exists. Plain "Save" writes here again; "Save As…" always prompts.
+  std::string traverseGodatFilePath;
+  /// Issue #848 follow-up: one entry per raw-data file imported into the current
+  /// traverse, `{legIndex, "IMPORT \"path\""}` — legIndex is the 0-based index (at
+  /// import time) of the first leg that file contributed, so the Command tab can
+  /// re-insert a `# IMPORT "path"` comment line at the right spot every time it
+  /// regenerates the GSTC text from traverseData (travcmd::Parse ignores comments,
+  /// so this can't round-trip through the text itself). Cleared on Load/Open/Clear.
+  std::vector<std::pair<int, std::string>> traverseImportMarkers;
 
   // -------------------------------------------------------------------------
   // CLIPBOARD (COPYCLIP / PASTECLIP)
