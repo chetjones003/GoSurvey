@@ -239,6 +239,19 @@ struct TraverseData {
 
     std::vector<TraverseLeg> legs;
 
+    /// Known coordinates at the END of an OPEN traverse (the last leg's
+    /// foresight station) — issue #848 follow-up. A plain open chain tied to
+    /// only the start station has zero redundant observations (2 unknowns
+    /// consumed per leg, nothing left over) and least squares has nothing to
+    /// adjust; tying the far end to a second known control point is the
+    /// standard way a real open traverse gets closure (STAR*NET's general
+    /// network model lets any point carry known coordinates, not just the
+    /// start). Ignored when \ref isClosedLoop is true.
+    double endEasting = 0.0;
+    double endNorthing = 0.0;
+    double endElevation = 0.0;
+    bool hasEndCoordinates = false;
+
     /// Side shots and check shots (GitHub issue #853) — observations from an
     /// already-occupied station that don't advance the traverse chain.
     std::vector<TraverseSideShot> sideShots;

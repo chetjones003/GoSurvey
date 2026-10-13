@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
+#include <vector>
 
 /// Point file for import — `.csv` **or** `.txt`, which REQ-083 treats as one format. UTF-8 path
 /// output; returns false if cancelled or unavailable (non-Windows). The `Csv` in the name is
@@ -51,11 +53,28 @@ bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap);
 /// Trimble JobXML (*.jxl / *.xml) for import (issue #846, Phase B).
 bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap);
 
+/// Multi-select variants of the four raw-data pickers above (issue #848 follow-up):
+/// a .godat file can hold the merged legs of several field-day raw files, so the
+/// LSA Editor's Import actions let the user pick more than one file of the same
+/// format in a single dialog. Returns false (outPaths left empty) if cancelled or
+/// unavailable (non-Windows); outPaths is cleared on every call.
+bool BrowseOpenFilesFbkUtf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesStarNetUtf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesRw5Utf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesJobXmlUtf8(std::vector<std::string>& outPaths);
+
 /// REQ-403 (#834): a Traverse Editor save file (`.gstrav`) to load.
 bool BrowseOpenFileGstravUtf8(char* utf8Out, size_t utf8Cap);
 
 /// REQ-403 (#834): where to save a Traverse Editor session (`.gstrav`).
 bool BrowseSaveFileGstravUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// LSA Editor command-text document (`.godat`) to open — the GSTC source text
+/// itself, as a plain file, distinct from the structured `.gstrav` save format.
+bool BrowseOpenFileGodatUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Where to save a `.godat` command-text document.
+bool BrowseSaveFileGodatUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
 /// glTF / GLB 3D model for import (REQ-065).
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);

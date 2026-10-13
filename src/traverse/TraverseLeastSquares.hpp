@@ -72,6 +72,16 @@ struct LsaResult {
     std::vector<double> adjNorthing;
     std::vector<double> adjElevation;
 
+    // 1-sigma standard error ellipse per free station (parallel to stationIds),
+    // from the inverted normal-equation matrix scaled by refStdDev^2 — the
+    // standard "Qxx * sigma0^2" covariance propagation. azimuthDeg is the
+    // semi-major axis's direction, degrees clockwise from north (0-360), matching
+    // this file's bearing convention. Empty when the normal matrix couldn't be
+    // inverted (same geometry that would make the adjustment itself singular).
+    std::vector<double> stationSemiMajorFt;
+    std::vector<double> stationSemiMinorFt;
+    std::vector<double> stationEllipseAzimuthDeg;
+
     // Loop closure recomputed from the adjusted observations (~0 when adjusted).
     double adjClosureE      = 0.0;
     double adjClosureN      = 0.0;
@@ -81,12 +91,16 @@ struct LsaResult {
     std::vector<LsaGpsResidual> gpsResiduals;  ///< One entry per used GPS vector.
 };
 
-/// Adjust a closed-loop traverse by weighted least squares, optionally folding
-/// in GPS vectors (REQ-417, ADR-065).
+/// Adjust a closed-loop OR open traverse by weighted least squares, optionally
+/// folding in GPS vectors (REQ-417, ADR-065; open-traverse support — issue
+/// #848 follow-up).
 ///
 /// Preconditions (each failure yields ok == false and a message — REQ-017):
 ///   - td.isClosedLoop is true (the closing foresight is the start monument,
-///     possibly re-observed under a suffixed name — it is treated as the start),
+///     possibly re-observed under a suffixed name — it is treated as the start)
+///     OR td.hasEndCoordinates is true (an open traverse tied to a second
+///     known point — td.endEasting/endNorthing/endElevation — for the
+///     redundancy a plain open chain tied to only the start doesn't have),
 ///   - a start reference bearing is set,
 ///   - every leg has a resolved horizontal angle and horizontal distance
 ///     (run ComputeTraverse first),

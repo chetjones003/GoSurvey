@@ -12,14 +12,20 @@
 #include "traverse/TraverseCommandLang.hpp"
 #include "WinFileDialogs.hpp"
 #include "ProjectFiles.hpp"
+#include "FontRegistry.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -465,212 +471,325 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
 }
 
 // ---- Command-style text view (REQ-404, GitHub issue #845 Phase A) ----
-// A GoSurvey-flavor (travcmd::) text editor for the same TraverseData the Form
-// tab edits. Text is (re)generated from td/weights whenever the form side was
-// last authoritative; typing marks the buffer dirty so the form side doesn't
-// clobber it mid-edit. "Apply" parses the buffer back into td/weights — both
-// tabs are views onto the same data, not a one-way import.
-static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string>& log) {
-    TraverseData& td = cmd.traverseData;
+// ---- Command tab: line numbers + basic syntax highlighting -----------------
+// The real editing (caret, selection, undo, IME) is still an ordinary
+// InputTextMultiline — its glyphs are just made transparent — with a
+// non-interactive colorized overlay drawn on top (ImGuiWindowFlags_NoInputs,
+// so clicks/typing pass straight through to the real box underneath) and a
+// line-number gutter beside it. Both are kept in lockstep with the real box's
+// scroll position via ImGui's internal input-text state (imgui_internal.h,
+// already used elsewhere in this codebase — CadUi.cpp, SplashScreen.cpp).
+namespace travcmdui {
 
-    if (!cmd.traverseCommandTextLoaded) {
-        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
-        cmd.traverseCommandTextLoaded = true;
-        cmd.traverseCommandError.clear();
-    }
-
-    ImGui::TextWrapped(
-        "GoSurvey's own traverse command language (not StarNet's; no \"key=value\", just "
-        "plain words and numbers). Header: STATION, BEARING, LOOP, SCALE, ERRORS. Per leg: "
-        "STN <at> <to>, then HANG <from> <at> <to> <angle>, HDIST/SDIST <at> <to> <dist>, "
-        "VANG <at> <to> <angle> [ZENITH|ELEV], DESC <at> <to> <text>, PRISM <at> <to> "
-        "<constant> <error>, POLE <at> <to> <error>, TSERR <at> <to> <angle-sec> "
-        "<dist-const> <dist-ppm>. Edit below, then Apply.");
-
-    ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, 420.f));
-
-    if (ImGui::Button("Apply")) {
-        TraverseData parsed;
-        LsaWeights parsedWeights;
-        std::string err;
-        if (travcmd::Parse(cmd.traverseCommandText, parsed, parsedWeights, err)) {
-            cmd.traverseData = std::move(parsed);
-            cmd.traverseLsaWeights = parsedWeights;
-            cmd.traverseDataDirty = true;
-            cmd.traverseExpandedLeg = -1;
-            cmd.traverseCommandError.clear();
-            log.push_back("TRAVERSE — applied command text (" +
-                          std::to_string(cmd.traverseData.legs.size()) + " legs).");
-        } else {
-            cmd.traverseCommandError = err;
-        }
-    }
-    ItemHelpTooltip("Parse the text above and replace the current traverse with it.\nThe Form tab will show the result.");
-
-    ImGui::SameLine();
-    if (ImGui::Button("Revert to Current Data")) {
-        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
-        cmd.traverseCommandError.clear();
-    }
-    ItemHelpTooltip("Discard edits below and regenerate the text from the traverse's current state.");
-
-    if (!cmd.traverseCommandError.empty())
-        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "Parse error: %s", cmd.traverseCommandError.c_str());
+bool IsKeyword(const std::string& upperTok) {
+    static const char* const kKeywords[] = {
+        "STATION", "BEARING", "LOOP", "SCALE", "ERRORS",
+        "STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR",
+        "ON", "OFF", "ZENITH", "ELEV", "SIDE", "CHECK", "COMBINED", "GRID", "REF",
+    };
+    for (const char* kw : kKeywords)
+        if (upperTok == kw) return true;
+    return false;
 }
 
-} // namespace
+bool IsNumber(const std::string& tok) {
+    if (tok.empty()) return false;
+    size_t i = 0;
+    if (tok[i] == '-' || tok[i] == '+') ++i;
+    if (i >= tok.size()) return false;
+    bool sawDigit = false, sawDot = false;
+    for (; i < tok.size(); ++i) {
+        if (tok[i] >= '0' && tok[i] <= '9') sawDigit = true;
+        else if (tok[i] == '.' && !sawDot) sawDot = true;
+        else return false;
+    }
+    return sawDigit;
+}
 
+// The GSTC header directives and per-leg commands (not argument-value tokens like
+// ON/OFF/ZENITH — those aren't "commands" in their own right) — used for the
+// Command tab's fuzzy autocomplete. Usage strings mirror TraverseCommandLang.hpp.
+struct GstcCommandDef { const char* name; const char* usage; };
+const GstcCommandDef kGstcCommands[] = {
+    {"STATION", "<id> <e> <n> <z>"},
+    {"BEARING", "<deg>"},
+    {"ENDPOINT","<e> <n> <z>  (open-traverse known end point, for least squares)"},
+    {"LOOP",    "ON|OFF"},
+    {"SCALE",   "ON|OFF [COMBINED|GRID]"},
+    {"ERRORS",  "<angle-arcsec> <dist-const> <dist-ppm>"},
+    {"STN",     "<at> <to> [SIDE | CHECK [known-e known-n]]"},
+    {"HANG",    "<from> <at> <to> <angle-deg>"},
+    {"HDIST",   "<at> <to> <dist>"},
+    {"SDIST",   "<at> <to> <dist>"},
+    {"VANG",    "<at> <to> <angle-deg> [ZENITH|ELEV]"},
+    {"DESC",    "<at> <to> <text to end of line>"},
+    {"PRISM",   "<at> <to> <constant> <error>"},
+    {"POLE",    "<at> <to> <error>"},
+    {"TSERR",   "<at> <to> <angle-arcsec> <dist-const> <dist-ppm>"},
+};
+constexpr int kGstcCommandCount = static_cast<int>(sizeof(kGstcCommands) / sizeof(kGstcCommands[0]));
+// The table above is ordered header directives first, then per-leg directives
+// (matches TraverseCommandLang.hpp's own doc comment grouping) — the Records
+// menu (DrawTraverseMenuBar) splits on this count rather than tagging each
+// entry individually.
+constexpr int kGstcHeaderCommandCount = 6;  // STATION, BEARING, ENDPOINT, LOOP, SCALE, ERRORS.
 
-void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log) {
-    if (!cmd.showTraverseEditorWindow)
+// Case-insensitive fuzzy match against kGstcCommands: an exact prefix ranks above a
+// subsequence match (same two-tier idea as the main CAD command bar's own fuzzy
+// finder, CadCommands.cpp — just scoped to this tiny, fixed keyword set rather than
+// sharing that implementation). \p queryUpper must already be upper-cased.
+std::vector<int> FuzzyGstcMatches(const std::string& queryUpper, int maxResults) {
+    std::vector<std::pair<int, int>> scored;  // (tier, index), lower tier first.
+    for (int i = 0; i < kGstcCommandCount; ++i) {
+        const std::string name = kGstcCommands[i].name;
+        if (queryUpper.empty()) { scored.push_back({0, i}); continue; }
+        if (name.compare(0, queryUpper.size(), queryUpper) == 0) { scored.push_back({0, i}); continue; }
+        size_t qi = 0;
+        for (size_t ni = 0; ni < name.size() && qi < queryUpper.size(); ++ni)
+            if (name[ni] == queryUpper[qi]) ++qi;
+        if (qi == queryUpper.size()) scored.push_back({1, i});
+    }
+    std::stable_sort(scored.begin(), scored.end());
+    std::vector<int> out;
+    for (const auto& p : scored) {
+        out.push_back(p.second);
+        if (static_cast<int>(out.size()) >= maxResults) break;
+    }
+    return out;
+}
+
+// Tab-completion while the real InputTextMultiline is focused: the top match (set
+// just before the call, from last frame's cursor position) is spliced in via the
+// callback's own DeleteChars/InsertChars, which is the only safe way to mutate an
+// actively-focused InputText's buffer (an external std::string edit would otherwise
+// be clobbered by the widget's own internal copy on the very same frame).
+struct GstcCompletionState {
+    bool pending = false;
+    std::string word;
+};
+GstcCompletionState& CompletionState() {
+    static GstcCompletionState s;
+    return s;
+}
+
+int GstcTextEditCallback(ImGuiInputTextCallbackData* data) {
+    if (data->EventFlag != ImGuiInputTextFlags_CallbackCompletion) return 0;
+    GstcCompletionState& st = CompletionState();
+    if (!st.pending || st.word.empty()) return 0;
+    st.pending = false;
+    const char* buf = data->Buf;
+    const int cursor = data->CursorPos;
+    int lineStart = cursor;
+    while (lineStart > 0 && buf[lineStart - 1] != '\n') --lineStart;
+    int tokenEnd = lineStart;
+    while (tokenEnd < data->BufTextLen && buf[tokenEnd] != ' ' && buf[tokenEnd] != '\t' && buf[tokenEnd] != '\n')
+        ++tokenEnd;
+    if (cursor > tokenEnd) return 0;  // cursor has moved past the leading token.
+    data->DeleteChars(lineStart, tokenEnd - lineStart);
+    const std::string insert = st.word + " ";
+    data->InsertChars(lineStart, insert.c_str());
+    return 0;
+}
+
+// Draws one source line as alternating whitespace/word runs, reproducing the
+// exact characters (so it lines up pixel-for-pixel with the real, invisible
+// text beneath it) with each word run colored by its token kind. The caller
+// must already have zeroed ItemSpacing so lines stack at exactly font height,
+// matching InputTextMultiline's own internal line pitch.
+void DrawHighlightedLine(const std::string& line) {
+    if (line.empty()) {
+        ImGui::Dummy(ImVec2(1.0f, ImGui::GetTextLineHeight()));
         return;
+    }
+    // Tuned for the LSA Editor's light theme (PushLsaLightTheme) — a white-ish
+    // background, so these need to be dark enough to read, not the light-on-dark
+    // palette a code editor would use on a black background.
+    static const ImVec4 kKeywordCol(0.00f, 0.22f, 0.70f, 1.0f);
+    static const ImVec4 kNumberCol(0.04f, 0.42f, 0.34f, 1.0f);
+    static const ImVec4 kCommentCol(0.42f, 0.47f, 0.42f, 1.0f);
+    const ImVec4 defaultCol = ImGui::GetStyle().Colors[ImGuiCol_Text];
 
-    // REQ-401: resolve the scale factor every frame (cheap — one CS-MAP lookup, only while the
-    // option is on) so a Drawing Settings change made elsewhere is picked up without a stale
-    // cached factor. Only forces a recompute when the resolved number actually changes.
-    TraverseData& tdPre = cmd.traverseData;
-    std::string scaleFactorError;
-    if (tdPre.applyScaleFactor) {
-        double factor = 1.0;
-        scaleFactorError = ResolveTraverseScaleFactor(cmd, tdPre.scaleFactorKind, &factor);
-        const double resolved = scaleFactorError.empty() ? factor : 1.0;
-        if (resolved != tdPre.scaleFactor) {
-            tdPre.scaleFactor = resolved;
+    const size_t firstNonSpace = line.find_first_not_of(" \t");
+    if (firstNonSpace != std::string::npos && line[firstNonSpace] == '#') {
+        ImGui::TextColored(kCommentCol, "%s", line.c_str());  // whole-line comment.
+        return;
+    }
+
+    bool first = true;
+    size_t i = 0;
+    while (i < line.size()) {
+        const bool isSpace = (line[i] == ' ' || line[i] == '\t');
+        size_t j = i;
+        while (j < line.size() && ((line[j] == ' ' || line[j] == '\t') == isSpace)) ++j;
+        const std::string run = line.substr(i, j - i);
+        if (!first) ImGui::SameLine(0.0f, 0.0f);
+        first = false;
+        if (isSpace) {
+            ImGui::TextUnformatted(run.c_str());
+        } else {
+            std::string upper = run;
+            for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+            if (IsKeyword(upper))
+                ImGui::TextColored(kKeywordCol, "%s", run.c_str());
+            else if (IsNumber(run))
+                ImGui::TextColored(kNumberCol, "%s", run.c_str());
+            else
+                ImGui::TextColored(defaultCol, "%s", run.c_str());
+        }
+        i = j;
+    }
+}
+
+}  // namespace travcmdui
+
+// Merges `imported` onto the end of `into`: when `into` is still empty (the common
+// case — the very first import into a blank traverse), this is just a replace. When
+// `into` already holds legs/side shots/GPS vectors, `imported`'s are appended instead
+// of clobbering them, so importing several raw-data files in one go (or one at a time,
+// via repeated Import clicks) builds up one continuous traverse rather than each file
+// stomping the last (issue #848 follow-up — a .godat file holds the merged result).
+//
+// GSTC only models ONE sequential chain with globally-unique station numbers (every
+// STN's TO station id must be unique — TraverseCommandLang.cpp's `toIndex`/`sideIndex`
+// check). Each raw-file importer numbers its own stations from scratch, so appending a
+// second file's legs verbatim collides with the first file's ids (and was rejected by
+// the parser with "station N already declared with STN"). Every id in the imported
+// block is renumbered to a fresh, unused id before it's appended; its own start
+// station (the point the imported side shots/GPS vectors may be anchored to) maps onto
+// wherever `into`'s chain currently ends, since the new legs continue from there.
+static void MergeImportedTraverse(TraverseData& into, TraverseData&& imported) {
+    if (into.legs.empty() && into.sideShots.empty() && into.gpsVectors.empty()) {
+        into = std::move(imported);
+        return;
+    }
+
+    int maxUsedId = into.startStationId;
+    for (const TraverseLeg& leg : into.legs) maxUsedId = std::max(maxUsedId, leg.stationId);
+    for (const TraverseSideShot& ss : into.sideShots)
+        maxUsedId = std::max({maxUsedId, ss.atStationId, ss.stationId});
+    for (const TraverseGpsVector& gv : into.gpsVectors)
+        maxUsedId = std::max({maxUsedId, gv.fromStationId, gv.toStationId});
+
+    const int chainEndId = into.legs.empty() ? into.startStationId : into.legs.back().stationId;
+    std::unordered_map<int, int> remap;
+    remap[imported.startStationId] = chainEndId;
+    int nextId = maxUsedId + 1;
+    auto mapId = [&](int oldId) -> int {
+        auto it = remap.find(oldId);
+        if (it != remap.end()) return it->second;
+        const int newId = nextId++;
+        remap[oldId] = newId;
+        return newId;
+    };
+
+    for (TraverseLeg& leg : imported.legs) leg.stationId = mapId(leg.stationId);
+    for (TraverseSideShot& ss : imported.sideShots) {
+        ss.atStationId = mapId(ss.atStationId);
+        ss.stationId = mapId(ss.stationId);
+    }
+    for (TraverseGpsVector& gv : imported.gpsVectors) {
+        gv.fromStationId = mapId(gv.fromStationId);
+        gv.toStationId = mapId(gv.toStationId);
+    }
+
+    for (auto& leg : imported.legs) into.legs.push_back(std::move(leg));
+    for (auto& ss : imported.sideShots) into.sideShots.push_back(std::move(ss));
+    for (auto& gv : imported.gpsVectors) into.gpsVectors.push_back(std::move(gv));
+}
+
+// Imports every path in `paths` with `importFn`, merging each into cmd.traverseData
+// (see MergeImportedTraverse), recording a `# IMPORT "path"` marker (surfaced in the
+// Command tab's text — DrawTraverseCommandTab) and logging per-file success/failure.
+template <typename ImportFn>
+static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
+                            const std::vector<std::string>& paths, const char* formatLabel,
+                            ImportFn importFn) {
+    for (const std::string& path : paths) {
+        TraverseData imported;
+        std::string err;
+        if (importFn(path.c_str(), imported, err)) {
+            const size_t importedLegs = imported.legs.size();
+            const int markerLegIndex = static_cast<int>(cmd.traverseData.legs.size());
+            MergeImportedTraverse(cmd.traverseData, std::move(imported));
+            cmd.traverseImportMarkers.emplace_back(markerLegIndex, "IMPORT \"" + path + "\"");
             cmd.traverseDataDirty = true;
+            cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
+            log.push_back("TRAVERSE — imported " + std::string(formatLabel) + " (" +
+                          std::to_string(importedLegs) + " legs): " + path);
+        } else {
+            std::string fail = "TRAVERSE — ";
+            fail += formatLabel;
+            fail += " import failed (";
+            fail += path;
+            fail += "): ";
+            fail += err;
+            log.push_back(std::move(fail));
         }
     }
+}
 
-    // Recompute when inputs change.
-    if (cmd.traverseDataDirty) {
-        ComputeTraverse(cmd.traverseData);
-        cmd.traverseDataDirty = false;
-        cmd.traverseLsaComputed = false;  // inputs changed -> adjustment is stale.
-        // #845 Phase A: the data actually changed (from the Form tab, an import, or a
-        // prior Apply) — regenerate the Command tab's text next time it's drawn. Merely
-        // switching tabs must NOT hit this, or unapplied typed text would be discarded.
-        cmd.traverseCommandTextLoaded = false;
-    }
-
-    // The closure window is launched from this editor; draw it here so it
-    // survives the editor being collapsed.
-    DrawTraverseClosureWindow(cmd, log);
-
-    ImGui::SetNextWindowSize(ImVec2(1080, 580), ImGuiCond_FirstUseEver);
-    bool open = cmd.showTraverseEditorWindow;
-    if (!ImGui::Begin("Traverse Editor", &open)) {
-        cmd.showTraverseEditorWindow = open;
-        ImGui::End();
-        return;
-    }
-    cmd.showTraverseEditorWindow = open;
-
+// Raw-format import buttons (FBK, STAR*NET, RW5, JobXML) and .gstrav Save/Save
+// As/Load — shared by the LSA Editor's left "Files" panel and the (secondary)
+// Table View tab, so there is exactly one place this logic lives.
+static void DrawTraverseFileButtons(AppCommandState& cmd, std::vector<std::string>& log) {
     TraverseData& td = cmd.traverseData;
 
-    // GitHub issue #845 (Phase A) — Form vs. Command (GSTC text) view, two-way
-    // synced through the same traverseData/traverseLsaWeights.
-    if (!ImGui::BeginTabBar("traverse_view_tabs")) {
-        ImGui::End();
-        return;
-    }
-
-    if (ImGui::BeginTabItem("Form")) {
-
-    // ---- Raw data import ----
+    // ---- Raw data import — multi-select: a .godat can hold several field-day raw
+    // files merged into one continuous traverse (issue #848 follow-up). ----
     if (ImGui::Button("Import .fbk\xe2\x80\xa6")) {
-        char path[1024]{};
-        if (BrowseOpenFileFbkUtf8(path, sizeof(path))) {
-            TraverseData imported;
-            std::string err;
-            if (FbkImport(path, imported, err)) {
-                cmd.traverseData = std::move(imported);
-                cmd.traverseDataDirty = true;
-                cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
-                log.push_back(std::string("TRAVERSE — imported FBK (") +
-                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
-            } else {
-                log.push_back("TRAVERSE — FBK import failed: " + err);
-            }
-        }
+        std::vector<std::string> paths;
+        if (BrowseOpenFilesFbkUtf8(paths))
+            ImportRawFiles(cmd, log, paths, "FBK", FbkImport);
     }
     ItemHelpTooltip(
-        "Import an Autodesk Field Book (.fbk) raw data file.\n"
-        "Replaces the current traverse with the imported stations, backsight\n"
-        "orientation, and face-averaged observations.");
+        "Import one or more Autodesk Field Book (.fbk) raw data files.\n"
+        "The first import (or, into an empty traverse) replaces it; additional\n"
+        "files — picked together or one at a time — append their legs so\n"
+        "multiple field days merge into one continuous traverse.");
 
     // ---- StarNet import (GitHub issue #846, Phase B) ----
     ImGui::SameLine();
     if (ImGui::Button("Import StarNet .dat\xe2\x80\xa6")) {
-        char path[1024]{};
-        if (BrowseOpenFileStarNetUtf8(path, sizeof(path))) {
-            TraverseData imported;
-            std::string err;
-            if (StarNetImport(path, imported, err)) {
-                cmd.traverseData = std::move(imported);
-                cmd.traverseDataDirty = true;
-                cmd.traverseExpandedLeg = -1;
-                log.push_back(std::string("TRAVERSE — imported STAR*NET (") +
-                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
-            } else {
-                log.push_back("TRAVERSE — STAR*NET import failed: " + err);
-            }
-        }
+        std::vector<std::string> paths;
+        if (BrowseOpenFilesStarNetUtf8(paths))
+            ImportRawFiles(cmd, log, paths, "STAR*NET", StarNetImport);
     }
     ItemHelpTooltip(
-        "Import a MicroSurvey STAR*NET .dat file (conventional 2D traverse data: a\n"
-        "single TB/T/TE traverse, with C lines for reference coordinates).\n"
-        "Replaces the current traverse. StarNet records this importer doesn't\n"
-        "support (GPS vectors, 3D data, general network angles, etc.) are reported\n"
-        "as an import failure rather than silently dropped.");
+        "Import one or more MicroSurvey STAR*NET .dat files (conventional 2D\n"
+        "traverse data: a single TB/T/TE traverse, with C lines for reference\n"
+        "coordinates). StarNet records this importer doesn't support (GPS\n"
+        "vectors, 3D data, general network angles, etc.) are reported as an\n"
+        "import failure rather than silently dropped. Multiple files append\n"
+        "(see Import .fbk tooltip).");
 
     // ---- Carlson RW5 import (GitHub issue #846, Phase B) ----
     ImGui::SameLine();
     if (ImGui::Button("Import RW5\xe2\x80\xa6")) {
-        char path[1024]{};
-        if (BrowseOpenFileRw5Utf8(path, sizeof(path))) {
-            TraverseData imported;
-            std::string err;
-            if (Rw5Import(path, imported, err)) {
-                cmd.traverseData = std::move(imported);
-                cmd.traverseDataDirty = true;
-                cmd.traverseExpandedLeg = -1;
-                log.push_back(std::string("TRAVERSE — imported RW5 (") +
-                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
-            } else {
-                log.push_back("TRAVERSE — RW5 import failed: " + err);
-            }
-        }
+        std::vector<std::string> paths;
+        if (BrowseOpenFilesRw5Utf8(paths))
+            ImportRawFiles(cmd, log, paths, "RW5", Rw5Import);
     }
     ItemHelpTooltip(
-        "Import a Carlson SurvCE/SurvPC raw data file (*.rw5): a sequential\n"
-        "OC/BK/TR traverse, with SP lines for known-point coordinates.\n"
-        "Replaces the current traverse. GNSS vectors and non-traverse records\n"
-        "(SS/BD/BR/FD/FR/OF) are either reported as unsupported or ignored by\n"
-        "design per the importer's documented scope, not silently misread.");
+        "Import one or more Carlson SurvCE/SurvPC raw data files (*.rw5): a\n"
+        "sequential OC/BK/TR traverse, with SP lines for known-point\n"
+        "coordinates. GNSS vectors and non-traverse records (SS/BD/BR/FD/FR/OF)\n"
+        "are either reported as unsupported or ignored by design per the\n"
+        "importer's documented scope. Multiple files append (see Import .fbk\n"
+        "tooltip).");
 
     // ---- Trimble JobXML import (GitHub issue #846, Phase B) ----
     ImGui::SameLine();
     if (ImGui::Button("Import JobXML\xe2\x80\xa6")) {
-        char path[1024]{};
-        if (BrowseOpenFileJobXmlUtf8(path, sizeof(path))) {
-            TraverseData imported;
-            std::string err;
-            if (JobXmlImport(path, imported, err)) {
-                cmd.traverseData = std::move(imported);
-                cmd.traverseDataDirty = true;
-                cmd.traverseExpandedLeg = -1;
-                log.push_back(std::string("TRAVERSE — imported JobXML (") +
-                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
-            } else {
-                log.push_back("TRAVERSE — JobXML import failed: " + err);
-            }
-        }
+        std::vector<std::string> paths;
+        if (BrowseOpenFilesJobXmlUtf8(paths))
+            ImportRawFiles(cmd, log, paths, "JobXML", JobXmlImport);
     }
     ItemHelpTooltip(
-        "Import a Trimble JobXML file (*.jxl/*.xml): a sequential StationRecord/\n"
-        "BackBearingRecord/PointRecord traverse, with Reductions points for\n"
-        "known-point coordinates. All distances convert from metres to feet.\n"
-        "Replaces the current traverse. GPS/resection/offset observations are\n"
-        "reported as unsupported, not silently misread.");
+        "Import one or more Trimble JobXML files (*.jxl/*.xml): a sequential\n"
+        "StationRecord/BackBearingRecord/PointRecord traverse, with Reductions\n"
+        "points for known-point coordinates. All distances convert from metres\n"
+        "to feet. GPS/resection/offset observations are reported as unsupported.\n"
+        "Multiple files append (see Import .fbk tooltip).");
 
     // ---- Save / Load (REQ-403, GitHub issue #834) ----
     ImGui::SameLine();
@@ -724,6 +843,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
                 cmd.traverseLsaComputed = false;
                 cmd.traverseLsaAccepted = false;
                 cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
+                cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
                 log.push_back(std::string("TRAVERSE — loaded (") +
                               std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
             } else {
@@ -732,6 +852,1365 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         }
     }
     ItemHelpTooltip("Load a previously saved .gstrav file, replacing the current traverse.");
+
+    // ---- .godat — the command-editor text itself, as its own plain-text file ----
+    // Distinct from .gstrav (a structured save of every input field): a .godat file
+    // is exactly what the Command/Editor tab's text box holds, byte for byte — open
+    // it in any text editor, diff it, generate it from a script.
+    ImGui::SameLine();
+    const bool haveGodatPath = !cmd.traverseGodatFilePath.empty();
+    if (!haveGodatPath) ImGui::BeginDisabled();
+    if (ImGui::Button("Save .godat")) {
+        std::ofstream f(cmd.traverseGodatFilePath, std::ios::binary | std::ios::trunc);
+        if (f) {
+            f << cmd.traverseCommandText;
+            log.push_back("TRAVERSE — saved .godat: " + cmd.traverseGodatFilePath);
+        } else {
+            log.push_back("TRAVERSE — .godat save failed: could not open \"" + cmd.traverseGodatFilePath + "\".");
+        }
+    }
+    if (!haveGodatPath) ImGui::EndDisabled();
+    ItemHelpTooltip("Save the Command editor's text back to its current .godat file.");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Save .godat As\xe2\x80\xa6")) {
+        char path[1024]{};
+        const char* defaultName = haveGodatPath ? cmd.traverseGodatFilePath.c_str() : nullptr;
+        if (BrowseSaveFileGodatUtf8(path, sizeof(path), defaultName)) {
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            if (f) {
+                f << cmd.traverseCommandText;
+                cmd.traverseGodatFilePath = path;
+                log.push_back(std::string("TRAVERSE — saved .godat: ") + path);
+            } else {
+                log.push_back(std::string("TRAVERSE — .godat save failed: could not open \"") + path + "\".");
+            }
+        }
+    }
+    ItemHelpTooltip("Save the Command editor's text as a new .godat file (the GSTC source,\nplain text — not the structured .gstrav format).");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Open .godat\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileGodatUtf8(path, sizeof(path))) {
+            std::ifstream f(path, std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                cmd.traverseCommandText = ss.str();
+                cmd.traverseGodatFilePath = path;
+                cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
+                TraverseData parsed;
+                LsaWeights parsedWeights;
+                std::string err;
+                if (travcmd::Parse(cmd.traverseCommandText, parsed, parsedWeights, err)) {
+                    cmd.traverseData = std::move(parsed);
+                    cmd.traverseLsaWeights = parsedWeights;
+                    ComputeTraverse(cmd.traverseData);
+                    cmd.traverseLsaComputed = false;
+                    cmd.traverseExpandedLeg = -1;
+                    cmd.traverseCommandError.clear();
+                    log.push_back(std::string("TRAVERSE — opened .godat (") +
+                                  std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+                } else {
+                    cmd.traverseCommandError = err;
+                    log.push_back("TRAVERSE — .godat opened but failed to parse: " + err);
+                }
+                cmd.traverseCommandTextLoaded = true;  // the editor shows this text as-is, errors and all.
+            } else {
+                log.push_back(std::string("TRAVERSE — could not open \"") + path + "\".");
+            }
+        }
+    }
+    ItemHelpTooltip("Open a .godat command document, replacing both the Command editor's text\nand the current traverse.");
+}
+
+// File/Edit menu bar (replaces the import/save/load button row the left panel
+// had no room for — same actions as DrawTraverseFileButtons, as menu items).
+static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
+    TraverseData& td = cmd.traverseData;
+    if (!ImGui::BeginMenuBar()) return;
+
+    if (ImGui::BeginMenu("File")) {
+        if (ImGui::MenuItem("Import .fbk\xe2\x80\xa6")) {
+            std::vector<std::string> paths;
+            if (BrowseOpenFilesFbkUtf8(paths))
+                ImportRawFiles(cmd, log, paths, "FBK", FbkImport);
+        }
+        if (ImGui::MenuItem("Import STAR*NET .dat\xe2\x80\xa6")) {
+            std::vector<std::string> paths;
+            if (BrowseOpenFilesStarNetUtf8(paths))
+                ImportRawFiles(cmd, log, paths, "STAR*NET", StarNetImport);
+        }
+        if (ImGui::MenuItem("Import RW5\xe2\x80\xa6")) {
+            std::vector<std::string> paths;
+            if (BrowseOpenFilesRw5Utf8(paths))
+                ImportRawFiles(cmd, log, paths, "RW5", Rw5Import);
+        }
+        if (ImGui::MenuItem("Import JobXML\xe2\x80\xa6")) {
+            std::vector<std::string> paths;
+            if (BrowseOpenFilesJobXmlUtf8(paths))
+                ImportRawFiles(cmd, log, paths, "JobXML", JobXmlImport);
+        }
+
+        ImGui::Separator();
+
+        const bool haveSavedPath = !cmd.traverseFilePath.empty();
+        if (ImGui::MenuItem("Save .gstrav", nullptr, false, haveSavedPath)) {
+            std::string err;
+            if (traverseio::Save(cmd.traverseFilePath, td, cmd.traverseLsaWeights, err)) {
+                TrackTraverseFileInProject(cmd, cmd.traverseFilePath, log);
+                log.push_back("TRAVERSE — saved: " + cmd.traverseFilePath);
+            } else {
+                log.push_back("TRAVERSE — save failed: " + err);
+            }
+        }
+        if (ImGui::MenuItem("Save .gstrav As\xe2\x80\xa6")) {
+            char path[1024]{};
+            const char* defaultName = haveSavedPath ? cmd.traverseFilePath.c_str() : nullptr;
+            if (BrowseSaveFileGstravUtf8(path, sizeof(path), defaultName)) {
+                std::string err;
+                if (traverseio::Save(path, td, cmd.traverseLsaWeights, err)) {
+                    cmd.traverseFilePath = path;
+                    TrackTraverseFileInProject(cmd, cmd.traverseFilePath, log);
+                    log.push_back("TRAVERSE — saved: " + cmd.traverseFilePath);
+                } else {
+                    log.push_back("TRAVERSE — save failed: " + err);
+                }
+            }
+        }
+        if (ImGui::MenuItem("Load .gstrav\xe2\x80\xa6")) {
+            char path[1024]{};
+            if (BrowseOpenFileGstravUtf8(path, sizeof(path))) {
+                TraverseData loaded;
+                LsaWeights loadedWeights;
+                std::string err;
+                if (traverseio::Load(path, loaded, loadedWeights, err)) {
+                    cmd.traverseData = std::move(loaded);
+                    cmd.traverseLsaWeights = loadedWeights;
+                    cmd.traverseFilePath = path;
+                    cmd.traverseDataDirty = true;
+                    cmd.traverseLsaComputed = false;
+                    cmd.traverseLsaAccepted = false;
+                    cmd.traverseExpandedLeg = -1;
+                    cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
+                    log.push_back(std::string("TRAVERSE — loaded (") +
+                                  std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+                } else {
+                    log.push_back("TRAVERSE — load failed: " + err);
+                }
+            }
+        }
+
+        ImGui::Separator();
+
+        const bool haveGodatPath = !cmd.traverseGodatFilePath.empty();
+        if (ImGui::MenuItem("Open .godat\xe2\x80\xa6")) {
+            char path[1024]{};
+            if (BrowseOpenFileGodatUtf8(path, sizeof(path))) {
+                std::ifstream f(path, std::ios::binary);
+                if (f) {
+                    std::ostringstream ss;
+                    ss << f.rdbuf();
+                    cmd.traverseCommandText = ss.str();
+                    cmd.traverseGodatFilePath = path;
+                    cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
+                    TraverseData parsed;
+                    LsaWeights parsedWeights;
+                    std::string err;
+                    if (travcmd::Parse(cmd.traverseCommandText, parsed, parsedWeights, err)) {
+                        cmd.traverseData = std::move(parsed);
+                        cmd.traverseLsaWeights = parsedWeights;
+                        ComputeTraverse(cmd.traverseData);
+                        cmd.traverseLsaComputed = false;
+                        cmd.traverseExpandedLeg = -1;
+                        cmd.traverseCommandError.clear();
+                        log.push_back(std::string("TRAVERSE — opened .godat (") +
+                                      std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+                    } else {
+                        cmd.traverseCommandError = err;
+                        log.push_back("TRAVERSE — .godat opened but failed to parse: " + err);
+                    }
+                    cmd.traverseCommandTextLoaded = true;
+                } else {
+                    log.push_back(std::string("TRAVERSE — could not open \"") + path + "\".");
+                }
+            }
+        }
+        if (ImGui::MenuItem("Save .godat", nullptr, false, haveGodatPath)) {
+            std::ofstream f(cmd.traverseGodatFilePath, std::ios::binary | std::ios::trunc);
+            if (f) {
+                f << cmd.traverseCommandText;
+                log.push_back("TRAVERSE — saved .godat: " + cmd.traverseGodatFilePath);
+            } else {
+                log.push_back("TRAVERSE — .godat save failed: could not open \"" + cmd.traverseGodatFilePath + "\".");
+            }
+        }
+        if (ImGui::MenuItem("Save .godat As\xe2\x80\xa6")) {
+            char path[1024]{};
+            const char* defaultName = haveGodatPath ? cmd.traverseGodatFilePath.c_str() : nullptr;
+            if (BrowseSaveFileGodatUtf8(path, sizeof(path), defaultName)) {
+                std::ofstream f(path, std::ios::binary | std::ios::trunc);
+                if (f) {
+                    f << cmd.traverseCommandText;
+                    cmd.traverseGodatFilePath = path;
+                    log.push_back(std::string("TRAVERSE — saved .godat: ") + path);
+                } else {
+                    log.push_back(std::string("TRAVERSE — .godat save failed: could not open \"") + path + "\".");
+                }
+            }
+        }
+
+        ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Edit")) {
+        if (ImGui::MenuItem("Clear Traverse")) {
+            cmd.traverseData = TraverseData{};
+            cmd.traverseFilePath.clear();
+            cmd.traverseGodatFilePath.clear();
+            cmd.traverseImportMarkers.clear();
+            cmd.traverseDataDirty = true;
+            cmd.traverseLsaComputed = false;
+            cmd.traverseLsaAccepted = false;
+            cmd.traverseExpandedLeg = -1;
+            log.push_back("TRAVERSE — cleared.");
+        }
+        ImGui::EndMenu();
+    }
+
+    // Every GSTC directive, addable from the UI instead of needing to be typed
+    // from memory — a template line (name + its usage placeholders, same text
+    // the autocomplete popup and the (?) tooltip already show) is appended to
+    // the Command tab's text, which live-applies like any other edit.
+    if (ImGui::BeginMenu("Records")) {
+        auto insertRecord = [&](const travcmdui::GstcCommandDef& c) {
+            std::string& text = cmd.traverseCommandText;
+            if (!text.empty() && text.back() != '\n') text += '\n';
+            text += std::string(c.name) + " " + c.usage + "\n";
+            log.push_back(std::string("TRAVERSE — inserted ") + c.name + " template.");
+        };
+        if (ImGui::BeginMenu("Header Records")) {
+            for (int i = 0; i < travcmdui::kGstcHeaderCommandCount; ++i) {
+                const travcmdui::GstcCommandDef& c = travcmdui::kGstcCommands[i];
+                if (ImGui::MenuItem(c.name)) insertRecord(c);
+                ItemHelpTooltip(c.usage);
+            }
+            ImGui::EndMenu();
+        }
+        if (ImGui::BeginMenu("Leg Records")) {
+            for (int i = travcmdui::kGstcHeaderCommandCount; i < travcmdui::kGstcCommandCount; ++i) {
+                const travcmdui::GstcCommandDef& c = travcmdui::kGstcCommands[i];
+                if (ImGui::MenuItem(c.name)) insertRecord(c);
+                ItemHelpTooltip(c.usage);
+            }
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenu();
+    }
+
+    ImGui::EndMenuBar();
+}
+
+// A toolbar row under the menu bar (STAR*NET-PRO style: a strip of common
+// actions as buttons, separate from the File/Edit menus that hold the same
+// actions plus everything else). No icon artwork of our own for these yet —
+// labeled buttons stand in for it.
+static void DrawTraverseToolbar(AppCommandState& cmd, std::vector<std::string>& log) {
+    TraverseData& td = cmd.traverseData;
+    const bool haveGstrav = !cmd.traverseFilePath.empty();
+    if (!haveGstrav) ImGui::BeginDisabled();
+    if (ImGui::Button("Save")) {
+        std::string err;
+        if (traverseio::Save(cmd.traverseFilePath, td, cmd.traverseLsaWeights, err)) {
+            TrackTraverseFileInProject(cmd, cmd.traverseFilePath, log);
+            log.push_back("TRAVERSE — saved: " + cmd.traverseFilePath);
+        } else {
+            log.push_back("TRAVERSE — save failed: " + err);
+        }
+    }
+    if (!haveGstrav) ImGui::EndDisabled();
+    ItemHelpTooltip("Save .gstrav (File menu has Save As\xe2\x80\xa6/Load\xe2\x80\xa6/the .godat actions too).");
+
+    ImGui::SameLine();
+    if (ImGui::Button("Open\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileGstravUtf8(path, sizeof(path))) {
+            TraverseData loaded;
+            LsaWeights loadedWeights;
+            std::string err;
+            if (traverseio::Load(path, loaded, loadedWeights, err)) {
+                cmd.traverseData = std::move(loaded);
+                cmd.traverseLsaWeights = loadedWeights;
+                cmd.traverseFilePath = path;
+                cmd.traverseDataDirty = true;
+                cmd.traverseLsaComputed = false;
+                cmd.traverseLsaAccepted = false;
+                cmd.traverseExpandedLeg = -1;
+                cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
+                log.push_back(std::string("TRAVERSE — loaded (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — load failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip("Open a .gstrav file.");
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+
+    if (ImGui::Button("Run")) {
+        cmd.traverseLsaComputed = false;  // forces EnsureLsaComputed to redo the adjustment this frame.
+        log.push_back("TRAVERSE — re-ran the least-squares adjustment.");
+    }
+    ItemHelpTooltip("Re-run the least-squares adjustment (it also reruns automatically whenever\nthe command text or traverse data changes).");
+}
+
+// Splices `# IMPORT "path"` comment lines (cmd.traverseImportMarkers) into freshly
+// Serialize()'d GSTC text, right before the STN block of the leg each marker names.
+// travcmd::Parse ignores comment lines and travcmd::Serialize has no notion of import
+// history, so this can't be done inside either of them — it's cosmetic text spliced in
+// after the fact, same as a human would paste a note in. Markers are applied highest
+// legIndex first so earlier insertions don't shift the position of later ones.
+static void InsertImportMarkerComments(std::string& text,
+                                        const std::vector<std::pair<int, std::string>>& markers) {
+    if (markers.empty()) return;
+    std::vector<std::pair<int, std::string>> sorted = markers;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto& a, const auto& b) { return a.first > b.first; });
+    for (const auto& [legIndex, label] : sorted) {
+        size_t pos = 0;
+        int count = 0;
+        size_t foundPos = std::string::npos;
+        for (;;) {
+            const size_t p = text.find("\nSTN ", pos);
+            if (p == std::string::npos) break;
+            if (count == legIndex) { foundPos = p; break; }
+            ++count;
+            pos = p + 1;
+        }
+        const std::string comment = "\n# " + label + "\n";
+        if (foundPos != std::string::npos)
+            text.insert(foundPos, comment);
+        else
+            text += comment;  // e.g. an import that contributed only side shots.
+    }
+}
+
+// A GoSurvey-flavor (travcmd::) text editor for the same TraverseData the Form
+// tab edits. The Command tab is the primary editing surface: it live-applies
+// on every change (no Apply/Revert step) and fills the rest of the window.
+// Text is only ever regenerated FROM the traverse (travcmd::Serialize) when the
+// data changed from outside this tab — the Form tab or an import — via the
+// existing traverseCommandTextLoaded invalidation; an edit that originates
+// here never gets reformatted out from under the user's cursor.
+static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string>& log) {
+    TraverseData& td = cmd.traverseData;
+    (void)log;  // imports/Form edits still log at their own call sites; live edits don't spam the log.
+
+    if (!cmd.traverseCommandTextLoaded) {
+        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
+        InsertImportMarkerComments(cmd.traverseCommandText, cmd.traverseImportMarkers);
+        cmd.traverseCommandTextLoaded = true;
+        cmd.traverseCommandError.clear();
+    }
+
+    ImGui::TextDisabled("GoSurvey Traverse Command (GSTC)");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "GoSurvey's own traverse command language (not StarNet's; no \"key=value\", "
+            "just plain words and numbers). Header: STATION, BEARING, LOOP, SCALE, "
+            "ERRORS. Per leg: STN <at> <to>, then HANG <from> <at> <to> <angle>, "
+            "HDIST/SDIST <at> <to> <dist>, VANG <at> <to> <angle> [ZENITH|ELEV], "
+            "DESC <at> <to> <text>, PRISM <at> <to> <constant> <error>, POLE <at> <to> "
+            "<error>, TSERR <at> <to> <angle-sec> <dist-const> <dist-ppm>.\n"
+            "Start typing a command for suggestions (Tab to accept). Full reference: Help (F1).");
+
+    // Split into display lines once per frame (cheap — these buffers are tiny).
+    std::vector<std::string> lines;
+    {
+        const std::string& text = cmd.traverseCommandText;
+        size_t start = 0;
+        for (size_t p = 0; p <= text.size(); ++p) {
+            if (p == text.size() || text[p] == '\n') {
+                lines.push_back(text.substr(start, p - start));
+                start = p + 1;
+            }
+        }
+        if (lines.empty()) lines.emplace_back();
+    }
+
+    static float s_scrollY = 0.0f;
+    static float s_scrollX = 0.0f;
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const int maxDigits = static_cast<int>(std::to_string(lines.size()).size());
+    const float gutterW = ImGui::CalcTextSize(std::string(static_cast<size_t>(maxDigits), '9').c_str()).x +
+                           style.FramePadding.x * 2.0f;
+
+    // Fill the rest of the panel — no Apply/Revert bar below, just a thin status/error
+    // line, so this (the primary editing surface) gets essentially the whole window.
+    const float statusH = ImGui::GetFrameHeightWithSpacing();
+    const float boxH = std::max(80.f, ImGui::GetContentRegionAvail().y - statusH);
+
+    const ImGuiID textId = ImGui::GetID("##trv_cmd_text");
+
+    // ---- Autocomplete: the leading token of the line at the cursor, read from last
+    // frame's persisted cursor position (one-frame-behind — the same idiom the main
+    // CAD command bar's own suggestion popup uses, CadUi.cpp) ----
+    std::string partialToken;
+    int tokenLineStart = -1, tokenEnd = -1;
+    if (ImGuiInputTextState* state = ImGui::GetInputTextState(textId)) {
+        const std::string& text = cmd.traverseCommandText;
+        const int n = static_cast<int>(text.size());
+        const int cursor = std::clamp(state->GetCursorPos(), 0, n);
+        int lineStart = cursor;
+        while (lineStart > 0 && text[static_cast<size_t>(lineStart - 1)] != '\n') --lineStart;
+        int te = lineStart;
+        while (te < n && text[static_cast<size_t>(te)] != ' ' && text[static_cast<size_t>(te)] != '\t' &&
+               text[static_cast<size_t>(te)] != '\n')
+            ++te;
+        if (cursor <= te) {
+            tokenLineStart = lineStart;
+            tokenEnd = te;
+            partialToken = text.substr(static_cast<size_t>(lineStart), static_cast<size_t>(te - lineStart));
+        }
+    }
+    std::string partialUpper = partialToken;
+    for (char& ch : partialUpper) ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+    const std::vector<int> matches =
+        partialToken.empty() ? std::vector<int>() : travcmdui::FuzzyGstcMatches(partialUpper, 8);
+
+    // Prime Tab-completion with the top match; cleared again right after the real
+    // InputTextMultiline call below (Tab, if pressed, already fired synchronously
+    // inside that call) so a later, unrelated Tab press can't replay it.
+    travcmdui::GstcCompletionState& compState = travcmdui::CompletionState();
+    compState.pending = !matches.empty();
+    compState.word = matches.empty() ? std::string() : std::string(travcmdui::kGstcCommands[matches[0]].name);
+
+    // Consolas for the gutter, the real (invisible) text, and the colorized overlay
+    // alike — all three must share identical font metrics, since the overlay and
+    // gutter are positioned by assuming they use the exact same line pitch as the
+    // real InputTextMultiline underneath.
+    ImFont* monoFont = FontReg::Resolve("Consolas", false, false);
+    ImGui::PushFont(monoFont);
+
+    // ---- Line-number gutter ----
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.FramePadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, style.Colors[ImGuiCol_FrameBg]);
+    if (ImGui::BeginChild("##trv_cmd_gutter", ImVec2(gutterW, boxH), ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
+        ImGui::SetScrollY(s_scrollY);
+        const ImVec4 gutterCol = style.Colors[ImGuiCol_TextDisabled];
+        for (size_t i = 0; i < lines.size(); ++i)
+            ImGui::TextColored(gutterCol, "%*d", maxDigits, static_cast<int>(i + 1));
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+
+    ImGui::SameLine(0.0f, 2.0f);
+
+    // ---- The real, editable box (glyphs hidden; caret/selection stay visible) ----
+    ImGui::BeginGroup();
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 0));
+    ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, boxH),
+                              ImGuiInputTextFlags_CallbackCompletion, travcmdui::GstcTextEditCallback);
+    ImGui::PopStyleColor();
+    const ImVec2 textMin = ImGui::GetItemRectMin();
+    const ImVec2 textMax = ImGui::GetItemRectMax();
+    const bool textBoxActive = ImGui::IsItemActive();
+    compState.pending = false;
+
+    // ImGui's native caret is drawn in ImGuiCol_Text, which is pushed fully
+    // transparent above (so the real glyphs stay invisible under the colorized
+    // overlay) — that hid the caret too. It's redrawn by hand in the overlay
+    // below, from this frame's live cursor position (no one-frame-behind delay
+    // needed here — unlike the autocomplete token above, this isn't deciding
+    // what to splice into next frame's buffer, just where to draw a line now).
+    int caretRow = -1;
+    float caretColPx = 0.0f;
+    if (ImGuiInputTextState* state = ImGui::GetInputTextState(textId)) {
+        s_scrollY = state->Scroll.y;
+        s_scrollX = state->Scroll.x;
+        if (textBoxActive) {
+            const std::string& text = cmd.traverseCommandText;
+            const int n = static_cast<int>(text.size());
+            const int cur = std::clamp(state->GetCursorPos(), 0, n);
+            int lineStartPos = cur;
+            while (lineStartPos > 0 && text[static_cast<size_t>(lineStartPos - 1)] != '\n') --lineStartPos;
+            caretRow = static_cast<int>(std::count(text.begin(), text.begin() + lineStartPos, '\n'));
+            const std::string prefix =
+                text.substr(static_cast<size_t>(lineStartPos), static_cast<size_t>(cur - lineStartPos));
+            caretColPx = ImGui::CalcTextSize(prefix.c_str()).x;
+        }
+    }
+
+    // ---- Inline parse-error annotation: travcmd::Parse's error is always
+    // "line N: message" (TraverseCommandLang.cpp) — split that apart so the line
+    // number only has to steer a highlight drawn ON that line, not be read and
+    // hunted for by the user.
+    int errLineIdx = -1;
+    std::string errMsg;
+    if (!cmd.traverseCommandError.empty()) {
+        const std::string& e = cmd.traverseCommandError;
+        if (e.rfind("line ", 0) == 0) {
+            const size_t colonPos = e.find(':');
+            if (colonPos != std::string::npos) {
+                errLineIdx = std::atoi(e.c_str() + 5) - 1;
+                size_t msgStart = colonPos + 1;
+                while (msgStart < e.size() && e[msgStart] == ' ') ++msgStart;
+                errMsg = e.substr(msgStart);
+            }
+        }
+        if (errMsg.empty()) errMsg = e;
+    }
+
+    // ---- Colorized overlay, drawn on top, input-transparent ----
+    ImGui::SetCursorScreenPos(textMin);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.FramePadding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0));
+    if (ImGui::BeginChild("##trv_cmd_overlay", ImVec2(textMax.x - textMin.x, textMax.y - textMin.y),
+                          ImGuiChildFlags_AlwaysUseWindowPadding,
+                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
+                              ImGuiWindowFlags_NoInputs)) {
+        ImGui::SetScrollY(s_scrollY);
+        ImGui::SetScrollX(s_scrollX);
+        const ImVec2 overlayOrigin = ImGui::GetCursorScreenPos();
+        const float lineH = ImGui::GetTextLineHeight();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        for (size_t li = 0; li < lines.size(); ++li) {
+            const ImVec2 lineTop = ImGui::GetCursorScreenPos();
+            travcmdui::DrawHighlightedLine(lines[li]);
+            if (static_cast<int>(li) == errLineIdx) {
+                const float textW = std::max(4.0f, ImGui::CalcTextSize(lines[li].c_str()).x);
+                const ImU32 errCol = IM_COL32(214, 60, 50, 255);
+                const float underlineY = lineTop.y + lineH - 2.0f;
+                dl->AddLine(ImVec2(lineTop.x, underlineY), ImVec2(lineTop.x + textW, underlineY), errCol, 1.5f);
+                dl->AddText(ImVec2(lineTop.x, lineTop.y + lineH + 1.0f), errCol, errMsg.c_str());
+            }
+        }
+
+        if (caretRow >= 0) {
+            const ImVec2 caretTop(overlayOrigin.x + caretColPx, overlayOrigin.y + static_cast<float>(caretRow) * lineH);
+            const ImVec2 caretBot(caretTop.x, caretTop.y + lineH);
+            if (std::fmod(static_cast<float>(ImGui::GetTime()), 1.0f) < 0.5f)
+                dl->AddLine(caretTop, caretBot, IM_COL32(15, 15, 15, 255), 1.5f);
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+    ImGui::EndGroup();
+    ImGui::PopFont();
+
+    // ---- Autocomplete popup: "COMMAND   usage", filtered as you type ----
+    if (textBoxActive && !matches.empty() && tokenLineStart >= 0) {
+        const std::string& text = cmd.traverseCommandText;
+        const int lineIndex =
+            static_cast<int>(std::count(text.begin(), text.begin() + tokenLineStart, '\n'));
+        const float lineH = ImGui::GetTextLineHeight();
+        const float rowH = ImGui::GetFrameHeight();
+
+        float contentW = 0.f;
+        for (int idx : matches) {
+            const travcmdui::GstcCommandDef& c = travcmdui::kGstcCommands[idx];
+            const float w = ImGui::CalcTextSize(c.name).x + ImGui::CalcTextSize("   ").x +
+                             ImGui::CalcTextSize(c.usage).x;
+            contentW = std::max(contentW, w);
+        }
+        const float listW = std::clamp(contentW + 24.f, 160.f, 520.f);
+        const float listH = rowH * static_cast<float>(matches.size()) + 6.f;
+
+        ImVec2 pos(textMin.x, textMin.y + static_cast<float>(lineIndex + 1) * lineH - s_scrollY + 2.0f);
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        const ImVec2 wmax(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y);
+        if (pos.x + listW > wmax.x) pos.x = wmax.x - listW;
+        if (pos.y + listH > wmax.y)
+            pos.y = textMin.y + static_cast<float>(lineIndex) * lineH - s_scrollY - listH - 2.0f;
+        pos.x = std::max(pos.x, vp->WorkPos.x);
+        pos.y = std::max(pos.y, vp->WorkPos.y);
+
+        ImGui::SetNextWindowPos(pos);
+        ImGui::SetNextWindowSize(ImVec2(listW, listH));
+        const ImGuiWindowFlags pf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                    ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                    ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 3.f));
+        if (ImGui::Begin("##trv_cmd_autocomplete", nullptr, pf)) {
+            for (int idx : matches) {
+                const travcmdui::GstcCommandDef& c = travcmdui::kGstcCommands[idx];
+                ImGui::PushID(idx);
+                if (ImGui::Selectable("##row", false, 0, ImVec2(0, rowH))) {
+                    cmd.traverseCommandText.replace(static_cast<size_t>(tokenLineStart),
+                                                    static_cast<size_t>(tokenEnd - tokenLineStart),
+                                                    std::string(c.name) + " ");
+                }
+                ImGui::SameLine(6.f);
+                ImGui::TextColored(ImVec4(0.40f, 0.68f, 0.98f, 1.0f), "%s", c.name);
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", c.usage);
+                ImGui::PopID();
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar();
+    }
+
+    // ---- Status / error line (replaces the old Apply/Revert buttons — this tab
+    // applies live). The error itself is now underlined in place on its own line
+    // above (errMsg/errLineIdx) — this is just a short status, not a repeat of
+    // "line N:" the user has to go hunt for.
+    if (!cmd.traverseCommandError.empty())
+        ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "Parse error \xe2\x80\x94 see the highlighted line above.");
+    else
+        ImGui::TextDisabled("Edits apply live — the Form tab reflects this traverse too.");
+
+    // ---- Live-apply: reparse whenever the text actually changed, from any source
+    // (typing, a clicked autocomplete suggestion) ----
+    static std::string s_lastAppliedText;
+    if (cmd.traverseCommandText != s_lastAppliedText) {
+        s_lastAppliedText = cmd.traverseCommandText;
+        TraverseData parsed;
+        LsaWeights parsedWeights;
+        std::string err;
+        if (travcmd::Parse(cmd.traverseCommandText, parsed, parsedWeights, err)) {
+            cmd.traverseData = std::move(parsed);
+            cmd.traverseLsaWeights = parsedWeights;
+            ComputeTraverse(cmd.traverseData);
+            cmd.traverseLsaComputed = false;
+            cmd.traverseExpandedLeg = -1;
+            cmd.traverseCommandError.clear();
+        } else {
+            cmd.traverseCommandError = err;
+        }
+    }
+}
+
+void EnsureLsaComputed(AppCommandState& cmd);  // defined below; DrawLsaStationPlot needs it first.
+
+// ---- Left-panel "Preview": a small plan plot of the computed traverse — points,
+// the legs between them, and each station's 1-sigma error ellipse once the least
+// squares adjustment has run (replaces a plain easting/northing/elev table, which
+// told you numbers but not the shape of the network or where it's weakest). ----
+void DrawLsaStationPlot(AppCommandState& cmd) {
+    TraverseData& td = cmd.traverseData;
+    EnsureLsaComputed(cmd);
+    const LsaResult& r = cmd.traverseLsaResult;
+
+    struct PlotPt {
+        int id = 0;
+        double e = 0.0, n = 0.0;
+        bool hasEllipse = false;
+        double semiMajorFt = 0.0, semiMinorFt = 0.0, azimuthDeg = 0.0;
+    };
+    auto findAdjusted = [&](int id, double& e, double& n) -> bool {
+        if (!r.ok) return false;
+        for (size_t i = 0; i < r.stationIds.size(); ++i)
+            if (r.stationIds[i] == id) { e = r.adjEasting[i]; n = r.adjNorthing[i]; return true; }
+        return false;
+    };
+    auto attachEllipse = [&](PlotPt& p) {
+        if (!r.ok) return;
+        for (size_t i = 0; i < r.stationIds.size(); ++i) {
+            if (r.stationIds[i] != p.id) continue;
+            p.hasEllipse = true;
+            p.semiMajorFt = r.stationSemiMajorFt[i];
+            p.semiMinorFt = r.stationSemiMinorFt[i];
+            p.azimuthDeg = r.stationEllipseAzimuthDeg[i];
+            return;
+        }
+    };
+
+    std::vector<PlotPt> pts;
+    {
+        PlotPt p;
+        p.id = td.startStationId;
+        if (!findAdjusted(p.id, p.e, p.n)) { p.e = td.startEasting; p.n = td.startNorthing; }
+        attachEllipse(p);
+        pts.push_back(p);
+    }
+    for (const TraverseLeg& leg : td.legs) {
+        PlotPt p;
+        p.id = leg.stationId;
+        if (!findAdjusted(p.id, p.e, p.n)) {
+            if (!leg.computed) continue;  // unresolved leg — nothing to plot yet.
+            p.e = leg.computedEasting;
+            p.n = leg.computedNorthing;
+        }
+        attachEllipse(p);
+        pts.push_back(p);
+    }
+
+    if (pts.size() < 2) {
+        ImGui::TextDisabled("Not enough computed stations yet.");
+        return;
+    }
+
+    // Side/check shots (issue #853) — the traverse's radial detail/control
+    // points, drawn thin and un-adjusted (least squares only ever touches the
+    // loop, never these) so they don't read as part of the backbone chain.
+    struct SideShotPt {
+        int atStationId = 0;
+        double e = 0.0, n = 0.0;
+        bool isCheck = false;
+        std::string label;
+    };
+    std::vector<SideShotPt> sidePts;
+    for (const TraverseSideShot& ss : td.sideShots) {
+        if (!ss.computed) continue;  // occupied station unresolved, or missing data — nothing to plot.
+        SideShotPt sp;
+        sp.atStationId = ss.atStationId;
+        sp.e = ss.computedEasting;
+        sp.n = ss.computedNorthing;
+        sp.isCheck = ss.isCheckShot;
+        sp.label = !ss.description.empty() ? ss.description : std::to_string(ss.stationId);
+        sidePts.push_back(std::move(sp));
+    }
+
+    double minE = pts[0].e, maxE = pts[0].e, minN = pts[0].n, maxN = pts[0].n;
+    for (const PlotPt& p : pts) {
+        minE = std::min(minE, p.e); maxE = std::max(maxE, p.e);
+        minN = std::min(minN, p.n); maxN = std::max(maxN, p.n);
+    }
+    for (const PlotPt& p : pts) {
+        if (!p.hasEllipse) continue;
+        minE = std::min(minE, p.e - p.semiMajorFt); maxE = std::max(maxE, p.e + p.semiMajorFt);
+        minN = std::min(minN, p.n - p.semiMajorFt); maxN = std::max(maxN, p.n + p.semiMajorFt);
+    }
+    for (const SideShotPt& sp : sidePts) {
+        minE = std::min(minE, sp.e); maxE = std::max(maxE, sp.e);
+        minN = std::min(minN, sp.n); maxN = std::max(maxN, sp.n);
+    }
+    const double spanE = std::max(1e-6, maxE - minE), spanN = std::max(1e-6, maxN - minN);
+
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float pad = 22.0f;
+    const float plotW = std::max(10.0f, avail.x - 2.0f * pad);
+    const float plotH = std::max(10.0f, avail.y - 2.0f * pad);
+
+    // Persistent pan/zoom (world-space center + pixels-per-foot), navigated the
+    // same way as the main 3D viewport: scroll to zoom (about the cursor),
+    // middle-mouse-drag to pan, double-middle-click to zoom extents. Auto-fit
+    // the first time there's something to show, and again whenever the data's
+    // bounds jump somewhere the current view doesn't even overlap — the signature
+    // of a coordinate-system change (e.g. the start station's E/N were just
+    // edited) rather than the traverse just growing/shrinking incrementally,
+    // which should NOT fight the user's own framing.
+    static bool s_plotInit = false;
+    static double s_centerE = 0.0, s_centerN = 0.0, s_scale = 1.0;
+    static bool s_havePrevBounds = false;
+    static double s_prevMinE = 0.0, s_prevMaxE = 0.0, s_prevMinN = 0.0, s_prevMaxN = 0.0;
+
+    auto zoomExtents = [&]() {
+        s_centerE = 0.5 * (minE + maxE);
+        s_centerN = 0.5 * (minN + maxN);
+        s_scale = std::min(plotW / spanE, plotH / spanN);
+    };
+
+    const bool boundsDisjoint = s_havePrevBounds &&
+        (maxE < s_prevMinE || minE > s_prevMaxE || maxN < s_prevMinN || minN > s_prevMaxN);
+    if (!s_plotInit || boundsDisjoint) {
+        zoomExtents();
+        s_plotInit = true;
+    }
+    s_prevMinE = minE; s_prevMaxE = maxE; s_prevMinN = minN; s_prevMaxN = maxN;
+    s_havePrevBounds = true;
+
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 center(origin.x + avail.x * 0.5f, origin.y + avail.y * 0.5f);
+    auto toScreen = [&](double e, double n) -> ImVec2 {
+        return ImVec2(center.x + static_cast<float>((e - s_centerE) * s_scale),
+                      center.y - static_cast<float>((n - s_centerN) * s_scale));  // north is up.
+    };
+
+    ImGui::InvisibleButton("##lsa_plot_canvas", avail,
+                           ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
+    const bool hovered = ImGui::IsItemHovered();
+    if (hovered) {
+        const float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.0f) {
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const double worldE = s_centerE + (mouse.x - center.x) / s_scale;
+            const double worldN = s_centerN - (mouse.y - center.y) / s_scale;
+            s_scale = std::clamp(s_scale * std::pow(1.1, wheel), 1e-6, 1e9);
+            s_centerE = worldE - (mouse.x - center.x) / s_scale;
+            s_centerN = worldN + (mouse.y - center.y) / s_scale;
+        }
+        if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle))
+            zoomExtents();
+    }
+    const bool panning = ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0f);
+    if (panning) {
+        const ImVec2 d = ImGui::GetIO().MouseDelta;
+        s_centerE -= d.x / s_scale;
+        s_centerN += d.y / s_scale;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImU32 legCol = IM_COL32(70, 100, 180, 255);
+    const ImU32 ptCol = IM_COL32(30, 30, 30, 255);
+    const ImU32 ellipseCol = IM_COL32(210, 70, 40, 200);
+    constexpr double kDeg2RadLocal = 3.14159265358979323846 / 180.0;
+
+    for (size_t i = 1; i < pts.size(); ++i)
+        dl->AddLine(toScreen(pts[i - 1].e, pts[i - 1].n), toScreen(pts[i].e, pts[i].n), legCol, 1.5f);
+    if (td.isClosedLoop && pts.size() > 2)
+        dl->AddLine(toScreen(pts.back().e, pts.back().n), toScreen(pts.front().e, pts.front().n),
+                    IM_COL32(70, 100, 180, 120), 1.0f);
+
+    // Side/check shots: a thin radial line from the occupied backbone station
+    // to each detail/control point, plus its own small marker + label —
+    // distinguished by color from the backbone legs so the chain still reads
+    // clearly even on a station with a dozen side shots off it.
+    {
+        std::unordered_map<int, ImVec2> backbonePx;
+        for (const PlotPt& p : pts) backbonePx[p.id] = toScreen(p.e, p.n);
+        const ImU32 sideCol = IM_COL32(140, 140, 145, 200);
+        const ImU32 checkCol = IM_COL32(60, 150, 90, 220);
+        const ImU32 sidePtCol = IM_COL32(90, 90, 95, 255);
+        const ImU32 checkPtCol = IM_COL32(30, 120, 60, 255);
+        for (const SideShotPt& sp : sidePts) {
+            const auto atIt = backbonePx.find(sp.atStationId);
+            const ImVec2 c = toScreen(sp.e, sp.n);
+            if (atIt != backbonePx.end())
+                dl->AddLine(atIt->second, c, sp.isCheck ? checkCol : sideCol, 1.0f);
+            dl->AddCircleFilled(c, 2.5f, sp.isCheck ? checkPtCol : sidePtCol);
+            dl->AddText(ImVec2(c.x + 5.0f, c.y - 7.0f), sp.isCheck ? checkPtCol : sidePtCol, sp.label.c_str());
+        }
+    }
+
+    // Hover target: nearest station within a small pixel radius, OR anywhere
+    // inside its own ellipse (ellipses can be much bigger than the point marker,
+    // and that's exactly the part someone wants to put a number to).
+    const ImVec2 mouse = ImGui::GetIO().MousePos;
+    const PlotPt* hoverPt = nullptr;
+    float hoverBestD2 = 1e30f;
+    if (hovered && !panning) {
+        for (const PlotPt& p : pts) {
+            const ImVec2 c = toScreen(p.e, p.n);
+            const float dx = mouse.x - c.x, dy = mouse.y - c.y;
+            const float d2 = dx * dx + dy * dy;
+            bool inEllipse = false;
+            if (p.hasEllipse && (p.semiMajorFt > 1e-9 || p.semiMinorFt > 1e-9)) {
+                const float rMaj = static_cast<float>(p.semiMajorFt * s_scale);
+                const float rMin = static_cast<float>(p.semiMinorFt * s_scale);
+                const float rot = static_cast<float>(p.azimuthDeg * kDeg2RadLocal);
+                // Rotate the cursor offset into the ellipse's own (major,minor) axes.
+                const float u = dx * std::sin(rot) + dy * std::cos(rot);
+                const float v = dx * std::cos(rot) - dy * std::sin(rot);
+                if (rMaj > 1e-6f && rMin > 1e-6f)
+                    inEllipse = (u * u) / (rMaj * rMaj) + (v * v) / (rMin * rMin) <= 1.0f;
+            }
+            if (d2 <= 64.0f || inEllipse) {
+                if (d2 < hoverBestD2) { hoverBestD2 = d2; hoverPt = &p; }
+            }
+        }
+    }
+
+    for (const PlotPt& p : pts) {
+        const ImVec2 c = toScreen(p.e, p.n);
+        const bool isHovered = (&p == hoverPt);
+        if (p.hasEllipse && (p.semiMajorFt > 1e-9 || p.semiMinorFt > 1e-9)) {
+            const float rMaj = static_cast<float>(p.semiMajorFt * s_scale);
+            const float rMin = static_cast<float>(p.semiMinorFt * s_scale);
+            const float rot = static_cast<float>(p.azimuthDeg * kDeg2RadLocal);
+            const int segs = 32;
+            ImVec2 poly[33];
+            for (int s = 0; s <= segs; ++s) {
+                const float t = (2.0f * 3.14159265f) * static_cast<float>(s) / static_cast<float>(segs);
+                const float lx = rMaj * std::cos(t), ly = rMin * std::sin(t);
+                const float dE = lx * std::sin(rot) + ly * std::cos(rot);
+                const float dN = lx * std::cos(rot) - ly * std::sin(rot);
+                poly[s] = ImVec2(c.x + dE, c.y - dN);
+            }
+            dl->AddPolyline(poly, segs + 1, ellipseCol, ImDrawFlags_None, isHovered ? 2.5f : 1.25f);
+            if (isHovered) {
+                // Major-axis tick, so the number below has something to point at.
+                const ImVec2 axisEnd(c.x + rMaj * std::sin(rot), c.y - rMaj * std::cos(rot));
+                dl->AddLine(c, axisEnd, ellipseCol, 1.0f);
+            }
+        }
+        dl->AddCircleFilled(c, isHovered ? 4.0f : 3.0f, ptCol);
+        char label[16];
+        std::snprintf(label, sizeof(label), "%d", p.id);
+        dl->AddText(ImVec2(c.x + 5.0f, c.y - 7.0f), ptCol, label);
+    }
+
+    if (hoverPt != nullptr) {
+        if (hoverPt->hasEllipse && (hoverPt->semiMajorFt > 1e-9 || hoverPt->semiMinorFt > 1e-9)) {
+            ImGui::SetTooltip("Station %d \xe2\x80\x94 1-sigma error ellipse\nSemi-major: %.4f ft\nSemi-minor: %.4f ft\nAzimuth: %.1f\xc2\xb0",
+                              hoverPt->id, hoverPt->semiMajorFt, hoverPt->semiMinorFt, hoverPt->azimuthDeg);
+        } else {
+            ImGui::SetTooltip("Station %d \xe2\x80\x94 no error ellipse (run the least-squares adjustment).",
+                              hoverPt->id);
+        }
+    }
+}
+
+// Lazily (re)computes cmd.traverseLsaResult the first time it's needed this
+// session — the same guard DrawTraverseClosureWindow's own "recompute" lambda
+// uses, duplicated here (rather than shared) since it's a one-line cache check.
+void EnsureLsaComputed(AppCommandState& cmd) {
+    if (!cmd.traverseLsaComputed) {
+        cmd.traverseLsaResult = ComputeTraverseLeastSquares(cmd.traverseData, cmd.traverseLsaWeights);
+        cmd.traverseLsaComputed = true;
+    }
+}
+
+// ---- LSA Editor tab: files/summary/preview (left) | command editor (center,
+// primary) | output report (right) — a StarNet-PRO-style three-pane layout. ----
+// A thin draggable handle between two panels: click-drag moves *width by the
+// mouse's horizontal delta (clamped), and the cursor hints resizability on
+// hover even before a drag starts. ImGui has no built-in splitter widget, so
+// this is the standard manual pattern (an InvisibleButton read as a drag).
+// \p growsRight: true when dragging the handle rightward should grow *width
+// (the splitter sits on the panel's LEFT edge, e.g. the center/right divider,
+// where pulling left gives the right panel more room); false when dragging
+// leftward grows it (the splitter sits on the panel's RIGHT edge, e.g. the
+// left/center divider).
+static void DrawVerticalSplitter(const char* strId, float* width, float minW, float maxW, float height,
+                                 bool growsRight) {
+    ImGui::SameLine(0.f, 0.f);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));  // invisible until hovered/dragged.
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyle().Colors[ImGuiCol_SeparatorHovered]);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_SeparatorActive]);
+    ImGui::Button(strId, ImVec2(6.f, height));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    if (ImGui::IsItemActive()) {
+        const float dx = ImGui::GetIO().MouseDelta.x;
+        *width = std::clamp(*width + (growsRight ? dx : -dx), minW, maxW);
+    }
+    ImGui::SameLine(0.f, 0.f);
+}
+
+// Same idea as DrawVerticalSplitter, rotated 90°: a draggable handle between two
+// stacked sections (the LSA Editor left panel's Files/Summary/Preview), dragging
+// vertically to resize the section above it. Always grows downward (dragging the
+// handle down gives the section above it more height) — unlike the left/right
+// splitter there's no "panel on the far side" ambiguity to resolve.
+static void DrawHorizontalSplitter(const char* strId, float* height, float minH, float maxH, float width) {
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::GetStyle().Colors[ImGuiCol_SeparatorHovered]);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImGui::GetStyle().Colors[ImGuiCol_SeparatorActive]);
+    ImGui::Button(strId, ImVec2(width, 6.f));
+    ImGui::PopStyleColor(3);
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    if (ImGui::IsItemActive()) {
+        const float dy = ImGui::GetIO().MouseDelta.y;
+        *height = std::clamp(*height + dy, minH, maxH);
+    }
+}
+
+// GoSurvey's own "Hazel" neutral ladder (CadUi.cpp's dark theme — see its
+// `seam/ground/titlebar/surface/raised/hover` comments) reused verbatim by
+// hex value here, since those locals are file-static in CadUi.cpp and not
+// exported. Darkest to lightest: seam < field < ground < titlebar < surface
+// < raised < hover. Reusing the app's real steps (rather than inventing a
+// separate near-black palette) is what makes the LSA Editor's chrome actually
+// match the rest of GoSurvey instead of just looking like a different app.
+// The LSA Editor runs one single, cohesive light theme across the WHOLE
+// window — menu bar, toolbar, tab strip, both side panels, the editor, and
+// the report — matching STAR*NET-PRO's own look (its entire app is one light
+// Windows-classic palette, not a mix of dark chrome around light content).
+// Pushed before Begin() so it also covers colors Begin() itself samples
+// immediately (WindowBg, TitleBg, Border), and popped after every exit from
+// DrawTraverseEditorPanel. Returns the number of colors pushed.
+int PushLsaLightTheme() {
+    struct C { ImGuiCol idx{}; ImVec4 col; };
+    static const C kColors[] = {
+        {ImGuiCol_Text,                 ImVec4(0.09f, 0.09f, 0.10f, 1.00f)},
+        {ImGuiCol_TextDisabled,         ImVec4(0.50f, 0.50f, 0.52f, 1.00f)},
+        {ImGuiCol_WindowBg,             ImVec4(0.94f, 0.94f, 0.95f, 1.00f)},
+        {ImGuiCol_ChildBg,              ImVec4(0.97f, 0.97f, 0.98f, 1.00f)},
+        {ImGuiCol_PopupBg,              ImVec4(0.98f, 0.98f, 0.99f, 1.00f)},
+        {ImGuiCol_Border,               ImVec4(0.78f, 0.78f, 0.80f, 1.00f)},
+        {ImGuiCol_FrameBg,              ImVec4(1.00f, 1.00f, 1.00f, 1.00f)},
+        {ImGuiCol_FrameBgHovered,       ImVec4(0.90f, 0.93f, 0.99f, 1.00f)},
+        {ImGuiCol_FrameBgActive,        ImVec4(0.83f, 0.88f, 0.98f, 1.00f)},
+        {ImGuiCol_TitleBg,              ImVec4(0.88f, 0.88f, 0.90f, 1.00f)},
+        {ImGuiCol_TitleBgActive,        ImVec4(0.82f, 0.85f, 0.92f, 1.00f)},
+        {ImGuiCol_TitleBgCollapsed,     ImVec4(0.90f, 0.90f, 0.91f, 1.00f)},
+        {ImGuiCol_MenuBarBg,            ImVec4(0.90f, 0.90f, 0.91f, 1.00f)},
+        {ImGuiCol_ScrollbarBg,          ImVec4(0.91f, 0.91f, 0.92f, 1.00f)},
+        {ImGuiCol_ScrollbarGrab,        ImVec4(0.75f, 0.75f, 0.77f, 1.00f)},
+        {ImGuiCol_ScrollbarGrabHovered, ImVec4(0.65f, 0.65f, 0.68f, 1.00f)},
+        {ImGuiCol_ScrollbarGrabActive,  ImVec4(0.55f, 0.55f, 0.58f, 1.00f)},
+        {ImGuiCol_CheckMark,            ImVec4(0.17f, 0.45f, 0.85f, 1.00f)},
+        {ImGuiCol_SliderGrab,           ImVec4(0.26f, 0.55f, 0.90f, 1.00f)},
+        {ImGuiCol_SliderGrabActive,     ImVec4(0.17f, 0.45f, 0.85f, 1.00f)},
+        {ImGuiCol_Button,               ImVec4(0.89f, 0.89f, 0.91f, 1.00f)},
+        {ImGuiCol_ButtonHovered,        ImVec4(0.80f, 0.86f, 0.98f, 1.00f)},
+        {ImGuiCol_ButtonActive,         ImVec4(0.70f, 0.79f, 0.96f, 1.00f)},
+        {ImGuiCol_Header,               ImVec4(0.82f, 0.87f, 0.98f, 1.00f)},
+        {ImGuiCol_HeaderHovered,        ImVec4(0.75f, 0.83f, 0.98f, 1.00f)},
+        {ImGuiCol_HeaderActive,         ImVec4(0.67f, 0.78f, 0.97f, 1.00f)},
+        {ImGuiCol_Separator,            ImVec4(0.78f, 0.78f, 0.80f, 1.00f)},
+        {ImGuiCol_SeparatorHovered,     ImVec4(0.40f, 0.60f, 0.92f, 1.00f)},
+        {ImGuiCol_SeparatorActive,      ImVec4(0.26f, 0.50f, 0.90f, 1.00f)},
+        {ImGuiCol_ResizeGrip,           ImVec4(0.60f, 0.70f, 0.95f, 0.40f)},
+        {ImGuiCol_ResizeGripHovered,    ImVec4(0.45f, 0.60f, 0.93f, 0.70f)},
+        {ImGuiCol_ResizeGripActive,     ImVec4(0.26f, 0.50f, 0.90f, 0.90f)},
+        {ImGuiCol_Tab,                  ImVec4(0.87f, 0.87f, 0.89f, 1.00f)},
+        {ImGuiCol_TabHovered,           ImVec4(0.80f, 0.86f, 0.98f, 1.00f)},
+        {ImGuiCol_TabActive,            ImVec4(0.95f, 0.95f, 0.96f, 1.00f)},
+        {ImGuiCol_TabUnfocused,         ImVec4(0.87f, 0.87f, 0.89f, 1.00f)},
+        {ImGuiCol_TabUnfocusedActive,   ImVec4(0.91f, 0.91f, 0.92f, 1.00f)},
+        {ImGuiCol_TableHeaderBg,        ImVec4(0.87f, 0.87f, 0.89f, 1.00f)},
+        {ImGuiCol_TableBorderStrong,    ImVec4(0.72f, 0.72f, 0.75f, 1.00f)},
+        {ImGuiCol_TableBorderLight,     ImVec4(0.83f, 0.83f, 0.85f, 1.00f)},
+        {ImGuiCol_TableRowBg,           ImVec4(0.97f, 0.97f, 0.98f, 1.00f)},
+        {ImGuiCol_TableRowBgAlt,        ImVec4(0.93f, 0.93f, 0.95f, 1.00f)},
+    };
+    for (const C& c : kColors) ImGui::PushStyleColor(c.idx, c.col);
+    return static_cast<int>(sizeof(kColors) / sizeof(kColors[0]));
+}
+
+void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
+    TraverseData& td = cmd.traverseData;
+    const float panelH = ImGui::GetContentRegionAvail().y;
+    // Persist across frames (and the splitters below mutate these directly) —
+    // one LSA Editor window exists at a time, so function statics are fine,
+    // same idiom as the Command tab's own scroll-position statics. Defaults are
+    // derived from the CURRENT window size the first time this draws, as
+    // fractions of it (not fixed pixel widths), so they land at the same
+    // proportions regardless of what size the window happens to be the first
+    // time it opens — a fixed-pixel default looked right only at the one window
+    // size it was measured against and collapsed the right panel at any other.
+    static bool s_sizesInit = false;
+    static float s_leftW = 0.f;
+    static float s_rightW = 0.f;
+    static float s_filesH = 0.f;
+    static float s_summaryH = 0.f;
+    if (!s_sizesInit) {
+        const float totalW = ImGui::GetContentRegionAvail().x;
+        s_leftW = 0.1725f * totalW;
+        s_rightW = 0.2035f * totalW;
+        // Fractions of the left panel's own content height (Files : Summary :
+        // Preview ~= 38% : 29% : 33%, measured off the reference layout).
+        s_filesH = 0.379f * panelH;
+        s_summaryH = 0.287f * panelH;
+        s_sizesInit = true;
+    }
+    const float minPanelW = 160.f;
+    const float splitterW = 6.f * 2.f;  // two splitters, each reserved from the center.
+    const float maxSideW = std::max(minPanelW, ImGui::GetContentRegionAvail().x - minPanelW - splitterW);
+    s_leftW = std::clamp(s_leftW, minPanelW, maxSideW);
+    s_rightW = std::clamp(s_rightW, minPanelW, maxSideW - s_leftW + minPanelW);
+    const float leftW = s_leftW;
+    const float rightW = s_rightW;
+
+    // ---------------------------------------------------------------- Left --
+    // Files/Summary/Preview are independently resizable (issue #848 follow-up) —
+    // each lives in its own fixed-height child with a drag handle below it;
+    // Preview (the plot) takes whatever height is left.
+    const float minSectionH = 32.f;
+    const float minPreviewH = 80.f;
+    const float splitterH = 6.f * 2.f;  // two horizontal splitters.
+    const float maxSectionH = std::max(minSectionH, panelH - minSectionH - minPreviewH - splitterH);
+    s_filesH = std::clamp(s_filesH, minSectionH, maxSectionH);
+    s_summaryH = std::clamp(s_summaryH, minSectionH, maxSectionH - s_filesH + minSectionH);
+
+    if (ImGui::BeginChild("##lsa_left", ImVec2(leftW, panelH), ImGuiChildFlags_Borders)) {
+        const float sectionW = ImGui::GetContentRegionAvail().x;
+
+        if (ImGui::BeginChild("##lsa_files", ImVec2(0.f, s_filesH))) {
+            ImGui::SeparatorText("Files");
+            // Import/Save/Load now live in the File menu above — this panel is too
+            // narrow for that whole button row (REQ-387-style floating window is
+            // often sized like a document window, not a wide toolbar strip).
+            if (!cmd.traverseFilePath.empty()) ImGui::TextWrapped(".gstrav: %s", cmd.traverseFilePath.c_str());
+            else ImGui::TextDisabled(".gstrav: (unsaved)");
+            if (!cmd.traverseGodatFilePath.empty()) ImGui::TextWrapped(".godat: %s", cmd.traverseGodatFilePath.c_str());
+            else ImGui::TextDisabled(".godat: (unsaved)");
+        }
+        ImGui::EndChild();
+        DrawHorizontalSplitter("##lsa_split_files", &s_filesH, minSectionH, maxSectionH, sectionW);
+
+        if (ImGui::BeginChild("##lsa_summary", ImVec2(0.f, s_summaryH))) {
+            ImGui::SeparatorText("Summary");
+            if (td.closureValid) {
+                ImGui::Text("Stations: %d", static_cast<int>(td.legs.size()) + 1);
+                ImGui::Text("Misclosure: %.4f", td.closureLinear);
+                if (td.closureLinear > 1e-6)
+                    ImGui::Text("Precision: 1:%.0f", td.closurePrecision);
+                else
+                    ImGui::TextUnformatted("Precision: perfect");
+            } else {
+                ImGui::Text("Stations: %d", static_cast<int>(td.legs.size()) + 1);
+                ImGui::TextDisabled("No closure (open traverse or not computed).");
+            }
+            EnsureLsaComputed(cmd);
+            if (cmd.traverseLsaResult.ok) {
+                ImGui::Text("Std dev of unit weight: %.4f", cmd.traverseLsaResult.refStdDev);
+                ImGui::Text("Redundancy: %d", cmd.traverseLsaResult.redundancy);
+            } else {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "LSA: %s", cmd.traverseLsaResult.message.c_str());
+            }
+        }
+        ImGui::EndChild();
+        DrawHorizontalSplitter("##lsa_split_summary", &s_summaryH, minSectionH,
+                               maxSectionH - s_filesH + minSectionH, sectionW);
+
+        ImGui::SeparatorText("Preview");
+        ImGui::TextDisabled("Points, legs, and error ellipses (computed)");
+        if (ImGui::BeginChild("##lsa_preview", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders)) {
+            DrawLsaStationPlot(cmd);
+        }
+        ImGui::EndChild();
+    }
+    ImGui::EndChild();
+
+    DrawVerticalSplitter("##lsa_split_l", &s_leftW, minPanelW, maxSideW, panelH, /*growsRight=*/true);
+
+    // -------------------------------------------------------------- Center --
+    // The whole window is one uniform light theme now (matching STAR*NET-PRO's
+    // own cohesive light chrome) — no separate per-panel theme push here.
+    if (ImGui::BeginChild("##lsa_center", ImVec2(-(rightW + 6.f), panelH), ImGuiChildFlags_Borders)) {
+        DrawTraverseCommandTab(cmd, log);
+    }
+    ImGui::EndChild();
+
+    DrawVerticalSplitter("##lsa_split_r", &s_rightW, minPanelW, maxSideW - s_leftW + minPanelW, panelH,
+                         /*growsRight=*/false);
+
+    // --------------------------------------------------------------- Right --
+    if (ImGui::BeginChild("##lsa_right", ImVec2(rightW, panelH), ImGuiChildFlags_Borders)) {
+        ImGui::SeparatorText("Output Report");
+        EnsureLsaComputed(cmd);
+        const LsaResult& r = cmd.traverseLsaResult;
+        // STAR*NET-PRO's Output panel is itself sub-tabbed (Listings / Errors /
+        // Coordinates / Lat-Longs / Ground / Dump, tabs along the bottom — ImGui
+        // tab bars only place tabs at the top of their own region, so this is the
+        // same set of pages with the tab strip on top instead). Lat/Longs and
+        // Ground aren't here: both need project-wide geodetic/ground-scale math
+        // GoSurvey doesn't have yet (only a single GPS-vector origin, not a full
+        // project datum) — a real gap, not something to fake with placeholder
+        // numbers. Dump (STAR*NET's raw internal adjustment-matrix dump) isn't
+        // something GoSurvey's solver currently exposes either.
+        if (ImGui::BeginChild("##lsa_report_body", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders)) {
+            ImGui::PushFont(FontReg::Resolve("Consolas", false, false));
+            if (ImGui::BeginTabBar("##lsa_report_tabs")) {
+                if (ImGui::BeginTabItem("Listings")) {
+                    if (!r.ok) {
+                        ImGui::TextColored(ImVec4(0.80f, 0.25f, 0.10f, 1.f), "Least squares unavailable:");
+                        ImGui::TextWrapped("%s", r.message.c_str());
+                    } else {
+                        std::string rpt;
+                        rpt += "Observations : " + std::to_string(r.observations) + "\n";
+                        rpt += "Unknowns     : " + std::to_string(r.unknowns) + "\n";
+                        rpt += "Redundancy   : " + std::to_string(r.redundancy) + "\n";
+                        rpt += "Iterations   : " + std::to_string(r.iterations) + "\n";
+                        char buf[64];
+                        std::snprintf(buf, sizeof(buf), "%.4f", r.refStdDev);
+                        rpt += std::string("Std dev unit wt : ") + buf + "\n";
+                        std::snprintf(buf, sizeof(buf), "%.6f", r.adjClosureLinear);
+                        rpt += std::string("Adj. misclosure : ") + buf + "\n";
+                        if (r.usedGpsVectors) {
+                            rpt += "GPS vectors used: " + std::to_string(r.gpsVectorsUsed);
+                            if (r.gpsVectorsSkipped > 0) rpt += " (skipped " + std::to_string(r.gpsVectorsSkipped) + ")";
+                            rpt += "\n";
+                        }
+                        rpt += "\n--- Residuals ---\n";
+                        rpt += "From  To   Angle\"    Dist(ft)";
+                        if (r.usedGpsVectors) rpt += "   Vert(ft)";
+                        rpt += "\n";
+                        for (const LsaResidual& v : r.residuals) {
+                            std::snprintf(buf, sizeof(buf), "%-5d %-4d %+8.2f  %+8.4f", v.fromStationId,
+                                          v.toStationId, v.angleResidualSec, v.distResidualFt);
+                            rpt += buf;
+                            if (r.usedGpsVectors) {
+                                std::snprintf(buf, sizeof(buf), "  %+8.4f", v.vertResidualFt);
+                                rpt += buf;
+                            }
+                            rpt += "\n";
+                        }
+                        if (!r.gpsResiduals.empty()) {
+                            rpt += "\n--- GPS Vector Residuals (local ENU) ---\n";
+                            rpt += "From  To   East(ft)  North(ft)  Up(ft)\n";
+                            for (const LsaGpsResidual& gv : r.gpsResiduals) {
+                                std::snprintf(buf, sizeof(buf), "%-5d %-4d %+8.4f  %+8.4f  %+8.4f",
+                                              gv.fromStationId, gv.toStationId, gv.eastResidualFt,
+                                              gv.northResidualFt, gv.upResidualFt);
+                                rpt += buf;
+                                rpt += "\n";
+                            }
+                        }
+                        ImGui::TextUnformatted(rpt.c_str());
+                    }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Errors")) {
+                    bool any = false;
+                    if (!cmd.traverseCommandError.empty()) {
+                        ImGui::TextColored(ImVec4(0.80f, 0.25f, 0.10f, 1.f), "Command text:");
+                        ImGui::TextWrapped("%s", cmd.traverseCommandError.c_str());
+                        any = true;
+                    }
+                    if (!r.ok) {
+                        if (any) ImGui::Spacing();
+                        ImGui::TextColored(ImVec4(0.80f, 0.25f, 0.10f, 1.f), "Least squares:");
+                        ImGui::TextWrapped("%s", r.message.c_str());
+                        any = true;
+                    }
+                    if (!any) ImGui::TextDisabled("No errors.");
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Coordinates")) {
+                    if (ImGui::BeginTable("##lsa_report_coords", 4,
+                                          ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders)) {
+                        ImGui::TableSetupColumn("Pt", ImGuiTableColumnFlags_WidthFixed, 44.f);
+                        ImGui::TableSetupColumn("Easting");
+                        ImGui::TableSetupColumn("Northing");
+                        ImGui::TableSetupColumn("Elev");
+                        ImGui::TableHeadersRow();
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn(); ImGui::Text("%d", td.startStationId);
+                        ImGui::TableNextColumn(); ImGui::Text("%.4f", td.startEasting);
+                        ImGui::TableNextColumn(); ImGui::Text("%.4f", td.startNorthing);
+                        ImGui::TableNextColumn(); ImGui::Text("%.4f", td.startElevation);
+                        for (const TraverseLeg& leg : td.legs) {
+                            ImGui::TableNextRow();
+                            ImGui::TableNextColumn(); ImGui::Text("%d", leg.stationId);
+                            ImGui::TableNextColumn();
+                            if (leg.computed) ImGui::Text("%.4f", leg.computedEasting); else ImGui::TextDisabled("\xe2\x80\x94");
+                            ImGui::TableNextColumn();
+                            if (leg.computed) ImGui::Text("%.4f", leg.computedNorthing); else ImGui::TextDisabled("\xe2\x80\x94");
+                            ImGui::TableNextColumn();
+                            if (leg.computed) ImGui::Text("%.4f", leg.computedElevation); else ImGui::TextDisabled("\xe2\x80\x94");
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+            ImGui::PopFont();
+        }
+        ImGui::EndChild();
+    }
+    ImGui::EndChild();
+}
+
+} // namespace
+
+
+void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log) {
+    if (!cmd.showTraverseEditorWindow)
+        return;
+
+    // REQ-401: resolve the scale factor every frame (cheap — one CS-MAP lookup, only while the
+    // option is on) so a Drawing Settings change made elsewhere is picked up without a stale
+    // cached factor. Only forces a recompute when the resolved number actually changes.
+    TraverseData& tdPre = cmd.traverseData;
+    std::string scaleFactorError;
+    if (tdPre.applyScaleFactor) {
+        double factor = 1.0;
+        scaleFactorError = ResolveTraverseScaleFactor(cmd, tdPre.scaleFactorKind, &factor);
+        const double resolved = scaleFactorError.empty() ? factor : 1.0;
+        if (resolved != tdPre.scaleFactor) {
+            tdPre.scaleFactor = resolved;
+            cmd.traverseDataDirty = true;
+        }
+    }
+
+    // Recompute when inputs change.
+    if (cmd.traverseDataDirty) {
+        ComputeTraverse(cmd.traverseData);
+        cmd.traverseDataDirty = false;
+        cmd.traverseLsaComputed = false;  // inputs changed -> adjustment is stale.
+        // #845 Phase A: the data actually changed (from the Form tab, an import, or a
+        // prior Apply) — regenerate the Command tab's text next time it's drawn. Merely
+        // switching tabs must NOT hit this, or unapplied typed text would be discarded.
+        cmd.traverseCommandTextLoaded = false;
+    }
+
+    // The closure window is launched from this editor; draw it here so it
+    // survives the editor being collapsed.
+    DrawTraverseClosureWindow(cmd, log);
+
+    ImGui::SetNextWindowSize(ImVec2(1080, 580), ImGuiCond_FirstUseEver);
+    bool open = cmd.showTraverseEditorWindow;
+    // Its own OS window, same technique as the PDF viewer (REQ-387): NoAutoMerge gives
+    // it a real platform viewport instead of folding it into the main window, with the
+    // operating system's own minimize/maximize/close and a taskbar entry. Dragging its
+    // tab onto a dock slot docks it back into GoSurvey's layout like any other panel.
+    // ImGui only knows whether it actually got an OS-framed viewport AFTER Begin() —
+    // s_osFramed is last frame's answer, used to decide this frame's title-bar flag
+    // (same one-frame-behind idiom PdfViewerWindow.cpp uses per-viewer).
+    static bool s_osFramed = false;
+    ImGuiWindowClass travClass;
+    travClass.ViewportFlagsOverrideSet = ImGuiViewportFlags_NoAutoMerge;
+    travClass.ViewportFlagsOverrideClear = ImGuiViewportFlags_NoDecoration | ImGuiViewportFlags_NoTaskBarIcon;
+    ImGui::SetNextWindowClass(&travClass);
+    const int chromeThemeN = PushLsaLightTheme();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
+    // In its own OS window the operating system draws the title bar and close button, so
+    // ImGui draws no second one. Docked, the tab is the only handle there is, so it comes
+    // back. To dock a floating editor, drag it by any empty part of its tab bar.
+    // NoMove alongside NoTitleBar: without a real ImGui title bar, Dear ImGui falls back to
+    // "click any empty background to move the window" (imgui.cpp's StartMouseMovingWindow
+    // skip-check only cancels that for a windowed title bar or a docked window) — which
+    // means dragging on what looks like a panel border inside the three-pane layout below
+    // was actually dragging the whole OS window. The real OS title bar already lets you
+    // move it once it's floating, so ImGui's own background-drag fallback is just noise here.
+    const ImGuiWindowFlags baseFlags = ImGuiWindowFlags_MenuBar;
+    const bool shown = ImGui::Begin("LSA Editor###TraverseEditor", &open,
+                                    baseFlags | (s_osFramed ? (ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove)
+                                                            : ImGuiWindowFlags_None));
+    ImGui::PopStyleVar();
+    {
+        ImGuiWindow* self = ImGui::GetCurrentWindow();
+        s_osFramed = self->ViewportOwned && !self->DockIsActive && self->Viewport != nullptr &&
+                    (self->Viewport->Flags & ImGuiViewportFlags_NoDecoration) == 0;
+    }
+    if (!shown) {
+        cmd.showTraverseEditorWindow = open;
+        ImGui::End();
+        ImGui::PopStyleColor(chromeThemeN);
+        return;
+    }
+    cmd.showTraverseEditorWindow = open;
+
+    TraverseData& td = cmd.traverseData;
+
+    DrawTraverseMenuBar(cmd, log);
+    // STAR*NET-PRO-style toolbar strip, same light chrome as everything else —
+    // a thin border is what separates it from the menu bar, not a color change.
+    if (ImGui::BeginChild("##lsa_toolbar", ImVec2(0.f, ImGui::GetFrameHeightWithSpacing() + 4.f),
+                          ImGuiChildFlags_Borders)) {
+        DrawTraverseToolbar(cmd, log);
+    }
+    ImGui::EndChild();
+
+    // GitHub issue #845 (Phase A) — "Editor" (primary: the StarNet-PRO-style three-pane
+    // layout, command editor in the middle) vs. "Table View" (secondary, form/table
+    // editing — kept for now, may be removed later), two-way synced through the same
+    // traverseData/traverseLsaWeights.
+    if (!ImGui::BeginTabBar("traverse_view_tabs")) {
+        ImGui::End();
+        ImGui::PopStyleColor(chromeThemeN);
+        return;
+    }
+
+    if (ImGui::BeginTabItem("Editor")) {
+        DrawLsaEditorTab(cmd, log);
+        ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Table View")) {
+
+    DrawTraverseFileButtons(cmd, log);
 
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
@@ -1388,13 +2867,9 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     ItemHelpTooltip("Place all computed traverse stations as survey points in the drawing.\nUse View Points to review or edit them after committing.");
 
     ImGui::EndTabItem();
-    }  // Form tab
-
-    if (ImGui::BeginTabItem("Command")) {
-        DrawTraverseCommandTab(cmd, log);
-        ImGui::EndTabItem();
-    }
+    }  // Table View tab
 
     ImGui::EndTabBar();
     ImGui::End();
+    ImGui::PopStyleColor(chromeThemeN);
 }

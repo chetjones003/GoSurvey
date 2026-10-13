@@ -131,9 +131,95 @@ TEST_CASE("Least squares: adjustment drives misclosure to zero", "[lsa][REQ-015]
     CHECK(r.residuals[0].distResidualFt < 0.0);   // adjusted = observed + v < observed.
 }
 
+// ------------------------------------------------- open traverse (#848) --
+// Same geometry as MakeSquareLoop but stopping one leg short of closing: an
+// OPEN traverse tied to a known ENDPOINT instead of looping back to the
+// start. Three legs of a 100x100 square from (0,0) heading north with a 90°
+// turn each leg lands exactly on (E=0, N=100) — see MakeSquareLoop's own
+// worked geometry in its comment-free math (start bearing 0, HA 90 each leg).
+TraverseData MakeOpenSquareThreeLegs() {
+    TraverseData td;
+    td.startStationId  = 0;
+    td.startEasting     = 0.0;
+    td.startNorthing    = 0.0;
+    td.startBearingDeg  = 0.0;
+    td.hasStartBearing  = true;
+    td.isClosedLoop     = false;
+    td.endEasting       = 0.0;
+    td.endNorthing       = 100.0;
+    td.hasEndCoordinates = true;
+
+    auto addLeg = [&](int id, double haDeg, double dist) {
+        TraverseLeg leg;
+        leg.stationId    = id;
+        leg.hasHorizAngle = true; leg.horizAngleDeg = haDeg;
+        leg.hasHorizDist  = true; leg.horizDist     = dist;
+        td.legs.push_back(leg);
+    };
+    addLeg(1, 90.0, 100.0);
+    addLeg(2, 90.0, 100.0);
+    addLeg(3, 90.0, 100.0);  // lands on the known ENDPOINT, (0, 100).
+
+    ComputeTraverse(td);
+    return td;
+}
+
+TEST_CASE("Least squares: open traverse with a known ENDPOINT adjusts", "[lsa][REQ-017]") {
+    TraverseData td = MakeOpenSquareThreeLegs();
+
+    // ComputeTraverse's own (unadjusted) closure now compares against the
+    // ENDPOINT, not the start, for an open traverse.
+    REQUIRE(td.closureValid);
+    CHECK(td.closureLinear == Approx(0.0).margin(1e-6));
+
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(r.observations == 6);
+    CHECK(r.unknowns == 4);     // 2 free interior stations (1, 2) x 2D -- same shape as a closed loop.
+    CHECK(r.redundancy == 2);
+    CHECK(r.adjClosureLinear == Approx(0.0).margin(1e-6));
+    for (const LsaResidual& v : r.residuals) {
+        CHECK(v.distResidualFt == Approx(0.0).margin(1e-6));
+        CHECK(v.angleResidualSec == Approx(0.0).margin(1e-3));
+    }
+}
+
+TEST_CASE("Least squares: open traverse adjustment drives ENDPOINT misclosure to zero",
+         "[lsa][REQ-017]") {
+    TraverseData td = MakeOpenSquareThreeLegs();
+    td.legs[0].horizDist += 0.10;  // 0.10 ft long on leg 1, same perturbation as the closed-loop test.
+    ComputeTraverse(td);
+
+    REQUIRE(td.closureValid);
+    CHECK(td.closureLinear > 0.05);  // genuinely fails to land on the known ENDPOINT.
+
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(r.redundancy == 2);
+    CHECK(r.adjClosureLinear < 1e-3);
+    CHECK(r.refStdDev > 0.0);
+    CHECK(std::isfinite(r.refStdDev));
+}
+
+TEST_CASE("GSTC round-trips ENDPOINT for an open traverse", "[travcmd][REQ-017]") {
+    TraverseData td = MakeOpenSquareThreeLegs();
+    const std::string text = travcmd::Serialize(td, LsaWeights{});
+    CHECK(text.find("ENDPOINT 0.000000 100.000000 0.000000") != std::string::npos);
+    CHECK(text.find("LOOP OFF") != std::string::npos);
+
+    TraverseData parsed;
+    LsaWeights w;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, parsed, w, err));
+    CHECK(parsed.hasEndCoordinates);
+    CHECK(parsed.endEasting == Approx(0.0));
+    CHECK(parsed.endNorthing == Approx(100.0));
+    CHECK_FALSE(parsed.isClosedLoop);
+}
+
 // ---------------------------------------------------------------- REQ-017 --
 TEST_CASE("Least squares: insufficient/invalid input is surfaced", "[lsa][REQ-017]") {
-    SECTION("open traverse is rejected") {
+    SECTION("open traverse with no ENDPOINT is rejected") {
         TraverseData td = MakeSquareLoop();
         td.isClosedLoop = false;
         LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
@@ -2083,6 +2169,10 @@ TEST_CASE("JobXmlImport: distances and coordinates convert metres to feet", "[jo
 }
 
 TEST_CASE("JobXmlImport: a non-terrestrial (keyed-in) PointRecord is skipped, not rejected", "[jobxml][REQ-410]") {
+    // Two StationRecords (issue #848 follow-up: a leg is a sight from one
+    // setup to the very next one, so at least two setups are needed for any
+    // leg to exist at all) — the thing actually under test is that the
+    // keyed-in CTRL1 record is skipped rather than rejected.
     const std::string fb =
         "<PointRecord ID=\"KI1\" TimeStamp=\"2026-01-01T08:00:00\">"
         "<Name>CTRL1</Name><Grid><North>100</North><East>100</East><Elevation>0</Elevation></Grid>"
@@ -2094,7 +2184,8 @@ TEST_CASE("JobXmlImport: a non-terrestrial (keyed-in) PointRecord is skipped, no
         "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
         "<Name>2</Name><StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
         "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
-        "<EDMDistance>10</EDMDistance></Circle></PointRecord>";
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>"
+        "<StationRecord ID=\"ST2\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>2</StationName></StationRecord>";
     const std::string path = WriteJobXmlFixture("keyedin.jxl", WrapJobXml(fb));
 
     TraverseData td;
@@ -2124,6 +2215,11 @@ TEST_CASE("JobXmlImport: a GPS/WGS84 PointRecord is a defined gap", "[jobxml][RE
 }
 
 TEST_CASE("JobXmlImport: a backsight that doesn't match the traverse chain is rejected", "[jobxml][REQ-410]") {
+    // "3" must itself be promoted to a backbone station (a 3rd StationRecord)
+    // for its backsight to be chain-checked at all — the setup SEQUENCE is what
+    // defines the chain now (issue #848 follow-up: Trimble's own real exports
+    // mix side/check shots into every setup, so "every PointRecord is a leg"
+    // no longer holds; only a sight from one setup to the very next one is).
     const std::string fb =
         "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
         "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
@@ -2140,7 +2236,8 @@ TEST_CASE("JobXmlImport: a backsight that doesn't match the traverse chain is re
         "<PointRecord ID=\"P2\" TimeStamp=\"2026-01-01T08:00:00\">"
         "<Name>3</Name><StationID>ST2</StationID><BackBearingID>BB2</BackBearingID>"
         "<Circle><HorizontalCircle>90</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
-        "<EDMDistance>10</EDMDistance></Circle></PointRecord>";
+        "<EDMDistance>10</EDMDistance></Circle></PointRecord>"
+        "<StationRecord ID=\"ST3\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>3</StationName></StationRecord>";
     const std::string path = WriteJobXmlFixture("wrong_backsight.jxl", WrapJobXml(fb));
 
     TraverseData td;
@@ -2199,6 +2296,39 @@ TEST_CASE("JobXmlImport: not a JobXML file is reported", "[jobxml][REQ-410]") {
     std::string err;
     CHECK_FALSE(JobXmlImport(path.c_str(), td, err));
     CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("JobXmlImport: an MTA reading is already a turned angle, not an azimuth needing the "
+         "backsight subtracted again", "[jobxml][REQ-410]") {
+    // Regression for a real-world bug (issue #848 follow-up): a raw <Circle>
+    // face reading in a SetHorizontalCircleMode=SetToAzimuth job IS azimuth-
+    // calibrated and needs the backsight's Face1HorizontalCircle subtracted to
+    // get a turned angle (every other test here has Face1HorizontalCircle=0,
+    // which can't catch a bug in that subtraction) -- but Trimble's own
+    // multi-round MTA average is computed by reducing each round to a turned
+    // angle FIRST, so <MTA><HorizontalCircle> already IS the turned angle.
+    // Subtracting a non-zero backsight circle from it a second time silently
+    // rotated every leg after the first by that station's own backsight
+    // azimuth. BB1's Face1HorizontalCircle=90 here (nonzero, unlike every
+    // other fixture in this file) specifically exercises that path.
+    const std::string fb =
+        "<StationRecord ID=\"ST1\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>1</StationName></StationRecord>"
+        "<BackBearingRecord ID=\"BB1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Station>1</Station><BackSight>0</BackSight><Face1HorizontalCircle>90</Face1HorizontalCircle>"
+        "</BackBearingRecord>"
+        "<PointRecord ID=\"P1\" TimeStamp=\"2026-01-01T08:00:00\">"
+        "<Name>2</Name><Code>TH</Code><Method>MeanTurnedAngle</Method><Classification>MTA</Classification>"
+        "<StationID>ST1</StationID><BackBearingID>BB1</BackBearingID>"
+        "<MTA><HorizontalCircle>50</HorizontalCircle><VerticalCircle>90</VerticalCircle>"
+        "<EDMDistance>10</EDMDistance></MTA></PointRecord>"
+        "<StationRecord ID=\"ST2\" TimeStamp=\"2026-01-01T08:00:00\"><StationName>2</StationName></StationRecord>";
+    const std::string path = WriteJobXmlFixture("mta_turned_angle.jxl", WrapJobXml(fb));
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(JobXmlImport(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].horizAngleDeg == Approx(50.0));
 }
 
 TEST_CASE("JobXmlImport: a missing file fails with a reason", "[jobxml][REQ-410]") {
