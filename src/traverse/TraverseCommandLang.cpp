@@ -101,6 +101,26 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
                 << " " << Fmt(leg.tsWeights.sigmaDistConstFt, 4)
                 << " " << Fmt(leg.tsWeights.sigmaDistPpm, 3) << "\n";
     }
+
+    for (const TraverseSideShot& ss : td.sideShots) {
+        out << "\nSTN " << ss.atStationId << " " << ss.stationId << " "
+            << (ss.isCheckShot ? "CHECK" : "SIDE");
+        if (ss.isCheckShot && ss.hasKnownCoords)
+            out << " " << Fmt(ss.knownEasting) << " " << Fmt(ss.knownNorthing);
+        out << "\n";
+
+        if (ss.hasHorizAngle)
+            out << "HANG REF " << ss.atStationId << " " << ss.stationId << " " << Fmt(ss.horizAngleDeg) << "\n";
+        if (ss.hasHorizDist)
+            out << "HDIST " << ss.atStationId << " " << ss.stationId << " " << Fmt(ss.horizDist) << "\n";
+        if (ss.hasSlopeDist)
+            out << "SDIST " << ss.atStationId << " " << ss.stationId << " " << Fmt(ss.slopeDist) << "\n";
+        if (ss.hasVertAngle)
+            out << "VANG " << ss.atStationId << " " << ss.stationId << " " << Fmt(ss.vertAngleDeg)
+                << " " << (ss.isZenithAngle ? "ZENITH" : "ELEV") << "\n";
+        if (!ss.description.empty())
+            out << "DESC " << ss.atStationId << " " << ss.stationId << " " << ss.description << "\n";
+    }
     return out.str();
 }
 
@@ -112,6 +132,8 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
 
     std::vector<TraverseLeg> newLegs;
     std::unordered_map<int, size_t> toIndex;  // TO station -> index in newLegs
+    std::vector<TraverseSideShot> newSideShots;
+    std::unordered_map<int, size_t> sideIndex;  // TO (the shot's own point) -> index in newSideShots
 
     // The station occupied for the leg at newLegs[idx] — the previous leg's TO,
     // or the start station for the first leg.
@@ -178,17 +200,45 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             int at, to;
             if (toks.size() < 3 || !ParseIntTok(toks[1], &at) || !ParseIntTok(toks[2], &to))
                 return fail("expected STN <at> <to>");
-            if (toIndex.count(to))
+            if (toIndex.count(to) || sideIndex.count(to))
                 return fail("station " + std::to_string(to) + " already declared with STN");
-            const int expected = expectedAt(newLegs.size());
-            if (at != expected)
-                return fail("AT " + std::to_string(at) + " doesn't continue the traverse chain (expected " +
-                            std::to_string(expected) + ")");
-            TraverseLeg leg;
-            leg.stationId = to;
-            leg.isZenithAngle = true;
-            newLegs.push_back(std::move(leg));
-            toIndex[to] = newLegs.size() - 1;
+
+            const std::string kind = (toks.size() >= 4) ? ToUpper(toks[3]) : "";
+            if (kind == "SIDE" || kind == "CHECK") {
+                bool atIsOccupied = (at == newTd.startStationId);
+                for (const TraverseLeg& l : newLegs)
+                    if (l.stationId == at) { atIsOccupied = true; break; }
+                if (!atIsOccupied)
+                    return fail("AT " + std::to_string(at) + " is not an already-occupied station");
+
+                TraverseSideShot ss;
+                ss.atStationId = at;
+                ss.stationId = to;
+                ss.isZenithAngle = true;
+                ss.isCheckShot = (kind == "CHECK");
+                if (ss.isCheckShot && toks.size() >= 6) {
+                    double ke, kn;
+                    if (!ParseDoubleTok(toks[4], &ke) || !ParseDoubleTok(toks[5], &kn))
+                        return fail("expected STN <at> <to> CHECK [known-e known-n]");
+                    ss.knownEasting = ke;
+                    ss.knownNorthing = kn;
+                    ss.hasKnownCoords = true;
+                }
+                newSideShots.push_back(std::move(ss));
+                sideIndex[to] = newSideShots.size() - 1;
+            } else if (!kind.empty()) {
+                return fail("STN: unknown modifier \"" + toks[3] + "\" (expected SIDE or CHECK)");
+            } else {
+                const int expected = expectedAt(newLegs.size());
+                if (at != expected)
+                    return fail("AT " + std::to_string(at) + " doesn't continue the traverse chain (expected " +
+                                std::to_string(expected) + ")");
+                TraverseLeg leg;
+                leg.stationId = to;
+                leg.isZenithAngle = true;
+                newLegs.push_back(std::move(leg));
+                toIndex[to] = newLegs.size() - 1;
+            }
         } else if (directive == "HANG" || directive == "HDIST" || directive == "SDIST" ||
                    directive == "VANG" || directive == "DESC" || directive == "PRISM" ||
                    directive == "POLE" || directive == "TSERR") {
@@ -202,55 +252,86 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             if (!ParseIntTok(toks[atPos], &at) || !ParseIntTok(toks[toPos], &to))
                 return fail(directive + ": <at>/<to> must be integers");
 
-            const auto it = toIndex.find(to);
-            if (it == toIndex.end())
-                return fail("station " + std::to_string(to) + " not declared (use STN " +
-                            std::to_string(at) + " " + std::to_string(to) + " first)");
-            const size_t idx = it->second;
-            if (at != expectedAt(idx))
-                return fail("AT " + std::to_string(at) + " doesn't match station " +
-                            std::to_string(expectedAt(idx)) + " occupied for the leg to station " +
-                            std::to_string(to));
+            TraverseLeg* legPtr = nullptr;
+            TraverseSideShot* sidePtr = nullptr;
+            size_t legIdx = 0;
+            const auto itLeg = toIndex.find(to);
+            if (itLeg != toIndex.end()) {
+                legIdx = itLeg->second;
+                legPtr = &newLegs[legIdx];
+                if (at != expectedAt(legIdx))
+                    return fail("AT " + std::to_string(at) + " doesn't match station " +
+                                std::to_string(expectedAt(legIdx)) + " occupied for the leg to station " +
+                                std::to_string(to));
+            } else {
+                const auto itSide = sideIndex.find(to);
+                if (itSide == sideIndex.end())
+                    return fail("station " + std::to_string(to) + " not declared (use STN " +
+                                std::to_string(at) + " " + std::to_string(to) + " first)");
+                sidePtr = &newSideShots[itSide->second];
+                if (at != sidePtr->atStationId)
+                    return fail("AT " + std::to_string(at) + " doesn't match the station (" +
+                                std::to_string(sidePtr->atStationId) + ") this side/check shot was declared at");
+            }
 
-            TraverseLeg& leg = newLegs[idx];
+            if (directive == "PRISM" || directive == "POLE" || directive == "TSERR") {
+                if (sidePtr)
+                    return fail(directive + " does not apply to a side/check shot (no least-squares adjustment uses it)");
+            }
+
             if (directive == "HANG") {
-                // toks[1] is FROM: unconstrained for the first leg (no modeled backsight
-                // station — the literal REF is round-tripped there), otherwise must equal
-                // the station occupied by the previous leg.
-                if (idx > 0) {
+                // toks[1] is FROM: unconstrained for a side/check shot (no "previous leg")
+                // and for the first leg (no modeled backsight station — the literal REF is
+                // round-tripped there); otherwise must equal the station occupied by the
+                // previous leg.
+                if (legPtr && legIdx > 0) {
                     int from;
                     if (!ParseIntTok(toks[1], &from))
                         return fail("HANG: <from> must be an integer after the first leg");
-                    if (from != expectedAt(idx - 1))
+                    if (from != expectedAt(legIdx - 1))
                         return fail("FROM " + std::to_string(from) + " doesn't match station " +
-                                    std::to_string(expectedAt(idx - 1)) + " occupied for the previous leg");
+                                    std::to_string(expectedAt(legIdx - 1)) + " occupied for the previous leg");
                 }
                 double ang;
                 if (toks.size() < 5 || !ParseDoubleTok(toks[4], &ang))
                     return fail("expected HANG <from> <at> <to> <angle-deg>");
-                leg.horizAngleDeg = ang;
-                leg.hasHorizAngle = true;
-                leg.horizAngleBuf = Fmt(ang);
+                if (legPtr) {
+                    legPtr->horizAngleDeg = ang;
+                    legPtr->hasHorizAngle = true;
+                    legPtr->horizAngleBuf = Fmt(ang);
+                } else {
+                    sidePtr->horizAngleDeg = ang;
+                    sidePtr->hasHorizAngle = true;
+                    sidePtr->horizAngleBuf = Fmt(ang);
+                }
             } else if (directive == "HDIST") {
                 double dist;
                 if (toks.size() < 4 || !ParseDoubleTok(toks[3], &dist))
                     return fail("expected HDIST <at> <to> <dist>");
-                leg.horizDist = dist;
-                leg.hasHorizDist = (dist > 0.0);
+                if (legPtr) { legPtr->horizDist = dist; legPtr->hasHorizDist = (dist > 0.0); }
+                else { sidePtr->horizDist = dist; sidePtr->hasHorizDist = (dist > 0.0); }
             } else if (directive == "SDIST") {
                 double dist;
                 if (toks.size() < 4 || !ParseDoubleTok(toks[3], &dist))
                     return fail("expected SDIST <at> <to> <dist>");
-                leg.slopeDist = dist;
-                leg.hasSlopeDist = (dist > 0.0);
+                if (legPtr) { legPtr->slopeDist = dist; legPtr->hasSlopeDist = (dist > 0.0); }
+                else { sidePtr->slopeDist = dist; sidePtr->hasSlopeDist = (dist > 0.0); }
             } else if (directive == "VANG") {
                 double ang;
                 if (toks.size() < 4 || !ParseDoubleTok(toks[3], &ang))
                     return fail("expected VANG <at> <to> <angle-deg> [ZENITH|ELEV]");
-                leg.vertAngleDeg = ang;
-                leg.hasVertAngle = true;
-                leg.vertAngleBuf = Fmt(ang);
-                leg.isZenithAngle = (toks.size() < 5) || (ToUpper(toks[4]) != "ELEV");
+                const bool zenith = (toks.size() < 5) || (ToUpper(toks[4]) != "ELEV");
+                if (legPtr) {
+                    legPtr->vertAngleDeg = ang;
+                    legPtr->hasVertAngle = true;
+                    legPtr->vertAngleBuf = Fmt(ang);
+                    legPtr->isZenithAngle = zenith;
+                } else {
+                    sidePtr->vertAngleDeg = ang;
+                    sidePtr->hasVertAngle = true;
+                    sidePtr->vertAngleBuf = Fmt(ang);
+                    sidePtr->isZenithAngle = zenith;
+                }
             } else if (directive == "DESC") {  // everything after the <to> token, verbatim.
                 auto isSpace = [](char c) { return std::isspace(static_cast<unsigned char>(c)); };
                 auto skipToken = [&](size_t p) -> size_t {
@@ -262,30 +343,32 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
                 pos = skipToken(pos);            // past <at>
                 pos = skipToken(pos);            // past <to>
                 while (pos < line.size() && isSpace(line[pos])) ++pos;
-                leg.description = (pos < line.size()) ? line.substr(pos) : "";
+                const std::string desc = (pos < line.size()) ? line.substr(pos) : "";
+                if (legPtr) legPtr->description = desc;
+                else sidePtr->description = desc;
             } else if (directive == "PRISM") {
                 double constant, error;
                 if (toks.size() < 5 || !ParseDoubleTok(toks[3], &constant) || !ParseDoubleTok(toks[4], &error))
                     return fail("expected PRISM <at> <to> <constant> <error>");
-                leg.prismConstant = constant;
-                leg.hasPrismConstant = (constant != 0.0);
-                leg.prismError = error;
-                leg.hasPrismError = (error != 0.0);
+                legPtr->prismConstant = constant;
+                legPtr->hasPrismConstant = (constant != 0.0);
+                legPtr->prismError = error;
+                legPtr->hasPrismError = (error != 0.0);
             } else if (directive == "POLE") {
                 double error;
                 if (toks.size() < 4 || !ParseDoubleTok(toks[3], &error))
                     return fail("expected POLE <at> <to> <error>");
-                leg.poleError = error;
-                leg.hasPoleError = (error != 0.0);
+                legPtr->poleError = error;
+                legPtr->hasPoleError = (error != 0.0);
             } else {  // TSERR
                 double a, d, p;
                 if (toks.size() < 6 || !ParseDoubleTok(toks[3], &a) || !ParseDoubleTok(toks[4], &d) ||
                     !ParseDoubleTok(toks[5], &p))
                     return fail("expected TSERR <at> <to> <angle-arcsec> <dist-const> <dist-ppm>");
-                leg.tsWeights.sigmaAngleSec = a;
-                leg.tsWeights.sigmaDistConstFt = d;
-                leg.tsWeights.sigmaDistPpm = p;
-                leg.hasTsWeights = true;
+                legPtr->tsWeights.sigmaAngleSec = a;
+                legPtr->tsWeights.sigmaDistConstFt = d;
+                legPtr->tsWeights.sigmaDistPpm = p;
+                legPtr->hasTsWeights = true;
             }
         } else {
             return fail("unknown directive \"" + toks[0] + "\"");
@@ -298,6 +381,7 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
     }
 
     newTd.legs = std::move(newLegs);
+    newTd.sideShots = std::move(newSideShots);
     td = std::move(newTd);
     weights = newWeights;
     errorMsg.clear();

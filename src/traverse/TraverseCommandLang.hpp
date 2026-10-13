@@ -35,6 +35,18 @@
 //
 //   STN <at> <to>
 //       Declares the leg: station AT is occupied, sighting foresight TO.
+//   STN <at> <to> SIDE
+//       Declares a side shot instead: a radial detail point shot from AT
+//       (which must already be an occupied station — the start station, or
+//       any earlier TO — not necessarily the chain's current end), TO is the
+//       shot's own point number, and it does NOT need to continue the chain.
+//       HANG/HDIST/SDIST/VANG/DESC below address it exactly like a leg, except
+//       HANG's FROM is never validated (a side shot has no "previous leg").
+//   STN <at> <to> CHECK [known-e known-n]
+//       Declares a check shot: a side shot flagged as a repeat/verification
+//       observation. The optional known-e/known-n are the already-known
+//       coordinates to compare the shot's computed position against; GoSurvey
+//       reports the discrepancy. Everything else is identical to SIDE.
 //   HANG <from> <at> <to> <angle-deg>
 //       The horizontal angle turned, backsighting FROM through AT to TO.
 //       FROM is informational only (it has no effect on the computed bearing,

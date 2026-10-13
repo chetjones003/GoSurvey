@@ -1436,3 +1436,227 @@ TEST_CASE("Rw5Import: a missing file fails with a reason", "[rw5][REQ-407]") {
     CHECK_FALSE(Rw5Import((Rw5TestDir() / "does-not-exist.rw5").string().c_str(), td, err));
     CHECK_FALSE(err.empty());
 }
+
+// ---------------------------------------------------------------------------
+// GitHub issue #853 — side shots and check shots: observations from an
+// already-occupied traverse station that don't advance the chain.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("ComputeTraverse: a side shot from the start station reduces correctly", "[traverse][REQ-409]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 1000.0;
+    td.startNorthing = 1000.0;
+    td.startElevation = 50.0;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;  // backsight due north.
+
+    TraverseSideShot ss;
+    ss.atStationId = 1;
+    ss.stationId = 101;
+    ss.hasHorizAngle = true;
+    ss.horizAngleDeg = 90.0;   // due east of the backsight.
+    ss.hasHorizDist = true;
+    ss.horizDist = 50.0;
+    td.sideShots.push_back(ss);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.sideShots.size() == 1);
+    const TraverseSideShot& r = td.sideShots[0];
+    CHECK(r.computed);
+    CHECK(r.hasSufficientData);
+    CHECK(r.computedBearingDeg == Approx(90.0));
+    CHECK(r.computedEasting == Approx(1050.0));
+    CHECK(r.computedNorthing == Approx(1000.0));
+}
+
+TEST_CASE("ComputeTraverse: a side shot from a later leg's occupied station", "[traverse][REQ-409]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 0.0;
+    td.startNorthing = 0.0;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+
+    TraverseLeg leg;
+    leg.stationId = 2;
+    leg.hasHorizAngle = true;
+    leg.horizAngleDeg = 0.0;  // straight ahead (same as backsight reversed).
+    leg.hasHorizDist = true;
+    leg.horizDist = 100.0;
+    td.legs.push_back(leg);
+
+    TraverseSideShot ss;
+    ss.atStationId = 2;  // occupied after the leg above.
+    ss.stationId = 201;
+    ss.hasHorizAngle = true;
+    ss.horizAngleDeg = 90.0;
+    ss.hasHorizDist = true;
+    ss.horizDist = 25.0;
+    td.sideShots.push_back(ss);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.legs[0].computed);
+    REQUIRE(td.sideShots.size() == 1);
+    const TraverseSideShot& r = td.sideShots[0];
+    CHECK(r.computed);
+    // Station 2 is at (0,100), backsight bearing there = leg's fwd bearing (0) + 180 = 180.
+    // Side shot bearing = 180 + 90 = 270 -> points due west.
+    CHECK(r.computedBearingDeg == Approx(270.0));
+    CHECK(r.computedEasting == Approx(0.0 - 25.0));
+    CHECK(r.computedNorthing == Approx(100.0));
+}
+
+TEST_CASE("ComputeTraverse: a check shot reports its discrepancy from the known point", "[traverse][REQ-409]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 1000.0;
+    td.startNorthing = 1000.0;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+
+    TraverseSideShot ss;
+    ss.atStationId = 1;
+    ss.stationId = 99;
+    ss.isCheckShot = true;
+    ss.hasHorizAngle = true;
+    ss.horizAngleDeg = 90.0;
+    ss.hasHorizDist = true;
+    ss.horizDist = 50.0;
+    ss.hasKnownCoords = true;
+    ss.knownEasting = 1053.0;   // 3 ft off from the computed 1050.
+    ss.knownNorthing = 1000.0;
+    td.sideShots.push_back(ss);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.sideShots.size() == 1);
+    const TraverseSideShot& r = td.sideShots[0];
+    CHECK(r.computed);
+    CHECK(r.checkDiscrepancy == Approx(3.0).margin(1e-6));
+}
+
+TEST_CASE("ComputeTraverse: a side shot from an unoccupied station reports an error", "[traverse][REQ-409]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+
+    TraverseSideShot ss;
+    ss.atStationId = 99;  // never occupied.
+    ss.stationId = 100;
+    ss.hasHorizAngle = true;
+    ss.horizAngleDeg = 90.0;
+    ss.hasHorizDist = true;
+    ss.horizDist = 50.0;
+    td.sideShots.push_back(ss);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.sideShots.size() == 1);
+    CHECK_FALSE(td.sideShots[0].computed);
+    CHECK_FALSE(td.sideShots[0].errorMsg.empty());
+}
+
+TEST_CASE("TraverseCommandLang: a SIDE shot round-trips", "[traverse][REQ-409]") {
+    const std::string text =
+        "STATION 1 1000 1000 50\n"
+        "STN 1 101 SIDE\n"
+        "HANG REF 1 101 90\n"
+        "HDIST 1 101 50\n"
+        "DESC 1 101 Fence corner\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.sideShots.size() == 1);
+    CHECK_FALSE(td.sideShots[0].isCheckShot);
+    CHECK(td.sideShots[0].atStationId == 1);
+    CHECK(td.sideShots[0].stationId == 101);
+    CHECK(td.sideShots[0].horizAngleDeg == Approx(90.0));
+    CHECK(td.sideShots[0].horizDist == Approx(50.0));
+    CHECK(td.sideShots[0].description == "Fence corner");
+
+    // Round-trip through Serialize too.
+    const std::string regenerated = travcmd::Serialize(td, weights);
+    TraverseData reparsed;
+    LsaWeights reparsedWeights;
+    REQUIRE(travcmd::Parse(regenerated, reparsed, reparsedWeights, err));
+    REQUIRE(reparsed.sideShots.size() == 1);
+    CHECK(reparsed.sideShots[0].horizAngleDeg == Approx(90.0));
+    CHECK(reparsed.sideShots[0].description == "Fence corner");
+}
+
+TEST_CASE("TraverseCommandLang: a CHECK shot with known coords round-trips", "[traverse][REQ-409]") {
+    const std::string text =
+        "STATION 1 1000 1000 50\n"
+        "STN 1 99 CHECK 1053 1000\n"
+        "HANG REF 1 99 90\n"
+        "HDIST 1 99 50\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.sideShots.size() == 1);
+    CHECK(td.sideShots[0].isCheckShot);
+    REQUIRE(td.sideShots[0].hasKnownCoords);
+    CHECK(td.sideShots[0].knownEasting == Approx(1053.0));
+    CHECK(td.sideShots[0].knownNorthing == Approx(1000.0));
+
+    const std::string regenerated = travcmd::Serialize(td, weights);
+    TraverseData reparsed;
+    LsaWeights reparsedWeights;
+    REQUIRE(travcmd::Parse(regenerated, reparsed, reparsedWeights, err));
+    REQUIRE(reparsed.sideShots.size() == 1);
+    CHECK(reparsed.sideShots[0].isCheckShot);
+    CHECK(reparsed.sideShots[0].knownEasting == Approx(1053.0));
+}
+
+TEST_CASE("TraverseCommandLang: SIDE's AT must already be an occupied station", "[traverse][REQ-409]") {
+    const std::string text =
+        "STATION 1 1000 1000 50\n"
+        "STN 99 101 SIDE\n";  // 99 was never occupied.
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("TraverseCommandLang: a side shot's HANG accepts any FROM (no chain to validate)", "[traverse][REQ-409]") {
+    const std::string text =
+        "STATION 1 1000 1000 50\n"
+        "STN 1 2\n"
+        "HANG REF 1 2 90\n"
+        "HDIST 1 2 100\n"
+        "STN 1 101 SIDE\n"
+        "HANG 999 1 101 45\n"  // 999 is not a real station -- must be accepted anyway.
+        "HDIST 1 101 20\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    REQUIRE(td.sideShots.size() == 1);
+    CHECK(td.sideShots[0].horizAngleDeg == Approx(45.0));
+}
+
+TEST_CASE("TraverseCommandLang: PRISM/POLE/TSERR are rejected on a side shot", "[traverse][REQ-409]") {
+    const std::string text =
+        "STATION 1 1000 1000 50\n"
+        "STN 1 101 SIDE\n"
+        "HANG REF 1 101 45\n"
+        "HDIST 1 101 20\n"
+        "PRISM 1 101 0.01 0.002\n";
+
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    CHECK_FALSE(travcmd::Parse(text, td, weights, err));
+    CHECK_FALSE(err.empty());
+}
