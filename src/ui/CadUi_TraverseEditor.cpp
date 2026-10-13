@@ -7,6 +7,7 @@
 #include "traverse/FbkImport.hpp"
 #include "traverse/StarNetImport.hpp"
 #include "traverse/Rw5Import.hpp"
+#include "traverse/JobXmlImport.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
 #include "WinFileDialogs.hpp"
@@ -588,6 +589,31 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         "Replaces the current traverse. GNSS vectors and non-traverse records\n"
         "(SS/BD/BR/FD/FR/OF) are either reported as unsupported or ignored by\n"
         "design per the importer's documented scope, not silently misread.");
+
+    // ---- Trimble JobXML import (GitHub issue #846, Phase B) ----
+    ImGui::SameLine();
+    if (ImGui::Button("Import JobXML\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileJobXmlUtf8(path, sizeof(path))) {
+            TraverseData imported;
+            std::string err;
+            if (JobXmlImport(path, imported, err)) {
+                cmd.traverseData = std::move(imported);
+                cmd.traverseDataDirty = true;
+                cmd.traverseExpandedLeg = -1;
+                log.push_back(std::string("TRAVERSE — imported JobXML (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — JobXML import failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip(
+        "Import a Trimble JobXML file (*.jxl/*.xml): a sequential StationRecord/\n"
+        "BackBearingRecord/PointRecord traverse, with Reductions points for\n"
+        "known-point coordinates. All distances convert from metres to feet.\n"
+        "Replaces the current traverse. GPS/resection/offset observations are\n"
+        "reported as unsupported, not silently misread.");
 
     // ---- Save / Load (REQ-403, GitHub issue #834) ----
     ImGui::SameLine();

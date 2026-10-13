@@ -145,6 +145,7 @@ set(imgui_test_engine_SOURCE_DIR  "${GOSURVEY_TP}/imgui_test_engine")
 set(pdfium_binaries_SOURCE_DIR    "${GOSURVEY_TP}/pdfium")
 set(GLEW_ROOT                     "${GOSURVEY_TP}/glew")
 set(NLOHMANN_JSON_INCLUDE         "${GOSURVEY_TP}")   # resolves <nlohmann/json.hpp>
+set(PUGIXML_INCLUDE               "${GOSURVEY_TP}/pugixml/src")   # resolves <pugixml.hpp>
 
 # REQ-161 / ADR-040: Developer Shell is compile-gated. Release cannot turn it on.
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -445,6 +446,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/traverse/TraverseCommandLang.cpp
   src/traverse/StarNetImport.cpp
   src/traverse/Rw5Import.cpp
+  src/traverse/JobXmlImport.cpp
+  ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
 
   # I/O
   src/io/GsIo.cpp
@@ -584,6 +587,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz)
@@ -714,6 +718,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(GoSurvey PRIVATE
@@ -984,6 +989,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
 
@@ -1018,6 +1024,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/font
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
   target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
@@ -1293,6 +1300,8 @@ if(GOSURVEY_BUILD_TESTS)
     src/traverse/TraverseCommandLang.cpp
     src/traverse/StarNetImport.cpp
     src/traverse/Rw5Import.cpp
+    src/traverse/JobXmlImport.cpp
+    ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
     src/io/DwgProbe.cpp
@@ -1365,6 +1374,7 @@ if(GOSURVEY_BUILD_TESTS)
     # whole command layer), but the serializer it relies on is, and that is where the precision
     # risk actually lives.
     ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
     # REQ-204 (DocInvariantsTests): CadCommands.hpp's header closure. Headers only — the test target
     # still links no command, UI or GL translation unit, which is the property ADR-002 protects.
     # AppCommandState is plain data, so constructing one costs nothing but these include paths.
@@ -1581,6 +1591,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${NLOHMANN_JSON_INCLUDE}
+  ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
   target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)

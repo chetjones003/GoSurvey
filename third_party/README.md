@@ -20,3 +20,4 @@ its `VENDORED.md` in the same commit.
 | `pdfium/` | github.com/bblanchon/pdfium-binaries | `chromium/7857` | prebuilt binaries |
 | `nlohmann/` | github.com/nlohmann/json | `v3.11.3` | `json.hpp` single header |
 | `stb_image.h` | github.com/nothings/stb | (see file header) | single header |
+| `pugixml/` | github.com/zeux/pugixml | `v1.14` | `src/pugixml.{hpp,cpp}` + `pugiconfig.hpp` |
