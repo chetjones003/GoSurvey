@@ -5,6 +5,7 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
+#include "traverse/StarNetImport.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
 #include "WinFileDialogs.hpp"
@@ -536,6 +537,31 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         "Import an Autodesk Field Book (.fbk) raw data file.\n"
         "Replaces the current traverse with the imported stations, backsight\n"
         "orientation, and face-averaged observations.");
+
+    // ---- StarNet import (GitHub issue #846, Phase B) ----
+    ImGui::SameLine();
+    if (ImGui::Button("Import StarNet .dat\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileStarNetUtf8(path, sizeof(path))) {
+            TraverseData imported;
+            std::string err;
+            if (StarNetImport(path, imported, err)) {
+                cmd.traverseData = std::move(imported);
+                cmd.traverseDataDirty = true;
+                cmd.traverseExpandedLeg = -1;
+                log.push_back(std::string("TRAVERSE — imported STAR*NET (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — STAR*NET import failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip(
+        "Import a MicroSurvey STAR*NET .dat file (conventional 2D traverse data: a\n"
+        "single TB/T/TE traverse, with C lines for reference coordinates).\n"
+        "Replaces the current traverse. StarNet records this importer doesn't\n"
+        "support (GPS vectors, 3D data, general network angles, etc.) are reported\n"
+        "as an import failure rather than silently dropped.");
 
     // ---- Save / Load (REQ-403, GitHub issue #834) ----
     ImGui::SameLine();
