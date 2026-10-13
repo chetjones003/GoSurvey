@@ -172,6 +172,55 @@ struct TraverseSideShot {
     bool hasSufficientData = false;
 };
 
+/// One GPS vector observation (GitHub issue #847) — the ECEF ΔX/ΔY/ΔZ baseline
+/// between two stations, as read from a STAR*NET-style "G1" record, plus its
+/// a-priori covariance ("G2"/"G3"). Resolved into GoSurvey's local easting/
+/// northing/elevation system by \ref ComputeTraverse via a local East-North-Up
+/// tangent-plane rotation anchored at \ref TraverseData::gpsOriginLatDeg /
+/// \ref TraverseData::gpsOriginLonDeg (see geo::EcefDeltaToEnu) — NOT by a map
+/// projection, since GoSurvey has no datum of its own; a further, optional
+/// re-projection onto a map grid (UTM, State Plane, ...) is a separate step
+/// (see TraverseGpsGrid.hpp), kept out of this core math so it stays free of
+/// the CS-MAP dependency.
+///
+/// Only resolved when \ref fromName already has a known local position — the
+/// traverse's start station, a computed leg station, or another already-
+/// resolved GPS vector's end station. A vector hanging off a station with no
+/// known position (e.g. a GPS-only sub-network with no tie to the traverse)
+/// is a defined gap: left unresolved with \ref errorMsg set, never guessed at.
+struct TraverseGpsVector {
+    // --- ECEF baseline components (meters), fromName -> toName ---
+    double deltaXEcefM = 0.0;
+    double deltaYEcefM = 0.0;
+    double deltaZEcefM = 0.0;
+
+    // --- A-priori covariance of the ECEF baseline (meters²) ---
+    // Required to be true covariance (StarNet's ".GPS WEIGHT COVARIANCE" mode);
+    // the alternate standard-error/correlation encoding ("STDERRCORR") is a
+    // defined gap — its exact field semantics could not be confirmed against
+    // an authoritative source, so it is rejected by the importer rather than
+    // guessed at (see StarNetImport.cpp). Not yet consumed by
+    // ComputeTraverseLeastSquares (tracked separately).
+    double varXM2 = 0.0, varYM2 = 0.0, varZM2 = 0.0;
+    double covXYM2 = 0.0, covXZM2 = 0.0, covYZM2 = 0.0;
+    bool hasCovariance = false;
+
+    // --- Computed outputs (set by ComputeTraverse) ---
+    double computedDeltaEastFt = 0.0;
+    double computedDeltaNorthFt = 0.0;
+    double computedDeltaUpFt = 0.0;
+    double computedToEasting = 0.0;
+    double computedToNorthing = 0.0;
+    double computedToElevation = 0.0;
+    bool computed = false;
+    std::string errorMsg;
+
+    std::string fromName;   ///< Station occupied by the GPS baseline's origin end.
+    std::string toName;     ///< Station at the baseline's other end.
+    int fromStationId = 0;  ///< Resolved against the same id space as TraverseLeg::stationId.
+    int toStationId = 0;
+};
+
 struct TraverseData {
     // --- Starting station ---
     int startStationId = 1;
@@ -193,6 +242,17 @@ struct TraverseData {
     /// Side shots and check shots (GitHub issue #853) — observations from an
     /// already-occupied station that don't advance the traverse chain.
     std::vector<TraverseSideShot> sideShots;
+
+    /// GPS vector observations (GitHub issue #847).
+    std::vector<TraverseGpsVector> gpsVectors;
+    /// The local tangent-plane origin used to resolve \ref gpsVectors into
+    /// local easting/northing/elevation (geodetic WGS84 degrees). Must be
+    /// supplied by the user — e.g. a receiver's known lat/long at one of the
+    /// GPS stations — since GoSurvey has no datum/geoid model of its own to
+    /// derive one from local coordinates alone.
+    double gpsOriginLatDeg = 0.0;
+    double gpsOriginLonDeg = 0.0;
+    bool hasGpsOrigin = false;
 
     bool useFace1Face2 = false;   ///< When true, use F1/F2 averages instead of single observations.
     bool isClosedLoop = false;    ///< When true, compute closure back to starting station.

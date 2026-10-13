@@ -1144,6 +1144,114 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         if (!hasSideShots) ImGui::EndDisabled();
     }
 
+    // ---- GPS vectors (GitHub issue #847) ----
+    ImGui::SeparatorText("GPS Vectors");
+    {
+        if (ImGui::Checkbox("##hasgpsorigin", &td.hasGpsOrigin)) cmd.traverseDataDirty = true;
+        ImGui::SameLine();
+        ImGui::TextUnformatted("Origin lat/long (WGS84, degrees)");
+        ItemHelpTooltip(
+            "The local tangent-plane origin GPS vectors are rotated into local\n"
+            "easting/northing/elevation around (e.g. a GPS station's known lat/long).\n"
+            "GoSurvey has no datum of its own, so this must be supplied manually.");
+        if (!td.hasGpsOrigin) ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(140.f);
+        if (ImGui::InputDouble("Lat##gpsorigin", &td.gpsOriginLatDeg, 0., 0., "%.8f"))
+            cmd.traverseDataDirty = true;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140.f);
+        if (ImGui::InputDouble("Lon##gpsorigin", &td.gpsOriginLonDeg, 0., 0., "%.8f"))
+            cmd.traverseDataDirty = true;
+        if (!td.hasGpsOrigin) ImGui::EndDisabled();
+
+        const ImGuiTableFlags gvTf = ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH |
+                                     ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
+        if (ImGui::BeginTable("traverse_gpsvectors", 8, gvTf)) {
+            ImGui::TableSetupColumn("From",     ImGuiTableColumnFlags_WidthFixed, 55.f);
+            ImGui::TableSetupColumn("To",       ImGuiTableColumnFlags_WidthFixed, 55.f);
+            ImGui::TableSetupColumn("\xce\x94X (m)", ImGuiTableColumnFlags_WidthFixed, 85.f);
+            ImGui::TableSetupColumn("\xce\x94Y (m)", ImGuiTableColumnFlags_WidthFixed, 85.f);
+            ImGui::TableSetupColumn("\xce\x94Z (m)", ImGuiTableColumnFlags_WidthFixed, 85.f);
+            ImGui::TableSetupColumn("Easting",  ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::TableSetupColumn("Northing", ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::TableSetupColumn("Elevation", ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
+            ImGui::TableHeadersRow();
+            ImGui::PopStyleColor();
+
+            for (size_t i = 0; i < td.gpsVectors.size(); ++i) {
+                TraverseGpsVector& gv = td.gpsVectors[i];
+                ImGui::PushID(static_cast<int>(i) + 200000);  // offset clear of other tables' PushIDs.
+                ImGui::TableNextRow();
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputInt("##from", &gv.fromStationId, 0, 0)) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputInt("##to", &gv.toStationId, 0, 0)) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputDouble("##dx", &gv.deltaXEcefM, 0., 0., "%.4f")) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputDouble("##dy", &gv.deltaYEcefM, 0., 0., "%.4f")) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputDouble("##dz", &gv.deltaZEcefM, 0., 0., "%.4f")) cmd.traverseDataDirty = true;
+
+                const ImU32 tintComputed = ImGui::GetColorU32(ImVec4(0.46f, 0.51f, 0.58f, 0.16f));
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (gv.computed) RightAlignedText(TraverseFormatDist(gv.computedToEasting).c_str());
+                else ImGui::TextDisabled("\xe2\x80\x94");
+
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (gv.computed) RightAlignedText(TraverseFormatDist(gv.computedToNorthing).c_str());
+                else ImGui::TextDisabled("\xe2\x80\x94");
+
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (gv.computed) {
+                    RightAlignedText(TraverseFormatDist(gv.computedToElevation).c_str());
+                } else if (!gv.errorMsg.empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "\xe2\x9c\x97");
+                    ItemHelpTooltip(gv.errorMsg.c_str());
+                } else {
+                    ImGui::TextDisabled("\xe2\x80\x94");
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::SmallButton("+ Add GPS Vector")) {
+            TraverseGpsVector gv;
+            gv.fromStationId = td.legs.empty() ? td.startStationId : td.legs.back().stationId;
+            gv.toStationId = gv.fromStationId + 1000;  // a placeholder the user is expected to renumber.
+            td.gpsVectors.push_back(std::move(gv));
+            cmd.traverseDataDirty = true;
+        }
+        ItemHelpTooltip(
+            "A GPS baseline vector (ECEF \xce\x94X/\xce\x94Y/\xce\x94Z, meters) between two stations —\n"
+            "e.g. from a STAR*NET \"G1\" record. Resolved into local easting/northing/\n"
+            "elevation only when the From station already has a known position\n"
+            "(the start station, a computed leg, or another resolved GPS vector).");
+        const bool hasGpsVectors = !td.gpsVectors.empty();
+        if (!hasGpsVectors) ImGui::BeginDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("- Remove Last GPS Vector")) {
+            td.gpsVectors.pop_back();
+            cmd.traverseDataDirty = true;
+        }
+        if (!hasGpsVectors) ImGui::EndDisabled();
+    }
+
     // ---- Closure ----
     if (td.isClosedLoop && td.closureValid) {
         ImGui::SameLine(0, 24);
@@ -1206,6 +1314,16 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             const double locN = ss.computedNorthing - cmd.worldDocumentOriginY;
             cmd.createPointsOpts.startNumber = ss.stationId;
             TryPlaceSurveyPoint(cmd, locE, locN, ss.computedElevation, log, /*pushUndo=*/false);
+        }
+
+        // Place resolved GPS vector endpoints (GitHub issue #847).
+        for (const auto& gv : td.gpsVectors) {
+            if (!gv.computed)
+                continue;
+            const double locE = gv.computedToEasting  - cmd.worldDocumentOriginX;
+            const double locN = gv.computedToNorthing - cmd.worldDocumentOriginY;
+            cmd.createPointsOpts.startNumber = gv.toStationId;
+            TryPlaceSurveyPoint(cmd, locE, locN, gv.computedToElevation, log, /*pushUndo=*/false);
         }
 
         log.push_back("TRAVERSE — committed points to drawing.");

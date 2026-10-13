@@ -1234,6 +1234,216 @@ TEST_CASE("StarNetImport: a C line's elevation sets the start elevation", "[star
 }
 
 // ---------------------------------------------------------------------------
+// GitHub issue #847 — GPS vector ("G0"-"G3") records in a StarNet file, and
+// their resolution in ComputeTraverse via a local ENU tangent plane. See
+// StarNetImport.hpp for exactly what's supported (and why G4/STDERRCORR are
+// defined gaps, not guesses).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("StarNetImport: a G1/G2/G3 GPS vector tied to the start station parses", "[starnet][REQ-416]") {
+    const std::string text =
+        "C 1 5000.0000 5000.0000\n"
+        "C 2 5000.0000 5100.0000\n"
+        "TB 2\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        ".GPS WEIGHT COVARIANCE\n"
+        "G0 'V1 comment\n"
+        "G1 1-9 17.279000 -2.809000 -10.433000 1.630/1.630\n"
+        "G2 1.823843000000E-002 3.938653000000E-002 1.501757000000E-002\n"
+        "G3 -1.432300000000E-004 1.041400000000E-004 -2.265200000000E-004\n";
+    const std::string path = WriteStarNetFixture("gps_vector.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    CHECK(err.empty());
+    REQUIRE(td.gpsVectors.size() == 1);
+
+    const auto& gv = td.gpsVectors[0];
+    CHECK(gv.fromName == "1");
+    CHECK(gv.toName == "9");
+    CHECK(gv.fromStationId == td.startStationId);
+    CHECK(gv.deltaXEcefM == Approx(17.279000));
+    CHECK(gv.deltaYEcefM == Approx(-2.809000));
+    CHECK(gv.deltaZEcefM == Approx(-10.433000));
+    REQUIRE(gv.hasCovariance);
+    CHECK(gv.varXM2 == Approx(1.823843e-002));
+    CHECK(gv.varYM2 == Approx(3.938653e-002));
+    CHECK(gv.varZM2 == Approx(1.501757e-002));
+    CHECK(gv.covXYM2 == Approx(-1.4323e-004));
+    CHECK(gv.covXZM2 == Approx(1.0414e-004));
+    CHECK(gv.covYZM2 == Approx(-2.2652e-004));
+}
+
+TEST_CASE("StarNetImport: a G1 without a preceding .GPS WEIGHT COVARIANCE is rejected",
+          "[starnet][REQ-416]") {
+    const std::string text =
+        "TB N75-00-00W\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        "G1 1-9 17.279 -2.809 -10.433\n";
+    const std::string path = WriteStarNetFixture("gps_no_mode.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: \".GPS WEIGHT STDERRCORR\" is rejected", "[starnet][REQ-416]") {
+    const std::string text =
+        "TB N75-00-00W\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        ".GPS WEIGHT STDERRCORR\n"
+        "G1 1-9 17.279 -2.809 -10.433\n";
+    const std::string path = WriteStarNetFixture("gps_stderrcorr.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: a G4 record is rejected", "[starnet][REQ-416]") {
+    const std::string text =
+        "TB N75-00-00W\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        ".GPS WEIGHT COVARIANCE\n"
+        "G1 1-9 17.279 -2.809 -10.433\n"
+        "G4 something\n";
+    const std::string path = WriteStarNetFixture("gps_g4.dat", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(StarNetImport(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("StarNetImport: a G1 with no covariance still parses (no G2/G3)", "[starnet][REQ-416]") {
+    const std::string text =
+        "TB N75-00-00W\n"
+        "T 1 90-00-00 100.00\n"
+        "TE 2\n"
+        ".GPS WEIGHT COVARIANCE\n"
+        "G1 1-9 17.279 -2.809 -10.433\n";
+    const std::string path = WriteStarNetFixture("gps_no_cov.dat", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(StarNetImport(path.c_str(), td, err));
+    REQUIRE(td.gpsVectors.size() == 1);
+    CHECK_FALSE(td.gpsVectors[0].hasCovariance);
+}
+
+TEST_CASE("ComputeTraverse: a GPS vector tied to the start station resolves via local ENU",
+          "[starnet][REQ-416]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.startEasting = 0.0;
+    td.startNorthing = 0.0;
+    td.startElevation = 0.0;
+    td.hasStartBearing = true;  // required to reach the GPS-vector pass at all.
+    td.startBearingDeg = 0.0;
+    td.hasGpsOrigin = true;
+    td.gpsOriginLatDeg = 0.0;
+    td.gpsOriginLonDeg = 0.0;  // ENU axes align with ECEF Y/Z/X here.
+
+    TraverseGpsVector gv;
+    gv.fromStationId = 1;
+    gv.toStationId = 2;
+    gv.deltaXEcefM = 10.0;   // -> Up
+    gv.deltaYEcefM = 20.0;   // -> East
+    gv.deltaZEcefM = 30.0;   // -> North
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.gpsVectors.size() == 1);
+    const auto& r = td.gpsVectors[0];
+    CHECK(r.computed);
+    CHECK(r.errorMsg.empty());
+    constexpr double kMetersToFeet = 1.0 / 0.3048;
+    CHECK(r.computedDeltaEastFt == Approx(20.0 * kMetersToFeet));
+    CHECK(r.computedDeltaNorthFt == Approx(30.0 * kMetersToFeet));
+    CHECK(r.computedDeltaUpFt == Approx(10.0 * kMetersToFeet));
+    CHECK(r.computedToEasting == Approx(20.0 * kMetersToFeet));
+    CHECK(r.computedToNorthing == Approx(30.0 * kMetersToFeet));
+    CHECK(r.computedToElevation == Approx(10.0 * kMetersToFeet));
+}
+
+TEST_CASE("ComputeTraverse: a GPS vector chained off a resolved GPS station also resolves",
+          "[starnet][REQ-416]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.startBearingDeg = 0.0;
+    td.hasGpsOrigin = true;
+    td.gpsOriginLatDeg = 0.0;
+    td.gpsOriginLonDeg = 0.0;
+
+    TraverseGpsVector gv1;
+    gv1.fromStationId = 1;
+    gv1.toStationId = 2;
+    gv1.deltaYEcefM = 20.0;  // East
+    td.gpsVectors.push_back(gv1);
+
+    TraverseGpsVector gv2;
+    gv2.fromStationId = 2;
+    gv2.toStationId = 3;
+    gv2.deltaYEcefM = 5.0;
+    td.gpsVectors.push_back(gv2);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.gpsVectors.size() == 2);
+    CHECK(td.gpsVectors[0].computed);
+    CHECK(td.gpsVectors[1].computed);
+    constexpr double kMetersToFeet = 1.0 / 0.3048;
+    CHECK(td.gpsVectors[1].computedToEasting == Approx(25.0 * kMetersToFeet));
+}
+
+TEST_CASE("ComputeTraverse: a GPS vector with no known origin station is left unresolved",
+          "[starnet][REQ-416]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.hasGpsOrigin = true;
+
+    TraverseGpsVector gv;
+    gv.fromStationId = 99;  // never resolved by anything.
+    gv.toStationId = 100;
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.gpsVectors.size() == 1);
+    CHECK_FALSE(td.gpsVectors[0].computed);
+    CHECK_FALSE(td.gpsVectors[0].errorMsg.empty());
+}
+
+TEST_CASE("ComputeTraverse: a GPS vector with no GPS origin set is left unresolved",
+          "[starnet][REQ-416]") {
+    TraverseData td;
+    td.startStationId = 1;
+    td.hasStartBearing = true;
+    td.hasGpsOrigin = false;  // not supplied by the user.
+
+    TraverseGpsVector gv;
+    gv.fromStationId = 1;
+    gv.toStationId = 2;
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+
+    REQUIRE(td.gpsVectors.size() == 1);
+    CHECK_FALSE(td.gpsVectors[0].computed);
+    CHECK_FALSE(td.gpsVectors[0].errorMsg.empty());
+}
+
+// ---------------------------------------------------------------------------
 // GitHub issue #846 (Phase B) — Carlson SurvCE/SurvPC .rw5 import. Grounded
 // in Carlson's official RW5 v3.03 reference; see Rw5Import.hpp for exactly
 // what's supported, ignored by design, and a defined gap.
