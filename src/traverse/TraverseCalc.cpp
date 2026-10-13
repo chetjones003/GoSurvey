@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <string>
+#include <unordered_map>
 
 static constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
 
@@ -301,6 +302,12 @@ void ComputeTraverse(TraverseData& td) {
     // so the formula (prevFwd + 180° + HA) becomes (startBearing - 180° + 180° + HA) = startBearing + HA.
     double prevFwdBearing = td.startBearingDeg - 180.0;
 
+    // Per-occupied-station position + effective backsight bearing, captured as
+    // each leg resolves, for the side-shot/check-shot pass below (REQ-409).
+    struct StationSetup { double e = 0.0, n = 0.0, z = 0.0, backBearingDeg = 0.0; bool valid = false; };
+    std::unordered_map<int, StationSetup> setups;
+    setups[td.startStationId] = {td.startEasting, td.startNorthing, td.startElevation, td.startBearingDeg, true};
+
     for (auto& leg : td.legs) {
         leg.computed = false;
         leg.hasSufficientData = false;
@@ -423,10 +430,91 @@ void ComputeTraverse(TraverseData& td) {
 
         td.closurePerimeter += gridHd;
 
+        setups[leg.stationId] = {leg.computedEasting, leg.computedNorthing, leg.computedElevation,
+                                  TraverseNormBearing(fwdBearing + 180.0), true};
+
         curE = leg.computedEasting;
         curN = leg.computedNorthing;
         curZ = leg.computedElevation;
         prevFwdBearing = fwdBearing;
+    }
+
+    // --- Side shots and check shots (REQ-409, GitHub issue #853) ---
+    // Reduced with the exact same trig as a leg, using the occupied station's
+    // resolved position and effective backsight bearing captured above — a
+    // shot's forward bearing is simply (that station's back-bearing + its own
+    // turned angle), matching the per-leg formula exactly (see `setups` above).
+    for (auto& ss : td.sideShots) {
+        ss.computed = false;
+        ss.hasSufficientData = false;
+        ss.errorMsg.clear();
+        ss.checkDiscrepancy = 0.0;
+
+        const auto it = setups.find(ss.atStationId);
+        if (it == setups.end() || !it->second.valid) {
+            ss.errorMsg = "Occupied station not found or not resolved";
+            continue;
+        }
+        if (!ss.hasHorizAngle) {
+            ss.errorMsg = "Horizontal angle required";
+            continue;
+        }
+
+        double hd = 0.0, dz = 0.0;
+        bool hasHD = false, hasVA = false;
+        if (ss.hasHorizDist) {
+            hd = ss.horizDist;
+            hasHD = true;
+            if (ss.hasVertAngle) {
+                hasVA = true;
+                if (ss.isZenithAngle) {
+                    const double sinZ = std::sin(ss.vertAngleDeg * kDeg2Rad);
+                    dz = (std::abs(sinZ) > 1e-10) ? hd * std::cos(ss.vertAngleDeg * kDeg2Rad) / sinZ : 0.0;
+                } else {
+                    dz = hd * std::tan(ss.vertAngleDeg * kDeg2Rad);
+                }
+            }
+        } else if (ss.hasSlopeDist) {
+            if (!ss.hasVertAngle) {
+                ss.errorMsg = "Slope distance requires vertical angle";
+                continue;
+            }
+            hasVA = true;
+            hd = TraverseReduceToHoriz(ss.slopeDist, ss.vertAngleDeg, ss.isZenithAngle);
+            dz = TraverseReduceToVert(ss.slopeDist, ss.vertAngleDeg, ss.isZenithAngle);
+            hasHD = true;
+        }
+
+        if (!hasHD || hd < 0.0) {
+            ss.errorMsg = "Horizontal or slope distance required";
+            continue;
+        }
+
+        if (td.applyCurvRefCorr && hasVA) {
+            constexpr double kEarthRadiusM = 6371000.0;
+            dz += (1.0 - td.refractionCoeff) * hd * hd / (2.0 * kEarthRadiusM);
+        }
+
+        const double fwdBearing = TraverseNormBearing(it->second.backBearingDeg + ss.horizAngleDeg);
+        const double bearingRad = fwdBearing * kDeg2Rad;
+        const double gridHd = td.applyScaleFactor ? hd * td.scaleFactor : hd;
+
+        ss.computedBearingDeg = fwdBearing;
+        ss.computedHorizDist = gridHd;
+        ss.computedDeltaE = gridHd * std::sin(bearingRad);
+        ss.computedDeltaN = gridHd * std::cos(bearingRad);
+        ss.computedDeltaZ = dz;
+        ss.computedEasting = it->second.e + ss.computedDeltaE;
+        ss.computedNorthing = it->second.n + ss.computedDeltaN;
+        ss.computedElevation = it->second.z + dz;
+        ss.computed = true;
+        ss.hasSufficientData = true;
+
+        if (ss.hasKnownCoords) {
+            const double dE = ss.computedEasting - ss.knownEasting;
+            const double dN = ss.computedNorthing - ss.knownNorthing;
+            ss.checkDiscrepancy = std::sqrt(dE * dE + dN * dN);
+        }
     }
 
     // --- Closure ---

@@ -1011,6 +1011,113 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         cmd.traverseDataDirty = true;
     }
 
+    // ---- Side shots / check shots (GitHub issue #853) ----
+    ImGui::SeparatorText("Side Shots / Check Shots");
+    {
+        const ImGuiTableFlags ssTf = ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH |
+                                     ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit;
+        if (ImGui::BeginTable("traverse_sideshots", 9, ssTf)) {
+            ImGui::TableSetupColumn("At",       ImGuiTableColumnFlags_WidthFixed, 55.f);
+            ImGui::TableSetupColumn("Point",    ImGuiTableColumnFlags_WidthFixed, 55.f);
+            ImGui::TableSetupColumn("Desc",     ImGuiTableColumnFlags_WidthStretch, 90.f);
+            ImGui::TableSetupColumn("H.Angle\xc2\xb0", ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::TableSetupColumn("Dist",     ImGuiTableColumnFlags_WidthFixed, 80.f);
+            ImGui::TableSetupColumn("Check",    ImGuiTableColumnFlags_WidthFixed, 50.f);
+            ImGui::TableSetupColumn("Easting",  ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::TableSetupColumn("Northing", ImGuiTableColumnFlags_WidthFixed, 92.f);
+            ImGui::TableSetupColumn("Discrepancy", ImGuiTableColumnFlags_WidthFixed, 90.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
+            ImGui::TableHeadersRow();
+            ImGui::PopStyleColor();
+
+            for (size_t i = 0; i < td.sideShots.size(); ++i) {
+                TraverseSideShot& ss = td.sideShots[i];
+                ImGui::PushID(static_cast<int>(i) + 100000);  // offset clear of the legs table's PushIDs.
+                ImGui::TableNextRow();
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputInt("##at", &ss.atStationId, 0, 0)) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                if (ImGui::InputInt("##pt", &ss.stationId, 0, 0)) cmd.traverseDataDirty = true;
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##desc", &ss.description);
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputText("##ha", &ss.horizAngleBuf);
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    double v;
+                    if (TraverseParseAngle(ss.horizAngleBuf, &v)) { ss.horizAngleDeg = v; ss.hasHorizAngle = true; }
+                    cmd.traverseDataDirty = true;
+                }
+
+                ImGui::TableNextColumn();
+                ImGui::SetNextItemWidth(-FLT_MIN);
+                ImGui::InputDouble("##d", &ss.horizDist, 0., 0., "%.4f");
+                if (ImGui::IsItemDeactivatedAfterEdit()) {
+                    ss.hasHorizDist = (ss.horizDist > 0.0);
+                    cmd.traverseDataDirty = true;
+                }
+
+                ImGui::TableNextColumn();
+                if (ImGui::Checkbox("##check", &ss.isCheckShot)) cmd.traverseDataDirty = true;
+                ItemHelpTooltip("Check shot: a repeat observation meant to verify the setup,\nnot a new detail point.");
+
+                const ImU32 tintComputed = ImGui::GetColorU32(ImVec4(0.46f, 0.51f, 0.58f, 0.16f));
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (ss.computed) RightAlignedText(TraverseFormatDist(ss.computedEasting).c_str());
+                else ImGui::TextDisabled("\xe2\x80\x94");
+
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (ss.computed) RightAlignedText(TraverseFormatDist(ss.computedNorthing).c_str());
+                else ImGui::TextDisabled("\xe2\x80\x94");
+
+                ImGui::TableNextColumn();
+                ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+                if (ss.isCheckShot && ss.hasKnownCoords && ss.computed) {
+                    char b[32];
+                    std::snprintf(b, sizeof(b), "%.4f", ss.checkDiscrepancy);
+                    RightAlignedText(b);
+                } else if (!ss.errorMsg.empty()) {
+                    ImGui::TextColored(ImVec4(1.f, 0.4f, 0.3f, 1.f), "\xe2\x9c\x97");
+                    ItemHelpTooltip(ss.errorMsg.c_str());
+                } else {
+                    ImGui::TextDisabled("\xe2\x80\x94");
+                }
+
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::SmallButton("+ Add Side Shot")) {
+            TraverseSideShot ss;
+            ss.atStationId = td.legs.empty() ? td.startStationId : td.legs.back().stationId;
+            ss.stationId = ss.atStationId + 1000;  // a placeholder the user is expected to renumber.
+            ss.isZenithAngle = true;
+            td.sideShots.push_back(std::move(ss));
+            cmd.traverseDataDirty = true;
+        }
+        ItemHelpTooltip(
+            "A shot from an already-occupied station that doesn't advance the traverse:\n"
+            "a radial detail point, or (tick Check) a repeat observation to verify the\n"
+            "setup. At defaults to the last occupied station; edit it to any earlier one.");
+        const bool hasSideShots = !td.sideShots.empty();
+        if (!hasSideShots) ImGui::BeginDisabled();
+        ImGui::SameLine();
+        if (ImGui::SmallButton("- Remove Last Side Shot")) {
+            td.sideShots.pop_back();
+            cmd.traverseDataDirty = true;
+        }
+        if (!hasSideShots) ImGui::EndDisabled();
+    }
+
     // ---- Closure ----
     if (td.isClosedLoop && td.closureValid) {
         ImGui::SameLine(0, 24);
@@ -1063,6 +1170,16 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             const double locN = leg.computedNorthing - cmd.worldDocumentOriginY;
             cmd.createPointsOpts.startNumber = leg.stationId;
             TryPlaceSurveyPoint(cmd, locE, locN, leg.computedElevation, log, /*pushUndo=*/false);
+        }
+
+        // Place side-shot/check-shot points (GitHub issue #853).
+        for (const auto& ss : td.sideShots) {
+            if (!ss.computed)
+                continue;
+            const double locE = ss.computedEasting  - cmd.worldDocumentOriginX;
+            const double locN = ss.computedNorthing - cmd.worldDocumentOriginY;
+            cmd.createPointsOpts.startNumber = ss.stationId;
+            TryPlaceSurveyPoint(cmd, locE, locN, ss.computedElevation, log, /*pushUndo=*/false);
         }
 
         log.push_back("TRAVERSE — committed points to drawing.");
