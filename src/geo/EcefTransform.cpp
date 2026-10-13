@@ -68,4 +68,34 @@ void EcefDeltaToEnu(double dx, double dy, double dz,
     *upMOut    =  cosLat * cosLon * dx + cosLat * sinLon * dy + sinLat * dz;
 }
 
+void EcefCovarianceToEnu(const double covEcef[3][3],
+                          double originLatDeg, double originLonDeg,
+                          double covEnuOut[3][3]) {
+    const double lat = originLatDeg * kDeg2Rad;
+    const double lon = originLonDeg * kDeg2Rad;
+    const double sinLat = std::sin(lat), cosLat = std::cos(lat);
+    const double sinLon = std::sin(lon), cosLon = std::cos(lon);
+
+    // Rows of R are the East/North/Up unit vectors expressed in ECEF, matching
+    // EcefDeltaToEnu's coefficients.
+    const double r[3][3] = {
+        {-sinLon,            cosLon,            0.0},
+        {-sinLat * cosLon,  -sinLat * sinLon,   cosLat},
+        { cosLat * cosLon,   cosLat * sinLon,   sinLat},
+    };
+
+    double rc[3][3] = {};  // R * Cov_ecef
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            for (int k = 0; k < 3; ++k)
+                rc[i][j] += r[i][k] * covEcef[k][j];
+
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            double sum = 0.0;
+            for (int k = 0; k < 3; ++k) sum += rc[i][k] * r[j][k];  // (R*Cov)*R^T
+            covEnuOut[i][j] = sum;
+        }
+}
+
 }  // namespace geo

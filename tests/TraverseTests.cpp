@@ -1444,6 +1444,141 @@ TEST_CASE("ComputeTraverse: a GPS vector with no GPS origin set is left unresolv
 }
 
 // ---------------------------------------------------------------------------
+// GitHub issue #857 (REQ-417) — GPS vectors folded into the least-squares
+// adjustment. "Full 3D, fully correlated" per the recorded decision: a usable
+// GPS vector's ECEF covariance is rotated into ENU and inverted into a full
+// 3x3 weight block, elevation becomes a third unknown per free station, and a
+// vector may tie in a station outside the traverse loop entirely. When no
+// usable vector is present the adjustment is untouched (2D, no elevation).
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Least squares: a GPS vector tying two loop stations solves elevation too",
+          "[lsa][REQ-417]") {
+    TraverseData td = MakeSquareLoop();  // perfect (flat) loop, station ids 1,2,3,0.
+    // Simulate every leg having actually carried a (flat, dz=0) vertical angle
+    // in the field, so elevation is well-determined around the loop — a GPS
+    // vector alone cannot anchor every station's elevation by itself (it only
+    // ties the two stations it spans), matching how a real job would also have
+    // zenith/vertical angles on its total-station legs.
+    for (TraverseLeg& leg : td.legs) leg.hasVertAngle = true;  // computedDeltaZ is already 0.
+    td.hasGpsOrigin = true;
+    td.gpsOriginLatDeg = 0.0;
+    td.gpsOriginLonDeg = 0.0;  // ENU: East=ECEF Y, North=ECEF Z, Up=ECEF X.
+
+    // Tie station 1 -> station 2 with a vector consistent with their own
+    // traverse-derived separation (so it reinforces rather than fights the
+    // existing geometry) and a tight covariance.
+    const double trueEastFt  = td.legs[1].computedEasting  - td.legs[0].computedEasting;
+    const double trueNorthFt = td.legs[1].computedNorthing - td.legs[0].computedNorthing;
+    constexpr double kFeetToMeters = 0.3048;
+
+    TraverseGpsVector gv;
+    gv.fromStationId = 1;
+    gv.toStationId = 2;
+    gv.deltaYEcefM = trueEastFt * kFeetToMeters;
+    gv.deltaZEcefM = trueNorthFt * kFeetToMeters;
+    gv.deltaXEcefM = 0.0;
+    gv.hasCovariance = true;
+    gv.varXM2 = gv.varYM2 = gv.varZM2 = 0.0004;  // ~0.02 m sigma, diagonal.
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+    REQUIRE(td.gpsVectors[0].computed);
+
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(r.usedGpsVectors);
+    CHECK(r.gpsVectorsUsed == 1);
+    CHECK(r.gpsVectorsSkipped == 0);
+    CHECK(r.unknowns == 9);         // 3 free stations (1,2,3) * 3 (E,N,Up) now.
+    CHECK(r.observations == 12 + 3); // 4 legs * 3 (dist+angle+vert) + 1 GPS vector (3 comps).
+    CHECK(r.redundancy == r.observations - r.unknowns);
+    REQUIRE(r.adjElevation.size() == r.stationIds.size());
+    REQUIRE(r.gpsResiduals.size() == 1);
+    CHECK(std::isfinite(r.gpsResiduals[0].eastResidualFt));
+    CHECK(std::isfinite(r.gpsResiduals[0].northResidualFt));
+    CHECK(std::isfinite(r.gpsResiduals[0].upResidualFt));
+    CHECK(r.adjClosureLinear < 1e-2);
+}
+
+TEST_CASE("Least squares: a GPS vector ties in a station outside the traverse loop",
+          "[lsa][REQ-417]") {
+    TraverseData td = MakeSquareLoop();
+    for (TraverseLeg& leg : td.legs) leg.hasVertAngle = true;  // anchors 1/2/3's elevation to the start.
+    td.hasGpsOrigin = true;
+    td.gpsOriginLatDeg = 0.0;
+    td.gpsOriginLonDeg = 0.0;
+
+    // Station 50 is not part of the loop at all; it is reached only via a GPS
+    // vector from station 1 (REQ-417: "allow new GPS-only stations").
+    TraverseGpsVector gv;
+    gv.fromStationId = 1;
+    gv.toStationId = 50;
+    gv.deltaYEcefM = 10.0;  // East, meters.
+    gv.deltaZEcefM = 5.0;   // North, meters.
+    gv.deltaXEcefM = 1.0;   // Up, meters.
+    gv.hasCovariance = true;
+    gv.varXM2 = gv.varYM2 = gv.varZM2 = 0.0004;
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+    REQUIRE(td.gpsVectors[0].computed);
+
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(r.usedGpsVectors);
+    CHECK(r.unknowns == 12);  // 4 free stations (1,2,3,50) * 3.
+
+    bool found50 = false;
+    for (size_t s = 0; s < r.stationIds.size(); ++s) {
+        if (r.stationIds[s] == 50) {
+            found50 = true;
+            CHECK(std::isfinite(r.adjEasting[s]));
+            CHECK(std::isfinite(r.adjNorthing[s]));
+            CHECK(std::isfinite(r.adjElevation[s]));
+        }
+    }
+    CHECK(found50);
+}
+
+TEST_CASE("Least squares: a GPS vector without covariance is excluded, not guessed",
+          "[lsa][REQ-417]") {
+    TraverseData td = MakeSquareLoop();
+    td.hasGpsOrigin = true;
+    td.gpsOriginLatDeg = 0.0;
+    td.gpsOriginLonDeg = 0.0;
+
+    TraverseGpsVector gv;
+    gv.fromStationId = 1;
+    gv.toStationId = 2;
+    gv.deltaYEcefM = 30.0;
+    gv.hasCovariance = false;  // no G2/G3 — StarNet gave no error model.
+    td.gpsVectors.push_back(gv);
+
+    ComputeTraverse(td);
+    REQUIRE(td.gpsVectors[0].computed);  // resolves geometrically...
+
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK_FALSE(r.usedGpsVectors);   // ...but is not usable for weighting.
+    CHECK(r.gpsVectorsUsed == 0);
+    CHECK(r.gpsVectorsSkipped == 1);
+    CHECK(r.unknowns == 6);          // falls back to the original 2D (no elevation) behavior.
+}
+
+TEST_CASE("Least squares: with no GPS vectors, behavior is unchanged (2D, no elevation)",
+          "[lsa][REQ-417]") {
+    TraverseData td = MakeSquareLoop();
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK_FALSE(r.usedGpsVectors);
+    CHECK(r.gpsResiduals.empty());
+    CHECK(r.unknowns == 6);
+    CHECK(r.observations == 8);
+    for (double z : r.adjElevation) CHECK(z == Approx(0.0));
+}
+
+// ---------------------------------------------------------------------------
 // GitHub issue #846 (Phase B) — Carlson SurvCE/SurvPC .rw5 import. Grounded
 // in Carlson's official RW5 v3.03 reference; see Rw5Import.hpp for exactly
 // what's supported, ignored by design, and a defined gap.

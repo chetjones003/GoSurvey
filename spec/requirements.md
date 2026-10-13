@@ -12284,6 +12284,29 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-12 — initial (D-2026-10-12-a). 2026-10-12 — accepted.
 
+### REQ-417 — Traverse Editor: fold GPS vectors into the least-squares adjustment (GitHub issue #857)
+
+- Purpose: GPS vectors (REQ-416, GitHub issue #847) are modeled and resolved into local coordinates (ECEF → geodetic → local ENU), but `ComputeTraverseLeastSquares` treated a resolved vector's coordinate the same way as a side shot — computed directly, not folded into the weighted adjustment alongside conventional angle/distance observations. How a GPS vector's a-priori covariance should enter the adjustment's weight matrix is an architecturally significant decision (correlated 3D error vs. the existing independent 2D angle/distance model), not a guess.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-13-a — "Full 3D, fully correlated" (of three options: horizontal-only/loop-stations-only; horizontal-only/allow new GPS-only stations; full 3D/fully correlated/arbitrary topology). The user selected full rigor over the smaller options.
+- Depends on: REQ-416 (GPS vector data model + ECEF/ENU resolution, GitHub issue #847).
+- Statement:
+  1. **Usable vectors.** A GPS vector is folded into the adjustment only when `ComputeTraverse` resolved it (`computed == true`) AND it carries a real a-priori covariance (`hasCovariance == true`, StarNet `.GPS WEIGHT COVARIANCE` mode). A vector missing either is excluded and counted (`LsaResult::gpsVectorsSkipped`), never silently dropped or guessed at (REQ-201 style).
+  2. **No GPS vectors — unchanged behavior.** When no usable vector exists, the adjustment is numerically identical to the pre-REQ-417 2D (easting/northing only, no elevation unknown) behavior — same unknowns, same observation count, same results. This is a backward-compatibility guarantee, not an optional mode.
+  3. **Elevation becomes a third unknown.** When at least one usable vector exists, every free station gains elevation as a third unknown (E, N, Up), and each conventional leg that actually carried a vertical angle (`TraverseLeg::hasVertAngle`) contributes an additional vertical (elevation-difference) observation, weighted by a new constant+ppm sigma pair (`LsaWeights::sigmaVertConstFt`/`sigmaVertPpm`, same model as distance, since there is no separately field-proven vertical error model in the existing spec).
+  4. **Full correlated GPS weight block.** A usable vector's ECEF covariance (`varX/varY/varZ/covXY/covXZ/covYZ`, meters²) is rotated into the local ENU frame (`geo::EcefCovarianceToEnu`, the same rotation `geo::EcefDeltaToEnu` already uses — REQ-416), converted to feet², and inverted into a full (non-diagonal) 3x3 weight matrix. A vector whose covariance is degenerate (not invertible) is excluded and counted, same as clause 1.
+  5. **Arbitrary topology.** A GPS vector may tie in a station that is not part of the traverse loop at all; such a station becomes an additional free unknown (3 columns) resolved jointly with the rest of the network, using `ComputeTraverse`'s GPS-resolution pass for its initial approximate coordinate.
+  6. **Residuals and UI.** `LsaResult` reports which vectors were used/skipped (`usedGpsVectors`, `gpsVectorsUsed`, `gpsVectorsSkipped`), adjusted elevations (`adjElevation`, parallel to `adjEasting`/`adjNorthing`), each leg's vertical residual (`LsaResidual::vertResidualFt`), and each used vector's local-ENU residual (`LsaGpsResidual`). The Traverse Closure Analysis window's Residuals tab shows the GPS vector residuals in a dedicated table alongside the existing per-leg residuals when any vector was used; Accept Least-Squares Result also writes the adjusted elevation back into the legs in that case.
+- Acceptance:
+  - `[req417]` test: a closed loop with no GPS vectors produces the exact same unknowns/observations/results as before this requirement (2D, no elevation).
+  - `[req417]` test: a usable GPS vector tying two existing loop stations is folded in, elevation becomes solvable, and the GPS vector produces a residual.
+  - `[req417]` test: a usable GPS vector ties in a station outside the loop; that station appears in the adjusted output with a finite coordinate.
+  - `[req417]` test: a GPS vector without covariance is excluded from the adjustment (counted as skipped) rather than guessed at, and the adjustment falls back to the pre-REQ-417 (2D) shape.
+- Owner-layer: Domain (`src/traverse/TraverseLeastSquares.hpp`/`.cpp`, `src/geo/EcefTransform.hpp`/`.cpp`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-13 — initial (D-2026-10-13-a). 2026-10-13 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

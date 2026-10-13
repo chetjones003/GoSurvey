@@ -34,4 +34,13 @@ void EcefDeltaToEnu(double dx, double dy, double dz,
                      double originLatDeg, double originLonDeg,
                      double* eastMOut, double* northMOut, double* upMOut);
 
+/// Rotates a symmetric ECEF covariance matrix (meters², row-major 3x3: XX, XY,
+/// XZ / XY, YY, YZ / XZ, YZ, ZZ) into the local ENU frame at the tangent plane
+/// anchored at geodetic (originLatDeg, originLonDeg), using the same rotation
+/// as \ref EcefDeltaToEnu (Cov_enu = R * Cov_ecef * R^T). \p covEnuOut is
+/// written row-major (EE, EN, EU / EN, NN, NU / EU, NU, UU).
+void EcefCovarianceToEnu(const double covEcef[3][3],
+                          double originLatDeg, double originLonDeg,
+                          double covEnuOut[3][3]);
+
 }  // namespace geo
