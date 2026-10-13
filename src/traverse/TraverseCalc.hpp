@@ -129,32 +129,15 @@ struct TraverseLeg {
 /// instead of nested inside a particular leg — that also makes a shot taken
 /// from the very first/start station (before any leg exists) representable.
 struct TraverseSideShot {
-    int atStationId = 0;         ///< The station occupied when this shot was taken.
-    int stationId = 0;           ///< This shot's own point number.
-    std::string description;
-
-    std::string horizAngleBuf;
     double horizAngleDeg = 0.0;
-    bool hasHorizAngle = false;
-
     double horizDist = 0.0;
-    bool hasHorizDist = false;
     double slopeDist = 0.0;
-    bool hasSlopeDist = false;
-
-    std::string vertAngleBuf;
     double vertAngleDeg = 0.0;
-    bool isZenithAngle = true;
-    bool hasVertAngle = false;
-
-    /// Marks this as a check shot rather than a new detail point.
-    bool isCheckShot = false;
     /// The known coordinates to check against, if given (e.g. the backsight's,
     /// or another control point's). Comparison is skipped when not supplied —
     /// the shot still computes and displays normally.
     double knownEasting = 0.0;
     double knownNorthing = 0.0;
-    bool hasKnownCoords = false;
 
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;
@@ -165,12 +148,28 @@ struct TraverseSideShot {
     double computedEasting = 0.0;
     double computedNorthing = 0.0;
     double computedElevation = 0.0;
-    bool computed = false;
-    bool hasSufficientData = false;
-    std::string errorMsg;
     /// Linear discrepancy between computed and known coordinates — valid only
     /// when hasKnownCoords && computed.
     double checkDiscrepancy = 0.0;
+
+    std::string description;
+    std::string horizAngleBuf;
+    std::string vertAngleBuf;
+    std::string errorMsg;
+
+    int atStationId = 0;         ///< The station occupied when this shot was taken.
+    int stationId = 0;           ///< This shot's own point number.
+
+    bool hasHorizAngle = false;
+    bool hasHorizDist = false;
+    bool hasSlopeDist = false;
+    bool isZenithAngle = true;
+    bool hasVertAngle = false;
+    /// Marks this as a check shot rather than a new detail point.
+    bool isCheckShot = false;
+    bool hasKnownCoords = false;
+    bool computed = false;
+    bool hasSufficientData = false;
 };
 
 struct TraverseData {
