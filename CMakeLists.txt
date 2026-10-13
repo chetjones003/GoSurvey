@@ -444,6 +444,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/traverse/TraverseIo.cpp
   src/traverse/TraverseCommandLang.cpp
   src/traverse/StarNetImport.cpp
+  src/traverse/Rw5Import.cpp
 
   # I/O
   src/io/GsIo.cpp
@@ -1291,6 +1292,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/traverse/TraverseIo.cpp
     src/traverse/TraverseCommandLang.cpp
     src/traverse/StarNetImport.cpp
+    src/traverse/Rw5Import.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
     src/io/DwgProbe.cpp

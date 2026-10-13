@@ -113,6 +113,8 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(ut
 
 bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
+bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }

@@ -11,6 +11,7 @@
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
 #include "traverse/StarNetImport.hpp"
+#include "traverse/Rw5Import.hpp"
 
 #include <cmath>
 #include <filesystem>
@@ -1229,4 +1230,209 @@ TEST_CASE("StarNetImport: a C line's elevation sets the start elevation", "[star
     std::string err;
     REQUIRE(StarNetImport(path.c_str(), td, err));
     CHECK(td.startElevation == Approx(123.45));
+}
+
+// ---------------------------------------------------------------------------
+// GitHub issue #846 (Phase B) — Carlson SurvCE/SurvPC .rw5 import. Grounded
+// in Carlson's official RW5 v3.03 reference; see Rw5Import.hpp for exactly
+// what's supported, ignored by design, and a defined gap.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+std::filesystem::path Rw5TestDir() {
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-rw5";
+    std::filesystem::create_directories(dir);
+    return dir;
+}
+
+std::string WriteRw5Fixture(const std::string& name, const std::string& content) {
+    const std::filesystem::path path = Rw5TestDir() / name;
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << content;
+    f.close();
+    return path.string();
+}
+
+}  // namespace
+
+TEST_CASE("Rw5Import: closed-loop traverse from the sample fixture", "[rw5][REQ-407]") {
+    const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/closed_loop_trav.rw5";
+    TraverseData td;
+    std::string err;
+    REQUIRE(Rw5Import(path.c_str(), td, err));
+    CHECK(err.empty());
+
+    REQUIRE(td.legs.size() == 3);
+    CHECK(td.isClosedLoop);
+    CHECK(td.hasStartBearing);
+    CHECK(td.startBearingDeg == Approx(270.0));
+    CHECK(td.startEasting == Approx(5100.0));
+    CHECK(td.startNorthing == Approx(5000.0));
+
+    CHECK(td.legs[0].horizAngleDeg == Approx(100.0));
+    CHECK(td.legs[0].slopeDist == Approx(150.25));
+    CHECK(td.legs[0].isZenithAngle);
+    CHECK(td.legs[0].vertAngleDeg == Approx(90.0));
+
+    CHECK(td.legs[1].horizAngleDeg == Approx(240.0));
+    CHECK(td.legs[2].horizAngleDeg == Approx(78.8333).margin(1e-3));
+    CHECK(td.legs[2].stationId == td.startStationId);
+
+    ComputeTraverse(td);
+    LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(r.ok);
+    CHECK(std::isfinite(r.refStdDev));
+}
+
+TEST_CASE("Rw5Import: AL (angle-left) is negated onto the CW convention", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AL90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("al.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(Rw5Import(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].horizAngleDeg == Approx(270.0));  // 360 - 90.
+}
+
+TEST_CASE("Rw5Import: VA (elevation angle) sets isZenithAngle false", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AR90.0000,VA5.0000,HD100.000000\n";
+    const std::string path = WriteRw5Fixture("va.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(Rw5Import(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK_FALSE(td.legs[0].isZenithAngle);
+    CHECK(td.legs[0].vertAngleDeg == Approx(5.0));
+    CHECK(td.legs[0].horizDist == Approx(100.0));
+    CHECK_FALSE(td.legs[0].hasSlopeDist);
+}
+
+TEST_CASE("Rw5Import: SS/BD/BR/FD/FR/OF records are ignored by design", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "SS,OP1,FP0,AR0.0000,ZE90.0000,SD50.000000,--backsight check\n"
+        "BD,OP1,FP3,AR0.0055,ZE86.0126,SD10.320000\n"
+        "OF,AR90.3333,ZE90.0000,SD25.550000\n"
+        "TR,OP1,FP2,AR90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("ignored.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(Rw5Import(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+    CHECK(td.legs[0].description == "2");
+}
+
+TEST_CASE("Rw5Import: comments and a Job/Mode header are accepted", "[rw5][REQ-407]") {
+    const std::string text =
+        "JB,NMSAMPLE,DT06-27-2003,TM14:21:53\n"
+        "MO,AD0,UN0,SF1.00000000,EC1,EO0.0,AU0\n"
+        "--a free-standing note\n"
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AR90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("header.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    REQUIRE(Rw5Import(path.c_str(), td, err));
+    REQUIRE(td.legs.size() == 1);
+}
+
+TEST_CASE("Rw5Import: MO declaring meters (UN1) is a defined gap", "[rw5][REQ-407]") {
+    const std::string text =
+        "MO,AD0,UN1,SF1.00000000,EC1,EO0.0,AU0\n"
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AR90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("meters.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    CHECK(err.find("meters") != std::string::npos);
+}
+
+TEST_CASE("Rw5Import: GPS/GNSS records are a defined gap", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AR90.0000,ZE90.0000,SD100.000000\n"
+        "GPS,PN701,LA42.214630920,LN-71.081409184,EL-21.8459\n";
+    const std::string path = WriteRw5Fixture("gps.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("Rw5Import: an AZ angle field is a defined gap", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AZ90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("az.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    const bool mentionsAz = (err.find("AZ") != std::string::npos) || (err.find("AR/AL") != std::string::npos);
+    CHECK(mentionsAz);
+}
+
+TEST_CASE("Rw5Import: a backsight that doesn't match the traverse chain is rejected", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP1,FP2,AR90.0000,ZE90.0000,SD100.000000\n"
+        "OC,OP2\n"
+        "BK,OP2,BP99\n"  // should be BP1 (the previous leg's occupied station).
+        "TR,OP2,FP3,AR90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("wrong_backsight.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("Rw5Import: a TR whose OP doesn't match the current occupy is rejected", "[rw5][REQ-407]") {
+    const std::string text =
+        "OC,OP1,N 1000.00000,E 1000.00000\n"
+        "BK,OP1,BP0,BS0.0000\n"
+        "TR,OP99,FP2,AR90.0000,ZE90.0000,SD100.000000\n";
+    const std::string path = WriteRw5Fixture("wrong_op.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("Rw5Import: no TR records is reported", "[rw5][REQ-407]") {
+    const std::string text = "OC,OP1,N 1000.00000,E 1000.00000\n";
+    const std::string path = WriteRw5Fixture("no_tr.rw5", text);
+
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import(path.c_str(), td, err));
+    CHECK_FALSE(err.empty());
+}
+
+TEST_CASE("Rw5Import: a missing file fails with a reason", "[rw5][REQ-407]") {
+    TraverseData td;
+    std::string err;
+    CHECK_FALSE(Rw5Import((Rw5TestDir() / "does-not-exist.rw5").string().c_str(), td, err));
+    CHECK_FALSE(err.empty());
 }
