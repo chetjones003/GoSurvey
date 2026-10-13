@@ -36,7 +36,8 @@ the places where a feature is present but not finished.
 
 - **[[Survey Points]]** — creating, editing, importing, and exporting the point database
 - **[[Point Groups and Surfaces]]** — rule-based groups and TIN surfaces
-- **[[Traverse Editor]]** — raw observations, Face 1/Face 2, least-squares closure, FBK import
+- **[[Traverse Editor]]** — raw observations, Face 1/Face 2, GPS vectors, least-squares closure,
+  a command-language editor, and raw-format import (FBK, STAR\*NET, RW5, JobXML)
 - **[[Coordinate Alignment]]** — ALIGN, the 2D Helmert fit, control-point tagging
 - **[[Inquiry Commands]]** — ID, INVERSE, SURFELEV
 

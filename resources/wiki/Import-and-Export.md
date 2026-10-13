@@ -8,6 +8,10 @@
 | **CSV** — survey points | ✔ | ✔ | `IMPORTPOINTS` / `EXPORTPOINTS` |
 | **JSON** — survey point database | ✔ | ✔ | Viewpoints / Create points panel |
 | **FBK** — Autodesk Field Book | ✔ | — | Traverse Editor → Import .fbk… |
+| **STAR\*NET .dat** — MicroSurvey raw data | ✔ | — | Traverse Editor → Import StarNet .dat… |
+| **RW5** — Carlson/SurvCE/SurvPC/TDS raw data | ✔ | — | Traverse Editor → Import RW5… |
+| **JobXML** — Trimble raw field data | ✔ | — | Traverse Editor → Import JobXML… |
+| **.gstrav** — GoSurvey traverse | ✔ | ✔ | Traverse Editor → Save / Load… |
 | **PDF** | ✔ *(as underlay)* | ✔ *(as a plot)* | `PDFATTACH` / Layout ribbon → Plot |
 | **glTF / GLB** | ✔ | — | `IMPORTMODEL` |
 | **STL** | ✔ | — | `IMPORTMODEL` |
@@ -165,6 +169,21 @@ a point set between drawings without going through CSV.
 **This replaces the current traverse.** Sample files are in the repository under `samples/`.
 
 Full detail: [[Traverse Editor]]
+
+---
+
+## STAR\*NET, RW5, and JobXML — raw field data
+
+**Traverse Editor → Import StarNet .dat… / Import RW5… / Import JobXML…**
+
+Three more raw-format importers, alongside FBK, each reading a different total-station/GNSS data
+logger's own field-data file straight into the Traverse Editor — no manual re-typing of angles and
+distances. **STAR\*NET .dat** also carries GPS vector records; **RW5** is one importer covering the
+shared record format used by Carlson SurvCE, SurvPC, and TDS. All three **replace the current
+traverse**, same as FBK.
+
+Full detail, including exactly which record types each importer supports and which are a defined
+gap: [[Traverse Editor]].
 
 ---
 
