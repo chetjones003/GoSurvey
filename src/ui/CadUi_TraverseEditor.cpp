@@ -6,6 +6,7 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
 #include "traverse/StarNetImport.hpp"
+#include "traverse/Rw5Import.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
 #include "WinFileDialogs.hpp"
@@ -562,6 +563,31 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         "Replaces the current traverse. StarNet records this importer doesn't\n"
         "support (GPS vectors, 3D data, general network angles, etc.) are reported\n"
         "as an import failure rather than silently dropped.");
+
+    // ---- Carlson RW5 import (GitHub issue #846, Phase B) ----
+    ImGui::SameLine();
+    if (ImGui::Button("Import RW5\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileRw5Utf8(path, sizeof(path))) {
+            TraverseData imported;
+            std::string err;
+            if (Rw5Import(path, imported, err)) {
+                cmd.traverseData = std::move(imported);
+                cmd.traverseDataDirty = true;
+                cmd.traverseExpandedLeg = -1;
+                log.push_back(std::string("TRAVERSE — imported RW5 (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — RW5 import failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip(
+        "Import a Carlson SurvCE/SurvPC raw data file (*.rw5): a sequential\n"
+        "OC/BK/TR traverse, with SP lines for known-point coordinates.\n"
+        "Replaces the current traverse. GNSS vectors and non-traverse records\n"
+        "(SS/BD/BR/FD/FR/OF) are either reported as unsupported or ignored by\n"
+        "design per the importer's documented scope, not silently misread.");
 
     // ---- Save / Load (REQ-403, GitHub issue #834) ----
     ImGui::SameLine();
