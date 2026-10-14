@@ -1055,7 +1055,7 @@ TEST_CASE("TraverseCommandLang: column alignment does not grow the text", "[trav
     const size_t dirLine = mixedAligned.find("\nDIR");
     REQUIRE(dirLine != std::string::npos);
     const size_t dirStart = dirLine + 1;
-    const size_t setId = mixedAligned.find("0", dirStart);
+    const size_t setId = mixedAligned.find('0', dirStart);
     REQUIRE(setId != std::string::npos);
     CHECK(setId - dirStart < 12);
 }
