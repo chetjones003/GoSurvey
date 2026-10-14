@@ -255,6 +255,20 @@ TEST_CASE("IntervalsCompatible tolerates a null message pointer", "[surface][req
   CHECK_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, nullptr));
 }
 
+TEST_CASE("IntervalsCompatible labels its rejection with the drawing's actual unit", "[surface][req070][style][req832]") {
+  // Issue #832: a meters drawing must not see "ft" in this message. The default (no unit passed)
+  // stays "ft" for every pre-existing caller — this only covers the new optional parameter.
+  std::string why;
+  REQUIRE_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, &why, "m"));
+  CHECK(Mentions(why, "7 m"));
+  CHECK(Mentions(why, "2 m"));
+  CHECK_FALSE(Mentions(why, "ft"));
+
+  std::string whyDefault;
+  REQUIRE_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, &whyDefault));
+  CHECK(Mentions(whyDefault, "ft"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Value equality — the display cache's staleness key rides on it
 // ---------------------------------------------------------------------------------------------

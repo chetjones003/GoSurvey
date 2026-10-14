@@ -1214,6 +1214,10 @@ static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
     constexpr float kFieldW = 150.f;
     LsaWeights& pw = cmd.traverseLsaWeights;
     bool pChanged = false;
+    const char* distUnit = CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits);  // issue #832
+    char lvlLabel[48], centeringHeader[48];
+    std::snprintf(lvlLabel, sizeof(lvlLabel), "Differential level \xcf\x83 (%s)", distUnit);
+    std::snprintf(centeringHeader, sizeof(centeringHeader), "Centering Errors (%s)", distUnit);
 
     ImGui::SeparatorText("Project Options");
     ImGui::Dummy(ImVec2(0, 2));
@@ -1240,12 +1244,12 @@ static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
     UiFormLabel("Zenith \xcf\x83 (sec)", kLabelW);
     ImGui::SetNextItemWidth(kFieldW);
     pChanged |= ImGui::InputDouble("##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
-    UiFormLabel("Differential level \xcf\x83 (ft)", kLabelW);
+    UiFormLabel(lvlLabel, kLabelW);
     ImGui::SetNextItemWidth(kFieldW);
     pChanged |= ImGui::InputDouble("##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
 
     ImGui::Dummy(ImVec2(0, 8));
-    ImGui::SeparatorText("Centering Errors (ft)");
+    ImGui::SeparatorText(centeringHeader);
     ImGui::Dummy(ImVec2(0, 2));
     UiFormLabel("Instrument", kLabelW);
     ImGui::SetNextItemWidth(kFieldW);
