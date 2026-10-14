@@ -236,12 +236,17 @@ window, re-read this section and check it against the running app, not just the 
   `###` as the visible title and the string after `###` as the stable id, e.g.
   `"Project Settings###traverse_project_settings"` — never let the raw id (a
   snake_case internal string) show up as the title text a user reads.
-- **Size it generously on first open.** `ImGui::SetNextWindowSize(ImVec2(w, h),
-  ImGuiCond_Appearing)` with enough room for the content to breathe — err larger,
-  not `ImGuiWindowFlags_AlwaysAutoResize` crammed to the exact pixel of its
-  narrowest valid layout. Prefer a window the user can still resize over one that
-  can't be (don't pass `ImGuiWindowFlags_NoResize` unless the content genuinely
-  can't reflow).
+- **No scrollbar — everything in a settings/options window is visible at once.**
+  Use `ImGuiWindowFlags_AlwaysAutoResize` so the window always sizes to its exact
+  content, plus a generous `ImGuiStyleVar_WindowPadding` (push before `Begin`/
+  `BeginPopupModal`, pop right after — `WindowPadding` is latched at `Begin` time)
+  and `ImGuiStyleVar_ItemSpacing` (push after `Begin`, pop before `EndPopup`/`End`
+  — `ItemSpacing` is live, not latched) so auto-sizing doesn't look cramped. A
+  scrollbar on a settings window is a sign the label column is too narrow or a
+  field belongs in a secondary/advanced section, not a reason to let it scroll.
+  A content-heavy window that's read more than edited (a report, a log, a table) is
+  the one case where a fixed `SetNextWindowSize(ImVec2(w, h), ImGuiCond_Appearing)`
+  plus a real scroll region is the right call instead.
 - **Settings/options windows use `UiFormLabel` (`src/ui/CadUiHelpers.hpp`), not a
   widget's own trailing label.** A settings/options window is one whose job is a
   list of labeled fields a person edits (not a toolbar, not a report/log view, not

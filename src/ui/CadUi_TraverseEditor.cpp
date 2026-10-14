@@ -1231,15 +1231,21 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
 // window happens to be open too.
 static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
     // Settings/options window layout standard (spec/coding-standards.md): a real title
-    // (### keeps the ImGui id stable while the visible text reads naturally), a generous
-    // fixed starting size so nothing feels cramped, and UiFormLabel's label/field columns
-    // instead of each widget's own trailing label — every field's input box lines up under
-    // every other field's, the way a native Windows options dialog does.
-    ImGui::SetNextWindowSize(ImVec2(440.f, 520.f), ImGuiCond_Appearing);
-    if (!ImGui::BeginPopupModal("Project Settings###traverse_project_settings"))
+    // (### keeps the ImGui id stable while the visible text reads naturally),
+    // AlwaysAutoResize so the window always fits its content exactly (no scrollbar —
+    // everything must be visible at once), generous WindowPadding so that auto-sizing
+    // doesn't look cramped, and UiFormLabel's label/field columns (wide enough for the
+    // longest label in the window) instead of each widget's own trailing label.
+    constexpr float kWindowPadX = 20.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(kWindowPadX, 18.f));
+    const bool open = ImGui::BeginPopupModal("Project Settings###traverse_project_settings", nullptr,
+                                             ImGuiWindowFlags_AlwaysAutoResize);
+    ImGui::PopStyleVar();  // WindowPadding is latched at Begin; ItemSpacing below must stay live.
+    if (!open)
         return;
-    constexpr float kLabelW = 190.f;
-    constexpr float kFieldW = 160.f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.f, 10.f));
+    constexpr float kLabelW = 230.f;
+    constexpr float kFieldW = 150.f;
     LsaWeights& pw = cmd.traverseLsaWeights;
     bool pChanged = false;
 
@@ -1293,11 +1299,12 @@ static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
     ImGui::Separator();
     ImGui::Dummy(ImVec2(0, 6));
     const float doneW = 100.f;
-    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - doneW - ImGui::GetStyle().WindowPadding.x);
+    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - doneW - kWindowPadX);
     if (ImGui::Button("Done", ImVec2(doneW, 0))) {
         cmd.traverseLsaComputed = false;
         ImGui::CloseCurrentPopup();
     }
+    ImGui::PopStyleVar();  // ItemSpacing, pushed after BeginPopupModal above.
     ImGui::EndPopup();
 }
 
