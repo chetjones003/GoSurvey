@@ -432,48 +432,6 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     ImGui::SameLine(0, 16);
     if (ImGui::Button("Project Settings\xe2\x80\xa6"))
         ImGui::OpenPopup("traverse_project_settings");
-    // ---- Project adjustment settings (REQ-422): instrument standard errors beyond the
-    // A-priori strip above, plus 2D/3D, convergence/iterations, and refraction. ----
-    if (ImGui::BeginPopupModal("traverse_project_settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        LsaWeights& pw = cmd.traverseLsaWeights;
-        bool pChanged = false;
-        ImGui::SeparatorText("Project Options");
-        pChanged |= ImGui::Checkbox("3D adjustment (informational)##lsa_3d", &pw.adjustmentIs3D);
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Convergence limit##lsa_conv", &pw.convergenceLimit, 0., 0., "%.2e");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputInt("Max iterations##lsa_maxiter", &pw.maxIterations);
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Coefficient of refraction##lsa_refr", &pw.refractionCoefficient, 0., 0., "%.4f");
-
-        ImGui::SeparatorText("Instrument Standard Errors");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Azimuth/bearing \xcf\x83 (sec)##lsa_az", &pw.sigmaAzimuthSec, 0., 0., "%.2f");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Zenith \xcf\x83 (sec)##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Differential level \xcf\x83 (ft)##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
-
-        ImGui::SeparatorText("Centering Errors (ft)");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Instrument##lsa_ci", &pw.centeringInstrumentFt, 0., 0., "%.4f");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Target##lsa_ct", &pw.centeringTargetFt, 0., 0., "%.4f");
-        ImGui::SetNextItemWidth(140.f);
-        pChanged |= ImGui::InputDouble("Vertical##lsa_cv", &pw.centeringVerticalFt, 0., 0., "%.4f");
-
-        if (pw.maxIterations < 1) pw.maxIterations = 1;
-        if (pw.convergenceLimit < 0.0) pw.convergenceLimit = 0.0;
-
-        if (pChanged) recompute();
-
-        ImGui::Spacing();
-        if (ImGui::Button("Done")) {
-            recompute();
-            ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-    }
 
     const LsaResult& res = cmd.traverseLsaResult;
 
@@ -796,7 +754,7 @@ void DrawHighlightedLine(const std::string& line) {
 // `into` already holds legs/side shots/GPS vectors, `imported`'s are appended instead
 // of clobbering them, so importing several raw-data files in one go (or one at a time,
 // via repeated Import clicks) builds up one continuous traverse rather than each file
-// stomping the last (issue #848 follow-up — a .godat file holds the merged result).
+// stomping the last (issue #848 follow-up — a .gsdat file holds the merged result).
 //
 // GSTC only models ONE sequential chain with globally-unique station numbers (every
 // STN's TO station id must be unique — TraverseCommandLang.cpp's `toIndex`/`sideIndex`
@@ -884,7 +842,7 @@ static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
 static void DrawTraverseFileButtons(AppCommandState& cmd, std::vector<std::string>& log) {
     TraverseData& td = cmd.traverseData;
 
-    // ---- Raw data import — multi-select: a .godat can hold several field-day raw
+    // ---- Raw data import — multi-select: a .gsdat can hold several field-day raw
     // files merged into one continuous traverse (issue #848 follow-up). ----
     if (ImGui::Button("Import .fbk\xe2\x80\xa6")) {
         std::vector<std::string> paths;
@@ -1003,52 +961,52 @@ static void DrawTraverseFileButtons(AppCommandState& cmd, std::vector<std::strin
     }
     ItemHelpTooltip("Load a previously saved .gstrav file, replacing the current traverse.");
 
-    // ---- .godat — the command-editor text itself, as its own plain-text file ----
-    // Distinct from .gstrav (a structured save of every input field): a .godat file
+    // ---- .gsdat — the command-editor text itself, as its own plain-text file ----
+    // Distinct from .gstrav (a structured save of every input field): a .gsdat file
     // is exactly what the Command/Editor tab's text box holds, byte for byte — open
     // it in any text editor, diff it, generate it from a script.
     ImGui::SameLine();
-    const bool haveGodatPath = !cmd.traverseGodatFilePath.empty();
-    if (!haveGodatPath) ImGui::BeginDisabled();
-    if (ImGui::Button("Save .godat")) {
-        std::ofstream f(cmd.traverseGodatFilePath, std::ios::binary | std::ios::trunc);
+    const bool haveGsdatPath = !cmd.traverseGsdatFilePath.empty();
+    if (!haveGsdatPath) ImGui::BeginDisabled();
+    if (ImGui::Button("Save .gsdat")) {
+        std::ofstream f(cmd.traverseGsdatFilePath, std::ios::binary | std::ios::trunc);
         if (f) {
             f << cmd.traverseCommandText;
-            log.push_back("TRAVERSE — saved .godat: " + cmd.traverseGodatFilePath);
+            log.push_back("TRAVERSE — saved .gsdat: " + cmd.traverseGsdatFilePath);
         } else {
-            log.push_back("TRAVERSE — .godat save failed: could not open \"" + cmd.traverseGodatFilePath + "\".");
+            log.push_back("TRAVERSE — .gsdat save failed: could not open \"" + cmd.traverseGsdatFilePath + "\".");
         }
     }
-    if (!haveGodatPath) ImGui::EndDisabled();
-    ItemHelpTooltip("Save the Command editor's text back to its current .godat file.");
+    if (!haveGsdatPath) ImGui::EndDisabled();
+    ItemHelpTooltip("Save the Command editor's text back to its current .gsdat file.");
 
     ImGui::SameLine();
-    if (ImGui::Button("Save .godat As\xe2\x80\xa6")) {
+    if (ImGui::Button("Save .gsdat As\xe2\x80\xa6")) {
         char path[1024]{};
-        const char* defaultName = haveGodatPath ? cmd.traverseGodatFilePath.c_str() : nullptr;
-        if (BrowseSaveFileGodatUtf8(path, sizeof(path), defaultName)) {
+        const char* defaultName = haveGsdatPath ? cmd.traverseGsdatFilePath.c_str() : nullptr;
+        if (BrowseSaveFileGsdatUtf8(path, sizeof(path), defaultName)) {
             std::ofstream f(path, std::ios::binary | std::ios::trunc);
             if (f) {
                 f << cmd.traverseCommandText;
-                cmd.traverseGodatFilePath = path;
-                log.push_back(std::string("TRAVERSE — saved .godat: ") + path);
+                cmd.traverseGsdatFilePath = path;
+                log.push_back(std::string("TRAVERSE — saved .gsdat: ") + path);
             } else {
-                log.push_back(std::string("TRAVERSE — .godat save failed: could not open \"") + path + "\".");
+                log.push_back(std::string("TRAVERSE — .gsdat save failed: could not open \"") + path + "\".");
             }
         }
     }
-    ItemHelpTooltip("Save the Command editor's text as a new .godat file (the GSTC source,\nplain text — not the structured .gstrav format).");
+    ItemHelpTooltip("Save the Command editor's text as a new .gsdat file (the GSTC source,\nplain text — not the structured .gstrav format).");
 
     ImGui::SameLine();
-    if (ImGui::Button("Open .godat\xe2\x80\xa6")) {
+    if (ImGui::Button("Open .gsdat\xe2\x80\xa6")) {
         char path[1024]{};
-        if (BrowseOpenFileGodatUtf8(path, sizeof(path))) {
+        if (BrowseOpenFileGsdatUtf8(path, sizeof(path))) {
             std::ifstream f(path, std::ios::binary);
             if (f) {
                 std::ostringstream ss;
                 ss << f.rdbuf();
                 cmd.traverseCommandText = ss.str();
-                cmd.traverseGodatFilePath = path;
+                cmd.traverseGsdatFilePath = path;
                 cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
                 TraverseData parsed;
                 LsaWeights parsedWeights;
@@ -1060,11 +1018,11 @@ static void DrawTraverseFileButtons(AppCommandState& cmd, std::vector<std::strin
                     cmd.traverseLsaComputed = false;
                     cmd.traverseExpandedLeg = -1;
                     cmd.traverseCommandError.clear();
-                    log.push_back(std::string("TRAVERSE — opened .godat (") +
+                    log.push_back(std::string("TRAVERSE — opened .gsdat (") +
                                   std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
                 } else {
                     cmd.traverseCommandError = err;
-                    log.push_back("TRAVERSE — .godat opened but failed to parse: " + err);
+                    log.push_back("TRAVERSE — .gsdat opened but failed to parse: " + err);
                 }
                 cmd.traverseCommandTextLoaded = true;  // the editor shows this text as-is, errors and all.
             } else {
@@ -1072,7 +1030,7 @@ static void DrawTraverseFileButtons(AppCommandState& cmd, std::vector<std::strin
             }
         }
     }
-    ItemHelpTooltip("Open a .godat command document, replacing both the Command editor's text\nand the current traverse.");
+    ItemHelpTooltip("Open a .gsdat command document, replacing both the Command editor's text\nand the current traverse.");
 }
 
 // File/Edit menu bar (replaces the import/save/load button row the left panel
@@ -1154,16 +1112,16 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
 
         ImGui::Separator();
 
-        const bool haveGodatPath = !cmd.traverseGodatFilePath.empty();
-        if (ImGui::MenuItem("Open .godat\xe2\x80\xa6")) {
+        const bool haveGsdatPath = !cmd.traverseGsdatFilePath.empty();
+        if (ImGui::MenuItem("Open .gsdat\xe2\x80\xa6")) {
             char path[1024]{};
-            if (BrowseOpenFileGodatUtf8(path, sizeof(path))) {
+            if (BrowseOpenFileGsdatUtf8(path, sizeof(path))) {
                 std::ifstream f(path, std::ios::binary);
                 if (f) {
                     std::ostringstream ss;
                     ss << f.rdbuf();
                     cmd.traverseCommandText = ss.str();
-                    cmd.traverseGodatFilePath = path;
+                    cmd.traverseGsdatFilePath = path;
                     cmd.traverseImportMarkers.clear();  // a different document — prior import history no longer applies.
                     TraverseData parsed;
                     LsaWeights parsedWeights;
@@ -1175,11 +1133,11 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
                         cmd.traverseLsaComputed = false;
                         cmd.traverseExpandedLeg = -1;
                         cmd.traverseCommandError.clear();
-                        log.push_back(std::string("TRAVERSE — opened .godat (") +
+                        log.push_back(std::string("TRAVERSE — opened .gsdat (") +
                                       std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
                     } else {
                         cmd.traverseCommandError = err;
-                        log.push_back("TRAVERSE — .godat opened but failed to parse: " + err);
+                        log.push_back("TRAVERSE — .gsdat opened but failed to parse: " + err);
                     }
                     cmd.traverseCommandTextLoaded = true;
                 } else {
@@ -1187,26 +1145,26 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
                 }
             }
         }
-        if (ImGui::MenuItem("Save .godat", nullptr, false, haveGodatPath)) {
-            std::ofstream f(cmd.traverseGodatFilePath, std::ios::binary | std::ios::trunc);
+        if (ImGui::MenuItem("Save .gsdat", nullptr, false, haveGsdatPath)) {
+            std::ofstream f(cmd.traverseGsdatFilePath, std::ios::binary | std::ios::trunc);
             if (f) {
                 f << cmd.traverseCommandText;
-                log.push_back("TRAVERSE — saved .godat: " + cmd.traverseGodatFilePath);
+                log.push_back("TRAVERSE — saved .gsdat: " + cmd.traverseGsdatFilePath);
             } else {
-                log.push_back("TRAVERSE — .godat save failed: could not open \"" + cmd.traverseGodatFilePath + "\".");
+                log.push_back("TRAVERSE — .gsdat save failed: could not open \"" + cmd.traverseGsdatFilePath + "\".");
             }
         }
-        if (ImGui::MenuItem("Save .godat As\xe2\x80\xa6")) {
+        if (ImGui::MenuItem("Save .gsdat As\xe2\x80\xa6")) {
             char path[1024]{};
-            const char* defaultName = haveGodatPath ? cmd.traverseGodatFilePath.c_str() : nullptr;
-            if (BrowseSaveFileGodatUtf8(path, sizeof(path), defaultName)) {
+            const char* defaultName = haveGsdatPath ? cmd.traverseGsdatFilePath.c_str() : nullptr;
+            if (BrowseSaveFileGsdatUtf8(path, sizeof(path), defaultName)) {
                 std::ofstream f(path, std::ios::binary | std::ios::trunc);
                 if (f) {
                     f << cmd.traverseCommandText;
-                    cmd.traverseGodatFilePath = path;
-                    log.push_back(std::string("TRAVERSE — saved .godat: ") + path);
+                    cmd.traverseGsdatFilePath = path;
+                    log.push_back(std::string("TRAVERSE — saved .gsdat: ") + path);
                 } else {
-                    log.push_back(std::string("TRAVERSE — .godat save failed: could not open \"") + path + "\".");
+                    log.push_back(std::string("TRAVERSE — .gsdat save failed: could not open \"") + path + "\".");
                 }
             }
         }
@@ -1218,7 +1176,7 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
         if (ImGui::MenuItem("Clear Traverse")) {
             cmd.traverseData = TraverseData{};
             cmd.traverseFilePath.clear();
-            cmd.traverseGodatFilePath.clear();
+            cmd.traverseGsdatFilePath.clear();
             cmd.traverseImportMarkers.clear();
             cmd.traverseDataDirty = true;
             cmd.traverseLsaComputed = false;
@@ -1266,6 +1224,53 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
 // actions as buttons, separate from the File/Edit menus that hold the same
 // actions plus everything else). No icon artwork of our own for these yet —
 // labeled buttons stand in for it.
+// Project adjustment settings (REQ-422): instrument standard errors, centering error,
+// refraction, and the solver's 2D/3D/convergence/iteration options. Triggered by
+// ImGui::OpenPopup("traverse_project_settings") from anywhere; rendered once, from the
+// always-visible LSA Editor toolbar, so it opens whether or not the Closure Analysis
+// window happens to be open too.
+static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
+    if (!ImGui::BeginPopupModal("traverse_project_settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+    LsaWeights& pw = cmd.traverseLsaWeights;
+    bool pChanged = false;
+    ImGui::SeparatorText("Project Options");
+    pChanged |= ImGui::Checkbox("3D adjustment (informational)##lsa_3d", &pw.adjustmentIs3D);
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Convergence limit##lsa_conv", &pw.convergenceLimit, 0., 0., "%.2e");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputInt("Max iterations##lsa_maxiter", &pw.maxIterations);
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Coefficient of refraction##lsa_refr", &pw.refractionCoefficient, 0., 0., "%.4f");
+
+    ImGui::SeparatorText("Instrument Standard Errors");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Azimuth/bearing \xcf\x83 (sec)##lsa_az", &pw.sigmaAzimuthSec, 0., 0., "%.2f");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Zenith \xcf\x83 (sec)##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Differential level \xcf\x83 (ft)##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
+
+    ImGui::SeparatorText("Centering Errors (ft)");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Instrument##lsa_ci", &pw.centeringInstrumentFt, 0., 0., "%.4f");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Target##lsa_ct", &pw.centeringTargetFt, 0., 0., "%.4f");
+    ImGui::SetNextItemWidth(140.f);
+    pChanged |= ImGui::InputDouble("Vertical##lsa_cv", &pw.centeringVerticalFt, 0., 0., "%.4f");
+
+    if (pw.maxIterations < 1) pw.maxIterations = 1;
+    if (pw.convergenceLimit < 0.0) pw.convergenceLimit = 0.0;
+    if (pChanged) cmd.traverseLsaComputed = false;  // EnsureLsaComputed redoes the adjustment.
+
+    ImGui::Spacing();
+    if (ImGui::Button("Done")) {
+        cmd.traverseLsaComputed = false;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+}
+
 static void DrawTraverseToolbar(AppCommandState& cmd, std::vector<std::string>& log) {
     TraverseData& td = cmd.traverseData;
     const bool haveGstrav = !cmd.traverseFilePath.empty();
@@ -1280,7 +1285,7 @@ static void DrawTraverseToolbar(AppCommandState& cmd, std::vector<std::string>& 
         }
     }
     if (!haveGstrav) ImGui::EndDisabled();
-    ItemHelpTooltip("Save .gstrav (File menu has Save As\xe2\x80\xa6/Load\xe2\x80\xa6/the .godat actions too).");
+    ItemHelpTooltip("Save .gstrav (File menu has Save As\xe2\x80\xa6/Load\xe2\x80\xa6/the .gsdat actions too).");
 
     ImGui::SameLine();
     if (ImGui::Button("Open\xe2\x80\xa6")) {
@@ -1316,6 +1321,14 @@ static void DrawTraverseToolbar(AppCommandState& cmd, std::vector<std::string>& 
         log.push_back("TRAVERSE — re-ran the least-squares adjustment.");
     }
     ItemHelpTooltip("Re-run the least-squares adjustment (it also reruns automatically whenever\nthe command text or traverse data changes).");
+
+    ImGui::SameLine();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine();
+    if (ImGui::Button("Project Settings\xe2\x80\xa6"))
+        ImGui::OpenPopup("traverse_project_settings");
+    ItemHelpTooltip("Instrument standard errors, centering error, refraction, and adjustment\noptions used by the least-squares solver and shown in the report (REQ-422).");
+    DrawTraverseProjectSettingsPopup(cmd);
 }
 
 // First newline that begins a measurement line, or npos when the text is only a header.
@@ -2145,8 +2158,8 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
             // often sized like a document window, not a wide toolbar strip).
             if (!cmd.traverseFilePath.empty()) ImGui::TextWrapped(".gstrav: %s", cmd.traverseFilePath.c_str());
             else ImGui::TextDisabled(".gstrav: (unsaved)");
-            if (!cmd.traverseGodatFilePath.empty()) ImGui::TextWrapped(".godat: %s", cmd.traverseGodatFilePath.c_str());
-            else ImGui::TextDisabled(".godat: (unsaved)");
+            if (!cmd.traverseGsdatFilePath.empty()) ImGui::TextWrapped(".gsdat: %s", cmd.traverseGsdatFilePath.c_str());
+            else ImGui::TextDisabled(".gsdat: (unsaved)");
         }
         ImGui::EndChild();
         DrawHorizontalSplitter("##lsa_split_files", &s_filesH, minSectionH, maxSectionH, sectionW);

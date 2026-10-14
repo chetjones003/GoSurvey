@@ -60,7 +60,7 @@ bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap);
 bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap);
 
 /// Multi-select variants of the four raw-data pickers above (issue #848 follow-up):
-/// a .godat file can hold the merged legs of several field-day raw files, so the
+/// a .gsdat file can hold the merged legs of several field-day raw files, so the
 /// LSA Editor's Import actions let the user pick more than one file of the same
 /// format in a single dialog. Returns false (outPaths left empty) if cancelled or
 /// unavailable (non-Windows); outPaths is cleared on every call.
@@ -75,12 +75,12 @@ bool BrowseOpenFileGstravUtf8(char* utf8Out, size_t utf8Cap);
 /// REQ-403 (#834): where to save a Traverse Editor session (`.gstrav`).
 bool BrowseSaveFileGstravUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
-/// LSA Editor command-text document (`.godat`) to open — the GSTC source text
+/// LSA Editor command-text document (`.gsdat`) to open — the GSTC source text
 /// itself, as a plain file, distinct from the structured `.gstrav` save format.
-bool BrowseOpenFileGodatUtf8(char* utf8Out, size_t utf8Cap);
+bool BrowseOpenFileGsdatUtf8(char* utf8Out, size_t utf8Cap);
 
-/// Where to save a `.godat` command-text document.
-bool BrowseSaveFileGodatUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+/// Where to save a `.gsdat` command-text document.
+bool BrowseSaveFileGsdatUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
 /// glTF / GLB 3D model for import (REQ-065).
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
