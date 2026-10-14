@@ -28,7 +28,7 @@ std::string Line(char fillChar, int width) { return std::string(static_cast<size
 std::string IdOrDash(int id) { return id < 0 ? std::string("-") : std::to_string(id); }
 
 template <typename T>
-std::string Field(const char* label, T value, const char* unit = "") {
+std::string Field(const char* label, const T& value, const char* unit = "") {
     char buf[160];
     if constexpr (std::is_same_v<T, std::string>) {
         std::snprintf(buf, sizeof(buf), "  %-28s: %s%s\n", label, value.c_str(), unit);
