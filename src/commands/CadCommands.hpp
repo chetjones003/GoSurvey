@@ -8028,6 +8028,15 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                  std::vector<std::string>& log);
 
+/// Every primary command name in the command registry (issue #785's regression test: a merge
+/// dropped eight handlers while leaving their registry rows in place, which made the loss
+/// invisible by inspection). Test-only, but cheap enough to leave built in all configurations.
+std::vector<std::string> RegisteredCommandPrimariesForTest();
+
+/// True if some handler claimed \p primary (a name from `RegisteredCommandPrimariesForTest()`).
+/// False means the registry advertises a command that silently does nothing when typed.
+bool DispatchByPrimaryForTest(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
+
 /// Rotate the whole selection by \p rad about the axis through (\p bx, \p by, \p bz) parallel to the
 /// ACTIVE UCS Z — the complete typed-ROTATE transform, dispatch included (REQ-329 increment 2,
 /// REQ-332 increment 2). The caller owns the undo snapshot.
