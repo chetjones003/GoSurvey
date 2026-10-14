@@ -221,6 +221,43 @@ Let tools enforce mechanical style so reviews can focus on substance.
   Vendored third-party targets build at `/w` (`third_party/`, D-2026-08-31-b).
 - Commit formatter config to the repo; never hand-format around it.
 
+## 11a. ImGui windows and settings/options dialogs
+
+Every new ImGui window, popup, or modal — ribbon palette, settings dialog, report
+viewer, anything — follows these so the app feels like one program, not a pile of
+ad hoc panels each agent invented fresh (D-2026-10-14-c). Before shipping a new
+window, re-read this section and check it against the running app, not just the code.
+
+- **Move by the title bar only.** `main.cpp` sets
+  `io.ConfigWindowsMoveFromTitleBarOnly = true` once, globally — a new window never
+  needs to do anything for this; if a window feels draggable from its body, that is
+  a regression in this global flag, not something to fix per-window.
+- **Give every window a real title.** `BeginPopupModal`/`Begin` use the string before
+  `###` as the visible title and the string after `###` as the stable id, e.g.
+  `"Project Settings###traverse_project_settings"` — never let the raw id (a
+  snake_case internal string) show up as the title text a user reads.
+- **Size it generously on first open.** `ImGui::SetNextWindowSize(ImVec2(w, h),
+  ImGuiCond_Appearing)` with enough room for the content to breathe — err larger,
+  not `ImGuiWindowFlags_AlwaysAutoResize` crammed to the exact pixel of its
+  narrowest valid layout. Prefer a window the user can still resize over one that
+  can't be (don't pass `ImGuiWindowFlags_NoResize` unless the content genuinely
+  can't reflow).
+- **Settings/options windows use `UiFormLabel` (`src/ui/CadUiHelpers.hpp`), not a
+  widget's own trailing label.** A settings/options window is one whose job is a
+  list of labeled fields a person edits (not a toolbar, not a report/log view, not
+  a canvas). For each field: `UiFormLabel("Label", kLabelW)` then the widget with an
+  `"##id"`-only label (so nothing is drawn twice), `ImGui::SetNextItemWidth` set to
+  one shared `kFieldW` for the whole window. This is what makes a column of fields
+  line up under each other the way a native Windows options dialog does, instead of
+  each row's input box starting wherever that row's label happened to end.
+- **Group related fields under `ImGui::SeparatorText`, with a small `ImGui::Dummy`
+  spacer before each section and before the closing button row** — see
+  `DrawTraverseProjectSettingsPopup` (`src/ui/CadUi_TraverseEditor.cpp`) for a
+  worked example of all of the above together.
+- **A primary action button (Done/OK/Save) is right-aligned**, not left-stuck under
+  the last field: `ImGui::SetCursorPosX(ImGui::GetWindowWidth() - buttonW -
+  ImGui::GetStyle().WindowPadding.x)`.
+
 ## 12. Tests
 
 - Every `must` requirement has a happy-path **and** a failure-mode test.

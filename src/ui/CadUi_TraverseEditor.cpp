@@ -1230,41 +1230,71 @@ static void DrawTraverseMenuBar(AppCommandState& cmd, std::vector<std::string>& 
 // always-visible LSA Editor toolbar, so it opens whether or not the Closure Analysis
 // window happens to be open too.
 static void DrawTraverseProjectSettingsPopup(AppCommandState& cmd) {
-    if (!ImGui::BeginPopupModal("traverse_project_settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    // Settings/options window layout standard (spec/coding-standards.md): a real title
+    // (### keeps the ImGui id stable while the visible text reads naturally), a generous
+    // fixed starting size so nothing feels cramped, and UiFormLabel's label/field columns
+    // instead of each widget's own trailing label — every field's input box lines up under
+    // every other field's, the way a native Windows options dialog does.
+    ImGui::SetNextWindowSize(ImVec2(440.f, 520.f), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopupModal("Project Settings###traverse_project_settings"))
         return;
+    constexpr float kLabelW = 190.f;
+    constexpr float kFieldW = 160.f;
     LsaWeights& pw = cmd.traverseLsaWeights;
     bool pChanged = false;
+
     ImGui::SeparatorText("Project Options");
-    pChanged |= ImGui::Checkbox("3D adjustment (informational)##lsa_3d", &pw.adjustmentIs3D);
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Convergence limit##lsa_conv", &pw.convergenceLimit, 0., 0., "%.2e");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputInt("Max iterations##lsa_maxiter", &pw.maxIterations);
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Coefficient of refraction##lsa_refr", &pw.refractionCoefficient, 0., 0., "%.4f");
+    ImGui::Dummy(ImVec2(0, 2));
+    UiFormLabel("3D adjustment", kLabelW);
+    pChanged |= ImGui::Checkbox("##lsa_3d", &pw.adjustmentIs3D);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(informational)");
+    UiFormLabel("Convergence limit", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_conv", &pw.convergenceLimit, 0., 0., "%.2e");
+    UiFormLabel("Max iterations", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputInt("##lsa_maxiter", &pw.maxIterations);
+    UiFormLabel("Coefficient of refraction", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_refr", &pw.refractionCoefficient, 0., 0., "%.4f");
 
+    ImGui::Dummy(ImVec2(0, 8));
     ImGui::SeparatorText("Instrument Standard Errors");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Azimuth/bearing \xcf\x83 (sec)##lsa_az", &pw.sigmaAzimuthSec, 0., 0., "%.2f");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Zenith \xcf\x83 (sec)##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Differential level \xcf\x83 (ft)##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
+    ImGui::Dummy(ImVec2(0, 2));
+    UiFormLabel("Azimuth/bearing \xcf\x83 (sec)", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_az", &pw.sigmaAzimuthSec, 0., 0., "%.2f");
+    UiFormLabel("Zenith \xcf\x83 (sec)", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
+    UiFormLabel("Differential level \xcf\x83 (ft)", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
 
+    ImGui::Dummy(ImVec2(0, 8));
     ImGui::SeparatorText("Centering Errors (ft)");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Instrument##lsa_ci", &pw.centeringInstrumentFt, 0., 0., "%.4f");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Target##lsa_ct", &pw.centeringTargetFt, 0., 0., "%.4f");
-    ImGui::SetNextItemWidth(140.f);
-    pChanged |= ImGui::InputDouble("Vertical##lsa_cv", &pw.centeringVerticalFt, 0., 0., "%.4f");
+    ImGui::Dummy(ImVec2(0, 2));
+    UiFormLabel("Instrument", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_ci", &pw.centeringInstrumentFt, 0., 0., "%.4f");
+    UiFormLabel("Target", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_ct", &pw.centeringTargetFt, 0., 0., "%.4f");
+    UiFormLabel("Vertical", kLabelW);
+    ImGui::SetNextItemWidth(kFieldW);
+    pChanged |= ImGui::InputDouble("##lsa_cv", &pw.centeringVerticalFt, 0., 0., "%.4f");
 
     if (pw.maxIterations < 1) pw.maxIterations = 1;
     if (pw.convergenceLimit < 0.0) pw.convergenceLimit = 0.0;
     if (pChanged) cmd.traverseLsaComputed = false;  // EnsureLsaComputed redoes the adjustment.
 
-    ImGui::Spacing();
-    if (ImGui::Button("Done")) {
+    ImGui::Dummy(ImVec2(0, 12));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0, 6));
+    const float doneW = 100.f;
+    ImGui::SetCursorPosX(ImGui::GetWindowWidth() - doneW - ImGui::GetStyle().WindowPadding.x);
+    if (ImGui::Button("Done", ImVec2(doneW, 0))) {
         cmd.traverseLsaComputed = false;
         ImGui::CloseCurrentPopup();
     }
