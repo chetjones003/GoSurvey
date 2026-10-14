@@ -1,6 +1,7 @@
 #include "util/pointcloudcache.hpp"
 
 #include "io/CadPointCloudE57.hpp"
+#include "io/CadPointCloudLas.hpp"  // REQ-172 LAS increment — reader, same contract as E57
 
 #include <algorithm>
 #include <array>
@@ -226,13 +227,19 @@ int SplitOrKeep(const std::string &filePath, std::int64_t pointCount, const poin
   return static_cast<int>(nodes.size() - 1);
 }
 
-}  // namespace
-
-bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
-                   std::vector<std::string> &progressLog, std::string *errorMessage,
-                   std::atomic<std::int64_t> *pointsStreamedOut,
-                   std::atomic<std::int64_t> *pointsFinalizedOut,
-                   const std::atomic<bool> *cancelRequested) {
+/// Shared body of \ref BuildFromE57 and \ref BuildFromLas: the out-of-core build (stream to a
+/// root temp file, then recursively bucket-split it) does not care which format the points came
+/// from — only `streamFn` (one of `pointcloud_e57::StreamE57File` / `pointcloud_las::StreamLasFile`)
+/// and the "zero points" message differ between formats. Kept as a template rather than a second
+/// ~250-line copy (REQ-172 LAS increment) — the same "parameterize by format" shape
+/// `RunPointCloudImportWorker` in `CadCommands.cpp` also uses.
+template <typename StreamFn>
+bool BuildFromStreamedSource(const std::string &sourcePath, const std::string &cachePath,
+                              std::vector<std::string> &progressLog, std::string *errorMessage,
+                              std::atomic<std::int64_t> *pointsStreamedOut,
+                              std::atomic<std::int64_t> *pointsFinalizedOut,
+                              const std::atomic<bool> *cancelRequested, StreamFn &&streamFn,
+                              const char *zeroPointsMessage) {
   const auto fail = [&](const std::string &msg) {
     if (errorMessage) *errorMessage = msg;
     return false;
@@ -277,9 +284,9 @@ bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
   // already treats multi-setup files as a smaller-first simplification) would have a later scan's
   // channel silently zero-filled rather than sized differently mid-stream, which fixed-size
   // records require anyway.
-  const bool streamOk = pointcloud_e57::StreamE57File(
+  const bool streamOk = streamFn(
       sourcePath, kStreamChunkPoints,
-      [&](const pointcloud_e57::PointChunk &chunk) -> bool {
+      [&](const auto &chunk) -> bool {
         if (cancelRequested && cancelRequested->load(std::memory_order_relaxed)) return false;
         const std::int64_t n = static_cast<std::int64_t>(chunk.pointsXyz.size() / 3);
         if (n == 0) return true;
@@ -349,7 +356,7 @@ bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
   }
   if (totalCount == 0) {
     cleanupTemp();
-    return fail("E57 import: contains zero valid points");
+    return fail(zeroPointsMessage);
   }
 
   progressLog.push_back("Indexing " + std::to_string(totalCount) + " point(s)...");
@@ -471,6 +478,28 @@ bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
   }
   progressLog.push_back("Wrote cache: " + cachePath);
   return true;
+}
+
+}  // namespace
+
+bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
+                   std::vector<std::string> &progressLog, std::string *errorMessage,
+                   std::atomic<std::int64_t> *pointsStreamedOut,
+                   std::atomic<std::int64_t> *pointsFinalizedOut,
+                   const std::atomic<bool> *cancelRequested) {
+  return BuildFromStreamedSource(sourcePath, cachePath, progressLog, errorMessage,
+                                  pointsStreamedOut, pointsFinalizedOut, cancelRequested,
+                                  pointcloud_e57::StreamE57File, "E57 import: contains zero valid points");
+}
+
+bool BuildFromLas(const std::string &sourcePath, const std::string &cachePath,
+                   std::vector<std::string> &progressLog, std::string *errorMessage,
+                   std::atomic<std::int64_t> *pointsStreamedOut,
+                   std::atomic<std::int64_t> *pointsFinalizedOut,
+                   const std::atomic<bool> *cancelRequested) {
+  return BuildFromStreamedSource(sourcePath, cachePath, progressLog, errorMessage,
+                                  pointsStreamedOut, pointsFinalizedOut, cancelRequested,
+                                  pointcloud_las::StreamLasFile, "LAS import: contains zero valid points");
 }
 
 OpenResult Open(const std::string &cachePath) {

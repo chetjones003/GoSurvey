@@ -557,6 +557,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
   src/io/CadPointCloudE57.cpp
 
+  # LAS (ASPRS binary) point-cloud reader/writer (REQ-172, LAS increment — delivered after PTX
+  # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
+  src/io/CadPointCloudLas.cpp
+
   # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
   # multi-GB scan is never fully resident in memory.
   src/util/pointcloudcache.cpp
@@ -1156,6 +1160,12 @@ if(GOSURVEY_BUILD_TESTS)
     # AcisSatParserTests pins its own reader above.
     tests/CadPointCloudE57Tests.cpp
     src/io/CadPointCloudE57.cpp
+    # REQ-172 LAS increment (delivered after PTX, `spec/file-format-specs.md` §6) — in-tree binary
+    # reader/writer round-trip (point formats 0/2, hand-checked scale+offset decode) and
+    # malformed/truncated/unsupported-format/missing-file refusal. Pinned directly, same as the
+    # E57 reader above.
+    tests/CadPointCloudLasTests.cpp
+    src/io/CadPointCloudLas.cpp
     # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
     # the octree and E57 reader above.
     tests/PointCloudCacheTests.cpp
