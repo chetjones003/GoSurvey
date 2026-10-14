@@ -320,7 +320,9 @@ void LoadUserStartupPrefs(AppCommandState& st) {
     }
     if (j.contains("settings") && j["settings"].is_object())
       ApplyUserPrefsSettings(st, j["settings"]);
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): a corrupt/unreadable prefs file falls back to
+                   // defaults; st was only ever partially written above, and every field already
+                   // has a sane default.
   }
 }
 
@@ -336,7 +338,8 @@ void LoadUserStartupPrefSettings(AppCommandState& st) {
       return;
     if (j.contains("settings") && j["settings"].is_object())
       ApplyUserPrefsSettings(st, j["settings"]);
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): same fallback-to-defaults reasoning as
+                   // LoadUserStartupPrefs above.
   }
 }
 
@@ -538,7 +541,8 @@ TelemetryIds GetTelemetryIds() {
 
     if (j.contains("installId") && j["installId"].is_string())
       result.installId = j["installId"].get<std::string>();
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): a corrupt/unreadable prefs file leaves
+                   // result's install id unset, which callers already treat as "none yet".
   }
 
   return result;
