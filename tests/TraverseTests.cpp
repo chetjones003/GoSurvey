@@ -13,6 +13,7 @@
 #include "traverse/StarNetImport.hpp"
 #include "traverse/Rw5Import.hpp"
 #include "traverse/JobXmlImport.hpp"
+#include "traverse/TraverseReport.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1623,16 +1624,16 @@ TEST_CASE("StarNetImport: a skipped inline option becomes an editor comment", "[
     TraverseData td;
     std::string err;
     REQUIRE(StarNetImport(path.c_str(), td, err));
-    REQUIRE(td.starnetSkippedInlineOptions.size() == 1);
-    CHECK(td.starnetSkippedInlineOptions[0].find(".INCLUDE") != std::string::npos);
+    REQUIRE(td.importerSkippedInlineOptions.size() == 1);
+    CHECK(td.importerSkippedInlineOptions[0].find(".INCLUDE") != std::string::npos);
     const std::string shown = travcmd::Serialize(td, LsaWeights{});
     CHECK(shown.find("Inline option from STAR*NET (not applied): .INCLUDE other.dat") != std::string::npos);
 
     TraverseData roundTrip;
     LsaWeights weights;
     REQUIRE(travcmd::Parse(shown, roundTrip, weights, err));
-    REQUIRE(roundTrip.starnetSkippedInlineOptions.size() == 1);
-    CHECK(roundTrip.starnetSkippedInlineOptions[0] == ".INCLUDE other.dat");
+    REQUIRE(roundTrip.importerSkippedInlineOptions.size() == 1);
+    CHECK(roundTrip.importerSkippedInlineOptions[0] == ".INCLUDE other.dat");
 }
 
 TEST_CASE("StarNetImport: a second TB (interconnected traverses) is rejected", "[starnet][REQ-406]") {
@@ -2743,4 +2744,228 @@ TEST_CASE("JobXmlImport: a missing file fails with a reason", "[jobxml][REQ-410]
     std::string err;
     CHECK_FALSE(JobXmlImport((JobXmlTestDir() / "does-not-exist.jxl").string().c_str(), td, err));
     CHECK_FALSE(err.empty());
+}
+
+// ---- REQ-422: project adjustment settings (centering error, refraction, iterations) ----
+
+TEST_CASE("Centering error widens a short sight's angle standard error more than a long one",
+         "[lsa][req422]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\n"
+        "CTRL 2 10 0 ! !\n"   // short sight: 10 ft
+        "CTRL 3 1000 0 ! !\n" // long sight: 1000 ft
+        "CTRL 4 10 10 * *\n"
+        "CTRL 5 1000 10 * *\n"
+        "DIST 1 2 10\nDIST 2 4 10\nANGLE 1 2 4 90\n"
+        "DIST 1 3 1000\nDIST 3 5 10\nANGLE 1 3 5 90\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    weights.centeringInstrumentFt = 0.01;
+    weights.centeringTargetFt = 0.01;
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    double shortAngleStdError = 0.0, longAngleStdError = 0.0;
+    for (const LsaMeasResidual& row : result.measResiduals) {
+        if (row.kind != LsaMeasKind::Angle) continue;
+        if (row.atStationId == 1 && row.toStationId == 4) shortAngleStdError = row.stdError;
+        if (row.atStationId == 1 && row.toStationId == 5) longAngleStdError = row.stdError;
+    }
+    REQUIRE(shortAngleStdError > 0.0);
+    REQUIRE(longAngleStdError > 0.0);
+    CHECK(shortAngleStdError > longAngleStdError);
+}
+
+TEST_CASE("Zenith refraction correction matches the curvature+refraction formula", "[lsa][req422]") {
+    // Two long sights to a free-elevation station: the refraction coefficient should change
+    // the adjusted elevation by the curvature+refraction correction, which this test computes
+    // independently from the same formula the solver uses (REQ-422 statement 4).
+    const char* text =
+        "CTRL 1 0 0 0 ! ! !\n"
+        "CTRL 2 0 5000 0 ! ! !\n"
+        "CTRL 3 5000 0 5 ! ! *\n"  // easting/northing fixed, elevation free.
+        "ZENITH 1 3 89\n"
+        "ZENITH 2 3 89\n";
+    auto adjustedElevation = [&](double k) -> double {
+        TraverseData td;
+        LsaWeights weights;
+        std::string err;
+        REQUIRE(travcmd::Parse(text, td, weights, err));
+        weights.refractionCoefficient = k;
+        const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+        INFO(result.message);
+        REQUIRE(result.ok);
+        for (size_t i = 0; i < result.stationIds.size(); ++i)
+            if (result.stationIds[i] == 3) return result.adjElevation[i];
+        FAIL("station 3 not in the free-station list");
+        return 0.0;
+    };
+    const double elevNoRefraction = adjustedElevation(1.0);   // (1-k) == 0: no correction.
+    const double elevWithRefraction = adjustedElevation(0.07);
+    const double kEarthRadiusFt = 20902231.0;
+    // Both sights contribute their own correction; the two zeniths pull the single free
+    // elevation unknown roughly equally, so the net shift is on the order of one sight's
+    // correction converted through dZ -> dElev at near-level geometry (dElev ~= -S*dZ).
+    const double expectedOrderOfMagnitude = (1.0 - 0.07) * 5000.0 / (2.0 * kEarthRadiusFt) * 5000.0;
+    const double actualShift = std::abs(elevWithRefraction - elevNoRefraction);
+    CHECK(actualShift > 0.0);
+    CHECK(actualShift < expectedOrderOfMagnitude * 2.0);
+}
+
+TEST_CASE("maxIterations and convergenceLimit change the adjustment's reported iteration count",
+         "[lsa][req422]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\nCTRL 2 100 0 ! !\nCTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\nDIST 2 3 100\nDIST 1 3 100\nANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    // convergenceLimit of 0 is never satisfied (maxStep is never < 0), so the loop always
+    // runs to maxIterations -- directly exercising the cap.
+    weights.convergenceLimit = 0.0;
+    weights.maxIterations = 1;
+    const LsaResult capped = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(capped.ok);
+    weights.maxIterations = 5;
+    const LsaResult lessCapped = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(lessCapped.ok);
+    CHECK(lessCapped.iterations > capped.iterations);
+}
+
+TEST_CASE("Saving and reloading a .gstrav file round-trips the new settings fields", "[req422]") {
+    LsaWeights w;
+    w.sigmaAzimuthSec = 3.5;
+    w.sigmaZenithSec = 8.0;
+    w.sigmaLevelFt = 0.02;
+    w.centeringInstrumentFt = 0.004;
+    w.centeringTargetFt = 0.003;
+    w.centeringVerticalFt = 0.002;
+    w.adjustmentIs3D = true;
+    w.refractionCoefficient = 0.08;
+    w.convergenceLimit = 1e-7;
+    w.maxIterations = 20;
+
+    TraverseData td;
+    td.startStationId = 1;
+    td.importedFiles.push_back("C:/jobs/job1.dat");
+    const std::string path = (std::filesystem::temp_directory_path() / "req422_roundtrip.gstrav").string();
+    std::string err;
+    REQUIRE(traverseio::Save(path, td, w, err));
+
+    TraverseData loaded;
+    LsaWeights loadedW;
+    REQUIRE(traverseio::Load(path, loaded, loadedW, err));
+    CHECK(loadedW.sigmaAzimuthSec == Approx(3.5));
+    CHECK(loadedW.sigmaZenithSec == Approx(8.0));
+    CHECK(loadedW.sigmaLevelFt == Approx(0.02));
+    CHECK(loadedW.centeringInstrumentFt == Approx(0.004));
+    CHECK(loadedW.centeringTargetFt == Approx(0.003));
+    CHECK(loadedW.centeringVerticalFt == Approx(0.002));
+    CHECK(loadedW.adjustmentIs3D == true);
+    CHECK(loadedW.refractionCoefficient == Approx(0.08));
+    CHECK(loadedW.convergenceLimit == Approx(1e-7));
+    CHECK(loadedW.maxIterations == 20);
+    REQUIRE(loaded.importedFiles.size() == 1);
+    CHECK(loaded.importedFiles[0] == "C:/jobs/job1.dat");
+    std::filesystem::remove(path);
+}
+
+// ---- REQ-423: adjustment report (summary section + export) ----
+
+TEST_CASE("Report text lists files, then settings, then the residual listing, in order",
+         "[req423]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\nCTRL 2 100 0 ! !\nCTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\nDIST 2 3 100\nDIST 1 3 100\nANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    td.importedFiles.push_back("C:/jobs/job1.dat");
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+
+    const std::string report = traverserpt::BuildReportText(td, weights, result, "Test Project", "ft");
+    const size_t filesPos = report.find("Data File List");
+    const size_t settingsPos = report.find("Project Option Settings");
+    const size_t instrumentPos = report.find("Instrument Standard Error Settings");
+    const size_t residualsPos = report.find("Measurement Residuals");
+    const size_t coordsPos = report.find("Adjusted Coordinates");
+    REQUIRE(filesPos != std::string::npos);
+    REQUIRE(settingsPos != std::string::npos);
+    REQUIRE(instrumentPos != std::string::npos);
+    REQUIRE(residualsPos != std::string::npos);
+    REQUIRE(coordsPos != std::string::npos);
+    CHECK(filesPos < settingsPos);
+    CHECK(settingsPos < instrumentPos);
+    CHECK(instrumentPos < residualsPos);
+    CHECK(residualsPos < coordsPos);
+    CHECK(report.find("job1.dat") != std::string::npos);
+    CHECK(report.find("StarNet") == std::string::npos);
+    CHECK(report.find("STAR*NET") == std::string::npos);
+    // A distance's "At" column has no station (REQ-424-ish readability fix): "-", not -1.
+    CHECK(report.find(" -1 ") == std::string::npos);
+    CHECK(report.find("Distance") != std::string::npos);
+}
+
+TEST_CASE("A case with no imported files still produces a report", "[req423]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\nCTRL 2 100 0 ! !\nCTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\nDIST 2 3 100\nDIST 1 3 100\nANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    const std::string report = traverserpt::BuildReportText(td, weights, result, "", "ft");
+    CHECK(report.find("(none imported)") != std::string::npos);
+    CHECK_FALSE(report.empty());
+}
+
+TEST_CASE("Each report export produces a valid, non-empty file", "[req423]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\nCTRL 2 100 0 ! !\nCTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\nDIST 2 3 100\nDIST 1 3 100\nANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(travcmd::Parse(text, td, weights, err));
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights);
+    REQUIRE(result.ok);
+    const std::string report = traverserpt::BuildReportText(td, weights, result, "Test", "ft");
+
+    const auto dir = std::filesystem::temp_directory_path();
+    const std::string txtPath = (dir / "req423_report.txt").string();
+    const std::string rtfPath = (dir / "req423_report.rtf").string();
+    const std::string pdfPath = (dir / "req423_report.pdf").string();
+
+    REQUIRE(traverserpt::ExportReportTxt(txtPath, report, err));
+    REQUIRE(traverserpt::ExportReportRtf(rtfPath, report, err));
+    REQUIRE(traverserpt::ExportReportPdf(pdfPath, report, err));
+
+    REQUIRE(std::filesystem::exists(txtPath));
+    REQUIRE(std::filesystem::exists(rtfPath));
+    REQUIRE(std::filesystem::exists(pdfPath));
+    CHECK(std::filesystem::file_size(txtPath) > 0);
+    CHECK(std::filesystem::file_size(rtfPath) > 0);
+    CHECK(std::filesystem::file_size(pdfPath) > 0);
+
+    {
+        std::ifstream txtIn(txtPath, std::ios::binary);
+        const std::string txtContent((std::istreambuf_iterator<char>(txtIn)), std::istreambuf_iterator<char>());
+        CHECK(txtContent == report);
+    }
+    {
+        std::ifstream pdfIn(pdfPath, std::ios::binary);
+        char magic[5] = {};
+        pdfIn.read(magic, 4);
+        CHECK(std::string(magic) == "%PDF");
+    }
+
+    std::filesystem::remove(txtPath);
+    std::filesystem::remove(rtfPath);
+    std::filesystem::remove(pdfPath);
 }

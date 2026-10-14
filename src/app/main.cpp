@@ -378,6 +378,7 @@ int main()
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigWindowsMoveFromTitleBarOnly = true;  // native-feel: drag the title bar, not the body
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
   ApplyCadDarkTheme();

@@ -19,6 +19,12 @@
 # print thousands of diagnostics (each with ~7 lines of macro-expansion notes), turning a
 # few-minute lint into a near-hour one.
 #
+# clang-analyzer-optin.core.EnumCastOutOfRange is disabled below: MSVC's STL header
+# xfilesystem_abi.h casts an internal flags value the analyzer can't see is in range, inside
+# std::filesystem::file_size/exists/etc. The diagnostic's location is that system header, not
+# the call site, so a NOLINT comment on the calling line can't suppress it, and it fires on any
+# PR line that calls those functions even though the code is correct.
+#
 # NOTE: this list is a YAML block scalar (`>`), which folds newlines into spaces and does NOT
 # treat `#` as a comment marker inside it -- an inline comment here (as this field once had)
 # becomes literal text appended to the glob list, corrupting whichever entry follows it. Put
@@ -30,6 +36,7 @@ Checks: >
   -bugprone-branch-clone,
   -bugprone-chained-comparison,
   clang-analyzer-*,
+  -clang-analyzer-optin.core.EnumCastOutOfRange,
   performance-*,
   cppcoreguidelines-slicing,
   cppcoreguidelines-pro-type-member-init,

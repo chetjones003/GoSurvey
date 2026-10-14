@@ -197,7 +197,20 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
   w["sigmaDistPpm"] = weights.sigmaDistPpm;
   w["sigmaVertConstFt"] = weights.sigmaVertConstFt;
   w["sigmaVertPpm"] = weights.sigmaVertPpm;
+  // REQ-422 — project adjustment settings.
+  w["sigmaAzimuthSec"] = weights.sigmaAzimuthSec;
+  w["sigmaZenithSec"] = weights.sigmaZenithSec;
+  w["sigmaLevelFt"] = weights.sigmaLevelFt;
+  w["centeringInstrumentFt"] = weights.centeringInstrumentFt;
+  w["centeringTargetFt"] = weights.centeringTargetFt;
+  w["centeringVerticalFt"] = weights.centeringVerticalFt;
+  w["adjustmentIs3D"] = weights.adjustmentIs3D;
+  w["refractionCoefficient"] = weights.refractionCoefficient;
+  w["convergenceLimit"] = weights.convergenceLimit;
+  w["maxIterations"] = weights.maxIterations;
   j["weights"] = std::move(w);
+
+  j["importedFiles"] = td.importedFiles;  // REQ-423.
 
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) {
@@ -326,6 +339,22 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
     w.sigmaDistPpm = wj.value("sigmaDistPpm", w.sigmaDistPpm);
     w.sigmaVertConstFt = wj.value("sigmaVertConstFt", w.sigmaVertConstFt);
     w.sigmaVertPpm = wj.value("sigmaVertPpm", w.sigmaVertPpm);
+    // REQ-422 — project adjustment settings.
+    w.sigmaAzimuthSec = wj.value("sigmaAzimuthSec", w.sigmaAzimuthSec);
+    w.sigmaZenithSec = wj.value("sigmaZenithSec", w.sigmaZenithSec);
+    w.sigmaLevelFt = wj.value("sigmaLevelFt", w.sigmaLevelFt);
+    w.centeringInstrumentFt = wj.value("centeringInstrumentFt", w.centeringInstrumentFt);
+    w.centeringTargetFt = wj.value("centeringTargetFt", w.centeringTargetFt);
+    w.centeringVerticalFt = wj.value("centeringVerticalFt", w.centeringVerticalFt);
+    w.adjustmentIs3D = wj.value("adjustmentIs3D", w.adjustmentIs3D);
+    w.refractionCoefficient = wj.value("refractionCoefficient", w.refractionCoefficient);
+    w.convergenceLimit = wj.value("convergenceLimit", w.convergenceLimit);
+    w.maxIterations = wj.value("maxIterations", w.maxIterations);
+  }
+  if (j.contains("importedFiles") && j["importedFiles"].is_array()) {
+    out.importedFiles.clear();
+    for (const auto& entry : j["importedFiles"])
+      if (entry.is_string()) out.importedFiles.push_back(entry.get<std::string>());
   }
 
   td = std::move(out);

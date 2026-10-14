@@ -89,20 +89,35 @@ bool Invert3x3(const double m[3][3], double outInv[3][3]) {
 // deterministic correction for a prism's rated accuracy or a pole's centering
 // error, so they only widen the uncertainty, matching how a real geodetic
 // adjustment package (StarNet, SALSA) treats them.
+// Angular standard-error contribution (arc-seconds) of a centering error over a sight of
+// horizDistFt feet: centeringFt / horizDistFt, in radians, converted to arc-seconds
+// (REQ-422). Zero when the sight has no length or the centering error is zero/unset.
+double CenteringSec(double centeringFt, double horizDistFt) {
+    if (!(horizDistFt > 1e-6) || !(centeringFt > 0.0)) return 0.0;
+    return (centeringFt / horizDistFt) * kRad2Sec;
+}
+
 double LegDistSigma(const TraverseLeg& leg, const LsaWeights& w, double obsDist) {
     const double distConst = leg.hasTsWeights ? leg.tsWeights.sigmaDistConstFt : w.sigmaDistConstFt;
     const double distPpm   = leg.hasTsWeights ? leg.tsWeights.sigmaDistPpm    : w.sigmaDistPpm;
     const double base = distConst + distPpm * 1e-6 * obsDist;
-    const double prismErr = leg.hasPrismError ? leg.prismError : 0.0;
-    const double poleErr  = leg.hasPoleError  ? leg.poleError  : 0.0;
+    // A leg's own prism/pole error, when given, is its own centering-error figure and
+    // replaces the project-default instrument/target centering (REQ-422) rather than
+    // combining with it — the leg is the more specific setting.
+    const double prismErr = leg.hasPrismError ? leg.prismError : w.centeringTargetFt;
+    const double poleErr  = leg.hasPoleError  ? leg.poleError  : w.centeringInstrumentFt;
     return std::sqrt(base * base + prismErr * prismErr + poleErr * poleErr);
 }
 
 // Per-leg angle standard error (radians): the leg's own equipment spec if given,
-// else the traverse-wide weight.
-double LegAngleSigmaRad(const TraverseLeg& leg, const LsaWeights& w, double deg2rad) {
+// else the traverse-wide weight, plus the project-default centering error's angular
+// contribution over this leg's sight distance (REQ-422).
+double LegAngleSigmaRad(const TraverseLeg& leg, const LsaWeights& w, double deg2rad, double obsDist) {
     const double angleSec = leg.hasTsWeights ? leg.tsWeights.sigmaAngleSec : w.sigmaAngleSec;
-    return (angleSec / 3600.0) * deg2rad;
+    const double inst = CenteringSec(w.centeringInstrumentFt, obsDist);
+    const double tgt  = CenteringSec(w.centeringTargetFt, obsDist);
+    const double total = std::sqrt(angleSec * angleSec + inst * inst + tgt * tgt);
+    return (total / 3600.0) * deg2rad;
 }
 
 // Lower regularized gamma P(s, x). Series when x is not large; continued
@@ -258,6 +273,30 @@ double ComputedZenith(const NetSt& from, const NetSt& to) {
     const double du = to.up - from.up;
     return std::atan2(std::sqrt(de * de + dn * dn), du);
 }
+
+double HorizDistFt(const NetSt& a, const NetSt& b) {
+    const double de = b.e - a.e;
+    const double dn = b.n - a.n;
+    return std::sqrt(de * de + dn * dn);
+}
+
+// Mean earth radius, feet (used only by the curvature+refraction correction, REQ-422).
+constexpr double kEarthRadiusFt = 20902231.0;
+
+// Curvature+refraction correction (radians) added to a geometric (flat-ENU) zenith angle to
+// get the zenith a real instrument would read over a level sight of horizDistFt, with
+// coefficient of refraction k (REQ-422). Derived from the standard elevation formula
+// deltaElev = S*cosZ + (1-k)*S^2*sin^2(Z)/(2R): for a near-level sight, S*sinZ ~= horizDist,
+// so the correction simplifies to a term independent of Z: (1-k)*horizDist/(2R).
+double CurvatureRefractionCorrectionRad(double horizDistFt, double refractionCoefficient) {
+    return (1.0 - refractionCoefficient) * horizDistFt / (2.0 * kEarthRadiusFt);
+}
+
+double ComputedZenithRefracted(const NetSt& from, const NetSt& to, double refractionCoefficient) {
+    return ComputedZenith(from, to) +
+           CurvatureRefractionCorrectionRad(HorizDistFt(from, to), refractionCoefficient);
+}
+
 
 LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
     LsaResult result;
@@ -469,16 +508,26 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         return result;
     }
 
-    auto angleSigmaRad = [&](double stdErrorSec) {
-        const double sec = stdErrorSec > 0.0 ? stdErrorSec : w.sigmaAngleSec;
-        return (sec / 3600.0) * kDeg2Rad;
+    // Combined instrument+target centering error, as an angular standard-error contribution
+    // (arc-seconds) over a sight of horizDistFt (REQ-422).
+    auto centeringExtraSec = [&](double horizDistFt) {
+        const double inst = CenteringSec(w.centeringInstrumentFt, horizDistFt);
+        const double tgt  = CenteringSec(w.centeringTargetFt, horizDistFt);
+        return std::sqrt(inst * inst + tgt * tgt);
+    };
+    auto angleSigmaRad = [&](double stdErrorSec, double defaultSec, double extraSec) {
+        const double sec = stdErrorSec > 0.0 ? stdErrorSec : defaultSec;
+        return (std::sqrt(sec * sec + extraSec * extraSec) / 3600.0) * kDeg2Rad;
     };
     auto distSigma = [&](const NetworkDistObs& dist) {
-        if (dist.stdError > 0.0) return dist.stdError;
-        return w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * dist.distance;
+        const double base = dist.stdError > 0.0 ? dist.stdError
+                                                  : w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * dist.distance;
+        const double inst = w.centeringInstrumentFt;
+        const double tgt  = w.centeringTargetFt;
+        return std::sqrt(base * base + inst * inst + tgt * tgt);
     };
 
-    const int kMaxIter = 12;
+    const int kMaxIter = w.maxIterations > 0 ? w.maxIterations : 12;
     int iter = 0;
     for (; iter < kMaxIter; ++iter) {
         std::vector<double> normal(static_cast<size_t>(unknowns) * unknowns, 0.0);
@@ -501,7 +550,11 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
             std::vector<Term> row;
             AddAzimuthPartials(row, stations, colOf, angle.atId, angle.toId, 1.0);
             AddAzimuthPartials(row, stations, colOf, angle.atId, angle.fromId, -1.0);
-            addEq(row, angleSigmaRad(angle.stdErrorSec), WrapPi(angle.angleDeg * kDeg2Rad - computed));
+            const double extraTo   = centeringExtraSec(HorizDistFt(stations[angle.atId], stations[angle.toId]));
+            const double extraFrom = centeringExtraSec(HorizDistFt(stations[angle.atId], stations[angle.fromId]));
+            const double extra = std::sqrt(extraTo * extraTo + extraFrom * extraFrom);
+            addEq(row, angleSigmaRad(angle.stdErrorSec, w.sigmaAngleSec, extra),
+                  WrapPi(angle.angleDeg * kDeg2Rad - computed));
         }
         for (const NetworkDistObs& dist : dists) {
             const double de = stations[dist.toId].e - stations[dist.fromId].e;
@@ -523,21 +576,30 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                                             stations[azimuth.toId].e, stations[azimuth.toId].n);
             std::vector<Term> row;
             AddAzimuthPartials(row, stations, colOf, azimuth.fromId, azimuth.toId, 1.0);
-            addEq(row, angleSigmaRad(azimuth.stdErrorSec), WrapPi(azimuth.azimuthDeg * kDeg2Rad - computed));
+            const double extra = centeringExtraSec(HorizDistFt(stations[azimuth.fromId], stations[azimuth.toId]));
+            addEq(row, angleSigmaRad(azimuth.stdErrorSec, w.sigmaAzimuthSec, extra),
+                  WrapPi(azimuth.azimuthDeg * kDeg2Rad - computed));
         }
         for (const NetworkElevDiffObs& diff : elevDiffs) {
             const double computed = stations[diff.toId].up - stations[diff.fromId].up;
             std::vector<Term> row;
             AddPartial(row, colOf, diff.toId, 2, 1.0);
             AddPartial(row, colOf, diff.fromId, 2, -1.0);
-            const double sigma = diff.stdError > 0.0 ? diff.stdError : w.sigmaVertConstFt;
+            const double defaultSigma = diff.isLevelRun ? w.sigmaLevelFt : w.sigmaVertConstFt;
+            const double sigma = diff.stdError > 0.0 ? diff.stdError : defaultSigma;
             addEq(row, sigma, diff.deltaZ - computed);
         }
         for (const NetworkZenithObs& zenith : zeniths) {
-            const double computed = ComputedZenith(stations[zenith.fromId], stations[zenith.toId]);
+            const double computed = ComputedZenithRefracted(stations[zenith.fromId], stations[zenith.toId],
+                                                             w.refractionCoefficient);
             std::vector<Term> row;
             AddZenithPartials(row, stations, colOf, zenith.fromId, zenith.toId);
-            addEq(row, angleSigmaRad(zenith.stdErrorSec), WrapPi(zenith.zenithDeg * kDeg2Rad - computed));
+            const double horizDist = HorizDistFt(stations[zenith.fromId], stations[zenith.toId]);
+            const double vert = CenteringSec(w.centeringVerticalFt, horizDist);
+            const double extra = std::sqrt(centeringExtraSec(horizDist) * centeringExtraSec(horizDist) +
+                                           vert * vert);
+            addEq(row, angleSigmaRad(zenith.stdErrorSec, w.sigmaZenithSec, extra),
+                  WrapPi(zenith.zenithDeg * kDeg2Rad - computed));
         }
         for (const NetworkDirectionObs& dir : directions) {
             const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
@@ -547,7 +609,9 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
             AddAzimuthPartials(row, stations, colOf, dir.atId, dir.toId, 1.0);
             const auto colIt = orientCol.find(dir.setId);
             if (colIt != orientCol.end()) row.push_back(Term{colIt->second, -1.0});
-            addEq(row, angleSigmaRad(dir.stdErrorSec), WrapPi(dir.directionDeg * kDeg2Rad - computed));
+            const double extra = centeringExtraSec(HorizDistFt(stations[dir.atId], stations[dir.toId]));
+            addEq(row, angleSigmaRad(dir.stdErrorSec, w.sigmaAngleSec, extra),
+                  WrapPi(dir.directionDeg * kDeg2Rad - computed));
         }
         for (const NetworkStation& station : td.networkStations) {
             const NetSt& st = stations[station.id];
@@ -581,7 +645,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
             }
             maxStep = std::max(maxStep, std::abs(delta[static_cast<size_t>(col)]));
         }
-        if (maxStep < 1e-9) break;
+        if (maxStep < w.convergenceLimit) break;
     }
     result.iterations = iter + 1;
 
@@ -605,14 +669,18 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                                                stations[angle.toId].e, stations[angle.toId].n) -
                                        Azimuth(stations[angle.atId].e, stations[angle.atId].n,
                                                stations[angle.fromId].e, stations[angle.fromId].n));
+        const double extraTo   = centeringExtraSec(HorizDistFt(stations[angle.atId], stations[angle.toId]));
+        const double extraFrom = centeringExtraSec(HorizDistFt(stations[angle.atId], stations[angle.fromId]));
         pushAngleLike(LsaMeasKind::Angle, angle.atId, angle.fromId, angle.toId, angle.angleDeg, computed,
-                      angleSigmaRad(angle.stdErrorSec));
+                      angleSigmaRad(angle.stdErrorSec, w.sigmaAngleSec,
+                                    std::sqrt(extraTo * extraTo + extraFrom * extraFrom)));
     }
     for (const NetworkAzimuthObs& azimuth : azimuths) {
         const double computed = Azimuth(stations[azimuth.fromId].e, stations[azimuth.fromId].n,
                                         stations[azimuth.toId].e, stations[azimuth.toId].n);
+        const double extra = centeringExtraSec(HorizDistFt(stations[azimuth.fromId], stations[azimuth.toId]));
         pushAngleLike(LsaMeasKind::Angle, -1, azimuth.fromId, azimuth.toId, azimuth.azimuthDeg, computed,
-                      angleSigmaRad(azimuth.stdErrorSec));
+                      angleSigmaRad(azimuth.stdErrorSec, w.sigmaAzimuthSec, extra));
     }
     for (const NetworkDistObs& dist : dists) {
         const double de = stations[dist.toId].e - stations[dist.fromId].e;
@@ -631,7 +699,8 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
     }
     for (const NetworkElevDiffObs& diff : elevDiffs) {
         const double computed = stations[diff.toId].up - stations[diff.fromId].up;
-        const double sigma = diff.stdError > 0.0 ? diff.stdError : w.sigmaVertConstFt;
+        const double defaultSigma = diff.isLevelRun ? w.sigmaLevelFt : w.sigmaVertConstFt;
+        const double sigma = diff.stdError > 0.0 ? diff.stdError : defaultSigma;
         LsaMeasResidual row;
         row.kind = LsaMeasKind::Vertical;
         row.fromStationId = diff.fromId;
@@ -643,16 +712,22 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         PushMeas(result.measResiduals, row);
     }
     for (const NetworkZenithObs& zenith : zeniths) {
-        const double computed = ComputedZenith(stations[zenith.fromId], stations[zenith.toId]);
+        const double computed = ComputedZenithRefracted(stations[zenith.fromId], stations[zenith.toId],
+                                                         w.refractionCoefficient);
+        const double horizDist = HorizDistFt(stations[zenith.fromId], stations[zenith.toId]);
+        const double vert = CenteringSec(w.centeringVerticalFt, horizDist);
+        const double baseCentering = centeringExtraSec(horizDist);
         pushAngleLike(LsaMeasKind::Zenith, -1, zenith.fromId, zenith.toId, zenith.zenithDeg, computed,
-                      angleSigmaRad(zenith.stdErrorSec));
+                      angleSigmaRad(zenith.stdErrorSec, w.sigmaZenithSec,
+                                    std::sqrt(baseCentering * baseCentering + vert * vert)));
     }
     for (const NetworkDirectionObs& dir : directions) {
         const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
                                   stations[dir.toId].e, stations[dir.toId].n);
         const double computed = WrapPi(az - orient[static_cast<size_t>(dir.setId)]);
+        const double extra = centeringExtraSec(HorizDistFt(stations[dir.atId], stations[dir.toId]));
         pushAngleLike(LsaMeasKind::Direction, dir.atId, -1, dir.toId, dir.directionDeg, computed,
-                      angleSigmaRad(dir.stdErrorSec));
+                      angleSigmaRad(dir.stdErrorSec, w.sigmaAngleSec, extra));
     }
     for (const NetworkStation& station : td.networkStations) {
         const NetSt& st = stations[station.id];
@@ -690,6 +765,23 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
 }
 
 } // namespace
+
+const char* LsaMeasKindName(LsaMeasKind kind) {
+    switch (kind) {
+    case LsaMeasKind::Angle: return "Angle";
+    case LsaMeasKind::Distance: return "Distance";
+    case LsaMeasKind::Vertical: return "Vertical";
+    case LsaMeasKind::GpsEast: return "GPS E";
+    case LsaMeasKind::GpsNorth: return "GPS N";
+    case LsaMeasKind::GpsUp: return "GPS U";
+    case LsaMeasKind::CoordEast: return "Easting";
+    case LsaMeasKind::CoordNorth: return "Northing";
+    case LsaMeasKind::CoordUp: return "Elev";
+    case LsaMeasKind::Zenith: return "Zenith";
+    case LsaMeasKind::Direction: return "Direction";
+    }
+    return "";
+}
 
 double LsaChiSquareCritical(double probability, int degreesOfFreedom) {
     if (degreesOfFreedom < 1 || !(probability > 0.0) || !(probability < 1.0))
@@ -882,7 +974,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     const double startBrgRad = td.startBearingDeg * kDeg2Rad;
 
     // ---- Gauss-Newton iterations -----------------------------------------
-    const int kMaxIter = 12;
+    const int kMaxIter = w.maxIterations > 0 ? w.maxIterations : 12;
     int iter = 0;
     std::vector<double> Nfinal;  // the last iteration's normal matrix, kept for the
                                   // post-convergence covariance/error-ellipse inversion below.
@@ -951,7 +1043,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
             // --- Angle observation ---
             {
-                const double sigmaRad = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad);
+                const double sigmaRad = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad, obsDist[k]);
                 const double weight = 1.0 / (sigmaRad * sigmaRad);
 
                 const double azOF = Azimuth(O.e, O.n, F.e, F.n);
@@ -1038,7 +1130,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
                 maxStep = std::max(maxStep, std::abs(delta[dim * fi + 2]));
             }
         }
-        if (maxStep < 1e-9)
+        if (maxStep < w.convergenceLimit)
             break;
     }
     r.iterations = iter + 1;
@@ -1060,7 +1152,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         const double azOB = (k == 0) ? startBrgRad
                                      : Azimuth(O.e, O.n, coord[posId[k - 1]].e, coord[posId[k - 1]].n);
         const double vAng = WrapPi((azOF - azOB) - obsAng[k]);  // adjusted - observed.
-        const double sigmaA = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad);
+        const double sigmaA = LegAngleSigmaRad(td.legs[k], w, kDeg2Rad, obsDist[k]);
         vtWv += (vAng * vAng) / (sigmaA * sigmaA);
 
         LsaResidual& res = r.residuals[k];

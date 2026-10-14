@@ -19,6 +19,43 @@ struct LsaWeights {
     double sigmaDistPpm     = 2.0;    ///< Distance std error, parts-per-million of length.
     double sigmaVertConstFt = 0.02;   ///< Constant part of a leg's vertical std error, feet (REQ-417).
     double sigmaVertPpm     = 2.0;    ///< Leg vertical std error, parts-per-million of horiz. distance (REQ-417).
+
+    // --- Project-default instrument standard errors (REQ-422) --------------
+    double sigmaAzimuthSec  = 4.0;    ///< Std error of an azimuth/bearing observation, arc-seconds.
+    double sigmaZenithSec   = 10.0;   ///< Std error of a zenith angle observation, arc-seconds.
+    /// Std error of a differential-level run's elevation difference, feet. StarNet's own
+    /// "feet per km" figure needs a run length this importer doesn't carry (REQ-420 "L"
+    /// lines have no distance field), so this is applied flat, not scaled by distance —
+    /// documented limitation, not a per-km model (ASSUMPTION, TASK-739).
+    double sigmaLevelFt     = 0.01;
+    /// Centering error of the instrument over the station it occupies, feet. Folds into a
+    /// sighted angle/azimuth/direction/zenith observation's standard error as
+    /// (this ÷ sight distance), and directly (feet) into a distance observation's standard
+    /// error — both combined by root-sum-square with the observation's own std error.
+    double centeringInstrumentFt = 0.0;
+    /// Centering error of the target (prism/rod) over the sighted station, feet. Combines
+    /// the same way as centeringInstrumentFt.
+    double centeringTargetFt     = 0.0;
+    /// Centering error specific to a vertical (zenith) observation's target height, feet.
+    /// Combines into a zenith observation's standard error the same way as the other
+    /// centering errors (÷ sight distance, root-sum-square).
+    double centeringVerticalFt   = 0.0;
+
+    // --- Project options (REQ-422) ------------------------------------------
+    /// Informational: whether this project is run as a 2D or 3D adjustment. Does not
+    /// itself change which unknowns the solver solves — that is still decided per
+    /// adjustment from which observations are present (REQ-417) — it is shown in the
+    /// report (REQ-423) and available for the UI to default new settings from.
+    bool   adjustmentIs3D = false;
+    /// Coefficient of refraction used in the curvature+refraction correction applied to a
+    /// zenith observation's computed (model) value before comparison with the observed
+    /// zenith: correction = (1 - refractionCoefficient) * horizDistFt / (2 * earth radius).
+    double refractionCoefficient = 0.07;
+    /// Gauss-Newton stopping rule: the loop stops early once every unknown's correction
+    /// this iteration is below this (same units as that unknown — feet for a coordinate,
+    /// radians for a direction-set orientation), or after maxIterations iterations.
+    double convergenceLimit = 1e-9;
+    int    maxIterations    = 12;
 };
 
 /// One leg observation's residual from the least-squares adjustment (REQ-016).
@@ -153,6 +190,10 @@ struct LsaResult {
     std::vector<LsaKindSummary> kindSummaries;
     LsaChiSquare chiSquare;
 };
+
+/// Short display label for a measurement kind (REQ-418), e.g. "Angle", "GPS E". Shared by
+/// the closure window and the adjustment report (REQ-423).
+const char* LsaMeasKindName(LsaMeasKind kind);
 
 /// Chi-square critical value at \p probability (for example 0.025 or 0.975)
 /// with \p degreesOfFreedom. In-tree; no statistics library (ADR-001, REQ-300).

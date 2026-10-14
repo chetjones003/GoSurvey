@@ -12385,6 +12385,47 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-13 — initial (D-2026-10-13-f). 2026-10-13 — accepted.
 
+### REQ-422 — Project adjustment settings
+
+- Purpose: the solver's default standard errors and run options are something a surveyor configures per project, not a hardcoded constant.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-14-a.
+- Depends on: REQ-015, REQ-417, REQ-419, REQ-420.
+- Statement:
+  1. **Instrument standard errors.** One project-default instrument carries: distance (constant feet, ppm), angle (arc-seconds), azimuth & bearing (arc-seconds), zenith (arc-seconds), elevation difference (constant feet, ppm), a differential-level run (feet), and centering error for the instrument, the target, and a separate vertical centering error (all feet). No per-file instrument override exists yet.
+  2. **Project options.** Adjustment type (2D or 3D, shown in the report; the solver still decides per-adjustment whether elevation is actually solved, from what observations are present), convergence limit and maximum iterations (the Gauss-Newton loop's stopping rule), and a coefficient of refraction.
+  3. **Centering error in the solver.** For a sighted angle, azimuth, direction, or zenith observation, the instrument's and target's centering error each contribute an angular standard error of (centering error ÷ sight distance), combined by root-sum-square with that observation's own standard error. For a distance observation, the instrument's and target's centering error combine by root-sum-square directly into the distance standard error (already feet, no conversion).
+  4. **Refraction in the solver.** A zenith observation's computed (model) value is corrected for earth curvature and atmospheric refraction before comparison with the observed zenith, using the standard correction (1 − k) × horizontal distance ÷ (2 × earth radius), where k is the coefficient of refraction.
+  5. **Persistence.** All of the above round-trips through `.gstrav` (REQ-403) save/load.
+- Acceptance:
+  - `[req422]` test: a nonzero centering error on an otherwise-flat case increases the angle/zenith standard error of a short sight more than a long sight.
+  - `[req422]` test: a zenith observation's computed value includes the curvature+refraction correction, verified against the formula by hand for a known distance and coefficient.
+  - `[req422]` test: changing `maxIterations`/convergence limit changes `LsaResult::iterations` on a case that would otherwise need more/fewer iterations.
+  - `[req422]` test: saving and reloading a `.gstrav` file round-trips every new settings field.
+- Owner-layer: Domain (`src/traverse/TraverseLeastSquares.hpp/.cpp`, `TraverseIo.cpp`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-14 — initial (D-2026-10-14-a). 2026-10-14 — accepted.
+
+### REQ-423 — Adjustment report: files, settings, and export
+
+- Purpose: a surveyor can see, and hand to someone else, what files and settings produced an adjustment, the way a StarNet-style listing does — without this project naming that vendor anywhere.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-14-b.
+- Depends on: REQ-418, REQ-422.
+- Statement:
+  1. **Summary section.** The adjustment report begins with: the list of files imported into this traverse, in import order; the project option settings (REQ-422 §2); and the project-default instrument standard error settings (REQ-422 §1). This section precedes the existing per-measurement residual listing (REQ-418).
+  2. **Export.** The report (summary section plus the residual listing) exports to a plain-text `.txt` file, a `.pdf` file (reusing the existing PDFium-based vector PDF writer, ADR-007), and an `.rtf` file (hand-written; no DOCX library). All three contain the same content.
+  3. **No vendor name.** No file name, type name, UI label, or other identifier added for this requirement contains the name of any third-party survey-adjustment product.
+- Acceptance:
+  - `[req423]` test: the built report text lists imported files, then project settings, then instrument settings, then the residual listing, in that order.
+  - `[req423]` test: each of the three export functions produces a non-empty, correctly-typed file (a readable PDF, a readable RTF, matching text content).
+  - `[req423]` test: a case with zero imported files still produces a report (empty file list, not a crash or a missing section).
+- Owner-layer: Domain (`src/traverse/`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-14 — initial (D-2026-10-14-b). 2026-10-14 — accepted.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -13562,6 +13603,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-015 | compute | `TraverseTests` "adjustment drives misclosure to zero" | implemented |
 | REQ-016 | compute | `TraverseTests` "perfect loop yields zero residuals" | implemented |
 | REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
+| REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
+| REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
