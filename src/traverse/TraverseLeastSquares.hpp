@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -35,7 +36,7 @@ struct LsaResidual {
 };
 
 /// Which measurement a listing row describes (REQ-418).
-enum class LsaMeasKind {
+enum class LsaMeasKind : std::uint8_t {
     Angle,
     Distance,
     Vertical,

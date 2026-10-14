@@ -282,7 +282,6 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     std::unordered_map<std::string, KnownPt> knownPts;
     bool orderEN = false;  // STAR*NET default coordinate order is N-then-E.
     bool fromAtTo = false; // default angle order is At-From-To.
-    bool threeD = false;
     bool deltaOn = false;  // .DELTA ON: vertical values are elevation differences.
     std::vector<NamedAngle> rawAngles;
     std::vector<NamedDist> rawDists;
@@ -446,8 +445,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                     skippedInlineOptions.push_back(stripped);
                 continue;
             }
-            if (code == ".2D") { threeD = false; continue; }
-            if (code == ".3D") { threeD = true; continue; }
+            if (code == ".2D" || code == ".3D") { continue; }
             if (code == ".DELTA") {
                 deltaOn = toks.size() < 2 || ToUpper(toks[1]) != "OFF";
                 continue;
