@@ -88,6 +88,12 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 /// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);
 
-/// E57 point-cloud scan for import (REQ-172). PTS/PTX/LAS/LAZ are future increments (D-2026-09-17-d
-/// delivers E57 first) — not offered here yet.
+/// E57 point-cloud scan for import (REQ-172). PTX/LAS/LAZ are future increments (D-2026-09-17-d
+/// delivers E57 first, then PTS -> PTX -> LAS -> LAZ) — not offered here yet.
 bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap);
+
+/// PTS (Cyclone-style ASCII) point-cloud scan for import (REQ-172, PTS increment).
+bool BrowseOpenFilePtsUtf8(char* utf8Out, size_t utf8Cap);
+
+/// UTF-8 path for exporting the selected point cloud(s) to PTS; suggests a default file name.
+bool BrowseSaveFilePtsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);

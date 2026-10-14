@@ -71,6 +71,15 @@ struct OpenCache {
                                  std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
                                  const std::atomic<bool> *cancelRequested = nullptr);
 
+/// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_pts::StreamPtsFile`
+/// (`CadPointCloudPts.hpp`) instead of the E57 reader — REQ-172's PTS increment (delivered after
+/// E57 per `spec/file-format-specs.md` §6).
+[[nodiscard]] bool BuildFromPts(const std::string &sourcePath, const std::string &cachePath,
+                                 std::vector<std::string> &progressLog, std::string *errorMessage,
+                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
+                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
+                                 const std::atomic<bool> *cancelRequested = nullptr);
+
 /// Reads a cache's header + octree structure (not point data) from `cachePath`. `ok` is false and
 /// `errorMessage` is set if the file is missing, truncated, or its magic/version does not match —
 /// a caller should treat this the same as ADR-060 (d)'s "missing file is a logged rebuild, never a
