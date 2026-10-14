@@ -2949,12 +2949,9 @@ TEST_CASE("Each report export produces a valid, non-empty file", "[req423]") {
     REQUIRE(std::filesystem::exists(txtPath));
     REQUIRE(std::filesystem::exists(rtfPath));
     REQUIRE(std::filesystem::exists(pdfPath));
-    // NOLINTBEGIN(clang-analyzer-optin.core.EnumCastOutOfRange) -- MSVC STL's
-    // std::filesystem::file_size internals trip this analyzer false positive.
     CHECK(std::filesystem::file_size(txtPath) > 0);
     CHECK(std::filesystem::file_size(rtfPath) > 0);
     CHECK(std::filesystem::file_size(pdfPath) > 0);
-    // NOLINTEND(clang-analyzer-optin.core.EnumCastOutOfRange)
 
     {
         std::ifstream txtIn(txtPath, std::ios::binary);
