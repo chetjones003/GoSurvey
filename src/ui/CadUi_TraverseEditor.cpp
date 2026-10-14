@@ -343,40 +343,6 @@ static void DrawLsaMeasurementResiduals(const LsaResult& res, const char* distUn
     }
 }
 
-static void AppendLsaResidualReport(std::string& report, const LsaResult& result) {
-    report += "\n--- Measurements ---\n";
-    report += "Kind      At   From To     Adjusted    Residual    StdErr   StdRes\n";
-    char buf[160];
-    for (const LsaMeasResidual& row : result.measResiduals) {
-        const std::string at = row.atStationId < 0 ? std::string(" ") : std::to_string(row.atStationId);
-        const std::string from = row.fromStationId < 0
-            ? std::string(row.kind == LsaMeasKind::Angle ? "REF" : " ")
-            : std::to_string(row.fromStationId);
-        std::snprintf(buf, sizeof(buf), "%-8s %4s %4s %4d %12.4f %11.4f %9.4f %8.2f%s\n",
-                      LsaMeasKindName(row.kind), at.c_str(), from.c_str(), row.toStationId,
-                      row.adjusted, row.residual, row.stdError, row.stdResidual,
-                      row.flagged ? " *" : "");
-        report += buf;
-    }
-    report += "\n--- By kind ---\n";
-    for (const LsaKindSummary& summary : result.kindSummaries) {
-        std::snprintf(buf, sizeof(buf), "%-8s  n=%d  sumSq=%.4f  factor=%.4f\n",
-                      LsaMeasKindName(summary.kind), summary.count, summary.sumSqStdResidual,
-                      summary.errorFactor);
-        report += buf;
-    }
-    if (result.chiSquare.evaluated) {
-        const char* verdict = "passed";
-        if (!result.chiSquare.passed)
-            verdict = result.chiSquare.exceededUpper ? "exceeded the upper bound" : "exceeded the lower bound";
-        std::snprintf(buf, sizeof(buf),
-                      "Chi-square test at 5%%: %s (error factor %.4f, bounds %.4f to %.4f)\n",
-                      verdict, result.chiSquare.errorFactor, result.chiSquare.lowerFactor,
-                      result.chiSquare.upperFactor);
-        report += buf;
-    }
-}
-
 static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::string>& log) {
     if (!cmd.showTraverseClosureWindow)
         return;
@@ -2256,6 +2222,43 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
         ImGui::SeparatorText("Output Report");
         EnsureLsaComputed(cmd);
         const LsaResult& r = cmd.traverseLsaResult;
+        const char* distUnit = CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits);
+        // Export (REQ-423): same text as the Listings tab below, files/settings first.
+        if (ImGui::Button("Export .txt\xe2\x80\xa6")) {
+            char path[1024]{};
+            if (BrowseSaveFileTxtUtf8(path, sizeof(path), "report.txt")) {
+                const std::string rpt = traverserpt::BuildReportText(td, cmd.traverseLsaWeights, r, "", distUnit);
+                std::string exportErr;
+                if (!traverserpt::ExportReportTxt(path, rpt, exportErr))
+                    log.push_back("REPORT — export failed: " + exportErr);
+                else
+                    log.push_back(std::string("REPORT — saved \"") + path + "\".");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export .rtf\xe2\x80\xa6")) {
+            char path[1024]{};
+            if (BrowseSaveFileRtfUtf8(path, sizeof(path), "report.rtf")) {
+                const std::string rpt = traverserpt::BuildReportText(td, cmd.traverseLsaWeights, r, "", distUnit);
+                std::string exportErr;
+                if (!traverserpt::ExportReportRtf(path, rpt, exportErr))
+                    log.push_back("REPORT — export failed: " + exportErr);
+                else
+                    log.push_back(std::string("REPORT — saved \"") + path + "\".");
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Export .pdf\xe2\x80\xa6")) {
+            char path[1024]{};
+            if (BrowseSaveFilePdfUtf8(path, sizeof(path), "report.pdf")) {
+                const std::string rpt = traverserpt::BuildReportText(td, cmd.traverseLsaWeights, r, "", distUnit);
+                std::string exportErr;
+                if (!traverserpt::ExportReportPdf(path, rpt, exportErr))
+                    log.push_back("REPORT — export failed: " + exportErr);
+                else
+                    log.push_back(std::string("REPORT — saved \"") + path + "\".");
+            }
+        }
         // STAR*NET-PRO's Output panel is itself sub-tabbed (Listings / Errors /
         // Coordinates / Lat-Longs / Ground / Dump, tabs along the bottom — ImGui
         // tab bars only place tabs at the top of their own region, so this is the
@@ -2273,22 +2276,12 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
                         ImGui::TextColored(ImVec4(0.80f, 0.25f, 0.10f, 1.f), "Least squares unavailable:");
                         ImGui::TextWrapped("%s", r.message.c_str());
                     } else {
-                        std::string rpt;
-                        rpt += "Observations : " + std::to_string(r.observations) + "\n";
-                        rpt += "Unknowns     : " + std::to_string(r.unknowns) + "\n";
-                        rpt += "Redundancy   : " + std::to_string(r.redundancy) + "\n";
-                        rpt += "Iterations   : " + std::to_string(r.iterations) + "\n";
-                        char buf[64];
-                        std::snprintf(buf, sizeof(buf), "%.4f", r.refStdDev);
-                        rpt += std::string("Std dev unit wt : ") + buf + "\n";
-                        std::snprintf(buf, sizeof(buf), "%.6f", r.adjClosureLinear);
-                        rpt += std::string("Adj. misclosure : ") + buf + "\n";
-                        if (r.usedGpsVectors) {
-                            rpt += "GPS vectors used: " + std::to_string(r.gpsVectorsUsed);
-                            if (r.gpsVectorsSkipped > 0) rpt += " (skipped " + std::to_string(r.gpsVectorsSkipped) + ")";
-                            rpt += "\n";
-                        }
-                        AppendLsaResidualReport(rpt, r);
+                        // REQ-423: files used + project/instrument settings, then the
+                        // measurement residual listing — one report, one builder, so this
+                        // view, the Export buttons above, and Closure Analysis's own Report
+                        // tab never drift apart.
+                        const std::string rpt =
+                            traverserpt::BuildReportText(td, cmd.traverseLsaWeights, r, "", distUnit);
                         ImGui::TextUnformatted(rpt.c_str());
                     }
                     ImGui::EndTabItem();
