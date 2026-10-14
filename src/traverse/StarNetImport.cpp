@@ -21,19 +21,47 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 
-// Strip a '#' end-of-line comment (STAR*NET allows it anywhere on a line) and
-// a trailing descriptor token introduced by a leading "'" or a left-quote
-// glyph (both appear in the manual's own examples) — descriptors play no part
-// in GoSurvey's TraverseData, so they are simply dropped, not reported.
-std::string StripCommentAndDescriptor(const std::string& line) {
-    std::string s = line;
-    const size_t hash = s.find('#');
-    if (hash != std::string::npos) s.resize(hash);
-    for (char q : {'\'', '`'}) {
-        const size_t pos = s.find(q);
-        if (pos != std::string::npos) { s.resize(pos); break; }
+std::string TrimCopy(const std::string& text) {
+    size_t begin = 0;
+    while (begin < text.size() && (text[begin] == ' ' || text[begin] == '\t')) ++begin;
+    size_t end = text.size();
+    while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t')) --end;
+    return text.substr(begin, end - begin);
+}
+
+// A STAR*NET '#' starts a comment. A leading '\'' or '`' starts a descriptor
+// (the field code). Both are kept: the comment becomes a GoSurvey `//` line,
+// and the descriptor becomes `CODE` on the measurement.
+struct StarNetLineParts {
+    std::string body;
+    std::string descriptor;
+    std::string trailingComment;
+    bool fullLineComment = false;
+    std::string fullComment;
+};
+
+StarNetLineParts SplitStarNetLine(const std::string& line) {
+    StarNetLineParts parts;
+    const std::string trimmed = TrimCopy(line);
+    if (!trimmed.empty() && trimmed[0] == '#') {
+        parts.fullLineComment = true;
+        parts.fullComment = TrimCopy(trimmed.substr(1));
+        return parts;
     }
-    return s;
+    const size_t hash = line.find('#');
+    std::string head = hash == std::string::npos ? line : line.substr(0, hash);
+    if (hash != std::string::npos) parts.trailingComment = TrimCopy(line.substr(hash + 1));
+    size_t quote = std::string::npos;
+    for (const char q : {'\'', '`'}) {
+        const size_t at = head.find(q);
+        if (at != std::string::npos && (quote == std::string::npos || at < quote)) quote = at;
+    }
+    if (quote != std::string::npos) {
+        parts.descriptor = TrimCopy(head.substr(quote + 1));
+        head.resize(quote);
+    }
+    parts.body = head;
+    return parts;
 }
 
 std::vector<std::string> Tokenize(const std::string& line) {
@@ -142,7 +170,93 @@ bool ParseStarNetBearingOrAzimuth(std::string tok, double* degOut) {
     return false;
 }
 
-struct KnownPt { double n = 0.0, e = 0.0, z = 0.0; bool has = false, hasZ = false; };
+struct KnownPt {
+    double n = 0.0, e = 0.0, z = 0.0;
+    bool has = false, hasZ = false;
+    NetworkFix eFix = NetworkFix::Free;
+    NetworkFix nFix = NetworkFix::Free;
+    NetworkFix zFix = NetworkFix::Free;
+    double eSig = 0.0, nSig = 0.0, zSig = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+struct NamedAngle {
+    std::string at, from, to;
+    double deg = 0.0;
+    double sigSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+struct NamedDist {
+    std::string from, to;
+    double dist = 0.0;
+    double sig = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+struct NamedAzimuth {
+    std::string from, to;
+    double deg = 0.0;
+    double sigSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+struct NamedZenith {
+    std::string from, to;
+    double deg = 0.0;
+    double sigSec = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+struct NamedEdif {
+    std::string from, to;
+    double dz = 0.0;
+    double sig = 0.0;
+    std::string code;
+    int sourceOrder = 0;
+};
+
+std::vector<std::string> SplitStationList(const std::string& text) {
+    std::vector<std::string> parts;
+    std::string current;
+    for (const char c : text) {
+        if (c == '-') {
+            if (current.empty()) return {};
+            parts.push_back(current);
+            current.clear();
+        } else {
+            current.push_back(c);
+        }
+    }
+    if (!current.empty()) parts.push_back(current);
+    return parts;
+}
+
+std::vector<std::string> ExpandFixityTokens(const std::vector<std::string>& tokens) {
+    std::vector<std::string> expanded;
+    for (const std::string& tok : tokens) {
+        bool fixityRun = !tok.empty();
+        for (const char c : tok)
+            if (c != '!' && c != '*' && c != '&') fixityRun = false;
+        if (fixityRun && tok.size() > 1) {
+            for (const char c : tok) expanded.emplace_back(1, c);
+        } else {
+            expanded.push_back(tok);
+        }
+    }
+    return expanded;
+}
+
+bool ParseFixOrSigma(const std::string& tok, NetworkFix* fix, double* sigma) {
+    if (tok == "!") { *fix = NetworkFix::Fixed; *sigma = 0.0; return true; }
+    if (tok == "*" || tok == "&") { *fix = NetworkFix::Free; *sigma = 0.0; return true; }
+    double value = 0.0;
+    if (!ParseDoubleTok(tok, &value) || !(value > 0.0)) return false;
+    *fix = NetworkFix::Weighted;
+    *sigma = value;
+    return true;
+}
 
 // A GPS vector ("G1" record) plus its optional covariance ("G2"/"G3"), still
 // keyed by station NAME — resolved to GoSurvey's sequential integer ids
@@ -167,6 +281,34 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
     std::unordered_map<std::string, KnownPt> knownPts;
     bool orderEN = false;  // STAR*NET default coordinate order is N-then-E.
+    bool fromAtTo = false; // default angle order is At-From-To.
+    bool deltaOn = false;  // .DELTA ON: vertical values are elevation differences.
+    std::vector<NamedAngle> rawAngles;
+    std::vector<NamedDist> rawDists;
+    std::vector<NamedAzimuth> rawAzimuths;
+    std::vector<NamedZenith> rawZeniths;
+    std::vector<NamedEdif> rawEdifs;
+    std::vector<std::string> skippedInlineOptions;
+    bool dataOn = true;
+    double linearToFeet = 1.0;
+    bool inDirectionSet = false;
+    int currentSetId = -1;
+    std::string directionAt;
+    int nextSetId = 0;
+    struct NamedDir {
+        int setId = 0;
+        std::string at;
+        std::string to;
+        double dirDeg = 0.0;
+        double sigSec = 0.0;
+        double horizFt = 0.0;
+        double zenithDeg = 90.0;
+        bool hasDist = false;
+        bool hasZenith = false;
+        std::string code;
+        int sourceOrder = 0;
+    };
+    std::vector<NamedDir> rawDirs;
 
     bool inTraverse = false;
     bool sawAnyTraverse = false;
@@ -182,6 +324,8 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
         bool hasTsErr = false;
         double tsAngleSec = 0.0;
         double tsDistConst = 0.0;
+        std::string code;
+        int sourceOrder = 0;
     };
     std::vector<PendingLeg> pending;  // one per T line, foresight resolved afterward.
 
@@ -203,10 +347,53 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
     std::string line;
     int lineNo = 0;
+    int nextSourceOrder = 1;
+    std::vector<TraverseData::SourceComment> sourceComments;
+    std::string lineDescriptor;
+    std::string lineTrailing;
+    bool lineOrdered = false;
+    int lineOrder = 0;
+    auto orderThisLine = [&]() -> int {
+        if (!lineOrdered) {
+            lineOrdered = true;
+            lineOrder = nextSourceOrder++;
+            if (!lineTrailing.empty()) {
+                TraverseData::SourceComment note;
+                note.beforeOrder = nextSourceOrder;
+                note.text = lineTrailing;
+                sourceComments.push_back(note);
+            }
+        }
+        return lineOrder;
+    };
+    auto tag = [&](auto& obs) {
+        obs.code = lineDescriptor;
+        obs.sourceOrder = orderThisLine();
+    };
     while (std::getline(f, line)) {
         ++lineNo;
         if (!line.empty() && line.back() == '\r') line.pop_back();
-        const std::string stripped = StripCommentAndDescriptor(line);
+        if (TrimCopy(line).empty()) {
+            TraverseData::SourceComment note;
+            note.beforeOrder = nextSourceOrder;
+            note.blankLine = true;
+            sourceComments.push_back(note);
+            continue;
+        }
+        const StarNetLineParts parts = SplitStarNetLine(line);
+        if (parts.fullLineComment) {
+            if (!parts.fullComment.empty()) {
+                TraverseData::SourceComment note;
+                note.beforeOrder = nextSourceOrder;
+                note.text = parts.fullComment;
+                sourceComments.push_back(note);
+            }
+            continue;
+        }
+        lineDescriptor = parts.descriptor;
+        lineTrailing = parts.trailingComment;
+        lineOrdered = false;
+        const std::string stripped = parts.body;
         const auto toks = Tokenize(stripped);
         if (toks.empty()) continue;
 
@@ -244,18 +431,42 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                 }
                 continue;
             }
-            if (code != ".ORDER")
-                return fail("unsupported STAR*NET inline option \"" + toks[0] +
-                            "\" (only .ORDER and .GPS WEIGHT are supported)");
+            if (code == ".DAT" || code == ".DATA") {
+                const std::string arg = toks.size() >= 2 ? ToUpper(toks[1]) : "ON";
+                dataOn = (arg != "OFF");
+                continue;
+            }
+            if (code == ".UNIT" || code == ".UNITS") {
+                if (toks.size() >= 2 && ToUpper(toks[1]).rfind("MET", 0) == 0)
+                    linearToFeet = 1.0 / 0.3048;
+                else if (toks.size() < 2 || ToUpper(toks[1]).rfind("FEET", 0) == 0 || ToUpper(toks[1]) == "FT")
+                    linearToFeet = 1.0;
+                else
+                    skippedInlineOptions.push_back(stripped);
+                continue;
+            }
+            if (code == ".2D" || code == ".3D") { continue; }
+            if (code == ".DELTA") {
+                deltaOn = toks.size() < 2 || ToUpper(toks[1]) != "OFF";
+                continue;
+            }
+            if (code != ".ORDER") {
+                // Not one of our settings. Keep the original line so the editor
+                // can show it as a comment (D-2026-10-13-e). Do not fail the file.
+                skippedInlineOptions.push_back(stripped);
+                continue;
+            }
             for (size_t i = 1; i < toks.size(); ++i) {
                 const std::string a = ToUpper(toks[i]);
                 if (a == "EN") orderEN = true;
                 else if (a == "NE") orderEN = false;
-                // ATFROMTO/FROMATTO affect only A/M angle-station order, which this
-                // importer doesn't parse (T lines have a single station name).
+                else if (a == "FROMATTO") fromAtTo = true;
+                else if (a == "ATFROMTO") fromAtTo = false;
             }
             continue;
         }
+
+        if (!dataOn) continue;
 
         if (code == "G0" || code == "G1" || code == "G2" || code == "G3" || code == "G4") {
             if (gpsWeightMode != GpsWeightMode::kCovariance)
@@ -326,11 +537,46 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
             // TraverseData::startElevation even though this importer's traverse legs
             // stay 2D; a 4th-plus token is a std error or fixity symbol, out of scope
             // here (see StarNetImport.hpp), but doesn't itself make the line unreadable.
-            double z;
-            if (toks.size() > 4 && ParseDoubleTok(toks[4], &z)) {
-                kp.z = z;
-                kp.hasZ = true;
+            kp.n *= linearToFeet;
+            kp.e *= linearToFeet;
+            std::vector<std::string> rest;
+            for (size_t i = 4; i < toks.size(); ++i) rest.push_back(toks[i]);
+            rest = ExpandFixityTokens(rest);
+            auto applyFix = [&](const std::string& tok, NetworkFix* fix, double* sig) {
+                return ParseFixOrSigma(tok, fix, sig);
+            };
+            if (!rest.empty() && (rest[0] == "!" || rest[0] == "*" || rest[0] == "&")) {
+                if (rest.size() < 2 || !applyFix(rest[0], &kp.nFix, &kp.nSig) ||
+                    !applyFix(rest[1], &kp.eFix, &kp.eSig))
+                    return fail("C: expected two fixity symbols after the coordinates");
+                if (orderEN) std::swap(kp.eFix, kp.nFix), std::swap(kp.eSig, kp.nSig);
+            } else if (!rest.empty()) {
+                double z = 0.0;
+                if (!ParseDoubleTok(rest[0], &z))
+                    return fail("C: unrecognized token \"" + rest[0] + "\"");
+                const bool looksLikeFixes = rest.size() >= 2 &&
+                    (rest[1] == "!" || rest[1] == "*" || rest[1] == "&" || rest.size() >= 4);
+                if (rest.size() == 1 || looksLikeFixes) {
+                    kp.z = z;
+                    kp.hasZ = true;
+                    if (rest.size() >= 4) {
+                        if (!applyFix(rest[1], &kp.nFix, &kp.nSig) || !applyFix(rest[2], &kp.eFix, &kp.eSig) ||
+                            !applyFix(rest[3], &kp.zFix, &kp.zSig))
+                            return fail("C: fixity after an elevation must be !, *, or a standard error");
+                        if (orderEN) std::swap(kp.eFix, kp.nFix), std::swap(kp.eSig, kp.nSig);
+                    }
+                } else if (rest.size() >= 2) {
+                    if (!applyFix(rest[0], &kp.nFix, &kp.nSig) || !applyFix(rest[1], &kp.eFix, &kp.eSig))
+                        return fail("C: standard errors must be positive numbers");
+                    if (orderEN) std::swap(kp.eFix, kp.nFix), std::swap(kp.eSig, kp.nSig);
+                }
             }
+            kp.z *= linearToFeet;
+            kp.nSig *= linearToFeet;
+            kp.eSig *= linearToFeet;
+            kp.zSig *= linearToFeet;
+            kp.code = lineDescriptor;
+            kp.sourceOrder = orderThisLine();
             knownPts[toks[1]] = kp;
             continue;
         }
@@ -363,13 +609,15 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
             PendingLeg pl;
             pl.atName = toks[1];
             pl.angleDeg = angle;
-            pl.distFt = dist;
+            pl.distFt = dist * linearToFeet;
+            pl.code = lineDescriptor;
+            pl.sourceOrder = orderThisLine();
             if (toks.size() == 6) {
                 double se1, se2;
                 if (ParseDoubleTok(toks[4], &se1) && ParseDoubleTok(toks[5], &se2)) {
                     pl.hasTsErr = true;
                     pl.tsAngleSec = se1;
-                    pl.tsDistConst = se2;
+                    pl.tsDistConst = se2 * linearToFeet;
                 }
                 // Non-numeric (&, !, *) std-error entries fall back to GoSurvey's
                 // traverse-wide defaults — a documented simplification (GoSurvey
@@ -398,6 +646,8 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                     leg.tsWeights.sigmaAngleSec = prev.tsAngleSec;
                     leg.tsWeights.sigmaDistConstFt = prev.tsDistConst;
                 }
+                leg.code = prev.code;
+                leg.sourceOrder = prev.sourceOrder;
                 legs.push_back(std::move(leg));
             }
             pending.push_back(pl);
@@ -427,6 +677,8 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                 leg.tsWeights.sigmaAngleSec = prev.tsAngleSec;
                 leg.tsWeights.sigmaDistConstFt = prev.tsDistConst;
             }
+            leg.code = prev.code;
+            leg.sourceOrder = prev.sourceOrder;
             legs.push_back(std::move(leg));
 
             endStation = toks[1];
@@ -435,18 +687,285 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
             continue;
         }
 
+        auto observationSigma = [&](const std::string& tok, double* sigma) -> bool {
+            if (tok == "&") { *sigma = 0.0; return true; }
+            if (tok == "*") return false;
+            if (tok == "!") { *sigma = 0.01; return true; }
+            return ParseDoubleTok(tok, sigma) && *sigma > 0.0;
+        };
+
+        if (code == "DB" || code == "DE" || code == "DM" || code == "DN") {
+            if (code == "DE") { inDirectionSet = false; continue; }
+            if (code == "DB") {
+                if (toks.size() < 2) return fail("expected DB <station>");
+                directionAt = toks[1];
+                currentSetId = nextSetId++;
+                inDirectionSet = true;
+                continue;
+            }
+            if (!inDirectionSet) return fail(code + " found outside a DB...DE direction set");
+            if (toks.size() < 3) return fail(code + ": expected a station and a direction");
+            double dirDeg = 0.0;
+            if (!ParseStarNetAngle(toks[2], &dirDeg))
+                return fail(code + ": unrecognized direction \"" + toks[2] + "\"");
+            NamedDir shot;
+            shot.setId = currentSetId;
+            shot.at = directionAt;
+            shot.to = toks[1];
+            shot.dirDeg = dirDeg;
+            if (code == "DM" && toks.size() >= 4) {
+                double slope = 0.0;
+                if (!ParseDoubleTok(toks[3], &slope))
+                    return fail("DM: unrecognized distance \"" + toks[3] + "\"");
+                double zenith = 90.0;
+                bool haveZenith = false;
+                double hi = 0.0, ht = 0.0;
+                bool haveHiHt = false;
+                if (toks.size() >= 5 && toks[4].find('/') != std::string::npos) {
+                    const size_t slash = toks[4].find('/');
+                    haveHiHt = ParseDoubleTok(toks[4].substr(0, slash), &hi) &&
+                               ParseDoubleTok(toks[4].substr(slash + 1), &ht);
+                } else if (toks.size() >= 5 && ParseStarNetAngle(toks[4], &zenith)) {
+                    haveZenith = true;
+                    if (toks.size() >= 6 && toks[5].find('/') != std::string::npos) {
+                        const size_t slash = toks[5].find('/');
+                        haveHiHt = ParseDoubleTok(toks[5].substr(0, slash), &hi) &&
+                                   ParseDoubleTok(toks[5].substr(slash + 1), &ht);
+                    }
+                }
+                const bool face2 = haveZenith && zenith > 180.0;
+                if (face2) {
+                    zenith = 360.0 - zenith;
+                    shot.dirDeg += 180.0;
+                    if (shot.dirDeg >= 360.0) shot.dirDeg -= 360.0;
+                }
+                const double zenRad = zenith * (kPi / 180.0);
+                double horiz = slope * std::sin(zenRad);
+                double dz = slope * std::cos(zenRad);
+                if (haveHiHt) dz += (hi - ht);
+                if (haveZenith && haveHiHt) {
+                    zenith = std::atan2(horiz, dz) * (180.0 / kPi);
+                    if (zenith < 0.0) zenith += 360.0;
+                }
+                shot.hasDist = true;
+                shot.horizFt = horiz * linearToFeet;
+                shot.hasZenith = haveZenith;
+                shot.zenithDeg = zenith;
+            }
+            tag(shot);
+            rawDirs.push_back(shot);
+            continue;
+        }
+
+        if (code == "A" || code == "D" || code == "V" || code == "B" || code == "M" || code == "L" ||
+            code == "BM" || code == "DV") {
+            if (toks.size() < 3) return fail(code + ": missing station list or measurement");
+            const std::vector<std::string> names = SplitStationList(toks[1]);
+            if (code == "A" || code == "M" || code == "BM" || code == "DV") {
+                const size_t need = (code == "A" || code == "M") ? 3 : 2;
+                if (names.size() != need)
+                    return fail(code + ": expected " + std::to_string(need) + " station names in \"" + toks[1] + "\"");
+            } else if (names.size() != 2) {
+                return fail(code + ": expected from-to station names in \"" + toks[1] + "\"");
+            }
+
+            if (code == "A") {
+                double deg = 0.0;
+                if (!ParseStarNetAngle(toks[2], &deg)) return fail("A: unrecognized angle \"" + toks[2] + "\"");
+                NamedAngle angle;
+                if (fromAtTo) { angle.from = names[0]; angle.at = names[1]; angle.to = names[2]; }
+                else { angle.at = names[0]; angle.from = names[1]; angle.to = names[2]; }
+                angle.deg = deg;
+                if (toks.size() >= 4 && toks[3] == "*") continue;
+                if (toks.size() >= 4 && !observationSigma(toks[3], &angle.sigSec))
+                    return fail("A: unrecognized standard error \"" + toks[3] + "\"");
+                tag(angle);
+                rawAngles.push_back(angle);
+                continue;
+            }
+            if (code == "D") {
+                double dist = 0.0;
+                if (!ParseDoubleTok(toks[2], &dist)) return fail("D: unrecognized distance \"" + toks[2] + "\"");
+                NamedDist distObs;
+                distObs.from = names[0];
+                distObs.to = names[1];
+                distObs.dist = dist * linearToFeet;
+                if (toks.size() >= 4 && toks[3] == "*") continue;
+                if (toks.size() >= 4 && !observationSigma(toks[3], &distObs.sig))
+                    return fail("D: unrecognized standard error \"" + toks[3] + "\"");
+                tag(distObs);
+                rawDists.push_back(distObs);
+                continue;
+            }
+            if (code == "B") {
+                double deg = 0.0;
+                if (!ParseStarNetBearingOrAzimuth(toks[2], &deg) && !ParseStarNetAngle(toks[2], &deg))
+                    return fail("B: unrecognized bearing \"" + toks[2] + "\"");
+                NamedAzimuth azimuth;
+                azimuth.from = names[0];
+                azimuth.to = names[1];
+                azimuth.deg = deg;
+                if (toks.size() >= 4 && toks[3] == "*") continue;
+                if (toks.size() >= 4 && !observationSigma(toks[3], &azimuth.sigSec))
+                    return fail("B: unrecognized standard error \"" + toks[3] + "\"");
+                tag(azimuth);
+                rawAzimuths.push_back(azimuth);
+                continue;
+            }
+            if (code == "V" || code == "L") {
+                double value = 0.0;
+                const bool asAngle = (code == "V" && !deltaOn);
+                if (asAngle) {
+                    if (!ParseStarNetAngle(toks[2], &value))
+                        return fail("V: unrecognized zenith \"" + toks[2] + "\"");
+                } else if (!ParseDoubleTok(toks[2], &value)) {
+                    return fail(code + ": unrecognized elevation difference \"" + toks[2] + "\"");
+                }
+                double sig = 0.0;
+                if (code == "L") {
+                    if (toks.size() >= 4 && (toks.back() == "!" || toks.back() == "*" || toks.back() == "&" ||
+                                             (toks.size() >= 4 && toks[toks.size() - 1].find('-') == std::string::npos &&
+                                              toks.size() > 4))) {
+                        if (toks.back() == "*") continue;
+                        if (toks.back() == "!" || toks.back() == "&" || ParseDoubleTok(toks.back(), &sig)) {
+                            if (toks.back() == "!") sig = 0.01;
+                            if (toks.back() == "&") sig = 0.0;
+                        }
+                    }
+                } else if (toks.size() >= 4 && toks[3] != "*") {
+                    if (!observationSigma(toks[3], &sig))
+                        return fail("V: unrecognized standard error \"" + toks[3] + "\"");
+                } else if (toks.size() >= 4 && toks[3] == "*") {
+                    continue;
+                }
+                if (asAngle) {
+                    NamedZenith zenith;
+                    zenith.from = names[0];
+                    zenith.to = names[1];
+                    zenith.deg = value;
+                    zenith.sigSec = sig;
+                    tag(zenith);
+                    rawZeniths.push_back(zenith);
+                } else {
+                    NamedEdif diff;
+                    diff.from = names[0];
+                    diff.to = names[1];
+                    diff.dz = value * linearToFeet;
+                    diff.sig = sig;
+                    tag(diff);
+                    rawEdifs.push_back(diff);
+                }
+                continue;
+            }
+            if (code == "DV") {
+                double dist = 0.0;
+                if (!ParseDoubleTok(toks[2], &dist)) return fail("DV: unrecognized distance");
+                NamedDist distObs;
+                distObs.from = names[0];
+                distObs.to = names[1];
+                distObs.dist = dist * linearToFeet;
+                tag(distObs);
+                rawDists.push_back(distObs);
+                if (toks.size() >= 4) {
+                    double vertical = 0.0;
+                    if (deltaOn) {
+                        if (!ParseDoubleTok(toks[3], &vertical)) return fail("DV: unrecognized elevation difference");
+                        NamedEdif diff;
+                        diff.from = names[0];
+                        diff.to = names[1];
+                        diff.dz = vertical * linearToFeet;
+                        tag(diff);
+                        rawEdifs.push_back(diff);
+                    } else if (ParseStarNetAngle(toks[3], &vertical)) {
+                        NamedZenith zenith;
+                        zenith.from = names[0];
+                        zenith.to = names[1];
+                        zenith.deg = vertical;
+                        tag(zenith);
+                        rawZeniths.push_back(zenith);
+                    }
+                }
+                continue;
+            }
+            // M or BM
+            double first = 0.0;
+            double dist = 0.0;
+            if (code == "M") {
+                if (!ParseStarNetAngle(toks[2], &first)) return fail("M: unrecognized angle");
+            } else if (!ParseStarNetBearingOrAzimuth(toks[2], &first) && !ParseStarNetAngle(toks[2], &first)) {
+                return fail("BM: unrecognized bearing");
+            }
+            if (toks.size() < 4 || !ParseDoubleTok(toks[3], &dist))
+                return fail(code + ": unrecognized distance");
+            if (code == "M") {
+                NamedAngle angle;
+                if (fromAtTo) { angle.from = names[0]; angle.at = names[1]; angle.to = names[2]; }
+                else { angle.at = names[0]; angle.from = names[1]; angle.to = names[2]; }
+                angle.deg = first;
+                tag(angle);
+                rawAngles.push_back(angle);
+                NamedDist distObs;
+                distObs.from = angle.at;
+                distObs.to = angle.to;
+                distObs.dist = dist * linearToFeet;
+                tag(distObs);
+                rawDists.push_back(distObs);
+            } else {
+                NamedAzimuth azimuth;
+                azimuth.from = names[0];
+                azimuth.to = names[1];
+                azimuth.deg = first;
+                tag(azimuth);
+                rawAzimuths.push_back(azimuth);
+                NamedDist distObs;
+                distObs.from = names[0];
+                distObs.to = names[1];
+                distObs.dist = dist * linearToFeet;
+                tag(distObs);
+                rawDists.push_back(distObs);
+            }
+            if (toks.size() >= 5) {
+                double vertical = 0.0;
+                const bool verticalIsAngle = !deltaOn && ParseStarNetAngle(toks[4], &vertical);
+                if (verticalIsAngle || (deltaOn && ParseDoubleTok(toks[4], &vertical))) {
+                    if (verticalIsAngle) {
+                        NamedZenith zenith;
+                        zenith.from = (code == "M") ? (fromAtTo ? names[1] : names[0]) : names[0];
+                        zenith.to = (code == "M") ? names[2] : names[1];
+                        if (code == "M" && !fromAtTo) zenith.from = names[0];
+                        zenith.deg = vertical;
+                        tag(zenith);
+                        rawZeniths.push_back(zenith);
+                    } else {
+                        NamedEdif diff;
+                        diff.from = (code == "BM") ? names[0] : (fromAtTo ? names[1] : names[0]);
+                        diff.to = (code == "BM" || fromAtTo) ? names.back() : names[2];
+                        diff.dz = vertical * linearToFeet;
+                        tag(diff);
+                        rawEdifs.push_back(diff);
+                    }
+                }
+            }
+            continue;
+        }
+
         return fail("unsupported STAR*NET record type \"" + toks[0] +
-                    "\" (this importer handles only C, TB, T, TE, and G0-G3 GPS vector "
-                    "records, per issue #845/#847's scope decisions)");
+                    "\" (supported records are C, A, D, V, B, M, BM, DV, L, TB, T, TE, and G0-G3)");
     }
     if (havePendingG1) rawGpsVectors.push_back(pendingGv);
 
-    if (!sawAnyTraverse || !haveEndStation) {
+    const bool hasNetworkRecords = !rawAngles.empty() || !rawDists.empty() || !rawAzimuths.empty() ||
+                                   !rawZeniths.empty() || !rawEdifs.empty() || !rawDirs.empty();
+    if (sawAnyTraverse && !haveEndStation) {
         errorMsg = "no complete TB...TE traverse found";
         return false;
     }
-    if (legs.empty()) {
+    if (sawAnyTraverse && legs.empty()) {
         errorMsg = "traverse has no legs";
+        return false;
+    }
+    if (!sawAnyTraverse && !hasNetworkRecords) {
+        errorMsg = "no complete TB...TE traverse found";
         return false;
     }
 
@@ -460,7 +979,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
         ptIdMap[name] = id;
         return id;
     };
-    GetId(firstOccupied);
+    if (sawAnyTraverse) GetId(firstOccupied);
     for (auto& leg : legs) leg.stationId = GetId(leg.description);
     // GPS vector endpoints share the same id space as traverse station names,
     // so a vector tied to a conventional station resolves against it directly.
@@ -486,7 +1005,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
     }
 
     td = TraverseData{};
-    td.startStationId = GetId(firstOccupied);
+    if (sawAnyTraverse) td.startStationId = GetId(firstOccupied);
     {
         const auto it = knownPts.find(firstOccupied);
         if (it != knownPts.end() && it->second.has) {
@@ -524,6 +1043,184 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
     td.legs = std::move(legs);
     td.gpsVectors = std::move(gpsVectors);
+    td.starnetSkippedInlineOptions = std::move(skippedInlineOptions);
+    td.sourceComments = std::move(sourceComments);
+
+    for (const auto& known : knownPts) {
+        NetworkStation station;
+        station.id = GetId(known.first);
+        station.northing.value = known.second.n;
+        station.northing.present = true;
+        station.northing.fix = known.second.nFix;
+        station.northing.stdError = known.second.nSig;
+        station.easting.value = known.second.e;
+        station.easting.present = true;
+        station.easting.fix = known.second.eFix;
+        station.easting.stdError = known.second.eSig;
+        if (known.second.hasZ) {
+            station.elevation.value = known.second.z;
+            station.elevation.present = true;
+            station.elevation.fix = known.second.zFix;
+            station.elevation.stdError = known.second.zSig;
+        }
+        station.code = known.second.code;
+        station.sourceOrder = known.second.sourceOrder;
+        td.networkStations.push_back(station);
+    }
+    for (const NamedAngle& angle : rawAngles) {
+        NetworkAngleObs obs;
+        obs.atId = GetId(angle.at);
+        obs.fromId = GetId(angle.from);
+        obs.toId = GetId(angle.to);
+        obs.angleDeg = angle.deg;
+        obs.stdErrorSec = angle.sigSec;
+        obs.code = angle.code;
+        obs.sourceOrder = angle.sourceOrder;
+        td.networkAngles.push_back(obs);
+    }
+    for (const NamedDist& dist : rawDists) {
+        NetworkDistObs obs;
+        obs.fromId = GetId(dist.from);
+        obs.toId = GetId(dist.to);
+        obs.distance = dist.dist;
+        obs.stdError = dist.sig;
+        obs.code = dist.code;
+        obs.sourceOrder = dist.sourceOrder;
+        td.networkDists.push_back(obs);
+    }
+    for (const NamedAzimuth& azimuth : rawAzimuths) {
+        NetworkAzimuthObs obs;
+        obs.fromId = GetId(azimuth.from);
+        obs.toId = GetId(azimuth.to);
+        obs.azimuthDeg = azimuth.deg;
+        obs.stdErrorSec = azimuth.sigSec;
+        obs.code = azimuth.code;
+        obs.sourceOrder = azimuth.sourceOrder;
+        td.networkAzimuths.push_back(obs);
+    }
+    for (const NamedZenith& zenith : rawZeniths) {
+        NetworkZenithObs obs;
+        obs.fromId = GetId(zenith.from);
+        obs.toId = GetId(zenith.to);
+        obs.zenithDeg = zenith.deg;
+        obs.stdErrorSec = zenith.sigSec;
+        obs.code = zenith.code;
+        obs.sourceOrder = zenith.sourceOrder;
+        td.networkZeniths.push_back(obs);
+    }
+    struct SeedPt { double e = 0.0, n = 0.0, up = 0.0; bool has = false; };
+    std::unordered_map<std::string, SeedPt> seeds;
+    for (const auto& known : knownPts) {
+        SeedPt seed;
+        seed.e = known.second.e;
+        seed.n = known.second.n;
+        seed.up = known.second.z;
+        seed.has = true;
+        seeds[known.first] = seed;
+    }
+    for (int pass = 0; pass < static_cast<int>(rawDirs.size()) + 2; ++pass) {
+        bool grew = false;
+        for (int set = 0; set < nextSetId; ++set) {
+            const NamedDir* atShot = nullptr;
+            for (const NamedDir& shot : rawDirs)
+                if (shot.setId == set) { atShot = &shot; break; }
+            if (atShot == nullptr || !seeds[atShot->at].has) continue;
+            bool haveOrient = false;
+            double orient = 0.0;
+            for (const NamedAzimuth& azimuth : rawAzimuths) {
+                if (azimuth.from != atShot->at) continue;
+                for (const NamedDir& shot : rawDirs) {
+                    if (shot.setId != set || shot.to != azimuth.to) continue;
+                    orient = azimuth.deg * (kPi / 180.0) - shot.dirDeg * (kPi / 180.0);
+                    haveOrient = true;
+                    break;
+                }
+                if (haveOrient) break;
+            }
+            if (!haveOrient) {
+                for (const NamedDir& shot : rawDirs) {
+                    if (shot.setId != set || !seeds[shot.to].has) continue;
+                    const SeedPt& from = seeds[atShot->at];
+                    const SeedPt& to = seeds[shot.to];
+                    const double az = std::atan2(to.e - from.e, to.n - from.n);
+                    orient = az - shot.dirDeg * (kPi / 180.0);
+                    haveOrient = true;
+                    break;
+                }
+            }
+            if (!haveOrient) continue;
+            const SeedPt& from = seeds[atShot->at];
+            for (const NamedDir& shot : rawDirs) {
+                if (shot.setId != set || seeds[shot.to].has || !shot.hasDist) continue;
+                const double az = orient + shot.dirDeg * (kPi / 180.0);
+                SeedPt placed;
+                placed.e = from.e + shot.horizFt * std::sin(az);
+                placed.n = from.n + shot.horizFt * std::cos(az);
+                const double zen = shot.zenithDeg * (kPi / 180.0);
+                const double tanZen = std::tan(zen);
+                placed.up = from.up + (std::abs(tanZen) > 1e-8 ? shot.horizFt / tanZen : 0.0);
+                placed.has = true;
+                seeds[shot.to] = placed;
+                grew = true;
+            }
+        }
+        if (!grew) break;
+    }
+    for (const auto& seed : seeds) {
+        if (!seed.second.has || knownPts.count(seed.first)) continue;
+        NetworkStation station;
+        station.id = GetId(seed.first);
+        station.easting.value = seed.second.e;
+        station.easting.present = true;
+        station.easting.fix = NetworkFix::Free;
+        station.northing.value = seed.second.n;
+        station.northing.present = true;
+        station.northing.fix = NetworkFix::Free;
+        station.elevation.value = seed.second.up;
+        station.elevation.present = true;
+        station.elevation.fix = NetworkFix::Free;
+        station.sourceOrder = nextSourceOrder++;
+        td.networkStations.push_back(station);
+    }
+    for (const NamedDir& shot : rawDirs) {
+        NetworkDirectionObs dir;
+        dir.setId = shot.setId;
+        dir.atId = GetId(shot.at);
+        dir.toId = GetId(shot.to);
+        dir.directionDeg = shot.dirDeg;
+        dir.stdErrorSec = shot.sigSec;
+        dir.code = shot.code;
+        dir.sourceOrder = shot.sourceOrder;
+        td.networkDirections.push_back(dir);
+        if (shot.hasDist) {
+            NetworkDistObs dist;
+            dist.fromId = dir.atId;
+            dist.toId = dir.toId;
+            dist.distance = shot.horizFt;
+            dist.code = shot.code;
+            dist.sourceOrder = shot.sourceOrder;
+            td.networkDists.push_back(dist);
+        }
+        if (shot.hasZenith) {
+            NetworkZenithObs zenith;
+            zenith.fromId = dir.atId;
+            zenith.toId = dir.toId;
+            zenith.zenithDeg = shot.zenithDeg;
+            zenith.code = shot.code;
+            zenith.sourceOrder = shot.sourceOrder;
+            td.networkZeniths.push_back(zenith);
+        }
+    }
+    for (const NamedEdif& diff : rawEdifs) {
+        NetworkElevDiffObs obs;
+        obs.fromId = GetId(diff.from);
+        obs.toId = GetId(diff.to);
+        obs.deltaZ = diff.dz;
+        obs.stdError = diff.sig;
+        obs.code = diff.code;
+        obs.sourceOrder = diff.sourceOrder;
+        td.networkElevDiffs.push_back(obs);
+    }
     // The GPS tangent-plane origin (td.gpsOriginLatDeg/LonDeg) is not something
     // this importer can derive from a conventional .dat file — it must be set
     // by the user before ComputeTraverse will resolve any G-record vectors.

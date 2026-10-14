@@ -3,8 +3,10 @@
 #include "../geo/EcefTransform.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <unordered_map>
+#include <vector>
 
 namespace {
 
@@ -103,15 +105,615 @@ double LegAngleSigmaRad(const TraverseLeg& leg, const LsaWeights& w, double deg2
     return (angleSec / 3600.0) * deg2rad;
 }
 
+// Lower regularized gamma P(s, x). Series when x is not large; continued
+// fraction for the upper tail otherwise (Numerical Recipes gser/gcf).
+double RegularizedGammaP(double shape, double x) {
+    if (x <= 0.0) return 0.0;
+    if (shape <= 0.0) return 0.0;
+    const double logPrefix = -x + shape * std::log(x) - std::lgamma(shape);
+    if (x < shape + 1.0) {
+        double sum = 1.0 / shape;
+        double term = sum;
+        for (int n = 1; n < 400; ++n) {
+            term *= x / (shape + static_cast<double>(n));
+            sum += term;
+            if (std::abs(term) < 1e-14 * std::abs(sum)) break;
+        }
+        return std::exp(logPrefix) * sum;
+    }
+    const double kTiny = 1e-30;
+    double b = x + 1.0 - shape;
+    double c = 1.0 / kTiny;
+    double d = 1.0 / b;
+    double h = d;
+    for (int i = 1; i <= 400; ++i) {
+        const double an = -static_cast<double>(i) * (static_cast<double>(i) - shape);
+        b += 2.0;
+        d = an * d + b;
+        if (std::abs(d) < kTiny) d = kTiny;
+        c = b + an / c;
+        if (std::abs(c) < kTiny) c = kTiny;
+        d = 1.0 / d;
+        const double del = d * c;
+        h *= del;
+        if (std::abs(del - 1.0) < 1e-12) break;
+    }
+    const double upper = std::exp(logPrefix) * h;
+    return 1.0 - upper;
+}
+
+void PushMeas(std::vector<LsaMeasResidual>& rows, LsaMeasResidual row) {
+    if (row.stdError > 0.0)
+        row.stdResidual = row.residual / row.stdError;
+    row.flagged = std::abs(row.stdResidual) > 3.0;
+    rows.push_back(row);
+}
+
+void SummarizeMeasResiduals(LsaResult& result) {
+    const std::array<LsaMeasKind, 11> kinds = {
+        LsaMeasKind::Angle, LsaMeasKind::Distance, LsaMeasKind::Vertical,
+        LsaMeasKind::GpsEast, LsaMeasKind::GpsNorth, LsaMeasKind::GpsUp,
+        LsaMeasKind::CoordEast, LsaMeasKind::CoordNorth, LsaMeasKind::CoordUp,
+        LsaMeasKind::Zenith, LsaMeasKind::Direction};
+    for (const LsaMeasKind kind : kinds) {
+        LsaKindSummary summary;
+        summary.kind = kind;
+        for (const LsaMeasResidual& row : result.measResiduals) {
+            if (row.kind != kind) continue;
+            summary.count += 1;
+            summary.sumSqStdResidual += row.stdResidual * row.stdResidual;
+        }
+        if (summary.count < 1) continue;
+        summary.errorFactor = std::sqrt(summary.sumSqStdResidual / static_cast<double>(summary.count));
+        result.kindSummaries.push_back(summary);
+    }
+}
+
+void FillChiSquare(LsaResult& result, double weightedSumOfSquares) {
+    result.refStdDev = (result.redundancy > 0)
+                           ? std::sqrt(weightedSumOfSquares / static_cast<double>(result.redundancy))
+                           : 0.0;
+    if (result.redundancy < 1) return;
+    result.chiSquare.evaluated = true;
+    result.chiSquare.statistic = weightedSumOfSquares;
+    result.chiSquare.errorFactor = result.refStdDev;
+    const double lowerCrit = LsaChiSquareCritical(0.025, result.redundancy);
+    const double upperCrit = LsaChiSquareCritical(0.975, result.redundancy);
+    const double redundancy = static_cast<double>(result.redundancy);
+    result.chiSquare.lowerFactor = std::sqrt(lowerCrit / redundancy);
+    result.chiSquare.upperFactor = std::sqrt(upperCrit / redundancy);
+    result.chiSquare.passed = result.chiSquare.errorFactor >= result.chiSquare.lowerFactor &&
+                              result.chiSquare.errorFactor <= result.chiSquare.upperFactor;
+    result.chiSquare.exceededUpper = result.chiSquare.errorFactor > result.chiSquare.upperFactor;
+}
+
 // A sparse coefficient term for one component of one observation.
 struct Term { int col; double a; };
 
 struct Coord { double e = 0.0, n = 0.0, up = 0.0; };
 
+struct NetSt {
+    double e = 0.0;
+    double n = 0.0;
+    double up = 0.0;
+    bool eFixed = true;
+    bool nFixed = true;
+    bool upFixed = true;
+};
+
+bool HasNetworkObservations(const TraverseData& td) {
+    return !td.networkAngles.empty() || !td.networkDists.empty() ||
+           !td.networkAzimuths.empty() ||            !td.networkElevDiffs.empty() ||
+           !td.networkZeniths.empty() || !td.networkDirections.empty();
+}
+
+void AddPartial(std::vector<Term>& row, const std::unordered_map<int, std::array<int, 3>>& colOf,
+                int stationId, int axis, double coefficient) {
+    const auto it = colOf.find(stationId);
+    if (it == colOf.end()) return;
+    const int col = it->second[static_cast<size_t>(axis)];
+    if (col >= 0) row.push_back(Term{col, coefficient});
+}
+
+void AddAzimuthPartials(std::vector<Term>& row, const std::unordered_map<int, NetSt>& stations,
+                        const std::unordered_map<int, std::array<int, 3>>& colOf,
+                        int fromId, int toId, double sign) {
+    const NetSt& from = stations.at(fromId);
+    const NetSt& to = stations.at(toId);
+    const double de = to.e - from.e;
+    const double dn = to.n - from.n;
+    const double dist2 = de * de + dn * dn;
+    if (dist2 < 1e-12) return;
+    const double inv = sign / dist2;
+    AddPartial(row, colOf, toId, 0, dn * inv);
+    AddPartial(row, colOf, toId, 1, -de * inv);
+    AddPartial(row, colOf, fromId, 0, -dn * inv);
+    AddPartial(row, colOf, fromId, 1, de * inv);
+}
+
+void AddZenithPartials(std::vector<Term>& row, const std::unordered_map<int, NetSt>& stations,
+                       const std::unordered_map<int, std::array<int, 3>>& colOf, int fromId, int toId) {
+    const NetSt& from = stations.at(fromId);
+    const NetSt& to = stations.at(toId);
+    const double de = to.e - from.e;
+    const double dn = to.n - from.n;
+    const double du = to.up - from.up;
+    const double horiz = std::sqrt(de * de + dn * dn);
+    const double slope2 = horiz * horiz + du * du;
+    if (slope2 < 1e-12) return;
+    const double dZenithdUp = -horiz / slope2;
+    AddPartial(row, colOf, toId, 2, dZenithdUp);
+    AddPartial(row, colOf, fromId, 2, -dZenithdUp);
+    if (horiz < 1e-6) return;
+    const double dZenithdHoriz = du / slope2;
+    AddPartial(row, colOf, toId, 0, dZenithdHoriz * de / horiz);
+    AddPartial(row, colOf, toId, 1, dZenithdHoriz * dn / horiz);
+    AddPartial(row, colOf, fromId, 0, -dZenithdHoriz * de / horiz);
+    AddPartial(row, colOf, fromId, 1, -dZenithdHoriz * dn / horiz);
+}
+
+double ComputedZenith(const NetSt& from, const NetSt& to) {
+    const double de = to.e - from.e;
+    const double dn = to.n - from.n;
+    const double du = to.up - from.up;
+    return std::atan2(std::sqrt(de * de + dn * dn), du);
+}
+
+LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
+    LsaResult result;
+    bool solveUp = !td.networkElevDiffs.empty() || !td.networkZeniths.empty();
+    for (const NetworkStation& station : td.networkStations)
+        if (station.elevation.present) solveUp = true;
+
+    std::unordered_map<int, NetSt> stations;
+    for (const NetworkStation& station : td.networkStations) {
+        NetSt& st = stations[station.id];
+        if (station.easting.present) {
+            st.e = station.easting.value;
+            st.eFixed = station.easting.fix == NetworkFix::Fixed;
+        }
+        if (station.northing.present) {
+            st.n = station.northing.value;
+            st.nFixed = station.northing.fix == NetworkFix::Fixed;
+        }
+        if (station.elevation.present) {
+            st.up = station.elevation.value;
+            st.upFixed = station.elevation.fix == NetworkFix::Fixed;
+        }
+    }
+
+    std::vector<NetworkAngleObs> angles = td.networkAngles;
+    std::vector<NetworkDistObs> dists = td.networkDists;
+    std::vector<NetworkAzimuthObs> azimuths = td.networkAzimuths;
+    const std::vector<NetworkElevDiffObs>& elevDiffs = td.networkElevDiffs;
+    const std::vector<NetworkZenithObs>& zeniths = td.networkZeniths;
+    const std::vector<NetworkDirectionObs>& directions = td.networkDirections;
+
+    if (!td.legs.empty()) {
+        if (!td.hasStartBearing) {
+            result.message = "A traverse chain folded into a network needs a start bearing.";
+            return result;
+        }
+        const int legCount = static_cast<int>(td.legs.size());
+        if (!stations.count(td.startStationId)) {
+            NetSt start;
+            start.e = td.startEasting;
+            start.n = td.startNorthing;
+            start.up = td.startElevation;
+            stations[td.startStationId] = start;
+        }
+        for (int k = 0; k < legCount; ++k) {
+            if (!td.legs[static_cast<size_t>(k)].computed) {
+                result.message = "All legs must be computed before a network adjustment.";
+                return result;
+            }
+            const int occupied = (k == 0) ? td.startStationId : td.legs[static_cast<size_t>(k - 1)].stationId;
+            const int foresight = td.legs[static_cast<size_t>(k)].stationId;
+            if (!stations.count(foresight)) {
+                NetSt st;
+                st.e = td.legs[static_cast<size_t>(k)].computedEasting;
+                st.n = td.legs[static_cast<size_t>(k)].computedNorthing;
+                st.up = td.legs[static_cast<size_t>(k)].computedElevation;
+                st.eFixed = false;
+                st.nFixed = false;
+                st.upFixed = true;
+                if (td.isClosedLoop && foresight == td.startStationId) {
+                    st.e = td.startEasting;
+                    st.n = td.startNorthing;
+                    st.eFixed = true;
+                    st.nFixed = true;
+                }
+                if (td.hasEndCoordinates && k == legCount - 1) {
+                    st.e = td.endEasting;
+                    st.n = td.endNorthing;
+                    st.up = td.endElevation;
+                    st.eFixed = true;
+                    st.nFixed = true;
+                    st.upFixed = true;
+                }
+                stations[foresight] = st;
+            }
+            NetworkDistObs dist;
+            dist.fromId = occupied;
+            dist.toId = foresight;
+            dist.distance = td.legs[static_cast<size_t>(k)].computedHorizDist;
+            dist.stdError = LegDistSigma(td.legs[static_cast<size_t>(k)], w, dist.distance);
+            dists.push_back(dist);
+            const double angleSec = td.legs[static_cast<size_t>(k)].hasTsWeights
+                                        ? td.legs[static_cast<size_t>(k)].tsWeights.sigmaAngleSec
+                                        : w.sigmaAngleSec;
+            if (k == 0) {
+                NetworkAzimuthObs azimuth;
+                azimuth.fromId = occupied;
+                azimuth.toId = foresight;
+                azimuth.azimuthDeg = td.startBearingDeg + td.legs[static_cast<size_t>(k)].computedHorizAngleDeg;
+                azimuth.stdErrorSec = angleSec;
+                azimuths.push_back(azimuth);
+            } else {
+                NetworkAngleObs angle;
+                angle.atId = occupied;
+                angle.fromId = (k == 1) ? td.startStationId : td.legs[static_cast<size_t>(k - 2)].stationId;
+                angle.toId = foresight;
+                angle.angleDeg = td.legs[static_cast<size_t>(k)].computedHorizAngleDeg;
+                angle.stdErrorSec = angleSec;
+                angles.push_back(angle);
+            }
+        }
+    }
+
+    if (solveUp) {
+        bool anyHeld = false;
+        for (auto& entry : stations) {
+            bool specified = false;
+            for (const NetworkStation& station : td.networkStations)
+                if (station.id == entry.first && station.elevation.present) specified = true;
+            if (!specified) entry.second.upFixed = false;
+            if (entry.second.upFixed) anyHeld = true;
+        }
+        if (!anyHeld && !stations.empty()) {
+            int holdId = stations.begin()->first;
+            for (const auto& entry : stations)
+                if (entry.first < holdId) holdId = entry.first;
+            stations[holdId].upFixed = true;
+        }
+    }
+
+    std::vector<int> ids;
+    ids.reserve(stations.size());
+    for (const auto& entry : stations) ids.push_back(entry.first);
+    std::sort(ids.begin(), ids.end());
+
+    std::vector<int> columnStation;
+    std::vector<int> columnAxis;
+    std::unordered_map<int, std::array<int, 3>> colOf;
+    for (const int id : ids) {
+        const NetSt& st = stations[id];
+        std::array<int, 3> cols = {-1, -1, -1};
+        const std::array<bool, 3> fixed = {st.eFixed, st.nFixed, solveUp ? st.upFixed : true};
+        for (int axis = 0; axis < 3; ++axis) {
+            if (fixed[static_cast<size_t>(axis)]) continue;
+            cols[static_cast<size_t>(axis)] = static_cast<int>(columnStation.size());
+            columnStation.push_back(id);
+            columnAxis.push_back(axis);
+        }
+        colOf[id] = cols;
+    }
+    int maxSet = -1;
+    for (const NetworkDirectionObs& dir : directions)
+        if (dir.setId > maxSet) maxSet = dir.setId;
+    std::vector<double> orient(static_cast<size_t>(maxSet + 1), 0.0);
+    std::vector<char> orientSet(static_cast<size_t>(maxSet + 1), 0);
+    std::unordered_map<int, int> orientCol;
+    for (const NetworkDirectionObs& dir : directions) {
+        if (dir.setId < 0 || stations.find(dir.atId) == stations.end() ||
+            stations.find(dir.toId) == stations.end())
+            continue;
+        if (orientSet[static_cast<size_t>(dir.setId)]) continue;
+        const NetSt& at = stations[dir.atId];
+        const NetSt& to = stations[dir.toId];
+        const double az = Azimuth(at.e, at.n, to.e, to.n);
+        orient[static_cast<size_t>(dir.setId)] = WrapPi(az - dir.directionDeg * kDeg2Rad);
+        orientSet[static_cast<size_t>(dir.setId)] = 1;
+        orientCol[dir.setId] = static_cast<int>(columnStation.size());
+        columnStation.push_back(dir.setId);
+        columnAxis.push_back(3);
+    }
+    const int unknowns = static_cast<int>(columnStation.size());
+
+    auto missing = [&](int id) { return stations.find(id) == stations.end(); };
+    for (const NetworkAngleObs& angle : angles)
+        if (missing(angle.atId) || missing(angle.fromId) || missing(angle.toId)) {
+            result.message = "A network angle names a station with no coordinates.";
+            return result;
+        }
+    for (const NetworkDistObs& dist : dists)
+        if (missing(dist.fromId) || missing(dist.toId)) {
+            result.message = "A network distance names a station with no coordinates.";
+            return result;
+        }
+    for (const NetworkAzimuthObs& azimuth : azimuths)
+        if (missing(azimuth.fromId) || missing(azimuth.toId)) {
+            result.message = "A network azimuth names a station with no coordinates.";
+            return result;
+        }
+    for (const NetworkElevDiffObs& diff : elevDiffs)
+        if (missing(diff.fromId) || missing(diff.toId)) {
+            result.message = "An elevation difference names a station with no coordinates.";
+            return result;
+        }
+    for (const NetworkZenithObs& zenith : zeniths)
+        if (missing(zenith.fromId) || missing(zenith.toId)) {
+            result.message = "A zenith angle names a station with no coordinates.";
+            return result;
+        }
+    for (const NetworkDirectionObs& dir : directions)
+        if (missing(dir.atId) || missing(dir.toId)) {
+            result.message = "A direction names a station with no coordinates.";
+            return result;
+        }
+
+    int weightedControl = 0;
+    for (const NetworkStation& station : td.networkStations) {
+        if (station.easting.present && station.easting.fix == NetworkFix::Weighted) ++weightedControl;
+        if (station.northing.present && station.northing.fix == NetworkFix::Weighted) ++weightedControl;
+        if (solveUp && station.elevation.present && station.elevation.fix == NetworkFix::Weighted) ++weightedControl;
+    }
+    const int observations = static_cast<int>(angles.size() + dists.size() + azimuths.size() +
+                                              elevDiffs.size() + zeniths.size() + directions.size()) +
+                             weightedControl;
+    result.unknowns = unknowns;
+    result.observations = observations;
+    result.redundancy = observations - unknowns;
+    if (unknowns < 1 || result.redundancy < 1) {
+        result.message = "The network does not have enough redundant measurements to adjust.";
+        return result;
+    }
+
+    auto angleSigmaRad = [&](double stdErrorSec) {
+        const double sec = stdErrorSec > 0.0 ? stdErrorSec : w.sigmaAngleSec;
+        return (sec / 3600.0) * kDeg2Rad;
+    };
+    auto distSigma = [&](const NetworkDistObs& dist) {
+        if (dist.stdError > 0.0) return dist.stdError;
+        return w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * dist.distance;
+    };
+
+    const int kMaxIter = 12;
+    int iter = 0;
+    for (; iter < kMaxIter; ++iter) {
+        std::vector<double> normal(static_cast<size_t>(unknowns) * unknowns, 0.0);
+        std::vector<double> rhs(static_cast<size_t>(unknowns), 0.0);
+        auto addEq = [&](const std::vector<Term>& row, double sigma, double misclose) {
+            if (!(sigma > 0.0)) return;
+            const double weight = 1.0 / (sigma * sigma);
+            for (const Term& a : row) {
+                rhs[static_cast<size_t>(a.col)] += weight * a.a * misclose;
+                for (const Term& b : row)
+                    normal[static_cast<size_t>(a.col) * unknowns + b.col] += weight * a.a * b.a;
+            }
+        };
+
+        for (const NetworkAngleObs& angle : angles) {
+            const double computed = WrapPi(Azimuth(stations[angle.atId].e, stations[angle.atId].n,
+                                                   stations[angle.toId].e, stations[angle.toId].n) -
+                                           Azimuth(stations[angle.atId].e, stations[angle.atId].n,
+                                                   stations[angle.fromId].e, stations[angle.fromId].n));
+            std::vector<Term> row;
+            AddAzimuthPartials(row, stations, colOf, angle.atId, angle.toId, 1.0);
+            AddAzimuthPartials(row, stations, colOf, angle.atId, angle.fromId, -1.0);
+            addEq(row, angleSigmaRad(angle.stdErrorSec), WrapPi(angle.angleDeg * kDeg2Rad - computed));
+        }
+        for (const NetworkDistObs& dist : dists) {
+            const double de = stations[dist.toId].e - stations[dist.fromId].e;
+            const double dn = stations[dist.toId].n - stations[dist.fromId].n;
+            const double computed = std::sqrt(de * de + dn * dn);
+            if (computed < 1e-9) {
+                result.message = "Two stations in a distance occupy the same position.";
+                return result;
+            }
+            std::vector<Term> row;
+            AddPartial(row, colOf, dist.toId, 0, de / computed);
+            AddPartial(row, colOf, dist.toId, 1, dn / computed);
+            AddPartial(row, colOf, dist.fromId, 0, -de / computed);
+            AddPartial(row, colOf, dist.fromId, 1, -dn / computed);
+            addEq(row, distSigma(dist), dist.distance - computed);
+        }
+        for (const NetworkAzimuthObs& azimuth : azimuths) {
+            const double computed = Azimuth(stations[azimuth.fromId].e, stations[azimuth.fromId].n,
+                                            stations[azimuth.toId].e, stations[azimuth.toId].n);
+            std::vector<Term> row;
+            AddAzimuthPartials(row, stations, colOf, azimuth.fromId, azimuth.toId, 1.0);
+            addEq(row, angleSigmaRad(azimuth.stdErrorSec), WrapPi(azimuth.azimuthDeg * kDeg2Rad - computed));
+        }
+        for (const NetworkElevDiffObs& diff : elevDiffs) {
+            const double computed = stations[diff.toId].up - stations[diff.fromId].up;
+            std::vector<Term> row;
+            AddPartial(row, colOf, diff.toId, 2, 1.0);
+            AddPartial(row, colOf, diff.fromId, 2, -1.0);
+            const double sigma = diff.stdError > 0.0 ? diff.stdError : w.sigmaVertConstFt;
+            addEq(row, sigma, diff.deltaZ - computed);
+        }
+        for (const NetworkZenithObs& zenith : zeniths) {
+            const double computed = ComputedZenith(stations[zenith.fromId], stations[zenith.toId]);
+            std::vector<Term> row;
+            AddZenithPartials(row, stations, colOf, zenith.fromId, zenith.toId);
+            addEq(row, angleSigmaRad(zenith.stdErrorSec), WrapPi(zenith.zenithDeg * kDeg2Rad - computed));
+        }
+        for (const NetworkDirectionObs& dir : directions) {
+            const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
+                                      stations[dir.toId].e, stations[dir.toId].n);
+            const double computed = WrapPi(az - orient[static_cast<size_t>(dir.setId)]);
+            std::vector<Term> row;
+            AddAzimuthPartials(row, stations, colOf, dir.atId, dir.toId, 1.0);
+            const auto colIt = orientCol.find(dir.setId);
+            if (colIt != orientCol.end()) row.push_back(Term{colIt->second, -1.0});
+            addEq(row, angleSigmaRad(dir.stdErrorSec), WrapPi(dir.directionDeg * kDeg2Rad - computed));
+        }
+        for (const NetworkStation& station : td.networkStations) {
+            const NetSt& st = stations[station.id];
+            auto addCoord = [&](const NetworkComponent& component, int axis, double current) {
+                if (!component.present || component.fix != NetworkFix::Weighted) return;
+                std::vector<Term> row;
+                AddPartial(row, colOf, station.id, axis, 1.0);
+                addEq(row, component.stdError, component.value - current);
+            };
+            addCoord(station.easting, 0, st.e);
+            addCoord(station.northing, 1, st.n);
+            if (solveUp) addCoord(station.elevation, 2, st.up);
+        }
+
+        std::vector<double> delta = rhs;
+        if (!SolveCholesky(normal, delta, unknowns)) {
+            result.message = "The network normal equations are singular.";
+            return result;
+        }
+        double maxStep = 0.0;
+        for (int col = 0; col < unknowns; ++col) {
+            const int axis = columnAxis[static_cast<size_t>(col)];
+            if (axis == 3) {
+                orient[static_cast<size_t>(columnStation[static_cast<size_t>(col)])] +=
+                    delta[static_cast<size_t>(col)];
+            } else {
+                NetSt& st = stations[columnStation[static_cast<size_t>(col)]];
+                if (axis == 0) st.e += delta[static_cast<size_t>(col)];
+                else if (axis == 1) st.n += delta[static_cast<size_t>(col)];
+                else st.up += delta[static_cast<size_t>(col)];
+            }
+            maxStep = std::max(maxStep, std::abs(delta[static_cast<size_t>(col)]));
+        }
+        if (maxStep < 1e-9) break;
+    }
+    result.iterations = iter + 1;
+
+    double weightedSum = 0.0;
+    auto pushAngleLike = [&](LsaMeasKind kind, int at, int from, int to, double observedDeg,
+                             double computedRad, double sigmaRad) {
+        const double residualSec = WrapPi(computedRad - observedDeg * kDeg2Rad) * kRad2Sec;
+        LsaMeasResidual row;
+        row.kind = kind;
+        row.atStationId = at;
+        row.fromStationId = from;
+        row.toStationId = to;
+        row.residual = residualSec;
+        row.stdError = sigmaRad * kRad2Sec;
+        row.adjusted = observedDeg + residualSec / 3600.0;
+        weightedSum += (row.stdError > 0.0) ? (residualSec / row.stdError) * (residualSec / row.stdError) : 0.0;
+        PushMeas(result.measResiduals, row);
+    };
+    for (const NetworkAngleObs& angle : angles) {
+        const double computed = WrapPi(Azimuth(stations[angle.atId].e, stations[angle.atId].n,
+                                               stations[angle.toId].e, stations[angle.toId].n) -
+                                       Azimuth(stations[angle.atId].e, stations[angle.atId].n,
+                                               stations[angle.fromId].e, stations[angle.fromId].n));
+        pushAngleLike(LsaMeasKind::Angle, angle.atId, angle.fromId, angle.toId, angle.angleDeg, computed,
+                      angleSigmaRad(angle.stdErrorSec));
+    }
+    for (const NetworkAzimuthObs& azimuth : azimuths) {
+        const double computed = Azimuth(stations[azimuth.fromId].e, stations[azimuth.fromId].n,
+                                        stations[azimuth.toId].e, stations[azimuth.toId].n);
+        pushAngleLike(LsaMeasKind::Angle, -1, azimuth.fromId, azimuth.toId, azimuth.azimuthDeg, computed,
+                      angleSigmaRad(azimuth.stdErrorSec));
+    }
+    for (const NetworkDistObs& dist : dists) {
+        const double de = stations[dist.toId].e - stations[dist.fromId].e;
+        const double dn = stations[dist.toId].n - stations[dist.fromId].n;
+        const double computed = std::sqrt(de * de + dn * dn);
+        const double sigma = distSigma(dist);
+        LsaMeasResidual row;
+        row.kind = LsaMeasKind::Distance;
+        row.fromStationId = dist.fromId;
+        row.toStationId = dist.toId;
+        row.residual = computed - dist.distance;
+        row.stdError = sigma;
+        row.adjusted = dist.distance + row.residual;
+        if (sigma > 0.0) weightedSum += (row.residual / sigma) * (row.residual / sigma);
+        PushMeas(result.measResiduals, row);
+    }
+    for (const NetworkElevDiffObs& diff : elevDiffs) {
+        const double computed = stations[diff.toId].up - stations[diff.fromId].up;
+        const double sigma = diff.stdError > 0.0 ? diff.stdError : w.sigmaVertConstFt;
+        LsaMeasResidual row;
+        row.kind = LsaMeasKind::Vertical;
+        row.fromStationId = diff.fromId;
+        row.toStationId = diff.toId;
+        row.residual = computed - diff.deltaZ;
+        row.stdError = sigma;
+        row.adjusted = diff.deltaZ + row.residual;
+        if (sigma > 0.0) weightedSum += (row.residual / sigma) * (row.residual / sigma);
+        PushMeas(result.measResiduals, row);
+    }
+    for (const NetworkZenithObs& zenith : zeniths) {
+        const double computed = ComputedZenith(stations[zenith.fromId], stations[zenith.toId]);
+        pushAngleLike(LsaMeasKind::Zenith, -1, zenith.fromId, zenith.toId, zenith.zenithDeg, computed,
+                      angleSigmaRad(zenith.stdErrorSec));
+    }
+    for (const NetworkDirectionObs& dir : directions) {
+        const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
+                                  stations[dir.toId].e, stations[dir.toId].n);
+        const double computed = WrapPi(az - orient[static_cast<size_t>(dir.setId)]);
+        pushAngleLike(LsaMeasKind::Direction, dir.atId, -1, dir.toId, dir.directionDeg, computed,
+                      angleSigmaRad(dir.stdErrorSec));
+    }
+    for (const NetworkStation& station : td.networkStations) {
+        const NetSt& st = stations[station.id];
+        auto pushCoord = [&](LsaMeasKind kind, const NetworkComponent& component, double current) {
+            if (!component.present || component.fix != NetworkFix::Weighted || !(component.stdError > 0.0)) return;
+            LsaMeasResidual row;
+            row.kind = kind;
+            row.toStationId = station.id;
+            row.residual = current - component.value;
+            row.stdError = component.stdError;
+            row.adjusted = current;
+            weightedSum += (row.residual / row.stdError) * (row.residual / row.stdError);
+            PushMeas(result.measResiduals, row);
+        };
+        pushCoord(LsaMeasKind::CoordEast, station.easting, st.e);
+        pushCoord(LsaMeasKind::CoordNorth, station.northing, st.n);
+        if (solveUp) pushCoord(LsaMeasKind::CoordUp, station.elevation, st.up);
+    }
+
+    for (const int id : ids) {
+        const NetSt& st = stations[id];
+        const std::array<int, 3>& cols = colOf[id];
+        if (cols[0] < 0 && cols[1] < 0 && cols[2] < 0) continue;
+        result.stationIds.push_back(id);
+        result.adjEasting.push_back(st.e);
+        result.adjNorthing.push_back(st.n);
+        result.adjElevation.push_back(st.up);
+    }
+    SummarizeMeasResiduals(result);
+    FillChiSquare(result, weightedSum);
+    result.ok = true;
+    result.message = "Adjusted network: " + std::to_string(result.observations) + " obs, " +
+                     std::to_string(result.unknowns) + " unknowns.";
+    return result;
+}
+
 } // namespace
 
+double LsaChiSquareCritical(double probability, int degreesOfFreedom) {
+    if (degreesOfFreedom < 1 || !(probability > 0.0) || !(probability < 1.0))
+        return 0.0;
+    double lo = 0.0;
+    double hi = static_cast<double>(degreesOfFreedom) +
+                20.0 * std::sqrt(static_cast<double>(degreesOfFreedom)) + 10.0;
+    for (int expand = 0; expand < 30; ++expand) {
+        if (RegularizedGammaP(0.5 * degreesOfFreedom, 0.5 * hi) >= probability) break;
+        hi *= 2.0;
+    }
+    for (int step = 0; step < 70; ++step) {
+        const double mid = 0.5 * (lo + hi);
+        if (RegularizedGammaP(0.5 * degreesOfFreedom, 0.5 * mid) < probability)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
 
 LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& w) {
+    if (HasNetworkObservations(td))
+        return AdjustNetwork(td, w);
     LsaResult r;
 
     // ---- Preconditions (REQ-017: surface, never absorb) -------------------
@@ -229,6 +831,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         int fromId, toId;
         double obs[3];     // observed East/North/Up delta, ft.
         double W[3][3];    // inverse rotated covariance, 1/ft².
+        double sigmaFt[3]; // marginal standard error, sqrt of the ENU variance diagonal.
     };
     std::vector<GpsEdge> gpsEdges;
     for (int gi : usableGps) {
@@ -251,6 +854,8 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         e.obs[0] = gv.computedDeltaEastFt;
         e.obs[1] = gv.computedDeltaNorthFt;
         e.obs[2] = gv.computedDeltaUpFt;
+        for (int axis = 0; axis < 3; ++axis)
+            e.sigmaFt[axis] = std::sqrt(std::max(0.0, covEnuFt2[axis][axis]));
         if (!Invert3x3(covEnuFt2, e.W)) {
             ++r.gpsVectorsSkipped;
             continue;  // degenerate covariance; excluded rather than guessed.
@@ -465,11 +1070,40 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         res.distResidualFt   = vDist;
         res.angleResidualSec = vAng * kRad2Sec;
 
+        const int backsightId = (k == 0) ? -1 : posId[k - 1];
+        LsaMeasResidual angleRow;
+        angleRow.kind = LsaMeasKind::Angle;
+        angleRow.atStationId = Oid;
+        angleRow.fromStationId = backsightId;
+        angleRow.toStationId = Fid;
+        angleRow.adjusted = obsAng[k] / kDeg2Rad + (vAng * kRad2Sec) / 3600.0;
+        angleRow.residual = vAng * kRad2Sec;
+        angleRow.stdError = sigmaA * kRad2Sec;
+        PushMeas(r.measResiduals, angleRow);
+
+        LsaMeasResidual distRow;
+        distRow.kind = LsaMeasKind::Distance;
+        distRow.fromStationId = Oid;
+        distRow.toStationId = Fid;
+        distRow.adjusted = obsDist[k] + vDist;
+        distRow.residual = vDist;
+        distRow.stdError = sigmaD;
+        PushMeas(r.measResiduals, distRow);
+
         if (dim == 3 && hasVert[k]) {
             const double vVert = (F.up - O.up) - obsVert[k];
             const double sigmaV = w.sigmaVertConstFt + w.sigmaVertPpm * 1e-6 * obsDist[k];
             vtWv += (vVert * vVert) / (sigmaV * sigmaV);
             res.vertResidualFt = vVert;
+
+            LsaMeasResidual vertRow;
+            vertRow.kind = LsaMeasKind::Vertical;
+            vertRow.fromStationId = Oid;
+            vertRow.toStationId = Fid;
+            vertRow.adjusted = obsVert[k] + vVert;
+            vertRow.residual = vVert;
+            vertRow.stdError = sigmaV;
+            PushMeas(r.measResiduals, vertRow);
         }
     }
 
@@ -491,9 +1125,23 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         gr.northResidualFt = v[1];
         gr.upResidualFt    = v[2];
         r.gpsResiduals.push_back(gr);
+
+        const std::array<LsaMeasKind, 3> gpsKinds = {
+            LsaMeasKind::GpsEast, LsaMeasKind::GpsNorth, LsaMeasKind::GpsUp};
+        for (int axis = 0; axis < 3; ++axis) {
+            LsaMeasResidual gpsRow;
+            gpsRow.kind = gpsKinds[axis];
+            gpsRow.fromStationId = e.fromId;
+            gpsRow.toStationId = e.toId;
+            gpsRow.adjusted = e.obs[axis] + v[axis];
+            gpsRow.residual = v[axis];
+            gpsRow.stdError = e.sigmaFt[axis];
+            PushMeas(r.measResiduals, gpsRow);
+        }
     }
 
-    r.refStdDev = (r.redundancy > 0) ? std::sqrt(vtWv / r.redundancy) : 0.0;
+    SummarizeMeasResiduals(r);
+    FillChiSquare(r, vtWv);
 
     // ---- Error ellipses (1-sigma): Qxx = N^-1, covariance = Qxx * sigma0^2 ----
     // N^-1 is built one column at a time by re-solving N x = e_i through the same
