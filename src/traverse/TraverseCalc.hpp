@@ -285,6 +285,10 @@ struct NetworkElevDiffObs {
     int toId = 0;
     double deltaZ = 0.0;
     double stdError = 0.0;
+    /// True when this came from a differential-level run ("L" line), which defaults to
+    /// LsaWeights::sigmaLevelFt rather than sigmaVertConstFt when stdError is unset
+    /// (REQ-422).
+    bool isLevelRun = false;
     std::string code;
     int sourceOrder = 0;
 };
@@ -361,7 +365,11 @@ struct TraverseData {
 
     /// StarNet dotted options we read but do not apply (D-2026-10-13-e).
     /// Shown in the command editor as comments. Not GoSurvey commands.
-    std::vector<std::string> starnetSkippedInlineOptions;
+    std::vector<std::string> importerSkippedInlineOptions;
+
+    /// File paths imported into this traverse, in import order (REQ-423). Appended by each
+    /// importer's UI call site; never read by any importer itself.
+    std::vector<std::string> importedFiles;
 
     /// A comment or a blank line from the source file or the command text,
     /// shown just before the measurement whose \c sourceOrder equals

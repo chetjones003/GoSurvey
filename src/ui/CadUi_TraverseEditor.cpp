@@ -10,6 +10,7 @@
 #include "traverse/JobXmlImport.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "traverse/TraverseCommandLang.hpp"
+#include "traverse/TraverseReport.hpp"
 #include "WinFileDialogs.hpp"
 #include "ProjectFiles.hpp"
 #include "FontRegistry.hpp"
@@ -270,22 +271,7 @@ static void DrawLegObservationEditor(TraverseLeg& leg, size_t legIndex, bool& di
 }
 
 // ---- Closure analysis window: Unadjusted vs Least Squares (REQ-014–017) ----
-static const char* LsaMeasKindName(LsaMeasKind kind) {
-    switch (kind) {
-    case LsaMeasKind::Angle: return "Angle";
-    case LsaMeasKind::Distance: return "Distance";
-    case LsaMeasKind::Vertical: return "Vertical";
-    case LsaMeasKind::GpsEast: return "GPS E";
-    case LsaMeasKind::GpsNorth: return "GPS N";
-    case LsaMeasKind::GpsUp: return "GPS U";
-    case LsaMeasKind::CoordEast: return "Easting";
-    case LsaMeasKind::CoordNorth: return "Northing";
-    case LsaMeasKind::CoordUp: return "Elev";
-    case LsaMeasKind::Zenith: return "Zenith";
-    case LsaMeasKind::Direction: return "Direction";
-    }
-    return "";
-}
+// LsaMeasKindName lives in TraverseLeastSquares.hpp (shared with the report builder, REQ-423).
 
 static void DrawStationOrBlank(int stationId, bool referenceBearing) {
     if (stationId < 0)
@@ -443,6 +429,51 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
     ImGui::SameLine(0, 16);
     if (ImGui::Button("Recompute") || wChanged)
         recompute();
+    ImGui::SameLine(0, 16);
+    if (ImGui::Button("Project Settings\xe2\x80\xa6"))
+        ImGui::OpenPopup("traverse_project_settings");
+    // ---- Project adjustment settings (REQ-422): instrument standard errors beyond the
+    // A-priori strip above, plus 2D/3D, convergence/iterations, and refraction. ----
+    if (ImGui::BeginPopupModal("traverse_project_settings", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        LsaWeights& pw = cmd.traverseLsaWeights;
+        bool pChanged = false;
+        ImGui::SeparatorText("Project Options");
+        pChanged |= ImGui::Checkbox("3D adjustment (informational)##lsa_3d", &pw.adjustmentIs3D);
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Convergence limit##lsa_conv", &pw.convergenceLimit, 0., 0., "%.2e");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputInt("Max iterations##lsa_maxiter", &pw.maxIterations);
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Coefficient of refraction##lsa_refr", &pw.refractionCoefficient, 0., 0., "%.4f");
+
+        ImGui::SeparatorText("Instrument Standard Errors");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Azimuth/bearing \xcf\x83 (sec)##lsa_az", &pw.sigmaAzimuthSec, 0., 0., "%.2f");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Zenith \xcf\x83 (sec)##lsa_zn", &pw.sigmaZenithSec, 0., 0., "%.2f");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Differential level \xcf\x83 (ft)##lsa_lvl", &pw.sigmaLevelFt, 0., 0., "%.4f");
+
+        ImGui::SeparatorText("Centering Errors (ft)");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Instrument##lsa_ci", &pw.centeringInstrumentFt, 0., 0., "%.4f");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Target##lsa_ct", &pw.centeringTargetFt, 0., 0., "%.4f");
+        ImGui::SetNextItemWidth(140.f);
+        pChanged |= ImGui::InputDouble("Vertical##lsa_cv", &pw.centeringVerticalFt, 0., 0., "%.4f");
+
+        if (pw.maxIterations < 1) pw.maxIterations = 1;
+        if (pw.convergenceLimit < 0.0) pw.convergenceLimit = 0.0;
+
+        if (pChanged) recompute();
+
+        ImGui::Spacing();
+        if (ImGui::Button("Done")) {
+            recompute();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 
     const LsaResult& res = cmd.traverseLsaResult;
 
@@ -530,6 +561,47 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
             } else {
                 DrawLsaMeasurementResiduals(res, distUnit);
             }
+            ImGui::EndTabItem();
+        }
+
+        // -------------------------------------------------------------- Report --
+        if (ImGui::BeginTabItem("Report")) {
+            std::string reportText = traverserpt::BuildReportText(td, cmd.traverseLsaWeights, res, "", distUnit);
+            if (ImGui::Button("Export .txt\xe2\x80\xa6")) {
+                char path[1024]{};
+                if (BrowseSaveFileTxtUtf8(path, sizeof(path), "report.txt")) {
+                    std::string exportErr;
+                    if (!traverserpt::ExportReportTxt(path, reportText, exportErr))
+                        log.push_back("REPORT — export failed: " + exportErr);
+                    else
+                        log.push_back(std::string("REPORT — saved \"") + path + "\".");
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Export .rtf\xe2\x80\xa6")) {
+                char path[1024]{};
+                if (BrowseSaveFileRtfUtf8(path, sizeof(path), "report.rtf")) {
+                    std::string exportErr;
+                    if (!traverserpt::ExportReportRtf(path, reportText, exportErr))
+                        log.push_back("REPORT — export failed: " + exportErr);
+                    else
+                        log.push_back(std::string("REPORT — saved \"") + path + "\".");
+                }
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Export .pdf\xe2\x80\xa6")) {
+                char path[1024]{};
+                if (BrowseSaveFilePdfUtf8(path, sizeof(path), "report.pdf")) {
+                    std::string exportErr;
+                    if (!traverserpt::ExportReportPdf(path, reportText, exportErr))
+                        log.push_back("REPORT — export failed: " + exportErr);
+                    else
+                        log.push_back(std::string("REPORT — saved \"") + path + "\".");
+                }
+            }
+            ImGui::Separator();
+            ImGui::InputTextMultiline("##traverse_report_text", &reportText, ImVec2(-1, -1),
+                                      ImGuiInputTextFlags_ReadOnly);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -789,6 +861,7 @@ static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
             const int markerLegIndex = static_cast<int>(cmd.traverseData.legs.size());
             MergeImportedTraverse(cmd.traverseData, std::move(imported));
             cmd.traverseImportMarkers.emplace_back(markerLegIndex, "IMPORT \"" + path + "\"");
+            cmd.traverseData.importedFiles.push_back(path);  // REQ-423.
             cmd.traverseDataDirty = true;
             cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
             log.push_back("TRAVERSE — imported " + std::string(formatLabel) + " (" +

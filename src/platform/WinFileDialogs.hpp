@@ -41,6 +41,12 @@ bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
 /// UTF-8 path for saving a plotted PDF; suggests default file name.
 bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
+/// UTF-8 path for saving a plain-text report (REQ-423); suggests default file name.
+bool BrowseSaveFileTxtUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// UTF-8 path for saving an .rtf report (REQ-423); suggests default file name.
+bool BrowseSaveFileRtfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
 /// Autodesk Field Book raw-data file (*.fbk).
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
 

@@ -213,6 +213,7 @@ struct NamedEdif {
     std::string from, to;
     double dz = 0.0;
     double sig = 0.0;
+    bool isLevelRun = false;
     std::string code;
     int sourceOrder = 0;
 };
@@ -854,6 +855,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
                     diff.to = names[1];
                     diff.dz = value * linearToFeet;
                     diff.sig = sig;
+                    diff.isLevelRun = (code == "L");
                     tag(diff);
                     rawEdifs.push_back(diff);
                 }
@@ -1045,7 +1047,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
 
     td.legs = std::move(legs);
     td.gpsVectors = std::move(gpsVectors);
-    td.starnetSkippedInlineOptions = std::move(skippedInlineOptions);
+    td.importerSkippedInlineOptions = std::move(skippedInlineOptions);
     td.sourceComments = std::move(sourceComments);
 
     for (const auto& known : knownPts) {
@@ -1219,6 +1221,7 @@ bool StarNetImport(const char* path, TraverseData& td, std::string& errorMsg) {
         obs.toId = GetId(diff.to);
         obs.deltaZ = diff.dz;
         obs.stdError = diff.sig;
+        obs.isLevelRun = diff.isLevelRun;
         obs.code = diff.code;
         obs.sourceOrder = diff.sourceOrder;
         td.networkElevDiffs.push_back(obs);

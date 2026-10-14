@@ -658,6 +658,7 @@ add_executable(GoSurvey
 
   # I/O (windowed application only)
   src/io/PdfPlot.cpp
+  src/traverse/TraverseReport.cpp
 
   # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
   src/pdf/PdfAttach.cpp
@@ -1298,6 +1299,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/GpuPreference.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
+    src/traverse/TraverseReport.cpp
     src/traverse/FbkImport.cpp
     src/traverse/TraverseIo.cpp
     src/traverse/TraverseCommandLang.cpp

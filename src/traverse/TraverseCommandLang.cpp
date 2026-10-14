@@ -385,7 +385,7 @@ static void AppendOrderedBody(std::ostringstream& out, const TraverseData& td) {
 std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
     std::ostringstream out;
     out << "// GoSurvey Traverse Command (GSTC) \xe2\x80\x94 edit and re-apply.\n";
-    for (const std::string& option : td.starnetSkippedInlineOptions)
+    for (const std::string& option : td.importerSkippedInlineOptions)
         out << "// Inline option from STAR*NET (not applied): " << option << "\n";
 
     out << "STATION " << td.startStationId
@@ -594,7 +594,7 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
                 std::string option = body.substr(noteAt + note.size());
                 const size_t start = option.find_first_not_of(" \t");
                 if (start != std::string::npos)
-                    newTd.starnetSkippedInlineOptions.push_back(option.substr(start));
+                    newTd.importerSkippedInlineOptions.push_back(option.substr(start));
                 continue;
             }
             const size_t bodyStart = body.find_first_not_of(" \t");
