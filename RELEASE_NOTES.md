@@ -18,6 +18,16 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ## 0.7.4
 
+**Traverse elevations now allow for earth curvature and refraction — new**
+- The traverse editor now applies the standard combined curvature-and-refraction correction
+  to each leg's elevation difference. It is worth about 7 cm on a 1 km leg, so long sights no
+  longer drift the way plain trigonometry left them.
+- The new "Curv + Refr" option sits in the traverse editor's options row and is on by default,
+  with the refraction coefficient (Refr k) beside it — 0.14 suits average conditions, and the
+  editor warns you if k is set outside its typical −2 to +2 range.
+- Legs observed without a vertical angle are unchanged, and turning the option off gives the
+  previous plain-trigonometry elevations.
+
 - Fixed a second case of the command line running a different command than what was typed.
 - The sign-in prompt at launch is now a real choice: sign in now, or choose "Don't Sign In" to
   skip it for good. You can still sign in later any time from Settings.
