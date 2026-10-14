@@ -705,9 +705,9 @@ static void DrawTplEditorPopup(AppCommandState& cmd) {
                     ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoInputs);
   ImGui::Spacing();
   if (ImGui::Button("Insert color tag", ImVec2(btnW, 0.f))) {
-    const auto cr = static_cast<uint8_t>(gTplEditorColor[0] * 255.f + 0.5f);
-    const auto cg = static_cast<uint8_t>(gTplEditorColor[1] * 255.f + 0.5f);
-    const auto cb = static_cast<uint8_t>(gTplEditorColor[2] * 255.f + 0.5f);
+    const auto cr = static_cast<uint8_t>(std::lround(gTplEditorColor[0] * 255.f));
+    const auto cg = static_cast<uint8_t>(std::lround(gTplEditorColor[1] * 255.f));
+    const auto cb = static_cast<uint8_t>(std::lround(gTplEditorColor[2] * 255.f));
     gTplEditorInsert = MtextRichColorTag(cr, cg, cb);
   }
   if (ImGui::Button("End color tag", ImVec2(btnW, 0.f)))

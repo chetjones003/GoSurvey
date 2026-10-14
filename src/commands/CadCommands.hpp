@@ -76,7 +76,7 @@
 
 
 struct SelectedEntity {
-  enum class Type {
+  enum class Type : std::uint8_t {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
     FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
     Mesh = 8,         ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
@@ -1059,7 +1059,7 @@ inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
 /// The Object Layers tab's rows (REQ-361): each kind of object that lands on its own layer when it
 /// is created. Stored by index — append only.
-enum class ObjectLayerKind {
+enum class ObjectLayerKind : std::uint8_t {
   SurveyPoint = 0,
   SurveyPointLabel,
   Surface,      ///< Every TIN surface store entry (TIN, grid, volume, corridor).
@@ -1073,7 +1073,7 @@ inline constexpr int kObjectLayerKindCount = 8;
 
 /// One Object Layers row: the base layer, the name modifier and whether a creation dialog may change it.
 struct ObjectLayerRow {
-  enum class Modifier { None = 0, Prefix = 1, Suffix = 2 };
+  enum class Modifier : std::uint8_t { None = 0, Prefix = 1, Suffix = 2 };
   std::string layer;
   Modifier    modifier = Modifier::None;
   std::string value;   ///< Each `*` becomes the new object's name.
@@ -1099,7 +1099,7 @@ struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
 /// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
 /// override. The zone and the drawing unit are enforced instead; the transformation, geographic
 /// marker and online map are always the drawing's own. The names are the trailer's.
-enum class ProjectDefaultKey : unsigned {
+enum class ProjectDefaultKey : std::uint8_t {
   AngularUnits = 0,
   FootDefinition,
   ScaleInsertedObjects,
@@ -1124,8 +1124,8 @@ struct DrawingSettings {
     overridden = on ? (overridden | bit) : (overridden & ~bit);
   }
 
-  enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
-  enum class FootDefinition { UsSurvey = 0, International = 1 };
+  enum class AngularUnits : std::uint8_t { Degrees = 0, Radians = 1, Grads = 2 };
+  enum class FootDefinition : std::uint8_t { UsSurvey = 0, International = 1 };
   AngularUnits   angularUnits = AngularUnits::Degrees;
   /// Imperial to Metric conversion: every feet↔meters conversion in the drawing uses this.
   FootDefinition footDefinition = FootDefinition::UsSurvey;
@@ -1149,10 +1149,10 @@ struct DrawingSettings {
   /// `grid = G_ref + k·R(θ)·(L − L_ref)` with k = k_grid · k_sea. Angles are stored in degrees
   /// whatever the Angular units (the window converts). Belongs to the zone: reset with it.
   struct Transform {
-    enum class Computation { ReferencePoint = 0, UserDefined = 1 };
+    enum class Computation : std::uint8_t { ReferencePoint = 0, UserDefined = 1 };
     /// Rotation point: θ from a second point's grid vs local bearing. ToNorth / Azimuth are the two
     /// kinds of "Specify grid rotation angle".
-    enum class Rotation { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
+    enum class Rotation : std::uint8_t { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
     bool        apply = false;
     bool        applySeaLevel = false;
     double      elevation = 0.0;        ///< h, drawing unit
@@ -1194,7 +1194,7 @@ struct DrawingSettings {
 
   /// The Geolocation tab's online map (REQ-363, D-2026-09-30-b). Map Off draws nothing and fetches
   /// nothing. Stored values are the trailer's; append, never renumber.
-  enum class OnlineMap { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
+  enum class OnlineMap : std::uint8_t { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
   OnlineMap onlineMap = OnlineMap::Off;
 
   /// REQ-364: a piece of the online map kept inside the drawing (ADR-064 (e)): its tiles as they were
@@ -1754,7 +1754,7 @@ constexpr int kRibbonTabGeolocationCtx = 12;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
-enum class PointCloudColorScheme { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
+enum class PointCloudColorScheme : std::uint8_t { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
 
 /// REQ-171 point-cloud display settings (session-global, not per-cloud — `CadPointCloud`'s payload
 /// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
@@ -1773,7 +1773,7 @@ struct PointCloudDisplaySettings {
 /// the two selections. Nothing in a selection says whether the user wants to MOVE, TURN or RESIZE
 /// it: the operation has no derivation to disagree with, so it is a setting. Different question,
 /// different answer.
-enum class CadGizmoOp {
+enum class CadGizmoOp : std::uint8_t {
   /// Three handles along the active UCS, committing through `ApplyTranslationToSelection`.
   Translate,
   /// ONE ring, about the active UCS Z, committing through \ref ApplyRotationAboutUcsZ.
@@ -1797,7 +1797,7 @@ struct UnsavedProject {
 };
 
 struct AppCommandState {
-  enum class Kind {
+  enum class Kind : std::uint8_t {
     None,
     Line,
     Circle,
@@ -2505,29 +2505,29 @@ struct AppCommandState {
   float pendingZoomMnY = 0.f;
   float pendingZoomMxY = 0.f;
 
-  enum class LinePhase { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
+  enum class LinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
   /// Segments committed in the current LINE chain; the point being specified is
   /// (lineDraftSegments + 2) once past the first point (REQ-024 ordinal prompt).
   uint32_t lineDraftSegments = 0;
 
-  enum class PolylinePhase { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
+  enum class PolylinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
 
   float polyFirstX = 0.f;
   float polyFirstY = 0.f;
   uint32_t polyDraftSegments = 0;
 
-  enum class ArcPhase { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
+  enum class ArcPhase : std::uint8_t { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
 
   float arcAx = 0.f, arcAy = 0.f;
   float arcBx = 0.f, arcBy = 0.f;
   float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
-  enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+  enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
   /// - one ground surface, several pads at different levels - is just a number each time.
-  enum class PadSolidPhase { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
+  enum class PadSolidPhase : std::uint8_t { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
       PadSolidPhase::WaitBoundary;
   std::uint64_t padSolidBoundaryId = 0;
   std::string padSolidSurface;
@@ -2538,19 +2538,19 @@ struct AppCommandState {
 
   /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
   /// is how a rectangle of an exact width and height is drawn.
-  enum class RectPhase { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
+  enum class RectPhase : std::uint8_t { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
 
   float rectX1 = 0.f, rectY1 = 0.f;
 
-  enum class TextCmdPhase { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
+  enum class TextCmdPhase : std::uint8_t { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
 
   float textInsX = 0.f, textInsY = 0.f;
   float textHeightDraft = 1.f;
   float textRotDraft = 0.f;
 
-  enum class MtextPhase { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
+  enum class MtextPhase : std::uint8_t { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
   /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
-  enum class MleaderPhase { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
+  enum class MleaderPhase : std::uint8_t { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
   float mleaderTipX = 0.f;
   float mleaderTipY = 0.f;
   float mleaderTipZ = 0.f;
@@ -2620,9 +2620,9 @@ struct AppCommandState {
   /// True while the ruler's width marker is being dragged (so the undo snapshot is pushed exactly once).
   bool mtextRulerDragActive = false;
 
-  enum class DimPhase { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
+  enum class DimPhase : std::uint8_t { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
   /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
-  enum class DimAngularPhase { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
+  enum class DimAngularPhase : std::uint8_t { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
   float dimAngVx = 0.f;
   float dimAngVy = 0.f;
   float dimE1x = 0.f, dimE1y = 0.f;
@@ -2817,14 +2817,14 @@ struct AppCommandState {
   std::vector<EntityAttributes> userLineAttrs;
 
   // --- Circle ---
-  enum class CircleStyle { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
+  enum class CircleStyle : std::uint8_t { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
 
   // --- The prompted solid-primitive command (REQ-313 as amended) ---------------------------------
 
   /// The most named dimensions any primitive has (PYRAMID: sides, base radius, top radius, height).
   static constexpr int kMaxSolidParams = 4;
 
-  enum class SolidPhase {
+  enum class SolidPhase : std::uint8_t {
     WaitBasePoint,   ///< Click, or type X,Y[,Z]. The base centre — or the centre, for sphere/torus.
     WaitParameters,  ///< Base set: type a letter + value, a bare value for the next unset one, or Enter.
   } solidPhase = SolidPhase::WaitBasePoint;
@@ -2870,7 +2870,7 @@ struct AppCommandState {
 
   // --- The EXTRUDE command (REQ-314 / ADR-046, GitHub #147) --------------------------------------
 
-  enum class ExtrudePhase {
+  enum class ExtrudePhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
     WaitHeight,      ///< Profiles gathered: type a height, or move the cursor and click.
   } extrudePhase = ExtrudePhase::SelectProfiles;
@@ -2890,7 +2890,7 @@ struct AppCommandState {
   // selected closed polyline/circle — mutually exclusive per D-2026-09-04-a), then a distance phase
   // with the same typed-or-dragged-with-a-live-ghost shape.
 
-  enum class PressPullPhase {
+  enum class PressPullPhase : std::uint8_t {
     SelectTarget,  ///< A face named by Ctrl+click, or a closed-shape entity selection; Enter confirms.
     WaitDistance,  ///< Target gathered: type a distance, or move the cursor and click.
   } pressPullPhase = PressPullPhase::SelectTarget;
@@ -2915,7 +2915,7 @@ struct AppCommandState {
 
   // --- The REVOLVE command (REQ-314 / ADR-046 increment 2, GitHub #147) --------------------------
 
-  enum class RevolvePhase {
+  enum class RevolvePhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
     WaitAxisStart,   ///< Pick or type the first point of the revolve axis.
     WaitAxisEnd,     ///< Pick or type the second point of the revolve axis.
@@ -2930,7 +2930,7 @@ struct AppCommandState {
 
   // --- The SLICE command (REQ-314 / ADR-046 increment 3, GitHub #147) ---------------------------
 
-  enum class SlicePhase {
+  enum class SlicePhase : std::uint8_t {
     SelectSolids,   ///< Accumulate a selection of solids; Enter confirms.
     WaitP1,         ///< First of three points that define the cutting plane.
     WaitP2,
@@ -2949,7 +2949,7 @@ struct AppCommandState {
   // so typing SECTION with nothing selected printed "select one or more solids first" and ENDED.
   // That reads as a prompt and behaves as a refusal — the next click lands with the command already
   // over and merely selects the solid, which is precisely how it was reported.
-  enum class SectionPhase {
+  enum class SectionPhase : std::uint8_t {
     SelectSolids,  ///< Accumulate a selection of solids; Enter confirms.
     WaitP1,        ///< First of three points defining the section plane, or [UCS] for the work plane.
     WaitP2,
@@ -2969,7 +2969,7 @@ struct AppCommandState {
   // starts a section LINE instead: the plane then stands square to the work plane, through that
   // line — which is the only way to aim a plane at a solid with no flat face at all, such as a
   // sphere or a torus.
-  enum class SectionPlanePhase {
+  enum class SectionPlanePhase : std::uint8_t {
     PickFaceOrPoint,   ///< A flat face places the plane outright; any other point starts a line.
     WaitThroughPoint,  ///< The second point of the section line.
   } sectionPlanePhase = SectionPlanePhase::PickFaceOrPoint;
@@ -2982,13 +2982,13 @@ struct AppCommandState {
 
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
-  enum class LoftPhase {
+  enum class LoftPhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate an ORDERED selection of closed polylines / circles; Enter builds.
   } loftPhase = LoftPhase::SelectProfiles;
 
   // --- The SWEEP command (REQ-315 / ADR-048, GitHub #241) --------------------------------------
 
-  enum class SweepPhase {
+  enum class SweepPhase : std::uint8_t {
     SelectInputs,  ///< Accumulate a closed profile and a line/arc path; Enter builds.
   } sweepPhase = SweepPhase::SelectInputs;
 
@@ -3002,7 +3002,7 @@ struct AppCommandState {
 
   // --- The prompted UNION / SUBTRACT / INTERSECT command (REQ-314 / ADR-046, GitHub #147) --------
 
-  enum class BooleanPhase {
+  enum class BooleanPhase : std::uint8_t {
     SelectOperands,     ///< UNION / INTERSECT: one "select objects" step.
     SelectMinuend,      ///< SUBTRACT step 1: the solids to subtract from.
     SelectSubtrahend,   ///< SUBTRACT step 2: the solids to subtract.
@@ -3014,7 +3014,7 @@ struct AppCommandState {
   std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
   // --- REQ-317 POLYSOLID: a wall swept along a picked path ---------------------------------------
 
-  enum class PolysolidPhase {
+  enum class PolysolidPhase : std::uint8_t {
     WaitFirstPoint,  ///< the start of the run, or `O` to convert something already drawn
     WaitObject,      ///< `O` was given: the next click names the entity to sweep along
     WaitNextPoint    ///< a run is under way; each further point commits a segment
@@ -3040,7 +3040,7 @@ struct AppCommandState {
 
   // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
 
-  enum class PipeRunPhase {
+  enum class PipeRunPhase : std::uint8_t {
     WaitNominalSize,     ///< first prompt of a run: nominal size, optional pressure class
     WaitWallThickness,   ///< size known; the wall the pipe is hollow to (D-2026-09-23-a)
     WaitFirstPoint,      ///< size and wall known; the next click/point is the run's start
@@ -3102,7 +3102,7 @@ struct AppCommandState {
   /// caller's own single-pipe-run selection, never re-resolved from `st.selection` mid-command.
   int pipeSplitRunIndex = -1;
 
-  enum class CirclePhase {
+  enum class CirclePhase : std::uint8_t {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
     WaitRadius,       ///< Center set: radius click, number, or D + diameter
     ThreeP_WaitP1,
@@ -3177,7 +3177,7 @@ struct AppCommandState {
   /// cut slope, the fill slope, the target surface and — for an open baseline only — which side to
   /// grade. Enter grades. Every value is remembered between runs in a drawing, because a site is
   /// normally graded to one surface at one pair of slopes and only the baseline changes.
-  enum class GradingPhase {
+  enum class GradingPhase : std::uint8_t {
     WaitBaseline,
     WaitOptions,
     WaitCutSlope,
@@ -3235,7 +3235,7 @@ struct AppCommandState {
   ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
   /// Within a run, \p T switches to picking cutting edges and \p L back to the drawn line, so either mode
   /// is reachable whatever TRIMSTATE says.
-  enum class TrimPhase {
+  enum class TrimPhase : std::uint8_t {
     SelectCuttingEdges,
     CuttingLine_WaitP1,
     CuttingLine_WaitP2,
@@ -3351,7 +3351,7 @@ struct AppCommandState {
   /// OFFSET: distance (or T for a through point) first, then select object, then side/through pick;
   /// on a successful commit it loops back to WaitSelectEntity with the same distance/mode retained,
   /// until Enter/Esc ends the command (REQ-103's documented TRIM/OFFSET per-target loop pattern).
-  enum class OffsetPhase {
+  enum class OffsetPhase : std::uint8_t {
     WaitDistanceOrThrough,
     WaitSelectEntity,
     WaitSidePick,
@@ -3500,7 +3500,7 @@ struct AppCommandState {
   // solid face (reusing the existing bconnectAwaitingFace pick mechanism) or accepts typed
   // "x,y,z,nx,ny,nz".
   // -------------------------------------------------------------------------
-  enum class BConnectPhase {
+  enum class BConnectPhase : std::uint8_t {
     WaitName,
     WaitNominalSize,
     WaitRole,
@@ -3513,7 +3513,7 @@ struct AppCommandState {
   // BCONNECTEDIT wizard (issue #496): one value prompted per step, each showing the port's
   // current value with Enter-to-keep, plus a remove option.
   // -------------------------------------------------------------------------
-  enum class BConnectEditPhase {
+  enum class BConnectEditPhase : std::uint8_t {
     WaitConnName,
     WaitRemoveConfirm, ///< Only reached when the typed connection name exists.
     WaitNominalSize,
@@ -3531,7 +3531,7 @@ struct AppCommandState {
   // BLOCKFITTING wizard (issue #496): one value prompted per step, each showing the current value
   // with Enter-to-keep.
   // -------------------------------------------------------------------------
-  enum class BlockFittingPhase {
+  enum class BlockFittingPhase : std::uint8_t {
     WaitPartType,
     WaitNominalSize,
     WaitPressureClass,
@@ -3546,7 +3546,7 @@ struct AppCommandState {
   // BCONNECTMODE wizard (issue #496): one value prompted per step, instead of a
   // single comma-separated command line.
   // -------------------------------------------------------------------------
-  enum class BConnectModePhase {
+  enum class BConnectModePhase : std::uint8_t {
     WaitConnName,
     WaitModeName,
     WaitRemoveConfirm, ///< Only reached when the typed mode name already exists.
@@ -3895,7 +3895,7 @@ struct AppCommandState {
   std::string delPointSurfaceName;
   std::string movePointSurfaceName;
   std::string delLineSurfaceName;
-  enum class MoveTinPointPhase { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
+  enum class MoveTinPointPhase : std::uint8_t { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
   double moveTinFromX = 0.0;
   double moveTinFromY = 0.0;
   std::vector<float> lastWaterDropPathXyz;
@@ -4082,20 +4082,20 @@ struct AppCommandState {
 
   /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
   /// sits on (D-2026-09-28-c), or showing the handles on it.
-  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  enum class GizmoCmdPhase : std::uint8_t { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
 
   // --- Geolocation tab commands (REQ-359) ---
   /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
   /// the design point, WaitSecond = a point along north from it.
   /// GEOCAPTUREAREA: the two corners, then Capturing while the map controller gathers the tiles.
-  enum class GeoCmdPhase { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
+  enum class GeoCmdPhase : std::uint8_t { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
   double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
   double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
   /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
   /// Settings window (which reads and clears \c done). Points are one pick; ToNorth / LocalAzimuth
   /// are two (a direction), with the first in geoCmdFirstA/B.
   struct DrawingSettingsPickState {
-    enum class Target { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
+    enum class Target : std::uint8_t { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
     bool   done = false;         ///< A result is waiting for the window.
     double worldX = 0.0;         ///< The picked point (WORLD), for the point targets.
     double worldY = 0.0;
@@ -4127,10 +4127,10 @@ struct AppCommandState {
   // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
   /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
   /// property (WaitProperty) and its value (WaitValue); MATCHPROP's destinations are SelectTargets.
-  enum class PropCmdPhase { SelectObjects, WaitProperty, WaitValue, SelectTargets };
+  enum class PropCmdPhase : std::uint8_t { SelectObjects, WaitProperty, WaitValue, SelectTargets };
   PropCmdPhase propCmdPhase = PropCmdPhase::SelectObjects;
   /// The property CHPROP is asking a value for.
-  enum class ChPropProperty { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
+  enum class ChPropProperty : std::uint8_t { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
   /// MATCHPROP's source attributes, copied when the source is picked (an index would not survive an
   /// undo in between — architecture §11.9).
   EntityAttributes matchPropSource;
@@ -4289,7 +4289,7 @@ struct AppCommandState {
   int gripMenuPendingWhich = -1;
 
   // --- MOVE / COPY ---
-  enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
+  enum class ModifyPhase : std::uint8_t { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
 
   float modifyBaseX = 0.f;
   float modifyBaseY = 0.f;
@@ -4300,7 +4300,7 @@ struct AppCommandState {
   /// base-to-cursor over this value in \c ScalePhase::FactorPick).
   float scaleRefDist = 1.f;
   /// \c Kind::Scale — sub-state while \c modifyPhase == NeedDestination (after base).
-  enum class ScalePhase {
+  enum class ScalePhase : std::uint8_t {
     FactorPick, ///< Default: \c scaleRefDist from selection vs base; scale = dist(base,cursor)/ref or typed factor.
     Ref_WaitP1, ///< First point of explicit reference length segment.
     Ref_WaitP2, ///< Second point sets \c scaleRefDist.
@@ -4311,7 +4311,7 @@ struct AppCommandState {
   float scaleNewLenP1X = 0.f, scaleNewLenP1Y = 0.f;
 
   // --- ROTATE ---
-  enum class RotatePhase {
+  enum class RotatePhase : std::uint8_t {
     PickSelection,
     NeedBase,
     NeedAngleOrReference, ///< decimal/DMS **clockwise from north**, or R reference
@@ -4335,7 +4335,7 @@ struct AppCommandState {
   float pendingRotateCopyBx = 0.f, pendingRotateCopyBy = 0.f, pendingRotateCopyRad = 0.f;
 
   // --- MIRROR (REQ-103 step 1) ---
-  enum class MirrorPhase {
+  enum class MirrorPhase : std::uint8_t {
     PickSelection,
     NeedP1,          ///< first point of the mirror line
     NeedP2,          ///< second point of the mirror line
@@ -4359,8 +4359,8 @@ struct AppCommandState {
   bool mirrorEraseSourcePending = false;
 
   // --- ARRAY (REQ-305) ---
-  enum class ArrayType { Rectangular, Polar } arrayType = ArrayType::Rectangular;
-  enum class ArrayPhase {
+  enum class ArrayType : std::uint8_t { Rectangular, Polar } arrayType = ArrayType::Rectangular;
+  enum class ArrayPhase : std::uint8_t {
     PickSelection,
     WaitType,               ///< "[R]ectangular / [P]olar"
     Rect_WaitColumns,       ///< typed integer only — not spatial
@@ -4410,8 +4410,8 @@ struct AppCommandState {
   /// for: pick a line, read what it measures, type what you want it to measure. DElta's "add 50
   /// to whatever this is" needs the current length as context anyway, which a bare prompt before
   /// the pick cannot give.
-  enum class LengthenMode { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Total;
-  enum class LengthenPhase {
+  enum class LengthenMode : std::uint8_t { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Total;
+  enum class LengthenPhase : std::uint8_t {
     WaitSelectOrMode,  ///< pick an object (applies current mode+value), or type DE/P/T/DY to (re)set the mode
     WaitDeltaValue,    ///< typed signed length to add/subtract
     WaitPercentValue,  ///< typed percentage of current length (100 = unchanged)
@@ -4441,7 +4441,7 @@ struct AppCommandState {
   bool lengthenPendingApplyOnValue = false;
 
   // --- EXTEND (REQ-103 step 3) ---
-  enum class ExtendPhase {
+  enum class ExtendPhase : std::uint8_t {
     SelectBoundaries, ///< picking boundary edges; Enter (needs >=1) advances to SelectTargets
     SelectTargets,    ///< picking objects to extend, one per click, loops until Enter/Esc
   } extendPhase = ExtendPhase::SelectBoundaries;
@@ -4450,7 +4450,7 @@ struct AppCommandState {
   std::vector<SelectedEntity> extendBoundaries;
 
   // --- BREAK (REQ-103 step 4) --- (BreakPoint is file-scope; see its definition above)
-  enum class BreakPhase {
+  enum class BreakPhase : std::uint8_t {
     SelectFirstPoint,  ///< pick selects the entity AND supplies break point 1
     SelectSecondPoint, ///< pick supplies break point 2, projected onto the same entity; applies, loops
   } breakPhase = BreakPhase::SelectFirstPoint;
@@ -4470,7 +4470,7 @@ struct AppCommandState {
   bool stretchRectInUcsPlane = false;
 
   // --- FILLET (REQ-103 step 6a) ---
-  enum class FilletPhase {
+  enum class FilletPhase : std::uint8_t {
     WaitFirstEntity,  ///< pick the first curve (or type R/T to set radius/trim mode)
     WaitSecondEntity, ///< pick the second curve; applies immediately, loops back to WaitFirstEntity
   } filletPhase = FilletPhase::WaitFirstEntity;
@@ -4515,7 +4515,7 @@ struct AppCommandState {
   bool filletSolidAwaitingRadius = false;
 
   // --- CHAMFER (REQ-103 step 6b) ---
-  enum class ChamferPhase { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
+  enum class ChamferPhase : std::uint8_t { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
   /// Same shape as `filletFirstEntity`/`filletFirstPolySeg` — see that field's comment.
   SelectedEntity chamferFirstEntity{};
   int chamferFirstPolySeg = -1;
@@ -4573,12 +4573,12 @@ struct AppCommandState {
   float pickDisambiguationScreenX = 0.f;
   float pickDisambiguationScreenY = 0.f;
   bool pickDisambiguationShiftClick = false;
-  enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
+  enum class SurveyInversePhase : std::uint8_t { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
 
   /// REQ-105: DIST — two-point 3D distance (delta X/Y/Z + slope distance).
-  enum class DistPhase { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
+  enum class DistPhase : std::uint8_t { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
   float distFromX = 0.f;
   float distFromY = 0.f;
   float distFromZ = 0.f;
@@ -4587,8 +4587,8 @@ struct AppCommandState {
   /// it; the elevations are kept per surface, by name, because a point can be covered by more than
   /// one surface (existing and proposed) and a grade must be computed within one surface, never
   /// across two (Q1, TASK-055).
-  enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
-  enum class QuickProfilePhase { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
+  enum class SurfaceElevPhase : std::uint8_t { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  enum class QuickProfilePhase : std::uint8_t { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
   std::string quickProfileSurfaceName;
   double quickProfileFromX = 0.0;
   double quickProfileFromY = 0.0;
@@ -4687,7 +4687,7 @@ struct AppCommandState {
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
-  enum class ToolspaceTab : int { Prospector = 0, Settings = 1, Project = 2 };
+  enum class ToolspaceTab : std::uint8_t { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
   /// other manager windows: which panels are open is not a property of the drawing.
@@ -5076,7 +5076,7 @@ struct AppCommandState {
   /// A question the user must answer before a project open can continue (damaged marker, or the lock
   /// is held). Drawn as a modal by DrawProjectDialogs; the continuation re-enters the open path.
   struct ProjectPrompt {
-    enum class Kind { None, Damaged, Locked } kind = Kind::None;
+    enum class Kind : std::uint8_t { None, Damaged, Locked } kind = Kind::None;
     std::string      gsprojPath;
     std::string      dwgPath;      ///< the drawing being opened, or empty for Open Project
     std::string      message;      ///< why the marker is damaged
@@ -5096,7 +5096,7 @@ struct AppCommandState {
   /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
   /// goes to ResolveProjectAttach and then on to the attach that asked.
   struct ProjectAttachPrompt {
-    enum class Kind { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
+    enum class Kind : std::uint8_t { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
     uint32_t    projectUid = 0;
     std::string sourcePath;          ///< UTF-8
     std::string destRel;             ///< where a copy would go, project-relative
@@ -5216,7 +5216,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
   // -------------------------------------------------------------------------
-  enum class AlignPhase { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
+  enum class AlignPhase : std::uint8_t { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
 
   struct AlignControlPt { float srcX = 0.f, srcY = 0.f, dstX = 0.f, dstY = 0.f; };
   std::vector<AlignControlPt> alignControlPts;
@@ -5241,7 +5241,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // PDFATTACH command state
   // -------------------------------------------------------------------------
-  enum class PdfAttachPhase {
+  enum class PdfAttachPhase : std::uint8_t {
     WaitDialog,       ///< Dialog is open; user browses / configures
     Building,         ///< Async rasterize running in background; dialog shows spinner
     WaitInsertPoint,  ///< User picks insertion point in viewport
@@ -5264,7 +5264,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // INSERT dialog (issue #124)
   // -------------------------------------------------------------------------
-  enum class InsertBlockPhase {
+  enum class InsertBlockPhase : std::uint8_t {
     WaitDialog,
     WaitInsertPoint,
     WaitScale,
@@ -5319,7 +5319,7 @@ struct AppCommandState {
   char insertBlockAttrBuf[8][128]{};
 
   // Block Create dialog (ribbon Create button) — mirrors Insert dialog (issue #475 follow-up)
-  enum class BlockCreatePhase { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
+  enum class BlockCreatePhase : std::uint8_t { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
   bool blockCreateDialogOpen = false;
   char blockCreateName[256]{};
   float blockCreateBaseX = 0.f;
@@ -5597,7 +5597,7 @@ inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& 
   if (pi < 0 || pi >= np)
     return;
   const int v0 = st.userPolylineOffsets[static_cast<std::size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi + 1)];
+  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi) + 1];
   const bool closed = static_cast<std::size_t>(pi) < st.userPolylineClosed.size() &&
                       st.userPolylineClosed[static_cast<std::size_t>(pi)];
   const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
@@ -5732,7 +5732,7 @@ inline float CadWorkPlaneElevation(const AppCommandState& st) {
 /// it. Without the override, snapped geometry would be silently lifted to the current elevation
 /// and would not touch the thing it was snapped to.
 inline float CadCommitElevation(const AppCommandState& st) {
-  return st.viewportSnapPickValid ? st.viewportSnapPickLocalZ : CadWorkPlaneElevation(st);
+  return st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalZ) : CadWorkPlaneElevation(st);
 }
 
 /// True when the active UCS is the World Coordinate System — the default, and what the status bar
@@ -6487,7 +6487,7 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 
 // --- UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1) -----------------------
 
-enum class CadBooleanOp { Union, Subtract, Intersect };
+enum class CadBooleanOp : std::uint8_t { Union, Subtract, Intersect };
 
 /// Combine the two B-rep solids in the current selection (REQ-314 B1). UNION and INTERSECT do not
 /// care about order; SUBTRACT keeps the first selected solid and removes the second. Both operands
@@ -6530,7 +6530,7 @@ void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vec
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
 /// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
 /// dependency, so it lives here rather than in either panel.
-enum class SurfaceState { Current, Stale, Rebuilding };
+enum class SurfaceState : std::uint8_t { Current, Stale, Rebuilding };
 
 /// \p surfaceIndex's current/stale/rebuilding state. Both non-`Current` states are already knowable
 /// without any new bookkeeping: a rebuild in flight is an entry in \c surfaceRebuildAsync, and
@@ -7538,7 +7538,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
 /// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
-enum class ViewportPickFamily { None, Table, Annotation, Linework, Solid, FilledRegion };
+enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion };
 
 /// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
 struct ViewportPickRequest {
@@ -7832,7 +7832,7 @@ struct DwgGeoData {
   /// What GEODATA's reference point (the design point in the coordinate system) is, by its
   /// coordinate type: 3 geographic = longitude / latitude (degrees), 2 projected grid = easting /
   /// northing in the zone's unit; anything else (unknown, local grid) gives no grid reference.
-  enum class Reference { None, Geographic, ProjectedGrid };
+  enum class Reference : std::uint8_t { None, Geographic, ProjectedGrid };
   Reference   reference = Reference::None;
   double      refX = 0.0;  ///< Longitude or easting.
   double      refY = 0.0;  ///< Latitude or northing.
@@ -8061,7 +8061,7 @@ void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float b
 /// third thing that can disagree with them. `None` is the answer whenever no gizmo may be drawn —
 /// which is REQ-060's third acceptance bullet and, for a face, the honest answer for a selection the
 /// kernel has no operation for.
-enum class CadGizmoMode {
+enum class CadGizmoMode : std::uint8_t {
   None,
   /// The entity selection: three handles along the active UCS, committing through
   /// `ApplyTranslationToSelection`.
