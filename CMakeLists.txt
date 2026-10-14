@@ -557,6 +557,11 @@ set(GOSURVEY_DOMAIN_SOURCES
   # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
   src/io/CadPointCloudE57.cpp
 
+  # PTX (Cyclone-style ASCII, per-scan-setup) point-cloud reader/writer (REQ-172, issue #825
+  # increment 2 — delivered after PTS per `spec/file-format-specs.md` §6). In-tree, no delimiter
+  # sniffing.
+  src/io/CadPointCloudPtx.cpp
+
   # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
   # multi-GB scan is never fully resident in memory.
   src/util/pointcloudcache.cpp
@@ -1156,6 +1161,12 @@ if(GOSURVEY_BUILD_TESTS)
     # AcisSatParserTests pins its own reader above.
     tests/CadPointCloudE57Tests.cpp
     src/io/CadPointCloudE57.cpp
+    # REQ-172 PTX increment (issue #825 increment 2, delivered after PTS, `spec/file-format-specs.md`
+    # §6) — in-tree ASCII reader/writer round-trip (per-scan-setup 4x4 transform, including a
+    # hand-checked non-identity case), "no return" filtering, and malformed/truncated/missing-file
+    # refusal. Pinned directly, same as the E57 reader above.
+    tests/CadPointCloudPtxTests.cpp
+    src/io/CadPointCloudPtx.cpp
     # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
     # the octree and E57 reader above.
     tests/PointCloudCacheTests.cpp

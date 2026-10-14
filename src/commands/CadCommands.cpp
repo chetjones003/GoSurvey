@@ -20,6 +20,7 @@
 #include "util/pointcloudcache.hpp"   // ADR-060 .gscloud out-of-core cache (streams the E57 internally)
 #include "util/cylinderfit.hpp"       // REQ-347 EXTRACTCENTERLINE's least-squares cylinder-axis fit
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
+#include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
@@ -6657,6 +6658,8 @@ const CmdEntry kRegistry[] = {
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"pointcloudattach", "importe57, e57", "Import an E57 point cloud as reference geometry (REQ-172)"},
+    {"importptx", "ptx", "Import a PTX (Cyclone-style ASCII, per-scan-setup) point cloud as reference geometry (REQ-172)"},
+    {"exportptx", "", "Export the selected point cloud(s) (or all, if none selected) to a PTX file (REQ-172)"},
     // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
     // then its exact dimensions; the UCS supplies the orientation.
     {"box", "", "Create a box solid: BOX <X,Y[,Z]> <length> <width> <height>"},
@@ -31462,9 +31465,14 @@ void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job) {
   } else {
     std::vector<std::string> buildLog;  // human-readable lines; not surfaced yet (numeric progress
                                         // is what the UI polls) but kept for a future log dump.
-    built = pointcloudcache::BuildFromE57(job->sourcePath, job->cachePath, buildLog, &errorMessage,
-                                          &job->pointsStreamed, &job->pointsFinalized,
-                                          &job->cancelRequested);
+    using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
+    built = (job->format == Format::Ptx)
+                ? pointcloudcache::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
+                                               &errorMessage, &job->pointsStreamed,
+                                               &job->pointsFinalized, &job->cancelRequested)
+                : pointcloudcache::BuildFromE57(job->sourcePath, job->cachePath, buildLog,
+                                               &errorMessage, &job->pointsStreamed,
+                                               &job->pointsFinalized, &job->cancelRequested);
   }
   if (!built) {
     job->ok = false;
@@ -31501,7 +31509,17 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
   auto job = std::make_unique<AppCommandState::PointCloudImportAsync>();
   job->sourcePath = path;
   job->cachePath = path + ".gscloud";
-  job->totalPointsEstimate = pointcloud_e57::QuickPointCountEstimate(path);
+  // Format is decided once, here, from the source path's own extension — every later step
+  // (QuickPointCountEstimate above, BuildFromE57/BuildFromPtx in the worker) reads `job->format`
+  // rather than re-sniffing the path, so the async plumbing stays shared across formats (REQ-172).
+  using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
+  job->format = (StringUtil::toLowerAsciiCopy(std::filesystem::path(path).extension().string()) ==
+                 ".ptx")
+                    ? Format::Ptx
+                    : Format::E57;
+  job->totalPointsEstimate = (job->format == Format::Ptx)
+                                 ? pointcloud_ptx::QuickPointCountEstimate(path)
+                                 : pointcloud_e57::QuickPointCountEstimate(path);
   job->startTime = std::chrono::steady_clock::now();
 
   AppCommandState::PointCloudImportAsync* jobPtr = job.get();
@@ -31551,6 +31569,126 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
   st.pointCloudImportAsync.reset();
   if (st.bench.pointCloudImportPending)
     InstallPointCloudBenchScene(st, log);  // BENCH POINTCLOUD was waiting on this import
+}
+
+/// REQ-172 PTX export increment (issue #825 increment 2) — same shape as PTS's
+/// `ExportSelectedPointCloudsToPts`. Resolves the selected `CadPointCloud`(s) from `st.selection`,
+/// or every cloud in the drawing when none is selected (REQ-172 acceptance text: "Export writes
+/// the selected cloud(s) (or all, when none selected — stated in the command)"), reads back every
+/// point each resolved cloud actually has — the full `.gscloud` out-of-core cache when one exists
+/// (every leaf, not the bounded preview sample), else the cloud's own in-memory preview — and
+/// writes them to ONE PTX file at a user-chosen path, as a single degenerate scan block with an
+/// identity setup transform (`WritePtxFile`'s documented choice).
+///
+/// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
+/// concatenated into a single file's one scan block rather than written one-file-per-cloud or
+/// one-scan-block-per-cloud — same reasoning PTS's export already recorded: PTX's acceptance text
+/// only exercises the single-cloud case, and there is no multi-cloud-per-export UI to drive a
+/// per-cloud prompt yet.
+void ExportSelectedPointCloudsToPtx(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadPointClouds.empty()) {
+    log.push_back("EXPORTPTX — the drawing has no point clouds.");
+    return;
+  }
+
+  std::set<int> resolved;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.cadPointClouds.size())
+      resolved.insert(e.index);
+  }
+  if (resolved.empty()) {
+    for (int i = 0; i < static_cast<int>(st.cadPointClouds.size()); ++i) resolved.insert(i);
+  }
+
+  // Decided once across every resolved cloud (same "decide once, default-fill the rest" tolerance
+  // BuildFromE57/StreamPtxFile already use for a mixed-schema source) — a channel is carried in
+  // the merged output if ANY resolved cloud has it; a cloud lacking that channel gets zero-filled.
+  bool anyColor = false, anyIntensity = false;
+  for (int idx : resolved) {
+    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    if (cloud->hasOutOfCoreCache()) {
+      const pointcloudcache::OpenResult opened = pointcloudcache::Open(cloud->cloudCachePath);
+      if (opened.ok) {
+        anyColor = anyColor || opened.cache.hasColor;
+        anyIntensity = anyIntensity || opened.cache.hasIntensity;
+        continue;
+      }
+    }
+    anyColor = anyColor || cloud->hasColor();
+    anyIntensity = anyIntensity || cloud->hasIntensity();
+  }
+
+  std::vector<double> xyz;
+  std::vector<float> colors, intensity;
+  std::int64_t totalCount = 0;
+  for (int idx : resolved) {
+    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    std::vector<double> cloudXyz;
+    std::vector<float> cloudColors, cloudIntensity;
+    bool cloudHasColor = false, cloudHasIntensity = false;
+    if (cloud->hasOutOfCoreCache()) {
+      const pointcloudcache::OpenResult opened = pointcloudcache::Open(cloud->cloudCachePath);
+      if (opened.ok) {
+        // previewCap == totalPointCount makes BuildPreviewFromCache's stride compute to 1 — a
+        // full read of every leaf, reused rather than writing a second "read everything" loop.
+        BuildPreviewFromCache(opened.cache, std::max<std::int64_t>(1, opened.cache.totalPointCount),
+                              cloudXyz, cloudColors, cloudIntensity);
+        cloudHasColor = opened.cache.hasColor;
+        cloudHasIntensity = opened.cache.hasIntensity;
+      }
+    }
+    if (cloudXyz.empty()) {  // no cache (small cloud) or the cache failed to open: fall back
+      cloudXyz = cloud->pointsXyz;
+      cloudColors = cloud->colorsRgb;
+      cloudIntensity = cloud->intensity;
+      cloudHasColor = cloud->hasColor();
+      cloudHasIntensity = cloud->hasIntensity();
+    }
+
+    const std::int64_t n = static_cast<std::int64_t>(cloudXyz.size() / 3);
+    xyz.insert(xyz.end(), cloudXyz.begin(), cloudXyz.end());
+    if (anyColor) {
+      if (cloudHasColor && cloudColors.size() == static_cast<size_t>(n) * 3)
+        colors.insert(colors.end(), cloudColors.begin(), cloudColors.end());
+      else
+        colors.insert(colors.end(), static_cast<size_t>(n) * 3, 0.0f);
+    }
+    if (anyIntensity) {
+      if (cloudHasIntensity && cloudIntensity.size() == static_cast<size_t>(n))
+        intensity.insert(intensity.end(), cloudIntensity.begin(), cloudIntensity.end());
+      else
+        intensity.insert(intensity.end(), static_cast<size_t>(n), 0.0f);
+    }
+    totalCount += n;
+  }
+
+  if (xyz.empty()) {
+    log.push_back("EXPORTPTX — the selected point cloud(s) have no points to export.");
+    return;
+  }
+
+  const std::string defaultName =
+      resolved.size() == 1
+          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
+                .stem().u8string() + ".ptx"
+          : std::string("pointclouds.ptx");
+  char buf[1024]{};
+  if (!BrowseSaveFilePtxUtf8(buf, sizeof(buf), defaultName.c_str())) {
+    log.push_back("EXPORTPTX — cancelled.");
+    return;
+  }
+
+  const pointcloud_ptx::WriteResult wr = pointcloud_ptx::WritePtxFile(buf, xyz, colors, intensity);
+  if (!wr.ok) {
+    log.push_back("EXPORTPTX — " + wr.errorMessage);
+    return;
+  }
+  char msg[384];
+  std::snprintf(msg, sizeof(msg), "EXPORTPTX — wrote %lld point(s) from %zu cloud(s) to %s.",
+               static_cast<long long>(totalCount), resolved.size(),
+               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
+  log.push_back(msg);
 }
 
 // =================================================================================================
@@ -43170,6 +43308,36 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
         return;
       StartPointCloudImportAsync(st, path, log);
+      return;
+    }
+    if (plotTok == "importptx" || plotTok == "ptx") {
+      std::string path;
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      // A path may contain spaces, so quoted-first: "C:\a b\scan.ptx"
+      if (!rest.empty() && rest.front() == '"') {
+        const size_t close = rest.find('"', 1);
+        if (close != std::string::npos)
+          path = rest.substr(1, close - 1);
+      } else if (!rest.empty()) {
+        path = rest;
+      }
+      if (path.empty()) {
+        char buf[1024]{};
+        if (!BrowseOpenFilePtxUtf8(buf, sizeof(buf))) {
+          log.push_back("IMPORTPTX — cancelled.");
+          return;
+        }
+        path = buf;
+      }
+      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
+        return;
+      StartPointCloudImportAsync(st, path, log);
+      return;
+    }
+    if (plotTok == "exportptx") {
+      ExportSelectedPointCloudsToPtx(st, log);
       return;
     }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,
