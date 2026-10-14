@@ -375,8 +375,10 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     scratchMajor = s.majorIntervalFt;
   }
 
+  const char* distUnit = CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits);  // issue #832
   std::string intervalWhy;
-  const bool intervalsOk = SurfaceStyles::IntervalsCompatible(scratchMinor, scratchMajor, &intervalWhy);
+  const bool intervalsOk =
+      SurfaceStyles::IntervalsCompatible(scratchMinor, scratchMajor, &intervalWhy, distUnit);
 
   if (ImGui::BeginTabBar("##sststabs")) {
     if (ImGui::BeginTabItem("Information")) {
@@ -423,10 +425,13 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     if (ImGui::BeginTabItem("Contours")) {
       ImGui::Spacing();
       ImGui::SeparatorText("Interval");
+      char minorLabel[48], majorLabel[48];
+      std::snprintf(minorLabel, sizeof(minorLabel), "Minor interval (%s)", distUnit);
+      std::snprintf(majorLabel, sizeof(majorLabel), "Major interval (%s)", distUnit);
       ImGui::SetNextItemWidth(140.f);
-      ImGui::InputDouble("Minor interval (ft)", &scratchMinor, 0.0, 0.0, "%.4g");
+      ImGui::InputDouble(minorLabel, &scratchMinor, 0.0, 0.0, "%.4g");
       ImGui::SetNextItemWidth(140.f);
-      ImGui::InputDouble("Major interval (ft)", &scratchMajor, 0.0, 0.0, "%.4g");
+      ImGui::InputDouble(majorLabel, &scratchMajor, 0.0, 0.0, "%.4g");
 
       if (!intervalsOk) {
         ImGui::Spacing();
@@ -458,7 +463,9 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         changed = true;
       ItemHelpTooltip("Chaikin corner-cutting on displayed contours only (0–5). Does not change the TIN.");
       ImGui::SetNextItemWidth(120.f);
-      if (ImGui::InputDouble("Label spacing (ft)", &s.contourLabelSpacingFt, 0.0, 0.0, "%.2f")) {
+      char spacingLabel[48];
+      std::snprintf(spacingLabel, sizeof(spacingLabel), "Label spacing (%s)", distUnit);
+      if (ImGui::InputDouble(spacingLabel, &s.contourLabelSpacingFt, 0.0, 0.0, "%.2f")) {
         if (s.contourLabelSpacingFt < 0.0)
           s.contourLabelSpacingFt = 0.0;
         changed = true;
@@ -510,14 +517,20 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
         changed = true;
       }
-      ItemHelpTooltip("Colours every triangle by None, Elevation (ft), Slope (%), Direction (deg), "
-                      "or Slope angle (deg), driven by the range table below. A triangle takes ONE "
-                      "colour — its centroid elevation, or its plane's grade or aspect — never a "
-                      "gradient across it.");
+      char elevTooltip[300];
+      std::snprintf(elevTooltip, sizeof(elevTooltip),
+                    "Colours every triangle by None, Elevation (%s), Slope (%%), Direction (deg), "
+                    "or Slope angle (deg), driven by the range table below. A triangle takes ONE "
+                    "colour \xe2\x80\x94 its centroid elevation, or its plane's grade or aspect \xe2\x80\x94 never a "
+                    "gradient across it.",
+                    distUnit);
+      ItemHelpTooltip(elevTooltip);
       if (s.analysisMode != SurfaceAnalysisMode::None) {
         ImGui::Spacing();
+        char elevBoundLabel[48];
+        std::snprintf(elevBoundLabel, sizeof(elevBoundLabel), "Upper bound (%s)", distUnit);
         const char* boundLabel =
-            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)"
+            s.analysisMode == SurfaceAnalysisMode::Elevation ? elevBoundLabel
             : s.analysisMode == SurfaceAnalysisMode::Direction ? "Upper bound (deg)"
             : s.analysisMode == SurfaceAnalysisMode::SlopeAngle ? "Upper bound (deg)"
                                                                : "Upper bound (%)";

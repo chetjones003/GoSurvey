@@ -4641,7 +4641,8 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     // REQ-070: rejected with a SPECIFIC message, and rejected BEFORE the value is stored, so the
     // invalid pair never exists to generate mis-labelled contours from.
     std::string why;
-    if (!SurfaceStyles::IntervalsCompatible(minor, major, &why)) {
+    const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawingInsUnits);  // issue #832
+    if (!SurfaceStyles::IntervalsCompatible(minor, major, &why, distUnit)) {
       log.push_back("SURFSTYLE — " + why);
       return;
     }
@@ -4654,7 +4655,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     // cannot retriangulate.
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — \"" + s->name + "\" contours: minor " + SurfaceStyles::FormatFt(minor) +
-                  " ft, major " + SurfaceStyles::FormatFt(major) + " ft.");
+                  " " + distUnit + ", major " + SurfaceStyles::FormatFt(major) + " " + distUnit + ".");
     return;
   }
 
@@ -25629,6 +25630,7 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
 
   const SurfaceStyle* stylePtr = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
   const SurfaceStyle style = stylePtr ? *stylePtr : SurfaceStyles::StandardSurfaceStyle();
+  const char* distUnit = CadDrawingInsUnitsAbbrev(st.drawingInsUnits);  // issue #832
 
   // REQ-071's last acceptance condition. Refused BEFORE anything is created, and the message says
   // which style switched them off — "nothing happened" with no reason is the exact silence REQ-201
@@ -25653,7 +25655,7 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
   if (levels.empty()) {
     log.push_back("EXTRACT — \"" + surf.name + "\" displays no contours at style \"" + style.name +
                   "\"'s intervals over its " + SurfaceStyles::FormatFt(levels.minZ) + " to " +
-                  SurfaceStyles::FormatFt(levels.maxZ) + " ft range; nothing extracted.");
+                  SurfaceStyles::FormatFt(levels.maxZ) + " " + distUnit + " range; nothing extracted.");
     return;
   }
 
@@ -25724,12 +25726,12 @@ void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::ve
   std::string msg = "EXTRACT — \"" + surf.name + "\": ";
   if (minorMade > 0)
     msg += std::to_string(minorMade) + " minor contour(s) at " +
-           SurfaceStyles::FormatFt(style.minorIntervalFt) + " ft";
+           SurfaceStyles::FormatFt(style.minorIntervalFt) + " " + distUnit;
   if (minorMade > 0 && majorMade > 0)
     msg += ", ";
   if (majorMade > 0)
     msg += std::to_string(majorMade) + " major contour(s) at " +
-           SurfaceStyles::FormatFt(style.majorIntervalFt) + " ft";
+           SurfaceStyles::FormatFt(style.majorIntervalFt) + " " + distUnit;
   msg += " — " + std::to_string(minorMade + majorMade) + " polyline(s) on layer \"" + layer + "\"" +
          (layerCreated ? " (created)" : "") + ".";
   log.push_back(msg);

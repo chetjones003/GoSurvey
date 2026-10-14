@@ -840,7 +840,9 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
     const bool byElevation = resolved.analysisMode == SurfaceAnalysisMode::Elevation;
     const bool byDirection = resolved.analysisMode == SurfaceAnalysisMode::Direction;
     const bool bySlopeAngle = resolved.analysisMode == SurfaceAnalysisMode::SlopeAngle;
-    const char* unit = byElevation ? "ft" : (byDirection || bySlopeAngle ? "deg" : "%");
+    const char* unit =
+        byElevation ? CadDrawingInsUnitsAbbrev(cmd.drawingInsUnits)  // issue #832
+                    : (byDirection || bySlopeAngle ? "deg" : "%");
     // Title row + one row per band + one overflow row (only when there is a table to overflow).
     const size_t dataRows = resolved.bands.size() + (resolved.bands.empty() ? 0 : 1);
     const float boxH = (1.f + static_cast<float>(dataRows)) * kRowH + kPad * 2.f;
