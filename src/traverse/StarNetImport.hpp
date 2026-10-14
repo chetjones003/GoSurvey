@@ -8,7 +8,16 @@
 /// #846, Phase B). Verified against the STAR*NET v10 Reference Manual's
 /// documented input grammar (Chapter 5, "Preparing Input Data") — not guessed.
 ///
-/// Supports exactly STAR*NET's own "Traverse" data type, which maps directly
+/// Supports STAR*NET traverse lines and the single-observation network lines
+/// A, D, V, B, M, BM, DV, and L. Those lines are converted into GoSurvey
+/// stations and measurements (our own command words: CTRL, ANGLE, DIST,
+/// AZIMUTH, ZENITH, EDIF). A few of their dotted options are read only so the
+/// conversion is right (coordinate order, 2D versus 3D, elevation-difference
+/// versus zenith, angle-name order). Those names are not GoSurvey commands
+/// (D-2026-10-13-e). Sideshots (SS) and direction sets are still reported
+/// as unsupported.
+///
+/// Supports STAR*NET's own "Traverse" data type, which maps directly
 /// onto GoSurvey's sequential TraverseLeg chain:
 ///   C <name> <N> <E> [elev] [...]      — a station's known/reference coordinates
 ///   .ORDER [NE|EN] [...]               — the only inline option honored; selects

@@ -270,6 +270,127 @@ static void DrawLegObservationEditor(TraverseLeg& leg, size_t legIndex, bool& di
 }
 
 // ---- Closure analysis window: Unadjusted vs Least Squares (REQ-014–017) ----
+static const char* LsaMeasKindName(LsaMeasKind kind) {
+    switch (kind) {
+    case LsaMeasKind::Angle: return "Angle";
+    case LsaMeasKind::Distance: return "Distance";
+    case LsaMeasKind::Vertical: return "Vertical";
+    case LsaMeasKind::GpsEast: return "GPS E";
+    case LsaMeasKind::GpsNorth: return "GPS N";
+    case LsaMeasKind::GpsUp: return "GPS U";
+    case LsaMeasKind::CoordEast: return "Easting";
+    case LsaMeasKind::CoordNorth: return "Northing";
+    case LsaMeasKind::CoordUp: return "Elev";
+    case LsaMeasKind::Zenith: return "Zenith";
+    case LsaMeasKind::Direction: return "Direction";
+    }
+    return "";
+}
+
+static void DrawStationOrBlank(int stationId, bool referenceBearing) {
+    if (stationId < 0)
+        ImGui::TextUnformatted(referenceBearing ? "REF" : "");
+    else
+        ImGui::Text("%d", stationId);
+}
+
+static void DrawLsaMeasurementResiduals(const LsaResult& res, const char* distUnit) {
+    ImGui::TextDisabled(
+        "Angle adjusted values are degrees; angle residuals and standard errors are arc-seconds. "
+        "Distance, vertical, and GPS values are %s. A mark appears when the standardized residual exceeds 3.",
+        distUnit);
+    if (ImGui::BeginTable("meas_residuals", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                   ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupColumn("Kind");
+        ImGui::TableSetupColumn("At");
+        ImGui::TableSetupColumn("From");
+        ImGui::TableSetupColumn("To");
+        ImGui::TableSetupColumn("Adjusted");
+        ImGui::TableSetupColumn("Residual");
+        ImGui::TableSetupColumn("Std err");
+        ImGui::TableSetupColumn("Std res");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+        ImGui::TableHeadersRow();
+        ImGui::PopStyleColor();
+        for (const LsaMeasResidual& row : res.measResiduals) {
+            const bool angle = row.kind == LsaMeasKind::Angle;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(LsaMeasKindName(row.kind));
+            ImGui::TableNextColumn(); DrawStationOrBlank(row.atStationId, false);
+            ImGui::TableNextColumn(); DrawStationOrBlank(row.fromStationId, angle);
+            ImGui::TableNextColumn(); ImGui::Text("%d", row.toStationId);
+            ImGui::TableNextColumn(); ImGui::Text("%.4f", row.adjusted);
+            ImGui::TableNextColumn(); ImGui::Text("%+.4f", row.residual);
+            ImGui::TableNextColumn(); ImGui::Text("%.4f", row.stdError);
+            ImGui::TableNextColumn();
+            if (row.flagged) ImGui::Text("%+.2f *", row.stdResidual);
+            else ImGui::Text("%+.2f", row.stdResidual);
+        }
+        ImGui::EndTable();
+    }
+    if (!res.kindSummaries.empty()) {
+        ImGui::SeparatorText("By measurement kind");
+        if (ImGui::BeginTable("meas_summary", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Kind");
+            ImGui::TableSetupColumn("Count");
+            ImGui::TableSetupColumn("Sum sq std res");
+            ImGui::TableSetupColumn("Error factor");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+            ImGui::TableHeadersRow();
+            ImGui::PopStyleColor();
+            for (const LsaKindSummary& summary : res.kindSummaries) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn(); ImGui::TextUnformatted(LsaMeasKindName(summary.kind));
+                ImGui::TableNextColumn(); ImGui::Text("%d", summary.count);
+                ImGui::TableNextColumn(); ImGui::Text("%.4f", summary.sumSqStdResidual);
+                ImGui::TableNextColumn(); ImGui::Text("%.4f", summary.errorFactor);
+            }
+            ImGui::EndTable();
+        }
+    }
+    if (res.chiSquare.evaluated) {
+        const char* verdict = "passed";
+        if (!res.chiSquare.passed)
+            verdict = res.chiSquare.exceededUpper ? "exceeded the upper bound" : "exceeded the lower bound";
+        ImGui::Text("Chi-square test at 5%%: %s (error factor %.4f, bounds %.4f to %.4f)",
+                    verdict, res.chiSquare.errorFactor, res.chiSquare.lowerFactor, res.chiSquare.upperFactor);
+    }
+}
+
+static void AppendLsaResidualReport(std::string& report, const LsaResult& result) {
+    report += "\n--- Measurements ---\n";
+    report += "Kind      At   From To     Adjusted    Residual    StdErr   StdRes\n";
+    char buf[160];
+    for (const LsaMeasResidual& row : result.measResiduals) {
+        const std::string at = row.atStationId < 0 ? std::string(" ") : std::to_string(row.atStationId);
+        const std::string from = row.fromStationId < 0
+            ? std::string(row.kind == LsaMeasKind::Angle ? "REF" : " ")
+            : std::to_string(row.fromStationId);
+        std::snprintf(buf, sizeof(buf), "%-8s %4s %4s %4d %12.4f %11.4f %9.4f %8.2f%s\n",
+                      LsaMeasKindName(row.kind), at.c_str(), from.c_str(), row.toStationId,
+                      row.adjusted, row.residual, row.stdError, row.stdResidual,
+                      row.flagged ? " *" : "");
+        report += buf;
+    }
+    report += "\n--- By kind ---\n";
+    for (const LsaKindSummary& summary : result.kindSummaries) {
+        std::snprintf(buf, sizeof(buf), "%-8s  n=%d  sumSq=%.4f  factor=%.4f\n",
+                      LsaMeasKindName(summary.kind), summary.count, summary.sumSqStdResidual,
+                      summary.errorFactor);
+        report += buf;
+    }
+    if (result.chiSquare.evaluated) {
+        const char* verdict = "passed";
+        if (!result.chiSquare.passed)
+            verdict = result.chiSquare.exceededUpper ? "exceeded the upper bound" : "exceeded the lower bound";
+        std::snprintf(buf, sizeof(buf),
+                      "Chi-square test at 5%%: %s (error factor %.4f, bounds %.4f to %.4f)\n",
+                      verdict, result.chiSquare.errorFactor, result.chiSquare.lowerFactor,
+                      result.chiSquare.upperFactor);
+        report += buf;
+    }
+}
+
 static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::string>& log) {
     if (!cmd.showTraverseClosureWindow)
         return;
@@ -407,60 +528,7 @@ static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::str
             if (!res.ok) {
                 ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "No residuals: %s", res.message.c_str());
             } else {
-                const int nCols = res.usedGpsVectors ? 5 : 4;
-                char distResidLabel[32], vertResidLabel[32];
-                std::snprintf(distResidLabel, sizeof(distResidLabel), "Dist resid (%s)", distUnit);
-                std::snprintf(vertResidLabel, sizeof(vertResidLabel), "Vert resid (%s)", distUnit);
-                if (ImGui::BeginTable("residuals", nCols, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                                             ImGuiTableFlags_ScrollY)) {
-                    ImGui::TableSetupColumn("From");
-                    ImGui::TableSetupColumn("To");
-                    ImGui::TableSetupColumn("Angle resid (sec)");
-                    ImGui::TableSetupColumn(distResidLabel);
-                    if (res.usedGpsVectors) ImGui::TableSetupColumn(vertResidLabel);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-                    ImGui::TableHeadersRow();
-                    ImGui::PopStyleColor();
-                    for (const LsaResidual& v : res.residuals) {
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn(); ImGui::Text("%d", v.fromStationId);
-                        ImGui::TableNextColumn(); ImGui::Text("%d", v.toStationId);
-                        ImGui::TableNextColumn(); ImGui::Text("%+.2f", v.angleResidualSec);
-                        ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.distResidualFt);
-                        if (res.usedGpsVectors) {
-                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.vertResidualFt);
-                        }
-                    }
-                    ImGui::EndTable();
-                }
-
-                if (res.usedGpsVectors && !res.gpsResiduals.empty()) {
-                    ImGui::SeparatorText("GPS Vector Residuals (local ENU)");
-                    char gE[32], gN[32], gU[32];
-                    std::snprintf(gE, sizeof(gE), "East resid (%s)", distUnit);
-                    std::snprintf(gN, sizeof(gN), "North resid (%s)", distUnit);
-                    std::snprintf(gU, sizeof(gU), "Up resid (%s)", distUnit);
-                    if (ImGui::BeginTable("gps_residuals", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                                                 ImGuiTableFlags_ScrollY)) {
-                        ImGui::TableSetupColumn("From");
-                        ImGui::TableSetupColumn("To");
-                        ImGui::TableSetupColumn(gE);
-                        ImGui::TableSetupColumn(gN);
-                        ImGui::TableSetupColumn(gU);
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-                        ImGui::TableHeadersRow();
-                        ImGui::PopStyleColor();
-                        for (const LsaGpsResidual& gv : res.gpsResiduals) {
-                            ImGui::TableNextRow();
-                            ImGui::TableNextColumn(); ImGui::Text("%d", gv.fromStationId);
-                            ImGui::TableNextColumn(); ImGui::Text("%d", gv.toStationId);
-                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.eastResidualFt);
-                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.northResidualFt);
-                            ImGui::TableNextColumn(); ImGui::Text("%+.4f", gv.upResidualFt);
-                        }
-                        ImGui::EndTable();
-                    }
-                }
+                DrawLsaMeasurementResiduals(res, distUnit);
             }
             ImGui::EndTabItem();
         }
@@ -485,6 +553,7 @@ bool IsKeyword(const std::string& upperTok) {
     static const char* const kKeywords[] = {
         "STATION", "BEARING", "LOOP", "SCALE", "ERRORS",
         "STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR",
+        "CTRL", "ANGLE", "DIST", "AZIMUTH", "EDIF", "DIR",
         "ON", "OFF", "ZENITH", "ELEV", "SIDE", "CHECK", "COMBINED", "GRID", "REF",
     };
     for (const char* kw : kKeywords)
@@ -607,29 +676,37 @@ void DrawHighlightedLine(const std::string& line) {
     static const ImVec4 kKeywordCol(0.00f, 0.22f, 0.70f, 1.0f);
     static const ImVec4 kNumberCol(0.04f, 0.42f, 0.34f, 1.0f);
     static const ImVec4 kCommentCol(0.42f, 0.47f, 0.42f, 1.0f);
+    static const ImVec4 kCodeCol(0.55f, 0.28f, 0.05f, 1.0f);
     const ImVec4 defaultCol = ImGui::GetStyle().Colors[ImGuiCol_Text];
 
     const size_t firstNonSpace = line.find_first_not_of(" \t");
-    if (firstNonSpace != std::string::npos && line[firstNonSpace] == '#') {
+    if (firstNonSpace != std::string::npos && firstNonSpace + 1 < line.size() && line[firstNonSpace] == '/' &&
+        line[firstNonSpace + 1] == '/') {
         ImGui::TextColored(kCommentCol, "%s", line.c_str());  // whole-line comment.
         return;
     }
 
     bool first = true;
+    bool inCode = false;
     size_t i = 0;
     while (i < line.size()) {
         const bool isSpace = (line[i] == ' ' || line[i] == '\t');
         size_t j = i;
         while (j < line.size() && ((line[j] == ' ' || line[j] == '\t') == isSpace)) ++j;
         const std::string run = line.substr(i, j - i);
+        if (!inCode && !isSpace && !run.empty() && (run[0] == '\'' || run[0] == '`')) inCode = true;
         if (!first) ImGui::SameLine(0.0f, 0.0f);
         first = false;
-        if (isSpace) {
+        if (inCode) {
+            ImGui::TextColored(kCodeCol, "%s", run.c_str());
+        } else if (isSpace) {
             ImGui::TextUnformatted(run.c_str());
         } else {
             std::string upper = run;
             for (char& c : upper) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-            if (IsKeyword(upper))
+            if (!upper.empty() && upper[0] == '#')
+                ImGui::TextColored(kKeywordCol, "%s", run.c_str());
+            else if (IsKeyword(upper))
                 ImGui::TextColored(kKeywordCol, "%s", run.c_str());
             else if (IsNumber(run))
                 ImGui::TextColored(kNumberCol, "%s", run.c_str());
@@ -698,7 +775,7 @@ static void MergeImportedTraverse(TraverseData& into, TraverseData&& imported) {
 }
 
 // Imports every path in `paths` with `importFn`, merging each into cmd.traverseData
-// (see MergeImportedTraverse), recording a `# IMPORT "path"` marker (surfaced in the
+// (see MergeImportedTraverse), recording a `#IMPORT "path"` marker (surfaced in the
 // Command tab's text — DrawTraverseCommandTab) and logging per-file success/failure.
 template <typename ImportFn>
 static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
@@ -1168,12 +1245,29 @@ static void DrawTraverseToolbar(AppCommandState& cmd, std::vector<std::string>& 
     ItemHelpTooltip("Re-run the least-squares adjustment (it also reruns automatically whenever\nthe command text or traverse data changes).");
 }
 
-// Splices `# IMPORT "path"` comment lines (cmd.traverseImportMarkers) into freshly
-// Serialize()'d GSTC text, right before the STN block of the leg each marker names.
-// travcmd::Parse ignores comment lines and travcmd::Serialize has no notion of import
-// history, so this can't be done inside either of them — it's cosmetic text spliced in
-// after the fact, same as a human would paste a note in. Markers are applied highest
-// legIndex first so earlier insertions don't shift the position of later ones.
+// First newline that begins a measurement line, or npos when the text is only a header.
+// The index points at the '\n' so the caller can insert the following line.
+static size_t FindFirstMeasurementLine(const std::string& text) {
+    static const char* kWords[] = {
+        "STN ", "CTRL ", "ANGLE ", "DIST ", "AZIMUTH ", "EDIF ", "ZENITH ", "DIR ",
+        "HANG ", "HDIST ", "SDIST ", "VANG ", "DESC ", "PRISM ", "POLE ", "TSERR ",
+    };
+    size_t best = std::string::npos;
+    for (const char* word : kWords) {
+        const std::string needle = std::string("\n") + word;
+        const size_t at = text.find(needle);
+        if (at != std::string::npos && (best == std::string::npos || at < best)) best = at;
+    }
+    return best;
+}
+
+// Splices `#IMPORT "path"` lines into freshly Serialize()'d GSTC text, immediately
+// before the measurements that import contributed. A chain import is marked in
+// front of its STN block. A network import has no STN lines, so the marker goes
+// in front of the first CTRL/DIST/DIR line instead of after the last one.
+// travcmd::Parse treats `#IMPORT` as a note. Serialize has no import history, so
+// the note is spliced in here. Markers are applied highest legIndex first so
+// earlier insertions don't shift the position of later ones.
 static void InsertImportMarkerComments(std::string& text,
                                         const std::vector<std::pair<int, std::string>>& markers) {
     if (markers.empty()) return;
@@ -1191,11 +1285,14 @@ static void InsertImportMarkerComments(std::string& text,
             ++count;
             pos = p + 1;
         }
-        const std::string comment = "\n# " + label + "\n";
+        if (foundPos == std::string::npos) foundPos = FindFirstMeasurementLine(text);
+        const std::string marker = "#" + label + "\n";
         if (foundPos != std::string::npos)
-            text.insert(foundPos, comment);
+            text.insert(foundPos + 1, marker);
+        else if (!text.empty() && text.back() != '\n')
+            text += "\n" + marker;
         else
-            text += comment;  // e.g. an import that contributed only side shots.
+            text += marker;
     }
 }
 
@@ -1211,10 +1308,18 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     (void)log;  // imports/Form edits still log at their own call sites; live edits don't spam the log.
 
     if (!cmd.traverseCommandTextLoaded) {
-        cmd.traverseCommandText = travcmd::Serialize(td, cmd.traverseLsaWeights);
+        cmd.traverseCommandText = travcmd::AlignColumns(travcmd::Serialize(td, cmd.traverseLsaWeights));
         InsertImportMarkerComments(cmd.traverseCommandText, cmd.traverseImportMarkers);
         cmd.traverseCommandTextLoaded = true;
         cmd.traverseCommandError.clear();
+        // The text box keeps its own copy while it is focused. Tell it to pick up
+        // this replacement, or the next keystroke writes the old header back over
+        // the imported commands.
+        if (ImGuiInputTextState* state = ImGui::GetInputTextState(ImGui::GetID("##trv_cmd_text"))) {
+            state->WantReloadUserBuf = true;
+            state->ReloadSelectionStart = 0;
+            state->ReloadSelectionEnd = 0;
+        }
     }
 
     ImGui::TextDisabled("GoSurvey Traverse Command (GSTC)");
@@ -1234,14 +1339,19 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     std::vector<std::string> lines;
     {
         const std::string& text = cmd.traverseCommandText;
-        size_t start = 0;
-        for (size_t p = 0; p <= text.size(); ++p) {
-            if (p == text.size() || text[p] == '\n') {
+        if (text.empty()) {
+            lines.emplace_back();
+        } else {
+            size_t start = 0;
+            for (size_t p = 0; p < text.size(); ++p) {
+                if (text[p] != '\n') continue;
                 lines.push_back(text.substr(start, p - start));
                 start = p + 1;
             }
+            // A trailing newline ends the last line; it is not an extra blank row.
+            if (start < text.size()) lines.push_back(text.substr(start));
+            if (lines.empty()) lines.emplace_back();
         }
-        if (lines.empty()) lines.emplace_back();
     }
 
     static float s_scrollY = 0.0f;
@@ -1295,10 +1405,62 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     // alike — all three must share identical font metrics, since the overlay and
     // gutter are positioned by assuming they use the exact same line pitch as the
     // real InputTextMultiline underneath.
-    ImFont* monoFont = FontReg::Resolve("Consolas", false, false);
+    ImFont* monoFont = FontReg::Resolve("Courier New", false, false);
     ImGui::PushFont(monoFont);
 
-    // ---- Line-number gutter ----
+    // The text box is drawn first so its scrollbar position is known before the
+    // gutter and the colorized overlay are drawn. Those two are separate windows
+    // and used to copy scroll only while the box was focused, so dragging the
+    // scrollbar (or rolling the wheel) left the line numbers and text behind
+    // until the next click.
+    const ImVec2 editorOrigin = ImGui::GetCursorScreenPos();
+    ImGui::SetCursorScreenPos(ImVec2(editorOrigin.x + gutterW + 2.0f, editorOrigin.y));
+
+    // ---- The real, editable box (glyphs hidden; caret/selection stay visible) ----
+    ImGui::BeginGroup();
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 0));
+    ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, boxH),
+                              ImGuiInputTextFlags_CallbackCompletion, travcmdui::GstcTextEditCallback);
+    ImGui::PopStyleColor();
+    const ImVec2 textMin = ImGui::GetItemRectMin();
+    const ImVec2 textMax = ImGui::GetItemRectMax();
+    const bool textBoxActive = ImGui::IsItemActive();
+    compState.pending = false;
+
+    {
+        const ImVector<ImGuiWindow*>& children = ImGui::GetCurrentWindow()->DC.ChildWindows;
+        if (!children.empty()) {
+            const ImGuiWindow* textWindow = children.back();
+            s_scrollY = textWindow->Scroll.y;
+            s_scrollX = textWindow->Scroll.x;
+        }
+    }
+
+    // ImGui's native caret is drawn in ImGuiCol_Text, which is pushed fully
+    // transparent above (so the real glyphs stay invisible under the colorized
+    // overlay) — that hid the caret too. It's redrawn by hand in the overlay
+    // below, from this frame's live cursor position (no one-frame-behind delay
+    // needed here — unlike the autocomplete token above, this isn't deciding
+    // what to splice into next frame's buffer, just where to draw a line now).
+    int caretRow = -1;
+    float caretColPx = 0.0f;
+    if (ImGuiInputTextState* state = ImGui::GetInputTextState(textId)) {
+        if (textBoxActive) s_scrollX = state->Scroll.x;
+        if (textBoxActive) {
+            const std::string& text = cmd.traverseCommandText;
+            const int n = static_cast<int>(text.size());
+            const int cur = std::clamp(state->GetCursorPos(), 0, n);
+            int lineStartPos = cur;
+            while (lineStartPos > 0 && text[static_cast<size_t>(lineStartPos - 1)] != '\n') --lineStartPos;
+            caretRow = static_cast<int>(std::count(text.begin(), text.begin() + lineStartPos, '\n'));
+            const std::string prefix =
+                text.substr(static_cast<size_t>(lineStartPos), static_cast<size_t>(cur - lineStartPos));
+            caretColPx = ImGui::CalcTextSize(prefix.c_str()).x;
+        }
+    }
+
+    // ---- Line-number gutter, scrolled with the text box even when it is not focused ----
+    ImGui::SetCursorScreenPos(editorOrigin);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, style.FramePadding);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleColor(ImGuiCol_ChildBg, style.Colors[ImGuiCol_FrameBg]);
@@ -1312,43 +1474,6 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     ImGui::EndChild();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
-
-    ImGui::SameLine(0.0f, 2.0f);
-
-    // ---- The real, editable box (glyphs hidden; caret/selection stay visible) ----
-    ImGui::BeginGroup();
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(0, 0, 0, 0));
-    ImGui::InputTextMultiline("##trv_cmd_text", &cmd.traverseCommandText, ImVec2(-FLT_MIN, boxH),
-                              ImGuiInputTextFlags_CallbackCompletion, travcmdui::GstcTextEditCallback);
-    ImGui::PopStyleColor();
-    const ImVec2 textMin = ImGui::GetItemRectMin();
-    const ImVec2 textMax = ImGui::GetItemRectMax();
-    const bool textBoxActive = ImGui::IsItemActive();
-    compState.pending = false;
-
-    // ImGui's native caret is drawn in ImGuiCol_Text, which is pushed fully
-    // transparent above (so the real glyphs stay invisible under the colorized
-    // overlay) — that hid the caret too. It's redrawn by hand in the overlay
-    // below, from this frame's live cursor position (no one-frame-behind delay
-    // needed here — unlike the autocomplete token above, this isn't deciding
-    // what to splice into next frame's buffer, just where to draw a line now).
-    int caretRow = -1;
-    float caretColPx = 0.0f;
-    if (ImGuiInputTextState* state = ImGui::GetInputTextState(textId)) {
-        s_scrollY = state->Scroll.y;
-        s_scrollX = state->Scroll.x;
-        if (textBoxActive) {
-            const std::string& text = cmd.traverseCommandText;
-            const int n = static_cast<int>(text.size());
-            const int cur = std::clamp(state->GetCursorPos(), 0, n);
-            int lineStartPos = cur;
-            while (lineStartPos > 0 && text[static_cast<size_t>(lineStartPos - 1)] != '\n') --lineStartPos;
-            caretRow = static_cast<int>(std::count(text.begin(), text.begin() + lineStartPos, '\n'));
-            const std::string prefix =
-                text.substr(static_cast<size_t>(lineStartPos), static_cast<size_t>(cur - lineStartPos));
-            caretColPx = ImGui::CalcTextSize(prefix.c_str()).x;
-        }
-    }
 
     // ---- Inline parse-error annotation: travcmd::Parse's error is always
     // "line N: message" (TraverseCommandLang.cpp) — split that apart so the line
@@ -1409,6 +1534,7 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     ImGui::PopStyleVar(2);
     ImGui::EndGroup();
     ImGui::PopFont();
+    ImGui::SetCursorScreenPos(ImVec2(editorOrigin.x, textMax.y + style.ItemSpacing.y));
 
     // ---- Autocomplete popup: "COMMAND   usage", filtered as you type ----
     if (textBoxActive && !matches.empty() && tokenLineStart >= 0) {
@@ -1472,10 +1598,25 @@ static void DrawTraverseCommandTab(AppCommandState& cmd, std::vector<std::string
     else
         ImGui::TextDisabled("Edits apply live — the Form tab reflects this traverse too.");
 
+    // Snap columns once, when the user leaves the box. Doing this every frame
+    // rewrote the buffer continuously (AlignColumns used to append a blank line
+    // on each call) and the live-apply below then parsed that stale text over
+    // a just-imported network.
+    static bool s_textBoxWasActive = false;
+    if (s_textBoxWasActive && !textBoxActive && cmd.traverseCommandError.empty() &&
+        !cmd.traverseDataDirty) {
+        const std::string aligned = travcmd::AlignColumns(cmd.traverseCommandText);
+        if (aligned != cmd.traverseCommandText) cmd.traverseCommandText = aligned;
+    }
+    s_textBoxWasActive = textBoxActive;
+
     // ---- Live-apply: reparse whenever the text actually changed, from any source
-    // (typing, a clicked autocomplete suggestion) ----
+    // (typing, a clicked autocomplete suggestion). Skip while an import or Form
+    // edit is still dirty: this frame's text is the previous document, and
+    // parsing it would wipe the new measurements before the next frame
+    // regenerates the command text from them.
     static std::string s_lastAppliedText;
-    if (cmd.traverseCommandText != s_lastAppliedText) {
+    if (!cmd.traverseDataDirty && cmd.traverseCommandText != s_lastAppliedText) {
         s_lastAppliedText = cmd.traverseCommandText;
         TraverseData parsed;
         LsaWeights parsedWeights;
@@ -1939,15 +2080,18 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
 
         if (ImGui::BeginChild("##lsa_summary", ImVec2(0.f, s_summaryH))) {
             ImGui::SeparatorText("Summary");
+            const int stationCount = td.networkStations.empty()
+                                          ? static_cast<int>(td.legs.size()) + 1
+                                          : static_cast<int>(td.networkStations.size());
             if (td.closureValid) {
-                ImGui::Text("Stations: %d", static_cast<int>(td.legs.size()) + 1);
+                ImGui::Text("Stations: %d", stationCount);
                 ImGui::Text("Misclosure: %.4f", td.closureLinear);
                 if (td.closureLinear > 1e-6)
                     ImGui::Text("Precision: 1:%.0f", td.closurePrecision);
                 else
                     ImGui::TextUnformatted("Precision: perfect");
             } else {
-                ImGui::Text("Stations: %d", static_cast<int>(td.legs.size()) + 1);
+                ImGui::Text("Stations: %d", stationCount);
                 ImGui::TextDisabled("No closure (open traverse or not computed).");
             }
             EnsureLsaComputed(cmd);
@@ -1999,7 +2143,7 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
         // numbers. Dump (STAR*NET's raw internal adjustment-matrix dump) isn't
         // something GoSurvey's solver currently exposes either.
         if (ImGui::BeginChild("##lsa_report_body", ImVec2(0.f, 0.f), ImGuiChildFlags_Borders)) {
-            ImGui::PushFont(FontReg::Resolve("Consolas", false, false));
+            ImGui::PushFont(FontReg::Resolve("Courier New", false, false));
             if (ImGui::BeginTabBar("##lsa_report_tabs")) {
                 if (ImGui::BeginTabItem("Listings")) {
                     if (!r.ok) {
@@ -2021,31 +2165,7 @@ void DrawLsaEditorTab(AppCommandState& cmd, std::vector<std::string>& log) {
                             if (r.gpsVectorsSkipped > 0) rpt += " (skipped " + std::to_string(r.gpsVectorsSkipped) + ")";
                             rpt += "\n";
                         }
-                        rpt += "\n--- Residuals ---\n";
-                        rpt += "From  To   Angle\"    Dist(ft)";
-                        if (r.usedGpsVectors) rpt += "   Vert(ft)";
-                        rpt += "\n";
-                        for (const LsaResidual& v : r.residuals) {
-                            std::snprintf(buf, sizeof(buf), "%-5d %-4d %+8.2f  %+8.4f", v.fromStationId,
-                                          v.toStationId, v.angleResidualSec, v.distResidualFt);
-                            rpt += buf;
-                            if (r.usedGpsVectors) {
-                                std::snprintf(buf, sizeof(buf), "  %+8.4f", v.vertResidualFt);
-                                rpt += buf;
-                            }
-                            rpt += "\n";
-                        }
-                        if (!r.gpsResiduals.empty()) {
-                            rpt += "\n--- GPS Vector Residuals (local ENU) ---\n";
-                            rpt += "From  To   East(ft)  North(ft)  Up(ft)\n";
-                            for (const LsaGpsResidual& gv : r.gpsResiduals) {
-                                std::snprintf(buf, sizeof(buf), "%-5d %-4d %+8.4f  %+8.4f  %+8.4f",
-                                              gv.fromStationId, gv.toStationId, gv.eastResidualFt,
-                                              gv.northResidualFt, gv.upResidualFt);
-                                rpt += buf;
-                                rpt += "\n";
-                            }
-                        }
+                        AppendLsaResidualReport(rpt, r);
                         ImGui::TextUnformatted(rpt.c_str());
                     }
                     ImGui::EndTabItem();

@@ -9,7 +9,15 @@
 // line is plain whitespace-separated tokens with no `key=value` punctuation.
 //
 // Each non-blank, non-comment line is one directive: an upper/lower-case keyword
-// followed by its values, in a fixed order. Comment lines start with '#'.
+// followed by its values, in a fixed order. Comment lines start with `//`.
+// Inline options start with `#` (for example `#LOOP ON`, `#SCALE OFF COMBINED`,
+// `#ERRORS <angle-arcsec> <dist-const> <dist-ppm>`) and change how the text is read.
+// `#IMPORT "path"` is a note the editor inserts in front of an imported block.
+// It does not change the measurements.
+// A measurement that carried a field code or description ends with
+// `'<text to the end of the line>` (for example `'TH CN`). `//` comments,
+// including ones copied from an imported file, stay on their own lines and
+// keep their place.
 //
 // Header directives (each at most once, before any leg directives):
 //   STATION <id> <e> <n> <z>
@@ -91,6 +99,29 @@
 // prism/centering a-priori error: effective = sqrt(dist_const² + prism_error² +
 // pole_error²). They have no effect outside the least-squares adjustment.
 //
+// Network directives (REQ-419) — any stations, not only the next course on one
+// route. A file that contains any of ANGLE, DIST, AZIMUTH, or EDIF is adjusted
+// as a network. CTRL gives each station its approximate or known coordinates.
+// A component fix is `!` (held), `*` (free to move), or a positive standard
+// error in feet (the coordinate is itself a measurement).
+//
+//   CTRL <id> <e> <n>
+//       Easting and northing held fixed. No elevation.
+//   CTRL <id> <e> <n> <e-fix> <n-fix>
+//       Same, with an explicit fix on each horizontal component.
+//   CTRL <id> <e> <n> <z> <e-fix> <n-fix> <z-fix>
+//       Adds elevation.
+//   ANGLE <at> <from> <to> <deg> [stderr-sec]
+//       Clockwise angle at <at>, from <from> to <to>.
+//   DIST <from> <to> <dist> [stderr]
+//       Horizontal distance.
+//   AZIMUTH <from> <to> <deg> [stderr-sec]
+//       Azimuth, decimal degrees clockwise from north.
+//   EDIF <from> <to> <elev-diff> [stderr]
+//       Elevation difference, feet, from the first station up to the second.
+//   ZENITH <from> <to> <deg> [stderr-sec]
+//       Zenith angle. 90 is level. 0 is straight up.
+//
 // This format only round-trips what TraverseData already models: a leg's raw F1/F2
 // observation sets (src/traverse/FbkImport.cpp import detail) are not represented
 // here, since they have no manual-entry counterpart in the form panel either.
@@ -109,5 +140,9 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights);
 /// Returns false with a 1-based "line N: ..." message in \p errorMsg on the first
 /// malformed line; \p td and \p weights are left unchanged on failure.
 bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::string& errorMsg);
+
+/// Pads each command's fields so the same word lines up in columns. Comments,
+/// blank lines, and a DESC line's free text are left as written.
+std::string AlignColumns(const std::string& text);
 
 }  // namespace travcmd

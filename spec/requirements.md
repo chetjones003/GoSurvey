@@ -3001,7 +3001,7 @@ requirements is a planning failure, not a sign of rigor.
     This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
     by explicit user decision. No `lastActivePingDate` is tracked or persisted any more — there
     is nothing left to throttle against. The server enforces no per-day dedup either
-    (`ux_pings_active_daily` was dropped from `tools/telemetry-worker/schema.sql`), so this table
+    (`ux_pings_active_daily` was dropped from `workers/telemetry/schema.sql` in the gosurveycad-site repo), so this table
     now measures **launches**, not daily-active-identities; every analytics query in `queries.sql`
     already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
     numbers are unaffected — only a query counting rows would be.
@@ -12249,7 +12249,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decision: D-2026-10-11-c.
 - Depends on: REQ-080 (telemetry), REQ-091/REQ-092 (accounts).
 - Statement:
-  1. **Surface.** One new Worker (`admin-api`, under `tools/admin-worker/`) serves a small HTML dashboard and the JSON endpoints it calls. It is bound to both existing D1 databases (`gosurvey-telemetry`, `gosurveycad-db`) as read-only data sources — it never writes to either.
+  1. **Surface.** One new Worker (`admin-api`, under `workers/admin/` in the private gosurveycad-site repo) serves a small HTML dashboard and the JSON endpoints it calls. It is bound to both existing D1 databases (`gosurvey-telemetry`, `gosurveycad-db`) as read-only data sources — it never writes to either.
   2. **Content.** The dashboard shows: (a) telemetry summary — installs, 7/30-day active installs, version & channel breakdown; (b) a browsable, filterable list of `startup_reports` and `crash_reports` rows with a detail view of the full report text; (c) an accounts list from `gosurveycad-db` (email, name, created/updated); (d) a link out to Cloudflare's own Workers Logs/Analytics for live request/error logs — those live in Cloudflare's system, not D1, and are not mirrored locally.
   3. **Reachability.** The dashboard is served at an unlinked subdomain (`admin.gosurveycad.com`) — no page on the public site links to it, and it is excluded from `sitemap.xml`/`robots.txt`.
   4. **Access control.** The subdomain is gated by Cloudflare Access (not a password baked into the Worker code) restricted to the operator's own identity. A request that Access rejects never reaches the Worker.
@@ -12259,7 +12259,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `[req402]` manual: the operator, authenticated via Cloudflare Access, sees telemetry summary numbers matching `stats.mjs`'s own query results for the same period.
   - `[req402]` manual: startup/crash reports and the accounts list are each browsable and match a direct D1 query.
   - `[req402]` manual: `admin.gosurveycad.com` is absent from `sitemap.xml`, `robots.txt`, and every page of the public site's navigation.
-- Owner-layer: Infrastructure (`tools/admin-worker/`), Operations (Cloudflare Access policy, DNS — configured in the Cloudflare dashboard/account, not in this repo's build).
+- Owner-layer: Infrastructure (`workers/admin/` in gosurveycad-site), Operations (Cloudflare Access policy, DNS — configured in the Cloudflare dashboard/account, not in this repo's build).
 - Status: accepted.
 - Revisions: 2026-10-11 — initial (D-2026-10-11-c). 2026-10-11 — accepted.
 
@@ -12306,6 +12306,84 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain (`src/traverse/TraverseLeastSquares.hpp`/`.cpp`, `src/geo/EcefTransform.hpp`/`.cpp`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
 - Status: accepted.
 - Revisions: 2026-10-13 — initial (D-2026-10-13-a). 2026-10-13 — accepted.
+
+### REQ-418 — Per-measurement least-squares residual listing
+
+- Purpose: a surveyor comparing an adjustment to a StarNet listing can see each measurement on its own, and which ones are worth investigating.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-13-b. The user confirmed the feature request for this listing as the first increment; a network command language is a later increment and is not part of this requirement.
+- Depends on: REQ-015, REQ-016, REQ-417.
+- Statement:
+  1. **One row per measurement.** When an adjustment succeeds, each course contributes an angle row and a distance row. A course that contributed a vertical observation (REQ-417 — elevation was solved and the course had a vertical angle) also contributes a vertical row. Each used GPS vector contributes three rows: east, north, and up. Side shots and check shots are not rows.
+  2. **What a row shows.** Stations (an angle names the occupied station, the backsight, and the foresight; the first course's backsight is the reference bearing, not a station). The adjusted value. The residual, which is adjusted minus observed: arc-seconds for an angle, feet for a distance, a vertical, or a GPS component. The standard error in that same residual unit. The standardized residual, which is the residual divided by that standard error. A GPS component's standard error is the square root of that component's variance (the diagonal of the local east-north-up covariance), not a combined three-dimensional figure.
+  3. **Mark.** A row whose standardized residual has absolute value greater than 3 is marked. A row at or under 3 is not.
+  4. **Summary by kind.** Angles, distances, verticals, and GPS components are summarized separately, and only a kind that has at least one row appears. Each summary shows the count, the sum of the squared standardized residuals of those rows, and an error factor equal to the square root of that sum divided by the count.
+  5. **Chi-square.** The adjustment's existing weighted sum of squares (the quantity already divided by the redundancy to produce the standard error of unit weight) is tested with a two-tailed chi-square test at 5 percent: pass when it lies between the 2.5 percent and 97.5 percent critical values for that redundancy. The reported bounds are those critical values turned into error-factor units (the square root of the critical value divided by the redundancy). A failure names the bound that was exceeded. The total error factor equals the standard error of unit weight already reported. The signed per-course residuals and the adjusted coordinates are unchanged by this listing.
+- Acceptance:
+  - `[req418]` test: a known adjustment lists the angle and the distance on separate rows, and each standardized residual equals the residual divided by the standard error.
+  - `[req418]` test: a standardized residual over 3 is marked, and one at or under 3 is not.
+  - `[req418]` test: the total error factor equals the standard error of unit weight, and a perfect adjustment (residuals at zero) is reported as exceeding the lower chi-square bound.
+  - `[req418]` test: the 2.5 percent and 97.5 percent chi-square critical values for a few known degrees of freedom match published table values.
+  - `[req418]` test: an existing least-squares case still produces the same adjusted closure and the same signed per-course residuals.
+- Owner-layer: Domain (`src/traverse/TraverseLeastSquares.hpp`/`.cpp`), UI (`src/ui/CadUi_TraverseEditor.cpp`).
+- Status: accepted.
+- Revisions: 2026-10-13 — initial (D-2026-10-13-b). 2026-10-13 — accepted.
+
+### REQ-419 — Network observations in the traverse command language
+
+- Purpose: a job can connect any stations, not only the next course of one route.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-13-c. The user said to proceed toward a StarNet-style adjustment. This increment is the first network slice: control, angles, distances, azimuths, and elevation differences. Direction sets, leveling, and zenith angles as their own observation wait.
+- Depends on: REQ-015, REQ-418.
+- Statement:
+  1. **Commands.** The traverse command text accepts `CTRL`, `ANGLE`, `DIST`, `AZIMUTH`, and `EDIF` as specified in `TraverseCommandLang.hpp`. A component fix is held (`!`), free (`*`), or a positive standard error in feet.
+  2. **When it runs.** If the text contains any of those observations, the adjustment solves that network. A traverse chain in the same text is included as angles, distances, and the starting azimuth. A file with no network observations still uses the existing chain adjustment, unchanged.
+  3. **Coordinates.** Every station an observation names must already have coordinates from `CTRL` or from the traverse chain. A free component moves. A held component does not. A weighted component is itself a measurement and appears in the residual listing.
+  4. **Not enough measurements.** If the network has fewer than one redundant measurement, or the equations cannot be solved, the adjustment reports why and shows no adjusted coordinates.
+- Acceptance:
+  - `[req419]` test: a perfect triangle given with `CTRL`, `DIST`, and `ANGLE` adjusts back to those coordinates and near-zero residuals, and the command text round-trips.
+  - `[req419]` test: a distance that disagrees with the figure, given a small standard error, is marked.
+  - `[req419]` test: a chain with no network observations still adjusts as before.
+- Owner-layer: Domain (`src/traverse/`), UI (the existing command text and residual listing).
+- Status: accepted.
+- Revisions: 2026-10-13 — initial (D-2026-10-13-c). 2026-10-13 — accepted.
+
+### REQ-420 — Zenith angles and StarNet single-observation lines
+
+- Purpose: a StarNet `.dat` file of angles, distances, zeniths, bearings, and level runs can be adjusted here.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-13-d. Continues D-2026-10-13-c.
+- Depends on: REQ-419.
+- Statement:
+  1. **Zenith.** `ZENITH <from> <to> <deg> [stderr-sec]` is a measurement. 90 degrees is level. It is solved with the station elevations and listed as its own residual.
+  2. **StarNet lines.** A `.dat` file may contain `A`, `D`, `V`, `B`, `M`, `BM`, `DV`, and `L` in addition to a traverse. `A` is an angle, `D` a distance, `V` a zenith (or an elevation difference when that file says verticals are elevation differences), `B` a bearing, `M` and `BM` the combined forms, `DV` distance plus vertical, and `L` a level run's elevation difference. `C` lines carry `!`, `*`, or a standard error. While reading that file, coordinate order, 2D versus 3D, and angle-name order are translated into our stations and measurements. `SS` and direction sets are still reported as unsupported.
+  3. **Their options are not our options.** StarNet dotted options (`.DATA`, `.INCLUDE`, `.DELTA`, `.ORDER`, and the rest) are never GoSurvey commands. The importer may read one only to convert its meaning into our data. GoSurvey's own inline options, which are not built yet, will use our words and will change how our parser reads our text. Copying their option list or their engine one-to-one is out of scope (D-2026-10-13-e).
+  4. **No traverse required.** A file that has these observations and no `TB`/`TE` block still imports and adjusts.
+- Acceptance:
+  - `[req419]` test: `A` and `D` lines with fixed and free `C` stations adjust the free station onto the measured figure.
+  - `[req419]` test: a level `ZENITH` between two stations holds the free elevation.
+- Owner-layer: Domain (`src/traverse/`).
+- Status: accepted.
+- Revisions: 2026-10-13 — initial (D-2026-10-13-d). 2026-10-13 — accepted. 2026-10-13 — D-2026-10-13-e: StarNet dotted options are translated on import and are not GoSurvey syntax.
+
+### REQ-421 — Field codes and imported comments in the command text
+
+- Purpose: a code or description that was on a measurement, and the comments that sat beside it, are still visible after import.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-13-f.
+- Depends on: REQ-419, REQ-420.
+- Statement:
+  1. **Code.** A measurement that carried a field code or description is written with a leading apostrophe and the rest of that line (`'TH CN`). The apostrophe is optional. A line without it is unchanged.
+  2. **Comments and blank lines.** A comment line in an imported file is written as a `//` comment in the command text, in the same place relative to the measurements that were imported. A blank line in that file is kept as a blank line in the same place. Neither is a measurement.
+- Acceptance:
+  - `[req421]` test: a control point marked `PIN` and a distance marked `FENCE CORNER`, with comment lines before each, import so `'PIN` follows the first comment and `'FENCE CORNER` follows the second, and parsing that text keeps both.
+- Owner-layer: Domain (`src/traverse/`), UI (command text).
+- Status: accepted.
+- Revisions: 2026-10-13 — initial (D-2026-10-13-f). 2026-10-13 — accepted.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13483,6 +13561,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-014 | UI | manual (closure window, side-by-side) | implemented |
 | REQ-015 | compute | `TraverseTests` "adjustment drives misclosure to zero" | implemented |
 | REQ-016 | compute | `TraverseTests` "perfect loop yields zero residuals" | implemented |
+| REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
