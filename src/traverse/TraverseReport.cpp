@@ -22,6 +22,11 @@ namespace {
 
 std::string Line(char fillChar, int width) { return std::string(static_cast<size_t>(width), fillChar); }
 
+// A station id column shows "-" rather than -1 for "this measurement kind has no such
+// station" (e.g. a distance's At, or an angle's From when its backsight is the reference
+// bearing rather than a station).
+std::string IdOrDash(int id) { return id < 0 ? std::string("-") : std::to_string(id); }
+
 template <typename T>
 std::string Field(const char* label, T value, const char* unit = "") {
     char buf[160];
@@ -98,8 +103,9 @@ std::string BuildReportText(const TraverseData& td, const LsaWeights& w, const L
     out << hdr;
     for (const LsaMeasResidual& row : result.measResiduals) {
         char line[200];
-        std::snprintf(line, sizeof(line), "  %-10s %6d %6d %6d %12.5f %12.5f %10.4f %10.2f %s\n",
-                     LsaMeasKindName(row.kind), row.atStationId, row.fromStationId, row.toStationId, row.adjusted,
+        std::snprintf(line, sizeof(line), "  %-10s %6s %6s %6s %12.5f %12.5f %10.4f %10.2f %s\n",
+                     LsaMeasKindName(row.kind), IdOrDash(row.atStationId).c_str(),
+                     IdOrDash(row.fromStationId).c_str(), IdOrDash(row.toStationId).c_str(), row.adjusted,
                      row.residual, row.stdError, row.stdResidual, row.flagged ? "*" : "");
         out << line;
     }
@@ -125,6 +131,26 @@ std::string BuildReportText(const TraverseData& td, const LsaWeights& w, const L
                      cs.upperFactor, cs.passed ? "PASS" : (cs.exceededUpper ? "FAIL (exceeds upper bound)"
                                                                            : "FAIL (below lower bound)"));
         out << line;
+    }
+
+    if (!result.stationIds.empty()) {
+        out << "\n";
+        out << "Adjusted Coordinates\n" << Line('-', 50) << "\n";
+        char hdr2[80];
+        std::snprintf(hdr2, sizeof(hdr2), "  %-10s %14s %14s %14s\n", "Station", "Easting", "Northing",
+                     result.usedGpsVectors ? "Elevation" : "");
+        out << hdr2;
+        for (size_t i = 0; i < result.stationIds.size(); ++i) {
+            char line2[120];
+            if (result.usedGpsVectors) {
+                std::snprintf(line2, sizeof(line2), "  %-10d %14.5f %14.5f %14.5f\n", result.stationIds[i],
+                             result.adjEasting[i], result.adjNorthing[i], result.adjElevation[i]);
+            } else {
+                std::snprintf(line2, sizeof(line2), "  %-10d %14.5f %14.5f\n", result.stationIds[i],
+                             result.adjEasting[i], result.adjNorthing[i]);
+            }
+            out << line2;
+        }
     }
 
     return out.str();

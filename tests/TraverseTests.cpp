@@ -2892,16 +2892,22 @@ TEST_CASE("Report text lists files, then settings, then the residual listing, in
     const size_t settingsPos = report.find("Project Option Settings");
     const size_t instrumentPos = report.find("Instrument Standard Error Settings");
     const size_t residualsPos = report.find("Measurement Residuals");
+    const size_t coordsPos = report.find("Adjusted Coordinates");
     REQUIRE(filesPos != std::string::npos);
     REQUIRE(settingsPos != std::string::npos);
     REQUIRE(instrumentPos != std::string::npos);
     REQUIRE(residualsPos != std::string::npos);
+    REQUIRE(coordsPos != std::string::npos);
     CHECK(filesPos < settingsPos);
     CHECK(settingsPos < instrumentPos);
     CHECK(instrumentPos < residualsPos);
+    CHECK(residualsPos < coordsPos);
     CHECK(report.find("job1.dat") != std::string::npos);
     CHECK(report.find("StarNet") == std::string::npos);
     CHECK(report.find("STAR*NET") == std::string::npos);
+    // A distance's "At" column has no station (REQ-424-ish readability fix): "-", not -1.
+    CHECK(report.find(" -1 ") == std::string::npos);
+    CHECK(report.find("Distance") != std::string::npos);
 }
 
 TEST_CASE("A case with no imported files still produces a report", "[req423]") {
