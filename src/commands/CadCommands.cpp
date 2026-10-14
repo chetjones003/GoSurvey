@@ -1,4 +1,6 @@
 #include "CadCommands.hpp"
+#include "ProjectSettings.hpp"  // REQ-375: NoteUserPlotScale
+#include "ProjectFiles.hpp"  // REQ-379: RequestProjectAttach
 #include "ProjectWarnings.hpp"  // REQ-383: TagClipboardOrigin / CheckClipboardPaste
 #include "CadCommandsInternal.hpp"
 #include "CadColor.hpp"
@@ -159,6 +161,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingInsUnits        = cmd.drawingInsUnits;  // REQ-357: unit, scale and settings are per drawing
   doc.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
   doc.drawingSettings        = cmd.drawingSettings;
+  doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
@@ -273,6 +276,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingInsUnits            = doc.drawingInsUnits;  // REQ-357
   cmd.modelUnitsPerPlottedInch   = doc.modelUnitsPerPlottedInch;
   cmd.drawingSettings            = doc.drawingSettings;
+  cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
@@ -5190,6 +5194,12 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     log.push_back("TOOLSPACE — Prospector.");
     return;
   }
+  if (verb == "project") {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Project;
+    log.push_back("TOOLSPACE — Project.");
+    return;
+  }
   if (verb == "settings") {
     st.showToolspaceWindow = true;
     st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;
@@ -6780,10 +6790,18 @@ const CmdEntry kRegistry[] = {
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
+    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
+    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
+    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
+    {"turnover", "", "Create Turnover: record which project files were handed to whom, and when (REQ-381)"},
+    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
+    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
+    {"pdfview", "pv", "Open a PDF in the built-in viewer (REQ-387)"},
+    {"pdfsplit", "", "Save chosen pages of the open PDF as a new PDF (REQ-389)"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
@@ -7237,6 +7255,73 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back("DRAWINGSETTINGS — Drawing Settings opened.");
     return true;
   }
+  if (primary == "projectsettings") {  // REQ-375
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTSETTINGS — this drawing is not in a project.");
+    } else {
+      st.projectSettingsUid = uid;
+      log.push_back("PROJECTSETTINGS — Project Settings opened.");
+    }
+    return true;
+  }
+  if (primary == "projecthealth") {  // REQ-379 clause 4
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PROJECTHEALTH — this drawing is not in a project.");
+    } else {
+      st.projectHealthUid = uid;
+      log.push_back("PROJECTHEALTH — Project Health opened.");
+    }
+    return true;
+  }
+  if (primary == "packproject") {  // REQ-380
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("PACKPROJECT — this drawing is not in a project.");
+    } else {
+      st.projectPackPrompt = {};
+      st.projectPackPrompt.projectUid = uid;
+      log.push_back("PACKPROJECT — Pack Project opened.");
+    }
+    return true;
+  }
+  if (primary == "turnover") {  // REQ-381
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("TURNOVER — this drawing is not in a project.");
+    } else {
+      st.projectTurnoverPrompt = {};
+      st.projectTurnoverPrompt.projectUid = uid;
+      log.push_back("TURNOVER — Create Turnover opened.");
+    }
+    return true;
+  }
+  if (primary == "openpack") {  // REQ-380
+    st.openPackRequested = true;
+    log.push_back("OPENPACK — choose the .gspack file to open.");
+    return true;
+  }
+  if (primary == "adddrawing") {  // REQ-378
+    const uint32_t uid = st.activeDrawingIdx >= 1 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())
+                             ? st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid
+                             : 0u;
+    if (uid == 0) {
+      log.push_back("ADDDRAWING — open a drawing of the project first.");
+    } else {
+      st.addDrawingToProjectUid = uid;
+      log.push_back("ADDDRAWING — choose the drawing to add.");
+    }
+    return true;
+  }
   if (primary == "style") {
     TextStyles::EnsureStandard(st.textStyles);
     st.showTextStyleManagerWindow = true;
@@ -7404,6 +7489,15 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "traverse" || primary == "trav" || primary == "traverseeditor") {
     StartTraverseEditorCommand(st, log);
+    return true;
+  }
+  if (primary == "pdfview") {  // REQ-387: the built-in PDF viewer; the window shows the file dialog
+    st.pdfViewerPickRequest = true;
+    log.push_back("PDFVIEW — choose a PDF to open in the viewer.");
+    return true;
+  }
+  if (primary == "pdfsplit") {  // REQ-389: the viewer window shows the Split dialog
+    st.pdfSplitRequest = true;
     return true;
   }
   if (primary == "pdfattach" || primary == "pdfatt") {
@@ -10427,6 +10521,24 @@ static void TranslateSelectedSolids(AppCommandState& st, float dx, float dy, flo
 // the test that asserts the agreement, both have to be able to name it. Internal linkage said the
 // opposite: "nothing outside this file may depend on this".
 }  // namespace
+
+/// Every primary command name in `kRegistry` (issue #785: a merge can silently drop a handler
+/// without dropping its registry entry, which is otherwise invisible — the command just goes
+/// silent). Declared in `CadCommands.hpp` so the regression test can enumerate the registry
+/// without duplicating it.
+std::vector<std::string> RegisteredCommandPrimariesForTest() {
+  std::vector<std::string> out;
+  out.reserve(std::size(kRegistry));
+  for (const CmdEntry& e : kRegistry)
+    out.emplace_back(e.primary);
+  return out;
+}
+
+/// Runs `DispatchByPrimary` for a name taken from `kRegistry` and reports whether anything claimed
+/// it, the same way the real command line is caught/let-through (issue #785).
+bool DispatchByPrimaryForTest(const std::string& primary, AppCommandState& st, std::vector<std::string>& log) {
+  return DispatchByPrimary(primary, st, log);
+}
 
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                 std::vector<std::string>& log) {
@@ -26180,6 +26292,13 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadAnnotationAttrs.clear();
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
+  st.annotationScales.clear();
+  st.currentAnnotationScaleIndex = -1;
+  st.dwgImportedLights.clear();
+  st.dwgImportedSunPresent = false;
+  st.dwgImportedLightList = {};
+  st.dwgImportedLightListPresent = false;
+  st.dwgImportedLightListDictKey.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
   st.cadPointClouds.clear();
@@ -26188,6 +26307,19 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSolidAttrs.clear();
   st.solidDisplayCache.clear();
   st.solidDisplayGeometry.solids.clear();
+  // TIN surfaces (REQ-068) and their generated display geometry (ADR-036 (e)). The cache is keyed
+  // on stable entity ids and lives on AppCommandState, not in the drawing snapshot — so it must be
+  // dropped whenever the drawing's geometry is cleared or replaced. Leaving it across OPEN/IMPORT
+  // let a cache entry for the same id early-out against a new triangulation and, worse, hand the
+  // renderer buffers built for the previous document (issue #663).
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  st.surfaceDisplayCache.clear();
+  st.surfaceWatershedCache.clear();
+  st.surfaceDisplayGeometry.lines.clear();
+  st.surfaceDisplayGeometry.bandTriangles.clear();
+  st.waterDropPreviewLines.clear();
+  st.surfaceRebuildAsync.clear();  // join/cancel any in-flight worker before ids are reused
   st.blockRefWorldSolids.clear();
   st.blockRefWorldSolidAttrs.clear();
   st.blockRefWorldSolidsSig = 0;
@@ -43033,6 +43165,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         }
         path = buf;
       }
+      // REQ-379 clause 1: in a project drawing a file from outside the project asks copy / link first;
+      // the modal's answer starts the import.
+      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
+        return;
       StartPointCloudImportAsync(st, path, log);
       return;
     }
@@ -43438,6 +43574,48 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
+        // `BENCH PDFVIEW [pages]` — REQ-387: open a synthetic PDF of that many pages in the viewer
+        // and scroll it top to bottom, reporting first-page time and the viewer's per-frame cost.
+        if (lower == "pdfview" || lower == "pdf") {
+          int pages = 500;
+          int v = 0;
+          const std::streampos beforeArg = issIdle.tellg();
+          if (issIdle >> v) {
+            pages = std::clamp(v, 1, 5000);
+          } else {  // not a number: the rest of the line is a real PDF to time (its path may hold spaces)
+            issIdle.clear();
+            issIdle.seekg(beforeArg);
+            std::string path;
+            std::getline(issIdle, path);
+            path = StringUtil::trimCopy(path);
+            if (!path.empty()) {
+              st.pdfViewBenchPath = path;
+              log.push_back("BENCH PDFVIEW - timing " + path);
+              return;
+            }
+          }
+          st.pdfViewBenchPages = pages;
+          log.push_back("BENCH PDFVIEW — building a " + std::to_string(pages) + "-page PDF; the viewer window will scroll it.");
+          return;
+        }
+        // `BENCH PDFCOMPARE [pages]` — REQ-392: overlay two generated PDFs of that many pages in a
+        // viewer, zoom and pan the overlay, and report the viewer's per-frame cost.
+        if (lower == "pdfcompare") {
+          int pages = 500;
+          int v = 0;
+          if (issIdle >> v)
+            pages = std::clamp(v, 1, 5000);
+          st.pdfCompareBenchPages = pages;
+          log.push_back("BENCH PDFCOMPARE — building two " + std::to_string(pages) + "-page PDFs; the viewer window will overlay and pan them.");
+          return;
+        }
+        // `BENCH PDFDIFF` — REQ-393: automatically align and compare a generated pair of 36 x 24 in sheets (a few
+        // hundred thousand line segments) and report the time and the worst viewer frame.
+        if (lower == "pdfdiff") {
+          st.pdfDiffBench = true;
+          log.push_back("BENCH PDFDIFF — building two 36 x 24 in sheets; the viewer window will align and compare them.");
+          return;
+        }
         if (lower == "mesh" || lower == "m") {
           int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
           int v = 0;
@@ -43553,6 +43731,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         if (pv != st.modelUnitsPerPlottedInch) {
           PushUndoSnapshot(st, "PLOTSCALE");  // the plot scale is undoable (REQ-357)
           SetDrawingPlotScale(st, pv);
+          NoteUserPlotScale(st);  // REQ-375
         }
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }

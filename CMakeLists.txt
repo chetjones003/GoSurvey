@@ -1566,6 +1566,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    # Issue #785 — regression test that every row in the command registry still has code behind
+    # it. Needs gosurvey_domain for ProcessCommandLineSubmit / RegisteredCommandPrimariesForTest.
+    tests/CommandRegistryHandlerTests.cpp
     # OFFSET distance-first flow + select/side loop (REQ-103), and double-precision offset math at
     # state-plane coordinate magnitude. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # SubmitViewportPick, like DistCommandTests above.
