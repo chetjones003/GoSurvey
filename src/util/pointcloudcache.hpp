@@ -71,6 +71,15 @@ struct OpenCache {
                                  std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
                                  const std::atomic<bool> *cancelRequested = nullptr);
 
+/// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_pts::StreamPtsFile`
+/// (`CadPointCloudPts.hpp`) instead of the E57 reader — REQ-172's PTS increment (delivered after
+/// E57 per `spec/file-format-specs.md` §6).
+[[nodiscard]] bool BuildFromPts(const std::string &sourcePath, const std::string &cachePath,
+                                 std::vector<std::string> &progressLog, std::string *errorMessage,
+                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
+                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
+                                 const std::atomic<bool> *cancelRequested = nullptr);
+
 /// Same contract as \ref BuildFromE57 above, sourcing from `pointcloud_ptx::StreamPtxFile`
 /// (`CadPointCloudPtx.hpp`) instead of the E57 reader — REQ-172's PTX increment (issue #825
 /// increment 2, delivered after PTS per `spec/file-format-specs.md` §6).
