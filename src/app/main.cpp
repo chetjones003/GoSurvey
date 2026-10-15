@@ -1333,10 +1333,14 @@ int main()
     const bool updateOfferBlocks = (updateState.phase == update::Phase::UpdateReady);
     if (!LaunchSequenceOverlayActive(cmd, updateOfferBlocks))
       DrawSignInGate(cmd);
-    // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
-    // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
-    cmd.updatePrefs.enabled        = updateState.prefs.enabled;
-    cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
+    // SkipAvailableVersion (UpdateService.cpp) writes the skip into updateState.prefs, not
+    // cmd.updatePrefs — sync just that field back so SaveUserStartupPrefs persists it. `enabled`/
+    // `useBetaChannel` are NOT synced here: those are owned by the Settings panel's checkboxes
+    // (CadUiSettings.cpp), which write directly into cmd.updatePrefs — syncing them from
+    // updateState.prefs (frozen at its startup copy, main.cpp's `updateState.prefs = cmd.updatePrefs`)
+    // overwrote every checkbox click right back to its startup value every frame, which is what
+    // made both checkboxes look like clicking them did nothing.
+    cmd.updatePrefs.skippedVersion = updateState.prefs.skippedVersion;
     DrawDwgLossyExportModal(cmd, cmdLog);
     DrawProjectDialogs(cmd, cmdLog);  // REQ-374 / REQ-382: New Project, lock + damaged-marker prompts
 
