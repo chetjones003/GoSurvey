@@ -3756,6 +3756,27 @@ requirements is a planning failure, not a sign of rigor.
   same point schema as `.las` (acceptance: a LAS and a LAZ of the same points import equal counts
   and XYZ; malformed/truncated/corrupt-compressed-stream and missing-file/empty-path refuse per
   REQ-001). Completes REQ-172's four-format delivery order (PTS/PTX/LAS/LAZ) alongside E57.
+  2026-10-15 (D-2026-10-15-a) — bug report: a real USGS LPC file uses point data record format 6,
+  which `.laz` import refused by name (the increment-4 scope note above). Investigation found the
+  format>3 refusal in `CadPointCloudLaz.cpp` is an artificial check this codebase added, not a
+  LASzip limitation — vendored LASzip's `laszip_point_struct` already carries every field formats
+  0-10 need (GPS time, `rgb[4]`, `extended_classification`, `wave_packet`), so it decodes/encodes
+  any of them natively. Decision: extend `.laz` import/export to formats 0-10 by removing that cap
+  and deriving `hasColor` from the actual format (2/3/5/7/8/10 carry RGB; GoSurvey's REQ-171 cloud
+  schema has no field for GPS time, NIR, or wave packets, so those are decoded and discarded, same
+  as formats 1/3's GPS time already was). No new dependency — supersedes any read of
+  `file-format-specs.md`'s LASlib-fallback row as applying here; LASzip already covers the case
+  that row anticipated.
+  2026-10-15 (D-2026-10-15-b) — `.las`'s in-tree reader extended to match: formats 6-10 use the
+  ASPRS "extended" 30-byte record core (vs. formats 0-5's 20-byte "legacy" core), a different byte
+  shape, but X/Y/Z/Intensity sit at the same offsets (0/4/8/12) in both, so one format-invariant
+  decode loop covers every format once `MinRecordSizeForFormat`/`ColorOffsetForFormat`
+  (`CadPointCloudLas.cpp`) know each format's record length and colour offset. GPS time, extended
+  classification, NIR, and wave packets are decoded as "present in the record" for sizing purposes
+  but never extracted, matching REQ-171's cloud schema and the `.laz` side's identical choice. The
+  writer is unchanged (still only ever emits format 0 or 2, same as `.laz`'s writer) — GoSurvey's
+  in-memory cloud has nothing to put in the other formats' extra fields, so there is no write-side
+  gap to close.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

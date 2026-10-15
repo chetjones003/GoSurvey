@@ -114,6 +114,23 @@ void AppendFormat0Point(std::vector<unsigned char> &buf, std::int32_t x, std::in
   buf.insert(buf.end(), zero6, zero6 + 6);
 }
 
+/// Format 6 (extended, LAS 1.4) point record (30 bytes): int32 X,Y,Z, uint16 intensity, 1 byte
+/// return info, 1 byte classification flags/channel/direction/edge, 1 byte classification, 1 byte
+/// user data, int16 scan angle, uint16 point source ID, f64 GPS time (D-2026-10-15-a: GPS time is
+/// decoded by LASzip but not asserted on — REQ-171's cloud schema has no field for it).
+void AppendFormat6Point(std::vector<unsigned char> &buf, std::int32_t x, std::int32_t y,
+                         std::int32_t z, std::uint16_t intensity, double gpsTime) {
+  AppendLE(buf, x);
+  AppendLE(buf, y);
+  AppendLE(buf, z);
+  AppendLE(buf, intensity);
+  const unsigned char zero4[4] = {0, 0, 0, 0};  // return info, classification flags, class, user data
+  buf.insert(buf.end(), zero4, zero4 + 4);
+  AppendLE(buf, static_cast<std::int16_t>(0));   // scan angle
+  AppendLE(buf, static_cast<std::uint16_t>(0));  // point source ID
+  AppendLE(buf, gpsTime);
+}
+
 }  // namespace
 
 TEST_CASE("WriteLazFile + ReadLazFile: a no-colour write-then-read round trip preserves count and XYZ",
@@ -209,14 +226,68 @@ TEST_CASE("ReadLazFile: a bad signature is refused, not partially imported", "[p
   CHECK(result.pointsXyz.empty());
 }
 
-TEST_CASE("ReadLazFile: an unsupported point data record format is refused by name, not crashed",
+TEST_CASE("ReadLazFile: point data record format 6 (LAS 1.4 extended) is read, not refused "
+          "(D-2026-10-15-a, bug: real USGS LPC files use this format)",
+          "[pointcloud][laz]") {
+  const auto path = TempLazPath("gosurvey_test_laz_format6.laz");
+  constexpr int kCount = 10;
+  constexpr double kScale = 0.01;
+  auto bytes = MakeHeader(kScale, kScale, kScale, 0, 0, 0, /*format*/ 6, /*recordLength*/ 30,
+                          static_cast<std::uint32_t>(kCount));
+  for (int i = 0; i < kCount; ++i) {
+    AppendFormat6Point(bytes, /*x*/ i * 100, /*y*/ i * 200, /*z*/ i * 300,
+                        /*intensity*/ static_cast<std::uint16_t>(i * 1000), /*gpsTime*/ i * 1.5);
+  }
+  WriteRawFile(path, bytes);
+
+  const auto result = pointcloud_laz::ReadLazFile(path.string());
+  RemoveWithRetry(path);
+
+  REQUIRE(result.ok);
+  CHECK(result.errorMessage.empty());
+  REQUIRE(result.pointCount() == kCount);
+  CHECK(result.colorsRgb.empty());  // format 6 carries no colour
+  for (int i = 0; i < kCount; ++i) {
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 0] == Approx(i * 1.0).margin(0.001));
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 1] == Approx(i * 2.0).margin(0.001));
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 2] == Approx(i * 3.0).margin(0.001));
+  }
+}
+
+TEST_CASE("ReadLazFile: point data record format 7 (extended + RGB) decodes colour",
+          "[pointcloud][laz]") {
+  const auto path = TempLazPath("gosurvey_test_laz_format7.laz");
+  constexpr int kCount = 5;
+  constexpr double kScale = 0.01;
+  // Format 7 = format 6's 30 bytes + 3x uint16 RGB = 36 bytes.
+  auto bytes = MakeHeader(kScale, kScale, kScale, 0, 0, 0, /*format*/ 7, /*recordLength*/ 36,
+                          static_cast<std::uint32_t>(kCount));
+  for (int i = 0; i < kCount; ++i) {
+    AppendFormat6Point(bytes, i * 100, i * 200, i * 300,
+                        static_cast<std::uint16_t>(i * 1000), i * 1.5);
+    AppendLE(bytes, static_cast<std::uint16_t>(10000 + i));  // R
+    AppendLE(bytes, static_cast<std::uint16_t>(20000 + i));  // G
+    AppendLE(bytes, static_cast<std::uint16_t>(30000 + i));  // B
+  }
+  WriteRawFile(path, bytes);
+
+  const auto result = pointcloud_laz::ReadLazFile(path.string());
+  RemoveWithRetry(path);
+
+  REQUIRE(result.ok);
+  REQUIRE(result.pointCount() == kCount);
+  REQUIRE(result.colorsRgb.size() == static_cast<std::size_t>(kCount) * 3);
+  for (int i = 0; i < kCount; ++i) {
+    CHECK(result.colorsRgb[static_cast<std::size_t>(i) * 3 + 0] ==
+          Approx(static_cast<float>(10000 + i) / 65535.0f).margin(0.0001f));
+  }
+}
+
+TEST_CASE("ReadLazFile: a point data record format LASzip cannot represent (>10) is refused by "
+          "name, not crashed",
           "[pointcloud][laz]") {
   const auto path = TempLazPath("gosurvey_test_laz_unsupported_format.laz");
-  // Format 6 (extended, GPS-time-heavy) is intentionally unsupported by this reader even though
-  // vendored LASzip itself can decode it — the format check fires right after the header is
-  // read, before any point data (compressed or not) is touched, so a header-only, zero-point
-  // fixture is enough to pin this refusal, same as the plain-LAS suite's equivalent test.
-  auto bytes = MakeHeader(0.01, 0.01, 0.01, 0, 0, 0, /*format*/ 6, /*recordLength*/ 30,
+  auto bytes = MakeHeader(0.01, 0.01, 0.01, 0, 0, 0, /*format*/ 11, /*recordLength*/ 30,
                           /*count*/ 0);
   WriteRawFile(path, bytes);
 
@@ -225,7 +296,7 @@ TEST_CASE("ReadLazFile: an unsupported point data record format is refused by na
 
   CHECK_FALSE(result.ok);
   CHECK_FALSE(result.errorMessage.empty());
-  CHECK(result.errorMessage.find("format 6") != std::string::npos);
+  CHECK(result.errorMessage.find("format 11") != std::string::npos);
   CHECK(result.pointsXyz.empty());
 }
 

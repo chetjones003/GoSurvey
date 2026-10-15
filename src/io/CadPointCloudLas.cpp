@@ -29,13 +29,44 @@ void WriteLE(std::vector<unsigned char> &buf, std::size_t offset, const T &v) {
   std::memcpy(buf.data() + offset, &v, sizeof(T));
 }
 
+/// Minimum point-data-record byte size per the ASPRS LAS 1.4 spec, formats 0-10
+/// (D-2026-10-15-b). Formats 0-5 share a 20-byte "legacy" core (X,Y,Z,Intensity, then
+/// ReturnByte/Classification/ScanAngleRank/UserData/PointSourceID); formats 6-10 share a
+/// different 30-byte "extended" core (X,Y,Z,Intensity, then ReturnInfo/ClassFlags/Classification/
+/// UserData/ScanAngle(int16)/PointSourceID/GPStime) — X, Y, Z, and Intensity sit at the same
+/// byte offsets (0/4/8/12) in both cores, which is what lets `StreamLasFile` decode them with one
+/// format-invariant code path; only the colour offset (see `ColorOffsetForFormat`) and the total
+/// record length vary.
 std::size_t MinRecordSizeForFormat(int format) {
   switch (format) {
     case 0: return 20;
-    case 1: return 28;
-    case 2: return 26;
-    case 3: return 34;
+    case 1: return 28;             // legacy core + GPS time(8)
+    case 2: return 26;             // legacy core + RGB(6)
+    case 3: return 34;             // legacy core + GPS time(8) + RGB(6)
+    case 4: return 57;             // format 1 + wave packet(29)
+    case 5: return 63;             // format 3 + wave packet(29)
+    case 6: return 30;             // extended core (GPS time mandatory, no colour)
+    case 7: return 36;             // extended core + RGB(6)
+    case 8: return 38;             // extended core + RGB(6) + NIR(2)
+    case 9: return 59;             // extended core + wave packet(29)
+    case 10: return 67;            // extended core + RGB(6) + NIR(2) + wave packet(29)
     default: return static_cast<std::size_t>(-1);
+  }
+}
+
+/// Byte offset of the first RGB uint16 within a point data record, or -1 when `format` carries no
+/// colour. Formats 2/3/5 share the legacy core's RGB offset (20 for format 2 since it has no GPS
+/// time; 28 for 3/5, which both have GPS time ahead of RGB). Formats 7/8/10 share the extended
+/// core's fixed 30-byte core, so RGB always starts right after it, at offset 30.
+int ColorOffsetForFormat(int format) {
+  switch (format) {
+    case 2: return 20;
+    case 3:
+    case 5: return 28;
+    case 7:
+    case 8:
+    case 10: return 30;
+    default: return -1;
   }
 }
 
@@ -84,10 +115,10 @@ bool ParseHeader(const std::string &pathUtf8, std::ifstream &in, std::uint64_t f
   out->offsetY = ReadLE<double>(buf.data(), 163);
   out->offsetZ = ReadLE<double>(buf.data(), 171);
 
-  if (out->pointDataFormat > 3)
+  if (out->pointDataFormat > 10)
     return fail("LAS import: '" + pathUtf8 + "' uses point data record format " +
                 std::to_string(out->pointDataFormat) +
-                ", which this reader does not support (only formats 0-3 are supported)");
+                ", which this reader does not support (only formats 0-10 are supported)");
 
   const std::size_t minRecordSize = MinRecordSizeForFormat(out->pointDataFormat);
   if (out->pointDataRecordLength < minRecordSize)
@@ -156,8 +187,9 @@ bool StreamLasFile(const std::string &pathUtf8, std::int64_t chunkPointBudget,
   std::string headerErr;
   if (!ParseHeader(pathUtf8, in, fileSize, &header, &headerErr)) return fail(headerErr);
 
-  const bool hasColor = header.pointDataFormat == 2 || header.pointDataFormat == 3;
-  const std::size_t colorOffset = header.pointDataFormat == 2 ? 20 : 28;
+  const int colorOffsetOrNone = ColorOffsetForFormat(header.pointDataFormat);
+  const bool hasColor = colorOffsetOrNone >= 0;
+  const std::size_t colorOffset = hasColor ? static_cast<std::size_t>(colorOffsetOrNone) : 0;
 
   in.seekg(static_cast<std::streamoff>(header.offsetToPointData), std::ios::beg);
   if (!in) return fail("LAS import: '" + pathUtf8 + "' point data could not be located");

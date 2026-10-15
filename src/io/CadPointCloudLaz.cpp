@@ -70,11 +70,11 @@ bool StreamLazFile(const std::string &pathUtf8, std::int64_t chunkPointBudget,
     return fail("LAZ import: could not read '" + pathUtf8 + "'s header");
 
   const int format = static_cast<int>(header->point_data_format);
-  if (format > 3) {
+  if (format > 10) {
     laszip_close_reader(reader);
     return fail("LAZ import: '" + pathUtf8 + "' uses point data record format " +
                 std::to_string(format) +
-                ", which this reader does not support (only formats 0-3 are supported)");
+                ", which this reader does not support (only formats 0-10 are supported)");
   }
 
   const std::int64_t pointCount = header->number_of_point_records != 0
@@ -91,7 +91,12 @@ bool StreamLazFile(const std::string &pathUtf8, std::int64_t chunkPointBudget,
     return fail("LAZ import: could not read '" + pathUtf8 + "'s point structure");
   }
 
-  const bool hasColor = (format == 2 || format == 3);
+  // Formats 2/3/5/7/8/10 carry RGB; the rest (0/1/4/6/9) do not. GPS time (1/3/4/5/6-10), NIR
+  // (8/10), and wave packets (4/5/9/10) are decoded by LASzip into `point` but discarded here —
+  // REQ-171's cloud schema has no field for them, same treatment formats 1/3's GPS time always
+  // got.
+  const bool hasColor = (format == 2 || format == 3 || format == 5 || format == 7 ||
+                         format == 8 || format == 10);
   const double scaleX = header->x_scale_factor, scaleY = header->y_scale_factor,
                scaleZ = header->z_scale_factor;
   const double offsetX = header->x_offset, offsetY = header->y_offset, offsetZ = header->z_offset;

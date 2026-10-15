@@ -106,6 +106,31 @@ void AppendFormat2Point(std::vector<unsigned char> &buf, std::int32_t x, std::in
   AppendLE(buf, b);
 }
 
+/// Format 6 (extended core, 30 bytes): int32 X,Y,Z, uint16 intensity, 4 bytes of return/class
+/// info, int16 scan angle, uint16 point source ID, f64 GPS time (D-2026-10-15-b).
+void AppendFormat6Point(std::vector<unsigned char> &buf, std::int32_t x, std::int32_t y,
+                         std::int32_t z, std::uint16_t intensity, double gpsTime) {
+  AppendLE(buf, x);
+  AppendLE(buf, y);
+  AppendLE(buf, z);
+  AppendLE(buf, intensity);
+  const unsigned char zero4[4] = {0, 0, 0, 0};
+  buf.insert(buf.end(), zero4, zero4 + 4);
+  AppendLE(buf, static_cast<std::int16_t>(0));
+  AppendLE(buf, static_cast<std::uint16_t>(0));
+  AppendLE(buf, gpsTime);
+}
+
+/// Format 7 point record (36 bytes): format 6's 30 bytes + uint16 R,G,B.
+void AppendFormat7Point(std::vector<unsigned char> &buf, std::int32_t x, std::int32_t y,
+                         std::int32_t z, std::uint16_t intensity, double gpsTime, std::uint16_t r,
+                         std::uint16_t g, std::uint16_t b) {
+  AppendFormat6Point(buf, x, y, z, intensity, gpsTime);
+  AppendLE(buf, r);
+  AppendLE(buf, g);
+  AppendLE(buf, b);
+}
+
 }  // namespace
 
 TEST_CASE("ReadLasFile: a format-0 (no colour) fixture round-trips point count and XYZ",
@@ -212,12 +237,11 @@ TEST_CASE("ReadLasFile: a header declaring more points than the file holds is re
   CHECK(result.pointsXyz.empty());
 }
 
-TEST_CASE("ReadLasFile: an unsupported point data record format is refused by name, not crashed",
+TEST_CASE("ReadLasFile: a point data record format LASzip-style readers cannot exceed (>10) is "
+          "refused by name, not crashed",
           "[pointcloud][las]") {
   const auto path = TempLasPath("gosurvey_test_las_unsupported_format.las");
-  // Format 6 (extended, GPS-time-heavy) is intentionally unsupported — name the actual minimum
-  // record length (30 bytes) so the header alone is self-consistent for this check.
-  auto bytes = MakeHeader(0.01, 0.01, 0.01, 0, 0, 0, /*format*/ 6, /*recordLength*/ 30,
+  auto bytes = MakeHeader(0.01, 0.01, 0.01, 0, 0, 0, /*format*/ 11, /*recordLength*/ 30,
                            /*count*/ 1);
   bytes.resize(bytes.size() + 30, 0);
   WriteRawLas(path, bytes);
@@ -227,8 +251,96 @@ TEST_CASE("ReadLasFile: an unsupported point data record format is refused by na
 
   CHECK_FALSE(result.ok);
   CHECK_FALSE(result.errorMessage.empty());
-  CHECK(result.errorMessage.find("format 6") != std::string::npos);
+  CHECK(result.errorMessage.find("format 11") != std::string::npos);
   CHECK(result.pointsXyz.empty());
+}
+
+TEST_CASE("ReadLasFile: point data record format 6 (extended, no colour) decodes XYZ/intensity "
+          "(D-2026-10-15-b, bug: real USGS LPC files use this format)",
+          "[pointcloud][las]") {
+  const auto path = TempLasPath("gosurvey_test_las_fmt6.las");
+  constexpr int kCount = 10;
+  constexpr double kScale = 0.01;
+  auto bytes = MakeHeader(kScale, kScale, kScale, 0, 0, 0, /*format*/ 6, /*recordLength*/ 30,
+                           static_cast<std::uint32_t>(kCount));
+  for (int i = 0; i < kCount; ++i) {
+    AppendFormat6Point(bytes, i * 100, i * 200, i * 300,
+                        static_cast<std::uint16_t>(i * 1000), i * 1.5);
+  }
+  WriteRawLas(path, bytes);
+
+  const auto result = pointcloud_las::ReadLasFile(path.string());
+  RemoveWithRetry(path);
+
+  REQUIRE(result.ok);
+  REQUIRE(result.pointCount() == kCount);
+  CHECK(result.colorsRgb.empty());  // format 6 carries no colour
+  REQUIRE(result.intensity.size() == static_cast<std::size_t>(kCount));
+  for (int i = 0; i < kCount; ++i) {
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 0] == Approx(i * 1.0).margin(0.001));
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 1] == Approx(i * 2.0).margin(0.001));
+    CHECK(result.pointsXyz[static_cast<std::size_t>(i) * 3 + 2] == Approx(i * 3.0).margin(0.001));
+    CHECK(result.intensity[static_cast<std::size_t>(i)] == Approx(i * 1000.0 / 65535.0));
+  }
+}
+
+TEST_CASE("ReadLasFile: point data record format 7 (extended + RGB) decodes colour",
+          "[pointcloud][las]") {
+  const auto path = TempLasPath("gosurvey_test_las_fmt7.las");
+  constexpr int kCount = 5;
+  constexpr double kScale = 0.01;
+  auto bytes = MakeHeader(kScale, kScale, kScale, 0, 0, 0, /*format*/ 7, /*recordLength*/ 36,
+                           static_cast<std::uint32_t>(kCount));
+  for (int i = 0; i < kCount; ++i) {
+    AppendFormat7Point(bytes, i * 100, i * 200, i * 300,
+                        static_cast<std::uint16_t>(i * 1000), i * 1.5,
+                        static_cast<std::uint16_t>(10000 + i), static_cast<std::uint16_t>(20000 + i),
+                        static_cast<std::uint16_t>(30000 + i));
+  }
+  WriteRawLas(path, bytes);
+
+  const auto result = pointcloud_las::ReadLasFile(path.string());
+  RemoveWithRetry(path);
+
+  REQUIRE(result.ok);
+  REQUIRE(result.pointCount() == kCount);
+  REQUIRE(result.colorsRgb.size() == static_cast<std::size_t>(kCount) * 3);
+  for (int i = 0; i < kCount; ++i) {
+    CHECK(result.colorsRgb[static_cast<std::size_t>(i) * 3 + 0] ==
+          Approx(static_cast<float>(10000 + i) / 65535.0f).margin(0.0001f));
+    CHECK(result.colorsRgb[static_cast<std::size_t>(i) * 3 + 1] ==
+          Approx(static_cast<float>(20000 + i) / 65535.0f).margin(0.0001f));
+    CHECK(result.colorsRgb[static_cast<std::size_t>(i) * 3 + 2] ==
+          Approx(static_cast<float>(30000 + i) / 65535.0f).margin(0.0001f));
+  }
+}
+
+TEST_CASE("ReadLasFile: format 1 (GPS time, no colour) and format 4 (GPS time + wave packet) "
+          "decode XYZ with no colour",
+          "[pointcloud][las]") {
+  // Format 1: legacy core (20) + GPS time (8) = 28 bytes. Format 4: format 1 + wave packet (29)
+  // = 57 bytes. Neither carries RGB, and X/Y/Z/Intensity are at the format-invariant offsets
+  // already covered by the format-0/6 tests, so this pins only "record-length/no-colour bookkeeping
+  // is right for the in-between sizes," not a new decode path.
+  for (const auto &[format, extraBytes] : std::vector<std::pair<int, int>>{{1, 8}, {4, 8 + 29}}) {
+    const auto path = TempLasPath("gosurvey_test_las_fmt_gps.las");
+    constexpr double kScale = 0.01;
+    auto bytes = MakeHeader(kScale, kScale, kScale, 0, 0, 0, static_cast<std::uint8_t>(format),
+                             static_cast<std::uint16_t>(20 + extraBytes), /*count*/ 1);
+    AppendFormat0Point(bytes, 100, 200, 300, 500);
+    bytes.resize(bytes.size() + static_cast<std::size_t>(extraBytes), 0);  // GPS time (+ wave packet)
+    WriteRawLas(path, bytes);
+
+    const auto result = pointcloud_las::ReadLasFile(path.string());
+    RemoveWithRetry(path);
+
+    REQUIRE(result.ok);
+    REQUIRE(result.pointCount() == 1);
+    CHECK(result.colorsRgb.empty());
+    CHECK(result.pointsXyz[0] == Approx(1.0).margin(0.001));
+    CHECK(result.pointsXyz[1] == Approx(2.0).margin(0.001));
+    CHECK(result.pointsXyz[2] == Approx(3.0).margin(0.001));
+  }
 }
 
 TEST_CASE("ReadLasFile: a missing file path is refused without crashing", "[pointcloud][las]") {

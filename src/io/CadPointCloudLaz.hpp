@@ -21,13 +21,16 @@
 /// Delivered fourth and last of REQ-172's four remaining formats (E57 -> PTS -> PTX -> LAS -> LAZ)
 /// per `spec/file-format-specs.md` §6 (issue #825 increment 4).
 ///
-/// **Point format / colour / intensity convention — kept identical to `CadPointCloudLas.hpp`'s**,
-/// so a LAS and a LAZ of the same points import equal counts and XYZ (REQ-172 acceptance):
-///   - Only point data record formats 0-3 are read (0/1: no colour; 2/3: RGB present) — the exact
-///     same scope `CadPointCloudLas.hpp` supports. Any other format LASzip reports (4-10: the
-///     GPS-time-waveform / extended LAS 1.4 types) is refused with a message naming the format
-///     number, rather than exploiting LAZ's wider native support for them — GoSurvey's in-memory
-///     cloud has no use for GPS time, NIR, or wave packets.
+/// **Point format / colour / intensity convention**, so a LAS and a LAZ of the same points import
+/// equal counts and XYZ when the LAS source is formats 0-3 (REQ-172 acceptance):
+///   - Point data record formats 0-10 are all read (D-2026-10-15-a): LASzip's `laszip_point_struct`
+///     already carries every field any of them needs (GPS time, `rgb[4]`, extended
+///     classification, wave packets), so no format-specific decode branch is required. Colour is
+///     present for formats 2/3/5/7/8/10, absent for 0/1/4/6/9. GPS time, NIR (formats 8/10), and
+///     wave packets (4/5/9/10) are decoded by LASzip into the point struct but discarded —
+///     GoSurvey's in-memory cloud (REQ-171) has no field for them, the same treatment formats
+///     1/3's GPS time always got. Only format values LASzip itself cannot represent (>10) are
+///     refused, naming the format number.
 ///   - Colour and intensity are both 16-bit channels in LASzip's `laszip_point_struct`
 ///     (`rgb[0..2]`, `intensity`); this reader/writer always divides/multiplies by 65535.0,
 ///     exactly like `CadPointCloudLas.hpp` — the same single fixed convention that keeps a
@@ -40,9 +43,8 @@
 ///     from the same in-memory point set decode to the same raw integers.
 ///
 /// A file whose signature is not "LASF" (LASzip reports this as an open failure), whose point
-/// data record format is unsupported (checked here, since LASzip itself will happily decompress
-/// a LAS 1.4 extended-format file this reader has no use for), or whose compressed stream is
-/// truncated/corrupt (LASzip reports a read failure mid-stream), is refused with a specific
+/// data record format is outside what LASzip itself represents (>10), or whose compressed stream
+/// is truncated/corrupt (LASzip reports a read failure mid-stream), is refused with a specific
 /// message — no partial cloud (REQ-001).
 namespace pointcloud_laz {
 
