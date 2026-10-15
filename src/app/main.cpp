@@ -651,7 +651,10 @@ int main()
   // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
   // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
   // above the title strip after the Survey-tab label layout.
-  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f + 16.f;  // +16: larger 32px-standard icons
+  // REQ-850 follow-up: this (231px unscaled) made the ribbon roughly double Civil 3D's height at
+  // the same resolution/OS scale — shrunk toward that reference density, then scaled by
+  // ui::UiScale() so it still tracks DPI/resolution on top of the smaller baseline.
+  const float ribbonH = (97.f + 20.f + 3.f + 7.f + 24.f + 11.f) * ui::UiScale();
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
