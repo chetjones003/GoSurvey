@@ -1818,26 +1818,9 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::EndMenu();
   }
 
-  // REQ-091: sign-in status at the far right of the menu bar — the same placement familiar CAD
-  // tools (e.g. Civil 3D) use for the signed-in account. Nothing shown while signed out, which
-  // (with the launch gate in place) only happens via its no-internet exception, so there is no
-  // "Sign In" prompt to squeeze in here — Settings → System → Account already has one.
-  // REQ-091 amendment (D-2026-09-01, GitHub issue #182): the email is a menu that opens an
-  // account dropdown — Account Details (a read-only placeholder window) and Sign Out (the same
-  // path Settings uses). Still nothing while signed out.
-  if (cmd.authSignedIn && !cmd.authEmail.empty()) {
-    const float textW = ImGui::CalcTextSize(cmd.authEmail.c_str()).x;
-    const float pad   = 28.f;  // room for the menu's own frame padding around the label
-    ImGui::SameLine(std::max(0.f, ImGui::GetWindowWidth() - textW - pad));
-    if (ImGui::BeginMenu(cmd.authEmail.c_str())) {
-      if (ImGui::MenuItem("Account Details"))
-        cmd.showAccountDetailsWindow = true;
-      ImGui::Separator();
-      if (ImGui::MenuItem("Sign Out"))
-        cmd.authSignOutRequested = true;
-      ImGui::EndMenu();
-    }
-  }
+  // REQ-091: the signed-in account (email + Account Details/Sign Out) moved to the custom title
+  // bar, just left of the min/max/close buttons (REQ-850 follow-up — see
+  // DrawMainWindowTitleBar/DrawTitleBarAccountPopup), so it no longer lives in this menu.
 
   ImGui::PopStyleVar();
 }
