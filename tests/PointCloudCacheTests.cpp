@@ -21,6 +21,21 @@
 
 namespace {
 
+/// Writes a small PTS text fixture (REQ-172 PTS increment) with `count` points spread over a real
+/// 3D volume plus RGB colour — the PTS analogue of `WriteFixtureE57` below.
+void WriteFixturePts(const std::filesystem::path &path, int count) {
+  std::ofstream out(path, std::ios::binary | std::ios::trunc);
+  out << count << "\n";
+  for (int i = 0; i < count; ++i) {
+    const double x = static_cast<double>(i % 37) - 18.0;
+    const double y = static_cast<double>((i / 37) % 37) - 18.0;
+    const int zLayer = i / (37 * 37);  // intentional integer floor — a "layer index", not a ratio.
+    const double z = static_cast<double>(zLayer) - 5.0;
+    out << x << " " << y << " " << z << " " << (1.0) << " " << (i % 256) << " " << ((i * 2) % 256)
+        << " " << ((i * 3) % 256) << "\n";
+  }
+}
+
 std::filesystem::path TempPath(const char *name) {
   return std::filesystem::temp_directory_path() / name;
 }
@@ -264,6 +279,60 @@ TEST_CASE("BuildFromE57: a malformed source produces no partial cache file", "[p
   std::vector<std::string> log;
   std::string err;
   const bool built = pointcloudcache::BuildFromE57(srcPath.string(), cachePath.string(), log, &err);
+  CHECK_FALSE(built);
+  CHECK_FALSE(err.empty());
+  CHECK_FALSE(std::filesystem::exists(cachePath));
+
+  RemoveWithRetry(srcPath);
+}
+
+TEST_CASE("BuildFromPts + Open: round-trips point count, octree covers every point exactly once "
+          "(REQ-172 PTS increment)",
+          "[pointcloud][cache][pts]") {
+  const auto srcPath = TempPath("gosurvey_cache_test_src.pts");
+  const auto cachePath = TempPath("gosurvey_cache_test_src.pts.gscloud");
+  constexpr int kCount = 5000;
+  WriteFixturePts(srcPath, kCount);
+
+  std::vector<std::string> log;
+  std::string err;
+  const bool built = pointcloudcache::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
+  REQUIRE(built);
+  CHECK(err.empty());
+
+  const pointcloudcache::OpenResult opened = pointcloudcache::Open(cachePath.string());
+  REQUIRE(opened.ok);
+  CHECK(opened.cache.totalPointCount == kCount);
+  CHECK(opened.cache.hasColor);
+  CHECK(opened.cache.hasIntensity);
+
+  std::int64_t leafSum = 0;
+  for (int i = 0; i < static_cast<int>(opened.cache.octree.nodes.size()); ++i) {
+    if (!opened.cache.octree.nodes[static_cast<std::size_t>(i)].isLeaf()) continue;
+    std::vector<double> xyz;
+    std::vector<float> rgb, intensity;
+    REQUIRE(pointcloudcache::ReadLeafPoints(opened.cache, i, xyz, rgb, intensity));
+    leafSum += static_cast<std::int64_t>(xyz.size() / 3);
+  }
+  CHECK(leafSum == kCount);
+
+  RemoveWithRetry(srcPath);
+  RemoveWithRetry(cachePath);
+}
+
+TEST_CASE("BuildFromPts: a malformed source produces no partial cache file (REQ-172 PTS increment)",
+          "[pointcloud][cache][pts]") {
+  const auto srcPath = TempPath("gosurvey_cache_test_badsource.pts");
+  const auto cachePath = TempPath("gosurvey_cache_test_badsource.pts.gscloud");
+  {
+    std::ofstream out(srcPath, std::ios::binary);
+    out << "not a valid PTS header line\n1.0 2.0 3.0\n";
+  }
+  RemoveWithRetry(cachePath);
+
+  std::vector<std::string> log;
+  std::string err;
+  const bool built = pointcloudcache::BuildFromPts(srcPath.string(), cachePath.string(), log, &err);
   CHECK_FALSE(built);
   CHECK_FALSE(err.empty());
   CHECK_FALSE(std::filesystem::exists(cachePath));

@@ -3738,12 +3738,15 @@ requirements is a planning failure, not a sign of rigor.
   → LAZ, so the new out-of-core octree/LOD engine (still to be recorded: `.gscloud` cache design
   and the REQ-100 point-cloud frame-budget profile) is proven against the user's real 7.8 GB
   driving scan file rather than a synthetic small format first.
+  2026-10-14 — PTS import + export delivered (issue #825 increment 1, PR #868): in-tree
+  whitespace-tokenized reader/writer (3/4/7-token line shapes), `pointcloudcache::BuildFromPts`,
+  `IMPORTPTS`/`EXPORTPTS` commands, `.pts` added to Project Files' PointCloud role.
   2026-10-14 — LAS import + export delivered (issue #825 increment 3, PR #870): in-tree binary
   reader/writer for LAS 1.2/1.4 Public Header Blocks and point data record formats 0/1/2/3 (4-10
   refused by name — no LASlib dependency), scale+offset int32 decode (`real = raw * scale +
   offset`), colour/intensity normalized by 65535, `pointcloudcache::BuildFromLas`,
-  `IMPORTLAS`/`EXPORTLAS` commands, `.las` added to Project Files' PointCloud role. LAZ remains
-  open per the delivery order above (separate follow-up — needs vendoring LASzip).
+  `IMPORTLAS`/`EXPORTLAS` commands, `.las` added to Project Files' PointCloud role. PTX/LAZ remain
+  open per the delivery order above (LAZ is a separate follow-up — needs vendoring LASzip).
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

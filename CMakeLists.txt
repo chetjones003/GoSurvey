@@ -557,6 +557,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # flat interleaved point layout. Delivered first among REQ-172's formats (D-2026-09-17-d).
   src/io/CadPointCloudE57.cpp
 
+  # PTS (Cyclone-style ASCII) point-cloud reader/writer (REQ-172, PTS increment — delivered after
+  # E57 per `spec/file-format-specs.md` §6). In-tree, no delimiter sniffing.
+  src/io/CadPointCloudPts.cpp
+
   # LAS (ASPRS binary) point-cloud reader/writer (REQ-172, LAS increment — delivered after PTX
   # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
   src/io/CadPointCloudLas.cpp
@@ -1160,6 +1164,11 @@ if(GOSURVEY_BUILD_TESTS)
     # AcisSatParserTests pins its own reader above.
     tests/CadPointCloudE57Tests.cpp
     src/io/CadPointCloudE57.cpp
+    # REQ-172 PTS increment (delivered after E57, `spec/file-format-specs.md` §6) — in-tree ASCII
+    # reader/writer round-trip (3/4/7-token line shapes) and malformed/truncated/missing-file
+    # refusal. Pinned directly, same as the E57 reader above.
+    tests/CadPointCloudPtsTests.cpp
+    src/io/CadPointCloudPts.cpp
     # REQ-172 LAS increment (delivered after PTX, `spec/file-format-specs.md` §6) — in-tree binary
     # reader/writer round-trip (point formats 0/2, hand-checked scale+offset decode) and
     # malformed/truncated/unsupported-format/missing-file refusal. Pinned directly, same as the
