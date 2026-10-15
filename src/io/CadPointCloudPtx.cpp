@@ -87,11 +87,11 @@ bool ParseDataLine(const std::string &line, ParsedLine *out, std::string *err) {
 
   if (toks.size() == 7) {
     int rgb[3];
-    for (int i = 0; i < 3; ++i) {
-      if (!ParseIntToken(toks[static_cast<std::size_t>(4 + i)], &rgb[i])) {
+    for (std::size_t i = 0; i < 3; ++i) {
+      if (!ParseIntToken(toks[4 + i], &rgb[i])) {
         if (err)
           *err = "PTX import: a data line has an R/G/B value that is not a valid integer ('" +
-                 toks[static_cast<std::size_t>(4 + i)] + "')";
+                 toks[4 + i] + "')";
         return false;
       }
     }
@@ -355,9 +355,9 @@ bool StreamPtxFile(const std::string &pathUtf8, std::int64_t chunkPointBudget,
       chunk.intensity.push_back(static_cast<float>(parsed.intensity));
       if (hasColor) {
         if (parsed.hasColor) {
-          chunk.colorsRgb.push_back(std::clamp(parsed.r, 0, 255) / 255.0f);
-          chunk.colorsRgb.push_back(std::clamp(parsed.g, 0, 255) / 255.0f);
-          chunk.colorsRgb.push_back(std::clamp(parsed.b, 0, 255) / 255.0f);
+          chunk.colorsRgb.push_back(static_cast<float>(std::clamp(parsed.r, 0, 255)) / 255.0f);
+          chunk.colorsRgb.push_back(static_cast<float>(std::clamp(parsed.g, 0, 255)) / 255.0f);
+          chunk.colorsRgb.push_back(static_cast<float>(std::clamp(parsed.b, 0, 255)) / 255.0f);
         } else {
           chunk.colorsRgb.insert(chunk.colorsRgb.end(), 3, 0.0f);
         }

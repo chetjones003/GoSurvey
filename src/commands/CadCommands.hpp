@@ -3647,7 +3647,7 @@ struct AppCommandState {
     /// the job is created (`StartPointCloudImportAsync`) — REQ-172's "share the async plumbing
     /// across formats instead of duplicating the worker" shape. Append a new value, never
     /// reorder/remove.
-    enum class SourceFormat { E57, Ptx };
+    enum class SourceFormat : std::uint8_t { E57, Ptx };
     SourceFormat format = SourceFormat::E57;
     std::string sourcePath;
     std::string cachePath;
