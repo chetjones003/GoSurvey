@@ -220,6 +220,30 @@ Let tools enforce mechanical style so reviews can focus on substance.
   `_CRT_SECURE_NO_WARNINGS` is defined (C4996 for `getenv` / `strncpy` etc.).
   Vendored third-party targets build at `/w` (`third_party/`, D-2026-08-31-b).
 - Commit formatter config to the repo; never hand-format around it.
+- `clang-tidy` runs in CI as a **blocking** check against lines changed in a PR only (`.clang-tidy`,
+  `.github/workflows/pr-checks.yml`), with `--warnings-as-errors=*` — any enabled check that fires
+  on a touched line fails the PR. The enabled groups are `bugprone-*`, `clang-analyzer-*`,
+  `performance-*`, plus `cppcoreguidelines-slicing`, `cppcoreguidelines-pro-type-member-init`,
+  `modernize-use-override`, `modernize-use-nullptr`, `modernize-use-default-member-init` (see
+  `.clang-tidy` for the exact exclusions and why). Write new code clean against these the first
+  time rather than discovering them in CI — the ones that recur most on new point-cloud/binary-IO
+  style code:
+  - **`performance-enum-size`**: give every new `enum class` an explicit narrow base type, e.g.
+    `enum class Kind : std::uint8_t { A, B };` — not just when a review flags it.
+  - **`bugprone-misplaced-widening-cast`**: when indexing with an offset (`toks[4 + i]`), make the
+    loop/index variable itself the wider type (`std::size_t i`) instead of computing the sum in a
+    narrower type and casting the result — `toks[static_cast<std::size_t>(4 + i)]` with `int i` is
+    flagged even though it "looks" safe.
+  - **`bugprone-narrowing-conversions`**: an integer divided/rounded into a floating type needs an
+    explicit `static_cast` at the point of conversion, not just at the end of an expression —
+    `static_cast<float>(std::clamp(r, 0, 255)) / 255.0f`, not `std::clamp(r, 0, 255) / 255.0f`; a
+    `long long` from `std::llround(...)` assigned into a `double` needs
+    `static_cast<double>(std::llround(...))`, not a bare assignment.
+  - **`bugprone-integer-division`**: `static_cast<double>(a / b)` (casting an already-truncated
+    integer result) is flagged whether or not the truncation was intended. If it was intended
+    (a deliberate floor/"layer index"), compute it into a named `int`/`int64_t` first and cast
+    *that* — the cast makes the intent visible to both the linter and the next reader. If it
+    wasn't intended, cast an operand before dividing instead.
 
 ## 11a. ImGui windows and settings/options dialogs
 
