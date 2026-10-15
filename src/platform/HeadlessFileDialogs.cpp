@@ -12,7 +12,8 @@
 //
 // Of the functions in the header, a handful (`BrowseOpenFileGltfUtf8`, `BrowseOpenFileE57Utf8`,
 // `BrowseOpenFilePtsUtf8`, `BrowseSaveFilePtsUtf8`, `BrowseOpenFilePtxUtf8`, `BrowseSaveFilePtxUtf8`,
-// `BrowseOpenFileLasUtf8`, `BrowseSaveFileLasUtf8`, `BrowseOpenFileBlockUtf8`) are reachable from
+// `BrowseOpenFileLasUtf8`, `BrowseSaveFileLasUtf8`, `BrowseOpenFileLazUtf8`, `BrowseSaveFileLazUtf8`,
+// `BrowseOpenFileBlockUtf8`) are reachable from
 // the Commands layer; the rest are called from the UI, which headless does not link. They are all
 // implemented anyway, because a seam that covers most of a header is a link error waiting for
 // whichever command grows a new call.
@@ -137,6 +138,12 @@ bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char*) {
 bool BrowseOpenFileLasUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseSaveFileLasUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseOpenFileLazUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseSaveFileLazUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return NextAnswer(utf8Out, utf8Cap);
 }
 

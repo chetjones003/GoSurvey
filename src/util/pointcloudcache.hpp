@@ -98,6 +98,16 @@ struct OpenCache {
                                  std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
                                  const std::atomic<bool> *cancelRequested = nullptr);
 
+/// Builds a `.gscloud` cache at `cachePath` from the LAZ at `sourcePath` (REQ-172 LAZ increment,
+/// issue #825 increment 4) — same contract as \ref BuildFromE57, via
+/// `CadPointCloudLaz.hpp`'s `StreamLazFile` (bounded-memory streaming, decoding through vendored
+/// LASzip) instead of `StreamE57File`.
+[[nodiscard]] bool BuildFromLaz(const std::string &sourcePath, const std::string &cachePath,
+                                 std::vector<std::string> &progressLog, std::string *errorMessage,
+                                 std::atomic<std::int64_t> *pointsStreamedOut = nullptr,
+                                 std::atomic<std::int64_t> *pointsFinalizedOut = nullptr,
+                                 const std::atomic<bool> *cancelRequested = nullptr);
+
 /// Reads a cache's header + octree structure (not point data) from `cachePath`. `ok` is false and
 /// `errorMessage` is set if the file is missing, truncated, or its magic/version does not match —
 /// a caller should treat this the same as ADR-060 (d)'s "missing file is a logged rebuild, never a

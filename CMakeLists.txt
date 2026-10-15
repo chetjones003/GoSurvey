@@ -206,6 +206,56 @@ target_compile_definitions(libredwg INTERFACE "GOSURVEY_LIBREDWG_VERSION=\"0.14\
 add_library(LibreDWG::libredwg ALIAS libredwg)
 unset(_lrd)
 
+# --- LASzip: vendored upstream source, built in-tree (REQ-172 LAZ increment, issue #825 #4) ---
+# The compression codec LAZ files use (third_party/laszip/VENDORED.md). Only the library sources
+# upstream's src/CMakeLists.txt lists (LASZIP_SOURCES) are built — not its own CMake probes,
+# example programs, or the dynamic-loading shim (dll/laszip_api.c), which would duplicate the
+# symbols laszip_dll.cpp already defines when both are compiled into one static library. The
+# public surface CadPointCloudLaz.cpp calls is dll/laszip_api.h's plain C API (laszip_create,
+# laszip_open_reader/_writer, laszip_read/_write_point, ...) — laszip_dll.cpp implements it
+# directly; no dynamic loading, no DLL boundary.
+set(laszip_SOURCE_DIR "${GOSURVEY_TP}/laszip")
+set(_lasz "${laszip_SOURCE_DIR}/src")
+add_library(laszip STATIC
+  ${_lasz}/mydefs.cpp ${_lasz}/lasmessage.cpp ${_lasz}/arithmeticdecoder.cpp
+  ${_lasz}/arithmeticencoder.cpp ${_lasz}/arithmeticmodel.cpp ${_lasz}/integercompressor.cpp
+  ${_lasz}/lasindex.cpp ${_lasz}/lasinterval.cpp ${_lasz}/lasquadtree.cpp
+  ${_lasz}/lasreaditemcompressed_v1.cpp ${_lasz}/lasreaditemcompressed_v2.cpp
+  ${_lasz}/lasreaditemcompressed_v3.cpp ${_lasz}/lasreaditemcompressed_v4.cpp
+  ${_lasz}/lasreadpoint.cpp
+  ${_lasz}/laswriteitemcompressed_v1.cpp ${_lasz}/laswriteitemcompressed_v2.cpp
+  ${_lasz}/laswriteitemcompressed_v3.cpp ${_lasz}/laswriteitemcompressed_v4.cpp
+  ${_lasz}/laswritepoint.cpp ${_lasz}/laszip.cpp ${_lasz}/laszip_dll.cpp)
+  # PRIVATE "${laszip_SOURCE_DIR}/include/laszip": upstream's own src/ files quote-include
+  # "laszip_common.h" unqualified (e.g. mydefs.hpp, lasmessage.hpp), expecting that header's own
+  # directory on the include path, not its parent — the PUBLIC "include" dir below only satisfies
+  # the <laszip/laszip_common.h>-style angle include dll/laszip_api.h itself uses.
+target_include_directories(laszip PRIVATE "${_lasz}" "${laszip_SOURCE_DIR}/include/laszip")
+# PUBLIC: consumers (gosurvey_domain, GoSurveyTests, ...) get laszip_api.h's "laszip/..." angle
+# includes and the bare laszip_api.h/laszip_common.h/laszip_api_version.h names for free, the same
+# way LibreDWG::libredwg's PUBLIC include already covers its consumers below.
+target_include_directories(laszip PUBLIC
+  "${laszip_SOURCE_DIR}/include" "${laszip_SOURCE_DIR}/dll")
+# LASZIP_API_VERSION selects laszip_api.h's own "<laszip/...>"-prefixed include form (matching
+# where this vendoring puts laszip_api_version.h/laszip_common.h); PUBLIC because any consumer
+# that also includes laszip_api.h directly (CadPointCloudLaz.cpp) needs the same branch taken.
+target_compile_definitions(laszip PUBLIC LASZIP_API_VERSION)
+# Vendored: silence its warnings so ours stay visible (as for glew/libredwg above).
+if(MSVC)
+  target_compile_options(laszip PRIVATE /w /utf-8)
+  target_compile_definitions(laszip PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+  target_compile_options(laszip PRIVATE -w)
+endif()
+# LASZIPDLL_EXPORTS: lasindex.cpp/.hpp branch on this to use lasreadpoint.hpp (vendored) instead of
+# the full LASlib lasreader.hpp/laswriter.hpp (not vendored — GoSurvey only needs LASzip's own
+# compression codec, not all of LASlib) for the optional LAX spatial-index path laszip_dll.cpp
+# calls into. This is upstream's own documented way of building LASzip's DLL target without LASlib.
+target_compile_definitions(laszip PRIVATE LASZIPDLL_EXPORTS)
+target_compile_definitions(laszip INTERFACE "GOSURVEY_LASZIP_VERSION=\"3.5.0\"")
+add_library(Laszip::laszip ALIAS laszip)
+unset(_lasz)
+
 # --- CS-MAP: vendored headers + prebuilt static lib + dictionaries (REQ-358 / ADR-063) ---
 # OSGeo MetaCRS CS-MAP, the coordinate-system catalogue and projection engine. Prebuilt MSVC x64
 # Release /MD static lib, like LibreDWG. Its headers are NOT an interface include directory: only
@@ -570,6 +620,12 @@ set(GOSURVEY_DOMAIN_SOURCES
   # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
   src/io/CadPointCloudLas.cpp
 
+  # LAZ (LASzip-compressed LAS) point-cloud reader/writer (REQ-172, LAZ increment, issue #825
+  # increment 4 — the last of REQ-172's four remaining formats). Parses the LAS Public Header
+  # Block itself (same byte layout as a plain LAS) and hands the compressed point-data section to
+  # vendored LASzip for decode/encode (third_party/laszip/VENDORED.md).
+  src/io/CadPointCloudLaz.cpp
+
   # .gscloud out-of-core cache codec (ADR-060) — builds/reads the disk-backed octree so a
   # multi-GB scan is never fully resident in memory.
   src/util/pointcloudcache.cpp
@@ -605,7 +661,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${PUGIXML_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -1186,6 +1242,13 @@ if(GOSURVEY_BUILD_TESTS)
     # E57 reader above.
     tests/CadPointCloudLasTests.cpp
     src/io/CadPointCloudLas.cpp
+    # REQ-172 LAZ increment (issue #825 increment 4, the last of REQ-172's four remaining
+    # formats) — LASzip-compressed LAS round-trip (point formats 0/2, matching the uncompressed
+    # LAS convention), the LAS/LAZ cross-check (same points import equal counts and XYZ from
+    # either format), and malformed/truncated/corrupt-compressed-stream/missing-file refusal.
+    # Pinned directly, same as the E57 reader above.
+    tests/CadPointCloudLazTests.cpp
+    src/io/CadPointCloudLaz.cpp
     # ADR-060 — .gscloud out-of-core cache build/read/stamp round-trip. Pinned directly, same as
     # the octree and E57 reader above.
     tests/PointCloudCacheTests.cpp
@@ -1461,7 +1524,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
     src/pdf/PdfDiff.cpp)
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different

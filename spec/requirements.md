@@ -3750,8 +3750,12 @@ requirements is a planning failure, not a sign of rigor.
   reader/writer for LAS 1.2/1.4 Public Header Blocks and point data record formats 0/1/2/3 (4-10
   refused by name — no LASlib dependency), scale+offset int32 decode (`real = raw * scale +
   offset`), colour/intensity normalized by 65535, `pointcloudcache::BuildFromLas`,
-  `IMPORTLAS`/`EXPORTLAS` commands, `.las` added to Project Files' PointCloud role. LAZ remains
-  open per the delivery order above (separate follow-up — needs vendoring LASzip).
+  `IMPORTLAS`/`EXPORTLAS` commands, `.las` added to Project Files' PointCloud role.
+  2026-10-15 — LAZ import/export delivered (issue #825 increment 4, PR #871): vendored LASzip
+  3.5.0 (Apache-2.0, `third_party/laszip/VENDORED.md`) builds in-tree; `.laz` reads/writes the
+  same point schema as `.las` (acceptance: a LAS and a LAZ of the same points import equal counts
+  and XYZ; malformed/truncated/corrupt-compressed-stream and missing-file/empty-path refuse per
+  REQ-001). Completes REQ-172's four-format delivery order (PTS/PTX/LAS/LAZ) alongside E57.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

@@ -3646,7 +3646,7 @@ struct AppCommandState {
     /// Which reader/cache-builder pair to use, decided once from `sourcePath`'s extension when the
     /// job is created (`StartPointCloudImportAsync`) — REQ-172's "share the async plumbing across
     /// formats instead of duplicating the worker" shape. Append a new value, never reorder/remove.
-    enum class SourceFormat : std::uint8_t { E57, Pts, Ptx, Las };
+    enum class SourceFormat : std::uint8_t { E57, Pts, Ptx, Las, Laz };
     SourceFormat format = SourceFormat::E57;
     std::string sourcePath;
     std::string cachePath;
@@ -3666,7 +3666,9 @@ struct AppCommandState {
     /// Total leaf count, set once (by the worker) right after the cache is opened for the preview
     /// pass — 0 until then, which the UI reads as "phase 3 hasn't started yet."
     std::atomic<std::int64_t> previewTotalLeaves{0};
-    /// From `pointcloud_e57::QuickPointCountEstimate` or `pointcloud_las::QuickPointCountEstimate`
+    /// From `pointcloud_e57::QuickPointCountEstimate`, `pointcloud_pts::QuickPointCountEstimate`,
+    /// `pointcloud_ptx::QuickPointCountEstimate`, `pointcloud_las::QuickPointCountEstimate`, or
+    /// `pointcloud_laz::QuickPointCountEstimate`
     /// (per `format`), read before dispatch (cheap: metadata only). 0 means unknown — the
     /// progress UI falls back to an indeterminate bar in that case.
     std::int64_t totalPointsEstimate = 0;
