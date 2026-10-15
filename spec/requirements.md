@@ -3740,8 +3740,12 @@ requirements is a planning failure, not a sign of rigor.
   driving scan file rather than a synthetic small format first.
   2026-10-14 — PTS import + export delivered (issue #825 increment 1, PR #868): in-tree
   whitespace-tokenized reader/writer (3/4/7-token line shapes), `pointcloudcache::BuildFromPts`,
-  `IMPORTPTS`/`EXPORTPTS` commands, `.pts` added to Project Files' PointCloud role. PTX/LAS/LAZ
-  remain open per the delivery order above.
+  `IMPORTPTS`/`EXPORTPTS` commands, `.pts` added to Project Files' PointCloud role.
+  2026-10-14 — PTX import + export delivered (issue #825 increment 2, PR #869): in-tree,
+  per-scan-setup ASCII reader/writer (4x4 transform applied `P_world = M * [x y z 1]^T`,
+  translation in column 3; "no return" rows filtered; multiple scan blocks merged into one
+  cloud), `pointcloudcache::BuildFromPtx`, `IMPORTPTX`/`EXPORTPTX` commands, `.ptx` added to
+  Project Files' PointCloud role. LAS/LAZ remain open per the delivery order above.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app
