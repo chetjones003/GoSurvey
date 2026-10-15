@@ -6660,14 +6660,10 @@ const CmdEntry kRegistry[] = {
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
-    {"pointcloudattach", "importe57, e57", "Import an E57 point cloud as reference geometry (REQ-172)"},
-    {"importpts", "pts", "Import a PTS (Cyclone-style ASCII) point cloud as reference geometry (REQ-172)"},
+    {"pointcloudattach", "importpointcloud", "Import a point cloud (E57, PTS, PTX, LAS, or LAZ) as reference geometry (REQ-172)"},
     {"exportpts", "", "Export the selected point cloud(s) (or all, if none selected) to a PTS file (REQ-172)"},
-    {"importptx", "ptx", "Import a PTX (Cyclone-style ASCII, per-scan-setup) point cloud as reference geometry (REQ-172)"},
     {"exportptx", "", "Export the selected point cloud(s) (or all, if none selected) to a PTX file (REQ-172)"},
-    {"importlas", "las", "Import a LAS (ASPRS binary) point cloud as reference geometry (REQ-172)"},
     {"exportlas", "", "Export the selected point cloud(s) (or all, if none selected) to a LAS file (REQ-172)"},
-    {"importlaz", "laz", "Import a LAZ (LASzip-compressed LAS) point cloud as reference geometry (REQ-172)"},
     {"exportlaz", "", "Export the selected point cloud(s) (or all, if none selected) to a LAZ file (REQ-172)"},
     // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
     // then its exact dimensions; the UCS supplies the orientation.
@@ -43475,7 +43471,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ImportGltfModel(st, path, scale, ix, iy, iz, log);
       return;
     }
-    if (plotTok == "pointcloudattach" || plotTok == "importe57" || plotTok == "e57") {
+    // Single import command for every point-cloud format (REQ-172): E57, PTS, PTX, LAS, LAZ.
+    // Format is decided from the chosen/typed path's own extension — StartPointCloudImportAsync
+    // does that sniffing internally, so this handler never branches on format itself. Replaces
+    // the earlier per-format IMPORTPTS/IMPORTPTX/IMPORTLAS/IMPORTLAZ commands (issue #825 follow-up:
+    // one import command, not five).
+    if (plotTok == "pointcloudattach" || plotTok == "importpointcloud") {
       std::string path;
       std::string rest;
       std::getline(issIdle, rest);
@@ -43490,7 +43491,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       if (path.empty()) {
         char buf[1024]{};
-        if (!BrowseOpenFileE57Utf8(buf, sizeof(buf))) {
+        if (!BrowseOpenFilePointCloudUtf8(buf, sizeof(buf))) {
           log.push_back("POINTCLOUDATTACH — cancelled.");
           return;
         }
@@ -43503,120 +43504,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       StartPointCloudImportAsync(st, path, log);
       return;
     }
-    if (plotTok == "importpts" || plotTok == "pts") {
-      std::string path;
-      std::string rest;
-      std::getline(issIdle, rest);
-      rest = StringUtil::trimCopy(rest);
-      // A path may contain spaces, so quoted-first: "C:\a b\scan.pts"
-      if (!rest.empty() && rest.front() == '"') {
-        const size_t close = rest.find('"', 1);
-        if (close != std::string::npos)
-          path = rest.substr(1, close - 1);
-      } else if (!rest.empty()) {
-        path = rest;
-      }
-      if (path.empty()) {
-        char buf[1024]{};
-        if (!BrowseOpenFilePtsUtf8(buf, sizeof(buf))) {
-          log.push_back("IMPORTPTS — cancelled.");
-          return;
-        }
-        path = buf;
-      }
-      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
-        return;
-      StartPointCloudImportAsync(st, path, log);
-      return;
-    }
     if (plotTok == "exportpts") {
       ExportSelectedPointCloudsToPts(st, log);
-      return;
-    }
-    if (plotTok == "importptx" || plotTok == "ptx") {
-      std::string path;
-      std::string rest;
-      std::getline(issIdle, rest);
-      rest = StringUtil::trimCopy(rest);
-      // A path may contain spaces, so quoted-first: "C:\a b\scan.ptx"
-      if (!rest.empty() && rest.front() == '"') {
-        const size_t close = rest.find('"', 1);
-        if (close != std::string::npos)
-          path = rest.substr(1, close - 1);
-      } else if (!rest.empty()) {
-        path = rest;
-      }
-      if (path.empty()) {
-        char buf[1024]{};
-        if (!BrowseOpenFilePtxUtf8(buf, sizeof(buf))) {
-          log.push_back("IMPORTPTX — cancelled.");
-          return;
-        }
-        path = buf;
-      }
-      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
-        return;
-      StartPointCloudImportAsync(st, path, log);
       return;
     }
     if (plotTok == "exportptx") {
       ExportSelectedPointCloudsToPtx(st, log);
       return;
     }
-    if (plotTok == "importlas" || plotTok == "las") {
-      std::string path;
-      std::string rest;
-      std::getline(issIdle, rest);
-      rest = StringUtil::trimCopy(rest);
-      // A path may contain spaces, so quoted-first: "C:\a b\scan.las"
-      if (!rest.empty() && rest.front() == '"') {
-        const size_t close = rest.find('"', 1);
-        if (close != std::string::npos)
-          path = rest.substr(1, close - 1);
-      } else if (!rest.empty()) {
-        path = rest;
-      }
-      if (path.empty()) {
-        char buf[1024]{};
-        if (!BrowseOpenFileLasUtf8(buf, sizeof(buf))) {
-          log.push_back("IMPORTLAS — cancelled.");
-          return;
-        }
-        path = buf;
-      }
-      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
-        return;
-      StartPointCloudImportAsync(st, path, log);
-      return;
-    }
     if (plotTok == "exportlas") {
       ExportSelectedPointCloudsToLas(st, log);
-      return;
-    }
-    if (plotTok == "importlaz" || plotTok == "laz") {
-      std::string path;
-      std::string rest;
-      std::getline(issIdle, rest);
-      rest = StringUtil::trimCopy(rest);
-      // A path may contain spaces, so quoted-first: "C:\a b\scan.laz"
-      if (!rest.empty() && rest.front() == '"') {
-        const size_t close = rest.find('"', 1);
-        if (close != std::string::npos)
-          path = rest.substr(1, close - 1);
-      } else if (!rest.empty()) {
-        path = rest;
-      }
-      if (path.empty()) {
-        char buf[1024]{};
-        if (!BrowseOpenFileLazUtf8(buf, sizeof(buf))) {
-          log.push_back("IMPORTLAZ — cancelled.");
-          return;
-        }
-        path = buf;
-      }
-      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
-        return;
-      StartPointCloudImportAsync(st, path, log);
       return;
     }
     if (plotTok == "exportlaz") {
