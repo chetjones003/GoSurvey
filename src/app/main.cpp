@@ -291,48 +291,18 @@ static void AppendFrameWatchLog(const AppCommandState& cmd, const framewatch::Ti
 
 namespace {
 
-// REQ-850: which monitor the window is currently centered over, so scaling is computed from that
-// monitor's own specs rather than always the primary one.
-GLFWmonitor* FindWindowMonitor(GLFWwindow* window) {
-  int wx = 0, wy = 0, ww = 0, wh = 0;
-  glfwGetWindowPos(window, &wx, &wy);
-  glfwGetWindowSize(window, &ww, &wh);
-  const int cx = wx + ww / 2;
-  const int cy = wy + wh / 2;
-  int monitorCount = 0;
-  GLFWmonitor** monitors = glfwGetMonitors(&monitorCount);
-  for (int i = 0; i < monitorCount; ++i) {
-    int mx = 0, my = 0, mw = 0, mh = 0;
-    glfwGetMonitorWorkarea(monitors[i], &mx, &my, &mw, &mh);
-    if (cx >= mx && cx < mx + mw && cy >= my && cy < my + mh)
-      return monitors[i];
-  }
-  return glfwGetPrimaryMonitor();
-}
-
-// REQ-850: true physical DPI from the monitor's reported physical size (EDID millimeters) and its
-// native resolution, rather than the OS content-scale percentage — two displays set to the same
-// "100%" Windows scaling but different resolutions (e.g. the same monitor run at 2560x1600 vs
-// 1920x1080) report an identical GLFW content scale even though the UI should look proportionally
-// different between them. Falls back to 1.0 (no scaling) if the monitor doesn't report a physical
-// size, which some virtual/remote displays don't.
-float ComputeMonitorDpiScale(GLFWmonitor* monitor) {
-  if (!monitor)
-    return 1.0f;
-  const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-  int widthMm = 0, heightMm = 0;
-  glfwGetMonitorPhysicalSize(monitor, &widthMm, &heightMm);
-  if (!mode || widthMm <= 0 || heightMm <= 0)
-    return 1.0f;
-  const float diagPx = std::sqrt(static_cast<float>(mode->width) * mode->width +
-                                  static_cast<float>(mode->height) * mode->height);
-  const float diagIn = std::sqrt(static_cast<float>(widthMm) * widthMm +
-                                  static_cast<float>(heightMm) * heightMm) / 25.4f;
-  if (diagIn <= 0.f)
-    return 1.0f;
-  const float dpi = diagPx / diagIn;
-  constexpr float kBaselineDpi = 96.0f;  // Windows "100%" scaling baseline
-  return std::clamp(dpi / kBaselineDpi, 0.75f, 3.0f);
+// REQ-850: the OS's own per-monitor scale percentage (Settings > Display > Scale), which GLFW
+// reports via glfwGetWindowContentScale once the process is Per-Monitor-v2 DPI aware (GLFW asks
+// Windows for that automatically on glfwInit, on Windows 10 1703+). Earlier this was computed by
+// hand from the monitor's reported physical size (EDID) and native resolution; that estimate
+// disagreed with Windows' own number (observed: Windows recommends 150% at 2560x1600 vs 125% at
+// 1920x1080 on the same panel) and silently ignored a manual override of the scale slider. Reading
+// the OS value directly tracks both the resolution AND whatever the user has actually set.
+float ComputeMonitorDpiScale(GLFWwindow* window) {
+  float sx = 1.0f, sy = 1.0f;
+  glfwGetWindowContentScale(window, &sx, &sy);
+  const float scale = (sx > 0.f) ? sx : 1.0f;
+  return std::clamp(scale, 0.75f, 3.0f);
 }
 
 }  // namespace
@@ -439,7 +409,7 @@ int main()
   // scaling, yet the UI needs to be visibly larger at the lower resolution to occupy the same
   // physical/proportional space. ComputeMonitorDpiScale instead derives DPI from the monitor's
   // reported physical size and native pixel resolution, which tracks resolution changes directly.
-  const float dpiScale = ComputeMonitorDpiScale(FindWindowMonitor(window));
+  const float dpiScale = ComputeMonitorDpiScale(window);
   io.FontGlobalScale = dpiScale;
   ImGui::GetStyle().ScaleAllSizes(dpiScale);
   ui::SetUiScale(dpiScale);  // hand-painted screens (Start screen, etc.) read this directly
