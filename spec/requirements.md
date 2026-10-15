@@ -3745,7 +3745,13 @@ requirements is a planning failure, not a sign of rigor.
   per-scan-setup ASCII reader/writer (4x4 transform applied `P_world = M * [x y z 1]^T`,
   translation in column 3; "no return" rows filtered; multiple scan blocks merged into one
   cloud), `pointcloudcache::BuildFromPtx`, `IMPORTPTX`/`EXPORTPTX` commands, `.ptx` added to
-  Project Files' PointCloud role. LAS/LAZ remain open per the delivery order above.
+  Project Files' PointCloud role.
+  2026-10-14 — LAS import + export delivered (issue #825 increment 3, PR #870): in-tree binary
+  reader/writer for LAS 1.2/1.4 Public Header Blocks and point data record formats 0/1/2/3 (4-10
+  refused by name — no LASlib dependency), scale+offset int32 decode (`real = raw * scale +
+  offset`), colour/intensity normalized by 65535, `pointcloudcache::BuildFromLas`,
+  `IMPORTLAS`/`EXPORTLAS` commands, `.las` added to Project Files' PointCloud role. LAZ remains
+  open per the delivery order above (separate follow-up — needs vendoring LASzip).
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

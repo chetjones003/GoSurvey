@@ -88,7 +88,7 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 /// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);
 
-/// E57 point-cloud scan for import (REQ-172). LAS/LAZ are future increments (D-2026-09-17-d
+/// E57 point-cloud scan for import (REQ-172). LAZ is a future increment (D-2026-09-17-d
 /// delivers E57 first, then PTS -> PTX -> LAS -> LAZ) — not offered here yet.
 bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap);
 
@@ -104,3 +104,10 @@ bool BrowseOpenFilePtxUtf8(char* utf8Out, size_t utf8Cap);
 
 /// UTF-8 path for exporting the selected point cloud(s) to PTX; suggests a default file name.
 bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// LAS (ASPRS binary) point-cloud scan for import (REQ-172, LAS increment, issue #825
+/// increment 3).
+bool BrowseOpenFileLasUtf8(char* utf8Out, size_t utf8Cap);
+
+/// UTF-8 path for exporting the selected point cloud(s) to LAS; suggests a default file name.
+bool BrowseSaveFileLasUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
