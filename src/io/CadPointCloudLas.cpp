@@ -342,9 +342,9 @@ WriteResult WriteLasFile(const std::string &pathUtf8, const std::vector<double> 
       const double x = pointsXyz[static_cast<std::size_t>(srcIdx) * 3 + 0];
       const double y = pointsXyz[static_cast<std::size_t>(srcIdx) * 3 + 1];
       const double z = pointsXyz[static_cast<std::size_t>(srcIdx) * 3 + 2];
-      const double rawXd = std::llround((x - offsetX) / scaleX);
-      const double rawYd = std::llround((y - offsetY) / scaleY);
-      const double rawZd = std::llround((z - offsetZ) / scaleZ);
+      const double rawXd = static_cast<double>(std::llround((x - offsetX) / scaleX));
+      const double rawYd = static_cast<double>(std::llround((y - offsetY) / scaleY));
+      const double rawZd = static_cast<double>(std::llround((z - offsetZ) / scaleZ));
       if (std::abs(rawXd) > static_cast<double>((std::numeric_limits<std::int32_t>::max)()) ||
           std::abs(rawYd) > static_cast<double>((std::numeric_limits<std::int32_t>::max)()) ||
           std::abs(rawZd) > static_cast<double>((std::numeric_limits<std::int32_t>::max)())) {

@@ -3646,7 +3646,7 @@ struct AppCommandState {
     /// Decided once, when the job is created (`StartPointCloudImportAsync`), from the source
     /// path's own extension — REQ-172's "share the async plumbing across formats" (issue #825
     /// increment 3 adds Las to the E57 increment's original single-format enum).
-    enum class SourceFormat { E57, Las };
+    enum class SourceFormat : std::uint8_t { E57, Las };
     SourceFormat format = SourceFormat::E57;
     std::string sourcePath;
     std::string cachePath;
