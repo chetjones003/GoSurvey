@@ -384,7 +384,16 @@ int main()
   ApplyCadDarkTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
-  io.FontGlobalScale = 1.35f;
+  // REQ-850: scale fonts and widget metrics to the monitor's actual DPI/content scale instead of
+  // a fixed baseline tuned against one high-resolution dev display. GLFW's content scale is 1.0
+  // at 96 DPI (Windows 100%) and e.g. 1.5 at 150% — the 1.35f baseline this replaces was really
+  // "150%-ish scaling, hand-tuned down a bit"; querying it keeps that look on the dev machine
+  // while fixing lower-DPI displays where 1.35x was simply too large.
+  float dpiScaleX = 1.0f, dpiScaleY = 1.0f;
+  glfwGetWindowContentScale(window, &dpiScaleX, &dpiScaleY);
+  const float dpiScale = (dpiScaleX > 0.f) ? dpiScaleX : 1.0f;
+  io.FontGlobalScale = dpiScale;
+  ImGui::GetStyle().ScaleAllSizes(dpiScale);
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
