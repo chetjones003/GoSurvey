@@ -7,8 +7,9 @@
 
 /// LAS (ASPRS binary point-cloud format, versions 1.2 and 1.4) reader/writer (REQ-172,
 /// `spec/file-format-specs.md` §2/§3.2/§5/§6). In-tree, no LASlib dependency — the Public Header
-/// Block and point-data-record layouts for formats 0/1/2/3 are decoded directly from the
-/// published ASPRS byte layout.
+/// Block and point-data-record layouts for formats 0-10 are decoded directly from the published
+/// ASPRS byte layout (D-2026-10-15-b extended this from the original 0-3 scope to match
+/// `CadPointCloudLaz.hpp`'s D-2026-10-15-a).
 ///
 /// Delivered third of REQ-172's four remaining formats (E57 -> PTS -> PTX -> LAS -> LAZ) per
 /// `spec/file-format-specs.md` §6 (issue #825 increment 3). LAZ (compressed LAS via LASzip) is a
@@ -21,9 +22,8 @@
 ///   - bytes 94-95:  header size (used only to sanity-check the file, not to locate point data).
 ///   - bytes 96-99:  offset (bytes) from the start of the file to the first point record.
 ///   - bytes 100-103: number of Variable Length Records (skipped, not parsed).
-///   - byte 104:     point data record format — this reader supports 0, 1, 2, 3 only. Any other
-///                   value (4-10, the GPS-time/waveform/extended formats) is refused with a
-///                   message naming the unsupported format number.
+///   - byte 104:     point data record format — this reader supports 0-10 (D-2026-10-15-b). Any
+///                   other value is refused with a message naming the unsupported format number.
 ///   - bytes 105-106: point data record length in bytes (the per-record stride; may be larger
 ///                   than the format's minimum size — extra trailing bytes per record are
 ///                   skipped).
@@ -39,11 +39,15 @@
 ///
 /// **Point Data Records** (one per point, `point data record length` bytes each, starting at the
 /// header's declared offset): int32 X, int32 Y, int32 Z (decoded via scale+offset above), then
-/// uint16 Intensity (present in every one of formats 0-3) at byte offset 12, then
-/// classification/return/scan-angle/user-data/point-source-id bytes (ignored). Format 1 and 3
-/// additionally carry an 8-byte GPS time (ignored, not needed for REQ-172). Formats 2 and 3
-/// additionally carry Red/Green/Blue, each a uint16, immediately after the fixed prefix (byte
-/// offset 20 for format 2, byte offset 28 for format 3 — after the GPS time).
+/// uint16 Intensity at byte offset 12 — true for every one of formats 0-10, since formats 0-5's
+/// "legacy" 20-byte core and formats 6-10's "extended" 30-byte core both put X/Y/Z/Intensity
+/// first, in the same order, at the same offsets; only the colour offset and overall record
+/// length differ by format (`ColorOffsetForFormat`/`MinRecordSizeForFormat` in the .cpp). GPS
+/// time, extended classification, NIR, and wave packets are all present in various formats'
+/// records but ignored (not needed for REQ-171's cloud schema). Colour (RGB, each a uint16) is
+/// present for formats 2/3/5/7/8/10 — offset 20 for format 2 (no GPS time ahead of it), offset 28
+/// for 3/5 (after an 8-byte GPS time), offset 30 for 7/8/10 (right after the fixed 30-byte
+/// extended core) — and absent for 0/1/4/6/9.
 ///
 /// **Colour/intensity normalization convention** (LAS stores both as 16-bit channels): this
 /// reader/writer always divides/multiplies by 65535.0, regardless of whether a real-world file's
@@ -52,7 +56,7 @@
 /// write-then-read round trip exact; it is not an attempt to detect or correct a source file's own
 /// scaling.
 ///
-/// A file whose signature is not "LASF", whose point data record format is not 0/1/2/3, or whose
+/// A file whose signature is not "LASF", whose point data record format is outside 0-10, or whose
 /// header declares more point records than the file actually holds (truncated), is a malformed
 /// file (REQ-001): refused with a specific message, no partial cloud.
 namespace pointcloud_las {
