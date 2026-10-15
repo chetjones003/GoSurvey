@@ -88,33 +88,19 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 /// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);
 
-/// E57 point-cloud scan for import (REQ-172, D-2026-09-17-d
-/// delivers E57 first, then PTS -> PTX -> LAS -> LAZ).
-bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap);
-
-/// PTS (Cyclone-style ASCII) point-cloud scan for import (REQ-172, PTS increment).
-bool BrowseOpenFilePtsUtf8(char* utf8Out, size_t utf8Cap);
+/// Any point-cloud scan for import — E57, PTS, PTX, LAS, or LAZ (REQ-172). POINTCLOUDATTACH is
+/// the single import command for every format; the dialog's combined filter lists all five
+/// extensions and the caller picks the reader by the chosen file's own extension.
+bool BrowseOpenFilePointCloudUtf8(char* utf8Out, size_t utf8Cap);
 
 /// UTF-8 path for exporting the selected point cloud(s) to PTS; suggests a default file name.
 bool BrowseSaveFilePtsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
-/// PTX (Cyclone-style ASCII, per-scan-setup) point-cloud scan for import (REQ-172, PTX increment,
-/// issue #825 increment 2).
-bool BrowseOpenFilePtxUtf8(char* utf8Out, size_t utf8Cap);
-
 /// UTF-8 path for exporting the selected point cloud(s) to PTX; suggests a default file name.
 bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
-/// LAS (ASPRS binary) point-cloud scan for import (REQ-172, LAS increment, issue #825
-/// increment 3).
-bool BrowseOpenFileLasUtf8(char* utf8Out, size_t utf8Cap);
-
 /// UTF-8 path for exporting the selected point cloud(s) to LAS; suggests a default file name.
 bool BrowseSaveFileLasUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
-
-/// LAZ (LASzip-compressed LAS) point-cloud scan for import (REQ-172, LAZ increment, issue #825
-/// increment 4 — the last of REQ-172's four remaining formats).
-bool BrowseOpenFileLazUtf8(char* utf8Out, size_t utf8Cap);
 
 /// UTF-8 path for exporting the selected point cloud(s) to LAZ; suggests a default file name.
 bool BrowseSaveFileLazUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
