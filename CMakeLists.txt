@@ -708,6 +708,7 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
   src/ui/CadUi_StartScreen.cpp
+  src/ui/UiScale.cpp
   src/ui/CadUi_Projects.cpp
   src/ui/CadUi_WhatsNew.cpp
   src/ui/CadUi_DrawingSettings.cpp

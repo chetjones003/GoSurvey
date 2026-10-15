@@ -33,6 +33,7 @@
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
 #include "SplashScreen.hpp"
+#include "UiScale.hpp"
 #include "WinFrameControls.hpp"
 #ifdef GOSURVEY_DEVELOPER_SHELL
 #include "DevShell.hpp"
@@ -441,6 +442,7 @@ int main()
   const float dpiScale = ComputeMonitorDpiScale(FindWindowMonitor(window));
   io.FontGlobalScale = dpiScale;
   ImGui::GetStyle().ScaleAllSizes(dpiScale);
+  ui::SetUiScale(dpiScale);  // hand-painted screens (Start screen, etc.) read this directly
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
