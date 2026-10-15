@@ -3738,12 +3738,20 @@ requirements is a planning failure, not a sign of rigor.
   → LAZ, so the new out-of-core octree/LOD engine (still to be recorded: `.gscloud` cache design
   and the REQ-100 point-cloud frame-budget profile) is proven against the user's real 7.8 GB
   driving scan file rather than a synthetic small format first.
+  2026-10-14 — PTS import + export delivered (issue #825 increment 1, PR #868): in-tree
+  whitespace-tokenized reader/writer (3/4/7-token line shapes), `pointcloudcache::BuildFromPts`,
+  `IMPORTPTS`/`EXPORTPTS` commands, `.pts` added to Project Files' PointCloud role.
+  2026-10-14 — PTX import + export delivered (issue #825 increment 2, PR #869): in-tree,
+  per-scan-setup ASCII reader/writer (4x4 transform applied `P_world = M * [x y z 1]^T`,
+  translation in column 3; "no return" rows filtered; multiple scan blocks merged into one
+  cloud), `pointcloudcache::BuildFromPtx`, `IMPORTPTX`/`EXPORTPTX` commands, `.ptx` added to
+  Project Files' PointCloud role.
   2026-10-15 — LAZ import/export delivered (issue #825 increment 4, PR #871): vendored LASzip
   3.5.0 (Apache-2.0, `third_party/laszip/VENDORED.md`) builds in-tree; `.laz` reads/writes the
   same point schema as `.las` (acceptance: a LAS and a LAZ of the same points import equal counts
   and XYZ; malformed/truncated/corrupt-compressed-stream and missing-file/empty-path refuse per
-  REQ-001). PTS (#868), PTX (#869), and LAS (#870) were delivered as issue #825 increments 1-3;
-  REQ-172's four-format delivery order is now complete alongside E57.
+  REQ-001). LAS (issue #825 increment 3, PR #870) completes REQ-172's four-format delivery order
+  alongside E57.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

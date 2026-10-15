@@ -11,6 +11,7 @@
 // false — a cancelled dialog — once the queue is empty.
 //
 // Of the functions in the header, a handful (`BrowseOpenFileGltfUtf8`, `BrowseOpenFileE57Utf8`,
+// `BrowseOpenFilePtsUtf8`, `BrowseSaveFilePtsUtf8`, `BrowseOpenFilePtxUtf8`, `BrowseSaveFilePtxUtf8`,
 // `BrowseOpenFileLazUtf8`, `BrowseSaveFileLazUtf8`, `BrowseOpenFileBlockUtf8`) are reachable from
 // the Commands layer; the rest are called from the UI, which headless does not link. They are all
 // implemented anyway, because a seam that covers most of a header is a link error waiting for
@@ -120,6 +121,18 @@ bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseOpenFilePtsUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseSaveFilePtsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseOpenFilePtxUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
 
 bool BrowseOpenFileLazUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
