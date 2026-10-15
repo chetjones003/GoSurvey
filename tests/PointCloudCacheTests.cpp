@@ -29,7 +29,8 @@ void WriteFixturePts(const std::filesystem::path &path, int count) {
   for (int i = 0; i < count; ++i) {
     const double x = static_cast<double>(i % 37) - 18.0;
     const double y = static_cast<double>((i / 37) % 37) - 18.0;
-    const double z = static_cast<double>(i / (37 * 37)) - 5.0;
+    const int zLayer = i / (37 * 37);  // intentional integer floor — a "layer index", not a ratio.
+    const double z = static_cast<double>(zLayer) - 5.0;
     out << x << " " << y << " " << z << " " << (1.0) << " " << (i % 256) << " " << ((i * 2) % 256)
         << " " << ((i * 3) % 256) << "\n";
   }

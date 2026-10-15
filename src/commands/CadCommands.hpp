@@ -3646,7 +3646,7 @@ struct AppCommandState {
     /// Which reader/cache-builder pair to use, decided once from `sourcePath`'s extension when the
     /// job is created (`StartPointCloudImportAsync`) — REQ-172's "share the async plumbing across
     /// formats instead of duplicating the worker" shape. Append a new value, never reorder/remove.
-    enum class SourceFormat { E57, Pts };
+    enum class SourceFormat : std::uint8_t { E57, Pts };
     SourceFormat format = SourceFormat::E57;
     std::string sourcePath;
     std::string cachePath;
