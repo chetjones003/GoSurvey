@@ -2,6 +2,7 @@
 
 #include "io/CadPointCloudE57.hpp"
 #include "io/CadPointCloudPts.hpp"
+#include "io/CadPointCloudPtx.hpp"  // REQ-172 PTX increment — reader, same contract as E57
 #include "io/CadPointCloudLas.hpp"  // REQ-172 LAS increment — reader, same contract as E57
 
 #include <algorithm>
@@ -228,12 +229,13 @@ int SplitOrKeep(const std::string &filePath, std::int64_t pointCount, const poin
   return static_cast<int>(nodes.size() - 1);
 }
 
-/// Shared body of \ref BuildFromE57, \ref BuildFromPts, and \ref BuildFromLas: the out-of-core
-/// build (stream to a root temp file, then recursively bucket-split it) does not care which
-/// format the points came from — only `streamFn` (one of `pointcloud_e57::StreamE57File` /
-/// `pointcloud_pts::StreamPtsFile` / `pointcloud_las::StreamLasFile`) and the "zero points"
-/// message differ between formats. Kept as a template rather than a third ~250-line copy
-/// (REQ-172 PTS/LAS increments) — the same "parameterize by format" shape
+/// Shared body of \ref BuildFromE57, \ref BuildFromPts, \ref BuildFromPtx, and \ref BuildFromLas:
+/// the out-of-core build (stream to a root temp file, then recursively bucket-split it) does not
+/// care which format the points came from — only `streamFn` (one of
+/// `pointcloud_e57::StreamE57File` / `pointcloud_pts::StreamPtsFile` /
+/// `pointcloud_ptx::StreamPtxFile` / `pointcloud_las::StreamLasFile`) and the "zero points"
+/// message differ between formats. Kept as a template rather than a fourth ~250-line copy
+/// (REQ-172 PTS/PTX/LAS increments) — the same "parameterize by format" shape
 /// `RunPointCloudImportWorker` in `CadCommands.cpp` also uses.
 template <typename StreamFn>
 bool BuildFromStreamedSource(const std::string &sourcePath, const std::string &cachePath,
@@ -502,6 +504,16 @@ bool BuildFromPts(const std::string &sourcePath, const std::string &cachePath,
   return BuildFromStreamedSource(sourcePath, cachePath, progressLog, errorMessage, pointsStreamedOut,
                                  pointsFinalizedOut, cancelRequested, pointcloud_pts::StreamPtsFile,
                                  "PTS import: contains zero valid points");
+}
+
+bool BuildFromPtx(const std::string &sourcePath, const std::string &cachePath,
+                   std::vector<std::string> &progressLog, std::string *errorMessage,
+                   std::atomic<std::int64_t> *pointsStreamedOut,
+                   std::atomic<std::int64_t> *pointsFinalizedOut,
+                   const std::atomic<bool> *cancelRequested) {
+  return BuildFromStreamedSource(sourcePath, cachePath, progressLog, errorMessage,
+                                 pointsStreamedOut, pointsFinalizedOut, cancelRequested,
+                                 pointcloud_ptx::StreamPtxFile, "PTX import: contains zero valid points");
 }
 
 bool BuildFromLas(const std::string &sourcePath, const std::string &cachePath,

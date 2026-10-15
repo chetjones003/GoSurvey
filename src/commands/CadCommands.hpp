@@ -6624,10 +6624,11 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
 
-/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the E57 or
-/// PTS at \p path (format decided from the extension — see `PointCloudImportAsync::SourceFormat`).
-/// Refuses (logs why, returns false) if an import is already in flight. Call once from the
-/// `POINTCLOUDATTACH`/`IMPORTPTS` command handlers; \ref TickPointCloudImport reaps the result.
+/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the E57,
+/// PTS, or PTX at \p path (format decided from the extension — see
+/// `PointCloudImportAsync::SourceFormat`). Refuses (logs why, returns false) if an import is
+/// already in flight. Call once from the `POINTCLOUDATTACH`/`IMPORTPTS`/`IMPORTPTX` command
+/// handlers; \ref TickPointCloudImport reaps the result.
 bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
                                 std::vector<std::string>& log);
 
