@@ -3738,6 +3738,12 @@ requirements is a planning failure, not a sign of rigor.
   → LAZ, so the new out-of-core octree/LOD engine (still to be recorded: `.gscloud` cache design
   and the REQ-100 point-cloud frame-budget profile) is proven against the user's real 7.8 GB
   driving scan file rather than a synthetic small format first.
+  2026-10-15 — LAZ import/export delivered (issue #825 increment 4, PR #871): vendored LASzip
+  3.5.0 (Apache-2.0, `third_party/laszip/VENDORED.md`) builds in-tree; `.laz` reads/writes the
+  same point schema as `.las` (acceptance: a LAS and a LAZ of the same points import equal counts
+  and XYZ; malformed/truncated/corrupt-compressed-stream and missing-file/empty-path refuse per
+  REQ-001). PTS (#868), PTX (#869), and LAS (#870) were delivered as issue #825 increments 1-3;
+  REQ-172's four-format delivery order is now complete alongside E57.
 
 ### REQ-173 — Raster IMAGE underlays (JPEG, PNG, BMP)
 - Purpose: File Format Specs — photos and scans on the sheet, like PDF attach, not a viewer app

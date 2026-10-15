@@ -1,6 +1,7 @@
 #include "util/pointcloudcache.hpp"
 
 #include "io/CadPointCloudE57.hpp"
+#include "io/CadPointCloudLaz.hpp"  // REQ-172 LAZ increment (issue #825 increment 4)
 
 #include <algorithm>
 #include <array>
@@ -384,6 +385,242 @@ bool BuildFromE57(const std::string &sourcePath, const std::string &cachePath,
   progressLog.push_back(std::to_string(nodes.size()) + " octree node(s) built.");
 
   // --- Write the final .gscloud: header, node table, then each leaf's temp-file bytes -----------
+  std::error_code statEc;
+  const auto srcSize = fs::file_size(sourcePath, statEc);
+  const auto srcMtime = fs::last_write_time(sourcePath, statEc);
+  if (statEc) {
+    cleanupTemp();
+    return fail("point-cloud cache build: cannot stat the source file");
+  }
+
+  bool ok = true;
+  {
+    std::ofstream out(cachePath, std::ios::binary | std::ios::trunc);
+    if (!out) {
+      ok = false;
+      if (errorMessage) *errorMessage = "point-cloud cache build: cannot create " + cachePath;
+    } else {
+      out.write(kMagic, sizeof(kMagic));
+      WritePod(out, kVersion);
+      WritePod(out, static_cast<std::uint64_t>(srcSize));
+      WritePod(out, static_cast<std::int64_t>(srcMtime.time_since_epoch().count()));
+      WritePod(out, static_cast<std::uint8_t>(hasColor ? 1 : 0));
+      WritePod(out, static_cast<std::uint8_t>(hasIntensity ? 1 : 0));
+      const std::uint8_t pad[6] = {0, 0, 0, 0, 0, 0};
+      out.write(reinterpret_cast<const char *>(pad), sizeof(pad));
+      WritePod(out, static_cast<std::uint32_t>(nodes.size()));
+      WritePod(out, static_cast<std::int64_t>(totalCount));
+
+      std::vector<std::int64_t> leafByteOffsets(nodes.size(), -1);
+      std::int64_t running = 0;
+      for (std::size_t i = 0; i < nodes.size(); ++i) {
+        if (nodes[i].isLeaf()) {
+          leafByteOffsets[i] = running;
+          running += nodes[i].leafPointCount * static_cast<std::int64_t>(recordSize);
+        }
+      }
+      for (std::size_t i = 0; i < nodes.size() && ok; ++i) {
+        const BuildNode &n = nodes[i];
+        double b[6] = {n.bounds.minX, n.bounds.minY, n.bounds.minZ,
+                      n.bounds.maxX, n.bounds.maxY, n.bounds.maxZ};
+        out.write(reinterpret_cast<const char *>(b), sizeof(b));
+        for (int c : n.children) {
+          const std::int32_t cc = c;
+          out.write(reinterpret_cast<const char *>(&cc), sizeof(cc));
+        }
+        const std::int64_t off = leafByteOffsets[i];
+        const std::int64_t cnt = n.isLeaf() ? n.leafPointCount : 0;
+        out.write(reinterpret_cast<const char *>(&off), sizeof(off));
+        out.write(reinterpret_cast<const char *>(&cnt), sizeof(cnt));
+        if (!out) ok = false;
+      }
+
+      if (ok) {
+        std::vector<char> copyBuf(1 << 20);
+        for (std::size_t i = 0; i < nodes.size() && ok; ++i) {
+          if (!nodes[i].isLeaf()) continue;
+          std::ifstream in(nodes[i].leafFile, std::ios::binary);
+          if (!in) {
+            ok = false;
+            if (errorMessage) *errorMessage = "point-cloud cache build: cannot read a temp leaf file";
+            break;
+          }
+          std::int64_t remaining = nodes[i].leafPointCount * static_cast<std::int64_t>(recordSize);
+          while (remaining > 0) {
+            const std::streamsize toRead = static_cast<std::streamsize>(
+                std::min<std::int64_t>(remaining, static_cast<std::int64_t>(copyBuf.size())));
+            in.read(copyBuf.data(), toRead);
+            if (!in) {
+              ok = false;
+              if (errorMessage) *errorMessage = "point-cloud cache build: truncated temp leaf file";
+              break;
+            }
+            out.write(copyBuf.data(), toRead);
+            remaining -= toRead;
+          }
+        }
+      }
+      if (!out) ok = false;
+    }
+  }
+  cleanupTemp();
+  if (!ok) {
+    std::error_code rmEc;
+    fs::remove(cachePath, rmEc);  // never leave a partial cache (REQ-001)
+    if (errorMessage && errorMessage->empty()) *errorMessage = "point-cloud cache build failed";
+    return false;
+  }
+  progressLog.push_back("Wrote cache: " + cachePath);
+  return true;
+}
+
+bool BuildFromLaz(const std::string &sourcePath, const std::string &cachePath,
+                   std::vector<std::string> &progressLog, std::string *errorMessage,
+                   std::atomic<std::int64_t> *pointsStreamedOut,
+                   std::atomic<std::int64_t> *pointsFinalizedOut,
+                   const std::atomic<bool> *cancelRequested) {
+  // Structurally identical to BuildFromE57 above (out-of-core: one streaming pass to a root temp
+  // file, then recursive on-disk octant splitting) with StreamE57File swapped for
+  // CadPointCloudLaz.hpp's StreamLazFile (which decodes the LASzip-compressed point data
+  // internally). Not factored into a shared helper: there is no such helper yet on `beta` (REQ-172's
+  // PTS/PTX/LAS increments are independent, not-yet-merged PRs at the time this one was written —
+  // see CadPointCloudLaz.hpp's top note), and BuildFromE57 above is itself the only precedent.
+  const auto fail = [&](const std::string &msg) {
+    if (errorMessage) *errorMessage = msg;
+    return false;
+  };
+  if (cancelRequested && cancelRequested->load(std::memory_order_relaxed))
+    return fail("Import cancelled.");
+
+  std::error_code ec;
+  std::mt19937_64 rng(std::random_device{}());
+  const fs::path tempDir =
+      fs::temp_directory_path() / ("gosurvey_pcbuild_" + std::to_string(rng()));
+  fs::create_directories(tempDir, ec);
+  if (ec) return fail("point-cloud cache build: cannot create a temp directory");
+  const auto cleanupTemp = [&] {
+    std::error_code ec2;
+    fs::remove_all(tempDir, ec2);
+  };
+
+  const std::string rootFile = (tempDir / "root.tmp").string();
+  std::vector<char> rootBuf;
+  std::ofstream rootOut;
+  UseBigBuffer(rootOut, rootBuf);
+  rootOut.open(rootFile, std::ios::binary);
+  if (!rootOut) {
+    cleanupTemp();
+    return fail("point-cloud cache build: cannot create the root temp file");
+  }
+
+  pointcloud::Bounds bounds;
+  bool boundsInit = false;
+  std::int64_t totalCount = 0;
+  bool hasColor = false;
+  bool hasIntensity = false;
+  bool decided = false;
+  bool writeFailed = false;
+  std::string streamErr;
+
+  const bool streamOk = pointcloud_laz::StreamLazFile(
+      sourcePath, kStreamChunkPoints,
+      [&](const pointcloud_laz::PointChunk &chunk) -> bool {
+        if (cancelRequested && cancelRequested->load(std::memory_order_relaxed)) return false;
+        const std::int64_t n = static_cast<std::int64_t>(chunk.pointsXyz.size() / 3);
+        if (n == 0) return true;
+        if (!decided) {
+          hasColor = !chunk.colorsRgb.empty();
+          hasIntensity = !chunk.intensity.empty();
+          decided = true;
+        }
+        for (std::int64_t i = 0; i < n; ++i) {
+          const double x = chunk.pointsXyz[static_cast<std::size_t>(i) * 3 + 0];
+          const double y = chunk.pointsXyz[static_cast<std::size_t>(i) * 3 + 1];
+          const double z = chunk.pointsXyz[static_cast<std::size_t>(i) * 3 + 2];
+          if (!boundsInit) {
+            bounds.minX = bounds.maxX = x;
+            bounds.minY = bounds.maxY = y;
+            bounds.minZ = bounds.maxZ = z;
+            boundsInit = true;
+          } else {
+            bounds.minX = std::min(bounds.minX, x);
+            bounds.maxX = std::max(bounds.maxX, x);
+            bounds.minY = std::min(bounds.minY, y);
+            bounds.maxY = std::max(bounds.maxY, y);
+            bounds.minZ = std::min(bounds.minZ, z);
+            bounds.maxZ = std::max(bounds.maxZ, z);
+          }
+          char rec[3 * sizeof(double) + 3 * sizeof(float) + sizeof(float)];
+          std::size_t off = 0;
+          double xyz[3] = {x, y, z};
+          std::memcpy(rec + off, xyz, sizeof(xyz));
+          off += sizeof(xyz);
+          if (hasColor) {
+            float rgb[3] = {0.f, 0.f, 0.f};
+            if (!chunk.colorsRgb.empty()) {
+              rgb[0] = chunk.colorsRgb[static_cast<std::size_t>(i) * 3 + 0];
+              rgb[1] = chunk.colorsRgb[static_cast<std::size_t>(i) * 3 + 1];
+              rgb[2] = chunk.colorsRgb[static_cast<std::size_t>(i) * 3 + 2];
+            }
+            std::memcpy(rec + off, rgb, sizeof(rgb));
+            off += sizeof(rgb);
+          }
+          if (hasIntensity) {
+            const float inten = chunk.intensity.empty() ? 0.f : chunk.intensity[static_cast<std::size_t>(i)];
+            std::memcpy(rec + off, &inten, sizeof(inten));
+            off += sizeof(inten);
+          }
+          rootOut.write(rec, static_cast<std::streamsize>(off));
+        }
+        totalCount += n;
+        if (pointsStreamedOut) pointsStreamedOut->store(totalCount, std::memory_order_relaxed);
+        if (!rootOut) {
+          writeFailed = true;
+          return false;
+        }
+        return true;
+      },
+      &streamErr);
+  rootOut.close();
+
+  if (!streamOk) {
+    cleanupTemp();
+    if (cancelRequested && cancelRequested->load(std::memory_order_relaxed))
+      return fail("Import cancelled.");
+    return fail(writeFailed ? "point-cloud cache build: disk write failed" : streamErr);
+  }
+  if (totalCount == 0) {
+    cleanupTemp();
+    return fail("LAZ import: contains zero valid points");
+  }
+
+  progressLog.push_back("Indexing " + std::to_string(totalCount) + " point(s)...");
+
+  const std::size_t recordSize = RecordSize(hasColor, hasIntensity);
+  std::vector<BuildNode> nodes;
+  bool splitFailed = false;
+  bool splitCancelled = false;
+  int tempFileCounter = 0;
+  const int rootIdx =
+      SplitOrKeep(rootFile, totalCount, bounds, 0, recordSize, tempDir, tempFileCounter, nodes,
+                 errorMessage, &splitFailed, pointsFinalizedOut, cancelRequested, &splitCancelled);
+  if (splitFailed || rootIdx < 0) {
+    cleanupTemp();
+    if (splitCancelled) return fail("Import cancelled.");
+    return false;  // *errorMessage already set by SplitOrKeep
+  }
+
+  if (rootIdx != 0) {
+    for (auto &n : nodes)
+      for (auto &c : n.children) {
+        if (c == 0) c = rootIdx;
+        else if (c == rootIdx) c = 0;
+      }
+    std::swap(nodes[0], nodes[static_cast<std::size_t>(rootIdx)]);
+  }
+
+  progressLog.push_back(std::to_string(nodes.size()) + " octree node(s) built.");
+
   std::error_code statEc;
   const auto srcSize = fs::file_size(sourcePath, statEc);
   const auto srcMtime = fs::last_write_time(sourcePath, statEc);

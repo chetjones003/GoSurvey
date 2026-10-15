@@ -117,7 +117,7 @@ const char* LayoutRole(Role r) {
 
 Role RoleForFile(const fs::path& file) {
   const std::string e = Lower(file.extension().string());
-  if (e == ".e57" || e == ".gscloud")
+  if (e == ".e57" || e == ".laz" || e == ".gscloud")
     return Role::PointCloud;
   if (e == ".pdf")
     return Role::Pdf;
@@ -218,7 +218,7 @@ std::vector<std::string> FindUntracked(const gsproj::Project& p) {
     if (!it->is_regular_file(ec))
       continue;
     const std::string ext = Lower(entry.extension().u8string());
-    if (ext != ".dwg" && ext != ".pdf" && ext != ".e57")
+    if (ext != ".dwg" && ext != ".pdf" && ext != ".e57" && ext != ".laz")
       continue;
     const std::string rel = entry.lexically_relative(root).generic_u8string();
     if (rel.empty() || tracked.count(Lower(rel)) != 0)
