@@ -22,6 +22,7 @@
 #include "io/CadPointCloudE57.hpp"    // QuickPointCountEstimate, for the import progress bar's total
 #include "io/CadPointCloudPts.hpp"    // REQ-172 PTS increment — reader/writer, same contract as E57
 #include "io/CadPointCloudPtx.hpp"    // REQ-172 PTX increment — reader/writer, same contract as E57
+#include "io/CadPointCloudLas.hpp"    // REQ-172 LAS increment — reader/writer, same contract as E57
 #include "io/CadPointCloudLaz.hpp"    // REQ-172 LAZ increment — reader/writer, same contract as E57
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
@@ -6664,6 +6665,8 @@ const CmdEntry kRegistry[] = {
     {"exportpts", "", "Export the selected point cloud(s) (or all, if none selected) to a PTS file (REQ-172)"},
     {"importptx", "ptx", "Import a PTX (Cyclone-style ASCII, per-scan-setup) point cloud as reference geometry (REQ-172)"},
     {"exportptx", "", "Export the selected point cloud(s) (or all, if none selected) to a PTX file (REQ-172)"},
+    {"importlas", "las", "Import a LAS (ASPRS binary) point cloud as reference geometry (REQ-172)"},
+    {"exportlas", "", "Export the selected point cloud(s) (or all, if none selected) to a LAS file (REQ-172)"},
     {"importlaz", "laz", "Import a LAZ (LASzip-compressed LAS) point cloud as reference geometry (REQ-172)"},
     {"exportlaz", "", "Export the selected point cloud(s) (or all, if none selected) to a LAZ file (REQ-172)"},
     // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
@@ -31480,6 +31483,10 @@ void RunPointCloudImportWorker(AppCommandState::PointCloudImportAsync* job) {
       built = pointcloudcache::BuildFromPtx(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
                                             &job->pointsFinalized, &job->cancelRequested);
+    } else if (job->format == Format::Las) {
+      built = pointcloudcache::BuildFromLas(job->sourcePath, job->cachePath, buildLog,
+                                            &errorMessage, &job->pointsStreamed,
+                                            &job->pointsFinalized, &job->cancelRequested);
     } else if (job->format == Format::Laz) {
       built = pointcloudcache::BuildFromLaz(job->sourcePath, job->cachePath, buildLog,
                                             &errorMessage, &job->pointsStreamed,
@@ -31526,20 +31533,23 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
   job->sourcePath = path;
   job->cachePath = path + ".gscloud";
   // Format is decided once, here, from the source path's own extension — every later step
-  // (QuickPointCountEstimate above, BuildFromE57/BuildFromPts/BuildFromPtx/BuildFromLaz in the
-  // worker) reads `job->format` rather than re-sniffing the path, so the async plumbing stays
-  // shared across formats (REQ-172).
+  // (QuickPointCountEstimate above, BuildFromE57/BuildFromPts/BuildFromPtx/BuildFromLas/
+  // BuildFromLaz in the worker) reads `job->format` rather than re-sniffing the path, so the
+  // async plumbing stays shared across formats (REQ-172).
   using Format = AppCommandState::PointCloudImportAsync::SourceFormat;
   const std::string ext =
       StringUtil::toLowerAsciiCopy(std::filesystem::path(path).extension().string());
   job->format = (ext == ".pts") ? Format::Pts
               : (ext == ".ptx") ? Format::Ptx
+              : (ext == ".las") ? Format::Las
               : (ext == ".laz") ? Format::Laz
                                  : Format::E57;
   job->totalPointsEstimate = (job->format == Format::Pts)
                                  ? pointcloud_pts::QuickPointCountEstimate(path)
                              : (job->format == Format::Ptx)
                                  ? pointcloud_ptx::QuickPointCountEstimate(path)
+                             : (job->format == Format::Las)
+                                 ? pointcloud_las::QuickPointCountEstimate(path)
                              : (job->format == Format::Laz)
                                  ? pointcloud_laz::QuickPointCountEstimate(path)
                                  : pointcloud_e57::QuickPointCountEstimate(path);
@@ -31594,18 +31604,18 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
     InstallPointCloudBenchScene(st, log);  // BENCH POINTCLOUD was waiting on this import
 }
 
-/// Shared by \ref ExportSelectedPointCloudsToPts, \ref ExportSelectedPointCloudsToPtx, and
-/// \ref ExportSelectedPointCloudsToLaz: resolves the selected `CadPointCloud`(s) from
-/// `st.selection`, or every cloud in the drawing when none is selected (REQ-172 acceptance text:
-/// "Export writes the selected cloud(s) (or all, when none selected — stated in the command)"),
-/// and reads back every point each resolved cloud actually has — the full `.gscloud` out-of-core
-/// cache when one exists (every leaf, not the bounded preview sample), else the cloud's own
-/// in-memory preview — merged into one flat point set.
+/// Shared by \ref ExportSelectedPointCloudsToPts, \ref ExportSelectedPointCloudsToPtx,
+/// \ref ExportSelectedPointCloudsToLas, and \ref ExportSelectedPointCloudsToLaz: resolves the
+/// selected `CadPointCloud`(s) from `st.selection`, or every cloud in the drawing when none is
+/// selected (REQ-172 acceptance text: "Export writes the selected cloud(s) (or all, when none
+/// selected — stated in the command)"), and reads back every point each resolved cloud actually
+/// has — the full `.gscloud` out-of-core cache when one exists (every leaf, not the bounded
+/// preview sample), else the cloud's own in-memory preview — merged into one flat point set.
 ///
 /// Decided once across every resolved cloud (same "decide once, default-fill the rest" tolerance
-/// `BuildFromE57`/`StreamPtsFile`/`StreamPtxFile`/`StreamLazFile` already use for a mixed-schema
-/// source) — a channel is carried in the merged output if ANY resolved cloud has it; a cloud
-/// lacking that channel gets zero-filled.
+/// `BuildFromE57`/`StreamPtsFile`/`StreamPtxFile`/`StreamLasFile`/`StreamLazFile` already use for
+/// a mixed-schema source) — a channel is carried in the merged output if ANY resolved cloud has
+/// it; a cloud lacking that channel gets zero-filled.
 void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& resolved,
                                          std::vector<double>& xyz, std::vector<float>& colors,
                                          std::vector<float>& intensity,
@@ -31776,6 +31786,54 @@ void ExportSelectedPointCloudsToPtx(AppCommandState& st, std::vector<std::string
                static_cast<long long>(totalCount), resolved.size(),
                std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
   log.push_back(msg);
+}
+
+/// REQ-172 LAS export increment (issue #825 increment 3) — same shape as \ref
+/// ExportSelectedPointCloudsToPts. See \ref CollectSelectedPointCloudsForExport for cloud
+/// resolution, and writes the merged points to ONE LAS file at a user-chosen path.
+///
+/// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
+/// concatenated into a single file rather than written one-file-per-cloud — same reasoning
+/// PTS's export already recorded: REQ-172's acceptance text only exercises the single-cloud
+/// case, and there is no multi-cloud-per-export UI to drive a per-cloud prompt yet.
+void ExportSelectedPointCloudsToLas(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadPointClouds.empty()) {
+    log.push_back("EXPORTLAS — the drawing has no point clouds.");
+    return;
+  }
+
+  std::set<int> resolved;
+  std::vector<double> xyz;
+  std::vector<float> colors, intensity;
+  std::int64_t totalCount = 0;
+  CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
+
+  if (xyz.empty()) {
+    log.push_back("EXPORTLAS — the selected point cloud(s) have no points to export.");
+    return;
+  }
+
+  const std::string defaultName =
+      resolved.size() == 1
+          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
+                .stem().u8string() + ".las"
+          : std::string("pointclouds.las");
+  char buf[1024]{};
+  if (!BrowseSaveFileLasUtf8(buf, sizeof(buf), defaultName.c_str())) {
+    log.push_back("EXPORTLAS — cancelled.");
+    return;
+  }
+
+  const pointcloud_las::WriteResult wr = pointcloud_las::WriteLasFile(buf, xyz, colors, intensity);
+  if (!wr.ok) {
+    log.push_back("EXPORTLAS — " + wr.errorMessage);
+    return;
+  }
+  char msg2[384];
+  std::snprintf(msg2, sizeof(msg2), "EXPORTLAS — wrote %lld point(s) from %zu cloud(s) to %s.",
+               static_cast<long long>(totalCount), resolved.size(),
+               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
+  log.push_back(msg2);
 }
 
 /// REQ-172 LAZ export increment (issue #825 increment 4) — same shape as \ref
@@ -43503,6 +43561,36 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "exportptx") {
       ExportSelectedPointCloudsToPtx(st, log);
+      return;
+    }
+    if (plotTok == "importlas" || plotTok == "las") {
+      std::string path;
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      // A path may contain spaces, so quoted-first: "C:\a b\scan.las"
+      if (!rest.empty() && rest.front() == '"') {
+        const size_t close = rest.find('"', 1);
+        if (close != std::string::npos)
+          path = rest.substr(1, close - 1);
+      } else if (!rest.empty()) {
+        path = rest;
+      }
+      if (path.empty()) {
+        char buf[1024]{};
+        if (!BrowseOpenFileLasUtf8(buf, sizeof(buf))) {
+          log.push_back("IMPORTLAS — cancelled.");
+          return;
+        }
+        path = buf;
+      }
+      if (RequestProjectAttach(st, AppCommandState::ProjectAttachPrompt::Kind::PointCloud, path, log))
+        return;
+      StartPointCloudImportAsync(st, path, log);
+      return;
+    }
+    if (plotTok == "exportlas") {
+      ExportSelectedPointCloudsToLas(st, log);
       return;
     }
     if (plotTok == "importlaz" || plotTok == "laz") {

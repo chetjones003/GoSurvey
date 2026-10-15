@@ -616,6 +616,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   # sniffing.
   src/io/CadPointCloudPtx.cpp
 
+  # LAS (ASPRS binary) point-cloud reader/writer (REQ-172, LAS increment — delivered after PTX
+  # per `spec/file-format-specs.md` §6). In-tree, no LASlib dependency.
+  src/io/CadPointCloudLas.cpp
+
   # LAZ (LASzip-compressed LAS) point-cloud reader/writer (REQ-172, LAZ increment, issue #825
   # increment 4 — the last of REQ-172's four remaining formats). Parses the LAS Public Header
   # Block itself (same byte layout as a plain LAS) and hands the compressed point-data section to
@@ -1232,6 +1236,12 @@ if(GOSURVEY_BUILD_TESTS)
     # refusal. Pinned directly, same as the E57 reader above.
     tests/CadPointCloudPtxTests.cpp
     src/io/CadPointCloudPtx.cpp
+    # REQ-172 LAS increment (delivered after PTX, `spec/file-format-specs.md` §6) — in-tree binary
+    # reader/writer round-trip (point formats 0/2, hand-checked scale+offset decode) and
+    # malformed/truncated/unsupported-format/missing-file refusal. Pinned directly, same as the
+    # E57 reader above.
+    tests/CadPointCloudLasTests.cpp
+    src/io/CadPointCloudLas.cpp
     # REQ-172 LAZ increment (issue #825 increment 4, the last of REQ-172's four remaining
     # formats) — LASzip-compressed LAS round-trip (point formats 0/2, matching the uncompressed
     # LAS convention), the LAS/LAZ cross-check (same points import equal counts and XYZ from
