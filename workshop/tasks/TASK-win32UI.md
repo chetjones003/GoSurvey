@@ -44,3 +44,13 @@ validation, layer suggestions, normalized color values, include/exclude, scope
 and append options. Filter settings apply only on acceptance. Qt build passed;
 18 Qt results passed, including length filtering and cancellation preservation.
 Domain code was unchanged; full domain results above remain the last baseline.
+
+Iteration 3: connected CREATEPOINTS to a modeless Qt panel and viewport placement,
+existing-marker selection, numbering, description/elevation/layer, duplicate
+policies, JSON save/load, and Escape. Rejected placement/load for read-only
+projects. Fixed missing undo snapshot for the shared Merge duplicate policy.
+Verified native placement, selection, number advancement, merge coordinate/
+description/elevation restoration, read-only rejection, Escape and creation undo.
+Qt build and 19 Qt results passed; reran both complete domain suites: 1,632 cases /
+9,201,236 assertions and 831 cases / 9,511 assertions passed. Point grids, advanced
+point rendering and project conflict workflows remain open parity gates.

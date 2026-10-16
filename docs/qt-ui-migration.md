@@ -51,6 +51,7 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog | Complete geometry properties, point grids, context menus, surface/style dialogs |
+| Survey point creation | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, JSON save/load; read-only placement/load protection | Point grids, import/export preview, full point-marker visibility/style parity, project conflict dialogs |
 | Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; point conflict prompts; health/pack/turnover UI; stale-lock takeover UI; cross-project clipboard warnings |
 | PDF viewer | Async page rendering, navigation/zoom, text/line/rectangle/ellipse annotations, scaled measurements, scale presets, undo/redo, Save As, close protection, page extraction | Search/thumbnails, calibration/checks, snapping, coordinate extraction, compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
 | Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
@@ -81,7 +82,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 18 passed, 0 failed (16 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 19 passed, 0 failed (17 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry

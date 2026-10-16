@@ -13,6 +13,11 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QLineEdit>
+#include <QSpinBox>
+#include <QPlainTextEdit>
+#include <QLabel>
+#include <QTimer>
+#include <QFileDialog>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -20,6 +25,7 @@
 #include <cstdio>
 
 void EditorWindow::ServiceUiRequests() {
+  if (m_State.showCreatePointsWindow) ShowCreatePoints();
   if (m_ModalOpen || m_TextDialogOpen) return;
   if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
@@ -34,6 +40,73 @@ void EditorWindow::ServiceUiRequests() {
     m_State.showTraverseEditorWindow = m_State.showTraverseClosureWindow = false;
     ShowAdjustment();
   }
+}
+
+void EditorWindow::ShowCreatePoints() {
+  if (findChild<QDialog*>("createPoints")) return;
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("createPoints");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Create Survey Points");
+  auto* layout = new QFormLayout(dialog);
+  auto* hint = new QLabel("Click in the drawing to place points. Click an existing marker to select it.\nEscape ends point creation.", dialog);
+  hint->setWordWrap(true); layout->addRow(hint);
+  auto* number = new QSpinBox(dialog); number->setObjectName("nextPointNumber");
+  number->setRange(1, std::numeric_limits<int>::max() - 1);
+  auto* layer = new QLineEdit(dialog); layer->setObjectName("pointLayer");
+  auto* description = new QPlainTextEdit(dialog); description->setObjectName("pointDescription");
+  description->setMaximumHeight(85);
+  auto* elevation = new QDoubleSpinBox(dialog); elevation->setObjectName("pointElevation");
+  elevation->setRange(-1.e9, 1.e9); elevation->setDecimals(6);
+  auto* duplicates = new QComboBox(dialog); duplicates->setObjectName("pointDuplicatePolicy");
+  duplicates->addItems({"Notify (skip)", "Renumber (next free)", "Merge (update coordinates)", "Overwrite"});
+  auto* sequential = new QCheckBox("Sequential numbering", dialog);
+  auto* step = new QSpinBox(dialog); step->setRange(1, 1000000);
+  layout->addRow("Next point number", number); layout->addRow("Layer", layer);
+  layout->addRow("Description", description); layout->addRow("Elevation", elevation);
+  layout->addRow("If number exists", duplicates); layout->addRow(sequential); layout->addRow("Number increment", step);
+  auto* files = new QHBoxLayout;
+  auto* save = new QPushButton("Save points JSON…", dialog);
+  auto* load = new QPushButton("Load points JSON…", dialog);
+  files->addWidget(save); files->addWidget(load); layout->addRow(files);
+  connect(number, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.createPointsNextId = n; });
+  connect(layer, &QLineEdit::textEdited, dialog, [this](const QString& s) { m_State.createPointsOpts.layer = s.trimmed().toUtf8().toStdString(); });
+  connect(description, &QPlainTextEdit::textChanged, dialog, [this, description] { m_State.createPointsOpts.defaultDescription = description->toPlainText().toUtf8().toStdString(); });
+  connect(elevation, &QDoubleSpinBox::valueChanged, dialog, [this](double z) { m_State.createPointsOpts.defaultElevation = static_cast<float>(z); });
+  connect(duplicates, &QComboBox::currentIndexChanged, dialog, [this](int index) { m_State.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy(index); });
+  connect(sequential, &QCheckBox::toggled, dialog, [this](bool enabled) { m_State.createPointsOpts.sequentialNumbering = enabled; });
+  connect(step, &QSpinBox::valueChanged, dialog, [this](int n) { m_State.createPointsOpts.pointNumberOffset = n; });
+  connect(save, &QPushButton::clicked, dialog, [this, dialog] {
+    const auto path = QFileDialog::getSaveFileName(dialog, "Save survey points", {}, "Survey points (*.json)");
+    if (!path.isEmpty()) { SaveSurveyPointsToJsonFile(m_State, path.toUtf8().constData(), m_Log); Refresh(); }
+  });
+  connect(load, &QPushButton::clicked, dialog, [this, dialog] {
+    if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) return;
+    const auto uid = m_State.drawingTabs[m_State.activeDrawingIdx].projectUid;
+    if (std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(), [uid](const auto& p) { return p.uid == uid && p.readOnly; })) {
+      QMessageBox::warning(dialog, "Load survey points", "This project is read-only."); return;
+    }
+    const auto path = QFileDialog::getOpenFileName(dialog, "Load survey points", {}, "Survey points (*.json)");
+    if (!path.isEmpty()) { LoadSurveyPointsFromJsonFile(m_State, path.toUtf8().constData(), m_Log); Refresh(); }
+  });
+  connect(dialog, &QDialog::finished, this, [this] { m_State.showCreatePointsWindow = false; Refresh(); });
+  auto* timer = new QTimer(dialog);
+  auto sync = [=] {
+    if (!m_State.showCreatePointsWindow || m_State.activeDrawingIdx <= 0) { dialog->close(); return; }
+    const auto& opts = m_State.createPointsOpts;
+    const QSignalBlocker a(number), b(layer), c(description), d(elevation), e(duplicates), f(sequential), g(step);
+    if (!number->hasFocus()) number->setValue(m_State.createPointsNextId);
+    const auto& objectLayer = m_State.drawingSettings.ObjectLayer(ObjectLayerKind::SurveyPoint);
+    layer->setEnabled(!objectLayer.locked);
+    if (!layer->hasFocus()) layer->setText(QString::fromUtf8((objectLayer.locked || opts.layer.empty() ? ResolveObjectLayer(m_State.drawingSettings, ObjectLayerKind::SurveyPoint, {}) : opts.layer).c_str()));
+    if (!description->hasFocus()) description->setPlainText(QString::fromUtf8(opts.defaultDescription.c_str()));
+    if (!elevation->hasFocus()) elevation->setValue(opts.defaultElevation);
+    duplicates->setCurrentIndex(int(opts.duplicatePolicy));
+    sequential->setChecked(opts.sequentialNumbering);
+    if (!step->hasFocus()) step->setValue(opts.pointNumberOffset);
+  };
+  connect(timer, &QTimer::timeout, dialog, sync);
+  sync(); timer->start(100); dialog->show();
 }
 
 void EditorWindow::ShowQuickSelect() {

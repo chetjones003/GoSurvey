@@ -203,7 +203,29 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
-    if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
+    if (m_State.showCreatePointsWindow && m_State.active == AppCommandState::Kind::None) {
+      int hit = -1;
+      double nearest = 100.0;
+      for (std::size_t i = 0; i < m_State.surveyPoints.size(); ++i) {
+        const auto& point = m_State.surveyPoints[i];
+        float x = 0, y = 0;
+        camera.WorldToScreen(point.easting, point.northing, point.elevation,
+            static_cast<float>(width()), static_cast<float>(height()), &x, &y);
+        const double distance = std::pow(x - m_Last.x(), 2) + std::pow(y - m_Last.y(), 2);
+        if (std::isfinite(distance) && distance < nearest) { nearest = distance; hit = static_cast<int>(i); }
+      }
+      if (hit >= 0) {
+        ClearCadSelection(m_State);
+        ApplySurveyPointClickSelection(m_State, hit, event->modifiers() & Qt::ShiftModifier, &m_Log);
+        for (int index : m_State.selectedSurveyPointIndices) SyncSurveyPointLinkedMtextSelection(m_State, index);
+      } else {
+        const auto uid = m_State.drawingTabs[m_State.activeDrawingIdx].projectUid;
+        const bool readOnly = std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
+            [uid](const auto& project) { return project.uid == uid && project.readOnly; });
+        if (readOnly) m_Log.push_back("CREATEPOINTS: the project is read-only; no point placed.");
+        else TryPlaceSurveyPoint(m_State, m_Cursor.x, m_Cursor.y, m_State.createPointsOpts.defaultElevation, m_Log);
+      }
+    } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
       SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, false,
           m_Last.x() >= m_State.selBoxAnchorScreenX, CadViewIsPlan(m_State) ? nullptr : &ray);
     } else {
@@ -276,7 +298,7 @@ void EditorViewport::wheelEvent(QWheelEvent* event) {
 }
 
 void EditorViewport::keyPressEvent(QKeyEvent* event) {
-  if (event->key() == Qt::Key_Escape) { CancelActiveCommand(m_State, m_Log); ClearTransientInput(); }
+  if (event->key() == Qt::Key_Escape) { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); ClearTransientInput(); }
   else if (event->key() == Qt::Key_Delete) ExecuteDeleteSelection(m_State, m_Log);
   else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Space) {
     char empty[1]{};

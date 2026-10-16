@@ -247,6 +247,8 @@ bool TryPlaceSurveyPoint(AppCommandState& st, double easting, double northing, d
 
   case SurveyDuplicatePolicy::Merge: {
     const int ix = FindSurveyPointIndexById(st.surveyPoints, idTry);
+    if (pushUndo)
+      PushUndoSnapshot(st, "Merge point");
     SurveyPoint& p = st.surveyPoints[static_cast<size_t>(ix)];
     p.easting = easting;
     p.northing = northing;

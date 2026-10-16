@@ -146,7 +146,7 @@ EditorWindow::EditorWindow() {
   statusBar()->addWidget(osnap);
   connect(osnap, &QToolButton::toggled, this, [this](bool on) { m_State.objectSnapEnabled = on; });
   auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-  connect(escape, &QShortcut::activated, this, [this] { CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
+  connect(escape, &QShortcut::activated, this, [this] { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
   connect(new QShortcut(QKeySequence(Qt::Key_F3), this), &QShortcut::activated, osnap, &QToolButton::toggle);
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
   connect(new QShortcut(QKeySequence(Qt::Key_F8), this), &QShortcut::activated, ortho, &QToolButton::toggle);
@@ -245,7 +245,7 @@ void EditorWindow::BuildRibbon() {
   addPage("Modify", {{"Mirror", "Mirror.png", "MIRROR"}, {"Scale", "Scale.png", "SCALE"},
       {"Fillet", "Fillet.png", "FILLET"}, {"Chamfer", "Chamfer.png", "CHAMFER"},
       {"Extend", "Extend.png", "EXTEND"}, {"Join", "Join.png", "JOIN"}, {"Explode", "Explode.png", "EXPLODE"}});
-  addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Points", "Point.png", "POINT"}});
+  addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Create Points", "Point.png", "CREATEPOINTS"}});
   addPage("Modeling", {{"Box", "Box.png", "BOX"}, {"Cylinder", "Cylinder.png", "CYLINDER"},
       {"Extrude", "Extrude.png", "EXTRUDE"}, {"Revolve", "Revolve.png", "REVOLVE"},
       {"Union", "Union.png", "UNION"}, {"Subtract", "Subtract.png", "SUBTRACT"}});
@@ -361,6 +361,7 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
   if (watched == m_Command && event->type() == QEvent::KeyPress) {
     auto* key = static_cast<QKeyEvent*>(event);
     if (key->key() == Qt::Key_Escape) {
+      m_State.showCreatePointsWindow = false;
       CancelActiveCommand(m_State, m_Log);
       m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
       return true;

@@ -20,6 +20,7 @@
 #include <QMouseEvent>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QSpinBox>
 #include <QComboBox>
 #include <QTableWidget>
 #include <QPushButton>
@@ -332,6 +333,59 @@ private Q_SLOTS:
     QCOMPARE(window.State().selection.size(), std::size_t(1));
     QCOMPARE(window.State().selection.front().index, 1);
     QCOMPARE(window.State().qsObjectType, AppCommandState::QsObjectType::Line);
+  }
+
+  void nativePointCreationPlacesSelectsAndUndoes() {
+    EditorWindow window;
+    window.show();
+    window.Submit("CREATEPOINTS");
+    auto* dialog = window.findChild<QDialog*>("createPoints");
+    QVERIFY(dialog); QVERIFY(!dialog->isModal());
+    dialog->findChild<QSpinBox*>("nextPointNumber")->setValue(42);
+    dialog->findChild<QDoubleSpinBox*>("pointElevation")->setValue(123.25);
+    dialog->findChild<QPlainTextEdit*>("pointDescription")->setPlainText("EG");
+    auto* viewport = dynamic_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTest::qWait(100);
+    const QPoint pick(viewport->width() / 2, viewport->height() / 2);
+    AppCommandState::ProjectSession lockedProject;
+    lockedProject.uid = 77; lockedProject.readOnly = true;
+    window.State().openProjects.push_back(lockedProject);
+    window.State().drawingTabs[window.State().activeDrawingIdx].projectUid = 77;
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, pick);
+    QVERIFY(window.State().surveyPoints.empty());
+    QCOMPARE(window.State().createPointsNextId, 42);
+    window.State().drawingTabs[window.State().activeDrawingIdx].projectUid = 0;
+    window.State().openProjects.clear();
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, pick);
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(1));
+    QCOMPARE(window.State().surveyPoints[0].id, 42);
+    QCOMPARE(window.State().surveyPoints[0].description, std::string("EG"));
+    QCOMPARE(window.State().surveyPoints[0].elevation, 123.25);
+    QCOMPARE(window.State().createPointsNextId, 43);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, pick);
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(1));
+    QCOMPARE(window.State().selectedSurveyPointIndices.size(), std::size_t(1));
+    QTRY_COMPARE(dialog->findChild<QSpinBox*>("nextPointNumber")->value(), 43);
+    const auto originalPoint = window.State().surveyPoints[0];
+    dialog->findChild<QSpinBox*>("nextPointNumber")->setValue(42);
+    dialog->findChild<QDoubleSpinBox*>("pointElevation")->setValue(200);
+    dialog->findChild<QComboBox*>("pointDuplicatePolicy")->setCurrentIndex(2);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, pick + QPoint(60, 40));
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(1));
+    QCOMPARE(window.State().surveyPoints[0].elevation, 200.0);
+    window.Submit("UNDO");
+    QCOMPARE(window.State().surveyPoints[0].easting, originalPoint.easting);
+    QCOMPARE(window.State().surveyPoints[0].northing, originalPoint.northing);
+    QCOMPARE(window.State().surveyPoints[0].elevation, 123.25);
+    QCOMPARE(window.State().surveyPoints[0].description, std::string("EG"));
+    QTest::keyClick(viewport, Qt::Key_Escape);
+    QVERIFY(!window.State().showCreatePointsWindow);
+    QTRY_VERIFY(!window.findChild<QDialog*>("createPoints"));
+    window.Submit("UNDO");
+    QVERIFY(window.State().surveyPoints.empty());
   }
 
   void pdfAnnotationsSaveAsWithoutChangingSource() {

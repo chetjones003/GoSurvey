@@ -44,6 +44,7 @@ private:
   void ShowLayers();
   void ShowUnits();
   void ShowQuickSelect();
+  void ShowCreatePoints();
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
