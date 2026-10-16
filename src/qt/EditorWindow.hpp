@@ -24,6 +24,7 @@ public:
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void showEvent(QShowEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:

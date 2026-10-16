@@ -113,3 +113,17 @@ survey-point icon alias, and retained tree expansion/current item through comman
 refreshes. Verified appearance changes preserve geometry and undo plus collapsed/
 expanded branches and selected tree item. Qt build, gray smoke and all 27 Qt
 results passed. Preview: build/neutral-gray/GoSurveyQt.exe.
+
+Input/layout correction: removed the Top/Front/etc toolbar row; retained named
+orientations and Zoom Extents under View and the existing clickable cube. Drawing
+tabs reserve height before the first OpenGL composition and refresh on show,
+verified in the styled startup screenshot before any viewport click. Replaced
+viewport-only character routing with a scoped application event filter for this
+editor and its floating docks (ownership checked across window boundaries).
+Ordinary typing moves to command entry from tabs, Toolspace, toolbar buttons and
+read-only history; editable fields, modifiers, popups, modal dialogs and other
+windows retain their handling. The filter is removed before editor destruction.
+Verified focus transfer from docked and floating Toolspace, commands/history/
+Escape, editable layer text, modal text and initial tab geometry. Qt build, styled
+smoke and all 28 Qt results passed. Preview: build/editor-input/GoSurveyQt.exe.
+Full parity remains open.

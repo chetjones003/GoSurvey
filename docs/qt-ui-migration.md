@@ -42,7 +42,7 @@ property rows, Segoe UI and a black drawing viewport. Logo menu > View > Appeara
 switches between Neutral gray and Classic light without reopening the drawing;
 the choice is saved. `--light-style` starts with the light appearance. The title-bar/ribbon/dock/
 floating-command layout is retained. `--default-style` remains an accepted alias.
-The current comparison build is at `build/neutral-gray/GoSurveyQt.exe`; configure
+The current comparison build is at `build/editor-input/GoSurveyQt.exe`; configure
 `GOSURVEY_QT_RUNTIME_DIR` to select a separate preview output directory, or set it
 empty to restore the normal `build/GoSurveyQt.exe` output. Existing preview windows
 can stay open while another output directory is rebuilt.
@@ -72,7 +72,10 @@ the command dispatcher does not establish UI parity for those commands.
 Native Quick Select now exposes object/property filters, include/exclude, current
 selection scope and append through the shared selection service. Numeric input
 is validated before applying; Cancel preserves the selection and saved filter.
-Native command typing, history, autocomplete and Escape are connected; pan/zoom
+Native command typing routes from editor controls and floating docks to command
+entry while preserving editable fields and dialogs. Tabs reserve space before
+the first viewport paint. Named orientations are under View rather than a toolbar
+row. History, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
 event loop. Exact annotation and all selection/gesture parity remain release gates.
 
@@ -93,7 +96,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 27 passed, 0 failed (25 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 28 passed, 0 failed (26 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry

@@ -6,6 +6,10 @@
 #include <QSet>
 #include <QStyle>
 #include <QAbstractButton>
+#include <QAbstractSpinBox>
+#include <QTextEdit>
+#include <QKeySequenceEdit>
+#include <QShowEvent>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -111,6 +115,9 @@ EditorWindow::EditorWindow() {
   m_Tabs->setObjectName("drawingTabs");
   m_Tabs->setTabsClosable(true);
   m_Tabs->setExpanding(false);
+  m_Tabs->setAutoHide(false);
+  m_Tabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+  m_Tabs->setMinimumHeight(m_Tabs->fontMetrics().height() + 12);
   centerLayout->addWidget(m_Tabs);
   m_Pages = new QStackedWidget(center);
   auto* start = new QWidget(m_Pages);
@@ -135,19 +142,6 @@ EditorWindow::EditorWindow() {
   auto* modelPage = new QWidget(m_Pages);
   auto* modelLayout = new QVBoxLayout(modelPage);
   modelLayout->setContentsMargins(0, 0, 0, 0);
-  auto* viewBar = new QToolBar(modelPage);
-  viewBar->setObjectName("viewCubeControls");
-  viewBar->setIconSize(QSize(16, 16));
-  viewBar->setMaximumHeight(28);
-  struct View { const char* name; float azimuth; float elevation; };
-  for (const auto& view : {View{"Top", 0, 90}, View{"Front", 0, 0}, View{"Right", 90, 0},
-                           View{"Back", 180, 0}, View{"Left", -90, 0}, View{"Bottom", 0, -90},
-                           View{"Home", 45, 35.264f}}) {
-    auto* action = viewBar->addAction(view.name);
-    connect(action, &QAction::triggered, this, [this, view] { m_Viewport->SetOrientation(view.azimuth, view.elevation); });
-  }
-  viewBar->addAction(CommandAction("Zoom extents", "Zoom_Extents.png", "ZOOMEXTENTS"));
-  modelLayout->addWidget(viewBar);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
   m_Viewport->textEntered = [this](const QString& text) { if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible(); m_Command->setFocus(); m_Command->insert(text); };
@@ -198,6 +192,7 @@ EditorWindow::EditorWindow() {
   restoreGeometry(settings.value("editor/geometry").toByteArray());
   restoreState(settings.value("editor/layout").toByteArray(), 1);
   Refresh();
+  qApp->installEventFilter(this);
 }
 
 QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
@@ -247,6 +242,12 @@ void EditorWindow::BuildRibbon() {
   edit->addAction(CommandAction("Copy", "Copy.png", "COPYCLIP", QKeySequence::Copy));
   edit->addAction(CommandAction("Paste", "Paste.png", "PASTECLIP", QKeySequence::Paste));
   auto* viewMenu = applicationMenu->addMenu("&View"); viewMenu->setObjectName("viewMenu");
+  auto* orientation = viewMenu->addMenu("Orientation");
+  struct View { const char* name; float azimuth; float elevation; };
+  for (const auto& view : {View{"Top", 0, 90}, View{"Front", 0, 0}, View{"Right", 90, 0},
+      View{"Back", 180, 0}, View{"Left", -90, 0}, View{"Bottom", 0, -90}, View{"Home", 45, 35.264f}})
+    connect(orientation->addAction(view.name), &QAction::triggered, this, [this, view] { m_Viewport->SetOrientation(view.azimuth, view.elevation); });
+  viewMenu->addAction(CommandAction("Zoom extents", "Zoom_Extents.png", "ZOOMEXTENTS"));
   auto* appearance = viewMenu->addMenu("Appearance");
   auto* themes = new QActionGroup(this); themes->setExclusive(true);
   for (bool light : {false, true}) {
@@ -374,7 +375,6 @@ void EditorWindow::BuildDocks() {
   toggleCommand->setShortcut(QKeySequence("Ctrl+9")); addAction(toggleCommand);
   connect(toggleCommand, &QAction::triggered, this, [this] { m_CommandBar->ToggleVisible(); });
   if (auto* view = findChild<QMenu*>("viewMenu")) view->addAction(toggleCommand);
-  m_Command->installEventFilter(this);
   m_Command->setPlaceholderText("Type a command or coordinates");
   QStringList names;
   for (const auto& suggestion : FuzzyCommandSuggestions("", 10000))
@@ -453,7 +453,47 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
       return true;
     }
   }
+  if (event->type() == QEvent::KeyPress && m_Command && watched != m_Command &&
+      !QApplication::activeModalWidget() && !QApplication::activePopupWidget()) {
+    auto* widget = qobject_cast<QWidget*>(watched);
+    auto* key = static_cast<QKeyEvent*>(event);
+    auto* floatingDock = widget ? qobject_cast<QDockWidget*>(widget->window()) : nullptr;
+    const bool editorWindow = widget && (widget->window() == this ||
+        (floatingDock && findChildren<QDockWidget*>().contains(floatingDock)));
+    bool editing = false;
+    for (auto* focus = QApplication::focusWidget(); focus; focus = focus->parentWidget()) {
+      const auto* line = qobject_cast<QLineEdit*>(focus);
+      const auto* text = qobject_cast<QTextEdit*>(focus);
+      const auto* plain = qobject_cast<QPlainTextEdit*>(focus);
+      if ((line && !line->isReadOnly()) || (text && !text->isReadOnly()) ||
+          (plain && !plain->isReadOnly()) || qobject_cast<QAbstractSpinBox*>(focus) ||
+          qobject_cast<QComboBox*>(focus) || qobject_cast<QKeySequenceEdit*>(focus)) { editing = true; break; }
+      if (focus->isWindow()) break;
+    }
+    if (editorWindow && !editing && !(key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) &&
+        !key->text().isEmpty() && key->text().front().isPrint() && key->key() != Qt::Key_Space) {
+      if (m_State.activeDrawingIdx == 0) NewDrawing();
+      if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible();
+      if (widget->window() != this) {
+        raise(); activateWindow();
+      }
+      m_Command->setFocus(Qt::OtherFocusReason);
+      QKeyEvent input(key->type(), key->key(), key->modifiers(), key->text(), key->isAutoRepeat(), key->count());
+      QApplication::sendEvent(m_Command, &input);
+      key->accept();
+      return true;
+    }
+  }
   return QMainWindow::eventFilter(watched, event);
+}
+
+void EditorWindow::showEvent(QShowEvent* event) {
+  QMainWindow::showEvent(event);
+  // Reserve the tab strip before the first OpenGL composition, rather than waiting
+  // for a viewport click to trigger a layout/refresh.
+  m_Tabs->show(); m_Tabs->updateGeometry();
+  if (centralWidget()->layout()) centralWidget()->layout()->activate();
+  m_Tabs->update();
 }
 
 void EditorWindow::SwitchDrawing(int index) {
@@ -622,6 +662,7 @@ void EditorWindow::Refresh() {
   }
   m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
   m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
+  m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
   QString commandHint;

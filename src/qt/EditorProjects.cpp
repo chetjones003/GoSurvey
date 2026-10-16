@@ -19,6 +19,7 @@ double Now() {
 }
 
 EditorWindow::~EditorWindow() {
+  if (qApp) qApp->removeEventFilter(this);
   for (auto& session : m_State.openProjects) {
     FlushProjectPointDb(session, m_Log);
     if (!session.readOnly) gsproj::Release(session.project.file, session.me);

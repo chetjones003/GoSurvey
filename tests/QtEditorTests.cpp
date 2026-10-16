@@ -33,6 +33,7 @@
 #include <QDockWidget>
 #include <QSettings>
 #include <QTreeWidget>
+#include <QTabBar>
 #include <QScopeGuard>
 #include <QStyle>
 #include <QSurfaceFormat>
@@ -308,6 +309,59 @@ private Q_SLOTS:
     window.resize(1500, 950); QTest::qWait(100);
     QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/qt-chrome-preview.png"));
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+  }
+
+  void tabsAppearInitiallyAndTypingRoutesFromEditorChrome() {
+    EditorWindow window; window.show(); window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
+    QTRY_VERIFY(tabs->isVisible() && tabs->height() >= tabs->fontMetrics().height());
+    QVERIFY(tabs->count() >= 2);
+    QVERIFY(!window.findChild<QWidget*>("viewCubeControls"));
+    const int viewportTop = viewport->mapTo(window.centralWidget(), QPoint()).y();
+    QVERIFY(viewportTop > tabs->geometry().bottom());
+    QVERIFY(viewportTop - tabs->geometry().bottom() <= 3);
+    auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
+    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
+    tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
+    QTest::keyClicks(tree, "l");
+    QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
+    input->completer()->popup()->hide(); input->clear();
+    tabs->setFocus(); QTRY_VERIFY(tabs->hasFocus());
+    QTest::keyClicks(tabs, "c");
+    QCOMPARE(input->text(), QString("c")); QVERIFY(input->hasFocus());
+    input->completer()->popup()->hide(); input->clear();
+    auto* tool = window.findChild<QToolButton*>("quick_NEW"); QVERIFY(tool);
+    tool->setFocus(); QTRY_VERIFY(tool->hasFocus());
+    QTest::keyClicks(tool, "p");
+    QCOMPARE(input->text(), QString("p")); QVERIFY(input->hasFocus());
+    input->completer()->popup()->hide(); input->clear();
+    // An editable property keeps text input rather than turning it into a CAD command.
+    auto* layer = window.findChild<QComboBox*>("selectionLayer"); QVERIFY(layer);
+    auto* edit = layer->lineEdit(); QVERIFY(edit); edit->setFocus(); edit->selectAll();
+    QTest::keyClicks(edit, "Survey");
+    QCOMPARE(edit->text(), QString("Survey")); QVERIFY(edit->hasFocus()); QVERIFY(input->text().isEmpty());
+    // Read-only history is not a text editor: typing there returns to command entry.
+    auto* panel = dynamic_cast<FloatingCommandBar*>(window.findChild<QFrame*>("floatingCommandBar")); QVERIFY(panel);
+    panel->ToggleConsole(); auto* console = panel->Transcript(); console->setFocus();
+    QTRY_VERIFY(console->hasFocus()); QTest::keyClicks(console, "u");
+    QCOMPARE(input->text(), QString("u")); QVERIFY(input->hasFocus());
+    input->completer()->popup()->hide(); input->clear();
+    QDialog dialog(&window); auto* field = new QLineEdit(&dialog);
+    dialog.setModal(true); dialog.show(); dialog.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&dialog)); field->setFocus();
+    QTest::keyClicks(field, "notes");
+    QCOMPARE(field->text(), QString("notes")); QVERIFY(input->text().isEmpty());
+    dialog.close();
+    window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* dock = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(dock);
+    dock->setFloating(true); dock->show(); dock->activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(dock)); tree->setFocus();
+    QTRY_VERIFY(tree->hasFocus()); QTest::keyClicks(tree, "z");
+    QCOMPARE(input->text(), QString("z")); QTRY_VERIFY(input->hasFocus());
+    input->completer()->popup()->hide(); input->clear();
+    dock->setFloating(false);
   }
 
   void appearanceChangesKeepDrawingAndToolspaceState() {
