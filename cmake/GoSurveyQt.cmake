@@ -1,28 +1,39 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
-add_executable(GoSurveyQt WIN32
-  src/qt/main.cpp
+add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorWindow.cpp
+  src/qt/QtText.cpp
+  src/qt/QtAnnotations.cpp
   src/qt/EditorViewport.cpp
   src/qt/EditorProjects.cpp
+  src/qt/EditorDialogs.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/PdfWindow.cpp
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
   src/pdf/PdfDocument.cpp
   src/pdf/PdfViewerCore.cpp
+  src/pdf/PdfAnnotate.cpp
+  src/pdf/PdfMeasure.cpp
+  src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfRaw.cpp
+  src/pdf/PdfSplit.cpp
+  src/io/PdfPlot.cpp
+  src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
-  src/platform/AppIcon.cpp
-  resources/icons/app.rc
 )
-target_link_libraries(GoSurveyQt PRIVATE
+target_link_libraries(gosurvey_qt_frontend PUBLIC
   gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
-  glfw comdlg32 ole32 shell32 Windowscodecs)
-target_include_directories(GoSurveyQt PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
-target_compile_definitions(GoSurveyQt PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN QT_NO_KEYWORDS)
+  comdlg32 ole32 shell32 Windowscodecs)
+target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
+target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN QT_NO_KEYWORDS)
+gosurvey_target_warnings(gosurvey_qt_frontend)
+add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
+target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
 gosurvey_target_warnings(GoSurveyQt)
 if(MSVC)
   target_compile_options(GoSurveyQt PRIVATE /utf-8)
+  target_compile_options(gosurvey_qt_frontend PRIVATE /utf-8)
 endif()
 
 # Use the same installed kit for runtime deployment; no downloads or guessed DLL paths.

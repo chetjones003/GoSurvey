@@ -5,6 +5,25 @@ Branch: `test/win32UI`. Authorized by the user on 2026-10-16.
 This is an executable migration baseline, **not a production replacement** for
 GoSurvey. The existing executable remains available during parity work.
 
+## Ongoing parity work
+
+The user requested autonomous iteration to full production parity. Fetched and
+merged `origin/master` at `90aa196d34692562effa18502c9b8ad0197e9e80`.
+`tools/qt-parity.ps1` extracts its 190 registered commands and 40 window flags
+into `build/qt-parity.json`. Source references do not count as verified parity.
+
+Build the native regression tests with `build-qt.bat GoSurveyQtTests`, then run
+`build/GoSurveyQtTests.exe` or `ctest --test-dir build -R '^qt.editor$'` on a desktop.
+They exercise lossless adjustment sessions, failures without mutation, worker
+solves, result acceptance, drawing commits and undo, network controls/elevations,
+unsaved-close cancellation, command input, camera pan, layers, units, PDF annotation
+Save As/source preservation, dimension strokes, and rich text colors.
+
+Domain regressions found during this gate were repaired: FBK closing observations
+now share the start station ID, malformed profile arc endpoints are rejected,
+and modern DWG layer colors retain their palette RGB. Tests were also updated for
+R2018 Unicode decoding, GSTC column alignment, and post-save fixture preconditions.
+
 ## Build and launch
 
 Run `build-qt.bat` from the repository. It initializes the installed MSVC environment,
@@ -29,17 +48,18 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Startup | Splash using existing artwork; Start page; Markdown What's New window | Startup auth/update/telemetry/crash-report wiring; recent-file tiles; version-based What's New display policy |
 | Editor chrome | Menus, quick access, ribbon tabs, dock layout persistence | Full existing ribbon inventory, contextual ribbons, panel-specific command UI, shortcut parity |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
-| Viewport | Existing GL renderer, grid, lines/circles/arcs/ellipses/polylines, blocks, feature lines, solid/surface geometry, basic Qt text and point overlays | Exact annotation/dimension/MTEXT/SHX layout, paper-space rendering, tables, point-cloud display inputs, map tiles, gizmo/section overlays, graphics parity |
+| Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
-| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits through shared command helpers | Complete editable geometry properties; layer manager; point database grids; tree context menus; surface and style management dialogs |
+| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog | Complete geometry properties, point grids, context menus, surface/style dialogs |
 | Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; point conflict prompts; health/pack/turnover UI; stale-lock takeover UI; cross-project clipboard warnings |
-| PDF viewer | Independent Qt window, PDFium streaming document open, asynchronous cancellable raster rendering, page navigation, bounded zoom/fit width | Search, thumbnails, annotations, measurement, calibration, snapping, coordinate extraction, split/compare, audit/export, underlay-attach UI |
-| Adjustment | Independent Qt window, GSTC editor, FBK/StarNet/RW5/JobXML import, GSTC save, existing least-squares solver, coordinate/residual tables and chi-square output | Full form/raw-set editor, weights UI, result acceptance/export/plot/report workflows, unsaved editor close prompts, asynchronous solve for large networks |
+| PDF viewer | Async page rendering, navigation/zoom, text/line/rectangle/ellipse annotations, scaled measurements, scale presets, undo/redo, Save As, close protection, page extraction | Search/thumbnails, calibration/checks, snapping, coordinate extraction, compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
+| Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
 
 Commands that request an existing ImGui-only modal still need a Qt adapter. Sharing
 the command dispatcher does not establish UI parity for those commands.
-Basic Qt MTEXT rendering flattens rich spans and does not yet reproduce attachment,
-wrapping, SHX, perspective sizing, or all layer/isolation rules.
+Native command typing, history, autocomplete and Escape are connected; pan/zoom
+uses the camera plane, and completed surface/cloud workers are serviced by Qt's
+event loop. Exact annotation and all selection/gesture parity remain release gates.
 
 ## Dependency boundary
 
@@ -52,10 +72,21 @@ Legacy font loading was moved from `CadCommands.cpp` into
 `src/ui/LegacyApplicationFonts.cpp`. The shared domain library **still links
 ImGui core**, because legacy font measurement, SHX draw-list paths and ribbon
 measurement still reference it. Those dependencies must be extracted before an
-ImGui-free binary can be claimed. GLFW also remains linked through AppIcon's
-legacy platform helpers; the Qt application itself creates no GLFW window.
+ImGui-free binary can be claimed. The Qt target no longer compiles AppIcon.cpp or
+links GLFW; icons and windows are managed by Qt.
 
-## Verification on this workstation
+## Latest verified iteration
+
+- Qt executable and the existing GoSurvey executable build successfully.
+- `GoSurveyQtTests`: 17 passed, 0 failed (15 workflow/render tests plus setup/teardown).
+- `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
+- `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
+- Domain suites were run from `build/` outside the sandbox because GPU registry
+  tests and the temporary AppData block-library fixture need that access.
+- These green gates do not establish full UI parity. The outstanding workflow,
+  graphics, dependency-removal and packaging gates above remain open.
+
+## Initial baseline verification (superseded by the iteration above)
 
 - `build-qt.bat`: passed with installed Qt 6.8.3 and MSVC x64.
 - `build.bat release --target GoSurvey GoSurveyTests GoSurveySnapTests`: passed.

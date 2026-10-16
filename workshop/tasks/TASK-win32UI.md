@@ -20,3 +20,21 @@ Plan review: additive target avoids replacing a functioning editor before parity
 render resource cleanup must occur with a current context; Qt's framebuffer is
 not framebuffer zero; save/close must preserve dirty drawings. UI dependencies
 must not be introduced into document or command APIs.
+
+2026-10-16 continuation: user requests autonomous iteration to production parity
+with master. Fetched origin/master at 90aa196d and merged its missing commits.
+Keep a named upstream revision in the parity inventory. Next gates: reproducible
+Qt integration tests, lossless adjustment sessions and report/commit workflows,
+correct viewport input, native modal adapters, graphics parity, and removal of
+remaining presentation dependencies. A gate is complete only with passing
+positive/failure tests; a working shared command alone is not UI parity.
+
+Iteration 1: merged current master, added a source inventory (190 commands / 40
+window flags), native Qt tests, adjustment persistence/acceptance/commit/report
+workflows, layer/units dialogs, command focus/history and worker completion,
+camera-plane pan/zoom, Qt annotation/dimension rendering, PDF annotation/scale/
+Save As/extract workflows, and removed GLFW from the Qt target. Survey label
+measurement now uses a frontend callback, avoiding an ImGui-context crash.
+Fixed FBK closed-loop identity, invalid profile arc endpoints, DWG layer colors,
+and updated format-aware regression fixtures. Domain suites: 1,632 + 831 cases
+passed; Qt suite: 17 checks passed. Full parity remains the active objective.

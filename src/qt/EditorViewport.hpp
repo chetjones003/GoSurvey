@@ -15,6 +15,7 @@ public:
   ~EditorViewport() override;
   std::function<void()> changed;
   std::function<void(double, double, double)> cursorChanged;
+  std::function<void(const QString&)> textEntered;
   void SetOrientation(float azimuth, float elevation);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
@@ -30,6 +31,8 @@ protected:
 private:
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
+  bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
+  void ClearTransientInput();
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;

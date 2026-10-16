@@ -22,6 +22,7 @@ public:
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 private:
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
@@ -39,6 +40,10 @@ private:
   std::uint32_t OpenProject(const QString& path, bool createDrawing);
   void NewProject();
   void RefreshProjects();
+  void ServiceUiRequests();
+  void ShowLayers();
+  void ShowUnits();
+  bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
   std::size_t m_LogShown = 0;
@@ -53,6 +58,8 @@ private:
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
   bool m_TextDialogOpen = false;
+  QStringList m_CommandHistory;
+  int m_HistoryIndex = 0;
 };
 
 QString QtAsset(const QString& relative);

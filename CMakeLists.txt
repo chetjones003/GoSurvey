@@ -435,6 +435,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
   src/commands/CadField.cpp
+  src/commands/TraverseActions.cpp
   # Cohesive slices split out of the CadCommands.cpp mega-TU (TASK-150 Phase 2,
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
@@ -1785,4 +1786,8 @@ if(GOSURVEY_BUILD_TESTS)
     # have lost the oracle; WILL_FAIL would have turned the fix into a red build), and re-enabling
     # it is the regression test for both issues.
   endif()
+endif()
+
+if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
+  include(cmake/GoSurveyQtTests.cmake)
 endif()

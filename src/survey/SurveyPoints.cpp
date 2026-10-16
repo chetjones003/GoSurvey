@@ -823,7 +823,7 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   const float halfH = std::max(st.viewportLastSurveyLayoutOrthoHalfH, 1.e-4f);
   const float worldPerPxY = (2.f * halfH) / vpH;
 
-  ImFont* font = ImGui::GetFont();
+  ImFont* font = ImGui::GetCurrentContext() ? ImGui::GetFont() : nullptr;
   const float fontPx =
       std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), st.viewportMtextMinPx, st.viewportMtextMaxPx);
 
@@ -837,7 +837,10 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   // meant clicking somewhere other than the text. Nothing about the default-font case changes.
   float pw = 8.f;
   float ph = fontPx * 1.22f;
-  MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+  if (st.measureAnnotationText)
+    st.measureAnnotationText(fontPx, a.text, a.fontFamily, &pw, &ph);
+  else
+    MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
 
   constexpr float kPadPx = 8.f;
   const float bw = (pw + 2.f * kPadPx) * worldPerPxY;

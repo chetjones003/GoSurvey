@@ -1,6 +1,7 @@
 #include "EditorWindow.hpp"
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
+#include "QtText.hpp"
 #include "PdfWindow.hpp"
 #include "CadBlocks.hpp"
 #include "DwgIo.hpp"
@@ -16,6 +17,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCompleter>
+#include <QStringListModel>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
@@ -25,6 +27,9 @@
 #include <QGroupBox>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QKeyEvent>
+#include <QShortcut>
+#include <QTimer>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenuBar>
@@ -58,6 +63,7 @@ QString QtAsset(const QString& relative) {
 }
 
 EditorWindow::EditorWindow() {
+  m_State.measureAnnotationText = MeasureQtText;
   setObjectName("GoSurveyQtEditor");
   setWindowTitle("GoSurvey | Qt Editor");
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
@@ -114,6 +120,7 @@ EditorWindow::EditorWindow() {
   modelLayout->addWidget(viewBar);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
+  m_Viewport->textEntered = [this](const QString& text) { m_Command->setFocus(); m_Command->insert(text); };
   m_Viewport->cursorChanged = [this](double x, double y, double z) {
     m_Coordinates->setText(QString("E %1   N %2   Z %3").arg(x + m_State.worldDocumentOriginX, 0, 'f', 4)
         .arg(y + m_State.worldDocumentOriginY, 0, 'f', 4).arg(z, 0, 'f', 4));
@@ -134,6 +141,25 @@ EditorWindow::EditorWindow() {
   grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
+  auto* osnap = new QToolButton(this);
+  osnap->setText("OSNAP"); osnap->setCheckable(true); osnap->setChecked(m_State.objectSnapEnabled);
+  statusBar()->addWidget(osnap);
+  connect(osnap, &QToolButton::toggled, this, [this](bool on) { m_State.objectSnapEnabled = on; });
+  auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+  connect(escape, &QShortcut::activated, this, [this] { CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
+  connect(new QShortcut(QKeySequence(Qt::Key_F3), this), &QShortcut::activated, osnap, &QToolButton::toggle);
+  connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
+  connect(new QShortcut(QKeySequence(Qt::Key_F8), this), &QShortcut::activated, ortho, &QToolButton::toggle);
+  auto* service = new QTimer(this);
+  service->setInterval(33);
+  connect(service, &QTimer::timeout, this, [this] {
+    const auto before = m_State.cadGpuRevision;
+    const auto logSize = m_Log.size();
+    TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
+    RefreshProjects();
+    if (before != m_State.cadGpuRevision || logSize != m_Log.size()) Refresh();
+  });
+  service->start();
   connect(m_Tabs, &QTabBar::currentChanged, this, [this](int index) { if (!m_Refreshing) SwitchDrawing(index); });
   connect(m_Tabs, &QTabBar::tabCloseRequested, this, [this](int index) { CloseDrawing(index); });
   QSettings settings;
@@ -266,6 +292,7 @@ void EditorWindow::BuildDocks() {
   m_Transcript->setFont(QFont("Consolas", 10));
   m_Command = new QLineEdit(commands);
   m_Command->setObjectName("commandInput");
+  m_Command->installEventFilter(this);
   m_Command->setPlaceholderText("Type a command or coordinates");
   QStringList names;
   for (const auto& suggestion : FuzzyCommandSuggestions("", 10000))
@@ -273,6 +300,14 @@ void EditorWindow::BuildDocks() {
   auto* completer = new QCompleter(names, m_Command);
   completer->setCaseSensitivity(Qt::CaseInsensitive);
   m_Command->setCompleter(completer);
+  connect(m_Command, &QLineEdit::textEdited, this, [completer](const QString& text) {
+    QStringList matches;
+    for (const auto& suggestion : FuzzyCommandSuggestions(text.toUtf8().toStdString(), 30))
+      matches.push_back(QString::fromUtf8(suggestion.name.c_str()));
+    static_cast<QStringListModel*>(completer->model())->setStringList(matches);
+    completer->setCompletionPrefix(text);
+    if (!matches.isEmpty()) completer->complete();
+  });
   connect(m_Command, &QLineEdit::returnPressed, this, [this] {
     const QString line = m_Command->text();
     m_Command->clear();
@@ -293,6 +328,11 @@ void EditorWindow::BuildDocks() {
 }
 
 void EditorWindow::Submit(const QString& command) {
+  if (!command.trimmed().isEmpty()) {
+    if (m_CommandHistory.isEmpty() || m_CommandHistory.last() != command) m_CommandHistory.push_back(command);
+    if (m_CommandHistory.size() > 500) m_CommandHistory.removeFirst();
+    m_HistoryIndex = m_CommandHistory.size();
+  }
   const QString verb = command.trimmed().toUpper();
   if (verb == "NEW") NewDrawing();
   else if (verb == "NEWPROJECT") NewProject();
@@ -315,6 +355,24 @@ void EditorWindow::Submit(const QString& command) {
     ProcessCommandLineSubmit(buffer.data(), static_cast<int>(buffer.size()), m_State, m_Log);
   }
   Refresh();
+}
+
+bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == m_Command && event->type() == QEvent::KeyPress) {
+    auto* key = static_cast<QKeyEvent*>(event);
+    if (key->key() == Qt::Key_Escape) {
+      CancelActiveCommand(m_State, m_Log);
+      m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
+      return true;
+    }
+    if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
+      if (m_Command->completer() && m_Command->completer()->popup()->isVisible()) return QMainWindow::eventFilter(watched, event);
+      m_HistoryIndex = std::clamp(m_HistoryIndex + (key->key() == Qt::Key_Up ? -1 : 1), 0, static_cast<int>(m_CommandHistory.size()));
+      m_Command->setText(m_HistoryIndex < m_CommandHistory.size() ? m_CommandHistory[m_HistoryIndex] : QString{});
+      return true;
+    }
+  }
+  return QMainWindow::eventFilter(watched, event);
 }
 
 void EditorWindow::SwitchDrawing(int index) {
@@ -449,6 +507,8 @@ void EditorWindow::CloseDrawing(int index) {
 }
 
 void EditorWindow::closeEvent(QCloseEvent* event) {
+  for (auto* child : findChildren<QMainWindow*>())
+    if (child->parentWidget() == this && !child->close()) { event->ignore(); return; }
   const int previous = m_State.activeDrawingIdx;
   for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
     SwitchDrawing(i);
@@ -520,6 +580,7 @@ void EditorWindow::Refresh() {
   for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
   m_Viewport->update();
   m_Refreshing = false;
+  ServiceUiRequests();
   if (m_State.mtextRichEditorOpen && !m_TextDialogOpen) {
     m_TextDialogOpen = true;
     bool accepted = false;
@@ -559,6 +620,7 @@ void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->show(
 void EditorWindow::ShowAdjustment() {
   if (auto* existing = findChild<QMainWindow*>("adjustmentWindow")) { existing->show(); existing->raise(); return; }
   auto* window = new AdjustmentWindow(m_State, m_Log, this);
+  window->drawingChanged = [this] { Refresh(); };
   window->setObjectName("adjustmentWindow");
   window->show();
 }
