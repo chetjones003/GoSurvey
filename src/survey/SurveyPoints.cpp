@@ -12,7 +12,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <iomanip>
+#include <nlohmann/json.hpp>
+#include <filesystem>
+#include <unordered_set>
+#include <limits>
+#include <atomic>
+#include <chrono>
+#include <stdexcept>
 
 float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float modelUnitsPerPlottedInch) {
   const float mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
@@ -77,69 +83,6 @@ int NextFreeId(const std::vector<SurveyPoint>& pts, int start, int step) {
     ++guard;
   }
   return id;
-}
-
-std::string JsonEscape(const std::string& s) {
-  std::string o;
-  o.reserve(s.size() + 8);
-  for (unsigned char uc : s) {
-    const char c = static_cast<char>(uc);
-    switch (c) {
-    case '"':
-      o += "\\\"";
-      break;
-    case '\\':
-      o += "\\\\";
-      break;
-    case '\n':
-      o += "\\n";
-      break;
-    case '\r':
-      o += "\\r";
-      break;
-    case '\t':
-      o += "\\t";
-      break;
-    default:
-      o += c;
-      break;
-    }
-  }
-  return o;
-}
-
-bool ExtractJsonStringField(const std::string& obj, const char* key, std::string* out) {
-  const std::string pat = std::string("\"") + key + "\":\"";
-  size_t a = obj.find(pat);
-  if (a == std::string::npos)
-    return false;
-  a += pat.size();
-  std::string accum;
-  for (size_t i = a; i < obj.size(); ++i) {
-    const char c = obj[i];
-    if (c == '\\' && i + 1 < obj.size()) {
-      const char n = obj[i + 1];
-      if (n == 'n')
-        accum.push_back('\n');
-      else if (n == 'r')
-        accum.push_back('\r');
-      else if (n == 't')
-        accum.push_back('\t');
-      else if (n == '"' || n == '\\')
-        accum.push_back(n);
-      else {
-        accum.push_back(c);
-        accum.push_back(n);
-      }
-      ++i;
-      continue;
-    }
-    if (c == '"')
-      break;
-    accum.push_back(c);
-  }
-  *out = accum;
-  return true;
 }
 
 } // namespace
@@ -969,115 +912,125 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   BumpCadGpuCache(st);
 }
 
+namespace {
+using PointJson = nlohmann::json;
+
+int PointJsonInteger(const PointJson& value) {
+  if (!value.is_number_integer()) throw std::runtime_error("Expected a whole number.");
+  if (value.is_number_unsigned()) {
+    const auto number = value.get<std::uint64_t>();
+    if (number > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) throw std::runtime_error("Point number is out of range.");
+    return static_cast<int>(number);
+  }
+  const auto number = value.get<std::int64_t>();
+  if (number < std::numeric_limits<int>::min() || number > std::numeric_limits<int>::max()) throw std::runtime_error("Point number is out of range.");
+  return static_cast<int>(number);
+}
+
+double PointJsonCoordinate(const PointJson& value) {
+  if (!value.is_number()) throw std::runtime_error("Expected a coordinate.");
+  const double number = value.get<double>();
+  if (!std::isfinite(number)) throw std::runtime_error("Coordinates must be finite.");
+  return number;
+}
+}
+
 bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log) {
-  std::ofstream f(path);
-  if (!f) {
-    log.push_back("Could not open file for saving survey points.");
+  std::filesystem::path temporary;
+  try {
+    if (!path || !*path) throw std::runtime_error("Choose a file path.");
+    PointJson root;
+    root["formatVersion"] = 1;
+    root["originX"] = PointJsonCoordinate(st.worldDocumentOriginX);
+    root["originY"] = PointJsonCoordinate(st.worldDocumentOriginY);
+    root["points"] = PointJson::array();
+    std::unordered_set<int> ids;
+    for (const auto& point : st.surveyPoints) {
+      if (!ids.insert(point.id).second) throw std::runtime_error("Duplicate point numbers cannot be saved.");
+      const int style = static_cast<int>(point.labelStyle);
+      if (style < 0 || style > static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)) throw std::runtime_error("Invalid point label style.");
+      root["points"].push_back({{"id", point.id}, {"easting", PointJsonCoordinate(point.easting)},
+          {"northing", PointJsonCoordinate(point.northing)}, {"elevation", PointJsonCoordinate(point.elevation)},
+          {"description", point.description}, {"rawDescription", point.rawDescription},
+          {"layer", point.layer}, {"labelStyle", style}});
+    }
+    // Serialize before opening any output: invalid UTF-8 must not damage an existing file.
+    const auto bytes = root.dump(2) + "\n";
+    const auto destination = std::filesystem::u8path(path);
+    static std::atomic<std::uint64_t> sequence{0};
+    temporary = destination;
+    temporary += ".tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(sequence++);
+    {
+      std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+      stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+      stream.flush();
+      if (!stream) throw std::runtime_error("The points file could not be written.");
+      stream.close();
+      if (!stream) throw std::runtime_error("The points file could not be closed.");
+    }
+    std::filesystem::rename(temporary, destination);
+    log.push_back("Saved " + std::to_string(st.surveyPoints.size()) + " survey point(s) to " + path);
+    return true;
+  } catch (const std::exception& error) {
+    std::error_code ignored;
+    if (!temporary.empty()) std::filesystem::remove(temporary, ignored);
+    log.push_back(std::string("Survey points save failed: ") + error.what());
     return false;
   }
-  // std::ofstream's default precision is 6 significant digits — plenty for `float` but not enough
-  // to round-trip a `double` state-plane easting/northing within REQ-101's ±0.002 ft (a 7-digit
-  // magnitude needs ~10 significant digits to keep 3 decimal places). setprecision(17) is the
-  // shortest-round-trip guarantee for IEEE-754 double, matching DxfIo.cpp's writer.
-  f << std::setprecision(17);
-  f << "{\"points\":[";
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
-    const SurveyPoint& p = st.surveyPoints[i];
-    if (i != 0)
-      f << ',';
-    f << "{\"id\":" << p.id << ",\"easting\":" << p.easting << ",\"northing\":" << p.northing
-      << ",\"elevation\":" << p.elevation << ",\"labelStyle\":" << static_cast<int>(p.labelStyle)
-      << ",\"layer\":\"" << JsonEscape(p.layer) << "\",\"description\":\"" << JsonEscape(p.description) << "\"}";
-  }
-  f << "]}\n";
-  log.push_back("Saved " + std::to_string(st.surveyPoints.size()) + " survey point(s) to " +
-                std::string(path));
-  return true;
 }
 
 bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::vector<std::string>& log) {
-  std::ifstream f(path);
-  if (!f) {
-    log.push_back("Could not open survey points file.");
+  std::vector<SurveyPoint> points;
+  try {
+    if (!path || !*path) throw std::runtime_error("Choose a file path.");
+    if (st.activeDrawingIdx > 0 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())) {
+      const auto uid = st.drawingTabs[st.activeDrawingIdx].projectUid;
+      for (const auto& session : st.openProjects) if (session.uid == uid && session.readOnly) throw std::runtime_error("The project is read-only.");
+    }
+    std::ifstream stream(std::filesystem::u8path(path), std::ios::binary);
+    if (!stream) throw std::runtime_error("The points file could not be opened.");
+    const auto root = PointJson::parse(stream);
+    if (stream.bad()) throw std::runtime_error("The points file could not be read.");
+    if (!root.is_object() || !root.contains("points") || !root.at("points").is_array()) throw std::runtime_error("Expected an object containing a points array.");
+    if (root.contains("formatVersion") && PointJsonInteger(root.at("formatVersion")) != 1) throw std::runtime_error("Unsupported points file version.");
+    if (root.contains("originX") != root.contains("originY")) throw std::runtime_error("Both coordinate origin values are required.");
+    // Old files contained drawing-local coordinates and no origin metadata.
+    const double dx = root.contains("originX") ? PointJsonCoordinate(root.at("originX")) - st.worldDocumentOriginX : 0;
+    const double dy = root.contains("originY") ? PointJsonCoordinate(root.at("originY")) - st.worldDocumentOriginY : 0;
+    std::unordered_set<int> ids;
+    for (const auto& item : root.at("points")) {
+      SurveyPoint point;
+      point.id = PointJsonInteger(item.at("id"));
+      if (!ids.insert(point.id).second) throw std::runtime_error("Duplicate point numbers in the points file.");
+      point.easting = PointJsonCoordinate(item.at("easting")) + dx;
+      point.northing = PointJsonCoordinate(item.at("northing")) + dy;
+      point.elevation = PointJsonCoordinate(item.at("elevation"));
+      if (!std::isfinite(point.easting) || !std::isfinite(point.northing)) throw std::runtime_error("Converted coordinates are out of range.");
+      point.description = item.value("description", std::string());
+      point.rawDescription = item.value("rawDescription", point.description);
+      point.layer = item.value("layer", std::string());
+      const int style = item.contains("labelStyle") ? PointJsonInteger(item.at("labelStyle")) : static_cast<int>(SurveyPointLabelStyle::NumberDesc);
+      if (style < 0 || style > static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)) throw std::runtime_error("Invalid point label style.");
+      point.labelStyle = static_cast<SurveyPointLabelStyle>(style);
+      points.push_back(std::move(point));
+    }
+  } catch (const std::exception& error) {
+    log.push_back(std::string("Survey points load failed: ") + error.what());
     return false;
   }
-  std::string s((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  st.surveyPoints.clear();
+  PushUndoSnapshot(st, "Load survey points");
+  // Remove the old points through their owner so no orphaned MTEXT labels survive replacement.
+  while (!st.surveyPoints.empty()) RemoveSurveyPointAt(st, st.surveyPoints.size() - 1);
+  ClearSelection(st);
+  st.surveyPoints = std::move(points);
   st.surveyPointIdBuffers.clear();
-  st.selectedSurveyPointIndices.clear();
-
-  auto parseIntField = [](const std::string& o, const char* key, int* out) -> bool {
-    const std::string pat = std::string("\"") + key + "\":";
-    const size_t p0 = o.find(pat);
-    if (p0 == std::string::npos)
-      return false;
-    const char* str = o.c_str() + p0 + pat.size();
-    char* end = nullptr;
-    const long v = std::strtol(str, &end, 10);
-    if (end == str)
-      return false;
-    *out = static_cast<int>(v);
-    return true;
-  };
-  auto parseDoubleField = [](const std::string& o, const char* key, double* out) -> bool {
-    const std::string pat = std::string("\"") + key + "\":";
-    const size_t p0 = o.find(pat);
-    if (p0 == std::string::npos)
-      return false;
-    const char* str = o.c_str() + p0 + pat.size();
-    char* end = nullptr;
-    *out = std::strtod(str, &end);
-    return end != str;
-  };
-
-  size_t search = 0;
-  while (true) {
-    const size_t idPos = s.find("\"id\":", search);
-    if (idPos == std::string::npos)
-      break;
-    const size_t objStart = s.rfind('{', idPos);
-    const size_t objEnd = s.find('}', idPos);
-    if (objStart == std::string::npos || objEnd == std::string::npos || objEnd <= objStart) {
-      search = idPos + 5;
-      continue;
-    }
-    const std::string obj = s.substr(objStart, objEnd - objStart + 1);
-    SurveyPoint p{};
-    if (!parseIntField(obj, "id", &p.id) || !parseDoubleField(obj, "easting", &p.easting) ||
-        !parseDoubleField(obj, "northing", &p.northing) || !parseDoubleField(obj, "elevation", &p.elevation)) {
-      search = objEnd + 1;
-      continue;
-    }
-    if (!ExtractJsonStringField(obj, "layer", &p.layer) || p.layer.empty())
-      p.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});  // REQ-361
-    if (!ExtractJsonStringField(obj, "description", &p.description))
-      p.description.clear();
-    int ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
-    if (parseIntField(obj, "labelStyle", &ls)) {
-      if (ls < 0 || ls > static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev))
-        ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
-      p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
-    }
-    st.surveyPoints.push_back(std::move(p));
-    search = objEnd + 1;
+  for (auto& point : st.surveyPoints) {
+    if (point.layer.empty()) point.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
+    st.surveyPointIdBuffers.push_back(std::to_string(point.id));
   }
-
-  // BUG-023: `surveyPointIdBuffers` is cleared above and MUST be refilled here.
-  // It is a parallel array the Viewpoints grid indexes with the point index, and
-  // that grid draws its Load button and its rows in the SAME frame — so a load
-  // that left the buffers empty had the table read `surveyPointIdBuffers[i]` on
-  // an empty vector for every row it had just gained. Refilled at the owner
-  // rather than patched at the reader: anything else that loads points inherits
-  // the same invariant for free.
-  st.surveyPointIdBuffers.resize(st.surveyPoints.size());
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
-    st.surveyPointIdBuffers[i] = std::to_string(st.surveyPoints[i].id);
-
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
-    EnsureSurveyPointLabelMtext(st, i, &log);
-
-  log.push_back("Loaded " + std::to_string(st.surveyPoints.size()) + " survey point(s) from " +
-                std::string(path));
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i) EnsureSurveyPointLabelMtext(st, i, &log);
+  BumpCadGpuCache(st);
+  log.push_back("Loaded " + std::to_string(st.surveyPoints.size()) + " survey point(s) from " + path);
   return true;
 }
 

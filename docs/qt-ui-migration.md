@@ -51,8 +51,8 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
-| Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, JSON save/load; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo | Import/export preview, full point-marker visibility/style parity, other project conflict dialogs; harden legacy JSON parsing/save failure behavior |
-| Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; point conflict prompts; health/pack/turnover UI; stale-lock takeover UI; cross-project clipboard warnings |
+| Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo | Import/export preview, full point-marker visibility/style parity, other project dialogs |
+| Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; health/pack/turnover UI; stale-lock takeover UI; cross-project clipboard warnings |
 | PDF viewer | Async page rendering, navigation/zoom, text/line/rectangle/ellipse annotations, scaled measurements, scale presets, undo/redo, Save As, close protection, page extraction | Search/thumbnails, calibration/checks, snapping, coordinate extraction, compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
 | Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
 
@@ -82,13 +82,22 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 21 passed, 0 failed (19 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 25 passed, 0 failed (23 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry
   tests and the temporary AppData block-library fixture need that access.
 - These green gates do not establish full UI parity. The outstanding workflow,
   graphics, dependency-removal and packaging gates above remain open.
+
+Survey JSON version 1 saves drawing-local double coordinates with `originX` and
+`originY`, retaining world positions when loaded into another drawing. It also
+retains raw field descriptions. Unversioned files without origin metadata keep
+the legacy local-coordinate interpretation. Invalid files leave points, labels,
+revision and undo unchanged; successful replacements are one undo step. Save
+serializes first, writes/closes a temporary sibling and renames it over the
+destination. Tests cover Unicode paths, existing-file replacement, failed final
+replacement cleanup, malformed/duplicate/out-of-range data, and label restoration.
 
 ## Initial baseline verification (superseded by the iteration above)
 

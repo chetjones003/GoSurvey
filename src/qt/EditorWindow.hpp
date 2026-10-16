@@ -46,6 +46,7 @@ private:
   void ShowQuickSelect();
   void ShowCreatePoints();
   void ShowPoints(bool database);
+  void ShowProjectPointWarning();
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;

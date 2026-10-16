@@ -28,6 +28,8 @@
 #include <QPushButton>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
+#include <QDir>
+#include <QFileInfo>
 #include <QTimer>
 #include <cmath>
 #include <limits>
@@ -431,6 +433,106 @@ private Q_SLOTS:
     QCOMPARE(state.surveyPoints[1].northing, 50.0);
   }
 
+  void surveyJsonRoundTripsUnicodeRawCodesAndWorldCoordinates() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath(QString::fromUtf8("測量-é.json"));
+    EditorWindow source; source.Submit("NEW");
+    auto& state = source.State();
+    state.worldDocumentOriginX = 6000000; state.worldDocumentOriginY = 4000000;
+    state.createPointsOpts.defaultDescription = "EG"; state.createPointsNextId = 0;
+    std::vector<std::string> log;
+    QVERIFY(TryPlaceSurveyPoint(state, 1.123456789, 2.987654321, 123.456789, log));
+    state.surveyPoints[0].description = "Expanded {EG} \"quoted\"\n\t\x01";
+    state.surveyPoints[0].layer = "測量";
+    QVERIFY(SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
+    // Replacing an existing file must work, including on Windows.
+    QVERIFY(SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
+    EditorWindow target; target.Submit("NEW");
+    target.State().worldDocumentOriginX = 6000100; target.State().worldDocumentOriginY = 4000200;
+    target.State().createPointsNextId = 99;
+    QVERIFY(TryPlaceSurveyPoint(target.State(), 10, 20, 30, log));
+    const auto oldLabel = target.State().surveyPoints[0].labelMtextAnnId;
+    QVERIFY(LoadSurveyPointsFromJsonFile(target.State(), path.toUtf8().constData(), log));
+    QCOMPARE(target.State().surveyPoints.size(), std::size_t(1));
+    const auto& loaded = target.State().surveyPoints[0];
+    QCOMPARE(loaded.id, 0);
+    QCOMPARE(loaded.rawDescription, std::string("EG"));
+    QCOMPARE(loaded.description, state.surveyPoints[0].description);
+    QCOMPARE(loaded.layer, state.surveyPoints[0].layer);
+    QVERIFY(std::abs(loaded.easting + 100 - state.surveyPoints[0].easting) < 1.e-12);
+    QVERIFY(std::abs(loaded.northing + 200 - state.surveyPoints[0].northing) < 1.e-12);
+    QCOMPARE(loaded.elevation, state.surveyPoints[0].elevation);
+    QCOMPARE(target.State().cadAnnotations.size(), std::size_t(1));
+    QCOMPARE(target.State().surveyPointIdBuffers[0], std::string("0"));
+    target.Submit("UNDO");
+    QCOMPARE(target.State().surveyPoints[0].id, 99);
+    QCOMPARE(target.State().surveyPoints[0].labelMtextAnnId, oldLabel);
+    QCOMPARE(target.State().cadAnnotations.size(), std::size_t(1));
+  }
+
+  void surveyJsonFailurePreservesDrawingAndExistingFile() {
+    QTemporaryDir directory;
+    const auto path = directory.filePath("points.json");
+    EditorWindow window; window.Submit("NEW");
+    auto& state = window.State(); std::vector<std::string> log;
+    QVERIFY(TryPlaceSurveyPoint(state, 10, 20, 30, log));
+    const auto revision = state.cadGpuRevision;
+    const auto undoCount = state.documents[state.activeDrawingIdx].undoStack.size();
+    const auto label = state.surveyPoints[0].labelMtextAnnId;
+    const QByteArray row = R"({"id":7,"easting":1,"northing":2,"elevation":3})";
+    const QList<QByteArray> invalid{
+        "broken", "{}", "{\"points\":[] } trailing", "{\"points\":[{}]}",
+        "{\"points\":[" + row + "," + row + "]}",
+        R"({"points":[{"id":2147483648,"easting":1,"northing":2,"elevation":3}]})",
+        R"({"points":[{"id":1,"easting":1e999,"northing":2,"elevation":3}]})",
+        R"({"points":[{"id":1,"easting":1,"northing":2,"elevation":3,"labelStyle":99}]})",
+        R"({"formatVersion":99,"points":[]})"};
+    for (const auto& bytes : invalid) {
+      QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly)); QCOMPARE(file.write(bytes), bytes.size()); file.close();
+      QVERIFY(!LoadSurveyPointsFromJsonFile(state, path.toUtf8().constData(), log));
+      QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+      QCOMPARE(state.surveyPoints[0].easting, 10.0);
+      QCOMPARE(state.surveyPoints[0].labelMtextAnnId, label);
+      QCOMPARE(state.cadAnnotations.size(), std::size_t(1));
+      QCOMPARE(state.cadGpuRevision, revision);
+      QCOMPARE(state.documents[state.activeDrawingIdx].undoStack.size(), undoCount);
+    }
+    QVERIFY(SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
+    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly)); const auto original = file.readAll(); file.close();
+    state.surveyPoints[0].elevation = std::numeric_limits<double>::quiet_NaN();
+    QVERIFY(!SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
+    QVERIFY(file.open(QIODevice::ReadOnly)); QCOMPARE(file.readAll(), original); file.close();
+    state.surveyPoints[0].elevation = 30;
+    // Replacing a directory fails after staging output; it must leave no temporary file.
+    const auto blocked = directory.filePath("blocked.json");
+    QVERIFY(QDir().mkpath(blocked));
+    QVERIFY(!SaveSurveyPointsToJsonFile(state, blocked.toUtf8().constData(), log));
+    QVERIFY(QFileInfo(blocked).isDir());
+    QCOMPARE(QDir(directory.path()).entryList({"*.tmp-*"}, QDir::Files).size(), 0);
+  }
+
+  void surveyJsonLegacyWhitespaceAndEmptyReplacementAreUndoable() {
+    QTemporaryDir directory; const auto path = directory.filePath("legacy.json");
+    QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(R"({ "points" : [ { "id" : 2, "easting" : 1.5, "northing" : 2.5, "elevation" : 3.5, "description" : "EG\u00e9" } ] })"); file.close();
+    EditorWindow window; window.Submit("NEW"); std::vector<std::string> log;
+    QVERIFY(LoadSurveyPointsFromJsonFile(window.State(), path.toUtf8().constData(), log));
+    QCOMPARE(window.State().surveyPoints[0].rawDescription, std::string("EGé"));
+    QVERIFY(file.open(QIODevice::WriteOnly)); file.write("{\"points\":[]}"); file.close();
+    AppCommandState::ProjectSession session; session.uid = 88; session.readOnly = true;
+    window.State().openProjects.push_back(session);
+    window.State().drawingTabs[window.State().activeDrawingIdx].projectUid = 88;
+    QVERIFY(!LoadSurveyPointsFromJsonFile(window.State(), path.toUtf8().constData(), log));
+    QCOMPARE(window.State().surveyPoints[0].id, 2);
+    window.State().drawingTabs[window.State().activeDrawingIdx].projectUid = 0;
+    window.State().openProjects.clear();
+    QVERIFY(LoadSurveyPointsFromJsonFile(window.State(), path.toUtf8().constData(), log));
+    QVERIFY(window.State().surveyPoints.empty()); QVERIFY(window.State().cadAnnotations.empty());
+    window.Submit("UNDO");
+    QCOMPARE(window.State().surveyPoints[0].id, 2);
+    QCOMPARE(window.State().cadAnnotations.size(), std::size_t(1));
+  }
+
   void nativeDatabaseGridResolvesCollisionAndHonorsReadOnly() {
     QTemporaryDir directory;
     EditorWindow window; window.Submit("NEW");
@@ -489,6 +591,62 @@ private Q_SLOTS:
       dialog->reject();
     });
     window.Submit("POINTDATABASE");
+  }
+
+  void nativeProjectPointWarningsProtectSharedData() {
+    QTemporaryDir directory;
+    QVERIFY(QDir().mkpath(directory.filePath("Drawings")));
+    QFile closedDrawing(directory.filePath("Drawings/Other.dwg"));
+    QVERIFY(closedDrawing.open(QIODevice::WriteOnly)); closedDrawing.close();
+    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    AppCommandState::ProjectSession session;
+    session.uid = 18; session.project.name = "Shared test";
+    session.project.file = std::filesystem::path(directory.filePath("Shared.gsproj").toStdWString());
+    session.points = std::make_shared<projpts::Db>();
+    SurveyPoint point; point.id = 10; point.easting = 1;
+    SurveyPoint second = point; second.id = 20;
+    session.points->points = {{point, "A.dwg"}, {second, "A.dwg"}}; session.points->revision = 1;
+    state.openProjects.push_back(session);
+    state.drawingTabs[state.activeDrawingIdx].projectUid = 18;
+    state.drawingTabs[state.activeDrawingIdx].pointsMode = AppCommandState::DrawingTab::PointsMode::Shared;
+    std::vector<std::string> log; SyncProjectPoints(state, log, 0);
+    projpts::AddId(&state.pointVisibility.hidden, 10); SyncProjectPoints(state, log, 0);
+    auto answer = [&](const QString& text) {
+      QTimer::singleShot(0, &window, [&, text] {
+        auto* message = window.findChild<QMessageBox*>("projectPointWarning");
+        QVERIFY(message);
+        for (auto* button : message->buttons()) if (button->text().remove('&') == text) { button->click(); return; }
+        message->reject(); QFAIL("Expected project point warning action is missing");
+      });
+      window.Submit("REGEN");
+      QVERIFY(!state.pointEditPrompt.active);
+    };
+    state.createPointsNextId = 10; QVERIFY(TryPlaceSurveyPoint(state, 100, 200, 300, log));
+    answer("Cancel");
+    QCOMPARE(session.points->points.size(), std::size_t(2));
+    QCOMPARE(session.points->points[0].point.easting, 1.0);
+    QCOMPARE(SurveyPointIndexForId(state, 10), -1);
+    state.createPointsNextId = 10; QVERIFY(TryPlaceSurveyPoint(state, 100, 200, 300, log));
+    answer("Renumber");
+    QCOMPARE(session.points->points.size(), std::size_t(3));
+    QCOMPARE(session.points->points[0].point.easting, 1.0);
+    const int newNumber = session.points->points.back().point.id;
+    QVERIFY(newNumber != 10 && newNumber != 20);
+    RemoveSurveyPointAt(state, SurveyPointIndexForId(state, 20));
+    answer("Hide in this drawing only");
+    QCOMPARE(session.points->points.size(), std::size_t(3));
+    QCOMPARE(SurveyPointIndexForId(state, 20), -1);
+    RemoveSurveyPointAt(state, SurveyPointIndexForId(state, newNumber));
+    answer("Cancel");
+    QVERIFY(SurveyPointIndexForId(state, newNumber) >= 0);
+    RemoveSurveyPointAt(state, SurveyPointIndexForId(state, newNumber));
+    answer("Delete from project");
+    QCOMPARE(session.points->points.size(), std::size_t(2));
+    state.createPointsNextId = 10; QVERIFY(TryPlaceSurveyPoint(state, 500, 600, 700, log));
+    answer("Overwrite");
+    QCOMPARE(session.points->points.size(), std::size_t(2));
+    QCOMPARE(session.points->points[0].point.easting, 500.0);
+    QVERIFY(SurveyPointIndexForId(state, 10) >= 0);
   }
 
   void pdfAnnotationsSaveAsWithoutChangingSource() {

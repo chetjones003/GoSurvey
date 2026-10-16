@@ -27,7 +27,9 @@
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();
   if (m_ModalOpen || m_TextDialogOpen) return;
-  if (m_State.showLayerManagerWindow) {
+  if (m_State.pointEditPrompt.active) {
+    ShowProjectPointWarning();
+  } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
   } else if (m_State.showUnitsWindow) {

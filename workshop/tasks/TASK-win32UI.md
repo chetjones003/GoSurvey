@@ -65,3 +65,17 @@ and read-only behavior. Qt build and 21 Qt results passed. Shared domain unchang
 Inspection found the legacy survey JSON loader clears the live list before full
 validation; hardening its parsing, transactionality, undo and Unicode paths is a
 required follow-up release gate, alongside the remaining inventory.
+
+Iteration 5: replaced fragment-based survey JSON parsing with full schema/value
+validation before mutation. Imports preserve raw codes and world positions across
+document origins, remove old labels through their owner, and form one undo step.
+Legacy local-coordinate files remain readable. Saves serialize before opening
+output, stage a sibling, check write/flush/close, and replace only on success;
+UTF-8 filesystem paths support Unicode filenames. Added native shared-point
+overwrite/renumber/cancel and project-delete/hide/cancel prompts, including timer
+servicing when no log/revision changes. Verified every warning choice, malformed
+and partially valid JSON, duplicates/ranges, failed writes, Unicode paths, origin
+precision, labels/raw codes and undo. Qt and legacy builds passed; all 25 Qt
+results, 1,632 domain cases / 9,201,236 assertions, and 831 snap/document cases /
+9,511 assertions passed. JSON integrity gate above is resolved; full UI parity
+remains active.

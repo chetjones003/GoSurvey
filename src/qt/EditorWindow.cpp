@@ -158,6 +158,7 @@ EditorWindow::EditorWindow() {
     TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
     RefreshProjects();
     if (before != m_State.cadGpuRevision || logSize != m_Log.size()) Refresh();
+    else ServiceUiRequests();
   });
   service->start();
   connect(m_Tabs, &QTabBar::currentChanged, this, [this](int index) { if (!m_Refreshing) SwitchDrawing(index); });
