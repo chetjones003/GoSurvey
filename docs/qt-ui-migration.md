@@ -57,6 +57,9 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 
 Commands that request an existing ImGui-only modal still need a Qt adapter. Sharing
 the command dispatcher does not establish UI parity for those commands.
+Native Quick Select now exposes object/property filters, include/exclude, current
+selection scope and append through the shared selection service. Numeric input
+is validated before applying; Cancel preserves the selection and saved filter.
 Native command typing, history, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
 event loop. Exact annotation and all selection/gesture parity remain release gates.
@@ -78,7 +81,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 17 passed, 0 failed (15 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 18 passed, 0 failed (16 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry

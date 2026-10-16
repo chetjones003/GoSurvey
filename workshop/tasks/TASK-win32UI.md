@@ -38,3 +38,9 @@ measurement now uses a frontend callback, avoiding an ImGui-context crash.
 Fixed FBK closed-loop identity, invalid profile arc endpoints, DWG layer colors,
 and updated format-aware regression fixtures. Domain suites: 1,632 + 831 cases
 passed; Qt suite: 17 checks passed. Full parity remains the active objective.
+
+Iteration 2: added native Quick Select with type-specific properties, numeric
+validation, layer suggestions, normalized color values, include/exclude, scope
+and append options. Filter settings apply only on acceptance. Qt build passed;
+18 Qt results passed, including length filtering and cancellation preservation.
+Domain code was unchanged; full domain results above remain the last baseline.

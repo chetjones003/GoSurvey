@@ -11,9 +11,13 @@
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QLineEdit>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
+#include <limits>
+#include <cstdio>
 
 void EditorWindow::ServiceUiRequests() {
   if (m_ModalOpen || m_TextDialogOpen) return;
@@ -23,10 +27,104 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showUnitsWindow) {
     m_State.showUnitsWindow = false;
     ShowUnits();
+  } else if (m_State.showQuickSelectWindow) {
+    m_State.showQuickSelectWindow = false;
+    ShowQuickSelect();
   } else if (m_State.showTraverseEditorWindow || m_State.showTraverseClosureWindow) {
     m_State.showTraverseEditorWindow = m_State.showTraverseClosureWindow = false;
     ShowAdjustment();
   }
+}
+
+void EditorWindow::ShowQuickSelect() {
+  using S = AppCommandState;
+  m_ModalOpen = true;
+  QDialog dialog(this);
+  dialog.setObjectName("quickSelect");
+  dialog.setWindowTitle("Quick Select");
+  auto* layout = new QFormLayout(&dialog);
+  auto combo = [&](const char* name, const QStringList& labels, int index) {
+    auto* widget = new QComboBox(&dialog);
+    widget->setObjectName(name); widget->addItems(labels); widget->setCurrentIndex(index);
+    return widget;
+  };
+  auto* scope = combo("selectionScope", {"Entire drawing", "Current selection"}, int(m_State.qsApplyTo));
+  auto* type = combo("selectionType", {"All", "Line", "Circle", "Arc", "Ellipse", "Polyline", "Text", "MText", "Aligned dimension", "Linear dimension", "Angular dimension", "Survey point"}, int(m_State.qsObjectType));
+  auto* property = new QComboBox(&dialog); property->setObjectName("selectionProperty");
+  auto* operation = new QComboBox(&dialog); operation->setObjectName("selectionOperator");
+  auto* value = new QComboBox(&dialog); value->setObjectName("selectionValue"); value->setEditable(true);
+  auto* mode = combo("selectionMode", {"Include matching objects", "Exclude matching objects"}, int(m_State.qsIncludeMode));
+  auto* append = new QCheckBox("Append to current selection", &dialog);
+  append->setChecked(m_State.qsAppendToExisting);
+  layout->addRow("Apply to", scope); layout->addRow("Object type", type);
+  layout->addRow("Property", property); layout->addRow("Operator", operation);
+  layout->addRow("Value", value); layout->addRow("Selection", mode); layout->addRow(append);
+  const QStringList names{"Layer", "Color", "Length", "Radius", "Closed", "Content", "Point number", "Elevation", "Easting", "Northing", "Description"};
+  auto numeric = [&] { const int p = property->currentData().toInt(); return p == 2 || p == 3 || (p >= 6 && p <= 9); };
+  auto updateOperators = [&] {
+    const int previous = operation->currentData().toInt();
+    operation->clear();
+    operation->addItem("Equals", 0); operation->addItem("Not equal", 1);
+    if (numeric()) { operation->addItem("Less than", 2); operation->addItem("Greater than", 3); }
+    operation->addItem("Select all", 4);
+    operation->setCurrentIndex(std::max(0, operation->findData(previous)));
+    const QString previousValue = value->currentText();
+    value->clear();
+    if (property->currentData().toInt() == 0) {
+      SyncDrawingLayerTableWithGeometry(m_State);
+      for (const auto& layer : m_State.drawingLayerTable) value->addItem(QString::fromUtf8(layer.name.c_str()));
+    } else if (property->currentData().toInt() == 1) value->addItems({"ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"});
+    else if (property->currentData().toInt() == 4) value->addItems({"Yes", "No"});
+    value->setEditText(previousValue);
+  };
+  auto updateProperties = [&] {
+    const int previous = property->currentData().toInt();
+    const QSignalBlocker blocker(property);
+    property->clear();
+    std::vector<int> allowed{0, 1};
+    switch (type->currentIndex()) {
+    case 1: allowed.push_back(2); break;
+    case 2: case 3: allowed.push_back(3); break;
+    case 5: allowed.insert(allowed.end(), {2, 4}); break;
+    case 6: case 7: allowed.push_back(5); break;
+    case 11: allowed = {0, 6, 7, 8, 9, 10}; break;
+    }
+    for (int p : allowed) property->addItem(names[p], p);
+    property->setCurrentIndex(std::max(0, property->findData(previous)));
+    updateOperators();
+  };
+  connect(type, &QComboBox::currentIndexChanged, &dialog, updateProperties);
+  connect(property, &QComboBox::currentIndexChanged, &dialog, updateOperators);
+  connect(operation, &QComboBox::currentIndexChanged, &dialog, [&] { value->setEnabled(operation->currentData().toInt() != 4); });
+  updateProperties();
+  property->setCurrentIndex(std::max(0, property->findData(int(m_State.qsProperty))));
+  operation->setCurrentIndex(std::max(0, operation->findData(int(m_State.qsOperator))));
+  value->setEditText(QString::fromUtf8(m_State.qsValueBuf));
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+  layout->addRow(buttons);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+    std::string text = value->currentText().toUtf8().toStdString();
+    if (operation->currentData().toInt() != 4) {
+      bool valid = true;
+      if (numeric()) { const double number = value->currentText().toDouble(&valid); valid = valid && std::isfinite(number) && std::abs(number) <= std::numeric_limits<float>::max(); }
+      if (property->currentData().toInt() == 1) valid = CadColorStorageFromTyped(text, &text);
+      if (text.size() >= sizeof(m_State.qsValueBuf)) valid = false;
+      if (!valid) { QMessageBox::warning(&dialog, "Quick Select", "Enter a valid value for the selected property."); return; }
+    }
+    m_State.qsApplyTo = S::QsApplyTo(scope->currentIndex());
+    m_State.qsObjectType = S::QsObjectType(type->currentIndex());
+    m_State.qsProperty = S::QsProperty(property->currentData().toInt());
+    m_State.qsOperator = S::QsOperator(operation->currentData().toInt());
+    m_State.qsIncludeMode = S::QsInclude(mode->currentIndex());
+    m_State.qsAppendToExisting = append->isChecked();
+    std::snprintf(m_State.qsValueBuf, sizeof(m_State.qsValueBuf), "%s", text.c_str());
+    ExecuteQuickSelect(m_State, m_Log);
+    dialog.accept();
+  });
+  dialog.exec();
+  m_ModalOpen = false;
+  Refresh();
 }
 
 void EditorWindow::ShowLayers() {

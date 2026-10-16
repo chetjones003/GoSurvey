@@ -301,6 +301,39 @@ private Q_SLOTS:
     QCOMPARE(window.State().userLinesFlat, before);
   }
 
+  void nativeQuickSelectFiltersAndCancelPreservesSelection() {
+    EditorWindow window;
+    std::vector<std::string> log;
+    for (const auto& endpoint : {"10,0", "20,0"}) {
+      window.Submit("LINE"); window.Submit("0,0"); window.Submit(endpoint);
+      CancelActiveCommand(window.State(), log);
+    }
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("quickSelect");
+      QVERIFY(dialog);
+      dialog->findChild<QComboBox*>("selectionType")->setCurrentIndex(1);
+      auto* property = dialog->findChild<QComboBox*>("selectionProperty");
+      property->setCurrentIndex(property->findData(2));
+      auto* operation = dialog->findChild<QComboBox*>("selectionOperator");
+      operation->setCurrentIndex(operation->findData(3));
+      dialog->findChild<QComboBox*>("selectionValue")->setEditText("15");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.Submit("QUICKSELECT");
+    QCOMPARE(window.State().selection.size(), std::size_t(1));
+    QCOMPARE(window.State().selection.front().index, 1);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("quickSelect");
+      QVERIFY(dialog);
+      dialog->findChild<QComboBox*>("selectionType")->setCurrentIndex(2);
+      dialog->reject();
+    });
+    window.Submit("QUICKSELECT");
+    QCOMPARE(window.State().selection.size(), std::size_t(1));
+    QCOMPARE(window.State().selection.front().index, 1);
+    QCOMPARE(window.State().qsObjectType, AppCommandState::QsObjectType::Line);
+  }
+
   void pdfAnnotationsSaveAsWithoutChangingSource() {
     QTemporaryDir directory;
     const auto source = directory.filePath("source.pdf");
