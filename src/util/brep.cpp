@@ -5943,6 +5943,11 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       return Fail(Problem::DegenerateEdge, outWhy);
     if (std::fabs(r0 - r1) > 1e-6 * scale)
       return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+    const Vec3 expectedEnd = ray3d::Add(pe.centre, ray3d::RotateVectorAboutAxis(
+        ray3d::Sub(profile.vertices[static_cast<std::size_t>(i)], pe.centre),
+        ray3d::Normalize(pl.zAxis), pe.sweep));
+    if (ray3d::Length(ray3d::Sub(expectedEnd, profile.vertices[static_cast<std::size_t>((i + 1) % n)])) > planeEps)
+      return Fail(Problem::NotClosed, outWhy);
   }
   if (ProfileChordsCross(profile))
     return Fail(Problem::ProfileSelfIntersects, outWhy);
@@ -6154,6 +6159,11 @@ struct LoftProfilePrep {
       return Fail(Problem::DegenerateEdge, outWhy);
     if (std::fabs(r0 - r1) > 1e-6 * scale)
       return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+    const Vec3 expectedEnd = ray3d::Add(pe.centre, ray3d::RotateVectorAboutAxis(
+        ray3d::Sub(pr.vertices[static_cast<std::size_t>(i)], pe.centre),
+        ray3d::Normalize(pl.zAxis), pe.sweep));
+    if (ray3d::Length(ray3d::Sub(expectedEnd, pr.vertices[static_cast<std::size_t>((i + 1) % n)])) > planeEps)
+      return Fail(Problem::NotClosed, outWhy);
   }
   if (ProfileChordsCross(pr))
     return Fail(Problem::ProfileSelfIntersects, outWhy);

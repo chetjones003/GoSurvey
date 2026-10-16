@@ -2445,7 +2445,9 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
   } else {
     ly->color.index = static_cast<BITCODE_BSd>(on ? aci : -aci);
     ly->color.method = DWG_COLOR_METHOD_ACI;
-    ly->color.rgb = 0;
+    // R2004+ table CMC writes an index override of zero; its RGB payload must
+    // carry the palette color or the reader recovers ACI 0 (ByBlock).
+    ly->color.rgb = useTrueColor ? (0xC2000000u | (DxfRgbPackedFromAci(aci) & 0xFFFFFFu)) : 0;
   }
   if (useTrueColor && layerTransparency01 > 1.e-5f)
     ApplyEntityEncTransparency(&ly->color, layerTransparency01);

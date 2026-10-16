@@ -198,6 +198,7 @@ TEST_CASE("req379 a missing tracked PDF or cloud is reported and the drawing sti
   const fs::path cloud = s.project.Folder() / "PointClouds" / "site.e57";
   const fs::path pdf = s.project.Folder() / "PDFs" / "plan.pdf";
   const fs::path dwg = s.project.Folder() / "Drawings" / "EG.dwg";
+  WriteText(dwg, "dwg"); // Sync runs after a drawing was saved, before attachments disappear.
   WriteText(cloud, "scan");
   WriteText(pdf, "pdf");
   st.cadPointClouds.push_back(Cloud(cloud.u8string()));
@@ -367,6 +368,7 @@ TEST_CASE("req379 Copy Links In repoints open drawings so the next save does not
   st.documents[2].cadPointClouds.push_back(Cloud(outCloud.u8string()));
 
   const std::string egDwg = (s.project.Folder() / "Drawings" / "EG.dwg").u8string();
+  WriteText(fs::u8path(egDwg), "dwg");
   SyncProjectFilesOnSave(st, 1, egDwg, log);
   REQUIRE(ProjectHealthFor(st, 7).linked.size() == 2);
 
