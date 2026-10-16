@@ -245,7 +245,8 @@ void EditorWindow::BuildRibbon() {
   addPage("Modify", {{"Mirror", "Mirror.png", "MIRROR"}, {"Scale", "Scale.png", "SCALE"},
       {"Fillet", "Fillet.png", "FILLET"}, {"Chamfer", "Chamfer.png", "CHAMFER"},
       {"Extend", "Extend.png", "EXTEND"}, {"Join", "Join.png", "JOIN"}, {"Explode", "Explode.png", "EXPLODE"}});
-  addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Create Points", "Point.png", "CREATEPOINTS"}});
+  addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Create Points", "Point.png", "CREATEPOINTS"},
+      {"Drawing points", "Point.png", "VIEWPOINTS"}, {"Point database", "Point.png", "POINTDATABASE"}});
   addPage("Modeling", {{"Box", "Box.png", "BOX"}, {"Cylinder", "Cylinder.png", "CYLINDER"},
       {"Extrude", "Extrude.png", "EXTRUDE"}, {"Revolve", "Revolve.png", "REVOLVE"},
       {"Union", "Union.png", "UNION"}, {"Subtract", "Subtract.png", "SUBTRACT"}});
@@ -347,6 +348,7 @@ void EditorWindow::Submit(const QString& command) {
   else if (verb == "SAVEAS") SaveDrawing(true);
   else if (verb == "PDFVIEW") ShowPdf();
   else if (verb == "LSA" || verb == "TRAVERSE") ShowAdjustment();
+  else if (verb == "POINTDATABASE") ShowPoints(true);
   else {
     if (m_State.activeDrawingIdx == 0) NewDrawing();
     const QByteArray input = command.toUtf8();

@@ -36,6 +36,10 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showQuickSelectWindow) {
     m_State.showQuickSelectWindow = false;
     ShowQuickSelect();
+  } else if (m_State.showViewPointsWindow || m_State.showSurveyPointGridWindow) {
+    const bool database = m_State.showSurveyPointGridWindow;
+    m_State.showViewPointsWindow = m_State.showSurveyPointGridWindow = false;
+    ShowPoints(database);
   } else if (m_State.showTraverseEditorWindow || m_State.showTraverseClosureWindow) {
     m_State.showTraverseEditorWindow = m_State.showTraverseClosureWindow = false;
     ShowAdjustment();

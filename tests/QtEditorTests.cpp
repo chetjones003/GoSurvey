@@ -6,6 +6,8 @@
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
+#include "ProjectPoints.hpp"
+#include "io/ProjectPointDb.hpp"
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtTest/QtTest>
@@ -386,6 +388,107 @@ private Q_SLOTS:
     QTRY_VERIFY(!window.findChild<QDialog*>("createPoints"));
     window.Submit("UNDO");
     QVERIFY(window.State().surveyPoints.empty());
+  }
+
+  void nativePointGridPreservesPrecisionIdentityAndUndo() {
+    EditorWindow window;
+    window.Submit("NEW");
+    auto& state = window.State();
+    state.worldDocumentOriginX = 6000000; state.worldDocumentOriginY = 4000000;
+    std::vector<std::string> log;
+    state.createPointsOpts.defaultDescription = "EG";
+    state.createPointsNextId = 10; QVERIFY(TryPlaceSurveyPoint(state, 10, 20, 30, log));
+    state.createPointsNextId = 2; QVERIFY(TryPlaceSurveyPoint(state, 40, 50, 60, log));
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surveyPointGrid");
+      QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("pointGrid");
+      table->sortItems(0, Qt::DescendingOrder);
+      QCOMPARE(table->item(0, 0)->text(), QString("10"));
+      QCOMPARE(table->item(1, 0)->text(), QString("2"));
+      table->item(1, 1)->setText("4000001.123456789");
+      QCOMPARE(state.surveyPoints[0].id, 10);
+      QCOMPARE(state.surveyPoints[1].id, 2);
+      QVERIFY(std::abs(state.surveyPoints[1].northing - 1.123456789) < 1.e-9);
+      table->item(1, 0)->setText("20");
+      QCOMPARE(state.surveyPoints[1].id, 20);
+      const int label = FindSurveyLabelAnnIndex(state, state.surveyPoints[1]);
+      QVERIFY(label >= 0);
+      QCOMPARE(state.cadAnnotations[label].surveyPointLabelForId, 20);
+      QCOMPARE(state.surveyPoints[1].rawDescription, std::string("EG"));
+      dialog->findChild<QLineEdit*>("pointFilter")->setText("20");
+      // Select by the stable identity carried in each cell after the sort moved it.
+      for (int row = 0; row < table->rowCount(); ++row)
+        if (table->item(row, 0)->data(Qt::UserRole).toInt() == 20) table->selectRow(row);
+      dialog->findChild<QPushButton*>("selectGridPoints")->click();
+    });
+    window.Submit("VIEWPOINTS");
+    QCOMPARE(state.selectedSurveyPointIndices.size(), std::size_t(1));
+    QCOMPARE(state.selectedSurveyPointIndices.front(), 1);
+    window.Submit("UNDO");
+    QCOMPARE(state.surveyPoints[1].id, 2);
+    window.Submit("UNDO");
+    QCOMPARE(state.surveyPoints[1].northing, 50.0);
+  }
+
+  void nativeDatabaseGridResolvesCollisionAndHonorsReadOnly() {
+    QTemporaryDir directory;
+    EditorWindow window; window.Submit("NEW");
+    auto& state = window.State();
+    AppCommandState::ProjectSession session;
+    session.uid = 8;
+    session.project.file = std::filesystem::path(directory.filePath("Grid.gsproj").toStdWString());
+    session.points = std::make_shared<projpts::Db>();
+    SurveyPoint a; a.id = 10; a.easting = 6000000.123456789; a.description = "EG";
+    SurveyPoint b = a; b.id = 20;
+    session.points->points = {{a, "DrawingA.dwg"}, {b, "DrawingB.dwg"}};
+    session.points->revision = 1;
+    state.openProjects.push_back(session);
+    state.drawingTabs[state.activeDrawingIdx].projectUid = 8;
+    state.drawingTabs[state.activeDrawingIdx].pointsMode = AppCommandState::DrawingTab::PointsMode::Shared;
+    std::vector<std::string> log; SyncProjectPoints(state, log, 0);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surveyPointGrid"); QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("pointGrid");
+      table->sortItems(0, Qt::AscendingOrder);
+      QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets()) if (auto* question = qobject_cast<QMessageBox*>(widget))
+          for (auto* button : question->buttons()) if (button->text() == "Next free number") button->click();
+      });
+      table->item(0, 0)->setText("20");
+      QCOMPARE(session.points->points.size(), std::size_t(2));
+      QCOMPARE(session.points->points[0].point.id, 1);
+      QCOMPARE(session.points->points[1].point.id, 20);
+      QCOMPARE(session.points->points[0].point.easting, a.easting);
+      QVERIFY(!state.surveyPointGridConflict.active);
+      AnswerNextDialog(QMessageBox::Cancel);
+      table->item(0, 0)->setText("20");
+      QCOMPARE(session.points->points[0].point.id, 1);
+      QCOMPARE(session.points->points.size(), std::size_t(2));
+      QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets()) if (auto* question = qobject_cast<QMessageBox*>(widget))
+          for (auto* button : question->buttons()) if (button->text() == "Overwrite") button->click();
+      });
+      table->item(0, 0)->setText("20");
+      QCOMPARE(session.points->points.size(), std::size_t(1));
+      QCOMPARE(session.points->points[0].point.id, 20);
+      QCOMPARE(session.points->points[0].sourceDrawing, std::string("DrawingA.dwg"));
+      AnswerNextDialog(QMessageBox::Ok);
+      table->item(0, 2)->setText("NaN");
+      QCOMPARE(session.points->points[0].point.easting, a.easting);
+      dialog->reject();
+    });
+    window.Submit("POINTDATABASE");
+    state.openProjects[0].readOnly = true;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surveyPointGrid"); QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("pointGrid");
+      for (int row = 0; row < table->rowCount(); ++row)
+        for (int column = 0; column < table->columnCount(); ++column)
+          QVERIFY(!(table->item(row, column)->flags() & Qt::ItemIsEditable));
+      dialog->reject();
+    });
+    window.Submit("POINTDATABASE");
   }
 
   void pdfAnnotationsSaveAsWithoutChangingSource() {

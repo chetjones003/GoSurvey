@@ -54,3 +54,14 @@ description/elevation restoration, read-only rejection, Escape and creation undo
 Qt build and 19 Qt results passed; reran both complete domain suites: 1,632 cases /
 9,201,236 assertions and 831 cases / 9,511 assertions passed. Point grids, advanced
 point rendering and project conflict workflows remain open parity gates.
+
+Iteration 4: native VIEWPOINTS and POINTDATABASE grids use stable point identities,
+numeric view sorting, filters, world-coordinate doubles, source/group/visibility
+columns, selection, local deletion and per-cell local undo. Shared points route
+through the project database APIs, including overwrite/renumber/cancel conflicts
+and read-only cells. Verified sorted edits preserve domain order, label identity
+and raw codes; world precision, undo, every conflict choice, nonfinite rejection,
+and read-only behavior. Qt build and 21 Qt results passed. Shared domain unchanged.
+Inspection found the legacy survey JSON loader clears the live list before full
+validation; hardening its parsing, transactionality, undo and Unicode paths is a
+required follow-up release gate, alongside the remaining inventory.
