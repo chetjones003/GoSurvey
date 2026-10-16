@@ -476,6 +476,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
   src/ui/MtextRichFormat.cpp
   src/ui/FontRegistry.cpp
+  src/ui/LegacyApplicationFonts.cpp
   # REQ-302/ADR-053 (issue #323) — ribbon measure pass runtime (icon side override for tests + app).
   src/ui/RibbonLayoutMeasure.cpp
   # SHX stroke text emitter. Here because MtextRichFormat's layout calls Shx::DrawText to measure
@@ -669,6 +670,12 @@ if(WIN32)
 endif()
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
+
+# Native Qt/Win32 presentation. Opt in while feature parity is being verified.
+option(GOSURVEY_BUILD_QT "Build the Qt Widgets editor using an installed Qt 6 kit" OFF)
+if(GOSURVEY_BUILD_QT)
+  include(cmake/GoSurveyQt.cmake)
+endif()
 
 add_executable(GoSurvey
   # Application entry

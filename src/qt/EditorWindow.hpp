@@ -1,0 +1,58 @@
+#pragma once
+#include <QMainWindow>
+#include "CadCommands.hpp"
+
+class EditorViewport;
+class QTabBar;
+class QLineEdit;
+class QPlainTextEdit;
+class QTreeWidget;
+class QComboBox;
+class QLabel;
+class QStackedWidget;
+class QAction;
+
+class EditorWindow final : public QMainWindow {
+public:
+  EditorWindow();
+  ~EditorWindow() override;
+  void Submit(const QString& command);
+  void OpenDrawing(const QString& path);
+  AppCommandState& State() { return m_State; }
+  bool RunSmokeChecks(QString& error);
+protected:
+  void closeEvent(QCloseEvent* event) override;
+private:
+  QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
+                        const QKeySequence& shortcut = {});
+  void BuildRibbon();
+  void BuildDocks();
+  void Refresh();
+  void NewDrawing(std::uint32_t projectUid = 0);
+  void SwitchDrawing(int index);
+  void CloseDrawing(int index);
+  bool SaveDrawing(bool saveAs = false);
+  bool ConfirmSave();
+  void ShowWhatsNew();
+  void ShowPdf();
+  void ShowAdjustment();
+  std::uint32_t OpenProject(const QString& path, bool createDrawing);
+  void NewProject();
+  void RefreshProjects();
+  AppCommandState m_State;
+  std::vector<std::string> m_Log;
+  std::size_t m_LogShown = 0;
+  EditorViewport* m_Viewport = nullptr;
+  QTabBar* m_Tabs = nullptr;
+  QStackedWidget* m_Pages = nullptr;
+  QPlainTextEdit* m_Transcript = nullptr;
+  QLineEdit* m_Command = nullptr;
+  QTreeWidget* m_Toolspace = nullptr;
+  QTreeWidget* m_Properties = nullptr;
+  QComboBox* m_Layer = nullptr;
+  QLabel* m_Coordinates = nullptr;
+  bool m_Refreshing = false;
+  bool m_TextDialogOpen = false;
+};
+
+QString QtAsset(const QString& relative);
