@@ -127,3 +127,20 @@ Verified focus transfer from docked and floating Toolspace, commands/history/
 Escape, editable layer text, modal text and initial tab geometry. Qt build, styled
 smoke and all 28 Qt results passed. Preview: build/editor-input/GoSurveyQt.exe.
 Full parity remains open.
+
+Native point transfer iteration: fetched master again (still 90aa196d); branch
+already contains it. Connected IMPORTPOINTS/EXPORTPOINTS to native Qt dialogs and
+Survey ribbon tools with preview, layout/header controls, skip/replace confirmation
+and read-only guards. Added native clipboard warning conversion/paste/cancel adapter
+and generated survey report dock with copy and safe Save As. Shared CSV validation
+now scans the complete file, import stages records and creates one undo snapshot,
+elevations remain doubles, UTF-8 BOMs are accepted, point integer overflow is
+rejected, and export stages/flushes/closes output before replacement with failure
+cleanup. Qt integration checks cover these flows including conversion before paste
+placement. Full UI parity remains open; no production-complete claim.
+Verified this checkpoint: both executables build; 32 Qt checks, 1,632 domain
+cases / 9,201,236 assertions and 831 snap cases / 9,511 assertions pass. The
+point-transfer preview smoke test passes. Corrected native Copy (direct shared
+clipboard service) and Paste (shared PASTE command, plus PASTECLIP compatibility)
+routing after the conversion integration test exposed the missing dispatcher alias.
+Preview: build/point-transfer/GoSurveyQt.exe.

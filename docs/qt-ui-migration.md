@@ -42,7 +42,7 @@ property rows, Segoe UI and a black drawing viewport. Logo menu > View > Appeara
 switches between Neutral gray and Classic light without reopening the drawing;
 the choice is saved. `--light-style` starts with the light appearance. The title-bar/ribbon/dock/
 floating-command layout is retained. `--default-style` remains an accepted alias.
-The current comparison build is at `build/editor-input/GoSurveyQt.exe`; configure
+The current comparison build is at `build/point-transfer/GoSurveyQt.exe`; configure
 `GOSURVEY_QT_RUNTIME_DIR` to select a separate preview output directory, or set it
 empty to restore the normal `build/GoSurveyQt.exe` output. Existing preview windows
 can stay open while another output directory is rebuilt.
@@ -62,8 +62,8 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
-| Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo | Import/export preview, full point-marker visibility/style parity, other project dialogs |
-| Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; health/pack/turnover UI; stale-lock takeover UI; cross-project clipboard warnings |
+| Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
+| Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; health/pack/turnover UI; stale-lock takeover UI |
 | PDF viewer | Async page rendering, navigation/zoom, text/line/rectangle/ellipse annotations, scaled measurements, scale presets, undo/redo, Save As, close protection, page extraction | Search/thumbnails, calibration/checks, snapping, coordinate extraction, compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
 | Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
 
@@ -96,7 +96,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 28 passed, 0 failed (26 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 32 passed, 0 failed (30 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry
@@ -112,6 +112,19 @@ revision and undo unchanged; successful replacements are one undo step. Save
 serializes first, writes/closes a temporary sibling and renames it over the
 destination. Tests cover Unicode paths, existing-file replacement, failed final
 replacement cleanup, malformed/duplicate/out-of-range data, and label restoration.
+
+Native point-file dialogs now route `IMPORTPOINTS` / `EXPORTPOINTS` to the shared
+CSV engine with column/header controls, debounced preview, invalid-row confirmation,
+read-only protection, and overwrite confirmation. Validation scans the complete file
+rather than a 256 KB prefix. Imports stage rows before mutation and create one undo
+snapshot; elevations retain double precision and UTF-8 BOM headers are supported.
+Exports stage, flush and close a sibling file before replacement and remove failed
+staging files. Generated survey reports open in a native dock with tabs, clipboard
+copy and safe Save As. View > Survey reports reopens it. Tests cover native file
+flows, Unicode paths, undo/redo, full-file counts, invalid exports, failed final
+replacement cleanup, read-only rejection, report copy, blocked paste cancellation,
+and Copy/Paste menu routing plus clipboard unit conversion before placement. These checks do not establish all
+CSV dialect or project/clipboard parity.
 
 ## Initial baseline verification (superseded by the iteration above)
 

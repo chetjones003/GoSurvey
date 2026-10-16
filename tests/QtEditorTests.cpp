@@ -8,6 +8,7 @@
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
 #include "ProjectPoints.hpp"
+#include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include <QPdfWriter>
 #include <QPainter>
@@ -26,6 +27,7 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QCheckBox>
 #include <QTableWidget>
 #include <QPushButton>
 #include <QToolButton>
@@ -34,6 +36,8 @@
 #include <QSettings>
 #include <QTreeWidget>
 #include <QTabBar>
+#include <QTabWidget>
+#include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
 #include <QSurfaceFormat>
@@ -496,6 +500,101 @@ private Q_SLOTS:
     QCOMPARE(window.State().selection.size(), std::size_t(1));
     QCOMPARE(window.State().selection.front().index, 1);
     QCOMPARE(window.State().qsObjectType, AppCommandState::QsObjectType::Line);
+  }
+
+  void nativePointTransferImportsExportsAndUndoes() {
+    QTemporaryDir directory;
+    const auto input = directory.filePath(QString::fromUtf8("points-\xc3\xa9.csv"));
+    const auto output = directory.filePath("export.csv");
+    QFile file(input); QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write("\xef\xbb\xbfP,N,E,Z,D\n12,100.125,200.25,30.123456789,EG\n13,101,201,31,Tree\n"); file.close();
+    EditorWindow window; window.Submit("NEW");
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("importSurveyPoints"); QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("pointFilePath")->setText(input);
+      dialog->findChild<QComboBox*>("pointColumnOrder")->setCurrentIndex(0);
+      auto* header = dialog->findChild<QCheckBox*>("pointFileHeader"); header->setChecked(true);
+      auto* apply = dialog->findChild<QPushButton*>("applyPointFile");
+      QTRY_VERIFY(apply->isEnabled()); apply->click(); dialog->reject();
+    });
+    window.Submit("IMPORTPOINTS");
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(2));
+    QCOMPARE(window.State().surveyPoints[0].id, 12);
+    QCOMPARE(window.State().surveyPoints[0].elevation, 30.123456789);
+    QCOMPARE(window.State().surveyPoints[0].easting + window.State().worldDocumentOriginX, 200.25);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("exportSurveyPoints"); QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("pointFilePath")->setText(output);
+      auto* apply = dialog->findChild<QPushButton*>("applyPointFile");
+      QTRY_VERIFY(apply->isEnabled()); apply->click(); dialog->reject();
+    });
+    window.Submit("EXPORTPOINTS");
+    QFile exported(output); QVERIFY(exported.open(QIODevice::ReadOnly));
+    QVERIFY(exported.readAll().contains("200.25"));
+    auto* reports = window.findChild<QDockWidget*>("surveyReports"); QVERIFY(reports);
+    QCOMPARE(reports->findChild<QTabWidget*>("surveyReportTabs")->count(), 1);
+    reports->findChild<QPushButton*>("copySurveyReport")->click();
+    QVERIFY(QApplication::clipboard()->text().contains("200.25"));
+    window.Submit("UNDO"); QVERIFY(window.State().surveyPoints.empty());
+    window.Submit("REDO"); QCOMPARE(window.State().surveyPoints.size(), std::size_t(2));
+  }
+
+  void pointFileValidationScansEntireFileAndFailedExportPreservesData() {
+    QTemporaryDir directory; const auto path = directory.filePath("large.csv");
+    QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
+    for (int i = 1; i <= 20000; ++i) file.write(QByteArray::number(i) + ",100,200,30,Survey point description\n");
+    file.close();
+    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    qstrncpy(state.surveyImportCsvPath, path.toUtf8().constData(), sizeof(state.surveyImportCsvPath));
+    state.surveyImportCsvLayoutIdx = 0; state.surveyImportCsvSkipFirstRow = false;
+    SurveyCsvRefreshImportPreview(state); QCOMPARE(state.surveyImportValidRowCount, 20000);
+    SurveyPoint point; point.id = 1; point.easting = std::numeric_limits<double>::infinity(); state.surveyPoints.push_back(point);
+    qstrncpy(state.surveyExportCsvPath, path.toUtf8().constData(), sizeof(state.surveyExportCsvPath));
+    const auto size = QFileInfo(path).size(); std::vector<std::string> log;
+    QVERIFY(!SurveyCsvExportFile(state, log)); QCOMPARE(QFileInfo(path).size(), size);
+    QVERIFY(state.surveyReportTabs.empty());
+    QCOMPARE(QDir(directory.path()).entryList({"*.tmp-*"}, QDir::Files).size(), 0);
+    state.surveyPoints[0].easting = 2;
+    const auto blocked = directory.filePath("blocked.csv"); QVERIFY(QDir().mkpath(blocked));
+    qstrncpy(state.surveyExportCsvPath, blocked.toUtf8().constData(), sizeof(state.surveyExportCsvPath));
+    QVERIFY(!SurveyCsvExportFile(state, log)); QVERIFY(QFileInfo(blocked).isDir());
+    QCOMPARE(QDir(directory.path()).entryList({"*.tmp-*"}, QDir::Files).size(), 0);
+    AppCommandState::ProjectSession session; session.uid = 81; session.readOnly = true;
+    state.openProjects.push_back(session); state.drawingTabs[state.activeDrawingIdx].projectUid = 81;
+    QVERIFY(!SurveyCsvImportFile(state, log)); QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+    state.drawingTabs[state.activeDrawingIdx].projectUid = 0; state.openProjects.clear();
+  }
+
+  void nativePasteWarningBlocksUnsafePasteAndCancels() {
+    EditorWindow window; window.Submit("NEW");
+    window.State().pastePrompt = {true, true, false, "Coordinate systems differ", true, false};
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QMessageBox*>("pasteWarning"); QVERIFY(dialog);
+      for (auto* button : dialog->buttons()) QVERIFY(button->text() != "Paste anyway");
+      dialog->button(QMessageBox::Cancel)->click();
+    });
+    window.Submit("");
+    QVERIFY(!window.State().pastePrompt.active);
+    QVERIFY(!window.State().pasteWarningAnswered);
+  }
+
+  void nativePasteWarningConvertsUnitsBeforePlacement() {
+    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 1, 1, 0};
+    state.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    auto* copy = Action(window, "Copy"); QVERIFY(copy); copy->trigger();
+    QCOMPARE(state.clipboard.lines.size(), std::size_t(6));
+    state.clipboard.srcProjectUid = 0; state.clipboard.srcZone.clear();
+    state.clipboard.srcMetersPerUnit = 1.0; state.drawingSettings.zoneCode.clear(); state.drawingInsUnits = 2;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QMessageBox*>("pasteWarning"); QVERIFY(dialog);
+      for (auto* button : dialog->buttons()) if (button->text() == "Convert and paste") { button->click(); return; }
+      dialog->button(QMessageBox::Cancel)->click(); QFAIL("Missing clipboard conversion action");
+    });
+    window.Submit("PASTECLIP");
+    QCOMPARE(state.active, AppCommandState::Kind::Paste);
+    QVERIFY(state.clipboard.lines[3] > 3.28f); QVERIFY(state.clipboard.lines[3] < 3.29f);
+    QVERIFY(!state.pastePrompt.active); QVERIFY(!state.pasteWarningAnswered);
   }
 
   void nativePointCreationPlacesSelectsAndUndoes() {

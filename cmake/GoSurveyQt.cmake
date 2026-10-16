@@ -10,6 +10,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorProjects.cpp
   src/qt/EditorDialogs.cpp
   src/qt/EditorPoints.cpp
+  src/qt/EditorPointTransfer.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/PdfWindow.cpp
   src/render/ViewportRenderer.cpp

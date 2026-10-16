@@ -29,6 +29,8 @@ void EditorWindow::ServiceUiRequests() {
   if (m_ModalOpen || m_TextDialogOpen) return;
   if (m_State.pointEditPrompt.active) {
     ShowProjectPointWarning();
+  } else if (m_State.pastePrompt.active) {
+    ShowPasteWarning();
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
@@ -42,9 +44,15 @@ void EditorWindow::ServiceUiRequests() {
     const bool database = m_State.showSurveyPointGridWindow;
     m_State.showViewPointsWindow = m_State.showSurveyPointGridWindow = false;
     ShowPoints(database);
+  } else if (m_State.showImportPointsWindow || m_State.showExportPointsWindow) {
+    const bool importing = m_State.showImportPointsWindow;
+    m_State.showImportPointsWindow = m_State.showExportPointsWindow = false;
+    ShowPointTransfer(importing);
   } else if (m_State.showTraverseEditorWindow || m_State.showTraverseClosureWindow) {
     m_State.showTraverseEditorWindow = m_State.showTraverseClosureWindow = false;
     ShowAdjustment();
+  } else if (m_State.surveyReportSelectLatestPending) {
+    ShowSurveyReports();
   }
 }
 

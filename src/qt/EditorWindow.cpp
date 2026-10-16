@@ -240,8 +240,9 @@ void EditorWindow::BuildRibbon() {
   edit->addAction(CommandAction("Undo", "Undo.png", "UNDO", QKeySequence::Undo));
   edit->addAction(CommandAction("Redo", "Redo.png", "REDO", QKeySequence::Redo));
   edit->addAction(CommandAction("Copy", "Copy.png", "COPYCLIP", QKeySequence::Copy));
-  edit->addAction(CommandAction("Paste", "Paste.png", "PASTECLIP", QKeySequence::Paste));
+  edit->addAction(CommandAction("Paste", "Paste.png", "PASTE", QKeySequence::Paste));
   auto* viewMenu = applicationMenu->addMenu("&View"); viewMenu->setObjectName("viewMenu");
+  connect(viewMenu->addAction("Survey reports"), &QAction::triggered, this, [this] { ShowSurveyReports(); });
   auto* orientation = viewMenu->addMenu("Orientation");
   struct View { const char* name; float azimuth; float elevation; };
   for (const auto& view : {View{"Top", 0, 90}, View{"Front", 0, 0}, View{"Right", 90, 0},
@@ -319,7 +320,8 @@ void EditorWindow::BuildRibbon() {
       {"Fillet", "Fillet.png", "FILLET"}, {"Chamfer", "Chamfer.png", "CHAMFER"},
       {"Extend", "Extend.png", "EXTEND"}, {"Join", "Join.png", "JOIN"}, {"Explode", "Explode.png", "EXPLODE"}});
   addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Create Points", "Point.png", "CREATEPOINTS"},
-      {"Drawing points", "Point.png", "VIEWPOINTS"}, {"Point database", "Point.png", "POINTDATABASE"}});
+      {"Drawing points", "Point.png", "VIEWPOINTS"}, {"Point database", "Point.png", "POINTDATABASE"},
+      {"Import points", "c3d_point.png", "IMPORTPOINTS"}, {"Export points", "c3d_exportpoints.png", "EXPORTPOINTS"}});
   addPage("Modeling", {{"Box", "Box.png", "BOX"}, {"Cylinder", "Cylinder.png", "CYLINDER"},
       {"Extrude", "Extrude.png", "EXTRUDE"}, {"Revolve", "Revolve.png", "REVOLVE"},
       {"Union", "Union.png", "UNION"}, {"Subtract", "Subtract.png", "SUBTRACT"}});
@@ -414,6 +416,8 @@ void EditorWindow::Submit(const QString& command) {
   }
   const QString verb = command.trimmed().toUpper();
   if (verb == "NEW") NewDrawing();
+  else if (verb == "COPYCLIP") CopySelectionToClipboard(m_State, m_Log);
+  else if (verb == "PASTECLIP") StartPasteCommand(m_State, m_Log);
   else if (verb == "NEWPROJECT") NewProject();
   else if (verb == "OPENPROJECT") {
     const auto path = QFileDialog::getOpenFileName(this, "Open project", {}, "GoSurvey project (*.gsproj)");

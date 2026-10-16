@@ -93,6 +93,36 @@ void EditorWindow::RefreshProjects() {
   SyncProjectPoints(m_State, m_Log, Now());
 }
 
+void EditorWindow::ShowPasteWarning() {
+  m_ModalOpen = true;
+  const auto pending = m_State.pastePrompt;
+  bool completed = false;
+  while (!completed) {
+    QMessageBox question(QMessageBox::Warning, "Paste into drawing", QString::fromUtf8(pending.text.c_str()), QMessageBox::Cancel, this);
+    question.setObjectName("pasteWarning");
+    auto* convert = pending.canConvert ? question.addButton("Convert and paste", QMessageBox::ActionRole) : nullptr;
+    auto* proceed = !pending.block ? question.addButton("Paste anyway", QMessageBox::ActionRole) : nullptr;
+    question.setDefaultButton(QMessageBox::Cancel);
+    question.exec();
+    const bool converting = convert && question.clickedButton() == convert;
+    if (!converting && (!proceed || question.clickedButton() != proceed)) {
+      m_State.pastePrompt = {};
+      break;
+    }
+    if (converting && !ConvertClipboardForPaste(m_State, m_Log)) {
+      QMessageBox::warning(this, "Cannot convert clipboard", "Conversion failed. See command history for details.");
+      continue;
+    }
+    m_State.pastePrompt = {};
+    m_State.pasteWarningAnswered = true;
+    if (pending.original) StartPasteOrigCommand(m_State, m_Log);
+    else StartPasteCommand(m_State, m_Log);
+    completed = true;
+  }
+  m_ModalOpen = false;
+  Refresh();
+}
+
 void EditorWindow::ShowProjectPointWarning() {
   using Answer = AppCommandState::PointEditPrompt::Answer;
   const auto pending = m_State.pointEditPrompt;

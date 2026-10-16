@@ -53,6 +53,9 @@ private:
   void ShowCreatePoints();
   void ShowPoints(bool database);
   void ShowProjectPointWarning();
+  void ShowPointTransfer(bool importing);
+  void ShowSurveyReports();
+  void ShowPasteWarning();
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
