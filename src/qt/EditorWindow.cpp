@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "EditorChrome.hpp"
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -32,8 +33,8 @@
 #include <QTimer>
 #include <QLabel>
 #include <QLineEdit>
-#include <QMenuBar>
 #include <QMessageBox>
+#include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
@@ -65,7 +66,9 @@ QString QtAsset(const QString& relative) {
 EditorWindow::EditorWindow() {
   m_State.measureAnnotationText = MeasureQtText;
   setObjectName("GoSurveyQtEditor");
-  setWindowTitle("GoSurvey | Qt Editor");
+  setWindowTitle("GoSurvey");
+  setWindowFlag(Qt::FramelessWindowHint);
+  setMinimumSize(820, 540);
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
   resize(1500, 950);
   setDockNestingEnabled(true);
@@ -120,7 +123,7 @@ EditorWindow::EditorWindow() {
   modelLayout->addWidget(viewBar);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
-  m_Viewport->textEntered = [this](const QString& text) { m_Command->setFocus(); m_Command->insert(text); };
+  m_Viewport->textEntered = [this](const QString& text) { if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible(); m_Command->setFocus(); m_Command->insert(text); };
   m_Viewport->cursorChanged = [this](double x, double y, double z) {
     m_Coordinates->setText(QString("E %1   N %2   Z %3").arg(x + m_State.worldDocumentOriginX, 0, 'f', 4)
         .arg(y + m_State.worldDocumentOriginY, 0, 'f', 4).arg(z, 0, 'f', 4));
@@ -176,12 +179,15 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   action->setObjectName("command_" + command);
   action->setToolTip(label + " (" + command + ")");
   action->setShortcut(shortcut);
+  addAction(action);
   connect(action, &QAction::triggered, this, [this, command] { Submit(command); });
   return action;
 }
 
 void EditorWindow::BuildRibbon() {
-  auto* file = menuBar()->addMenu("&File");
+  auto* applicationMenu = new QMenu(this);
+  applicationMenu->setObjectName("goSurveyApplicationMenu");
+  auto* file = applicationMenu->addMenu("&File");
   file->addAction(CommandAction("&New", "New.png", "NEW", QKeySequence::New));
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
@@ -193,26 +199,19 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("PDF viewer...", "Pdf.png", "PDFVIEW"));
   file->addSeparator();
   file->addAction("Exit", this, &QWidget::close);
-  auto* edit = menuBar()->addMenu("&Edit");
+  auto* edit = applicationMenu->addMenu("&Edit");
   edit->addAction(CommandAction("Undo", "Undo.png", "UNDO", QKeySequence::Undo));
   edit->addAction(CommandAction("Redo", "Redo.png", "REDO", QKeySequence::Redo));
   edit->addAction(CommandAction("Copy", "Copy.png", "COPYCLIP", QKeySequence::Copy));
   edit->addAction(CommandAction("Paste", "Paste.png", "PASTECLIP", QKeySequence::Paste));
-  menuBar()->addMenu("&View")->setObjectName("viewMenu");
-  menuBar()->addMenu("&Survey")->addAction(CommandAction("Least-squares adjustment...", "Adjust.png", "LSA"));
-  auto* help = menuBar()->addMenu("&Help");
+  applicationMenu->addMenu("&View")->setObjectName("viewMenu");
+  applicationMenu->addMenu("&Survey")->addAction(CommandAction("Least-squares adjustment...", "Adjust.png", "LSA"));
+  auto* help = applicationMenu->addMenu("&Help");
   help->addAction("What's new", this, [this] { ShowWhatsNew(); });
   help->addAction("About GoSurvey", this, [this] {
     QMessageBox::about(this, "GoSurvey", "GoSurvey Qt / Win32 editor\nQt " QT_VERSION_STR "\nMigration branch: test/win32UI");
   });
-  auto* quick = addToolBar("Quick Access");
-  quick->setObjectName("quickAccess");
-  quick->setMovable(false);
-  for (const auto& command : {"NEW", "OPEN", "SAVE", "UNDO", "REDO"}) {
-    const auto actions = findChildren<QAction*>("command_" + QString(command));
-    if (!actions.empty()) quick->addAction(actions.first());
-  }
-  addToolBarBreak();
+  BuildTitleBar(applicationMenu);
   auto* ribbonBar = addToolBar("Ribbon");
   ribbonBar->setObjectName("ribbonBar");
   ribbonBar->setMovable(false);
@@ -260,7 +259,7 @@ void EditorWindow::BuildDocks() {
     dock->setObjectName(name);
     dock->setWidget(widget);
     addDockWidget(area, dock);
-    for (auto* menu : menuBar()->findChildren<QMenu*>())
+    for (auto* menu : findChildren<QMenu*>())
       if (menu->objectName() == "viewMenu") menu->addAction(dock->toggleViewAction());
     return dock;
   };
@@ -284,16 +283,15 @@ void EditorWindow::BuildDocks() {
     CadRibbonPickLayer(m_State, layer.toUtf8().toStdString(), m_Log);
     Refresh();
   });
-  auto* commands = new QWidget(this);
-  auto* commandLayout = new QVBoxLayout(commands);
-  commandLayout->setContentsMargins(4, 4, 4, 4);
-  m_Transcript = new QPlainTextEdit(commands);
-  m_Transcript->setReadOnly(true);
-  m_Transcript->setMaximumBlockCount(5000);
-  m_Transcript->setMaximumHeight(135);
-  m_Transcript->setFont(QFont("Consolas", 10));
-  m_Command = new QLineEdit(commands);
-  m_Command->setObjectName("commandInput");
+  m_CommandBar = new FloatingCommandBar(m_Viewport);
+  m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
+  m_Transcript = m_CommandBar->Transcript();
+  m_Command = m_CommandBar->Input();
+  connect(new QShortcut(QKeySequence(Qt::Key_F2), this), &QShortcut::activated, this, [this] { m_CommandBar->ToggleConsole(); });
+  auto* toggleCommand = new QAction("Command line", this);
+  toggleCommand->setShortcut(QKeySequence("Ctrl+9")); addAction(toggleCommand);
+  connect(toggleCommand, &QAction::triggered, this, [this] { m_CommandBar->ToggleVisible(); });
+  if (auto* view = findChild<QMenu*>("viewMenu")) view->addAction(toggleCommand);
   m_Command->installEventFilter(this);
   m_Command->setPlaceholderText("Type a command or coordinates");
   QStringList names;
@@ -315,9 +313,6 @@ void EditorWindow::BuildDocks() {
     m_Command->clear();
     Submit(line);
   });
-  commandLayout->addWidget(m_Transcript);
-  commandLayout->addWidget(m_Command);
-  makeDock("Command line", "commandDock", Qt::BottomDockWidgetArea, commands);
   connect(m_Toolspace, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
     const auto index = item->data(0, Qt::UserRole);
     if (index.isValid()) SwitchDrawing(index.toInt());
@@ -546,7 +541,18 @@ void EditorWindow::Refresh() {
   m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
   m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
-  while (m_LogShown < m_Log.size()) m_Transcript->appendPlainText(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
+  while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
+  QString commandHint;
+  for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
+      ScaleCommandFooterHint(m_State), RotateCommandFooterHint(m_State), DeleteCommandFooterHint(m_State),
+      JoinCommandFooterHint(m_State), TrimCommandFooterHint(m_State), OffsetCommandFooterHint(m_State),
+      AlignCommandFooterHint(m_State), ZoomCommandFooterHint(m_State), DrawingExtrasFooterHint(m_State)})
+    if (hint && *hint) { commandHint = QString::fromUtf8(hint); break; }
+  m_CommandBar->SetHint(commandHint);
+  if (m_WindowTitle) {
+    const auto title = m_Tabs->tabText(m_State.activeDrawingIdx) + QString::fromUtf8("  —  GoSurvey");
+    m_WindowTitle->setText(title); setWindowTitle(title);
+  }
   m_Properties->clear();
   auto* general = new QTreeWidgetItem(m_Properties, {"General"});
   new QTreeWidgetItem(general, {"Selected", QString::number(m_State.selection.size())});

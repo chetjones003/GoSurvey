@@ -36,8 +36,8 @@ Alternatively configure with `-DGOSURVEY_BUILD_QT=ON` and
 `windeployqt` from that kit deploys runtime plugins beside the executable.
 The Qt option defaults to OFF, so existing build workflows do not require Qt.
 
-The application uses Qt's Windows platform plugin and native Windows top-level
-frames; Qt Widgets own all presentation and input. The Autodesk-inspired dark
+The application uses Qt's Windows platform plugin and Win32 top-level windows
+with a custom Qt title bar; Qt Widgets own all presentation and input. The Autodesk-inspired dark
 chrome uses the repository's existing PNG icons, Segoe UI, ribbon tabs, command
 line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 
@@ -46,7 +46,7 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Area | Implemented | Remaining parity work |
 |---|---|---|
 | Startup | Splash using existing artwork; Start page; Markdown What's New window | Startup auth/update/telemetry/crash-report wiring; recent-file tiles; version-based What's New display policy |
-| Editor chrome | Menus, quick access, ribbon tabs, dock layout persistence | Full existing ribbon inventory, contextual ribbons, panel-specific command UI, shortcut parity |
+| Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; ribbon tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Full existing ribbon inventory, contextual ribbons, panel-specific command UI, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
@@ -82,7 +82,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 25 passed, 0 failed (23 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 26 passed, 0 failed (24 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry

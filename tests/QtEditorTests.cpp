@@ -1,6 +1,7 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "EditorViewport.hpp"
+#include "EditorChrome.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "PdfAttach.hpp"
@@ -17,6 +18,7 @@
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QLineEdit>
+#include <QLabel>
 #include <QCompleter>
 #include <QAbstractItemView>
 #include <QMouseEvent>
@@ -26,6 +28,10 @@
 #include <QComboBox>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QToolButton>
+#include <QMenu>
+#include <QDockWidget>
+#include <QSettings>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QDir>
@@ -233,6 +239,72 @@ private Q_SLOTS:
     QTRY_COMPARE(window.State().active, AppCommandState::Kind::None);
     QTest::keyClick(input, Qt::Key_Up);
     QCOMPARE(input->text(), QString("LINE"));
+  }
+
+  void customTitleBarAndFloatingCommandLineWork() {
+    QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    EditorWindow window; window.Submit("NEW"); window.show(); window.activateWindow();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
+    auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
+    auto* logo = window.findChild<QToolButton*>("applicationMenu"); QVERIFY(logo); QVERIFY(logo->menu());
+    QStringList categories; for (auto* action : logo->menu()->actions()) categories.append(QString(action->text()).remove('&'));
+    QCOMPARE(categories, QStringList({"File", "Edit", "View", "Survey", "Help"}));
+    bool opened = false;
+    QTimer::singleShot(0, &window, [&] { opened = logo->menu()->isVisible(); logo->menu()->hide(); });
+    logo->showMenu(); QVERIFY(opened);
+    for (const auto& command : {"NEW", "OPEN", "SAVE", "UNDO", "REDO"}) {
+      auto* button = window.findChild<QToolButton*>("quick_" + QString(command));
+      QVERIFY(button); QVERIFY(button->defaultAction());
+      QVERIFY(title->isAncestorOf(button));
+    }
+    QVERIFY(!window.findChild<QDockWidget*>("commandDock"));
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
+    auto* panel = dynamic_cast<FloatingCommandBar*>(window.findChild<QFrame*>("floatingCommandBar")); QVERIFY(panel);
+    QCOMPARE(panel->parentWidget(), viewport);
+    auto* input = panel->Input();
+    input->setFocus(); input->setText("LINE"); QTest::keyClick(input, Qt::Key_Return);
+    QCOMPARE(window.State().active, AppCommandState::Kind::Line);
+    auto* hint = panel->findChild<QLabel*>("commandHint"); QVERIFY(hint); QVERIFY(!hint->isHidden());
+    input->setText("0,0"); QTest::keyClick(input, Qt::Key_Return);
+    QVERIFY(hint->text().contains("href"));
+    QVERIFY(QMetaObject::invokeMethod(hint, "linkActivated", Qt::DirectConnection, Q_ARG(QString, "a")));
+    QVERIFY(window.State().segmentAngleKeyboardAwaitBearing);
+    QTest::keyClick(input, Qt::Key_Escape);
+    input->setText("LINE"); QTest::keyClick(input, Qt::Key_Return);
+    input->setText("0,0"); QTest::keyClick(input, Qt::Key_Return);
+    input->setText("10,0"); QTest::keyClick(input, Qt::Key_Return);
+    QTest::keyClick(input, Qt::Key_Escape);
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    window.findChild<QToolButton*>("quick_UNDO")->click();
+    QVERIFY(window.State().userLinesFlat.empty());
+    window.findChild<QToolButton*>("quick_REDO")->click();
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    QTest::keyClick(input, Qt::Key_F2);
+    QTRY_VERIFY(panel->Transcript()->isVisible());
+    QVERIFY(panel->Transcript()->toPlainText().contains("LINE", Qt::CaseInsensitive));
+    QTest::keyClick(input, Qt::Key_F2); QTRY_VERIFY(panel->Transcript()->isHidden());
+    QTest::keyClick(input, Qt::Key_9, Qt::ControlModifier); QTRY_VERIFY(panel->isHidden());
+    QTest::keyClick(viewport, Qt::Key_9, Qt::ControlModifier); QTRY_VERIFY(panel->isVisible());
+    auto drag = [&](const char* name, int dx) {
+      auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
+      const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
+      QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
+      QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(grip, &move);
+      QTest::mouseRelease(grip, Qt::LeftButton);
+    };
+    const int oldX = panel->x(); drag("commandDragGrip", 20); QVERIFY(panel->x() > oldX);
+    const int oldWidth = panel->width(); drag("commandResizeGrip", -40); QCOMPARE(panel->width(), oldWidth - 40);
+    window.resize(950, 650); QTest::qWait(50);
+    QVERIFY(viewport->rect().contains(panel->geometry()));
+    QCOMPARE(viewport->height() - panel->geometry().bottom(), 13);
+    auto* maximize = window.findChild<QToolButton*>("windowMaximize"); QVERIFY(maximize);
+    maximize->click(); QTRY_VERIFY(window.isMaximized());
+    maximize->click(); QTRY_VERIFY(!window.isMaximized());
+    window.resize(1500, 950); QTest::qWait(100);
+    QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/qt-chrome-preview.png"));
+    settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
   }
 
   void frontViewPanMovesInCameraPlane() {

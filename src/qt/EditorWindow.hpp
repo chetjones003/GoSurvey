@@ -11,6 +11,8 @@ class QComboBox;
 class QLabel;
 class QStackedWidget;
 class QAction;
+class QMenu;
+class FloatingCommandBar;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -23,10 +25,12 @@ public:
 protected:
   void closeEvent(QCloseEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
+  bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
   void BuildRibbon();
+  void BuildTitleBar(QMenu* applicationMenu);
   void BuildDocks();
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);
@@ -56,6 +60,8 @@ private:
   QStackedWidget* m_Pages = nullptr;
   QPlainTextEdit* m_Transcript = nullptr;
   QLineEdit* m_Command = nullptr;
+  FloatingCommandBar* m_CommandBar = nullptr;
+  QLabel* m_WindowTitle = nullptr;
   QTreeWidget* m_Toolspace = nullptr;
   QTreeWidget* m_Properties = nullptr;
   QComboBox* m_Layer = nullptr;

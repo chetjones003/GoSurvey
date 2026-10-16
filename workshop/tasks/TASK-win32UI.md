@@ -79,3 +79,14 @@ precision, labels/raw codes and undo. Qt and legacy builds passed; all 25 Qt
 results, 1,632 domain cases / 9,201,236 assertions, and 831 snap/document cases /
 9,511 assertions passed. JSON integrity gate above is resolved; full UI parity
 remains active.
+
+User-directed chrome iteration: moved File/Edit/View/Survey/Help into the logo's
+application menu and moved New/Open/Save/Undo/Redo into a compact custom title bar.
+Added minimize/maximize/restore/close, system drag, double-click maximize and native
+resize/work-area handling. Replaced the docked command panel with a viewport overlay:
+horizontal drag, width resizing, retained layout preferences, fading recent lines,
+F2 console, Ctrl+9 visibility, and shared clickable command hints. Input events stop
+at the overlay to prevent duplicate empty submissions into the viewport. Verified
+menu access, quick actions, command/coordinate entry, hint dispatch, history toggles,
+drag/resize, viewport bounds and maximize/restore. Qt build, all 26 Qt results and
+styled smoke checks pass; inspected build/qt-editor-smoke.png. No domain changes.
