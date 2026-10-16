@@ -1,10 +1,12 @@
 #include "EditorWindow.hpp"
+#include "QtAppearance.hpp"
 #include "PdfAttach.hpp"
 #include <QApplication>
 #include <QFile>
 #include <QImage>
 #include <QPainter>
 #include <QPalette>
+#include <QSettings>
 #include <QSplashScreen>
 #include <QSurfaceFormat>
 #include <QTimer>
@@ -20,60 +22,7 @@ int main(int argc, char** argv) {
   QApplication app(argc, argv);
   app.setOrganizationName("GoSurvey");
   app.setApplicationName("GoSurveyQt");
-  app.setStyle("Fusion");
-  app.setFont(QFont("Segoe UI", 9));
-  app.setProperty("defaultQtStyle", true);
-  // Explicit light roles keep Fusion light even when Windows uses dark mode.
-  QPalette palette(QColor("#f0f0f0"));
-  palette.setColor(QPalette::Window, QColor("#f0f0f0"));
-  palette.setColor(QPalette::WindowText, QColor("#202020"));
-  palette.setColor(QPalette::Base, Qt::white);
-  palette.setColor(QPalette::AlternateBase, QColor("#f7f7f7"));
-  palette.setColor(QPalette::Text, QColor("#202020"));
-  palette.setColor(QPalette::Button, QColor("#f0f0f0"));
-  palette.setColor(QPalette::ButtonText, QColor("#202020"));
-  palette.setColor(QPalette::Highlight, QColor("#0078d7"));
-  palette.setColor(QPalette::HighlightedText, Qt::white);
-  palette.setColor(QPalette::Link, QColor("#0066cc"));
-  palette.setColor(QPalette::ToolTipBase, QColor("#ffffe1"));
-  palette.setColor(QPalette::ToolTipText, Qt::black);
-  palette.setColor(QPalette::Disabled, QPalette::Text, QColor("#808080"));
-  palette.setColor(QPalette::Disabled, QPalette::WindowText, QColor("#808080"));
-  palette.setColor(QPalette::Disabled, QPalette::ButtonText, QColor("#808080"));
-  palette.setColor(QPalette::Disabled, QPalette::Highlight, QColor("#d9d9d9"));
-  palette.setColor(QPalette::Disabled, QPalette::HighlightedText, QColor("#808080"));
-  app.setPalette(palette);
-  app.setStyleSheet(R"(
-    QMainWindow::separator { background:#b9bdc3; width:3px; height:3px; }
-    QToolBar { border:0; spacing:1px; padding:1px; background:#e5e7ea; }
-    #editorTitleBar { background:#e3e5e8; border-bottom:1px solid #a9adb4; }
-    QToolButton { border:1px solid transparent; border-radius:0; padding:2px 4px; }
-    QToolButton:hover { background:#e5f0fb; border-color:#93b4d3; }
-    QToolButton:pressed, QToolButton:checked { background:#cee1f4; border-color:#739bbf; }
-    #windowClose:hover { background:#c42b1c; color:white; border-color:#c42b1c; }
-    #ribbon::pane { border:1px solid #afb4bc; background:#e9ebee; }
-    #ribbon QToolButton { padding:2px 5px; }
-    #ribbonPanelLabel { color:#555e69; font-size:10px; border-top:1px solid #d2d5da; padding-top:1px; }
-    QTabBar::tab { background:#dce0e5; color:#30353b; border:1px solid #b0b5bd; padding:3px 12px; margin-right:1px; }
-    QTabBar::tab:selected { background:#f6f7f8; border-bottom-color:#f6f7f8; }
-    QTabBar::tab:hover:!selected { background:#eaf0f7; }
-    #drawingTabs::tab { padding:3px 10px; }
-    QDockWidget::title { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #eef0f3,stop:1 #c6cbd2); border:1px solid #a9afb8; padding:3px 6px; color:#30363f; }
-    QTreeView { background:white; border:1px solid #b3b8bf; outline:0; }
-    QTreeView::item { min-height:18px; }
-    QTreeView::item:selected { background:#dceafb; color:#152c44; }
-    QHeaderView::section { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f6f7f9,stop:1 #d9dde3); border:0; border-right:1px solid #b5bac2; border-bottom:1px solid #a9afb8; padding:3px 5px; color:#333b46; }
-    QLineEdit, QComboBox { background:white; color:#202020; border:1px solid #aeb4bc; border-radius:0; padding:2px 4px; min-height:18px; }
-    QLineEdit:focus, QComboBox:focus { border-color:#5d94c2; }
-    QStatusBar { background:#e0e3e7; border-top:1px solid #a8afb8; }
-    QStatusBar::item { border:0; }
-    #commandRow { background:#e0e3e7; border:1px solid #8d98a5; }
-    #commandRecent, #commandHint { background:#f1f2f4; border:1px solid #b8bec6; padding:3px 6px; }
-    #commandInput { background:white; border:1px solid #aeb4bc; padding:2px 4px; }
-    QMenu { background:#f7f7f7; border:1px solid #a5abb3; padding:2px; }
-    QMenu::item { padding:4px 24px 4px 24px; }
-    QMenu::item:selected { background:#dceafb; color:#202020; }
-  )");
+  ApplyQtAppearance(app, app.arguments().contains("--light-style") || QSettings().value("editor/lightTheme", false).toBool());
   const bool smoke = app.arguments().contains("--smoke-test");
   QPixmap splashImage(QtAsset("splash-bg.png"));
   if (splashImage.isNull()) { splashImage = QPixmap(800, 440); splashImage.fill(QColor("#242830")); }
@@ -107,7 +56,7 @@ int main(int argc, char** argv) {
       });
     } else {
       for (const auto& argument : app.arguments().mid(1))
-        if (argument != "--default-style") { window.OpenDrawing(argument); break; }
+        if (argument != "--default-style" && argument != "--light-style") { window.OpenDrawing(argument); break; }
     }
     result = app.exec();
   } // Release viewport resources and PDF worker windows before shutting down PDFium.

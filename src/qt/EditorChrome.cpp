@@ -134,6 +134,7 @@ FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
   options->setMenu(menu); options->setPopupMode(QToolButton::InstantPopup); row->addWidget(options);
   auto* prompt = new QLabel("Command:", bar); if (!qApp->property("defaultQtStyle").toBool()) prompt->setStyleSheet("color:#83cc94; background:transparent; border:0;"); row->addWidget(prompt);
   m_Input = new QLineEdit(bar); m_Input->setObjectName("commandInput"); m_Input->setPlaceholderText("Type a command"); row->addWidget(m_Input, 1);
+  auto inputPalette = m_Input->palette(); inputPalette.setColor(QPalette::PlaceholderText, QColor("#737373")); m_Input->setPalette(inputPalette);
   auto* history = new QToolButton(bar); history->setObjectName("commandHistoryToggle"); history->setArrowType(Qt::UpArrow); history->setAutoRaise(true); history->setToolTip("Expand command history (F2)");
   connect(history, &QToolButton::clicked, this, [this] { ToggleConsole(); }); row->addWidget(history);
   auto* size = new QLabel("⋮", bar); size->setToolTip("Drag to resize command line"); size->setCursor(Qt::SizeHorCursor);

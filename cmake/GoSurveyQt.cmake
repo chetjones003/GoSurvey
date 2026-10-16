@@ -3,6 +3,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorWindow.cpp
   src/qt/EditorChrome.cpp
+  src/qt/QtAppearance.cpp
   src/qt/QtText.cpp
   src/qt/QtAnnotations.cpp
   src/qt/EditorViewport.cpp

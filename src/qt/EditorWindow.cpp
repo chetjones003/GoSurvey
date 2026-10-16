@@ -1,5 +1,11 @@
 #include "EditorWindow.hpp"
 #include "EditorChrome.hpp"
+#include "QtAppearance.hpp"
+#include <QActionGroup>
+#include <QTreeWidgetItemIterator>
+#include <QSet>
+#include <QStyle>
+#include <QAbstractButton>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -58,9 +64,28 @@ QString QtAsset(const QString& relative) {
   if (relative == "icons/New.png") resolved = "icons/New_Drawing.png";
   else if (relative == "icons/circle.png") resolved = "icons/Circle_Center_Radius.png";
   else if (relative == "icons/Zoom_Extents.png") resolved = "icons/Zoom_Extensis.png";
+  else if (relative == "icons/Point.png") resolved = "icons/c3d_point.png";
   const auto path = ResolveBundledAssetPath(std::filesystem::path("resources") /
       std::filesystem::path(resolved.toStdWString()));
   return QString::fromStdWString(path.wstring());
+}
+
+namespace {
+QIcon CadCommandIcon(const QString& icon) {
+  const auto path = QtAsset("icons/" + icon);
+  if (path.isEmpty()) return {};
+  auto image = QImage(path).convertToFormat(QImage::Format_ARGB32);
+  // Keep the supplied icon artwork; give its neutral white strokes contrast on light controls.
+  if (qApp->palette().color(QPalette::Window).lightness() > 128) {
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+      const auto color = image.pixelColor(x, y);
+      if (color.alpha() && color.red() > 210 && color.green() > 210 && color.blue() > 210 &&
+          std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 15)
+        image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
+    }
+  }
+  return QIcon(QPixmap::fromImage(image));
+}
 }
 
 EditorWindow::EditorWindow() {
@@ -136,6 +161,7 @@ EditorWindow::EditorWindow() {
   setCentralWidget(center);
   BuildRibbon();
   BuildDocks();
+  UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
   statusBar()->addPermanentWidget(m_Coordinates, 1);
   auto* ortho = new QToolButton(this);
@@ -176,17 +202,8 @@ EditorWindow::EditorWindow() {
 
 QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
                                     const QString& command, const QKeySequence& shortcut) {
-  auto image = QImage(QtAsset("icons/" + icon)).convertToFormat(QImage::Format_ARGB32);
-  // Keep the supplied icon artwork; give its neutral white strokes contrast on light controls.
-  if (palette().color(QPalette::Window).lightness() > 128) {
-    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
-      const auto color = image.pixelColor(x, y);
-      if (color.alpha() && color.red() > 210 && color.green() > 210 && color.blue() > 210 &&
-          std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 15)
-        image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
-    }
-  }
-  auto* action = new QAction(QIcon(QPixmap::fromImage(image)), label, this);
+  auto* action = new QAction(CadCommandIcon(icon), label, this);
+  action->setProperty("cadIcon", icon);
   if (action->icon().isNull()) action->setIcon(QIcon(QtAsset("icons/app.png")));
   action->setObjectName("command_" + command);
   action->setToolTip(label + " (" + command + ")");
@@ -194,6 +211,19 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   addAction(action);
   connect(action, &QAction::triggered, this, [this, command] { Submit(command); });
   return action;
+}
+
+void EditorWindow::UpdateChromeIcons() {
+  for (auto* command : findChildren<QAction*>())
+    if (command->property("cadIcon").isValid()) command->setIcon(CadCommandIcon(command->property("cadIcon").toString()));
+  for (auto* dock : findChildren<QDockWidget*>()) for (auto* button : dock->findChildren<QAbstractButton*>()) {
+    if (button->objectName() != "qt_dockwidget_closebutton" && button->objectName() != "qt_dockwidget_floatbutton") continue;
+    auto glyph = button->icon().pixmap(32, 32);
+    if (glyph.isNull()) continue;
+    QPainter painter(&glyph); painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    painter.fillRect(glyph.rect(), palette().color(QPalette::WindowText)); painter.end();
+    button->setIcon(QIcon(glyph));
+  }
 }
 
 void EditorWindow::BuildRibbon() {
@@ -216,7 +246,20 @@ void EditorWindow::BuildRibbon() {
   edit->addAction(CommandAction("Redo", "Redo.png", "REDO", QKeySequence::Redo));
   edit->addAction(CommandAction("Copy", "Copy.png", "COPYCLIP", QKeySequence::Copy));
   edit->addAction(CommandAction("Paste", "Paste.png", "PASTECLIP", QKeySequence::Paste));
-  applicationMenu->addMenu("&View")->setObjectName("viewMenu");
+  auto* viewMenu = applicationMenu->addMenu("&View"); viewMenu->setObjectName("viewMenu");
+  auto* appearance = viewMenu->addMenu("Appearance");
+  auto* themes = new QActionGroup(this); themes->setExclusive(true);
+  for (bool light : {false, true}) {
+    auto* action = appearance->addAction(light ? "Classic light" : "Neutral gray");
+    action->setCheckable(true); action->setChecked(qApp->property("cadLightTheme").toBool() == light); themes->addAction(action);
+    connect(action, &QAction::triggered, this, [this, light] {
+      ApplyQtAppearance(*qApp, light);
+      QSettings settings; settings.setValue("editor/lightTheme", light);
+      UpdateChromeIcons();
+      Refresh();
+    });
+  }
+  viewMenu->addSeparator();
   applicationMenu->addMenu("&Survey")->addAction(CommandAction("Least-squares adjustment...", "Adjust.png", "LSA"));
   auto* help = applicationMenu->addMenu("&Help");
   help->addAction("What's new", this, [this] { ShowWhatsNew(); });
@@ -595,7 +638,7 @@ void EditorWindow::Refresh() {
   m_Properties->clear();
   auto* general = new QTreeWidgetItem(m_Properties, {"General"});
   general->setFirstColumnSpanned(true);
-  general->setBackground(0, QColor("#dce1e7")); general->setForeground(0, QColor("#303b46"));
+  general->setBackground(0, palette().color(QPalette::Button)); general->setForeground(0, palette().color(QPalette::ButtonText));
   auto sectionFont = general->font(0); sectionFont.setBold(true); general->setFont(0, sectionFont);
   new QTreeWidgetItem(general, {"Selected", QString::number(m_State.selection.size())});
   new QTreeWidgetItem(general, {"Lines", QString::number(m_State.userLinesFlat.size() / 6)});
@@ -610,26 +653,48 @@ void EditorWindow::Refresh() {
   auto* color = new QTreeWidgetItem(general, {"Color", QString::fromUtf8(
       (m_State.selection.empty() ? m_State.currentColor : CadSelectionColor(m_State)).c_str())});
   color->setFlags(color->flags() | Qt::ItemIsEditable);
+  auto itemPath = [](QTreeWidgetItem* item) {
+    QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
+    return parts.join(QChar(0x1f));
+  };
+  const bool initialTree = m_Toolspace->topLevelItemCount() == 0;
+  QSet<QString> expanded;
+  QString currentItem;
+  for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
+    if ((*it)->isExpanded()) expanded.insert(itemPath(*it));
+    if ((*it) == m_Toolspace->currentItem()) currentItem = itemPath(*it);
+  }
   m_Toolspace->clear();
   auto* projects = new QTreeWidgetItem(m_Toolspace, {"Projects"});
+  projects->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
   for (const auto& session : m_State.openProjects) {
     auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
         (session.readOnly ? " (read-only)" : "")});
+    project->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
     for (const auto& item : session.project.items)
       new QTreeWidgetItem(project, {QString::fromUtf8(item.path.c_str())});
   }
   projects->setExpanded(true);
   auto* drawings = new QTreeWidgetItem(m_Toolspace, {"Drawings"});
+  drawings->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
   for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
     auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
     drawing->setData(0, Qt::UserRole, i);
+    drawing->setIcon(0, CadCommandIcon("Active_File.png"));
   }
   drawings->setExpanded(true);
-  new QTreeWidgetItem(m_Toolspace, {"Survey points", QString::number(m_State.surveyPoints.size())});
+  auto* points = new QTreeWidgetItem(m_Toolspace, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
+  points->setIcon(0, CadCommandIcon("Point.png"));
   auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
+  surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
   for (const auto& surface : m_State.cadSurfaces) new QTreeWidgetItem(surfaces, {QString::fromUtf8(surface.name.c_str())});
   auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
+  blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
   for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
+  if (!initialTree) for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
+    (*it)->setExpanded(expanded.contains(itemPath(*it)));
+    if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
+  }
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();

@@ -31,6 +31,7 @@ private:
                         const QKeySequence& shortcut = {});
   void BuildRibbon();
   void BuildTitleBar(QMenu* applicationMenu);
+  void UpdateChromeIcons();
   void BuildDocks();
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);

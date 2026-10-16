@@ -32,6 +32,9 @@
 #include <QMenu>
 #include <QDockWidget>
 #include <QSettings>
+#include <QTreeWidget>
+#include <QScopeGuard>
+#include <QStyle>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QDir>
@@ -305,6 +308,36 @@ private Q_SLOTS:
     window.resize(1500, 950); QTest::qWait(100);
     QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/qt-chrome-preview.png"));
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+  }
+
+  void appearanceChangesKeepDrawingAndToolspaceState() {
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restore = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+      QSettings().remove("editor/lightTheme");
+    });
+    EditorWindow window;
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
+    std::vector<std::string> log; CancelActiveCommand(window.State(), log);
+    const auto geometry = window.State().userLinesFlat;
+    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
+    auto drawings = [&] { return tree->findItems("Drawings", Qt::MatchExactly).front(); };
+    auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly).front(); };
+    drawings()->setExpanded(false); blocks()->setExpanded(true);
+    QVERIFY(blocks()->childCount() > 0);
+    const auto selected = blocks()->child(0)->text(0); tree->setCurrentItem(blocks()->child(0));
+    for (const auto& theme : {QString("Neutral gray"), QString("Classic light")}) {
+      auto* action = Action(window, theme); QVERIFY(action); action->trigger();
+      QCOMPARE(window.State().userLinesFlat, geometry);
+      QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
+      QVERIFY(tree->currentItem()); QCOMPARE(tree->currentItem()->text(0), selected);
+      QCOMPARE(qApp->property("cadLightTheme").toBool(), theme == "Classic light");
+    }
+    window.Submit("UNDO"); QVERIFY(window.State().userLinesFlat.empty());
+    QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
   }
 
   void frontViewPanMovesInCameraPlane() {

@@ -102,3 +102,14 @@ now the default. Optional GOSURVEY_QT_RUNTIME_DIR permits rebuilding a compariso
 without closing a previous preview's drawing. Current preview:
 build/classic-cad/GoSurveyQt.exe. Build, styled smoke, and all 26 Qt results passed;
 inspected build/classic-cad/qt-editor-smoke.png. Full functional parity remains open.
+
+Gray reference iteration: neutral medium-gray Fusion chrome, darker tree/property
+fields, controlled muted-blue selection, paper-light command input and retained
+black viewport. Extracted reusable QtAppearance service; logo menu > View >
+Appearance offers live gray/light comparison with saved preference and refreshes
+the existing icon artwork for contrast. Tinted dock controls for legibility,
+added Toolspace folder/drawing icons and point counts, corrected the supplied
+survey-point icon alias, and retained tree expansion/current item through command
+refreshes. Verified appearance changes preserve geometry and undo plus collapsed/
+expanded branches and selected tree item. Qt build, gray smoke and all 27 Qt
+results passed. Preview: build/neutral-gray/GoSurveyQt.exe.
