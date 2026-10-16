@@ -92,7 +92,7 @@ EditorWindow::EditorWindow() {
   auto* startLayout = new QVBoxLayout(start);
   startLayout->setContentsMargins(70, 45, 70, 45);
   auto* title = new QLabel("GoSurvey", start);
-  title->setStyleSheet("font-size:36px; font-weight:600;");
+  if (!qApp->property("defaultQtStyle").toBool()) title->setStyleSheet("font-size:36px; font-weight:600;");
   startLayout->addWidget(title);
   startLayout->addWidget(new QLabel("Survey. Design. Deliver.", start));
   auto* create = new QPushButton(QIcon(QtAsset("icons/New.png")), "New drawing", start);
@@ -112,6 +112,8 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   auto* viewBar = new QToolBar(modelPage);
   viewBar->setObjectName("viewCubeControls");
+  viewBar->setIconSize(QSize(16, 16));
+  viewBar->setMaximumHeight(28);
   struct View { const char* name; float azimuth; float elevation; };
   for (const auto& view : {View{"Top", 0, 90}, View{"Front", 0, 0}, View{"Right", 90, 0},
                            View{"Back", 180, 0}, View{"Left", -90, 0}, View{"Bottom", 0, -90},
@@ -174,7 +176,17 @@ EditorWindow::EditorWindow() {
 
 QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
                                     const QString& command, const QKeySequence& shortcut) {
-  auto* action = new QAction(QIcon(QtAsset("icons/" + icon)), label, this);
+  auto image = QImage(QtAsset("icons/" + icon)).convertToFormat(QImage::Format_ARGB32);
+  // Keep the supplied icon artwork; give its neutral white strokes contrast on light controls.
+  if (palette().color(QPalette::Window).lightness() > 128) {
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+      const auto color = image.pixelColor(x, y);
+      if (color.alpha() && color.red() > 210 && color.green() > 210 && color.blue() > 210 &&
+          std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 15)
+        image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
+    }
+  }
+  auto* action = new QAction(QIcon(QPixmap::fromImage(image)), label, this);
   if (action->icon().isNull()) action->setIcon(QIcon(QtAsset("icons/app.png")));
   action->setObjectName("command_" + command);
   action->setToolTip(label + " (" + command + ")");
@@ -222,14 +234,31 @@ void EditorWindow::BuildRibbon() {
   auto addPage = [&](const char* name, std::initializer_list<Button> buttons) {
     auto* page = new QWidget(ribbon);
     auto* layout = new QHBoxLayout(page);
-    layout->setContentsMargins(8, 5, 8, 5);
+    layout->setContentsMargins(4, 2, 4, 1);
+    layout->setSpacing(0);
+    QHBoxLayout* tools = nullptr;
+    QString previousPanel;
+    int index = 0;
     for (const auto& button : buttons) {
+      const QString panel = QString(name) == "Home" ? (index < 4 ? "Draw" : "Modify") :
+          QString(name) == "Annotate" ? (index < 2 ? "Text" : "Dimensions") :
+          QString(name) == "Insert" ? "References" : QString(name) == "Modeling" ? "Solids" : name;
+      if (panel != previousPanel) {
+        if (tools) { auto* separator = new QFrame(page); separator->setFrameShape(QFrame::VLine); layout->addWidget(separator); }
+        auto* group = new QWidget(page);
+        auto* column = new QVBoxLayout(group); column->setContentsMargins(4, 0, 4, 0); column->setSpacing(1);
+        tools = new QHBoxLayout; tools->setSpacing(1); column->addLayout(tools);
+        auto* caption = new QLabel(panel, group); caption->setObjectName("ribbonPanelLabel"); caption->setAlignment(Qt::AlignCenter);
+        column->addWidget(caption); layout->addWidget(group); previousPanel = panel;
+      }
       auto* tool = new QToolButton(page);
       tool->setDefaultAction(CommandAction(button.label, button.icon, button.command));
       tool->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-      tool->setIconSize(QSize(30, 30));
-      tool->setMinimumSize(64, 66);
-      layout->addWidget(tool);
+      tool->setAutoRaise(true);
+      tool->setIconSize(QSize(22, 22));
+      tool->setMinimumSize(46, 42);
+      tools->addWidget(tool);
+      ++index;
     }
     layout->addStretch();
     ribbon->addTab(page, name);
@@ -265,10 +294,14 @@ void EditorWindow::BuildDocks() {
   };
   m_Toolspace = new QTreeWidget(this);
   m_Toolspace->setHeaderLabel("Prospector");
+  m_Toolspace->setUniformRowHeights(true);
+  m_Toolspace->setIndentation(14);
   m_Toolspace->setMinimumWidth(215);
   makeDock("Toolspace", "toolspaceDock", Qt::LeftDockWidgetArea, m_Toolspace);
   auto* propertyWidget = new QWidget(this);
   auto* propertyLayout = new QVBoxLayout(propertyWidget);
+  propertyLayout->setContentsMargins(4, 4, 4, 4);
+  propertyLayout->setSpacing(3);
   m_Layer = new QComboBox(propertyWidget);
   m_Layer->setObjectName("selectionLayer");
   m_Layer->setEditable(true);
@@ -276,7 +309,13 @@ void EditorWindow::BuildDocks() {
   propertyLayout->addWidget(m_Layer);
   m_Properties = new QTreeWidget(propertyWidget);
   m_Properties->setHeaderLabels({"Property", "Value"});
-  m_Properties->header()->setSectionResizeMode(QHeaderView::ResizeToContents);
+  m_Properties->setRootIsDecorated(true);
+  m_Properties->setIndentation(12);
+  m_Properties->setUniformRowHeights(true);
+  m_Properties->setAlternatingRowColors(true);
+  m_Properties->header()->setSectionResizeMode(0, QHeaderView::Interactive);
+  m_Properties->header()->setSectionResizeMode(1, QHeaderView::Stretch);
+  m_Properties->setColumnWidth(0, 118);
   propertyLayout->addWidget(m_Properties);
   makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, propertyWidget);
   connect(m_Layer, &QComboBox::textActivated, this, [this](const QString& layer) {
@@ -555,6 +594,9 @@ void EditorWindow::Refresh() {
   }
   m_Properties->clear();
   auto* general = new QTreeWidgetItem(m_Properties, {"General"});
+  general->setFirstColumnSpanned(true);
+  general->setBackground(0, QColor("#dce1e7")); general->setForeground(0, QColor("#303b46"));
+  auto sectionFont = general->font(0); sectionFont.setBold(true); general->setFont(0, sectionFont);
   new QTreeWidgetItem(general, {"Selected", QString::number(m_State.selection.size())});
   new QTreeWidgetItem(general, {"Lines", QString::number(m_State.userLinesFlat.size() / 6)});
   new QTreeWidgetItem(general, {"Circles", QString::number(m_State.userCirclesCxCyZR.size() / 4)});

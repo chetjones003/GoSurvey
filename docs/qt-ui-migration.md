@@ -36,8 +36,17 @@ Alternatively configure with `-DGOSURVEY_BUILD_QT=ON` and
 `windeployqt` from that kit deploys runtime plugins beside the executable.
 The Qt option defaults to OFF, so existing build workflows do not require Qt.
 
+The current appearance uses Qt Fusion with a compact classic CAD light treatment:
+flat grouped command tools, restrained borders, gray dock/header gradients, dense
+property rows, Segoe UI and a black drawing viewport. The title-bar/ribbon/dock/
+floating-command layout is retained. `--default-style` remains an accepted alias.
+The current comparison build is at `build/classic-cad/GoSurveyQt.exe`; configure
+`GOSURVEY_QT_RUNTIME_DIR` to select a separate preview output directory, or set it
+empty to restore the normal `build/GoSurveyQt.exe` output. Existing preview windows
+can stay open while another output directory is rebuilt.
+
 The application uses Qt's Windows platform plugin and Win32 top-level windows
-with a custom Qt title bar; Qt Widgets own all presentation and input. The Autodesk-inspired dark
+with a custom Qt title bar; Qt Widgets own all presentation and input. The Autodesk-inspired
 chrome uses the repository's existing PNG icons, Segoe UI, ribbon tabs, command
 line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 

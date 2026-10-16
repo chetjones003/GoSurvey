@@ -46,12 +46,13 @@ private:
 
 void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
   auto* strip = new TitleStrip(this);
-  strip->setFixedHeight(36);
-  strip->setStyleSheet("#editorTitleBar { background:#242830; border-bottom:1px solid #191d23; } QToolButton { color:#dce2e9; border:0; padding:0; border-radius:0; } QToolButton:hover { background:#465565; } QToolButton#windowClose:hover { background:#c42b1c; } QToolButton#applicationMenu { background:#306c94; } QToolButton#applicationMenu:hover { background:#438ab5; }");
+  strip->setFixedHeight(30);
+  strip->setAutoFillBackground(true);
+  if (!qApp->property("defaultQtStyle").toBool()) strip->setStyleSheet("#editorTitleBar { background:#242830; border-bottom:1px solid #191d23; } QToolButton { color:#dce2e9; border:0; padding:0; border-radius:0; } QToolButton:hover { background:#465565; } QToolButton#windowClose:hover { background:#c42b1c; } QToolButton#applicationMenu { background:#306c94; } QToolButton#applicationMenu:hover { background:#438ab5; }");
   auto* row = new QHBoxLayout(strip); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(2);
   auto* app = new QToolButton(strip); app->setObjectName("applicationMenu");
   app->setAccessibleName("GoSurvey application menu"); app->setToolTip("GoSurvey application menu (Alt+F)");
-  app->setIcon(windowIcon()); app->setIconSize(QSize(25, 25)); app->setFixedSize(48, 36);
+  app->setIcon(windowIcon()); app->setIconSize(QSize(22, 22)); app->setFixedSize(40, 30); app->setAutoRaise(true);
   app->setMenu(applicationMenu); app->setPopupMode(QToolButton::InstantPopup);
   row->addWidget(app);
   connect(new QShortcut(QKeySequence("Alt+F"), this), &QShortcut::activated, app, &QToolButton::showMenu);
@@ -59,16 +60,16 @@ void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
     const auto actions = findChildren<QAction*>("command_" + QString(command));
     if (actions.empty()) continue;
     auto* tool = new QToolButton(strip); tool->setObjectName("quick_" + QString(command));
-    tool->setDefaultAction(actions.first()); tool->setIconSize(QSize(19, 19)); tool->setFixedSize(30, 30);
+    tool->setDefaultAction(actions.first()); tool->setIconSize(QSize(17, 17)); tool->setFixedSize(26, 26); tool->setAutoRaise(true);
     row->addWidget(tool);
   }
   row->addSpacing(16);
   m_WindowTitle = new QLabel(windowTitle(), strip); m_WindowTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-  m_WindowTitle->setStyleSheet("color:#c8d0da; font-size:12px; background:transparent;");
+  if (!qApp->property("defaultQtStyle").toBool()) m_WindowTitle->setStyleSheet("color:#c8d0da; font-size:12px; background:transparent;");
   m_WindowTitle->setMinimumWidth(0); row->addWidget(m_WindowTitle, 1);
   auto control = [&](const char* name, const char* label, const char* glyph) {
     auto* button = new QToolButton(strip); button->setObjectName(name); button->setAccessibleName(label); button->setToolTip(label);
-    button->setText(QString::fromUtf8(glyph)); button->setFont(QFont("Segoe UI", 13)); button->setFixedSize(46, 36); row->addWidget(button); return button;
+    button->setText(QString::fromUtf8(glyph)); button->setFont(QFont("Segoe UI", 11)); button->setFixedSize(40, 30); button->setAutoRaise(true); row->addWidget(button); return button;
   };
   connect(control("windowMinimize", "Minimize", "−"), &QToolButton::clicked, this, &QWidget::showMinimized);
   auto* maximize = control("windowMaximize", "Maximize / Restore", "□");
@@ -105,33 +106,35 @@ bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* r
 
 FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
   setObjectName("floatingCommandBar"); setAttribute(Qt::WA_StyledBackground);
-  setStyleSheet("#floatingCommandBar { background:transparent; border:0; } #commandRow { background:#343b45; border:1px solid #596572; border-radius:4px; } #commandInput { background:#f4f5f6; color:#20262d; border:0; border-radius:2px; padding:6px; } #commandRecent { color:#cdd7e2; background:#29313b; padding:5px 9px; border-radius:3px; } QToolButton { border:0; padding:3px; }");
+  if (!qApp->property("defaultQtStyle").toBool()) setStyleSheet("#floatingCommandBar { background:transparent; border:0; } #commandRow { background:#343b45; border:1px solid #596572; border-radius:4px; } #commandInput { background:#f4f5f6; color:#20262d; border:0; border-radius:2px; padding:6px; } #commandRecent { color:#cdd7e2; background:#29313b; padding:5px 9px; border-radius:3px; } QToolButton { border:0; padding:3px; }");
   auto* layout = new QVBoxLayout(this); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(5);
   m_Transcript = new QPlainTextEdit(this); m_Transcript->setObjectName("commandConsole");
   m_Transcript->setReadOnly(true); m_Transcript->setMaximumBlockCount(5000); m_Transcript->setFixedHeight(200);
   m_Transcript->setFont(QFont("Consolas", 10)); m_Transcript->hide(); layout->addWidget(m_Transcript);
   m_Recent = new QLabel(this); m_Recent->setObjectName("commandRecent"); m_Recent->setTextFormat(Qt::PlainText);
+  m_Recent->setAutoFillBackground(true);
   m_Recent->setMaximumHeight(70); m_Recent->hide(); layout->addWidget(m_Recent);
   auto* opacity = new QGraphicsOpacityEffect(m_Recent); opacity->setOpacity(1); m_Recent->setGraphicsEffect(opacity);
   m_Fade = new QPropertyAnimation(opacity, "opacity", this); m_Fade->setDuration(1000); m_Fade->setStartValue(1.0); m_Fade->setEndValue(0.0);
   connect(m_Fade, &QPropertyAnimation::finished, this, [this] { m_Recent->hide(); Place(); });
   m_Hint = new QLabel(this); m_Hint->setObjectName("commandHint");
   m_Hint->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-  m_Hint->setStyleSheet("color:#8fd09a; background:#29313b; padding:4px 8px; border-radius:3px;");
+  m_Hint->setAutoFillBackground(true);
+  if (!qApp->property("defaultQtStyle").toBool()) m_Hint->setStyleSheet("color:#8fd09a; background:#29313b; padding:4px 8px; border-radius:3px;");
   m_Hint->setTextFormat(Qt::RichText); m_Hint->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
   connect(m_Hint, &QLabel::linkActivated, this, [this](const QString& shortcut) { if (optionSelected) optionSelected(shortcut); });
   m_Hint->hide(); layout->addWidget(m_Hint);
-  auto* bar = new QFrame(this); bar->setObjectName("commandRow");
+  auto* bar = new QFrame(this); bar->setObjectName("commandRow"); bar->setAutoFillBackground(true);
   auto* row = new QHBoxLayout(bar); row->setContentsMargins(3, 3, 3, 3); row->setSpacing(5);
   auto* grip = new QLabel("⠿", bar); grip->setToolTip("Drag horizontally to move the command line"); grip->setCursor(Qt::SizeHorCursor);
   m_Grip = grip; grip->setObjectName("commandDragGrip"); row->addWidget(grip); grip->installEventFilter(this);
-  auto* options = new QToolButton(bar); options->setText("⚙"); options->setAccessibleName("Command line options");
+  auto* options = new QToolButton(bar); options->setIcon(QIcon(QtAsset("icons/c3d_dwgsettings.png"))); options->setIconSize(QSize(16, 16)); options->setAutoRaise(true); options->setAccessibleName("Command line options");
   auto* menu = new QMenu(options); menu->addAction("Command history (F2)", this, [this] { ToggleConsole(); });
   menu->addAction("Hide command line (Ctrl+9)", this, [this] { ToggleVisible(); });
   options->setMenu(menu); options->setPopupMode(QToolButton::InstantPopup); row->addWidget(options);
-  auto* prompt = new QLabel("Command:", bar); prompt->setStyleSheet("color:#83cc94; background:transparent; border:0;"); row->addWidget(prompt);
+  auto* prompt = new QLabel("Command:", bar); if (!qApp->property("defaultQtStyle").toBool()) prompt->setStyleSheet("color:#83cc94; background:transparent; border:0;"); row->addWidget(prompt);
   m_Input = new QLineEdit(bar); m_Input->setObjectName("commandInput"); m_Input->setPlaceholderText("Type a command"); row->addWidget(m_Input, 1);
-  auto* history = new QToolButton(bar); history->setObjectName("commandHistoryToggle"); history->setText("⌃"); history->setToolTip("Expand command history (F2)");
+  auto* history = new QToolButton(bar); history->setObjectName("commandHistoryToggle"); history->setArrowType(Qt::UpArrow); history->setAutoRaise(true); history->setToolTip("Expand command history (F2)");
   connect(history, &QToolButton::clicked, this, [this] { ToggleConsole(); }); row->addWidget(history);
   auto* size = new QLabel("⋮", bar); size->setToolTip("Drag to resize command line"); size->setCursor(Qt::SizeHorCursor);
   m_SizeGrip = size; size->setObjectName("commandResizeGrip"); row->addWidget(size); size->installEventFilter(this);
@@ -159,6 +162,7 @@ void FloatingCommandBar::Append(const QString& line) {
 void FloatingCommandBar::ToggleConsole() {
   if (isHidden()) show();
   m_Transcript->setVisible(m_Transcript->isHidden()); m_Recent->hide(); Place();
+  findChild<QToolButton*>("commandHistoryToggle")->setArrowType(m_Transcript->isHidden() ? Qt::UpArrow : Qt::DownArrow);
   if (m_Transcript->isVisible()) m_Transcript->ensureCursorVisible();
 }
 void FloatingCommandBar::ToggleVisible() { setVisible(isHidden()); if (isVisible()) { Place(); m_Input->setFocus(); } }
@@ -166,7 +170,7 @@ void FloatingCommandBar::SetHint(const QString& hint) {
   QString html;
   for (const auto& segment : cmdbar::ParsePromptSegments(hint.toUtf8().constData())) {
     const auto text = QString::fromUtf8(segment.text.c_str()).toHtmlEscaped();
-    html += segment.isLink ? "<a style='color:#78c9ff' href='" + QString::fromUtf8(segment.shortcut.c_str()).toHtmlEscaped() + "'>" + text + "</a>" : text;
+    html += segment.isLink ? "<a href='" + QString::fromUtf8(segment.shortcut.c_str()).toHtmlEscaped() + "'>" + text + "</a>" : text;
   }
   if (m_Hint->text() == html) return;
   m_Hint->setText(html); m_Hint->setVisible(!html.isEmpty()); Place();

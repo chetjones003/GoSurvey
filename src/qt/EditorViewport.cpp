@@ -95,7 +95,7 @@ void EditorViewport::paintGL() {
     ext.blockRefs = &m_State.cadBlockRefs;
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
-    tuning.bgR = 0.105f; tuning.bgG = 0.125f; tuning.bgB = 0.15f;
+    tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
     m_Renderer->SetSize(w, h);
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,

@@ -90,3 +90,15 @@ at the overlay to prevent duplicate empty submissions into the viewport. Verifie
 menu access, quick actions, command/coordinate entry, hint dispatch, history toggles,
 drag/resize, viewport bounds and maximize/restore. Qt build, all 26 Qt results and
 styled smoke checks pass; inspected build/qt-editor-smoke.png. No domain changes.
+
+Visual steering: user prefers the supplied nanoCAD reference's compact classic
+CAD finish. Replaced oversized raised command cards with flat 22 px icon groups
+and panel captions, reduced title-bar/quick-access/view controls, unified gray
+dock/table headers and selection colors, tightened Properties/Toolspace rows,
+and replaced the command settings emoji with the existing settings icon. Preserved
+the requested logo application menu and floating command-line layout. Qt Fusion,
+explicit light palette, theme-adapted neutral icon strokes and black viewport are
+now the default. Optional GOSURVEY_QT_RUNTIME_DIR permits rebuilding a comparison
+without closing a previous preview's drawing. Current preview:
+build/classic-cad/GoSurveyQt.exe. Build, styled smoke, and all 26 Qt results passed;
+inspected build/classic-cad/qt-editor-smoke.png. Full functional parity remains open.
