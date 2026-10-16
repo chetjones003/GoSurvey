@@ -2,6 +2,7 @@
 #include "EditorWindow.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
+#include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "PdfAttach.hpp"
@@ -595,6 +596,101 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::Paste);
     QVERIFY(state.clipboard.lines[3] > 3.28f); QVERIFY(state.clipboard.lines[3] < 3.29f);
     QVERIFY(!state.pastePrompt.active); QVERIFY(!state.pasteWarningAnswered);
+  }
+
+  void releaseRibbonHasIconsAndReachableCollapsedActions() {
+    EditorWindow window; window.show();
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    for (const auto& name : {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling"})
+      QVERIFY(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name)));
+    int buttons = 0;
+    for (const auto& entry : qtribbon::kButtons) {
+      auto* action = window.findChild<QAction*>("ribbon_" + QString::fromUtf8(entry.id).mid(2));
+      QVERIFY2(action, entry.id); QVERIFY2(!action->icon().isNull(), entry.icon);
+      QCOMPARE(action->property("releasePlaceholder").toBool(), entry.placeholder);
+      if (entry.placeholder) QVERIFY(!action->isEnabled());
+      if (action->property("nativeDialogPending").toBool()) {
+        QVERIFY(!action->isEnabled()); QVERIFY(action->toolTip().contains("dialog is not available"));
+      }
+      ++buttons;
+    }
+    QCOMPARE(buttons, 280);
+    window.resize(850, 650); QTest::qWait(100);
+    QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
+    auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
+    bool collapsed = false;
+    for (auto* button : page->findChildren<QToolButton*>()) if (button->objectName().startsWith("collapsed_") && button->isVisible()) {
+      collapsed = true; QVERIFY(button->menu());
+      QVERIFY(button->mapTo(ribbon, QPoint(button->width(), 0)).x() <= ribbon->width());
+    }
+    QVERIFY(collapsed);
+    window.Submit("CIRCLE");
+    auto* line = window.findChild<QAction*>("ribbon_RibbonLine"); QVERIFY(line);
+    line->trigger(); QCOMPARE(window.State().active, AppCommandState::Kind::Line);
+    QVERIFY(line->associatedObjects().size() >= 2); // Same action in the panel and its native overflow menu.
+    auto* draw = window.findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->menu()->actions().contains(line));
+  }
+
+  void releaseRibbonContextTracksSelectionAndRestoresNormalTab() {
+    EditorWindow window; window.show();
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); auto& state = window.State();
+    auto index = [&](const char* name) { return ribbon->indexOf(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name))); };
+    ribbon->setCurrentIndex(index("Modeling"));
+    QVERIFY(!ribbon->isTabVisible(index("SurveyPointCtx")));
+    SurveyPoint point; point.id = 42; state.surveyPoints.push_back(point); state.selectedSurveyPointIndices = {0};
+    window.Submit(""); QVERIFY(ribbon->isTabVisible(index("SurveyPointCtx")));
+    QCOMPARE(ribbon->currentIndex(), index("SurveyPointCtx")); QVERIFY(ribbon->tabText(index("SurveyPointCtx")).contains("42"));
+    state.selectedSurveyPointIndices.clear(); window.Submit("");
+    QVERIFY(!ribbon->isTabVisible(index("SurveyPointCtx"))); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
+    state.cadSurfaces.emplace_back(); state.cadSurfaces.back().name = "Existing Ground";
+    state.selection.push_back({SelectedEntity::Type::Surface, 0}); window.Submit("");
+    QCOMPARE(ribbon->currentIndex(), index("SurfaceCtx")); QVERIFY(ribbon->tabText(index("SurfaceCtx")).contains("Existing Ground"));
+    state.selection.clear(); window.Submit(""); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
+    state.drawingSettings.zoneCode = "TX83-CF"; window.Submit(""); QVERIFY(ribbon->isTabVisible(index("GeolocationCtx")));
+    QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.
+  }
+
+  void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
+    EditorWindow window; window.show(); auto& state = window.State();
+    auto* style = window.findChild<QComboBox*>("ribbonVisualStyle"); QVERIFY(style);
+    style->setCurrentIndex(2); QMetaObject::invokeMethod(style, "activated", Q_ARG(int, 2));
+    QCOMPARE(state.viewportVisualStyle, VisualStyle::Shaded);
+    auto* projection = window.findChild<QComboBox*>("ribbonProjection"); QVERIFY(projection);
+    projection->setCurrentIndex(1); QMetaObject::invokeMethod(projection, "activated", Q_ARG(int, 1));
+    QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
+    auto* fov = window.findChild<QSpinBox*>("ribbonFov"); QVERIFY(fov); QVERIFY(fov->isEnabled());
+    fov->setValue(75); QCOMPARE(state.viewportFovDeg, 75.f);
+    auto* ucs = window.findChild<QComboBox*>("ribbonUcs"); QVERIFY(ucs);
+    ucs->setCurrentIndex(3); QMetaObject::invokeMethod(ucs, "activated", Q_ARG(int, 3));
+    QVERIFY(ucs::FramesMatch(state.activeUcs, ucs::OrthographicPresets()[2].frame));
+    auto* fitting = window.findChild<QAction*>("ribbon_ModPipeFit"); QVERIFY(fitting); QVERIFY(fitting->menu());
+    QCOMPARE(fitting->menu()->actions().size(), 9);
+    QCOMPARE(fitting->menu()->actions().front()->property("ribbonCommand").toString(), QString("PIPEFIT elbow-90"));
+    auto* layers = window.findChild<QToolButton*>("collapsed_ribbonPanel_Home_Layers"); QVERIFY(layers);
+    QVERIFY(!layers->menu()->findChildren<QComboBox*>().empty());
+    auto* size = window.findChild<QComboBox*>("ribbonPipeSize"); QVERIFY(size);
+    size->setCurrentText("2in"); QMetaObject::invokeMethod(size, "textActivated", Q_ARG(QString, QString("2in")));
+    QCOMPARE(state.pipeRunNominalSize, std::string("2in"));
+    state.drawingInsUnits = 2;
+    window.findChild<QAction*>("ribbon_ModPipeRun")->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
+    QVERIFY(!size->isEnabled());
+  }
+
+  void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {
+    EditorWindow window; window.show(); auto& state = window.State();
+    auto* angle = window.findChild<QDoubleSpinBox*>("ribbonHatchAngle"); QVERIFY(angle);
+    angle->setValue(30); QCOMPARE(state.hatchAngleDeg, 30.f);
+    CadFilledRegion region; region.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0}; region.loopStart = {0};
+    state.cadFilledRegions.push_back(region); state.cadFilledRegionAttrs.emplace_back();
+    state.selection.push_back({SelectedEntity::Type::FilledRegion, 0}); window.Submit("");
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon");
+    QCOMPARE(ribbon->currentWidget()->objectName(), QString("ribbonPage_HatchCtx"));
+    auto* pattern = window.findChild<QComboBox*>("ribbonHatchPattern"); QVERIFY(pattern->findText("ANSI31") >= 0);
+    angle->setValue(45); QCOMPARE(state.cadFilledRegions[0].patternAngleDeg, 45.f); QCOMPARE(state.hatchAngleDeg, 30.f);
+    window.Submit("UNDO"); QCOMPARE(state.cadFilledRegions[0].patternAngleDeg, 0.f);
+    window.Submit("REDO"); QCOMPARE(state.cadFilledRegions[0].patternAngleDeg, 45.f);
   }
 
   void nativePointCreationPlacesSelectsAndUndoes() {

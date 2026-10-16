@@ -39,6 +39,7 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #windowClose:hover { background:#c42b1c; color:white; border-color:#c42b1c; }
     #ribbon::pane { border:1px solid #afb4bc; background:#e9ebee; }
     #ribbon QToolButton { padding:2px 5px; }
+    #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #b9bec5; }
     #ribbonPanelLabel { color:#555e69; font-size:10px; border-top:1px solid #d2d5da; padding-top:1px; }
     QTabBar::tab { background:#dce0e5; color:#30353b; border:1px solid #b0b5bd; padding:3px 12px; margin-right:1px; }
     QTabBar::tab:selected { background:#f6f7f8; border-bottom-color:#f6f7f8; }
@@ -97,6 +98,7 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #windowClose:hover { background:#c42b1c; color:white; border-color:#c42b1c; }
     #ribbon::pane { border:1px solid #383838; background:#545454; }
     #ribbon QToolButton { padding:2px 5px; }
+    #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #686868; }
     #ribbonPanelLabel { color:#d0d0d0; font-size:10px; border-top:1px solid #696969; padding-top:1px; }
     QTabBar::tab { background:#484848; color:#eeeeee; border:1px solid #363636; padding:3px 12px; margin-right:1px; }
     QTabBar::tab:selected { background:#606060; border-bottom-color:#606060; }

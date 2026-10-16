@@ -31,6 +31,10 @@ private:
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
   void BuildRibbon();
+  void BuildRibbonPages();
+  void RefreshRibbon();
+  void RunRibbonAction(const QString& id);
+  void EditRibbonHatch(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
@@ -78,3 +82,5 @@ private:
 };
 
 QString QtAsset(const QString& relative);
+
+QIcon CadCommandIcon(const QString& icon);

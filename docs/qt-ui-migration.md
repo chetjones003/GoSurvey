@@ -42,7 +42,7 @@ property rows, Segoe UI and a black drawing viewport. Logo menu > View > Appeara
 switches between Neutral gray and Classic light without reopening the drawing;
 the choice is saved. `--light-style` starts with the light appearance. The title-bar/ribbon/dock/
 floating-command layout is retained. `--default-style` remains an accepted alias.
-The current comparison build is at `build/point-transfer/GoSurveyQt.exe`; configure
+The current comparison build is at `build/ribbon-v072/GoSurveyQt.exe`; configure
 `GOSURVEY_QT_RUNTIME_DIR` to select a separate preview output directory, or set it
 empty to restore the normal `build/GoSurveyQt.exe` output. Existing preview windows
 can stay open while another output directory is rebuilt.
@@ -57,7 +57,7 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Area | Implemented | Remaining parity work |
 |---|---|---|
 | Startup | Splash using existing artwork; Start page; Markdown What's New window | Startup auth/update/telemetry/crash-report wiring; recent-file tiles; version-based What's New display policy |
-| Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; ribbon tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Full existing ribbon inventory, contextual ribbons, panel-specific command UI, remaining shortcut parity and multi-monitor/DPI checks |
+| Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
@@ -79,6 +79,42 @@ row. History, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
 event loop. Exact annotation and all selection/gesture parity remain release gates.
 
+## Version 0.7.2 ribbon inventory
+
+The native ribbon now uses `src/qt/RibbonCatalog.hpp`, audited against the local
+`v0.7.2` tag's `CadUi.cpp` and `ModelingRibbon.hpp`. Run
+`python tools/audit-qt-ribbon.py`: all 268 audited release button entries are
+represented, with 280 native entries including style-manager accessors and the
+previous Qt point, PDF-viewer and modify controls. Every icon resolves to the
+existing `resources/icons` library. The legacy vector-only survey-data pin uses
+Point Style artwork; the original text-only block-close button uses Block Editor
+artwork. No new bitmap artwork was generated.
+
+Home, Insert, Annotate, View, Manage, Output, Survey and Modeling use their release
+panels. Manage retains its release placeholder. Contextual Surface, Survey Point,
+Point Cloud, Block Editor, Geolocation, PDF Underlay and Hatch pages follow editor
+state; Layout tools appear in paper space. Selection contexts activate on entry
+and restore the previous normal tab on exit; geolocation does not take focus.
+Three-row panels collapse to native menus, with More overflow at narrower widths.
+Expanded and collapsed presentations share QActions. Live selectors remain
+available in collapsed panels, and the shared Layers/color panel stays beside
+every tab. Menus include surface data/edit/extract, object isolation, fitting part
+types, map providers/capture and geographic marker choices.
+
+Native selectors cover visual style/projection/FOV, saved views, UCS presets/names,
+text style, layer/color, nominal pipe size, point-cloud size/LOD/color and centerline
+fit parameters. Pipe Run starts at the selected size, and the size control locks
+during a run. Hatch controls edit creation defaults or selected regions; selected
+changes are undoable and reject writes to read-only projects.
+
+**Inventory coverage is not workflow parity.** Release placeholders remain disabled.
+Buttons whose view/style/surface/group/block/page-setup/batch-plot dialogs still
+lack native adapters are present but explicitly disabled with a tooltip, rather
+than silently setting an unserviced UI flag. Their shared routes remain identified
+in the catalog/router for later migration. Settings currently opens the native
+units dialog; the complete settings workflow remains outstanding. Existing domain,
+rendering, advanced PDF/layout, accessibility and packaging gates still apply.
+
 ## Dependency boundary
 
 `src/qt/` does not call ImGui or initialize an ImGui context. `QOpenGLWidget` owns
@@ -96,7 +132,7 @@ links GLFW; icons and windows are managed by Qt.
 ## Latest verified iteration
 
 - Qt executable and the existing GoSurvey executable build successfully.
-- `GoSurveyQtTests`: 32 passed, 0 failed (30 workflow/render tests plus setup/teardown).
+- `GoSurveyQtTests`: 36 passed, 0 failed (34 workflow/render tests plus setup/teardown).
 - `GoSurveyTests`: all 1,632 cases / 9,201,236 assertions pass.
 - `GoSurveySnapTests`: all 831 cases / 9,511 assertions pass.
 - Domain suites were run from `build/` outside the sandbox because GPU registry

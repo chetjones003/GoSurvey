@@ -144,3 +144,19 @@ point-transfer preview smoke test passes. Corrected native Copy (direct shared
 clipboard service) and Paste (shared PASTE command, plus PASTECLIP compatibility)
 routing after the conversion integration test exposed the missing dispatcher alias.
 Preview: build/point-transfer/GoSurveyQt.exe.
+
+Version 0.7.2 ribbon pass: replaced the small Qt button lists with an audited
+catalog covering all 268 release entries and 280 native entries overall. Kept the
+existing supplied icons and prior Qt point/PDF/modify access. Added release tabs,
+panels, modeling/piping inventory, contextual selection tabs, native flyouts,
+shared Layers/color and responsive panel/More menus. Added live view/UCS/pipe/cloud
+selectors and undoable hatch appearance controls. Pipe Run uses the selected size.
+Release placeholders and still-unported native dialogs are explicitly disabled
+with explanatory help, so presence is not misrepresented as full functionality.
+The headless release inventory/icon audit, Qt build and 36 Qt checks pass. Preview
+output is build/ribbon-v072/GoSurveyQt.exe. Full migration remains open.
+Final visual pass retained the release's compact icon grids for Home Draw/Modify/
+Palettes, which keeps the core panels expanded at desktop widths. Rechecked the
+narrow-layout/icon-access test after this presentation adjustment and reran the
+styled smoke test successfully; inspected the final screenshot. All existing
+preview windows were preserved.

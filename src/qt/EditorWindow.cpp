@@ -74,7 +74,6 @@ QString QtAsset(const QString& relative) {
   return QString::fromStdWString(path.wstring());
 }
 
-namespace {
 QIcon CadCommandIcon(const QString& icon) {
   const auto path = QtAsset("icons/" + icon);
   if (path.isEmpty()) return {};
@@ -89,7 +88,6 @@ QIcon CadCommandIcon(const QString& icon) {
     }
   }
   return QIcon(QPixmap::fromImage(image));
-}
 }
 
 EditorWindow::EditorWindow() {
@@ -269,63 +267,7 @@ void EditorWindow::BuildRibbon() {
     QMessageBox::about(this, "GoSurvey", "GoSurvey Qt / Win32 editor\nQt " QT_VERSION_STR "\nMigration branch: test/win32UI");
   });
   BuildTitleBar(applicationMenu);
-  auto* ribbonBar = addToolBar("Ribbon");
-  ribbonBar->setObjectName("ribbonBar");
-  ribbonBar->setMovable(false);
-  auto* ribbon = new QTabWidget(ribbonBar);
-  ribbon->setObjectName("ribbon");
-  ribbon->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-  struct Button { const char* label; const char* icon; const char* command; };
-  auto addPage = [&](const char* name, std::initializer_list<Button> buttons) {
-    auto* page = new QWidget(ribbon);
-    auto* layout = new QHBoxLayout(page);
-    layout->setContentsMargins(4, 2, 4, 1);
-    layout->setSpacing(0);
-    QHBoxLayout* tools = nullptr;
-    QString previousPanel;
-    int index = 0;
-    for (const auto& button : buttons) {
-      const QString panel = QString(name) == "Home" ? (index < 4 ? "Draw" : "Modify") :
-          QString(name) == "Annotate" ? (index < 2 ? "Text" : "Dimensions") :
-          QString(name) == "Insert" ? "References" : QString(name) == "Modeling" ? "Solids" : name;
-      if (panel != previousPanel) {
-        if (tools) { auto* separator = new QFrame(page); separator->setFrameShape(QFrame::VLine); layout->addWidget(separator); }
-        auto* group = new QWidget(page);
-        auto* column = new QVBoxLayout(group); column->setContentsMargins(4, 0, 4, 0); column->setSpacing(1);
-        tools = new QHBoxLayout; tools->setSpacing(1); column->addLayout(tools);
-        auto* caption = new QLabel(panel, group); caption->setObjectName("ribbonPanelLabel"); caption->setAlignment(Qt::AlignCenter);
-        column->addWidget(caption); layout->addWidget(group); previousPanel = panel;
-      }
-      auto* tool = new QToolButton(page);
-      tool->setDefaultAction(CommandAction(button.label, button.icon, button.command));
-      tool->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-      tool->setAutoRaise(true);
-      tool->setIconSize(QSize(22, 22));
-      tool->setMinimumSize(46, 42);
-      tools->addWidget(tool);
-      ++index;
-    }
-    layout->addStretch();
-    ribbon->addTab(page, name);
-  };
-  addPage("Home", {{"Line", "line.png", "LINE"}, {"Polyline", "Polyline.png", "PLINE"},
-      {"Circle", "circle.png", "CIRCLE"}, {"Arc", "arc.png", "ARC"},
-      {"Move", "Move.png", "MOVE"}, {"Copy", "Copy.png", "COPY"},
-      {"Rotate", "Rotate.png", "ROTATE"}, {"Trim", "Trim.png", "TRIM"},
-      {"Offset", "Offset.png", "OFFSET"}, {"Erase", "Erase.png", "ERASE"}});
-  addPage("Insert", {{"Block", "block.png", "INSERT"}, {"PDF viewer", "Pdf.png", "PDFVIEW"}});
-  addPage("Annotate", {{"Text", "Text.png", "TEXT"}, {"Multiline text", "Mtext.png", "MTEXT"},
-      {"Dimension", "Dim_Linear.png", "DIMLINEAR"}, {"Aligned", "Dim_Aligned.png", "DIMALIGNED"}});
-  addPage("Modify", {{"Mirror", "Mirror.png", "MIRROR"}, {"Scale", "Scale.png", "SCALE"},
-      {"Fillet", "Fillet.png", "FILLET"}, {"Chamfer", "Chamfer.png", "CHAMFER"},
-      {"Extend", "Extend.png", "EXTEND"}, {"Join", "Join.png", "JOIN"}, {"Explode", "Explode.png", "EXPLODE"}});
-  addPage("Survey", {{"Adjustment", "Adjust.png", "LSA"}, {"Create Points", "Point.png", "CREATEPOINTS"},
-      {"Drawing points", "Point.png", "VIEWPOINTS"}, {"Point database", "Point.png", "POINTDATABASE"},
-      {"Import points", "c3d_point.png", "IMPORTPOINTS"}, {"Export points", "c3d_exportpoints.png", "EXPORTPOINTS"}});
-  addPage("Modeling", {{"Box", "Box.png", "BOX"}, {"Cylinder", "Cylinder.png", "CYLINDER"},
-      {"Extrude", "Extrude.png", "EXTRUDE"}, {"Revolve", "Revolve.png", "REVOLVE"},
-      {"Union", "Union.png", "UNION"}, {"Subtract", "Subtract.png", "SUBTRACT"}});
-  ribbonBar->addWidget(ribbon);
+  BuildRibbonPages();
 }
 
 void EditorWindow::BuildDocks() {
@@ -740,6 +682,7 @@ void EditorWindow::Refresh() {
     (*it)->setExpanded(expanded.contains(itemPath(*it)));
     if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
   }
+  RefreshRibbon();
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();
