@@ -5,6 +5,7 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
+#include "TraverseActions.hpp"
 #include "traverse/StarNetImport.hpp"
 #include "traverse/Rw5Import.hpp"
 #include "traverse/JobXmlImport.hpp"
@@ -3061,48 +3062,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     // ---- Commit to drawing ----
     ImGui::Separator();
     if (ImGui::Button("Commit to Drawing")) {
-        // Snapshot for undo
-        PushUndoSnapshot(cmd, "Traverse commit");
-
-        // Place starting point
-        const double startE = td.startEasting  - cmd.worldDocumentOriginX;
-        const double startN = td.startNorthing - cmd.worldDocumentOriginY;
-        cmd.createPointsOpts.startNumber = td.startStationId;
-        cmd.createPointsOpts.sequentialNumbering = false;
-        cmd.createPointsOpts.duplicatePolicy = SurveyDuplicatePolicy::Renumber;
-        TryPlaceSurveyPoint(cmd, startE, startN, td.startElevation, log, /*pushUndo=*/false);
-
-        // Place foresight points
-        for (const auto& leg : td.legs) {
-            if (!leg.computed)
-                break;
-            const double locE = leg.computedEasting  - cmd.worldDocumentOriginX;
-            const double locN = leg.computedNorthing - cmd.worldDocumentOriginY;
-            cmd.createPointsOpts.startNumber = leg.stationId;
-            TryPlaceSurveyPoint(cmd, locE, locN, leg.computedElevation, log, /*pushUndo=*/false);
-        }
-
-        // Place side-shot/check-shot points (GitHub issue #853).
-        for (const auto& ss : td.sideShots) {
-            if (!ss.computed)
-                continue;
-            const double locE = ss.computedEasting  - cmd.worldDocumentOriginX;
-            const double locN = ss.computedNorthing - cmd.worldDocumentOriginY;
-            cmd.createPointsOpts.startNumber = ss.stationId;
-            TryPlaceSurveyPoint(cmd, locE, locN, ss.computedElevation, log, /*pushUndo=*/false);
-        }
-
-        // Place resolved GPS vector endpoints (GitHub issue #847).
-        for (const auto& gv : td.gpsVectors) {
-            if (!gv.computed)
-                continue;
-            const double locE = gv.computedToEasting  - cmd.worldDocumentOriginX;
-            const double locN = gv.computedToNorthing - cmd.worldDocumentOriginY;
-            cmd.createPointsOpts.startNumber = gv.toStationId;
-            TryPlaceSurveyPoint(cmd, locE, locN, gv.computedToElevation, log, /*pushUndo=*/false);
-        }
-
-        log.push_back("TRAVERSE — committed points to drawing.");
+        CommitTraverseToDrawing(cmd, td, cmd.traverseLsaAccepted ? &cmd.traverseLsaResult : nullptr, log);
     }
     ItemHelpTooltip("Place all computed traverse stations as survey points in the drawing.\nUse View Points to review or edit them after committing.");
 

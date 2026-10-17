@@ -3358,7 +3358,7 @@ TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert 
       continue;
     const Dwg_Object_BLOCK_HEADER* hdr2 = blk->tio.object->tio.BLOCK_HEADER;
     if (hdr2 == nullptr ||
-        libredwgcad_detail::DecodeDwgString(hdr2->name, false) != "GOSURVEY_POINT")
+        libredwgcad_detail::DecodeDwgString(hdr2->name, dwg.header.version >= R_2007) != "GOSURVEY_POINT")
       continue;
     ++nInsert;
     insertXy.emplace_back(ins->ins_pt.x, ins->ins_pt.y);
@@ -3370,8 +3370,8 @@ TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert 
     if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
       continue;
     const Dwg_Entity_ATTRIB* att = o->tio.entity->tio.ATTRIB;
-    const std::string tag = libredwgcad_detail::DecodeDwgString(att->tag, false);
-    const std::string val = libredwgcad_detail::DecodeDwgString(att->text_value, false);
+    const std::string tag = libredwgcad_detail::DecodeDwgString(att->tag, dwg.header.version >= R_2007);
+    const std::string val = libredwgcad_detail::DecodeDwgString(att->text_value, dwg.header.version >= R_2007);
     if (tag == "NUMBER") attrNumbers.push_back(val);
     if (tag == "DESCRIPTION") attrDescs.push_back(val);
   }
@@ -3504,7 +3504,8 @@ TEST_CASE("DWG export writes a feature line as POLYLINE_3D with XDATA identity (
       Dwg_Object_Entity* ent = o->tio.entity;
       for (BITCODE_BL j = 0; j < ent->num_eed; ++j) {
         if (ent->eed[j].data != nullptr && ent->eed[j].data->code == 0)
-          eedStrings.emplace_back(ent->eed[j].data->u.eed_0.string, ent->eed[j].data->u.eed_0.length);
+          eedStrings.push_back(libredwgcad_detail::DecodeDwgString(ent->eed[j].data->u.eed_0.string,
+              ent->eed[j].data->u.eed_0.is_tu != 0));
       }
     }
     if (o->fixedtype == DWG_TYPE_VERTEX_3D && o->tio.entity && o->tio.entity->tio.VERTEX_3D)
@@ -3563,11 +3564,11 @@ TEST_CASE("DWG export writes TEXT rotation, style, and the degree sign (issue #6
     ++nText;
     const Dwg_Entity_TEXT* t = o->tio.entity->tio.TEXT;
     rotation = t->rotation;
-    text = libredwgcad_detail::DecodeDwgString(t->text_value, false);
+    text = libredwgcad_detail::DecodeDwgString(t->text_value, dwg.header.version >= R_2007);
     if (t->style != nullptr) {
       Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, t->style->absolute_ref);
       if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
-        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, dwg.header.version >= R_2007);
     }
   }
   CHECK(nText == 1);
@@ -3634,7 +3635,7 @@ TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issu
     if (m->style != nullptr) {
       Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, m->style->absolute_ref);
       if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
-        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, dwg.header.version >= R_2007);
     }
   }
   CHECK(nMtext == 1);
@@ -3698,8 +3699,8 @@ TEST_CASE("DWG export writes an INSERT with five attributes without corruption (
     if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
       continue;
     const Dwg_Entity_ATTRIB* a = o->tio.entity->tio.ATTRIB;
-    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, false),
-                       libredwgcad_detail::DecodeDwgString(a->text_value, false));
+    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, dwg->header.version >= R_2007),
+                       libredwgcad_detail::DecodeDwgString(a->text_value, dwg->header.version >= R_2007));
   }
   REQUIRE(attrs.size() == 5);
   for (int i = 0; i < 5; ++i) {
@@ -3772,7 +3773,7 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
     const Dwg_Object* o = &dwg.object[i];
     if (o->fixedtype == DWG_TYPE_BLOCK_HEADER && o->tio.object != nullptr &&
         o->tio.object->tio.BLOCK_HEADER != nullptr) {
-      const std::string nm = libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, false);
+      const std::string nm = libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, dwg.header.version >= R_2007);
       if (nm == "MARKER" || nm == "VALVE")
         ++nBlockDefs;
     }
@@ -3783,7 +3784,7 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
         Dwg_Object* blk = dwg_resolve_handle_silent(&dwg, ins->block_header->absolute_ref);
         if (blk != nullptr && blk->tio.object != nullptr && blk->tio.object->tio.BLOCK_HEADER != nullptr)
           insertBlockNames.push_back(
-              libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, false));
+              libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, dwg.header.version >= R_2007));
       }
     }
     if (o->fixedtype == DWG_TYPE_ATTRIB && o->tio.entity != nullptr && o->tio.entity->tio.ATTRIB != nullptr)

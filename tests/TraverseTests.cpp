@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <regex>
 
 using Catch::Approx;
 
@@ -341,8 +342,8 @@ TEST_CASE("Least squares: open traverse adjustment drives ENDPOINT misclosure to
 TEST_CASE("GSTC round-trips ENDPOINT for an open traverse", "[travcmd][REQ-017]") {
     TraverseData td = MakeOpenSquareThreeLegs();
     const std::string text = travcmd::Serialize(td, LsaWeights{});
-    CHECK(text.find("ENDPOINT 0.000000 100.000000 0.000000") != std::string::npos);
-    CHECK(text.find("LOOP OFF") != std::string::npos);
+    CHECK(std::regex_search(text, std::regex("ENDPOINT\\s+0\\.000000\\s+100\\.000000\\s+0\\.000000")));
+    CHECK(std::regex_search(text, std::regex("LOOP\\s+OFF")));
 
     TraverseData parsed;
     LsaWeights w;
@@ -390,10 +391,12 @@ TEST_CASE("FBK import detects a re-observed closed loop", "[fbk][REQ-015]") {
     REQUIRE(td.legs.size() == 3);
     CHECK(td.legs.back().description == "KCP2.1");
     CHECK(td.isClosedLoop);             // closure auto-detected from the suffix.
+    CHECK(td.legs.back().stationId == td.startStationId);
     CHECK(td.hasStartBearing);
 
     ComputeTraverse(td);
     LsaResult r = ComputeTraverseLeastSquares(td, LsaWeights{});
+    INFO(r.message);
     REQUIRE(r.ok);
     CHECK(r.redundancy == 2);           // simple loop fixed at the start.
     CHECK(r.adjClosureLinear < 1e-3);   // adjustment closes the loop.

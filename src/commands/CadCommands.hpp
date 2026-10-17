@@ -2215,6 +2215,9 @@ struct AppCommandState {
   int surveyPointDisplayPrecision = 4;
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
   float surveyPointLabelPlottedHeightInches = 0.10f;
+  // Frontend-provided natural text measurement. Session-only; no UI toolkit types
+  // cross into Commands. A null hook retains the legacy/headless measurement path.
+  void (*measureAnnotationText)(float, const std::string&, const std::string&, float*, float*) = nullptr;
   SurveyLabelStyleTemplates surveyLabelTemplates;
   /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
   /// world). The box grows east from this edge, so longer text never grows back toward the point.

@@ -6,7 +6,12 @@
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <limits>
+#include <stdexcept>
 #include <cctype>
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -67,7 +72,9 @@ bool ParseIntStrict(const std::string& cell, int* out) {
   if (t.empty())
     return false;
   char* end = nullptr;
+  errno = 0;
   const long v = std::strtol(t.c_str(), &end, 10);
+  if (errno == ERANGE || v < std::numeric_limits<int>::min() || v > std::numeric_limits<int>::max()) return false;
   if (!end || end != t.c_str() + static_cast<std::ptrdiff_t>(t.size()))
     return false;
   *out = static_cast<int>(v);
@@ -86,22 +93,6 @@ bool ParseDoubleStrict(const std::string& cell, double* out) {
     return false;
   *out = v;
   return true;
-}
-
-bool ParseDoubleStrict(const std::string& cell, float* out) {
-  double v = 0.0;
-  if (!ParseDoubleStrict(cell, &v))
-    return false;
-  *out = static_cast<float>(v);
-  return true;
-}
-
-bool SurveyIdExists(const std::vector<SurveyPoint>& pts, int id) {
-  for (const auto& p : pts) {
-    if (p.id == id)
-      return true;
-  }
-  return false;
 }
 
 int MaxSurveyPointId(const std::vector<SurveyPoint>& pts) {
@@ -138,13 +129,16 @@ std::string CsvEscapeField(const std::string& s) {
 
 bool OpenInput(const char* path, std::ifstream* out) {
   out->open(fs::u8path(std::string(path)), std::ios::binary);
+  if (!*out) return false;
+  char prefix[3]{};
+  out->read(prefix, 3);
+  const bool bom = out->gcount() == 3 && static_cast<unsigned char>(prefix[0]) == 0xef &&
+      static_cast<unsigned char>(prefix[1]) == 0xbb && static_cast<unsigned char>(prefix[2]) == 0xbf;
+  out->clear(); out->seekg(bom ? 3 : 0);
   return static_cast<bool>(*out);
 }
 
-bool OpenOutput(const char* path, std::ofstream* out) {
-  out->open(fs::u8path(std::string(path)), std::ios::binary);
-  return static_cast<bool>(*out);
-}
+
 
 void SplitLines(const std::string& blob, std::vector<std::string>* lines) {
   lines->clear();
@@ -163,7 +157,7 @@ void SplitLines(const std::string& blob, std::vector<std::string>* lines) {
   lines->push_back(cur);
 }
 
-bool ReadFileLimited(const char* path, std::string* blob, size_t maxBytes, std::vector<std::string>* log) {
+bool ReadFileContents(const char* path, std::string* blob, std::vector<std::string>* log) {
   std::ifstream f;
   if (!OpenInput(path, &f)) {
     if (log)
@@ -171,8 +165,7 @@ bool ReadFileLimited(const char* path, std::string* blob, size_t maxBytes, std::
     return false;
   }
   std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-  if (content.size() > maxBytes)
-    content.resize(maxBytes);
+  if (f.bad()) return false;
   *blob = std::move(content);
   return true;
 }
@@ -202,7 +195,7 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
 
   double n = 0.0;
   double e = 0.0;
-  float z = 0.f;
+  double z = 0.0;
   std::string desc;
 
   if (layout == SurveyCsvLayout::PENZD_PN) {
@@ -246,6 +239,7 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "internal: missing auto ID";
       return o;
     }
+    if (*autoIdCounter == std::numeric_limits<int>::max()) { o.err = "Point numbers exhausted"; return o; }
     o.pt.id = (*autoIdCounter)++;
     if (!ParseDoubleStrict(cells[0], &n)) {
       o.err = "N (northing) is not a valid number";
@@ -264,6 +258,7 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "internal: missing auto ID";
       return o;
     }
+    if (*autoIdCounter == std::numeric_limits<int>::max()) { o.err = "Point numbers exhausted"; return o; }
     o.pt.id = (*autoIdCounter)++;
     if (!ParseDoubleStrict(cells[0], &e)) {
       o.err = "E (easting) is not a valid number";
@@ -421,8 +416,7 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   }
 
   std::string blob;
-  constexpr size_t kPreviewCap = 256 * 1024;
-  if (!ReadFileLimited(st.surveyImportCsvPath, &blob, kPreviewCap, nullptr)) {
+  if (!ReadFileContents(st.surveyImportCsvPath, &blob, nullptr)) {
     // The probe opened the file but the read failed — treat as a file-level block.
     st.surveyImportPreviewValidation =
         std::string("Cannot import — ") + survey_csv::FileStateMessage(survey_csv::FileState::CannotOpen);
@@ -439,7 +433,7 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   if (st.surveyImportCsvSkipFirstRow && !lines.empty())
     startRow = 1;
 
-  int previewAuto = MaxSurveyPointId(st.surveyPoints) + 1;
+  int previewAuto = (MaxSurveyPointId(st.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.surveyPoints) + 1);
   previewAuto = std::max(previewAuto, st.createPointsNextId);
 
   int parsedOk = 0;
@@ -500,8 +494,6 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
     summ << ".\n";
   }
   summ << "Layout: " << HeaderLine(layout) << (hasId ? " (with point IDs)" : " (IDs assigned on import)") << '\n';
-  if (blob.size() >= kPreviewCap)
-    summ << "Preview data truncated at " << kPreviewCap << " bytes; import reads the full file.\n";
   summ << "Non-empty data rows scanned: " << (parsedOk + parseFail) << " — OK: " << okRows << ", problems: " << badRows
        << '\n';
   for (const auto& p : problems)
@@ -580,6 +572,12 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("IMPORTPOINTS — close the block editor first (BCLOSE).");
     return false;
   }
+  if (st.activeDrawingIdx > 0 && st.activeDrawingIdx < static_cast<int>(st.drawingTabs.size())) {
+    const auto uid = st.drawingTabs[st.activeDrawingIdx].projectUid;
+    for (const auto& project : st.openProjects) if (project.uid == uid && project.readOnly) {
+      log.push_back("IMPORTPOINTS: project is read-only."); return false;
+    }
+  }
   if (!st.surveyImportCsvPath[0]) {
     log.push_back("IMPORTPOINTS — no file path.");
     return false;
@@ -593,13 +591,16 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
 
   const SurveyCsvLayout layout = SurveyCsvLayoutFromUiIndex(st.surveyImportCsvLayoutIdx);
   const bool hasId = LayoutHasPointId(layout);
-  int autoId = MaxSurveyPointId(st.surveyPoints) + 1;
+  int autoId = (MaxSurveyPointId(st.surveyPoints) == std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : MaxSurveyPointId(st.surveyPoints) + 1);
   autoId = std::max(autoId, st.createPointsNextId);
 
   std::string line;
   size_t lineNo = 0;
   int imported = 0;
   int skipped = 0;
+  std::vector<SurveyPoint> pending;
+  std::unordered_set<int> used;
+  for (const auto& point : st.surveyPoints) used.insert(point.id);
 
   while (std::getline(f, line)) {
     ++lineNo;
@@ -617,7 +618,7 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
       continue;
     }
 
-    if (hasId && SurveyIdExists(st.surveyPoints, pr.pt.id)) {
+    if (!used.insert(pr.pt.id).second) {
       log.push_back("IMPORTPOINTS line " + std::to_string(lineNo) + ": duplicate ID " + std::to_string(pr.pt.id) +
                     " — skipped.");
       ++skipped;
@@ -628,15 +629,22 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     // in double precision so points land exactly on existing geometry (e.g. an imported DXF's endpoints).
     pr.pt.easting = pr.worldE - st.worldDocumentOriginX;
     pr.pt.northing = pr.worldN - st.worldDocumentOriginY;
-    pr.pt.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});  // REQ-361
-
-    st.surveyPoints.push_back(pr.pt);
-    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+    if (!std::isfinite(pr.pt.easting) || !std::isfinite(pr.pt.northing)) { ++skipped; continue; }
+    pending.push_back(std::move(pr.pt));
     ++imported;
     if (!hasId)
       autoId = counter;
   }
 
+  if (f.bad()) { log.push_back("IMPORTPOINTS: read failed; drawing unchanged."); return false; }
+  if (!pending.empty()) {
+    PushUndoSnapshot(st, "Import survey points");
+    for (auto& point : pending) {
+      point.layer = EnsureObjectLayer(st, ObjectLayerKind::SurveyPoint, {});
+      st.surveyPoints.push_back(std::move(point));
+      EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+    }
+  }
   st.createPointsNextId = std::max(st.createPointsNextId, autoId);
   st.selectedSurveyPointIndices.clear();
   if (imported > 0)
@@ -667,14 +675,28 @@ bool SurveyCsvExportFile(AppCommandState& st, std::vector<std::string>& log) {
   const SurveyCsvLayout layout = SurveyCsvLayoutFromUiIndex(st.surveyExportCsvLayoutIdx);
   const std::string body = BuildExportCsvBody(st, layout, st.surveyExportCsvWriteHeader);
 
-  std::ofstream f;
-  if (!OpenOutput(st.surveyExportCsvPath, &f)) {
-    log.push_back(std::string("EXPORTPOINTS — could not write ") + st.surveyExportCsvPath);
-    return false;
-  }
-  f << body;
-  if (!f) {
-    log.push_back("EXPORTPOINTS — write failed.");
+  fs::path temporary;
+  try {
+    for (const auto& point : st.surveyPoints) {
+      if (!std::isfinite(point.easting + st.worldDocumentOriginX) ||
+          !std::isfinite(point.northing + st.worldDocumentOriginY) || !std::isfinite(point.elevation))
+        throw std::runtime_error("Non-finite point coordinate.");
+    }
+    const auto destination = fs::u8path(st.surveyExportCsvPath);
+    static std::atomic<unsigned long long> sequence{0};
+    temporary = destination;
+    temporary += ".tmp-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "-" + std::to_string(sequence++);
+    std::ofstream f(temporary, std::ios::binary | std::ios::trunc);
+    f.write(body.data(), static_cast<std::streamsize>(body.size()));
+    f.flush();
+    if (!f) throw std::runtime_error("Point file write failed.");
+    f.close();
+    if (!f) throw std::runtime_error("Point file close failed.");
+    fs::rename(temporary, destination);
+  } catch (const std::exception& error) {
+    std::error_code ignored;
+    if (!temporary.empty()) fs::remove(temporary, ignored);
+    log.push_back(std::string("EXPORTPOINTS: ") + error.what());
     return false;
   }
 
