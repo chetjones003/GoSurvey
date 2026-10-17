@@ -189,9 +189,16 @@ static void TitleBarDrawCloseIcon(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 co
 
 } // namespace
 
-void DrawMainWindowTitleBar(GLFWwindow* window) {
+void DrawMainWindowTitleBar(GLFWwindow* window, const char* accountEmail,
+                            bool* outMenuClicked, ImVec2* outMenuAnchor,
+                            bool* outAccountClicked, ImVec2* outAccountAnchor) {
+  if (outMenuClicked) *outMenuClicked = false;
+  if (outAccountClicked) *outAccountClicked = false;
 #if !defined(_WIN32)
   (void)window;
+  (void)accountEmail;
+  (void)outMenuAnchor;
+  (void)outAccountAnchor;
   return;
 #else
   if (!window)
@@ -220,9 +227,24 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
     rowH  = std::max(rowH, logoH + padY * 2.f);
   }
 
+  // REQ-850 follow-up: the GS logo/title is now a dropdown trigger for File/Edit/View/Help (moved
+  // out of its own menu-bar strip to free vertical space), and the signed-in account email sits
+  // just left of the button strip instead of inside that menu. A down-chevron after "GoSurvey"
+  // hints the logo/title area is clickable the way a menu usually isn't.
+  const bool haveAccount = accountEmail && accountEmail[0] != '\0';
+  const float chevSz = 4.f;
+  const float accountPad = 14.f;  // inner padding around the email label
+  const float gapBeforeButtons = 10.f;
+  const ImVec2 accountTextSize = haveAccount ? ImGui::CalcTextSize(accountEmail) : ImVec2(0.f, 0.f);
+  const float accountAreaW = haveAccount ? accountTextSize.x + accountPad * 2.f : 0.f;
+  const float rightStripW = btnStripW + (haveAccount ? accountAreaW + gapBeforeButtons : 0.f);
+  const float menuAreaW = leftPad + (haveLogo ? logoW + st.ItemInnerSpacing.x : 0.f) +
+                          ImGui::CalcTextSize("GoSurvey").x + st.ItemInnerSpacing.x + chevSz * 2.f + leftPad;
+
   // Supply title bar geometry to the WndProc so WM_NCHITTEST returns HTCAPTION for the drag
-  // region and HTCLIENT for the button strip, making hit detection OS-level reliable.
-  GlfwPlatformSetTitleBarMetrics(rowH, btnStripW);
+  // region and HTCLIENT for the left (logo/menu) and right (account + buttons) zones, making hit
+  // detection OS-level reliable.
+  GlfwPlatformSetTitleBarMetrics(rowH, menuAreaW, rightStripW);
   // ImGui's hovered window is this frame's; the title bar's own window is the hovered one only when no
   // dialog sits over the pointer.
   {
@@ -240,8 +262,19 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   const float  rightEdge   = wp.x + ImGui::GetWindowSize().x;
   const float  stripLeftScr = rightEdge - btnStripW;
 
-  // Logo + title text.  The drag area to the right of the text is handled natively by HTCAPTION
-  // in BorderlessWndProc — no InvisibleButton needed here.
+  // Logo + title text + menu chevron, as one clickable zone that opens the File/Edit/View/Help
+  // dropdown. The drag area to its right is handled natively by HTCAPTION in BorderlessWndProc.
+  ImGui::SetCursorScreenPos(ImVec2(wp.x, wp.y));
+  if (ImGui::InvisibleButton("##TitleMenuArea", ImVec2(menuAreaW, rowH))) {
+    if (outMenuClicked) *outMenuClicked = true;
+  }
+  if (outMenuAnchor)
+    *outMenuAnchor = ImVec2(wp.x, wp.y + rowH);
+  const bool menuHov = ImGui::IsItemHovered();
+  if (menuHov)
+    ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                              IM_COL32(255, 255, 255, 18));
+
   ImGui::SetCursorPos(ImVec2(leftPad, padY));
   if (haveLogo && logoTex) {
     ImGui::SetCursorPosY(padY + std::max(0.f, (rowH - padY * 2.f - logoH) * 0.5f));
@@ -251,7 +284,40 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   ImGui::SetCursorPosY(padY + std::max(0.f, (rowH - padY * 2.f - ImGui::GetTextLineHeight()) * 0.5f));
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.82f, 0.88f, 1.f));
   ImGui::TextUnformatted("GoSurvey");
+  ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
+  ImGui::SetCursorPosY(padY + std::max(0.f, (rowH - padY * 2.f - chevSz * 1.6f) * 0.5f));
+  {
+    const ImVec2 cp = ImGui::GetCursorScreenPos();
+    const float cx = cp.x + chevSz;
+    const float cy = cp.y + chevSz * 0.7f;
+    ImGui::GetWindowDrawList()->AddTriangleFilled(
+        ImVec2(cx - chevSz, cy - chevSz * 0.4f), ImVec2(cx + chevSz, cy - chevSz * 0.4f),
+        ImVec2(cx, cy + chevSz * 0.5f), ImGui::GetColorU32(ImVec4(0.65f, 0.68f, 0.74f, 1.f)));
+  }
   ImGui::PopStyleColor();
+
+  // Signed-in account email, just left of the min/max/close strip. Click opens Account
+  // Details/Sign Out (moved here from the old in-menu-bar placement so the menu bar row itself
+  // could be removed).
+  if (haveAccount) {
+    const float accountLeftScr = stripLeftScr - gapBeforeButtons - accountAreaW;
+    ImGui::SetCursorScreenPos(ImVec2(accountLeftScr, wp.y));
+    if (ImGui::InvisibleButton("##TitleAccountArea", ImVec2(accountAreaW, rowH))) {
+      if (outAccountClicked) *outAccountClicked = true;
+    }
+    if (outAccountAnchor)
+      *outAccountAnchor = ImVec2(accountLeftScr, wp.y + rowH);
+    const bool acctHov = ImGui::IsItemHovered();
+    if (acctHov)
+      ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                                IM_COL32(255, 255, 255, 18));
+    ImGui::SetCursorScreenPos(ImVec2(accountLeftScr + accountPad,
+                                     wp.y + padY + std::max(0.f, (rowH - padY * 2.f - accountTextSize.y) * 0.5f)));
+    ImGui::PushStyleColor(ImGuiCol_Text, acctHov ? ImVec4(0.92f, 0.94f, 0.97f, 1.f)
+                                                 : ImVec4(0.70f, 0.74f, 0.80f, 1.f));
+    ImGui::TextUnformatted(accountEmail);
+    ImGui::PopStyleColor();
+  }
 
   // Window control buttons — full rowH so there are no dead zones at the top or bottom edge.
   ImGui::SetCursorScreenPos(ImVec2(stripLeftScr, wp.y));

@@ -33,6 +33,7 @@
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
 #include "SplashScreen.hpp"
+#include "UiScale.hpp"
 #include "WinFrameControls.hpp"
 #ifdef GOSURVEY_DEVELOPER_SHELL
 #include "DevShell.hpp"
@@ -50,6 +51,7 @@
 
 #include <chrono>
 #include <ctime>
+#include <functional>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -288,6 +290,24 @@ static void AppendFrameWatchLog(const AppCommandState& cmd, const framewatch::Ti
   f.flush();
 }
 
+namespace {
+
+// REQ-850: the OS's own per-monitor scale percentage (Settings > Display > Scale), which GLFW
+// reports via glfwGetWindowContentScale once the process is Per-Monitor-v2 DPI aware (GLFW asks
+// Windows for that automatically on glfwInit, on Windows 10 1703+). Earlier this was computed by
+// hand from the monitor's reported physical size (EDID) and native resolution; that estimate
+// disagreed with Windows' own number (observed: Windows recommends 150% at 2560x1600 vs 125% at
+// 1920x1080 on the same panel) and silently ignored a manual override of the scale slider. Reading
+// the OS value directly tracks both the resolution AND whatever the user has actually set.
+float ComputeMonitorDpiScale(GLFWwindow* window) {
+  float sx = 1.0f, sy = 1.0f;
+  glfwGetWindowContentScale(window, &sx, &sy);
+  const float scale = (sx > 0.f) ? sx : 1.0f;
+  return std::clamp(scale, 0.75f, 3.0f);
+}
+
+}  // namespace
+
 int main()
 {
 #ifdef _WIN32
@@ -384,7 +404,16 @@ int main()
   ApplyCadDarkTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
-  io.FontGlobalScale = 1.35f;
+  // REQ-850: scale fonts and widget metrics to the monitor's true physical DPI instead of a fixed
+  // baseline tuned against one high-resolution dev display. OS content-scale ("100%"/"150%") isn't
+  // enough on its own: the same monitor run at 2560x1600 vs 1920x1080 can both report 100% Windows
+  // scaling, yet the UI needs to be visibly larger at the lower resolution to occupy the same
+  // physical/proportional space. ComputeMonitorDpiScale instead derives DPI from the monitor's
+  // reported physical size and native pixel resolution, which tracks resolution changes directly.
+  const float dpiScale = ComputeMonitorDpiScale(window);
+  io.FontGlobalScale = dpiScale;
+  ImGui::GetStyle().ScaleAllSizes(dpiScale);
+  ui::SetUiScale(dpiScale);  // hand-painted screens (Start screen, etc.) read this directly
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
@@ -623,7 +652,10 @@ int main()
   // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
   // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
   // above the title strip after the Survey-tab label layout.
-  const float ribbonH = 139.f + 28.f + 4.f + 10.f + 34.f + 16.f;  // +16: larger 32px-standard icons
+  // REQ-850 follow-up: this (231px unscaled) made the ribbon roughly double Civil 3D's height at
+  // the same resolution/OS scale — shrunk toward that reference density, then scaled by
+  // ui::UiScale() so it still tracks DPI/resolution on top of the smaller baseline.
+  const float ribbonH = (97.f + 20.f + 3.f + 7.f + 24.f + 11.f) * ui::UiScale();
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -638,9 +670,28 @@ int main()
   auto perfPrevFrame = std::chrono::steady_clock::now();
   framewatch::FrameWatch frameWatch;
   bool launchAuthTimerArmed = false;
-  while (true)
-  {
-    glfwPollEvents();
+  bool appShouldExit = false;
+  bool inFrameTick = false;
+
+  // Rendering one frame is a std::function (not inlined directly in the loop below) so it can
+  // also be invoked from GLFW's window-refresh callback during a live Win32 resize/move drag.
+  // Windows runs its own modal message-pump loop for that drag INSIDE glfwPollEvents() — without
+  // this, the window would not repaint again until the drag ended, which is what made a
+  // drag-resize look frozen until mouse-up.
+  //
+  // The refresh callback can itself fire reentrantly mid-frame — e.g. glfwSwapBuffers() pumping a
+  // nested message loop while this very call is still on the stack — which would otherwise call
+  // ImGui::NewFrame()/Render() a second time into the same global ImGui context while the first
+  // call is mid-flight and crash (observed: 0xC0000005 reading near-null, from the corrupted
+  // context). inFrameTick skips any such nested call rather than reentering.
+  std::function<void()> frameTick = [&]() {
+    if (inFrameTick)
+      return;
+    struct ReentryGuard {
+      bool& flag;
+      explicit ReentryGuard(bool& f) : flag(f) { flag = true; }
+      ~ReentryGuard() { flag = false; }
+    } reentryGuard(inFrameTick);
 
     cmd.appWindowFocused = (glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE);
 
@@ -842,7 +893,8 @@ int main()
       // Inno closes this process via the AppMutex, replaces the files, and restarts us.
       if (updateExitPending)
         update::LaunchInstallerAndExit(updateState);
-      break;
+      appShouldExit = true;
+      return;
     }
 
     ImGui_ImplOpenGL3_NewFrame();
@@ -1066,21 +1118,38 @@ int main()
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("GoSurveyHost", nullptr, hostFlags);
 
-    DrawMainWindowTitleBar(window);
-
 #if defined(_WIN32)
+    // REQ-850 follow-up: File/Edit/View/Help used to be their own menu-bar row under the title
+    // bar; they're now a dropdown opened by clicking the GS logo/title, and the signed-in account
+    // (previously the menu bar's own far-right entry) moved into the title bar itself, just left
+    // of the min/max/close buttons — both free the vertical space that row used to take.
     {
-      const float menuStripH = ImGui::GetFrameHeight() + 6.f;
-      ImGui::BeginChild("##GoSurveyMenuHost", ImVec2(0.f, menuStripH), false,
-                        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-      if (ImGui::BeginMenuBar())
-      {
+      bool menuClicked = false, accountClicked = false;
+      ImVec2 menuAnchor(0.f, 0.f), accountAnchor(0.f, 0.f);
+      DrawMainWindowTitleBar(window, cmd.authSignedIn ? cmd.authEmail.c_str() : nullptr,
+                             &menuClicked, &menuAnchor, &accountClicked, &accountAnchor);
+      if (menuClicked)
+        ImGui::OpenPopup("##GoSurveyMainMenuPopup");
+      if (accountClicked)
+        ImGui::OpenPopup("##GoSurveyAccountPopup");
+
+      ImGui::SetNextWindowPos(menuAnchor);
+      if (ImGui::BeginPopup("##GoSurveyMainMenuPopup")) {
         DrawMainMenuBar(cmd, cmdLog);
-        ImGui::EndMenuBar();
+        ImGui::EndPopup();
       }
-      ImGui::EndChild();
+      ImGui::SetNextWindowPos(ImVec2(accountAnchor.x, accountAnchor.y), ImGuiCond_Always, ImVec2(0.f, 0.f));
+      if (ImGui::BeginPopup("##GoSurveyAccountPopup")) {
+        if (ImGui::MenuItem("Account Details"))
+          cmd.showAccountDetailsWindow = true;
+        ImGui::Separator();
+        if (ImGui::MenuItem("Sign Out"))
+          cmd.authSignOutRequested = true;
+        ImGui::EndPopup();
+      }
     }
 #else
+    DrawMainWindowTitleBar(window, nullptr, nullptr, nullptr, nullptr, nullptr);
     if (ImGui::BeginMenuBar())
     {
       DrawMainMenuBar(cmd, cmdLog);
@@ -1830,7 +1899,24 @@ int main()
 #ifdef GOSURVEY_DEVELOPER_SHELL
     DevShell_PostSwap(devEngine);
 #endif
+  };
+
+  // GLFW invokes the window-refresh callback during the OS's live-resize/move modal loop, so the
+  // window keeps repainting while being dragged instead of freezing until the drag ends.
+  glfwSetWindowUserPointer(window, &frameTick);
+  glfwSetWindowRefreshCallback(window, [](GLFWwindow* w) {
+    auto* tick = static_cast<std::function<void()>*>(glfwGetWindowUserPointer(w));
+    if (tick)
+      (*tick)();
+  });
+
+  while (!appShouldExit)
+  {
+    glfwPollEvents();
+    frameTick();
   }
+  glfwSetWindowRefreshCallback(window, nullptr);
+  glfwSetWindowUserPointer(window, nullptr);
 
   // Join any in-flight surface rebuild (REQ-069) here rather than leaving it to `cmd`'s destructor.
   // The destructor is the actual safety net — it covers every path — but it runs after

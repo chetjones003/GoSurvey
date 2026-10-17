@@ -20,6 +20,7 @@ GLFWwindow* g_borderlessWindow = nullptr;
 
 // Updated each frame by GlfwPlatformSetTitleBarMetrics so WM_NCHITTEST can route correctly.
 float g_titleBarRowH     = 0.f;
+float g_leftStripWidthPx = 0.f;  // logo/title click zone (opens the File/Edit/View/Help menu)
 float g_btnStripWidthPx  = 0.f;
 bool  g_captionBlocked   = false;  // another ImGui window covers the title bar under the pointer
 
@@ -73,6 +74,8 @@ LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     // title bar itself is what is under the pointer.
     if (!g_captionBlocked && g_titleBarRowH > 0.f && pt.y >= 0 && pt.y < (int)g_titleBarRowH) {
       if (g_btnStripWidthPx > 0.f && pt.x >= ww - (int)g_btnStripWidthPx)
+        return HTCLIENT;
+      if (g_leftStripWidthPx > 0.f && pt.x < (int)g_leftStripWidthPx)
         return HTCLIENT;
       return HTCAPTION;
     }
@@ -132,9 +135,10 @@ void GlfwPlatformBeginCaptionDrag(GLFWwindow* window) {
   SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
 }
 
-void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float btnStripWidthPx) {
-  g_titleBarRowH    = rowHeightPx;
-  g_btnStripWidthPx = btnStripWidthPx;
+void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float leftStripWidthPx, float btnStripWidthPx) {
+  g_titleBarRowH     = rowHeightPx;
+  g_leftStripWidthPx = leftStripWidthPx;
+  g_btnStripWidthPx  = btnStripWidthPx;
 }
 
 void GlfwPlatformSetCaptionBlocked(bool blocked) {

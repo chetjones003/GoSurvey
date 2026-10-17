@@ -5,9 +5,11 @@ struct GLFWwindow;
 #if defined(_WIN32)
 void GlfwPlatformInstallBorderlessResize(GLFWwindow* window);
 void GlfwPlatformBeginCaptionDrag(GLFWwindow* window);
-/// Called each frame with the title bar row height and button-strip width (in ImGui/screen pixels).
-/// The WndProc uses these to return HTCAPTION for the drag area and HTCLIENT for the button strip.
-void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float btnStripWidthPx);
+/// Called each frame with the title bar row height, the left logo/menu hit-zone width, and the
+/// right (account label + min/max/close) button-strip width, all in ImGui/screen pixels. The
+/// WndProc uses these to return HTCAPTION for the drag area and HTCLIENT for the left and right
+/// zones ImGui itself handles clicks in.
+void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float leftStripWidthPx, float btnStripWidthPx);
 /// Called each frame: true while another ImGui window (a dialog) is what the pointer is over, so a drag
 /// there is not taken as a title-bar drag even when the dialog overlaps the title bar.
 void GlfwPlatformSetCaptionBlocked(bool blocked);
@@ -22,7 +24,7 @@ void GlfwPlatformForceFocus(GLFWwindow* window);
 #else
 inline void GlfwPlatformInstallBorderlessResize(GLFWwindow*) {}
 inline void GlfwPlatformBeginCaptionDrag(GLFWwindow*) {}
-inline void GlfwPlatformSetTitleBarMetrics(float, float) {}
+inline void GlfwPlatformSetTitleBarMetrics(float, float, float) {}
 inline void GlfwPlatformSetCaptionBlocked(bool) {}
 inline void GlfwPlatformApplySplashRoundedRegion(GLFWwindow*, float) {}
 inline void GlfwPlatformClearWindowRegion(GLFWwindow*) {}
