@@ -401,6 +401,7 @@ void EditorWindow::ShowQuickSelect() {
     case 5: allowed.insert(allowed.end(), {2, 4}); break;
     case 6: case 7: allowed.push_back(5); break;
     case 11: allowed = {0, 6, 7, 8, 9, 10}; break;
+    default: break;
     }
     for (int p : allowed) property->addItem(names[p], p);
     property->setCurrentIndex(std::max(0, property->findData(previous)));

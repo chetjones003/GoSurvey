@@ -96,7 +96,7 @@ void EditorWindow::ShowPoints(bool database) {
     table->setSortingEnabled(false); table->setRowCount(0);
     const bool readOnly = PointsReadOnly(m_State);
     remove->setEnabled(!readOnly); hide->setEnabled(!readOnly);
-    auto append = [&](SurveyPoint point, const std::string& source, bool visible) {
+    auto append = [&](const SurveyPoint& point, const std::string& source, bool visible) {
       const int row = table->rowCount(); table->insertRow(row);
       QString group;
       for (const auto& candidate : m_State.pointGroups) {
