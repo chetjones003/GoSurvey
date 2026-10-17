@@ -22,6 +22,7 @@
 #include <QSignalBlocker>
 #include <QFileInfo>
 #include <QActionGroup>
+#include <QDebug>
 
 class PdfCanvas final : public QWidget {
 public:
@@ -96,7 +97,10 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
 
 PdfWindow::~PdfWindow() {
   m_Cancel = true;
-  if (m_Work.valid()) m_Work.wait(); // Document outlives every use on the worker.
+  if (m_Work.valid()) {
+    try { m_Work.wait(); } // Document outlives every use on the worker.
+    catch (const std::exception& error) { qWarning() << "PDF worker wait failed during shutdown:" << error.what(); }
+  }
 }
 
 void PdfWindow::Open(const QString& path) {
@@ -130,7 +134,7 @@ void PdfWindow::RequestRender() {
   const int page = m_PageNumber->value() - 1;
   const auto& size = m_Document->Sizes()[page];
   const int w = std::clamp(qRound(std::max(200, m_Scroll->viewport()->width() - 30) * m_Zoom), 64, 4096);
-  const int h = std::clamp(qRound(w * size.hPt / size.wPt), 64, 8192);
+  const int h = std::clamp(qRound(static_cast<double>(w) * size.hPt / size.wPt), 64, 8192);
   m_Cancel = false;
   m_Work = std::async(std::launch::async, [this, page, w, h] {
     pdfview::Bitmap bitmap;
@@ -147,7 +151,7 @@ void PdfWindow::PollRender() {
   try {
     auto bitmap = m_Work.get();
     if (!m_Pending && bitmap.w > 0 && bitmap.h > 0) {
-      QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, bitmap.w * 4, QImage::Format_ARGB32);
+      QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, static_cast<qsizetype>(bitmap.w) * 4, QImage::Format_ARGB32);
       m_Page->image = image.copy();
       m_Page->resize(bitmap.w, bitmap.h);
       m_Page->update();
@@ -190,7 +194,7 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (!m_Document || m_Tool < 0 || IsBusy() || m_Page->image.isNull()) return;
   const auto size = m_Document->Sizes()[m_PageNumber->value() - 1];
   if (button == Qt::LeftButton) m_Draft.emplace_back(static_cast<float>(point.x() * size.wPt / m_Page->width()),
-      static_cast<float>((m_Page->height() - point.y()) * size.hPt / m_Page->height()));
+      static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
   const auto kind = static_cast<pdfview::Annot::Kind>(m_Tool);
   const bool multi = kind == pdfview::Annot::Kind::PolyLength || kind == pdfview::Annot::Kind::Area;
   const std::size_t required = kind == pdfview::Annot::Kind::Angle || kind == pdfview::Annot::Kind::Area ? 3 : 2;
@@ -216,7 +220,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
   if (!m_Document || m_Page->image.isNull()) return;
   const int page = m_PageNumber->value() - 1;
   const auto size = m_Document->Sizes()[page];
-  const double factor = m_Page->width() / size.wPt;
+  const double factor = static_cast<double>(m_Page->width()) / size.wPt;
   auto map = [&](float x, float y) { return QPointF(x * factor, (size.hPt - y) * factor); };
   for (const auto& annotation : m_Annotations.Items()) {
     if (annotation.page != page) continue;

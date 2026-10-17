@@ -93,7 +93,7 @@ bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* r
   if (msg->message == WM_GETMINMAXINFO) {
     MONITORINFO monitor{sizeof(MONITORINFO)};
     if (GetMonitorInfoW(MonitorFromWindow(msg->hwnd, MONITOR_DEFAULTTONEAREST), &monitor)) {
-      auto* info = reinterpret_cast<MINMAXINFO*>(msg->lParam);
+      auto* info = reinterpret_cast<MINMAXINFO*>(msg->lParam); // NOLINT(performance-no-int-to-ptr): Win32 encodes MINMAXINFO* in LPARAM.
       info->ptMaxPosition = {monitor.rcWork.left - monitor.rcMonitor.left, monitor.rcWork.top - monitor.rcMonitor.top};
       info->ptMaxSize = {monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top};
       info->ptMinTrackSize = {qRound(minimumWidth() * devicePixelRatioF()), qRound(minimumHeight() * devicePixelRatioF())};

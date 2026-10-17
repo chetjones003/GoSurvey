@@ -192,7 +192,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     m_Snap = m_State.active != AppCommandState::Kind::None ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
-        true, camera.orthoHalfH * 16.f / std::max(1, height()), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
+        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     m_State.viewportSnapPickValid = m_Snap.valid;
     m_State.viewportSnapPickLocalX = m_Cursor.x;
@@ -233,7 +233,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       float distance = 0.f;
       if (!(event->modifiers() & Qt::ShiftModifier)) ClearSelection(m_State);
       if (PickClosestCadEntity(m_State, m_Cursor.x, m_Cursor.y,
-          camera.orthoHalfH * 16.f / std::max(1, height()), &picked, &distance, CadViewIsPlan(m_State) ? nullptr : &ray)) {
+          camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), &picked, &distance, CadViewIsPlan(m_State) ? nullptr : &ray)) {
         const auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
             [&](const SelectedEntity& entry) { return entry.type == picked.type && entry.index == picked.index; });
         if (it == m_State.selection.end()) m_State.selection.push_back(picked);
@@ -268,7 +268,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     m_Snap = m_State.active != AppCommandState::Kind::None ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
-        true, camera.orthoHalfH * 16.f / std::max(1, height()), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
+        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));

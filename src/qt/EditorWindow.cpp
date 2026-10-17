@@ -439,7 +439,7 @@ void EditorWindow::Submit(const QString& command) {
   if (!command.trimmed().isEmpty()) {
     if (m_CommandHistory.isEmpty() || m_CommandHistory.last() != command) m_CommandHistory.push_back(command);
     if (m_CommandHistory.size() > 500) m_CommandHistory.removeFirst();
-    m_HistoryIndex = m_CommandHistory.size();
+    m_HistoryIndex = static_cast<int>(m_CommandHistory.size());
   }
   const QString verb = command.trimmed().toUpper();
   if (verb == "NEW") NewDrawing();

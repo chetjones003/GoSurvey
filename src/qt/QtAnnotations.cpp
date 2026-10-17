@@ -96,9 +96,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     painter.save();
     painter.setWorldTransform(QTransform(right.x(), right.y(), down.x(), down.y(), origin.x(), origin.y()));
     std::string text = CadAnnotationResolvedText(state, annotation);
-    if (annotation.bold) text = "[[b]]" + text + "[[/b]]";
-    if (annotation.italic) text = "[[i]]" + text + "[[/i]]";
-    if (annotation.underline) text = "[[u]]" + text + "[[/u]]";
+    if (annotation.bold) { text.insert(0, "[[b]]"); text.append("[[/b]]"); }
+    if (annotation.italic) { text.insert(0, "[[i]]"); text.append("[[/i]]"); }
+    if (annotation.underline) { text.insert(0, "[[u]]"); text.append("[[/u]]"); }
     if (DrawStrokeText(painter, annotation, fontPixels, text, annotation.kind == CadAnnotation::Kind::Text)) {
       painter.restore(); continue;
     }

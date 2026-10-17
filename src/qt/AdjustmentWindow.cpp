@@ -28,6 +28,7 @@
 #include <QStatusBar>
 #include <QFormLayout>
 #include <QDoubleSpinBox>
+#include <QDebug>
 #include <QDialogButtonBox>
 
 AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
@@ -206,7 +207,11 @@ void AdjustmentWindow::SaveText() {
   Save(true);
 }
 
-AdjustmentWindow::~AdjustmentWindow() { if (m_Work.valid()) m_Work.wait(); }
+AdjustmentWindow::~AdjustmentWindow() {
+  if (!m_Work.valid()) return;
+  try { m_Work.wait(); }
+  catch (const std::exception& error) { qWarning() << "Adjustment worker wait failed during shutdown:" << error.what(); }
+}
 
 bool AdjustmentWindow::HasUnsavedChanges() const {
   return m_Imported || m_Editor->toPlainText() != m_SavedText;

@@ -108,6 +108,13 @@ jobs:
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
       - name: Ensure Ninja
         shell: pwsh
         run: |
@@ -125,7 +132,7 @@ jobs:
         # is ever produced. Leaving PCH on left compile_commands.json referencing a .pch that
         # does not exist, failing clang-tidy on ANY PCH-covered file with a PCH-not-found
         # compiler error (unrelated to the file's own content) rather than a real finding.
-        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF
+        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
 
       - name: clang-tidy (lines changed in this PR only)
         shell: pwsh
