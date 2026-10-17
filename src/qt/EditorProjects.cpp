@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "auth/AuthService.hpp"
 #include "ProjectSettings.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"

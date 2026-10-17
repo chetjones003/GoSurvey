@@ -26,12 +26,17 @@ add_library(gosurvey_qt_frontend STATIC
   src/io/PdfPlot.cpp
   src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
+  src/platform/HttpFetch.cpp
+  src/platform/OAuthListener.cpp
+  src/platform/CredentialStore.cpp
+  src/auth/AuthService.cpp
+  src/auth/AuthPing.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
   gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
-  comdlg32 ole32 shell32 Windowscodecs)
+  comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
-target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN QT_NO_KEYWORDS)
+target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
 gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
 set(GOSURVEY_QT_RUNTIME_DIR "" CACHE PATH "Optional Qt preview output directory")

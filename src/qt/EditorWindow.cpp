@@ -18,6 +18,9 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
+#include "UserPrefs.hpp"
+#include "auth/AuthService.hpp"
+#include "platform/HttpFetch.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
@@ -176,6 +179,7 @@ EditorWindow::EditorWindow() {
   auto* service = new QTimer(this);
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
+    ServiceAuth();
     const auto before = m_State.cadGpuRevision;
     const auto logSize = m_Log.size();
     TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
@@ -204,6 +208,85 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   addAction(action);
   connect(action, &QAction::triggered, this, [this, command] { Submit(command); });
   return action;
+}
+
+void EditorWindow::ServiceAuth() {
+  if (!m_AuthStarted)
+    return;
+  if (m_State.authSignOutRequested) {
+    m_State.authSignOutRequested = false;
+    auth::SignOut();
+    m_State.authSignedIn = false;
+    m_State.authEmail.clear();
+    m_State.authError.clear();
+    Refresh();
+  }
+  if (m_State.authSignInRequested) {
+    m_State.authSignInRequested = false;
+    if (!m_AuthTask) {
+      m_AuthTask = auth::BeginInteractiveSignIn();
+      m_AuthLastAttemptInteractive = true;
+      m_State.authBusy = true;
+      m_State.authInteractiveBusy = true;
+      m_State.authError.clear();
+    }
+  }
+  if (m_State.authDeclineRequested) {
+    m_State.authDeclineRequested = false;
+    m_State.authOptedOut = true;
+    if (SaveUserStartupPrefs(m_State)) {
+      m_State.authGateResolved = true;
+    } else {
+      m_State.authOptedOut = false;
+      m_State.authError = "Your sign-in choice could not be saved. It may "
+                          "appear again next time.";
+    }
+  }
+  if (m_AuthTask && m_AuthTask->done.load(std::memory_order_acquire)) {
+    m_State.authBusy = false;
+    m_State.authInteractiveBusy = false;
+    m_State.authSignedIn = m_AuthTask->ok;
+    m_State.authEmail = m_AuthTask->email;
+    m_State.authError = (!m_AuthTask->ok && m_AuthLastAttemptInteractive)
+                            ? m_AuthTask->error
+                            : "";
+    if (m_AuthTask->ok || m_AuthTask->skippedNoNetwork)
+      m_State.authGateResolved = true;
+    if (m_AuthTask->ok && m_State.authOptedOut) {
+      m_State.authOptedOut = false;
+      if (!SaveUserStartupPrefs(m_State))
+        m_State.authError =
+            "Signed in, but the saved sign-in preference could not be updated.";
+    }
+    m_AuthTask.reset();
+    Refresh();
+  }
+  if (m_State.authGateResolved) {
+    if (auto *gate = findChild<QDialog *>("signInGate"))
+      gate->accept();
+  } else if (HasInternetConnectivity()) {
+    ShowSignInGate();
+  }
+}
+
+void EditorWindow::StartAuth(bool previewSignIn) {
+  if (m_AuthStarted)
+    return;
+  m_AuthStarted = true;
+  if (previewSignIn) {
+    m_State.authGateResolved = false;
+    m_State.authSignedIn = false;
+    m_State.authBusy = false;
+    m_State.authOptedOut = false;
+    ShowSignInGate();
+    return;
+  }
+  if (!m_State.authOptedOut) {
+    m_AuthTask = auth::BeginSilentRefresh();
+    m_State.authBusy = true;
+  } else {
+    m_State.authGateResolved = true;
+  }
 }
 
 void EditorWindow::UpdateChromeIcons() {
@@ -259,6 +342,8 @@ void EditorWindow::BuildRibbon() {
       Refresh();
     });
   }
+  viewMenu->addSeparator();
+  connect(viewMenu->addAction("Settings…"), &QAction::triggered, this, [this] { ShowSettings(); });
   viewMenu->addSeparator();
   applicationMenu->addMenu("&Survey")->addAction(CommandAction("Least-squares adjustment...", "Adjust.png", "LSA"));
   auto* help = applicationMenu->addMenu("&Help");

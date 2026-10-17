@@ -1,6 +1,7 @@
 #include "EditorWindow.hpp"
 #include "QtAppearance.hpp"
 #include "PdfAttach.hpp"
+#include "UserPrefs.hpp"
 #include <QApplication>
 #include <QFile>
 #include <QImage>
@@ -24,6 +25,7 @@ int main(int argc, char** argv) {
   app.setApplicationName("GoSurveyQt");
   ApplyQtAppearance(app, app.arguments().contains("--light-style") || QSettings().value("editor/lightTheme", false).toBool());
   const bool smoke = app.arguments().contains("--smoke-test");
+  const bool previewSignIn = app.arguments().contains("--preview-sign-in");
   QPixmap splashImage(QtAsset("splash-bg.png"));
   if (splashImage.isNull()) { splashImage = QPixmap(800, 440); splashImage.fill(QColor("#242830")); }
   splashImage = splashImage.scaled(800, 440, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
@@ -43,6 +45,8 @@ int main(int argc, char** argv) {
   int result = 0;
   {
     EditorWindow window;
+    LoadUserStartupPrefSettings(window.State());
+    if (!smoke) window.StartAuth(previewSignIn);
     window.show();
     splash.finish(&window);
     if (smoke) {
@@ -56,7 +60,8 @@ int main(int argc, char** argv) {
       });
     } else {
       for (const auto& argument : app.arguments().mid(1))
-        if (argument != "--default-style" && argument != "--light-style") { window.OpenDrawing(argument); break; }
+        if (argument != "--default-style" && argument != "--light-style" &&
+            argument != "--preview-sign-in") { window.OpenDrawing(argument); break; }
     }
     result = app.exec();
   } // Release viewport resources and PDF worker windows before shutting down PDFium.

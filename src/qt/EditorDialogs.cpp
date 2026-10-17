@@ -19,10 +19,236 @@
 #include <QTimer>
 #include <QFileDialog>
 #include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QTabWidget>
+#include <QCloseEvent>
+#include <QKeyEvent>
+#include <QFrame>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <cstdio>
+
+namespace {
+class SignInGateDialog final : public QDialog {
+public:
+  using QDialog::QDialog;
+
+protected:
+  void closeEvent(QCloseEvent *event) override { event->ignore(); }
+  void keyPressEvent(QKeyEvent *event) override {
+    if (event->key() == Qt::Key_Escape)
+      event->ignore();
+    else
+      QDialog::keyPressEvent(event);
+  }
+};
+} // namespace
+
+void EditorWindow::ShowSignInGate() {
+  if (findChild<QDialog *>("signInGate"))
+    return;
+  auto *dialog = new SignInGateDialog(this);
+  dialog->setObjectName("signInGate");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Sign in to GoSurvey");
+  dialog->setWindowModality(Qt::ApplicationModal);
+  dialog->setWindowFlag(Qt::WindowCloseButtonHint, false);
+  dialog->setFixedSize(700, 370);
+  auto *layout = new QHBoxLayout(dialog);
+  layout->setContentsMargins(0, 0, 0, 0);
+  layout->setSpacing(0);
+
+  auto *brandPanel = new QWidget(dialog);
+  brandPanel->setObjectName("signInBrandPanel");
+  brandPanel->setFixedWidth(250);
+  brandPanel->setStyleSheet("QWidget#signInBrandPanel { background:#243a53; }");
+  auto *brandLayout = new QVBoxLayout(brandPanel);
+  brandLayout->setContentsMargins(26, 28, 26, 24);
+  auto *logo = new QLabel(brandPanel);
+  logo->setObjectName("signInLogo");
+  logo->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(54, 54));
+  brandLayout->addWidget(logo);
+  auto *brand = new QLabel("GoSurvey", brandPanel);
+  brand->setObjectName("signInBrand");
+  brand->setStyleSheet("color:#f4f7fb;");
+  QFont brandFont = brand->font();
+  brandFont.setPointSize(21);
+  brandFont.setBold(true);
+  brand->setFont(brandFont);
+  brandLayout->addWidget(brand);
+  auto *brandTitle = new QLabel("Make GoSurvey yours", brandPanel);
+  brandTitle->setStyleSheet("color:#f4f7fb;");
+  QFont brandTitleFont = brandTitle->font();
+  brandTitleFont.setPointSize(14);
+  brandTitleFont.setBold(true);
+  brandTitle->setFont(brandTitleFont);
+  brandTitle->setWordWrap(true);
+  brandLayout->addSpacing(8);
+  brandLayout->addWidget(brandTitle);
+  auto *brandBody = new QLabel("Sign in to identify your account and prepare "
+                               "for future cloud-sync features.",
+                               brandPanel);
+  brandBody->setWordWrap(true);
+  brandBody->setStyleSheet("color:#d0d9e4;");
+  brandLayout->addWidget(brandBody);
+  brandLayout->addStretch();
+  layout->addWidget(brandPanel);
+
+  auto *choicePanel = new QWidget(dialog);
+  auto *choiceLayout = new QVBoxLayout(choicePanel);
+  choiceLayout->setContentsMargins(32, 30, 32, 26);
+  choiceLayout->setSpacing(12);
+  auto *title = new QLabel("Sign in to GoSurvey", choicePanel);
+  QFont titleFont = title->font();
+  titleFont.setPointSize(17);
+  titleFont.setBold(true);
+  title->setFont(titleFont);
+  choiceLayout->addWidget(title);
+  auto *body = new QLabel(
+      "Choose an option to continue. GoSurvey opens the secure sign-in page in "
+      "your browser. "
+      "Google, Microsoft, and email/password sign-in are available there.",
+      choicePanel);
+  body->setWordWrap(true);
+  choiceLayout->addWidget(body);
+  choiceLayout->addStretch();
+  auto *error = new QLabel(choicePanel);
+  error->setObjectName("signInError");
+  error->setWordWrap(true);
+  error->setStyleSheet("color:#c54646;");
+  choiceLayout->addWidget(error);
+  auto *signIn = new QPushButton("Sign In", choicePanel);
+  signIn->setObjectName("signInButton");
+  signIn->setDefault(true);
+  signIn->setMinimumHeight(40);
+  signIn->setStyleSheet(
+      "QPushButton { background:#438fda; color:white; font-weight:600; "
+      "padding:9px; border:0; border-radius:4px; } QPushButton:hover { "
+      "background:#347cc3; }");
+  choiceLayout->addWidget(signIn);
+  auto *decline = new QPushButton("Don't Sign In", choicePanel);
+  decline->setObjectName("declineSignInButton");
+  decline->setMinimumHeight(38);
+  choiceLayout->addWidget(decline);
+  auto *state = new QLabel("You will not be asked again if you skip. You can "
+                           "sign in later from Settings → Account.",
+                           choicePanel);
+  state->setWordWrap(true);
+  state->setStyleSheet("color:#777f89;");
+  choiceLayout->addWidget(state);
+  layout->addWidget(choicePanel, 1);
+  connect(signIn, &QPushButton::clicked, this,
+          [this] { m_State.authSignInRequested = true; });
+  connect(decline, &QPushButton::clicked, this,
+          [this] { m_State.authDeclineRequested = true; });
+  auto *refresh = new QTimer(dialog);
+  refresh->setInterval(50);
+  connect(refresh, &QTimer::timeout, dialog,
+          [this, dialog, signIn, decline, error] {
+            error->setText(QString::fromUtf8(m_State.authError.c_str()));
+            const bool busy = m_State.authBusy;
+            signIn->setEnabled(!busy);
+            decline->setEnabled(!busy);
+            signIn->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
+                                                        : "Sign In");
+            if (m_State.authGateResolved)
+              dialog->accept();
+          });
+  refresh->start();
+  dialog->show();
+}
+
+void EditorWindow::ShowSettings() {
+  if (findChild<QDialog *>("applicationSettings")) {
+    auto *existing = findChild<QDialog *>("applicationSettings");
+    existing->raise();
+    existing->activateWindow();
+    return;
+  }
+  auto *dialog = new QDialog(this);
+  dialog->setObjectName("applicationSettings");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Settings");
+  dialog->resize(560, 285);
+  auto *layout = new QVBoxLayout(dialog);
+  layout->setContentsMargins(20, 18, 20, 16);
+  layout->setSpacing(12);
+  auto *heading = new QLabel("Account", dialog);
+  heading->setObjectName("accountSettingsHeading");
+  QFont headingFont = heading->font();
+  headingFont.setPointSize(16);
+  headingFont.setBold(true);
+  heading->setFont(headingFont);
+  layout->addWidget(heading);
+  auto *description = new QLabel(dialog);
+  description->setWordWrap(true);
+  description->setText(
+      "Sign in with Google, Microsoft, or an email and password to identify "
+      "this account. Nothing in GoSurvey is currently gated on signing in.");
+  layout->addWidget(description);
+
+  auto *identityCard = new QFrame(dialog);
+  identityCard->setObjectName("accountIdentityCard");
+  identityCard->setFrameShape(QFrame::StyledPanel);
+  auto *identityLayout = new QHBoxLayout(identityCard);
+  identityLayout->setContentsMargins(14, 12, 14, 12);
+  auto *logo = new QLabel(identityCard);
+  logo->setObjectName("accountSettingsLogo");
+  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(40, 40));
+  identityLayout->addWidget(logo);
+  auto *identityText = new QVBoxLayout();
+  auto *brand = new QLabel("GoSurvey", identityCard);
+  QFont accountBrandFont = brand->font();
+  accountBrandFont.setBold(true);
+  brand->setFont(accountBrandFont);
+  identityText->addWidget(brand);
+  auto *status = new QLabel(identityCard);
+  status->setObjectName("accountSignInStatus");
+  identityText->addWidget(status);
+  identityLayout->addLayout(identityText, 1);
+  auto *action = new QPushButton(identityCard);
+  action->setObjectName("accountSignInAction");
+  action->setMinimumWidth(100);
+  identityLayout->addWidget(action, 0, Qt::AlignVCenter);
+  layout->addWidget(identityCard);
+
+  auto *error = new QLabel(dialog);
+  error->setObjectName("accountSignInError");
+  error->setWordWrap(true);
+  error->setStyleSheet("color:#c54646;");
+  layout->addWidget(error);
+  layout->addStretch();
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  connect(action, &QPushButton::clicked, this, [this] {
+    if (m_State.authSignedIn)
+      m_State.authSignOutRequested = true;
+    else
+      m_State.authSignInRequested = true;
+  });
+  auto *refresh = new QTimer(dialog);
+  refresh->setInterval(100);
+  connect(refresh, &QTimer::timeout, dialog, [this, status, error, action] {
+    if (m_State.authSignedIn) {
+      status->setText("Signed in as " +
+                      QString::fromUtf8(m_State.authEmail.c_str()));
+      action->setText("Sign Out");
+    } else {
+      status->setText(m_State.authOptedOut
+                          ? "You chose not to sign in at startup."
+                          : "Not signed in.");
+      action->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
+                                                  : "Sign In");
+    }
+    action->setEnabled(!m_State.authBusy);
+    error->setText(QString::fromUtf8(m_State.authError.c_str()));
+  });
+  refresh->start();
+  dialog->show();
+}
 
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();

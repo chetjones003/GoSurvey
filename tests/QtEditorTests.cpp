@@ -18,6 +18,7 @@
 #include <QAbstractButton>
 #include <QApplication>
 #include <QMessageBox>
+#include <QDialog>
 #include <QPlainTextEdit>
 #include <QLineEdit>
 #include <QLabel>
@@ -34,6 +35,7 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QDockWidget>
+#include <QFrame>
 #include <QSettings>
 #include <QTreeWidget>
 #include <QTabBar>
@@ -107,6 +109,80 @@ private Q_SLOTS:
     QVERIFY(!window.HasUnsavedChanges());
     QVERIFY2(window.LoadFile(path, error), qPrintable(error));
     QVERIFY(!window.HasUnsavedChanges());
+  }
+
+  void settingsAccountSupportsLaterSignInAndReadOnlyStatus() {
+    EditorWindow window;
+    auto *viewMenu = window.findChild<QMenu *>("viewMenu");
+    QVERIFY(viewMenu);
+    QAction *settings = nullptr;
+    for (auto *action : viewMenu->actions())
+      if (action->text() == "Settings…")
+        settings = action;
+    QVERIFY(settings);
+    settings->trigger();
+    auto *dialog = window.findChild<QDialog *>("applicationSettings");
+    QVERIFY(dialog);
+    auto *heading = dialog->findChild<QLabel *>("accountSettingsHeading");
+    QVERIFY(heading);
+    QCOMPARE(heading->text(), QString("Account"));
+    QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
+    QVERIFY(dialog->findChildren<QLineEdit *>().isEmpty());
+    auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
+    auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
+    QVERIFY(action);
+    QVERIFY(status);
+    QTRY_COMPARE(action->text(), QString("Sign In"));
+    QTest::mouseClick(action, Qt::LeftButton);
+    QVERIFY(window.State().authSignInRequested);
+    window.State().authSignInRequested = false;
+    window.State().authSignedIn = true;
+    window.State().authEmail = "surveyor@example.com";
+    QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
+    QTRY_COMPARE(action->text(), QString("Sign Out"));
+    const auto accountShot = dialog->grab();
+    QVERIFY(accountShot.save(QCoreApplication::applicationDirPath() +
+                             "/qt-880-account-final.png"));
+    QTest::mouseClick(action, Qt::LeftButton);
+    QVERIFY(window.State().authSignOutRequested);
+  }
+
+  void startupGateUsesApplicationLogoAndRequiresAChoice() {
+    EditorWindow window;
+    window.State().authGateResolved = false;
+    window.show();
+    window.ShowSignInGate();
+    auto *gate = window.findChild<QDialog *>("signInGate");
+    QVERIFY(gate);
+    QTRY_VERIFY(gate->isVisible());
+    QCOMPARE(gate->windowModality(), Qt::ApplicationModal);
+    QVERIFY(!(gate->windowFlags() & Qt::WindowCloseButtonHint));
+    auto *logo = gate->findChild<QLabel *>("signInLogo");
+    QVERIFY(logo);
+    QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
+    const auto startupShot = gate->grab();
+    QVERIFY(startupShot.save(QCoreApplication::applicationDirPath() +
+                             "/qt-880-startup-final.png"));
+    gate->close();
+    QVERIFY(gate->isVisible());
+    QTest::keyClick(gate, Qt::Key_Escape);
+    QVERIFY(gate->isVisible());
+    QTest::mouseClick(gate->findChild<QPushButton *>("signInButton"),
+                      Qt::LeftButton);
+    QVERIFY(window.State().authSignInRequested);
+    QTest::mouseClick(gate->findChild<QPushButton *>("declineSignInButton"),
+                      Qt::LeftButton);
+    QVERIFY(window.State().authDeclineRequested);
+  }
+
+  void savedOptOutResolvesQtLaunchWithoutAuthAttempt() {
+    EditorWindow window;
+    window.State().authOptedOut = true;
+    window.StartAuth();
+    QVERIFY(window.State().authGateResolved);
+    QVERIFY(!window.State().authBusy);
+    QCoreApplication::processEvents();
+    QVERIFY(!window.findChild<QDialog *>("signInGate"));
   }
 
   void malformedOpenAndSavePreserveExistingSession() {

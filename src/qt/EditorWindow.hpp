@@ -1,6 +1,9 @@
 #pragma once
 #include <QMainWindow>
+#include <memory>
 #include "CadCommands.hpp"
+
+namespace auth { struct AuthTask; }
 
 class EditorViewport;
 class QTabBar;
@@ -19,6 +22,7 @@ public:
   EditorWindow();
   ~EditorWindow() override;
   void Submit(const QString& command);
+  void StartAuth(bool previewSignIn = false);
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool RunSmokeChecks(QString& error);
@@ -28,6 +32,7 @@ protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:
+  friend class QtEditorTests;
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
   void BuildRibbon();
@@ -60,6 +65,9 @@ private:
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
   void ShowPasteWarning();
+  void ShowSettings();
+  void ShowSignInGate();
+  void ServiceAuth();
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
@@ -77,6 +85,9 @@ private:
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
   bool m_TextDialogOpen = false;
+  bool m_AuthLastAttemptInteractive = false;
+  bool m_AuthStarted = false;
+  std::unique_ptr<auth::AuthTask> m_AuthTask;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };
