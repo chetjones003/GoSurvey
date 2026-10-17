@@ -1,5 +1,7 @@
 #pragma once
 
+#include <imgui.h>
+
 struct GLFWwindow;
 
 namespace update { struct UpdateState; }
@@ -12,8 +14,15 @@ void GlfwApplySplashStageWindowHints();
 /// other platforms), resizable, maximized, taskbar title.
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window);
 
-/// Windows: custom caption strip (drag, min / max / close). No-op elsewhere.
-void DrawMainWindowTitleBar(GLFWwindow* window);
+/// Windows: custom caption strip (drag, min / max / close), the GS logo/title (click opens the
+/// File/Edit/View/Help menu) and the signed-in account email (click opens Account Details/Sign
+/// Out). No-op elsewhere. `accountEmail` is the email to show, or nullptr/empty when signed out.
+/// On return, `*outMenuClicked`/`*outAccountClicked` report whether that area was clicked this
+/// frame, and `*outMenuAnchor`/`*outAccountAnchor` give the screen position (bottom-left) to open
+/// each dropdown under.
+void DrawMainWindowTitleBar(GLFWwindow* window, const char* accountEmail,
+                            bool* outMenuClicked, ImVec2* outMenuAnchor,
+                            bool* outAccountClicked, ImVec2* outAccountAnchor);
 
 /// Centered splash card (~⅓ of the work area) on a dimmed full-screen backdrop; theme colors; logo from
 /// \ref ResolveAppLogoPngPath (`icons/bitmap.png` or `bitmap.png`).

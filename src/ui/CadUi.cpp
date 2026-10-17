@@ -2,6 +2,7 @@
 #include "CadUiInternal.hpp"
 #include "ProjectFiles.hpp"
 #include "CadUiChrome.hpp"
+#include "UiScale.hpp"
 #include "CadBlocks.hpp"
 #include "DevShellHooks.hpp"
 #include "RibbonLayoutDraw.hpp"
@@ -687,12 +688,17 @@ void ApplyCadDarkTheme() {
   g_chrome.ribbonCtxTabHovered = IM_COL32(30, 144, 255, 255);
   g_chrome.ribbonCtxTabActive  = IM_COL32(0, 90, 180, 255);
   g_chrome.ribbonCtxTabText    = IM_COL32(255, 255, 255, 255);
-  g_chrome.ribbonTabPadY       = 5.f;
-  g_chrome.ribbonTabStripGapY  = 4.f;
-  g_chrome.ribbonBottomGutter  = 12.f;
-  g_chrome.ribbonTitleH        = 20.f;
+  // REQ-850 follow-up: these were hand-tuned on a high-DPI dev display and, independent of any
+  // DPI/resolution scaling, came out noticeably larger than a comparable CAD ribbon (Civil 3D) at
+  // the same OS scale/resolution — less a scaling bug than the baseline density itself being too
+  // generous. Shrunk toward that reference density; DrawRibbonBar multiplies these by
+  // ui::UiScale() at draw time, so they still track DPI/resolution on top of this baseline.
+  g_chrome.ribbonTabPadY       = 3.f;
+  g_chrome.ribbonTabStripGapY  = 3.f;
+  g_chrome.ribbonBottomGutter  = 8.f;
+  g_chrome.ribbonTitleH        = 16.f;
   g_chrome.ribbonBodyFontScale = 0.80f;
-  g_chrome.ribbonIconSideMin   = 32.f;
+  g_chrome.ribbonIconSideMin   = 24.f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1812,26 +1818,9 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::EndMenu();
   }
 
-  // REQ-091: sign-in status at the far right of the menu bar — the same placement familiar CAD
-  // tools (e.g. Civil 3D) use for the signed-in account. Nothing shown while signed out, which
-  // (with the launch gate in place) only happens via its no-internet exception, so there is no
-  // "Sign In" prompt to squeeze in here — Settings → System → Account already has one.
-  // REQ-091 amendment (D-2026-09-01, GitHub issue #182): the email is a menu that opens an
-  // account dropdown — Account Details (a read-only placeholder window) and Sign Out (the same
-  // path Settings uses). Still nothing while signed out.
-  if (cmd.authSignedIn && !cmd.authEmail.empty()) {
-    const float textW = ImGui::CalcTextSize(cmd.authEmail.c_str()).x;
-    const float pad   = 28.f;  // room for the menu's own frame padding around the label
-    ImGui::SameLine(std::max(0.f, ImGui::GetWindowWidth() - textW - pad));
-    if (ImGui::BeginMenu(cmd.authEmail.c_str())) {
-      if (ImGui::MenuItem("Account Details"))
-        cmd.showAccountDetailsWindow = true;
-      ImGui::Separator();
-      if (ImGui::MenuItem("Sign Out"))
-        cmd.authSignOutRequested = true;
-      ImGui::EndMenu();
-    }
-  }
+  // REQ-091: the signed-in account (email + Account Details/Sign Out) moved to the custom title
+  // bar, just left of the min/max/close buttons (REQ-850 follow-up — see
+  // DrawMainWindowTitleBar/DrawTitleBarAccountPopup), so it no longer lives in this menu.
 
   ImGui::PopStyleVar();
 }
@@ -1876,9 +1865,14 @@ void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string
 // Carries the active panel's title from Begin to End (panels never nest).
 static const char* s_ribbonPanelTitle = nullptr;
 
+// REQ-850 follow-up: the ribbon's own panel/button geometry (titles, icon grids, tab strip) is
+// hand-drawn with literal pixel constants that bypass ImGuiStyle's DPI scaling, the same class of
+// bug the Start screen had. Scale at the read sites below.
+static float RibbonTitleH() { return g_chrome.ribbonTitleH * ui::UiScale(); }
+
 // Usable content height above the bottom title strip, for sizing buttons.
 static float RibbonPanelContentH(float panelH) {
-  return std::max(24.f, panelH - g_chrome.ribbonTitleH);
+  return std::max(24.f, panelH - RibbonTitleH());
 }
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
@@ -1887,7 +1881,7 @@ static void RibbonSectionBegin(const char* childId, const char* title, float wid
   // section shares one continuous surface. Buttons float on it; the panel title is pinned at the
   // bottom by RibbonSectionEnd.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, 0);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f) * ui::UiScale());
   // NoScrollbar alone only hides the bar — a panel whose content is a hair wider than `width`
   // (rounding in colW(), an extra pixel of text) was still wheel-scrollable with no visible bar,
   // which is exactly what let the Survey panel keep scrolling after RibbonToolsLeft's own fix
@@ -1915,21 +1909,22 @@ static void RibbonSectionEnd() {
   const char* title = s_ribbonPanelTitle ? s_ribbonPanelTitle : "";
   const ImVec2 ts = ImGui::CalcTextSize(title);
 
-  const float titleTop = wp.y + wh - g_chrome.ribbonTitleH;
+  const float titleH = RibbonTitleH();
+  const float titleTop = wp.y + wh - titleH;
   dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), g_chrome.ribbonPanelRule, 1.f);
 
   const ImU32 tcol = g_chrome.ribbonPanelTitle;
 
-  constexpr float chevSz = 3.f;
-  constexpr float gap = 5.f;
+  const float chevSz = 3.f * ui::UiScale();
+  const float gap = 5.f * ui::UiScale();
   const float totalW = ts.x + gap + chevSz * 2.f;
   float tx = wp.x + (ww - totalW) * 0.5f;
   if (tx < wp.x + 3.f)
     tx = wp.x + 3.f;
-  const float ty = titleTop + (g_chrome.ribbonTitleH - ts.y) * 0.5f;
+  const float ty = titleTop + (titleH - ts.y) * 0.5f;
   dl->AddText(ImVec2(tx, ty), tcol, title);
   const float cx = tx + ts.x + gap + chevSz;
-  const float cy = titleTop + g_chrome.ribbonTitleH * 0.5f;
+  const float cy = titleTop + titleH * 0.5f;
   dl->AddTriangleFilled(ImVec2(cx - chevSz, cy - chevSz * 0.55f), ImVec2(cx + chevSz, cy - chevSz * 0.55f),
                         ImVec2(cx, cy + chevSz * 0.75f), tcol);
 
@@ -3495,7 +3490,7 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
     constexpr float botPad = 4.f;
-    const float iconArea = std::max(CadUiChrome().ribbonIconSideMin,
+    const float iconArea = std::max(CadUiChrome().ribbonIconSideMin * ui::UiScale(),
                                     size.y - ts.y - iconPad - botPad - 1.f);
     const float sideMax = std::min(size.x - iconPad * 2.f, iconArea);
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + iconPad + iconArea * 0.5f + shift);
@@ -3808,8 +3803,9 @@ static void DrawDropdownChevron(ImDrawList* dl, ImVec2 btnMin, ImVec2 btnMax, Im
 }
 
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
+  const float uiScale = ui::UiScale();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3) * uiScale);
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4) * uiScale);
   // nanoCAD-style flat system-gray toolbar band; icons float on it as 3D buttons.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
@@ -3935,9 +3931,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // active tab reads the same way the active space tab already does, rather than a second style.
   // Extra vertical FramePadding (user GUI-pass feedback, 2026-08-25: tab text sat flush against
   // the button's bottom edge) plus a gap row below the strip so it doesn't crowd the panels.
-  const float kRibbonTabStripH = 18.f + g_chrome.ribbonTabPadY * 2.f;
+  const float ribbonTabPadY = g_chrome.ribbonTabPadY * uiScale;
+  const float kRibbonTabStripH = 18.f * uiScale + ribbonTabPadY * 2.f;
   {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, g_chrome.ribbonTabPadY));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f * uiScale, ribbonTabPadY));
     auto ribbonTab = [&](const char* label, int tabIdx) {
       const bool active = cmd.activeRibbonTab == tabIdx;
       PushModeToggleButtonColors(active, cmd.displayColorThemeIdx);
@@ -4024,21 +4021,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::SameLine(0, 2);
     }
     ImGui::PopStyleVar();
-    ImGui::Dummy(ImVec2(1.f, g_chrome.ribbonTabStripGapY));
+    ImGui::Dummy(ImVec2(1.f, g_chrome.ribbonTabStripGapY * uiScale));
   }
 
   ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);
 
   const ImGuiStyle& st = ImGui::GetStyle();
+  const float ribbonTabStripGapY = g_chrome.ribbonTabStripGapY * uiScale;
+  const float ribbonBottomGutter = g_chrome.ribbonBottomGutter * uiScale;
+  const float ribbonIconSideMin  = g_chrome.ribbonIconSideMin * uiScale;
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
   // flush against the ribbon's bottom edge. WindowPadding cannot express this —
   // it is symmetric, and adding it at the top too would waste the band's height.
-  const float panelH = height - kRibbonTabStripH - g_chrome.ribbonTabStripGapY - st.WindowPadding.y * 2.f -
-                        g_chrome.ribbonBottomGutter;
-  constexpr float kLayerPanelW = 288.f;
+  const float panelH = height - kRibbonTabStripH - ribbonTabStripGapY - st.WindowPadding.y * 2.f -
+                        ribbonBottomGutter;
+  const float kLayerPanelW = 288.f * uiScale;
 
   // Civil 3D-style panel metrics: a button column fills the height above the bottom title.
-  const float colH = std::max(56.f, RibbonPanelContentH(panelH) - 4.f);
+  const float colH = std::max(56.f * uiScale, RibbonPanelContentH(panelH) - 4.f * uiScale);
   const float homeRowGapY = st.ItemSpacing.y;
   // Draw/Modify/Palettes icon grids divide the panel column height evenly across their rows so the
   // icons fill the ribbon instead of sitting as tiny AutoFit squares in a tall panel.
@@ -4046,15 +4046,15 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     assert(rows >= 1);
     assert(rows <= 8);
     const float gaps = homeRowGapY * static_cast<float>(rows - 1);
-    return std::max(g_chrome.ribbonIconSideMin, std::floor((colH - gaps) / static_cast<float>(rows)));
+    return std::max(ribbonIconSideMin, std::floor((colH - gaps) / static_cast<float>(rows)));
   };
   const float gridIconSide3Row = gridIconSideForRows(3);
   const float gridIconSide2Row = gridIconSideForRows(2);
   const float ribbonIconSide =
       cmd.displayResizeRibbonIcons ? gridIconSide3Row : ImGui::GetFrameHeight();
   ribbonlayout::SetRibbonMeasureIconSide(ribbonIconSide);
-  constexpr float largeW = 68.f;
-  constexpr float kTsLargeW = 76.f;
+  const float largeW = 68.f * uiScale;
+  const float kTsLargeW = 76.f * uiScale;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
   auto capW = [&](const char* caption) { return std::max(kTsLargeW, RibbonMaxLineWidth(caption) + 16.f); };
 
@@ -4070,7 +4070,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     return hit;
   };
 
-  const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
+  const float annStyleW = 150.f * uiScale;  // text-style dropdown width in the Annotate section (REQ-044)
   // Civil 3D Annotate tab shows a style/scale combo in most panels. Where GoSurvey has no picker
   // yet, render a disabled combo-shaped placeholder with the automatic NYI tooltip. MUST be at
   // function scope — the ribbonSpecs closures capture it and run after the tab block exits (the

@@ -46598,12 +46598,14 @@ ImFont* LoadBundledUiFont(const char* fileName, const float sizePx, ImFontConfig
 
 bool LoadApplicationFont() {
   ImGuiIO& io = ImGui::GetIO();
-  // Arial (DevShell Fonts tab, 2026-10-09). Falls back to the classic Tahoma/Segoe UI/Calibri chain.
+  // Segoe UI across the app (issue #850 follow-on request); falls back to the classic
+  // Arial/Tahoma/Calibri chain if Segoe UI isn't installed. The LSA Editor's command editor and
+  // output panel keep their own monospace font via explicit PushFont and are unaffected by this.
   const char* candidates[] = {
+      "C:/Windows/Fonts/segoeui.ttf",
       "C:/Windows/Fonts/arial.ttf",
       "C:/Windows/Fonts/tahoma.ttf",
       "C:/Windows/Fonts/Tahoma.ttf",
-      "C:/Windows/Fonts/segoeui.ttf",
       "C:/Windows/Fonts/calibri.ttf",
   };
   ImFontConfig cfg;
@@ -46628,8 +46630,8 @@ bool LoadApplicationFont() {
   tsCfg.OversampleV = 2;
   tsCfg.PixelSnapH = true;
   const char* tsCandidates[] = {
-      "C:/Windows/Fonts/arial.ttf",
       "C:/Windows/Fonts/segoeui.ttf",
+      "C:/Windows/Fonts/arial.ttf",
       "C:/Windows/Fonts/segoeuisl.ttf",
       "C:/Windows/Fonts/calibri.ttf",
   };
@@ -46641,14 +46643,14 @@ bool LoadApplicationFont() {
   }
   FontReg::SetToolspace(tsFont != nullptr ? tsFont : loaded);
 
-  // What's New billboard: Arial (DevShell Fonts tab, 2026-10-09) — Segoe UI/Calibri fallback.
+  // What's New billboard: Segoe UI (issue #850 follow-on) — Arial/Calibri fallback.
   ImFontConfig bbCfg;
   bbCfg.OversampleH = 3;
   bbCfg.OversampleV = 2;
   bbCfg.PixelSnapH = true;
   const char* bbCandidates[] = {
-      "C:/Windows/Fonts/arial.ttf",
       "C:/Windows/Fonts/segoeui.ttf",
+      "C:/Windows/Fonts/arial.ttf",
       "C:/Windows/Fonts/segoeuisl.ttf",
       "C:/Windows/Fonts/calibri.ttf",
   };
