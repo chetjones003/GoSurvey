@@ -134,6 +134,9 @@ jobs:
         # compiler error (unrelated to the file's own content) rather than a real finding.
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
 
+      - name: Generate Qt test moc files
+        run: cmake --build build --target GoSurveyQtTests_autogen
+
       - name: clang-tidy (lines changed in this PR only)
         shell: pwsh
         env:
