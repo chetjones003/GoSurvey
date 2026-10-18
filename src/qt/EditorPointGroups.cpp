@@ -27,7 +27,7 @@ namespace {
 QString FromUtf8(const std::string& value) { return QString::fromUtf8(value.c_str()); }
 
 std::string NextGroupName(const AppCommandState& state) {
-  const std::string base = "Point Group";
+  std::string base = "Point Group";
   if (FindPointGroupIndex(state, base) < 0) return base;
   for (int number = 2; number < 10000; ++number) {
     const auto candidate = base + " (" + std::to_string(number) + ")";
