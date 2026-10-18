@@ -97,12 +97,12 @@ void EditorWindow::RefreshProperties() {
   auto fmt = [precision](double v) { return QString::fromStdString(FormatLinear(v, precision)); };
 
   // --- selection summary ------------------------------------------------------------------------
-  int nLine = 0, nCirc = 0, nText = 0, nOther = 0;
+  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) ++nLine;
     else if (e.type == SelectedEntity::Type::Circle) ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nText;
-    else ++nOther;
+    else { ++nOther; if (e.type == SelectedEntity::Type::Surface) ++nSurface; }
   }
   const int total = static_cast<int>(st.selection.size());
   QString summary;
@@ -121,7 +121,7 @@ void EditorWindow::RefreshProperties() {
     else if (nLine) what = nLine == 1 ? "Line" : QString("%1 lines").arg(nLine);
     else if (nCirc) what = nCirc == 1 ? "Circle" : QString("%1 circles").arg(nCirc);
     else if (nText) what = nText == 1 ? "Text" : QString("%1 annotations").arg(nText);
-    else what = "Other objects";
+    else what = nSurface == nOther ? (nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface)) : QString("Other objects");
     summary = QString("Selected: %1 object%2 — %3").arg(total).arg(total == 1 ? "" : "s").arg(what);
   }
   auto* header = new QLabel(summary, body);
@@ -468,6 +468,39 @@ void EditorWindow::RefreshProperties() {
     auto* hint = new QLabel("Select a single TEXT or MTEXT to edit content and box here.", body);
     hint->setWordWrap(true);
     geometryRows->addWidget(hint);
+  }
+  // A single TIN surface: read-only, as in 0.7.4 -- every figure is derived from the triangulation or the
+  // definition, so an editable copy here would be a second source of truth the next rebuild overwrites.
+  int surfaceCount = 0;
+  size_t surfaceIndex = 0;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::Surface && ++surfaceCount == 1) surfaceIndex = static_cast<size_t>(e.index);
+  if (surfaceCount == 1 && surfaceIndex < st.cadSurfaces.size()) {
+    const CadSurface& surface = st.cadSurfaces[surfaceIndex];
+    auto* rows = section("Surface", "propertiesSurface");
+    readOnly(rows, "Name", Text(surface.name), "propSurfaceName");
+    readOnly(rows, "Points", QString::number(surface.vertexCount()), "propSurfacePoints");
+    readOnly(rows, "Triangles", QString::number(surface.triangleCount()), "propSurfaceTriangles");
+    if (surface.tin && surface.tin->vertsXyz.size() >= 3) {
+      double lo = surface.tin->vertsXyz[2], hi = lo;
+      for (size_t i = 2; i < surface.tin->vertsXyz.size(); i += 3) {
+        lo = std::min(lo, surface.tin->vertsXyz[i]);
+        hi = std::max(hi, surface.tin->vertsXyz[i]);
+      }
+      readOnly(rows, "Elevation range", fmt(lo) + " to " + fmt(hi), "propSurfaceElevation");
+    } else {
+      readOnly(rows, "Elevation range", QString::fromUtf8("\xE2\x80\x94"), "propSurfaceElevation");
+    }
+    readOnly(rows, "Definition", QString("%1 group(s), %2 file(s), %3 breakline(s), %4 boundary(ies)")
+                                     .arg(surface.sourcePointGroups.size()).arg(surface.sourcePointFiles.size())
+                                     .arg(surface.breaklines.size()).arg(surface.boundaries.size()), "propSurfaceDefinition");
+    // REQ-086: a surface showing an older triangulation than its definition describes must SAY so.
+    if (surface.lastBuildIncomplete)
+      readOnly(rows, "Status", QString::fromUtf8("out of date \xE2\x80\x94 ") + Text(surface.lastBuildMessage), "propSurfaceStatus");
+    auto* hint = new QLabel("Read-only. Edit the definition in the Surfaces manager.", body);
+    hint->setObjectName("propSurfaceNote");
+    hint->setWordWrap(true);
+    rows->addWidget(hint);
   }
   if (!st.selectedSurveyPointIndices.empty()) {
     auto* points = new QLabel(QString("%1 survey point%2 selected. Bulk editing: VIEWPOINTS.").arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s"), body);

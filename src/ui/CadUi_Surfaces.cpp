@@ -21,6 +21,7 @@
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
+#include "CadSurfaceEdit.hpp"
 #include "SurveyPoints.hpp"
 #include "WinFileDialogs.hpp"  // REQ-086: Browse... on the Add Point File dialog
 
@@ -32,32 +33,6 @@
 #include <vector>
 
 namespace {
-
-std::string NextSurfaceName(const AppCommandState& cmd) {
-  const std::string base = "Surface";
-  if (FindSurfaceIndex(cmd, base) < 0)
-    return base;
-  for (int n = 2; n < 10000; ++n) {
-    const std::string candidate = base + " (" + std::to_string(n) + ")";
-    if (FindSurfaceIndex(cmd, candidate) < 0)
-      return candidate;
-  }
-  return base;
-}
-
-/// Elevation range of a built surface, for the readout.
-bool SurfaceElevationRange(const CadSurface& s, float* lo, float* hi) {
-  if (!s.tin || s.tin->vertsXyz.size() < 3)
-    return false;
-  float mn = static_cast<float>(s.tin->vertsXyz[2]), mx = mn;
-  for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
-    mn = std::min(mn, static_cast<float>(s.tin->vertsXyz[i]));
-    mx = std::max(mx, static_cast<float>(s.tin->vertsXyz[i]));
-  }
-  *lo = mn;
-  *hi = mx;
-  return true;
-}
 
 // SurfaceState / SurfaceRebuildStateOf moved to CadCommands.hpp/.cpp (TASK-095): the Volume
 // Dashboard needs the identical current/stale/rebuilding classification for its own two picked
@@ -114,18 +89,6 @@ const char* BoundaryKindName(CadBoundaryKind k) {
 /// Which dialog wants opening after the tree is drawn. ImGui popups must be opened from the same id
 /// stack level they are begun at, so the tree records an intent and the caller acts on it.
 enum class PendingDialog { None, AddBreakline, AddBoundary, AddPointGroup, AddPointFile };
-
-/// Moves item \p i of \p v by \p delta, clamped. REQ-075 asks for reorder, and for boundaries the
-/// order is not cosmetic — REQ-069: "boundaries apply in definition order", so an outer ring after a
-/// hide ring means something different from before it.
-template <typename T>
-bool MoveInVector(std::vector<T>& v, size_t i, int delta) {
-  const long long j = static_cast<long long>(i) + delta;
-  if (j < 0 || j >= static_cast<long long>(v.size()))
-    return false;
-  std::swap(v[i], v[static_cast<size_t>(j)]);
-  return true;
-}
 
 } // namespace
 
@@ -354,8 +317,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
   ImGui::EndChild();
 
   if (ImGui::Button("New surface", ImVec2(-1, 0))) {
-    PushUndoSnapshot(cmd, "Create surface");
-    const int ni = CreateSurfaceFromPointGroups(cmd, NextSurfaceName(cmd), {}, *log);
+    const int ni = surfedit::CreateFromPointGroups(cmd, surfedit::NextSurfaceName(cmd), {}, *log);
     if (ni >= 0)
       selIdx = ni;
   }
@@ -382,7 +344,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     static std::vector<char> picked;
     if (picked.size() != cmd.pointGroups.size()) {
       picked.assign(cmd.pointGroups.size(), 0);
-      newName = NextSurfaceName(cmd);
+      newName = surfedit::NextSurfaceName(cmd);
     }
     ImGui::TextUnformatted("Name");
     ImGui::SetNextItemWidth(240.f);
@@ -410,8 +372,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 
     ImGui::BeginDisabled(newName.empty());
     if (ImGui::Button("Create empty")) {
-      PushUndoSnapshot(cmd, "Create surface");
-      const int ni = CreateSurfaceFromPointGroups(cmd, newName, {}, *log);
+      const int ni = surfedit::CreateFromPointGroups(cmd, newName, {}, *log);
       if (ni >= 0)
         selIdx = ni;
       picked.clear();
@@ -425,8 +386,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       for (size_t i = 0; i < cmd.pointGroups.size(); ++i)
         if (picked[i])
           groups.push_back(cmd.pointGroups[i].name);
-      PushUndoSnapshot(cmd, "Create surface");
-      const int ni = CreateSurfaceFromPointGroups(cmd, newName, groups, *log);
+      const int ni = surfedit::CreateFromPointGroups(cmd, newName, groups, *log);
       if (ni >= 0)
         selIdx = ni;
       picked.clear();  // forces re-seed (and a fresh default name) next time the popup opens
@@ -446,7 +406,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     static int baseIx = 0;
     static int compIx = 1;
     if (volName.empty())
-      volName = NextSurfaceName(cmd);
+      volName = surfedit::NextSurfaceName(cmd);
     if (baseIx < 0 || static_cast<size_t>(baseIx) >= cmd.cadSurfaces.size())
       baseIx = 0;
     if (compIx < 0 || static_cast<size_t>(compIx) >= cmd.cadSurfaces.size())
@@ -488,9 +448,8 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f), "Base and comparison must differ.");
     ImGui::BeginDisabled(volName.empty() || same);
     if (ImGui::Button("Create")) {
-      PushUndoSnapshot(cmd, "Create volume surface");
-      const int ni = CreateSurfaceFromVolumeParents(cmd, volName, cmd.cadSurfaces[static_cast<size_t>(baseIx)].name,
-                                                    cmd.cadSurfaces[static_cast<size_t>(compIx)].name, *log);
+      const int ni = surfedit::CreateVolumeFromParents(cmd, volName, cmd.cadSurfaces[static_cast<size_t>(baseIx)].name,
+                                                       cmd.cadSurfaces[static_cast<size_t>(compIx)].name, *log);
       if (ni >= 0)
         selIdx = ni;
       volName.clear();
@@ -523,19 +482,8 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::TextUnformatted("Name");
     ImGui::SetNextItemWidth(-1);
     std::string nameBuf = s.name;
-    if (ImGui::InputText("##sfrename", &nameBuf, ImGuiInputTextFlags_EnterReturnsTrue)) {
-      const int clash = FindSurfaceIndex(cmd, nameBuf);
-      if (nameBuf.empty())
-        log->push_back("Surface name cannot be empty — keeping \"" + s.name + "\".");
-      else if (clash >= 0 && clash != selIdx)
-        log->push_back("A surface named \"" + nameBuf + "\" already exists — rename refused.");
-      else {
-        PushUndoSnapshot(cmd, "Rename surface");
-        log->push_back("Renamed surface \"" + s.name + "\" to \"" + nameBuf + "\".");
-        s.name = nameBuf;
-        BumpCadGpuCache(cmd);
-      }
-    }
+    if (ImGui::InputText("##sfrename", &nameBuf, ImGuiInputTextFlags_EnterReturnsTrue))
+      surfedit::RenameSurface(cmd, selIdx, nameBuf, *log);
 
     if (s.isVolumeSurface()) {
       ImGui::Spacing();
@@ -556,12 +504,8 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     if (ImGui::BeginCombo("##sfstyle", resolved ? resolved->name.c_str() : "(none)")) {
       for (const SurfaceStyle& st : cmd.surfaceStyles) {
         const bool sel = resolved && st.name == resolved->name;
-        if (ImGui::Selectable(st.name.c_str(), sel)) {
-          PushUndoSnapshot(cmd, "Surface style");
-          s.styleName = st.name;
-          BumpCadGpuCache(cmd);
-          log->push_back("Surface \"" + s.name + "\" now uses style \"" + st.name + "\".");
-        }
+        if (ImGui::Selectable(st.name.c_str(), sel))
+          surfedit::AssignSurfaceStyle(cmd, selIdx, st.name, *log);
         if (sel)
           ImGui::SetItemDefaultFocus();
       }
@@ -612,8 +556,8 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f), "Not built.");
     } else {
       ImGui::Text("%d points, %d triangles.", s.vertexCount(), s.triangleCount());
-      float lo = 0.f, hi = 0.f;
-      if (SurfaceElevationRange(s, &lo, &hi))
+      double lo = 0.0, hi = 0.0;
+      if (surfedit::ElevationRange(s, &lo, &hi))
         ImGui::Text("Elevation %.2f to %.2f (%.2f range).", lo, hi, hi - lo);
       const std::uint64_t sid = cmd.cadSurfaceAttrs[static_cast<size_t>(selIdx)].id;
       for (const auto& we : cmd.surfaceWatershedCache) {
@@ -755,13 +699,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       if (dlgSurfaceValid) {
         // Straight through the command line, so the panel and SURFACEADDFILE cannot disagree about
         // what linking means — including refusing a path that cannot be read, and the undo snapshot.
-        std::string line = "SURFACEADDFILE " + cmd.cadSurfaces[static_cast<size_t>(dlgSurface)].name +
-                           ", " + dlgText + ", " + layouts[pfLayout];
-        if (pfHeader)
-          line += ", HEADER";
-        std::vector<char> buf(line.begin(), line.end());
-        buf.push_back('\0');
-        ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, *log);
+        surfedit::AddPointFile(cmd, dlgSurface, dlgText, layouts[pfLayout], pfHeader, *log);
       }
       ImGui::CloseCurrentPopup();
     }
@@ -790,10 +728,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
         ImGui::PushID(static_cast<int>(i));
         const std::vector<int> members = ResolvePointGroup(cmd, cmd.pointGroups[i], nullptr);
         if (ImGui::Selectable(gname.c_str())) {
-          PushUndoSnapshot(cmd, "Add point group to surface");
-          s.sourcePointGroups.push_back(gname);
-          BumpCadGpuCache(cmd);
-          log->push_back("Surface \"" + s.name + "\": added point group \"" + gname + "\".");
+          surfedit::AddPointGroup(cmd, dlgSurface, gname, *log);
           ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -814,72 +749,22 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 
   // ── Deferred mutations ────────────────────────────────────────────────────────────────────────
   // Applied after the tree walk so nothing resizes a vector the walk is iterating.
-  if (rebuildIdx >= 0 && rebuildIdx < static_cast<int>(cmd.cadSurfaces.size())) {
-    PushUndoSnapshot(cmd, "Rebuild surface");
-    BuildSurfaceFromSources(cmd, cmd.cadSurfaces[static_cast<size_t>(rebuildIdx)], *log);
-    BumpCadGpuCache(cmd);
-  }
+  if (rebuildIdx >= 0)
+    surfedit::RebuildSurface(cmd, rebuildIdx, *log);
 
-  if (removeReq.surface >= 0 && removeReq.surface < static_cast<int>(cmd.cadSurfaces.size())) {
-    CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(removeReq.surface)];
-    const char* what = removeReq.kind == 0   ? "point group"
-                       : removeReq.kind == 1 ? "breakline"
-                       : removeReq.kind == 2 ? "boundary"
-                                             : "point file link";
-    bool removed = false;
-    if (removeReq.kind == 0 && removeReq.index < s.sourcePointGroups.size()) {
-      PushUndoSnapshot(cmd, "Remove point group from surface");
-      s.sourcePointGroups.erase(s.sourcePointGroups.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
-      removed = true;
-    } else if (removeReq.kind == 1 && removeReq.index < s.breaklines.size()) {
-      PushUndoSnapshot(cmd, "Remove surface breakline");
-      s.breaklines.erase(s.breaklines.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
-      removed = true;
-    } else if (removeReq.kind == 2 && removeReq.index < s.boundaries.size()) {
-      PushUndoSnapshot(cmd, "Remove surface boundary");
-      s.boundaries.erase(s.boundaries.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
-      removed = true;
-    } else if (removeReq.kind == 3 && removeReq.index < s.sourcePointFiles.size()) {
-      PushUndoSnapshot(cmd, "Unlink surface point file");
-      s.sourcePointFiles.erase(s.sourcePointFiles.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
-      removed = true;
-    }
-    if (removed) {
-      log->push_back("Surface \"" + s.name + "\": removed " + what + " " +
-                     std::to_string(removeReq.index + 1) + " from the definition.");
-      BumpCadGpuCache(cmd);  // the dynamic rebuild picks this up next frame (REQ-069)
-    }
-  }
+  if (removeReq.surface >= 0)
+    surfedit::RemoveDefinitionItem(cmd, removeReq.surface, static_cast<surfedit::DefinitionKind>(removeReq.kind),
+                                   removeReq.index, *log);
 
-  if (moveReq.surface >= 0 && moveReq.surface < static_cast<int>(cmd.cadSurfaces.size()) && moveReq.delta != 0) {
-    CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(moveReq.surface)];
-    bool moved = false;
-    if (moveReq.kind == 1)
-      moved = MoveInVector(s.breaklines, moveReq.index, moveReq.delta);
-    else if (moveReq.kind == 2)
-      moved = MoveInVector(s.boundaries, moveReq.index, moveReq.delta);
-    if (moved) {
-      PushUndoSnapshot(cmd, moveReq.kind == 1 ? "Reorder surface breaklines" : "Reorder surface boundaries");
-      BumpCadGpuCache(cmd);
-      log->push_back("Surface \"" + s.name + "\": reordered the definition.");
-    }
-  }
+  if (moveReq.surface >= 0 && moveReq.delta != 0)
+    surfedit::MoveDefinitionItem(cmd, moveReq.surface, static_cast<surfedit::DefinitionKind>(moveReq.kind),
+                                 moveReq.index, moveReq.delta, *log);
 
-  if (importFileReq.surface >= 0 && importFileReq.surface < static_cast<int>(cmd.cadSurfaces.size())) {
-    // REQ-086's break-the-link, routed through the command so the panel and SURFACEIMPORTFILE share
-    // one definition of what it does — including refusing to drop the link when nothing imported.
-    const std::string line = "SURFACEIMPORTFILE " +
-                             cmd.cadSurfaces[static_cast<size_t>(importFileReq.surface)].name + ", " +
-                             std::to_string(importFileReq.index + 1);
-    std::vector<char> buf(line.begin(), line.end());
-    buf.push_back('\0');
-    ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, *log);
-  }
+  if (importFileReq.surface >= 0)
+    surfedit::ImportPointFile(cmd, importFileReq.surface, importFileReq.index, *log);
 
   if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.cadSurfaces.size())) {
-    PushUndoSnapshot(cmd, "Delete surface");  // undoable in one step (REQ-068)
-    log->push_back("Deleted surface \"" + cmd.cadSurfaces[static_cast<size_t>(deleteIdx)].name + "\".");
-    EraseSurfaceAtIndex(cmd, static_cast<size_t>(deleteIdx));
+    surfedit::DeleteSurface(cmd, deleteIdx, *log);
     if (selIdx >= static_cast<int>(cmd.cadSurfaces.size()))
       selIdx = static_cast<int>(cmd.cadSurfaces.size()) - 1;
   }
