@@ -730,6 +730,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
   file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
   file->addAction(CommandAction("Add PDF to project...", "Pdf.png", "ADDPDFTOPROJECT"));
+  file->addAction(CommandAction("Add Drawing to Project...", "Active_File.png", "ADDDRAWING"));
   file->addSeparator();
   file->addAction(CommandAction("PDF viewer...", "Pdf.png", "PDFVIEW"));
   file->addSeparator();
