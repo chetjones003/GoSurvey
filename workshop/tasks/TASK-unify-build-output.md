@@ -21,3 +21,5 @@ Assumption: local beta is the intended Qt baseline, since this worktree predates
 - Limitations/debt: existing test failures above are outside this build cleanup. Binary determinism across two complete clean builds was not remeasured. No new dependencies.
 
 - PR preparation: reapplied only this build commit on origin/beta b115659a to exclude the original branch's unrelated skill commit. Preserved #928 drawing-template deployment in the new runtime directory. Rebuilt Release successfully and ran all three newly merged Qt template tests (5 QtTest passes including setup/cleanup); output-layout check remains PASS.
+
+- Documentation follow-up (user request): CLAUDE.md and AGENTS.md now provide ImGui/Qt Release and Debug build/test commands, full-suite and layout checks, Qt-kit setup, output ownership, archive cleanup and recovery directions. Removed stale dev/ wrapper references and aligned screenshot evidence paths with build/artifacts/. Reviewed commands against build.bat, presets and cleanup/Qt test scripts; output-layout test and git diff --check PASS. Documentation only; application tests were not rerun.
