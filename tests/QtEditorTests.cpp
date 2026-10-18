@@ -12,6 +12,7 @@
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
 #include "ProjectPoints.hpp"
+#include "ProjectFiles.hpp"
 #include "ProjectSettings.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
@@ -78,6 +79,7 @@
 #include <QUrlQuery>
 #include <cmath>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <limits>
 
@@ -109,6 +111,37 @@ void AnswerNextDialog(QMessageBox::StandardButton answer) {
         if (auto* button = message->button(answer)) button->click();
   });
 }
+/// Clicks the named button of the project Copy / Link / Cancel question the moment it appears
+/// ("" = close the window, as Escape does). `beforeClick` runs first, to change the world under it.
+void AnswerAttachQuestion(EditorWindow& window, const char* button, std::function<void()> beforeClick = {}) {
+  auto* poll = new QTimer(&window);
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [&window, poll, button, beforeClick] {
+    auto* dialog = window.findChild<QDialog*>("projectAttachDialog");
+    if (!dialog) return;
+    poll->stop(); poll->deleteLater();
+    if (beforeClick) beforeClick();
+    auto* target = *button ? dialog->findChild<QPushButton*>(button) : nullptr;
+    if (target) target->click(); else dialog->reject();
+  });
+  poll->start();
+}
+/// Dismisses any message box that appears and keeps what it said.
+struct MessageCatcher {
+  QTimer timer;
+  QStringList texts;
+  MessageCatcher() {
+    timer.setInterval(10);
+    QObject::connect(&timer, &QTimer::timeout, &timer, [this] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* message = qobject_cast<QMessageBox*>(widget); message && message->isVisible()) {
+          texts << message->text();
+          message->accept();
+        }
+    });
+    timer.start();
+  }
+};
 /// Points the per-user preferences file (read from %APPDATA%) at a scratch folder, so a test that
 /// saves settings never touches the real ones.
 struct IsolatedUserData {
@@ -2257,6 +2290,213 @@ private Q_SLOTS:
     const auto hidden = render();
     for (int x = 0; x < hidden.width(); ++x) for (int y = 0; y < hidden.height(); ++y)
       QCOMPARE(hidden.pixelColor(x, y), QColor(Qt::black));
+  }
+
+  void projectAttachQuestionCopiesLinksAndCancelsWithoutTouchingTheOriginal() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Attach Job", &created, &error), error.c_str());
+    auto writePdf = [&](const char* name) {
+      QDir().mkpath(directory.filePath("outside"));
+      QFile file(directory.filePath(QString("outside/") + name));
+      if (!file.open(QIODevice::WriteOnly)) return QString();
+      file.write("pdf-bytes"); file.close();
+      return file.fileName();
+    };
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto& state = window.State();
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(), [uid](const auto& item) { return item.uid == uid; });
+    const QString projectFolder = QString::fromStdWString(session.project.Folder().wstring());
+    MessageCatcher messages;
+    QVERIFY(window.findChild<QAction*>("command_ADDPDFTOPROJECT"));  // File > Add PDF to project...
+    auto raise = [&](const QString& path) {
+      std::vector<std::string> log;
+      return AddPdfToProject(state, path.toUtf8().toStdString(), log);
+    };
+    const auto none = AppCommandState::ProjectAttachPrompt::Kind::None;
+
+    // The question names the file, the project and both consequences.
+    const QString cancelled = writePdf("cancelled.pdf");
+    QVERIFY(raise(cancelled));
+    QCOMPARE(state.projectAttachPrompt.destRel, std::string("PDFs/cancelled.pdf"));
+    bool inspected = false;
+    AnswerAttachQuestion(window, "projectAttachCancel", [&] {
+      auto* dialog = window.findChild<QDialog*>("projectAttachDialog");
+      if (!dialog) return;
+      inspected = dialog->findChild<QLabel*>("projectAttachHeadline")->text().contains("cancelled.pdf") &&
+                  dialog->findChild<QLabel*>("projectAttachHeadline")->text().contains("Attach Job") &&
+                  dialog->findChild<QLabel*>("projectAttachCopyText")->text().contains("PDFs/cancelled.pdf") &&
+                  dialog->findChild<QLabel*>("projectAttachLinkText")->text().contains("not") &&
+                  !dialog->findChild<QLabel*>("projectAttachLarge") &&
+                  dialog->findChild<QPushButton*>("projectAttachCopy")->isDefault();
+    });
+    QTRY_VERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(inspected);
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PDFs/cancelled.pdf"));
+    QVERIFY(QFileInfo::exists(cancelled));
+    QVERIFY(session.project.items.empty());
+
+    // Closing the question (Escape) is Cancel too.
+    const QString escaped = writePdf("escaped.pdf");
+    QVERIFY(raise(escaped));
+    AnswerAttachQuestion(window, "");
+    QTRY_VERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PDFs/escaped.pdf"));
+    QVERIFY(session.project.items.empty());
+
+    // Copy: the file lands in the project and is tracked as part of it; the original stays.
+    const QString copied = writePdf("copied.pdf");
+    QVERIFY(raise(copied));
+    AnswerAttachQuestion(window, "projectAttachCopy");
+    QTRY_COMPARE(session.project.items.size(), std::size_t(1));
+    QVERIFY(QFileInfo::exists(projectFolder + "/PDFs/copied.pdf"));
+    QVERIFY(QFileInfo::exists(copied));
+    QCOMPARE(session.project.items[0].kind, std::string(gsproj::kKindInProject));
+    gsproj::Project reloaded;
+    QVERIFY(gsproj::Load(session.project.file, &reloaded, nullptr));
+    QCOMPARE(reloaded.items.size(), std::size_t(1));  // the choice was saved to the .gsproj
+
+    // Link: tracked where it is, flagged as not travelling, and not copied.
+    const QString linked = writePdf("linked.pdf");
+    QVERIFY(raise(linked));
+    AnswerAttachQuestion(window, "projectAttachLink");
+    QTRY_COMPARE(session.project.items.size(), std::size_t(2));
+    QCOMPARE(session.project.items[1].kind, std::string(gsproj::kKindLocalLink));
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PDFs/linked.pdf"));
+    QVERIFY(QFileInfo::exists(linked));
+
+    // An identical copy that is already in the project is reused and the question says so.
+    QVERIFY(raise(copied));
+    bool reuseShown = false;
+    AnswerAttachQuestion(window, "projectAttachCancel", [&] {
+      auto* dialog = window.findChild<QDialog*>("projectAttachDialog");
+      reuseShown = dialog && dialog->findChild<QLabel*>("projectAttachReuse");
+    });
+    QTRY_VERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(reuseShown);
+    QVERIFY(messages.texts.isEmpty());
+  }
+
+  void projectAttachQuestionWarnsOfLargeFilesAndReportsFailures() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Failure Job", &created, &error), error.c_str());
+    QDir().mkpath(directory.filePath("outside"));
+    auto writePdf = [&](const char* name) {
+      QFile file(directory.filePath(QString("outside/") + name));
+      if (!file.open(QIODevice::WriteOnly)) return QString();
+      file.write("pdf-bytes"); file.close();
+      return file.fileName();
+    };
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto& state = window.State();
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(), [uid](const auto& item) { return item.uid == uid; });
+    const QString projectFolder = QString::fromStdWString(session.project.Folder().wstring());
+    MessageCatcher messages;
+    std::vector<std::string> log;
+    const auto none = AppCommandState::ProjectAttachPrompt::Kind::None;
+
+    // 100 MB or more gets the size warning (REQ-379 clause 1).
+    const QString big = writePdf("big.pdf");
+    QVERIFY(AddPdfToProject(state, big.toUtf8().toStdString(), log));
+    state.projectAttachPrompt.sizeBytes = 150ull * 1024 * 1024;
+    bool warned = false;
+    AnswerAttachQuestion(window, "projectAttachCancel", [&] {
+      auto* dialog = window.findChild<QDialog*>("projectAttachDialog");
+      if (!dialog) return;
+      auto* warning = dialog->findChild<QLabel*>("projectAttachLarge");
+      warned = warning && warning->text().contains("large file") &&
+               dialog->findChild<QLabel*>("projectAttachSize")->text().contains("150.0 MB");
+    });
+    QTRY_VERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(warned);
+
+    // A copy that cannot be written says why and attaches nothing.
+    QDir(projectFolder + "/PDFs").removeRecursively();
+    QFile blocker(projectFolder + "/PDFs");
+    QVERIFY(blocker.open(QIODevice::WriteOnly)); blocker.close();  // a file where the folder must go
+    const QString blocked = writePdf("blocked.pdf");
+    QVERIFY(AddPdfToProject(state, blocked.toUtf8().toStdString(), log));
+    AnswerAttachQuestion(window, "projectAttachCopy");
+    QTRY_VERIFY(!messages.texts.isEmpty());
+    QVERIFY2(messages.texts.first().contains("Nothing was attached"), qPrintable(messages.texts.first()));
+    QVERIFY(session.project.items.empty());
+    QVERIFY(state.projectAttachPrompt.kind == none);
+    QFile::remove(projectFolder + "/PDFs");
+    messages.texts.clear();
+
+    // A project that became read-only while the question was open attaches nothing.
+    const QString late = writePdf("late.pdf");
+    QVERIFY(AddPdfToProject(state, late.toUtf8().toStdString(), log));
+    AnswerAttachQuestion(window, "projectAttachCopy", [&] { session.readOnly = true; });
+    QTRY_VERIFY(!messages.texts.isEmpty());
+    QVERIFY2(messages.texts.first().contains("can no longer be written"), qPrintable(messages.texts.first()));
+    QVERIFY(session.project.items.empty());
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PDFs/late.pdf"));
+
+    // A read-only project never raises the question in the first place.
+    log.clear();
+    QVERIFY(!AddPdfToProject(state, late.toUtf8().toStdString(), log));
+    QVERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(QString::fromStdString(log.back()).contains("read-only"));
+  }
+
+  void projectAttachQuestionFollowsThroughToPointCloudImport() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Cloud Job", &created, &error), error.c_str());
+    QDir().mkpath(directory.filePath("outside"));
+    auto writeScan = [&](const char* name) {
+      QFile file(directory.filePath(QString("outside/") + name));
+      if (!file.open(QIODevice::WriteOnly)) return QString();
+      file.write("3\n0 0 0\n1 1 1\n2 2 2\n"); file.close();
+      return file.fileName();
+    };
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto& state = window.State();
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(), [uid](const auto& item) { return item.uid == uid; });
+    const QString projectFolder = QString::fromStdWString(session.project.Folder().wstring());
+    MessageCatcher messages;
+    const auto none = AppCommandState::ProjectAttachPrompt::Kind::None;
+    auto attach = [&](const QString& path) { window.Submit("POINTCLOUDATTACH \"" + QDir::toNativeSeparators(path) + "\""); };
+
+    // Cancel starts no import and copies nothing.
+    const QString cancelled = writeScan("cancelled.pts");
+    bool askedForCloud = false;
+    AnswerAttachQuestion(window, "projectAttachCancel", [&] {
+      askedForCloud = state.projectAttachPrompt.kind == AppCommandState::ProjectAttachPrompt::Kind::PointCloud;
+    });
+    attach(cancelled);  // asks the question before Submit returns
+    QVERIFY(askedForCloud);
+    QTRY_VERIFY(state.projectAttachPrompt.kind == none);
+    QVERIFY(!state.pointCloudImportAsync);
+    QVERIFY(state.cadPointClouds.empty());
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PointClouds/cancelled.pts"));
+
+    // Copy imports the project's copy.
+    const QString copied = writeScan("copied.pts");
+    AnswerAttachQuestion(window, "projectAttachCopy");
+    attach(copied);
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(1), 20000);
+    QVERIFY(QFileInfo::exists(projectFolder + "/PointClouds/copied.pts"));
+    QCOMPARE(QFileInfo(QString::fromStdString(state.cadPointClouds[0]->sourcePath)).canonicalFilePath(),
+             QFileInfo(projectFolder + "/PointClouds/copied.pts").canonicalFilePath());
+
+    // Link imports the file where it is.
+    const QString linked = writeScan("linked.pts");
+    AnswerAttachQuestion(window, "projectAttachLink");
+    attach(linked);
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(2), 20000);
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PointClouds/linked.pts"));
+    QCOMPARE(QFileInfo(QString::fromStdString(state.cadPointClouds[1]->sourcePath)).canonicalFilePath(),
+             QFileInfo(linked).canonicalFilePath());
+    QVERIFY(messages.texts.isEmpty());
   }
 
   void richTextColorsAreRenderedByQt() {
