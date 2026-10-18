@@ -10,6 +10,7 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QDebug>
 #include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QFrame>
@@ -83,7 +84,8 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     std::string directory;
     try {
       directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
-    } catch (const std::exception&) {
+    } catch (const std::exception& error) {
+      qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
     }
     geo::LoadDictionaries(directory);
   }
@@ -340,9 +342,11 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   layersLayout->addWidget(layerInfo);
   pages->addWidget(layersPage);
 
+  // NOLINTBEGIN(bugprone-exception-escape): Qt callbacks catch exceptions; clang-tidy still flags possible STL allocation failures.
   QObject::connect(navigation, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
   auto setZoneDetails = [zoneDescription, zoneProjection, zoneDatum, zoneError, zoneCode,
                          originalZone](const QString& code) {
+    try {
     const std::string value = Utf8String(code.trimmed());
     const auto details = value.empty() ? std::optional<geo::CoordinateSystemInfo>{}
                                        : geo::FindCoordinateSystem(value);
@@ -355,8 +359,16 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
                                                    : Utf8(geo::DictionaryError()));
     else
       zoneError->clear();
+    } catch (const std::exception& error) {
+      qWarning() << "Unable to show coordinate-system details:" << error.what();
+      zoneError->setText("Unable to load coordinate-system details.");
+    } catch (...) {
+      qWarning() << "Unable to show coordinate-system details due to an unknown error.";
+      zoneError->setText("Unable to load coordinate-system details.");
+    }
   };
-  auto populateSystems = [category, system, setZoneDetails](const QString& requestedCode) {
+  auto populateSystems = [category, system, zoneError, setZoneDetails](const QString& requestedCode) {
+    try {
     const QString categoryName = category->currentData().toString();
     const QSignalBlocker blocker(system);
     system->clear();
@@ -378,6 +390,13 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     if (index < 0 && system->count() > 0) index = 0;
     system->setCurrentIndex(index);
     setZoneDetails(index >= 0 ? system->currentData().toString() : requestedCode);
+    } catch (const std::exception& error) {
+      qWarning() << "Unable to populate coordinate-system choices:" << error.what();
+      zoneError->setText("Unable to load coordinate-system choices.");
+    } catch (...) {
+      qWarning() << "Unable to populate coordinate-system choices due to an unknown error.";
+      zoneError->setText("Unable to load coordinate-system choices.");
+    }
   };
   const QString initialCategory = staged.zoneCode.empty() ? QString() : Utf8(geo::CategoryOf(staged.zoneCode));
   int initialCategoryIndex = category->findData(initialCategory);
@@ -385,18 +404,31 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   category->setCurrentIndex(initialCategoryIndex);
   populateSystems(Utf8(staged.zoneCode));
   QObject::connect(category, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
-      [category, populateSystems](int) {
+      [category, zoneError, populateSystems](int) {
+        try {
         const QString categoryName = category->currentData().toString();
         const auto codes = categoryName.isEmpty() ? std::vector<std::string>{}
                                                    : geo::CoordinateSystemsIn(Utf8String(categoryName));
         populateSystems(codes.empty() ? QString() : Utf8(codes.front()));
+        } catch (const std::exception& error) {
+          qWarning() << "Unable to change coordinate-system category:" << error.what();
+          zoneError->setText("Unable to load coordinate-system choices.");
+        } catch (...) {
+          qWarning() << "Unable to change coordinate-system category due to an unknown error.";
+          zoneError->setText("Unable to load coordinate-system choices.");
+        }
       });
   QObject::connect(system, qOverload<int>(&QComboBox::currentIndexChanged), &dialog,
       [system, setZoneDetails](int index) {
-        setZoneDetails(index >= 0 ? system->currentData().toString() : QString());
+        try {
+          setZoneDetails(index >= 0 ? system->currentData().toString() : QString());
+        } catch (...) {
+          qWarning() << "Unable to select coordinate-system code.";
+        }
       });
   QObject::connect(zoneCode, &QLineEdit::editingFinished, &dialog,
-      [zoneCode, category, system, setZoneDetails, populateSystems] {
+      [zoneCode, category, system, zoneError, setZoneDetails, populateSystems] {
+        try {
         const QString code = zoneCode->text().trimmed();
         if (code.isEmpty()) {
           category->setCurrentIndex(category->findData(QString()));
@@ -412,7 +444,15 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
         } else {
           setZoneDetails(code);
         }
+        } catch (const std::exception& error) {
+          qWarning() << "Unable to apply coordinate-system code:" << error.what();
+          zoneError->setText("Unable to apply the coordinate-system code.");
+        } catch (...) {
+          qWarning() << "Unable to apply coordinate-system code due to an unknown error.";
+          zoneError->setText("Unable to apply the coordinate-system code.");
+        }
       });
+  // NOLINTEND(bugprone-exception-escape)
   const bool dictionaryLoaded = geo::DictionariesLoaded();
   category->setEnabled(dictionaryLoaded);
   system->setEnabled(dictionaryLoaded);
