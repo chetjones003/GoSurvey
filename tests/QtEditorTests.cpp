@@ -355,6 +355,75 @@ private Q_SLOTS:
     window.ShowViewportsManager();
   }
 
+  void paperSpaceRendersSheetTablesAndViewportModelContent() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    window.State().activeSpaceIndex = 0;
+    window.State().userLinesFlat = {0, 0, 0, 100, 100, 0};
+    EntityAttributes lineAttributes;
+    lineAttributes.layer = "0";
+    window.State().userLineAttrs = {lineAttributes};
+    window.Refresh();
+    window.resize(1280, 820);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* viewport = dynamic_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport")); QVERIFY(viewport);
+    QTRY_VERIFY(viewport->IsRendererReady());
+    auto* spaces = window.findChild<QTabBar*>("paperSpaceTabs"); QVERIFY(spaces);
+    QCOMPARE(window.State().activeSpaceIndex, 0);
+
+    auto& layout = window.State().paperLayouts[0];
+    layout.paperLines = {1, 1, 0, 5, 5, 0};
+    CadAnnotation table;
+    table.kind = CadAnnotation::Kind::Table;
+    table.boxMinX = 6; table.boxMinY = 2; table.boxMaxX = 10; table.boxMaxY = 4;
+    table.tableCols = 2; table.tableCells = {"Station", "Northing", "1+00", "24.5"};
+    layout.paperTexts.push_back(table);
+    Viewport layoutViewport;
+    layoutViewport.modelCenterX = 50.; layoutViewport.modelCenterY = 50.;
+    layout.viewports.push_back(layoutViewport);
+
+    const Camera paperCamera = CadViewCamera(window.State());
+    float screenX = 0.f, screenY = 0.f;
+    paperCamera.WorldToScreen(7.f, 3.5f, 0.f, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &screenX, &screenY);
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* dialog = qobject_cast<QInputDialog*>(widget)) {
+          dialog->setTextValue("Control point");
+          dialog->accept();
+        }
+    });
+    QTest::mouseDClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(screenX), qRound(screenY)));
+    QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[0], std::string("Control point"));
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[0], std::string("Station"));
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* dialog = qobject_cast<QInputDialog*>(widget)) dialog->reject();
+    });
+    QTest::mouseDClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(screenX), qRound(screenY)));
+    QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[0], std::string("Station"));
+
+    viewport->update();
+    QTest::qWait(100);
+    const QImage rendered = viewport->grabFramebuffer();
+    float viewportX = 0.f, viewportY = 0.f;
+    paperCamera.WorldToScreen(layoutViewport.paperXIn + layoutViewport.paperWIn * 0.5,
+        layoutViewport.paperYIn + layoutViewport.paperHIn * 0.5, 0.f, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &viewportX, &viewportY);
+    const QPoint modelCenter(qRound(viewportX * viewport->devicePixelRatioF()),
+        qRound(viewportY * viewport->devicePixelRatioF()));
+    int litCenterPixels = 0;
+    for (int y = modelCenter.y() - 4; y <= modelCenter.y() + 4; ++y)
+      for (int x = modelCenter.x() - 4; x <= modelCenter.x() + 4; ++x)
+        if (rendered.rect().contains(x, y) && qGray(rendered.pixel(x, y)) > 40) ++litCenterPixels;
+    QVERIFY(litCenterPixels > 0);
+    QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[3], std::string("24.5"));
+    QVERIFY(spaces->count() >= 2);
+  }
+
   void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
     EditorWindow window;
     QTemporaryDir directory;
