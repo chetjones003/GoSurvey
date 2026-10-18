@@ -288,7 +288,7 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
   o["lineweightMm"] = e.lineweightMm;
   o["transparency"] = e.transparency;
   // Omitted when 0 (not linked), so a drawing with no surface link is byte-identical to one
-  // written before this field existed. Additive, no format-version bump (ADR-020 (d), ADR-062).
+  // written before this field existed. Additive, no format-version bump (ADR-020 (d), ADR-069).
   if (e.drapedOnSurfaceId != 0)
     o["drapedOnSurfaceId"] = e.drapedOnSurfaceId;
   // REQ-372 inc 3 — additive; omitted when no material override (ADR-020 (d)).
