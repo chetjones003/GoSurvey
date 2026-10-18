@@ -13,7 +13,10 @@ merged `origin/master` at `90aa196d34692562effa18502c9b8ad0197e9e80`.
 into `build/qt-parity.json`. Source references do not count as verified parity.
 
 Build the native regression tests with `build-qt.bat GoSurveyQtTests`, then run
-`build/GoSurveyQtTests.exe` or `ctest --test-dir build -R '^qt.editor$'` on a desktop.
+`ctest --test-dir build -R '^qt.editor$'`. `ctest` runs them on a private invisible desktop
+(`tools/run-qt-tests-hidden.ps1`): no windows appear on screen, focus is not stolen, and a hung run is
+killed after its timeout. Run `build/GoSurveyQtTests.exe` directly to watch them on screen, or pass
+test function names to the script to run only those.
 They exercise lossless adjustment sessions, failures without mutation, worker
 solves, result acceptance, drawing commits and undo, network controls/elevations,
 unsaved-close cancellation, command input, camera pan, layers, units, PDF annotation
