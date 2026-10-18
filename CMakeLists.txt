@@ -1047,6 +1047,9 @@ add_custom_command(
   COMMENT "Stage CS-MAP dictionaries beside GoSurvey executable")
 add_custom_target(gosurvey_stage_csmap DEPENDS "${_GOSURVEY_CSMAP_STAMP}")
 add_dependencies(GoSurvey gosurvey_stage_csmap)
+if(TARGET GoSurveyQt)
+  add_dependencies(GoSurveyQt gosurvey_stage_csmap)
+endif()
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
 if(WIN32)

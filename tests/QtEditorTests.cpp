@@ -4,6 +4,7 @@
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
+#include "QtAppearance.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
@@ -14,6 +15,8 @@
 #include "ProjectSettings.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
+#include "io/Project.hpp"
+#include "ProjectSettings.hpp"
 #include "GsMigrate.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
@@ -21,12 +24,17 @@
 #include "UserPrefs.hpp"
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
+#include "CrashReporter.hpp"
+#include "FailureReport.hpp"
+#include "FailureReportUi.hpp"
+#include "StartupFailure.hpp"
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QPalette>
 #include <QMessageBox>
 #include <QDialog>
 #include <QPlainTextEdit>
@@ -44,6 +52,7 @@
 #include <QCheckBox>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QListWidget>
 #include <QProgressBar>
 #include <QTextBrowser>
 #include <QToolButton>
@@ -54,6 +63,7 @@
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QScrollArea>
 #include <QClipboard>
 #include <QScopeGuard>
@@ -64,6 +74,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QTimer>
+#include <QUrl>
+#include <QUrlQuery>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -121,6 +133,11 @@ update::Manifest OfferedManifest(const std::string& version = "99.0.0") {
 }
 QPushButton* UpdateButton(QDialog* dialog, const char* name) {
   return dialog->findChild<QPushButton*>(name);
+}
+QString Issue886Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
 }
 }
 
@@ -230,6 +247,188 @@ private Q_SLOTS:
     QVERIFY(window.State().authSignOutRequested);
   }
 
+  void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "North Ridge", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    QAction* action = window.findChild<QAction*>("command_PROJECTSETTINGS");
+    QVERIFY(action);
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* category = dialog->findChild<QComboBox*>("projectZoneCategory");
+      auto* systems = dialog->findChild<QComboBox*>("projectCoordinateSystem");
+      auto* angular = dialog->findChild<QComboBox*>("projectAngularUnits");
+      auto* foot = dialog->findChild<QComboBox*>("projectFootDefinition");
+      auto* scale = dialog->findChild<QComboBox*>("projectPlotScale");
+      auto* customScale = dialog->findChild<QDoubleSpinBox*>("projectCustomScale");
+      auto* inserted = dialog->findChild<QCheckBox*>("projectScaleInsertedObjects");
+      auto* layer = dialog->findChild<QComboBox*>("projectLayerName0");
+      auto* applyButton = dialog->findChild<QPushButton*>("projectSettingsApply");
+      auto* buttons = dialog->findChild<QDialogButtonBox*>();
+      auto* navigation = dialog->findChild<QListWidget*>("projectSettingsNavigation");
+      auto* pages = dialog->findChild<QStackedWidget*>("projectSettingsPages");
+      QVERIFY(units && category && systems && angular && foot && scale && customScale && inserted && layer && applyButton && buttons && navigation && pages);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-units.png")));
+      navigation->setCurrentRow(1);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-object-layers.png")));
+      navigation->setCurrentRow(0);
+      units->setCurrentIndex(units->findData(6));
+      QVERIFY(category->count() > 1);
+      category->setCurrentIndex(1);
+      QVERIFY(!systems->currentData().toString().isEmpty());
+      angular->setCurrentIndex(1);
+      foot->setCurrentIndex(1);
+      scale->setCurrentIndex(scale->findData(-1.0));
+      customScale->setValue(123.5);
+      inserted->setChecked(false);
+      layer->setCurrentText("C-PROJECT-POINT");
+      applyButton->click();
+      QVERIFY(dialog->isVisible());
+
+      auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+          [projectUid](const auto& item) { return item.uid == projectUid; });
+      QCOMPARE(session.settings->insUnits, 6);
+      QCOMPARE(session.settings->defaults.angularUnits, DrawingSettings::AngularUnits::Radians);
+      QCOMPARE(session.settings->defaults.footDefinition, DrawingSettings::FootDefinition::International);
+      QVERIFY(!session.settings->defaults.scaleInsertedObjects);
+      QCOMPARE(session.settings->zoneCode, systems->currentData().toString().toUtf8().toStdString());
+      QCOMPARE(session.settings->defaults.objectLayers[0].layer, std::string("C-PROJECT-POINT"));
+      QVERIFY(std::fabs(session.settings->plotScale - 123.5f) < 0.001f);
+
+      gsproj::Project stored;
+      QVERIFY2(gsproj::Load(created.file, &stored, &error), error.c_str());
+      ProjectSettings reloaded;
+      QVERIFY2(ParseProjectSettings(stored.settingsJson, &reloaded, &error), error.c_str());
+      QCOMPARE(reloaded.insUnits, 6);
+      QCOMPARE(reloaded.zoneCode, session.settings->zoneCode);
+      QCOMPARE(reloaded.defaults.objectLayers[0].layer, std::string("C-PROJECT-POINT"));
+
+      units->setCurrentIndex(units->findData(4));
+      buttons->button(QDialogButtonBox::Cancel)->click();
+      QCOMPARE(session.settings->insUnits, 6);
+    });
+    action->trigger();
+  }
+
+  void projectSettingsValidationBlocksSaveAndCancelLeavesProjectUntouched() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Validation Job", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      auto* layer = dialog->findChild<QComboBox*>("projectLayerName0");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      auto* validation = dialog->findChild<QLabel*>("projectSettingsValidation");
+      auto* navigation = dialog->findChild<QListWidget*>("projectSettingsNavigation");
+      QVERIFY(layer && apply && validation);
+      QVERIFY(navigation);
+      navigation->setCurrentRow(1);
+      layer->setCurrentText("");
+      QVERIFY(!validation->text().isEmpty());
+      QVERIFY(!apply->isEnabled());
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-validation.png")));
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [projectUid](const auto& item) { return item.uid == projectUid; });
+    QVERIFY(!session.settings->hasDefaults);
+    gsproj::Project stored;
+    QVERIFY2(gsproj::Load(created.file, &stored, &error), error.c_str());
+    ProjectSettings reloaded;
+    QVERIFY(ParseProjectSettings(stored.settingsJson, &reloaded, &error));
+    QVERIFY(!reloaded.hasDefaults);
+  }
+
+  void projectSettingsSaveFailureAndReadOnlyDoNotChangeSession() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Locked Job", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [projectUid](const auto& item) { return item.uid == projectUid; });
+    const auto originalPath = session.project.file;
+    session.project.file = originalPath.parent_path() / "missing-folder" / originalPath.filename();
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-save-error.png")));
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      QVERIFY(units && apply);
+      units->setCurrentIndex(units->findData(6));
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+            message->grab().save(Issue886Shot("qt-886-project-settings-save-error-message.png"));
+            message->accept();
+          }
+      });
+      apply->click();
+      QCOMPARE(session.settings->insUnits, -1);
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    session.project.file = originalPath;
+    QVERIFY(!session.settings->hasDefaults);
+
+    session.readOnly = true;
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-read-only.png")));
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      QVERIFY(units && apply);
+      units->setCurrentIndex(units->findData(6));
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+            message->grab().save(Issue886Shot("qt-886-project-settings-read-only-message.png"));
+            message->accept();
+          }
+      });
+      apply->click();
+      QCOMPARE(session.settings->insUnits, -1);
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    session.readOnly = false;
+    QVERIFY(!session.settings->hasDefaults);
+  }
+
   void startupGateUsesApplicationLogoAndRequiresAChoice() {
     EditorWindow window;
     window.State().authGateResolved = false;
@@ -266,6 +465,231 @@ private Q_SLOTS:
     QVERIFY(!window.State().authBusy);
     QCoreApplication::processEvents();
     QVERIFY(!window.findChild<QDialog *>("signInGate"));
+  }
+
+  // ---- REQ-080 usage ping / REQ-425 crash and startup-failure reports (issue #883) -----------
+
+  static QString SampleCrashReport() {
+    return QString(
+        "GoSurvey stopped because of an unexpected error.\n\n"
+        "Summary:\n"
+        "Access violation — the program tried to read or write memory it does not own.\n"
+        "Exception code: 0xC0000005\n"
+        "Fault address: 0x00007FF6A1B2C3D4\n"
+        "Access: write at 0x0000000000000001\n\n"
+        "version: ") + GOSURVEY_VERSION_FULL + "\nchannel: stable\n\n"
+        "Stack trace (most recent call first):\n"
+        "  at 0x00007FF6A1B2C3D4 in C:\\Program Files\\GoSurvey\\GoSurveyQt.exe + 0x12C3D4\n"
+        "  at 0x00007FF6A1B0F120 in C:\\Program Files\\GoSurvey\\GoSurveyQt.exe + 0x10F120\n"
+        "  at 0x00007FFC81E2257D in C:\\WINDOWS\\System32\\KERNEL32.DLL + 0x1257D\n"
+        "  at 0x00007FFC83E8AF28 in C:\\WINDOWS\\SYSTEM32\\ntdll.dll + 0x5AF28\n\n"
+        "A copy of this report was appended to:\n"
+        "C:\\Users\\surveyor\\AppData\\Roaming\\GoSurvey\\crash.log\n\n"
+        "Use \"Send This Report\" to copy this text and open GitHub to file an issue.";
+  }
+
+  /// Clicks OK on the next message box and hands back what it said.
+  static void CaptureNextMessage(QString& text) {
+    QTimer::singleShot(0, [&text] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+          text = message->text();
+          message->button(QMessageBox::Ok)->click();
+        }
+    });
+  }
+
+  void telemetryPingWaitsForLaunchGateAndFiresOnce() {
+    EditorWindow window;
+    std::vector<std::string> sent;
+    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
+    window.ServiceTelemetry();
+    QVERIFY2(sent.empty(), "no ping before the launch sequence starts");
+    window.m_AuthStarted = true;
+    window.State().authGateResolved = false;
+    window.ServiceTelemetry();
+    QVERIFY2(sent.empty(), "no ping while the sign-in gate is unresolved");
+    window.State().authGateResolved = true;
+    window.ServiceTelemetry();
+    window.ServiceTelemetry();
+    QCOMPARE(sent.size(), std::size_t(1));
+    QCOMPARE(sent[0], std::string());  // signed out: no email
+
+    EditorWindow signedIn;
+    std::vector<std::string> signedInSent;
+    signedIn.m_SendTelemetry = [&signedInSent](const std::string& email) { signedInSent.push_back(email); };
+    signedIn.m_AuthStarted = true;
+    signedIn.State().authGateResolved = true;
+    signedIn.State().authSignedIn = true;
+    signedIn.State().authEmail = "surveyor@example.com";
+    signedIn.ServiceTelemetry();
+    QCOMPARE(signedInSent, std::vector<std::string>{"surveyor@example.com"});
+  }
+
+  void telemetryPingFollowsTheRealLaunchPathOnlyWhenEnabled() {
+    // The saved opt-out resolves the gate at once; the window's own service loop sends the ping.
+    EditorWindow window;
+    std::vector<std::string> sent;
+    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
+    window.State().authOptedOut = true;
+    window.StartAuth();
+    QTRY_COMPARE(sent.size(), std::size_t(1));
+    QTest::qWait(150);
+    QCOMPARE(sent.size(), std::size_t(1));
+
+    // A window the entry point did not enable never sends one (so tests stay off the network).
+    EditorWindow quiet;
+    quiet.State().authOptedOut = true;
+    quiet.StartAuth();
+    QTest::qWait(150);
+    QVERIFY(!quiet.m_SendTelemetry);
+    QVERIFY(!quiet.m_TelemetryTask);
+  }
+
+  void settingsUsageDisclosureIsAccurateAndFollowsSignIn() {
+    EditorWindow window;
+    window.ShowSettings();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    auto* heading = dialog->findChild<QLabel*>("usageDataHeading");
+    auto* summary = dialog->findChild<QLabel*>("usageDataSummary");
+    auto* email = dialog->findChild<QLabel*>("usageDataEmail");
+    auto* crash = dialog->findChild<QLabel*>("usageDataCrashReports");
+    QVERIFY(heading && summary && email && crash);
+    // REQ-080 as amended: a ping every launch. The 0.7.4 "at most once a day" is no longer true.
+    QVERIFY(summary->text().contains("each time you start GoSurvey"));
+    QVERIFY(!summary->text().contains("once a day"));
+    // A disclosure, not a control: ADR-032 has no opt-out.
+    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection")->findChild<QCheckBox*>());
+    QVERIFY(email->text().contains("currently signed out"));
+    // REQ-425 §6.
+    QVERIFY(crash->text().contains("crashes or cannot start"));
+    QVERIFY(crash->text().contains("file locations"));
+    window.State().authSignedIn = true;
+    window.State().authEmail = "surveyor@example.com";
+    QTRY_VERIFY(email->text().contains("your email is included too"));
+  }
+
+  void failureReportWindowSendsWithoutClosingAndCloseSendsNothing() {
+    const QString report = SampleCrashReport();
+    QList<QUrl> opened;
+    bool browserWorks = true;
+    std::unique_ptr<QDialog> dialog(CreateFailureReportDialog(
+        "GoSurvey encountered a problem", report, nullptr,
+        [&opened, &browserWorks](const QUrl& url) { opened.push_back(url); return browserWorks; }));
+    dialog->show();
+    QTRY_VERIFY(dialog->isVisible());
+    QCOMPARE(dialog->windowTitle(), QString("GoSurvey encountered a problem"));
+    auto* text = dialog->findChild<QPlainTextEdit*>("failureReportText");
+    QVERIFY(text);
+    QVERIFY(text->isReadOnly());
+    QCOMPARE(text->toPlainText(), report);
+    auto* send = dialog->findChild<QPushButton*>("failureReportSend");
+    auto* close = dialog->findChild<QPushButton*>("failureReportClose");
+    QVERIFY(send && close);
+    QCOMPARE(send->text(), QString("Send This Report"));
+    QVERIFY(close->isDefault());
+
+    QApplication::clipboard()->clear();
+    QString message;
+    CaptureNextMessage(message);
+    QTest::mouseClick(send, Qt::LeftButton);
+    QCOMPARE(QApplication::clipboard()->text(), report);
+    QCOMPARE(opened.size(), 1);
+    const QUrl url = opened.front();
+    QCOMPARE(url.host(), QString("github.com"));
+    QCOMPARE(url.path(), QString("/chetjones003/GoSurvey/issues/new"));
+    const QUrlQuery query(url);
+    QCOMPARE(query.queryItemValue("title", QUrl::FullyDecoded),
+             QString("GoSurvey report (") + GOSURVEY_VERSION_FULL + ")");
+    QVERIFY(query.queryItemValue("body", QUrl::FullyDecoded).contains("Exception code: 0xC0000005"));
+    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(true, true).c_str()));
+    QVERIFY2(dialog->isVisible(), "Send This Report leaves the window open");
+
+    // A browser that cannot be opened is reported, with the address to use by hand.
+    browserWorks = false;
+    CaptureNextMessage(message);
+    QTest::mouseClick(send, Qt::LeftButton);
+    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(true, false).c_str()));
+    QVERIFY(message.contains("github.com/chetjones003/GoSurvey/issues/new"));
+
+    // Close is the cancel: the window goes and nothing more is opened or sent.
+    QTest::mouseClick(close, Qt::LeftButton);
+    QTRY_VERIFY(!dialog->isVisible());
+    QCOMPARE(dialog->result(), int(QDialog::Accepted));
+    QCOMPARE(opened.size(), 2);
+  }
+
+  void failureReportLinkCutsLongReportsToFitAUrl() {
+    const std::string longReport(20000, 'x');
+    const QUrl url = QUrl::fromEncoded(QByteArray::fromStdString(
+        failureReportUi::GitHubIssueUrlForReport(longReport)));
+    const QString body = QUrlQuery(url).queryItemValue("body", QUrl::FullyDecoded);
+    QVERIFY(body.size() < 5400);
+    QVERIFY(body.contains("full report copied to clipboard"));
+  }
+
+  void crashBundleReadsBackAndIsDeleted() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("gosurvey-crash-1-2.txt");
+    {
+      QFile file(path);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("GOSURVEY_CRASH_META reason=access_violation channel=beta\n---\nGoSurvey stopped.\nline two");
+    }
+    crashReporter::CrashReport report;
+    QVERIFY(crashReporter::ReadCrashBundle(path.toStdWString(), report));
+    QCOMPARE(report.wireReason, std::string("access_violation"));
+    QCOMPARE(report.channel, std::string("beta"));
+    QCOMPARE(report.reportUtf8, std::string("GoSurvey stopped.\nline two"));
+    QVERIFY(!QFileInfo::exists(path));
+
+    const QString malformed = directory.filePath("gosurvey-crash-3-4.txt");
+    {
+      QFile file(malformed);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("not a crash bundle\n");
+    }
+    crashReporter::CrashReport rejected;
+    QVERIFY(!crashReporter::ReadCrashBundle(malformed.toStdWString(), rejected));
+    QVERIFY2(!QFileInfo::exists(malformed), "a malformed bundle is not left in the temp folder");
+  }
+
+  void startupGraphicsCheckPassesOnAWorkingDriver() {
+    // REQ-425 §4: the launch check must not refuse a machine that can draw. (The failure branch
+    // needs a broken driver and is checked by hand.)
+    startupFailure::Stage stage{};
+    std::string detail;
+    QVERIFY2(ProbeStartupGraphics(stage, detail), detail.c_str());
+    QVERIFY(detail.empty());
+  }
+
+  /// Screenshots of the selected designs (report window B, Settings card B) for review.
+  void failureReportAndUsageNoticeScreenshots() {
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
+                                                              SampleCrashReport()));
+    dialog->resize(dialog->minimumSize());
+    dialog->show();
+    QTest::qWait(50);
+    QVERIFY(dialog->grab().save(dir + "/qt-883-report-final.png"));
+    std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
+        "GoSurvey could not start",
+        "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
+        "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
+    startup->resize(startup->minimumSize());
+    startup->show();
+    QTest::qWait(50);
+    QVERIFY(startup->grab().save(dir + "/qt-883-startup-final.png"));
+    EditorWindow window;
+    window.ShowSettings();
+    auto* settings = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(settings);
+    // As opened: tall enough for its wrapped text.
+    QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
+    QTest::qWait(250);  // let the account card's refresh fill in its status
+    QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
 
   // ---- REQ-077 / REQ-078 software update (issue #882) ----------------------------------------
@@ -818,6 +1242,14 @@ private Q_SLOTS:
 
   void customTitleBarAndFloatingCommandLineWork() {
     QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
@@ -878,7 +1310,10 @@ private Q_SLOTS:
     maximize->click(); QTRY_VERIFY(window.isMaximized());
     maximize->click(); QTRY_VERIFY(!window.isMaximized());
     window.resize(1500, 950); QTest::qWait(100);
-    QVERIFY(window.grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-chrome-preview.png"));
+    QVERIFY(window.grab().save(Issue886Shot("qt-886-neutral-gray-app.png")));
+    auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    tabs->setCurrentIndex(0); QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue886Shot("qt-886-neutral-gray-start.png")));
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
   }
 
@@ -1122,7 +1557,7 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
       QSettings().remove("editor/lightTheme");
     });
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
     const auto geometry = window.State().userLinesFlat;
@@ -1138,6 +1573,10 @@ private Q_SLOTS:
       QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
       QVERIFY(tree->currentItem()); QCOMPARE(tree->currentItem()->text(0), selected);
       QCOMPARE(qApp->property("cadLightTheme").toBool(), theme == "Classic light");
+      if (theme == "Neutral gray") {
+        QCOMPARE(qApp->palette().color(QPalette::Window), QColor("#222426"));
+        QCOMPARE(qApp->palette().color(QPalette::Button), QColor("#383a3c"));
+      }
     }
     window.Submit("UNDO"); QVERIFY(window.State().userLinesFlat.empty());
     QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());

@@ -137,7 +137,7 @@ void NoteGlfwError(int code, const char* description) {
   (void)description;
 }
 
-[[noreturn]] void FailAndShow(Stage stage, const std::string& detailUtf8) {
+std::string RecordAndSend(Stage stage, const std::string& detailUtf8) {
   WriteStartupFailureLog(stage, detailUtf8);
 
   const std::string summary = StageSummary(stage);
@@ -161,7 +161,11 @@ void NoteGlfwError(int code, const char* description) {
   std::fprintf(stderr, "%s\n", body.c_str());
 
   TryPostStartupReportSilent(stage, body);
+  return body;
+}
 
+[[noreturn]] void FailAndShow(Stage stage, const std::string& detailUtf8) {
+  const std::string body = RecordAndSend(stage, detailUtf8);
 #ifdef _WIN32
   failureReportUi::ShowReportDialog(L"GoSurvey could not start", body);
   ::ExitProcess(1);
