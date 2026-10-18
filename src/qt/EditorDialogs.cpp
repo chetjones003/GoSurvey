@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
@@ -6,6 +7,8 @@
 #include "Version.hpp"
 #include "update/UpdateService.hpp"
 #include "UserPrefs.hpp"
+#include "geo/CoordinateSystems.hpp"
+#include "util/PlotScales.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -29,6 +32,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QFrame>
@@ -36,6 +40,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <climits>
+#include <array>
 #include <cstdio>
 
 void EditorWindow::ShowSignInGate() {
@@ -429,8 +435,10 @@ void EditorWindow::ServiceUiRequests() {
     ShowPointGroupManager(this, m_State, m_Log);
     m_ModalOpen = false;
     Refresh();
-  } else if (m_State.showUnitsWindow) {
+  } else if (m_State.showUnitsWindow || m_State.showDrawingSettingsWindow) {
     m_State.showUnitsWindow = false;
+    m_State.showDrawingSettingsWindow = false;
+    m_State.drawingSettingsShowUnitsAndZone = false;
     ShowUnits();
   } else if (m_State.showQuickSelectWindow) {
     m_State.showQuickSelectWindow = false;
@@ -887,28 +895,278 @@ void EditorWindow::ShowLayers() {
 }
 
 void EditorWindow::ShowUnits() {
-  m_ModalOpen = true;
-  QDialog dialog(this);
-  dialog.setObjectName("drawingUnits");
-  dialog.setWindowTitle("Drawing Units and Plot Scale");
-  auto* layout = new QFormLayout(&dialog);
-  auto* units = new QComboBox(&dialog);
-  units->setObjectName("drawingUnit");
-  const std::pair<const char*, int> codes[] = {{"Unitless", 0}, {"Inches", 1}, {"Feet", 2}, {"Millimeters", 4}, {"Meters", 6}};
-  for (const auto& code : codes) units->addItem(code.first, code.second);
-  units->setCurrentIndex(units->findData(m_State.drawingInsUnits));
-  auto* scale = new QDoubleSpinBox(&dialog);
-  scale->setObjectName("drawingScale");
-  scale->setRange(0.000001, 1.e9); scale->setDecimals(6); scale->setValue(m_State.modelUnitsPerPlottedInch);
-  layout->addRow("Drawing unit (relabels geometry)", units);
-  layout->addRow("Model units per plotted inch", scale);
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  layout->addRow(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
-    if (ApplyDrawingSettings(m_State, units->currentData().toInt(), static_cast<float>(scale->value()), m_State.drawingSettings, m_Log)) dialog.accept();
+  if (auto* existing = findChild<QDialog*>("drawingSettingsDialog")) {
+    existing->show(); existing->raise(); existing->activateWindow(); return;
+  }
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
+    m_Log.push_back("DRAWINGSETTINGS — open or create a drawing first."); Refresh(); return;
+  }
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("drawingSettingsDialog");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Drawing Settings - " + QString::fromUtf8(m_State.drawingTabs[m_State.activeDrawingIdx].name.c_str()));
+  dialog->setWindowModality(Qt::WindowModal);
+  dialog->resize(970, 650);
+  DrawingSettings staged = m_State.drawingSettings;
+  int stagedUnits = m_State.drawingInsUnits;
+  auto* root = new QVBoxLayout(dialog);
+  auto* body = new QHBoxLayout;
+  auto* navigation = new QListWidget(dialog);
+  navigation->setObjectName("drawingSettingsNavigation");
+  navigation->setFixedWidth(190);
+  navigation->addItems({"Units and Zone", "Transformation", "Object Layers"});
+  navigation->setCurrentRow(0);
+  auto* pages = new QStackedWidget(dialog);
+  pages->setObjectName("drawingSettingsPages");
+  body->addWidget(navigation); body->addWidget(pages, 1); root->addLayout(body, 1);
+
+  const std::pair<const char*, int> unitCodes[] = {{"Unitless", 0}, {"Inches", 1}, {"Feet", 2}, {"Millimeters", 4}, {"Meters", 6}};
+  auto* unitsPage = new QWidget(dialog);
+  auto* unitsForm = new QFormLayout(unitsPage);
+  auto* units = new QComboBox(unitsPage); units->setObjectName("drawingUnit");
+  for (const auto& code : unitCodes) units->addItem(code.first, code.second);
+  units->setCurrentIndex(units->findData(stagedUnits));
+  auto* angular = new QComboBox(unitsPage); angular->setObjectName("drawingAngularUnits");
+  angular->addItems({"Degrees", "Radians", "Grads"}); angular->setCurrentIndex(static_cast<int>(staged.angularUnits));
+  auto* foot = new QComboBox(unitsPage); foot->setObjectName("drawingFootDefinition");
+  foot->addItems({"US Survey Foot", "International Foot"}); foot->setCurrentIndex(static_cast<int>(staged.footDefinition));
+  auto* scale = new QComboBox(unitsPage); scale->setObjectName("drawingScaleChoice");
+  auto* customScale = new QDoubleSpinBox(unitsPage); customScale->setObjectName("drawingCustomScale");
+  customScale->setRange(0.000001, 1.e9); customScale->setDecimals(6); customScale->setValue(m_State.modelUnitsPerPlottedInch);
+  auto fillScales = [scale, customScale](int insUnits, float current) {
+    const QSignalBlocker blocker(scale); scale->clear();
+    const auto choices = PlotScaleChoicesFor(insUnits);
+    for (const auto& choice : choices) scale->addItem(QString::fromStdString(choice.label), choice.modelUnitsPerPlottedInch);
+    const int choice = PlotScaleChoiceIndex(choices, current);
+    scale->addItem("Custom", -1);
+    scale->setCurrentIndex(choice >= 0 ? choice : scale->count() - 1);
+    customScale->setValue(current); customScale->setEnabled(choice < 0);
+  };
+  fillScales(stagedUnits, m_State.modelUnitsPerPlottedInch);
+  connect(units, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, fillScales](int) {
+    stagedUnits = units->currentData().toInt(); fillScales(stagedUnits, static_cast<float>(customScale->value()));
   });
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  dialog.exec();
+  connect(scale, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [scale, customScale](int index) {
+    const bool custom = index >= 0 && scale->currentData().toInt() == -1;
+    customScale->setEnabled(custom);
+    if (!custom && index >= 0) customScale->setValue(scale->currentData().toFloat());
+  });
+  auto* scaleRow = new QWidget(unitsPage); auto* scaleRowLayout = new QHBoxLayout(scaleRow); scaleRowLayout->setContentsMargins(0,0,0,0);
+  scaleRowLayout->addWidget(scale, 1); scaleRowLayout->addWidget(customScale);
+  auto* scaleInserted = new QCheckBox("Scale objects inserted from other drawings", unitsPage);
+  scaleInserted->setChecked(staged.scaleInsertedObjects);
+  auto* setVariables = new QCheckBox("Set drawing variables to match", unitsPage);
+  setVariables->setChecked(staged.setDrawingVariables);
+  unitsForm->addRow("Drawing units (relabels geometry)", units);
+  unitsForm->addRow("Angular units", angular);
+  unitsForm->addRow("Imperial to Metric conversion", foot);
+  unitsForm->addRow("Plot scale", scaleRow);
+  unitsForm->addRow(scaleInserted); unitsForm->addRow(setVariables);
+  auto* zoneHeading = new QLabel("Coordinate system", unitsPage); zoneHeading->setStyleSheet("font-weight:600; font-size:15px;");
+  unitsForm->addRow(zoneHeading);
+  auto* category = new QComboBox(unitsPage); category->setObjectName("drawingZoneCategory");
+  category->addItem(QString::fromUtf8(geo::kNoZoneCategory), QString());
+  for (const auto& name : geo::Categories()) category->addItem(QString::fromUtf8(name.c_str()), QString::fromUtf8(name.c_str()));
+  auto* systems = new QComboBox(unitsPage); systems->setObjectName("drawingZoneSystem");
+  auto* zoneCode = new QLineEdit(unitsPage); zoneCode->setObjectName("drawingZoneCode");
+  auto* zoneDetails = new QLabel(unitsPage); zoneDetails->setObjectName("drawingZoneDetails"); zoneDetails->setWordWrap(true);
+  auto updateDetails = [zoneDetails, &staged] {
+    if (staged.zoneCode.empty()) { zoneDetails->setText("No Datum, No Projection\nProjection: Unknown projection\nDatum: Unknown Datum"); return; }
+    const auto info = geo::FindCoordinateSystem(staged.zoneCode);
+    zoneDetails->setText(info ? QString("%1\nProjection: %2\nDatum: %3").arg(QString::fromUtf8(info->description.c_str()), QString::fromUtf8(info->projection.c_str()), QString::fromUtf8(info->datum.c_str()))
+                              : QString("%1 (unknown in this dictionary)\nProjection: Unknown projection\nDatum: Unknown Datum").arg(QString::fromUtf8(staged.zoneCode.c_str())));
+  };
+  auto populateSystems = [systems, &staged, updateDetails](const QString& cat) {
+    const QSignalBlocker blocker(systems); systems->clear();
+    const auto values = cat.isEmpty() ? std::vector<std::string>{} : geo::CoordinateSystemsIn(cat.toUtf8().toStdString());
+    for (const auto& code : values) {
+      const auto info = geo::FindCoordinateSystem(code);
+      systems->addItem(info ? QString::fromUtf8(info->description.c_str()) : QString::fromUtf8(code.c_str()), QString::fromUtf8(code.c_str()));
+    }
+    if (!values.empty()) { systems->setCurrentIndex(0); staged.zoneCode = values.front(); }
+    else if (cat.isEmpty()) staged.zoneCode.clear();
+    updateDetails();
+  };
+  QString selectedCategory = staged.zoneCode.empty() ? QString() : QString::fromUtf8(geo::CategoryOf(staged.zoneCode).c_str());
+  int catIndex = category->findData(selectedCategory);
+  category->setCurrentIndex(catIndex >= 0 ? catIndex : 0);
+  const std::string initialZoneCode = staged.zoneCode;
+  populateSystems(selectedCategory);
+  if (!staged.zoneCode.empty()) {
+    const auto info = geo::FindCoordinateSystem(initialZoneCode);
+    if (info) {
+      const int zoneIndex = systems->findData(QString::fromUtf8(initialZoneCode.c_str()));
+      if (zoneIndex >= 0) { systems->setCurrentIndex(zoneIndex); staged.zoneCode = initialZoneCode; }
+    } else staged.zoneCode = initialZoneCode;
+  }
+  zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str()));
+  connect(category, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, populateSystems](int) {
+    populateSystems(category->currentData().toString());
+    zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str()));
+  });
+  connect(systems, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, updateDetails](int) {
+    if (systems->currentIndex() >= 0) staged.zoneCode = systems->currentData().toString().toUtf8().toStdString();
+    zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str())); updateDetails();
+  });
+  connect(zoneCode, &QLineEdit::editingFinished, dialog, [&, populateSystems, updateDetails] {
+    const auto typed = zoneCode->text().trimmed().toUtf8().toStdString();
+    if (typed.empty() || typed == ".") { staged.zoneCode.clear(); category->setCurrentIndex(0); populateSystems(QString()); zoneCode->setText("."); return; }
+    const auto info = geo::FindCoordinateSystem(typed);
+    if (!info) { QMessageBox::warning(dialog, "Coordinate system", QString("\"%1\" is not a coordinate system in this dictionary.").arg(QString::fromUtf8(typed.c_str()))); zoneCode->setText(QString::fromUtf8(staged.zoneCode.c_str())); return; }
+    staged.zoneCode = info->code; const QString cat = QString::fromUtf8(geo::CategoryOf(info->code).c_str());
+    category->setCurrentIndex(category->findData(cat)); populateSystems(cat); systems->setCurrentIndex(systems->findData(QString::fromUtf8(info->code.c_str())));
+    zoneCode->setText(QString::fromUtf8(info->code.c_str())); updateDetails();
+  });
+  unitsForm->addRow("Categories", category); unitsForm->addRow("Available coordinate systems", systems);
+  unitsForm->addRow("Selected coordinate system code", zoneCode); unitsForm->addRow(zoneDetails);
+  pages->addWidget(unitsPage);
+
+  auto* transformPage = new QWidget(dialog); auto* transformForm = new QFormLayout(transformPage);
+  auto* transformOn = new QCheckBox("Apply transform settings", transformPage); transformOn->setChecked(staged.transform.apply);
+  auto* seaLevel = new QCheckBox("Apply sea level scale factor", transformPage); seaLevel->setChecked(staged.transform.applySeaLevel);
+  auto number = [transformPage](const QString& name, double value) {
+    auto* field = new QDoubleSpinBox(transformPage); field->setObjectName(name); field->setRange(-1.e12, 1.e12); field->setDecimals(8); field->setValue(value); return field;
+  };
+  auto* elevation = number("transformElevation", staged.transform.elevation);
+  auto* radius = number("transformRadius", staged.transform.spheroidRadiusM);
+  auto* computation = new QComboBox(transformPage); computation->addItems({"Reference Point", "User Defined"}); computation->setCurrentIndex(static_cast<int>(staged.transform.computation));
+  auto* userScale = number("transformUserScale", staged.transform.userScaleFactor);
+  auto* refLocalX = number("transformRefLocalX", staged.transform.refLocalX);
+  auto* refLocalY = number("transformRefLocalY", staged.transform.refLocalY);
+  auto* refGridE = number("transformRefGridE", staged.transform.refGridE);
+  auto* refGridN = number("transformRefGridN", staged.transform.refGridN);
+  auto* refPoint = new QSpinBox(transformPage); refPoint->setRange(0, INT_MAX); refPoint->setValue(staged.transform.refPointNumber);
+  auto* rotation = new QComboBox(transformPage); rotation->addItems({"Rotation point", "Specify grid rotation angle"}); rotation->setCurrentIndex(static_cast<int>(staged.transform.rotation));
+  auto* rotLocalX = number("transformRotLocalX", staged.transform.rotLocalX);
+  auto* rotLocalY = number("transformRotLocalY", staged.transform.rotLocalY);
+  auto* rotGridE = number("transformRotGridE", staged.transform.rotGridE);
+  auto* rotGridN = number("transformRotGridN", staged.transform.rotGridN);
+  auto* rotPoint = new QSpinBox(transformPage); rotPoint->setRange(0, INT_MAX); rotPoint->setValue(staged.transform.rotPointNumber);
+  auto* toNorth = number("transformToNorth", staged.transform.toNorthDeg);
+  auto* localAzimuth = number("transformLocalAzimuth", staged.transform.localAzimuthDeg);
+  auto* gridAzimuth = number("transformGridAzimuth", staged.transform.gridAzimuthDeg);
+  auto pickRow = [transformPage](QWidget* first, QWidget* second, QWidget* third, const QString& object) {
+    auto* row = new QWidget(transformPage); auto* h = new QHBoxLayout(row); h->setContentsMargins(0,0,0,0);
+    h->addWidget(first); if (second) h->addWidget(second); if (third) h->addWidget(third);
+    auto* pick = new QPushButton("Pick", row); pick->setObjectName(object); h->addWidget(pick); return row;
+  };
+  auto* referenceRow = pickRow(refLocalX, refLocalY, refGridE, "pickTransformReference");
+  static_cast<QHBoxLayout*>(referenceRow->layout())->addWidget(refGridN);
+  static_cast<QHBoxLayout*>(referenceRow->layout())->addWidget(refPoint);
+  auto* rotationRow = pickRow(rotLocalX, rotLocalY, rotGridE, "pickTransformRotation");
+  static_cast<QHBoxLayout*>(rotationRow->layout())->addWidget(rotGridN);
+  static_cast<QHBoxLayout*>(rotationRow->layout())->addWidget(rotPoint);
+  auto* northRow = pickRow(toNorth, nullptr, nullptr, "pickTransformNorth");
+  auto* localAzRow = pickRow(localAzimuth, gridAzimuth, nullptr, "pickTransformAzimuth");
+  transformForm->addRow(transformOn); transformForm->addRow("Zone", new QLabel(staged.zoneCode.empty() ? geo::kNoZoneCategory : staged.zoneCode.c_str(), transformPage));
+  transformForm->addRow(seaLevel); transformForm->addRow("Elevation", elevation); transformForm->addRow("Spheroid radius (m)", radius);
+  transformForm->addRow("Computation", computation); transformForm->addRow("User grid scale factor", userScale);
+  transformForm->addRow("Reference point — local X/Y, grid E/N, point #", referenceRow);
+  transformForm->addRow("Rotation", rotation); transformForm->addRow("Rotation point — local X/Y, grid E/N, point #", rotationRow);
+  transformForm->addRow("North direction", northRow); transformForm->addRow("Azimuth pair", localAzRow);
+  pages->addWidget(transformPage);
+
+  auto* layersPage = new QWidget(dialog); auto* layersLayout = new QVBoxLayout(layersPage);
+  auto* layersTable = new QTableWidget(layersPage); layersTable->setObjectName("drawingObjectLayers");
+  layersTable->setColumnCount(4); layersTable->setHorizontalHeaderLabels({"Object", "Layer", "Name modifier / value", "Locked"});
+  const char* layerNames[] = {"Survey point", "Survey point label", "TIN surface", "Feature line", "Pipe run", "Pipe fitting", "Solid", "Table"};
+  layersTable->setRowCount(kObjectLayerKindCount); layersTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  layersTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch); layersTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+  layersTable->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+  std::array<QComboBox*, kObjectLayerKindCount> modifiers{};
+  std::array<QComboBox*, kObjectLayerKindCount> layerFields{};
+  std::array<QLineEdit*, kObjectLayerKindCount> modifierValues{};
+  std::array<QCheckBox*, kObjectLayerKindCount> layerLocks{};
+  for (int i = 0; i < kObjectLayerKindCount; ++i) {
+    const auto& row = staged.objectLayers[static_cast<size_t>(i)];
+    layersTable->setItem(i, 0, new QTableWidgetItem(layerNames[i])); layersTable->item(i,0)->setFlags(Qt::ItemIsEnabled);
+    auto* layer = new QComboBox(layersTable); layer->setEditable(true); layer->setInsertPolicy(QComboBox::NoInsert);
+    for (const auto& entry : m_State.drawingLayerTable) layer->addItem(QString::fromUtf8(entry.name.c_str()));
+    layer->setCurrentText(QString::fromUtf8(row.layer.c_str()));
+    layerFields[static_cast<size_t>(i)] = layer; layersTable->setCellWidget(i, 1, layer);
+    auto* cell = new QWidget(layersTable); auto* h = new QHBoxLayout(cell); h->setContentsMargins(0,0,0,0);
+    auto* modifier = new QComboBox(cell); modifier->addItems({"None", "Prefix", "Suffix"}); modifier->setCurrentIndex(static_cast<int>(row.modifier));
+    auto* value = new QLineEdit(QString::fromUtf8(row.value.c_str()), cell); value->setEnabled(row.modifier != ObjectLayerRow::Modifier::None);
+    connect(modifier, qOverload<int>(&QComboBox::currentIndexChanged), value, [value](int index) { value->setEnabled(index != 0); });
+    h->addWidget(modifier); h->addWidget(value, 1); layersTable->setCellWidget(i, 2, cell);
+    modifiers[static_cast<size_t>(i)] = modifier; modifierValues[static_cast<size_t>(i)] = value;
+    auto* locked = new QCheckBox(layersTable); locked->setChecked(row.locked);
+    auto* lockCell = new QWidget(layersTable); auto* lockLayout = new QHBoxLayout(lockCell);
+    lockLayout->setContentsMargins(0, 0, 0, 0); lockLayout->addStretch(); lockLayout->addWidget(locked); lockLayout->addStretch();
+    layerLocks[static_cast<size_t>(i)] = locked; layersTable->setCellWidget(i, 3, lockCell);
+  }
+  layersLayout->addWidget(layersTable, 1);
+  auto* layerHelp = new QLabel("Use * in a prefix or suffix value to insert the new object's name. Display component controls are not implemented yet.", layersPage);
+  layerHelp->setWordWrap(true); layersLayout->addWidget(layerHelp); pages->addWidget(layersPage);
+  connect(navigation, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
+
+  auto* buttons = new QDialogButtonBox(dialog);
+  auto* ok = buttons->addButton(QDialogButtonBox::Ok); auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
+  auto* apply = buttons->addButton(QDialogButtonBox::Apply);
+  ok->setObjectName("drawingSettingsOk"); cancel->setObjectName("drawingSettingsCancel"); apply->setObjectName("drawingSettingsApply");
+  root->addWidget(buttons);
+  auto* pickTimer = new QTimer(dialog); pickTimer->setInterval(50);
+  bool waitingForPick = false;
+  auto beginPick = [this, dialog, pickTimer, &waitingForPick](AppCommandState::DrawingSettingsPickState::Target target) {
+    if (!StartDrawingSettingsPick(m_State, target, m_Log)) { Refresh(); return; }
+    waitingForPick = true; dialog->setWindowModality(Qt::NonModal); dialog->hide(); m_Viewport->setFocus(); pickTimer->start();
+  };
+  auto* pickRef = referenceRow->findChild<QPushButton*>("pickTransformReference");
+  auto* pickRot = rotationRow->findChild<QPushButton*>("pickTransformRotation");
+  auto* pickNorth = northRow->findChild<QPushButton*>("pickTransformNorth");
+  auto* pickAz = localAzRow->findChild<QPushButton*>("pickTransformAzimuth");
+  connect(pickRef, &QPushButton::clicked, dialog, [&, beginPick] { beginPick(AppCommandState::DrawingSettingsPickState::Target::ReferencePoint); });
+  connect(pickRot, &QPushButton::clicked, dialog, [&, beginPick] { beginPick(AppCommandState::DrawingSettingsPickState::Target::RotationPoint); });
+  connect(pickNorth, &QPushButton::clicked, dialog, [&, beginPick] { beginPick(AppCommandState::DrawingSettingsPickState::Target::ToNorth); });
+  connect(pickAz, &QPushButton::clicked, dialog, [&, beginPick] { beginPick(AppCommandState::DrawingSettingsPickState::Target::LocalAzimuth); });
+  connect(pickTimer, &QTimer::timeout, dialog, [&, dialog, pickTimer] {
+    if (m_State.active == AppCommandState::Kind::DrawingSettingsPick) return;
+    pickTimer->stop(); if (!waitingForPick) return; waitingForPick = false;
+    auto& result = m_State.drawingSettingsPick;
+    if (result.done) {
+      const auto target = result.target;
+      if (target == AppCommandState::DrawingSettingsPickState::Target::ReferencePoint) {
+        refLocalX->setValue(result.worldX); refLocalY->setValue(result.worldY); refPoint->setValue(result.pointNumber);
+      } else if (target == AppCommandState::DrawingSettingsPickState::Target::RotationPoint) {
+        rotLocalX->setValue(result.worldX); rotLocalY->setValue(result.worldY); rotPoint->setValue(result.pointNumber);
+      } else if (target == AppCommandState::DrawingSettingsPickState::Target::ToNorth) toNorth->setValue(result.azimuthDeg);
+      else if (target == AppCommandState::DrawingSettingsPickState::Target::LocalAzimuth) localAzimuth->setValue(result.azimuthDeg);
+      result.done = false;
+    }
+    dialog->setWindowModality(Qt::WindowModal); dialog->show(); dialog->raise(); dialog->activateWindow(); Refresh();
+  });
+  auto applySettings = [&, dialog](bool closeAfter) {
+    staged.angularUnits = static_cast<DrawingSettings::AngularUnits>(angular->currentIndex());
+    staged.footDefinition = static_cast<DrawingSettings::FootDefinition>(foot->currentIndex());
+    staged.scaleInsertedObjects = scaleInserted->isChecked(); staged.setDrawingVariables = setVariables->isChecked();
+    if (scale->currentData().toInt() == -1 && customScale->value() <= 0) { QMessageBox::warning(dialog, "Drawing Settings", "The custom scale must be a positive number."); return; }
+    const float plotScale = scale->currentData().toInt() == -1 ? static_cast<float>(customScale->value()) : scale->currentData().toFloat();
+    auto& transform = staged.transform;
+    transform.apply = transformOn->isChecked(); transform.applySeaLevel = seaLevel->isChecked(); transform.elevation = elevation->value();
+    transform.spheroidRadiusM = radius->value(); transform.computation = static_cast<DrawingSettings::Transform::Computation>(computation->currentIndex());
+    transform.userScaleFactor = userScale->value(); transform.refLocalX = refLocalX->value(); transform.refLocalY = refLocalY->value();
+    transform.refGridE = refGridE->value(); transform.refGridN = refGridN->value(); transform.refPointNumber = refPoint->value();
+    transform.rotation = static_cast<DrawingSettings::Transform::Rotation>(rotation->currentIndex());
+    transform.rotLocalX = rotLocalX->value(); transform.rotLocalY = rotLocalY->value(); transform.rotGridE = rotGridE->value();
+    transform.rotGridN = rotGridN->value(); transform.rotPointNumber = rotPoint->value(); transform.toNorthDeg = toNorth->value();
+    transform.localAzimuthDeg = localAzimuth->value(); transform.gridAzimuthDeg = gridAzimuth->value();
+    for (int i = 0; i < kObjectLayerKindCount; ++i) {
+      auto& row = staged.objectLayers[static_cast<size_t>(i)];
+      row.layer = layerFields[static_cast<size_t>(i)]->currentText().trimmed().toUtf8().toStdString();
+      row.modifier = static_cast<ObjectLayerRow::Modifier>(modifiers[static_cast<size_t>(i)]->currentIndex());
+      row.value = modifierValues[static_cast<size_t>(i)]->text().toUtf8().toStdString();
+      row.locked = layerLocks[static_cast<size_t>(i)]->isChecked();
+    }
+    if (const auto error = ValidateObjectLayers(staged); !error.empty()) { QMessageBox::warning(dialog, "Object Layers", QString::fromUtf8(error.c_str())); return; }
+    if (const auto error = ValidateDrawingTransform(staged); !error.empty()) { QMessageBox::warning(dialog, "Transformation", QString::fromUtf8(error.c_str())); return; }
+    if (ApplyDrawingSettings(m_State, stagedUnits, plotScale, staged, m_Log)) { Refresh(); if (closeAfter) dialog->accept(); }
+    else Refresh();
+  };
+  connect(ok, &QPushButton::clicked, dialog, [applySettings] { applySettings(true); });
+  connect(apply, &QPushButton::clicked, dialog, [applySettings] { applySettings(false); });
+  connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+  m_ModalOpen = true;
+  dialog->exec();
   m_ModalOpen = false;
   Refresh();
 }

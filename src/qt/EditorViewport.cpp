@@ -11,6 +11,7 @@
 #include "AppPaths.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
+#include "MapTileService.hpp"
 #include <QDateTime>
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -28,6 +29,23 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   setMinimumSize(240, 180);
   setCursor(Qt::CrossCursor);
   m_RightTimer.setSingleShot(true);
+  m_MapTimer.setInterval(100);
+  connect(&m_MapTimer, &QTimer::timeout, this, [this] {
+    const bool needed = m_State.drawingSettings.Geolocated() &&
+        (m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
+         !m_State.drawingSettings.capturedAreas.empty() ||
+         m_State.active == AppCommandState::Kind::GeoCaptureArea);
+    if (!needed) { m_MapTimer.stop(); return; }
+    update();
+    if (m_LastMapLogSize != m_Log.size() || m_LastCaptureGathered != m_State.mapCapture.gathered ||
+        m_LastCaptureTotal != m_State.mapCapture.total) {
+      m_LastMapLogSize = m_Log.size();
+      m_LastCaptureGathered = m_State.mapCapture.gathered;
+      m_LastCaptureTotal = m_State.mapCapture.total;
+      if (changed) changed();
+    }
+  });
+  m_MapTimer.start();
   // Still held when the threshold passes: the menu appears at the press point without waiting.
   QObject::connect(&m_RightTimer, &QTimer::timeout, this, [this] {
     if (!m_RightPending) return;
@@ -42,7 +60,9 @@ EditorViewport::~EditorViewport() { Cleanup(); }
 
 void EditorViewport::Cleanup() {
   if (!m_Ready || !context()) return;
+  m_MapTimer.stop();
   makeCurrent();
+  m_OnlineMap.reset();
   m_Renderer->Shutdown();
   m_Ready = false;
   doneCurrent();
@@ -57,6 +77,11 @@ void EditorViewport::initializeGL() {
   while (glGetError() != GL_NO_ERROR) {}
   std::string error;
   m_Ready = m_Renderer->Init(&error);
+  if (m_Ready) {
+    m_OnlineMap = std::make_unique<OnlineMapController>(
+        std::make_unique<MapTileService>(MapTileCacheDirectory(), FetchMapTileOverWinHttp, 6),
+        OnlineMapTextureHooks{ViewportRenderer::CreateMapTileTexture, ViewportRenderer::DeleteMapTileTexture});
+  }
   m_Error = QString::fromStdString(error);
   connect(context(), &QOpenGLContext::aboutToBeDestroyed, this, [this] { Cleanup(); }, Qt::DirectConnection);
 }
@@ -109,6 +134,13 @@ void EditorViewport::paintGL() {
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
+    if (m_State.drawingSettings.Geolocated() &&
+        (m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
+         !m_State.drawingSettings.capturedAreas.empty() ||
+         m_State.active == AppCommandState::Kind::GeoCaptureArea))
+      m_MapTimer.start();
+    m_OnlineMap->Update(m_State, m_State.activeSpaceIndex == kModelSpaceIndex, camera, w, h, m_Log);
+    tuning.mapTiles = &m_OnlineMap->DrawList();
     m_Renderer->SetSize(w, h);
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,
@@ -169,6 +201,12 @@ void EditorViewport::paintGL() {
   }
   painter.setPen(QColor("#bcc6d3"));
   painter.drawText(16, 26, "[Model]  [Orthographic]");
+  if (m_OnlineMap && m_OnlineMap->Drawing()) {
+    painter.fillRect(QRectF(width() - 268, height() - 36, 252, 26), QColor(20, 24, 28, 190));
+    painter.setPen(QColor("#f4f4f4"));
+    painter.drawText(QRectF(width() - 260, height() - 34, 246, 24), Qt::AlignRight | Qt::AlignVCenter,
+                     "Map: USGS The National Map");
+  }
   if (!m_Ready) painter.drawText(rect(), Qt::AlignCenter, m_Error);
   painter.setPen(QColor("#7593ad"));
   painter.drawText(18, height() - 20, "WCS");

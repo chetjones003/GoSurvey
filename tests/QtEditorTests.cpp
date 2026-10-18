@@ -2101,10 +2101,12 @@ private Q_SLOTS:
     CancelActiveCommand(window.State(), log);
     const auto before = window.State().userLinesFlat;
     QTimer::singleShot(0, &window, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingUnits");
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog");
       if (!dialog) return;
       dialog->findChild<QComboBox*>("drawingUnit")->setCurrentIndex(4);
-      dialog->findChild<QDoubleSpinBox*>("drawingScale")->setValue(100);
+      auto* scale = dialog->findChild<QComboBox*>("drawingScaleChoice");
+      scale->setCurrentIndex(scale->findData(-1));
+      dialog->findChild<QDoubleSpinBox*>("drawingCustomScale")->setValue(100);
       auto* buttons = dialog->findChild<QDialogButtonBox*>();
       buttons->button(QDialogButtonBox::Ok)->click();
     });
@@ -2295,6 +2297,53 @@ private Q_SLOTS:
     state.selection.clear(); window.Submit(""); QCOMPARE(ribbon->currentIndex(), index("Modeling"));
     state.drawingSettings.zoneCode = "TX83-CF"; window.Submit(""); QVERIFY(ribbon->isTabVisible(index("GeolocationCtx")));
     QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.
+  }
+
+  void issue899DrawingSettingsAndMapTaskPanelUseSharedWorkflows() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.drawingSettings.transform.apply = false;
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+
+    QTimer::singleShot(0, &window, [&] {
+      auto* settings = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(settings);
+      auto* navigation = settings->findChild<QListWidget*>("drawingSettingsNavigation"); QVERIFY(navigation);
+      auto* pages = settings->findChild<QStackedWidget*>("drawingSettingsPages"); QVERIFY(pages);
+      QVERIFY(settings->grab().save(artifacts + "qt-899-settings-units-zone.png"));
+      navigation->setCurrentRow(1); QApplication::processEvents();
+      QVERIFY(settings->grab().save(artifacts + "qt-899-settings-transformation.png"));
+      navigation->setCurrentRow(2); QApplication::processEvents();
+      QVERIFY(settings->grab().save(artifacts + "qt-899-settings-object-layers.png"));
+      auto* table = settings->findChild<QTableWidget*>("drawingObjectLayers"); QVERIFY(table);
+      QCOMPARE(table->columnCount(), 4);
+      auto* lock = table->cellWidget(0, 3)->findChild<QCheckBox*>(); QVERIFY(lock);
+      lock->setChecked(true);
+      auto* apply = settings->findChild<QPushButton*>("drawingSettingsApply"); QVERIFY(apply);
+      QTest::mouseClick(apply, Qt::LeftButton);
+      settings->close();
+    });
+    window.ShowUnits();
+    QVERIFY(state.drawingSettings.objectLayers[0].locked);
+
+    state.drawingSettings.zoneCode = "TX83-CF";
+    state.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;
+    window.Submit("");
+    auto* mapDock = window.findChild<QDockWidget*>("mapTaskDock"); QVERIFY(mapDock);
+    auto* panel = window.findChild<QWidget*>("mapTaskPanel"); QVERIFY(panel);
+    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel.png"));
+    auto* imagery = window.findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(DrawingSettings::OnlineMap::UsgsImagery)));
+    QVERIFY(imagery); QVERIFY(imagery->isEnabled());
+    imagery->click();
+    QCOMPARE(state.drawingSettings.onlineMap, DrawingSettings::OnlineMap::UsgsImagery);
+    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel-active.png"));
+    auto* capture = window.findChild<QPushButton*>("mapCapturePick"); QVERIFY(capture);
+    capture->click();
+    QCOMPARE(state.active, AppCommandState::Kind::GeoCaptureArea);
+    QVERIFY(panel->grab().save(artifacts + "qt-899-map-capture-prompt.png"));
+    std::vector<std::string> log;
+    CancelActiveCommand(state, log);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {

@@ -46,6 +46,10 @@ enum class MapTileStatus {
 /// touch UI-thread state.
 using MapTileFetch = std::function<MapTileStatus(const std::string& url, std::string& body, std::string& error)>;
 
+/// The shared REQ-363 disk-cache location and WinHTTP fetcher used by both frontends.
+[[nodiscard]] std::filesystem::path MapTileCacheDirectory();
+[[nodiscard]] MapTileStatus FetchMapTileOverWinHttp(const std::string& url, std::string& body, std::string& error);
+
 struct MapTileRequest {
   MapTileKey  key;
   std::string url;
