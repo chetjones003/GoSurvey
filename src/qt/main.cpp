@@ -1,6 +1,9 @@
+#include "CrashReporter.hpp"
 #include "EditorWindow.hpp"
+#include "FailureReport.hpp"
 #include "QtAppearance.hpp"
 #include "PdfAttach.hpp"
+#include "StartupFailure.hpp"
 #include "UserPrefs.hpp"
 #include <QApplication>
 #include <QFile>
@@ -13,8 +16,18 @@
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <cstdio>
+#include <string>
 
 int main(int argc, char** argv) {
+  // REQ-424 §2: a process relaunched by the crash handler only shows the report. It is read (and
+  // sent) before the handler is installed, as in the ImGui build, so a fault here cannot recurse.
+  std::string crashTitle;
+  std::string crashReport;
+  const bool crashReportMode = crashReporter::TakeCrashReportFromCommandLine(crashTitle, crashReport);
+  if (!crashReportMode) {
+    crashReporter::InstallHandler();
+    if (crashReporter::CommandLineHasTestCrash()) crashReporter::TriggerTestCrash();
+  }
   QSurfaceFormat format;
   format.setVersion(3, 3);
   format.setProfile(QSurfaceFormat::CoreProfile);
@@ -25,7 +38,21 @@ int main(int argc, char** argv) {
   app.setOrganizationName("GoSurvey");
   app.setApplicationName("GoSurveyQt");
   ApplyQtAppearance(app, app.arguments().contains("--light-style") || QSettings().value("editor/lightTheme", false).toBool());
+  if (crashReportMode) {
+    ExecFailureReportDialog(crashTitle, crashReport);
+    return 0;
+  }
   const bool smoke = app.arguments().contains("--smoke-test");
+  // REQ-424 §4: the same launch-time graphics check the ImGui build makes. Skipped for the smoke
+  // run, where a modal report window would hang an unattended check.
+  if (!smoke) {
+    startupFailure::Stage stage{};
+    std::string detail;
+    if (!ProbeStartupGraphics(stage, detail)) {
+      ExecFailureReportDialog("GoSurvey could not start", startupFailure::RecordAndSend(stage, detail));
+      return 1;
+    }
+  }
   const bool previewSignIn = app.arguments().contains("--preview-sign-in");
   QPixmap splashImage(QtAsset("splash-bg.png"));
   if (splashImage.isNull()) { splashImage = QPixmap(800, 440); splashImage.fill(QColor("#242830")); }
@@ -47,6 +74,7 @@ int main(int argc, char** argv) {
   {
     EditorWindow window;
     LoadUserStartupPrefSettings(window.State());
+    crashReporter::SetReportChannel(window.State().updatePrefs.useBetaChannel ? "beta" : "stable");
     if (!smoke) {
       // Started before sign-in so the update offer, when there is one, is shown first (REQ-077).
       window.StartUpdateCheck();
@@ -57,6 +85,8 @@ int main(int argc, char** argv) {
         app.processEvents(QEventLoop::AllEvents, 50);
         QThread::msleep(15);
       }
+      // REQ-080: the ping goes out once the sign-in gate below resolves.
+      window.EnableTelemetry();
       window.StartAuth(previewSignIn);
     }
     window.show();

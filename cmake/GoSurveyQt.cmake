@@ -15,6 +15,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/PdfWindow.cpp
+  src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
   src/pdf/PdfDocument.cpp
@@ -33,11 +34,19 @@ add_library(gosurvey_qt_frontend STATIC
   src/auth/AuthService.cpp
   src/auth/AuthPing.cpp
   src/update/UpdateService.cpp
+  # REQ-080 usage ping; REQ-424 crash and startup-failure reports
+  src/telemetry/TelemetryPing.cpp
+  src/telemetry/TelemetryService.cpp
+  src/platform/CrashReporter.cpp
+  src/platform/CrashReporterWireReason.cpp
+  src/platform/StartupFailure.cpp
+  src/platform/FailureReportUi.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
   gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium
   comdlg32 ole32 shell32 Windowscodecs winhttp bcrypt ws2_32 advapi32)
 target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/qt")
+target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry")
 target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
 gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)

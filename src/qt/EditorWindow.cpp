@@ -26,6 +26,7 @@
 #include "Project.hpp"
 #include "auth/AuthService.hpp"
 #include "update/UpdateService.hpp"
+#include "telemetry/TelemetryService.hpp"
 #include "platform/HttpFetch.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
@@ -503,6 +504,7 @@ EditorWindow::EditorWindow() {
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
     ServiceAuth();
+    ServiceTelemetry();
     ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
     const auto logSize = m_Log.size();
@@ -592,6 +594,25 @@ void EditorWindow::ServiceAuth() {
     ShowSignInGate();
   }
   MaybeAutoOpenWhatsNew();
+}
+
+void EditorWindow::EnableTelemetry() {
+  // The launch-time channel, as the ImGui build sends: a Settings change applies from next launch.
+  const std::string channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
+  m_SendTelemetry = [this, channel](const std::string& email) {
+    m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
+  };
+}
+
+void EditorWindow::ServiceTelemetry() {
+  telemetry::PollTelemetryTask(m_TelemetryTask);
+  // REQ-080: one ping per launch, fired once the launch gate resolves (signed in, opted out, or
+  // the offline exception) so the sign-in state it reports is known. It never waits on sign-in
+  // beyond that and never shows anything; failures are dropped inside the worker.
+  if (!m_AuthStarted || !m_State.authGateResolved || m_TelemetrySent || !m_SendTelemetry)
+    return;
+  m_TelemetrySent = true;
+  m_SendTelemetry(m_State.authSignedIn ? m_State.authEmail : std::string());
 }
 
 void EditorWindow::StartAuth(bool previewSignIn) {

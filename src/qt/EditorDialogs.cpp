@@ -28,6 +28,7 @@
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QFrame>
+#include <QStyle>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -208,6 +209,59 @@ void EditorWindow::ShowSettings() {
   error->setStyleSheet("color:#c54646;");
   layout->addWidget(error);
 
+  // REQ-080 / REQ-424 §6: what leaves this machine, in plain words. Text, not a checkbox: there is
+  // no opt-out by decision (ADR-032), and a toggle that did nothing — or wording that implied
+  // consent nobody is asked for — would be worse than saying so plainly. The email sentence
+  // follows the live sign-in state, so the notice is never a stale promise.
+  auto *usageBox = new QFrame(dialog);
+  usageBox->setObjectName("usageDataSection");
+  auto *usageLayout = new QVBoxLayout(usageBox);
+  usageLayout->setSpacing(8);
+  auto *usageHeading = new QLabel("What GoSurvey sends", usageBox);
+  usageHeading->setObjectName("usageDataHeading");
+  QFont usageHeadingFont = headingFont;
+  usageHeadingFont.setPointSize(12);
+  usageHeading->setFont(usageHeadingFont);
+  auto *usageSummary = new QLabel(
+      "GoSurvey reports usage so development can be aimed at what people actually run. Every "
+      "report includes a random ID that identifies this installation, the version, whether you "
+      "are on stable or beta, and that you are on Windows — once when installed, and each time "
+      "you start GoSurvey after that.",
+      usageBox);
+  usageSummary->setObjectName("usageDataSummary");
+  usageSummary->setWordWrap(true);
+  auto *usageEmail = new QLabel(usageBox);
+  usageEmail->setObjectName("usageDataEmail");
+  usageEmail->setWordWrap(true);
+  auto *usageCrash = new QLabel(
+      "If GoSurvey crashes or cannot start, it also sends the error report it shows you. That "
+      "report can include file locations on this computer, such as your user folder.",
+      usageBox);
+  usageCrash->setObjectName("usageDataCrashReports");
+  usageCrash->setWordWrap(true);
+  auto syncUsage = [this, usageEmail] {
+    usageEmail->setText(
+        m_State.authSignedIn
+            ? "Because you are signed in (see Account above), your email is included too. Sign "
+              "out and usage reports go back to fully anonymous."
+            : "Usage reports never send your name, company, computer name, file names, "
+              "drawings, survey data, or location. Your email is included only when you are "
+              "signed in — you are currently signed out, so they stay fully anonymous.");
+  };
+  syncUsage();
+  // Framed like the account card, so it reads as a notice rather than a setting.
+  usageBox->setFrameShape(QFrame::StyledPanel);
+  usageLayout->setContentsMargins(14, 12, 14, 12);
+  auto *titleRow = new QHBoxLayout();
+  auto *mark = new QLabel(usageBox);
+  mark->setPixmap(style()->standardIcon(QStyle::SP_MessageBoxInformation).pixmap(22, 22));
+  titleRow->addWidget(mark);
+  titleRow->addWidget(usageHeading, 1);
+  usageLayout->addLayout(titleRow);
+  usageLayout->addWidget(usageSummary);
+  usageLayout->addWidget(usageEmail);
+  usageLayout->addWidget(usageCrash);
+
   // REQ-077: the update check is switchable, and switching it off means no network request is
   // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
   // problem has somewhere to read it off.
@@ -291,6 +345,12 @@ void EditorWindow::ShowSettings() {
   connect(updatesSync, &QTimer::timeout, dialog, syncUpdates);
   updatesSync->start();
 
+  // Next to Updates: the other thing here that talks to the network.
+  auto *usageDivider = new QFrame(dialog);
+  usageDivider->setFrameShape(QFrame::HLine);
+  layout->addWidget(usageDivider);
+  layout->addWidget(usageBox);
+
   layout->addStretch();
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
@@ -303,7 +363,8 @@ void EditorWindow::ShowSettings() {
   });
   auto *refresh = new QTimer(dialog);
   refresh->setInterval(100);
-  connect(refresh, &QTimer::timeout, dialog, [this, status, error, action] {
+  connect(refresh, &QTimer::timeout, dialog, [this, status, error, action, syncUsage] {
+    syncUsage();
     if (m_State.authSignedIn) {
       status->setText("Signed in as " +
                       QString::fromUtf8(m_State.authEmail.c_str()));

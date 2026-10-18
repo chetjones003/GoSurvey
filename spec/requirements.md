@@ -12465,6 +12465,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-14 — initial (D-2026-10-14-b). 2026-10-14 — accepted.
 
+### REQ-424 — Crash and startup-failure reports
+
+- Purpose: when GoSurvey crashes or cannot start, the user sees what went wrong and has a one-click way to report it, and the project learns about failures it would otherwise never hear of.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-17-a. Records the behaviour shipped in 0.7.4 (commits 61680b60, d048dc59, 5579a3ec, 8738b8a8), which had no requirement; it adds no new behaviour except the Qt port and the disclosure sentence in §6.
+- Depends on: REQ-080 (install ID, endpoint pattern, settings disclosure), REQ-201 (silent-failure exception).
+- Statement:
+  1. **Crash capture.** An unhandled structured exception, an abort signal, or `std::terminate` in either front end (ImGui `GoSurvey.exe`, Qt `GoSurveyQt.exe`) builds a plain-text report: a one-line summary, the exception code and fault address when known, the version, the update channel, and a module + offset stack trace. The report is appended to `%APPDATA%\GoSurvey\crash.log`, written to a temporary bundle file, and the same executable is relaunched with `--gosurvey-crash-report=<bundle>`. The crashing process shows no UI.
+  2. **Crash report window.** A process started with `--gosurvey-crash-report=` does not open the editor. It reads the bundle, sends the report once in the background (§5), deletes the bundle, and shows a report window titled "GoSurvey encountered a problem" with the full report read-only and two buttons: **Send This Report** and **Close**. A bundle that cannot be read shows "GoSurvey could not read the crash report file." instead.
+  3. **Send This Report.** Copies the full report to the clipboard and opens the browser at a new GitHub issue on `chetjones003/GoSurvey`, with the title "GoSurvey report (<version>)" and the report as the body (the body is cut at about 5,200 characters with a note that the full text is on the clipboard). It then tells the user which of the two steps worked (both, clipboard only, browser only, neither) and how to finish by hand. It does not close the report window. **Close** is the cancel: it closes the window and sends nothing further.
+  4. **Startup failure.** When the graphics stack cannot start (the display library, a window with an OpenGL 3.3 context, or the viewport renderer), the application appends the reason to `%APPDATA%\GoSurvey\startup-failure.log`, sends it (§5), shows the same report window titled "GoSurvey could not start", and exits with code 1 when the window is closed. The stage names on the wire stay `glfw_init`, `glfw_window`, `opengl_init`; the Qt build reports a missing OpenGL 3.3 context as `glfw_window` and a renderer failure as `opengl_init`.
+  5. **Background send.** Crash and startup reports are POSTed once, when the machine has connectivity, to `CrashReportEndpoint` / `StartupReportEndpoint` with `installId`, `version`, `channel`, `os`, `reason` (crash) or `stage` (startup), and `report` (cut at 16 KB). There is no opt-out, consistent with REQ-080. Any network failure is dropped silently (REQ-201 exception, same reason as REQ-080).
+  6. **Disclosure.** The Settings privacy disclosure required by REQ-080 also states that crash and startup error reports are sent automatically and can include file locations on this computer.
+  7. **Test hook.** `--gosurvey-test-crash` deliberately crashes the process so §1–§3 can be checked by hand.
+- Acceptance:
+  - `[req424]` Qt test: the report window shows the report read-only with Send This Report and Close; Send copies the report to the clipboard, opens a GitHub new-issue URL with the title and report, reports the outcome, and leaves the window open; Close sends nothing further.
+  - `[req424]` Qt test: a crash bundle in the documented format is read back to its report and deleted; a malformed bundle is rejected.
+  - `[req424]` Qt test: the Settings disclosure mentions crash and startup reports.
+  - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window.
+- Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`, Settings).
+- Status: accepted.
+- Known gap: the ImGui Settings disclosure predates §6 (and still says "at most once a day", which REQ-080 no longer describes); it is updated separately from the Qt port.
+- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-a).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -13644,6 +13669,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
+| REQ-424 | Platform/UI | `GoSurveyQtTests` `[req424]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

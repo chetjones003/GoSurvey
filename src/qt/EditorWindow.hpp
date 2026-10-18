@@ -6,6 +6,7 @@
 
 namespace auth { struct AuthTask; }
 namespace update { struct UpdateState; }
+namespace telemetry { struct TelemetryTask; }
 
 class EditorViewport;
 class QTabBar;
@@ -34,6 +35,9 @@ public:
   /// True while the startup check is still waiting on the network, so the entry point can hold
   /// the splash screen until the answer is known (REQ-077: the check gates the session).
   bool UpdateCheckRunning() const;
+  /// REQ-080: lets this window send the usage ping once the launch gate resolves. Called by the
+  /// application entry point only, so test windows never send one.
+  void EnableTelemetry();
   void InitializeStartup();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
@@ -84,6 +88,7 @@ private:
   void ShowSettings();
   void ShowSignInGate();
   void ServiceAuth();
+  void ServiceTelemetry();
   void InitUpdates();
   void ServiceUpdate();
   void ShowUpdateDialog();
@@ -118,6 +123,11 @@ private:
   /// Hands the verified installer to the OS; replaceable so tests never run one.
   std::function<bool(update::UpdateState&)> m_LaunchInstaller;
   bool m_UpdateExitPending = false;
+  std::unique_ptr<telemetry::TelemetryTask> m_TelemetryTask;
+  /// Sends the REQ-080 ping with the signed-in email (or empty). Unset until EnableTelemetry;
+  /// replaceable so tests never send one.
+  std::function<void(const std::string& email)> m_SendTelemetry;
+  bool m_TelemetrySent = false;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };
