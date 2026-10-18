@@ -748,6 +748,10 @@ private Q_SLOTS:
     auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
     auto* input = window.findChild<QLineEdit*>("commandInput");
     QVERIFY(viewport); QVERIFY(input);
+    // A GL widget normally initialises on its first paint, but a window on an invisible desktop
+    // (tools/run-qt-tests-hidden.ps1) never receives one. Rendering it directly creates the
+    // context and runs initializeGL() without needing the window to be exposed.
+    viewport->grabFramebuffer();
     QTRY_VERIFY_WITH_TIMEOUT(static_cast<EditorViewport*>(viewport)->IsRendererReady(), 10000);
     viewport->setFocus();
     QTest::keyClicks(viewport, "l");
@@ -918,6 +922,10 @@ private Q_SLOTS:
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
+    // A GL widget normally initialises on its first paint, but a window on an invisible desktop
+    // (tools/run-qt-tests-hidden.ps1) never receives one. Rendering it directly creates the
+    // context and runs initializeGL() without needing the window to be exposed.
+    viewport->grabFramebuffer();
     QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
     viewport->SetOrientation(0, 0);
     const QPoint start(viewport->width() / 2, viewport->height() / 2);
@@ -936,6 +944,10 @@ private Q_SLOTS:
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
+    // A GL widget normally initialises on its first paint, but a window on an invisible desktop
+    // (tools/run-qt-tests-hidden.ps1) never receives one. Rendering it directly creates the
+    // context and runs initializeGL() without needing the window to be exposed.
+    viewport->grabFramebuffer();
     QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
     const auto image = viewport->grabFramebuffer();
     QVERIFY(!image.isNull());
