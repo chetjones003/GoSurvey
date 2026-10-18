@@ -5,6 +5,7 @@
 #include "ProjectSettings.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
+#include "ProjectAddFlow.hpp"
 #include "RecentDrawings.hpp"
 #include "AppPaths.hpp"
 #include <QApplication>
@@ -14,9 +15,22 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QComboBox>
+#include <QStackedWidget>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QFile>
+#include <QFileInfo>
+#include <QAbstractItemView>
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <optional>
 
 namespace {
 double Now() {
@@ -107,6 +121,210 @@ void EditorWindow::NewProject() {
     return;
   }
   OpenProject(QString::fromStdWString(project.file.wstring()), true);
+}
+
+void EditorWindow::ShowAddDrawing(std::uint32_t projectUid, const QString& selectedPath) {
+  const auto session = std::find_if(m_State.openProjects.begin(), m_State.openProjects.end(),
+      [projectUid](const auto& value) { return value.uid == projectUid; });
+  if (session == m_State.openProjects.end()) {
+    QMessageBox::warning(this, "Add Drawing to Project", "The project is no longer open.");
+    return;
+  }
+  if (session->readOnly) {
+    QMessageBox::warning(this, "Add Drawing to Project", "This project is read-only. No drawing can be added.");
+    return;
+  }
+  QString sourcePath = selectedPath;
+  if (sourcePath.isEmpty())
+    sourcePath = QFileDialog::getOpenFileName(this, "Choose drawing to add", {}, "Drawings (*.dwg)");
+  if (sourcePath.isEmpty()) return;
+
+  AddDrawingPlan plan;
+  PrepareAddDrawing(m_State, projectUid, sourcePath.toUtf8().toStdString(), &plan, m_Log);
+  if (!plan.error.empty()) {
+    QMessageBox::warning(this, "Add Drawing to Project", QString::fromUtf8(plan.error.c_str()));
+    return;
+  }
+
+  QDialog dialog(this);
+  dialog.setObjectName("addDrawingDialog");
+  dialog.setWindowTitle("Add Drawing to Project");
+  dialog.setMinimumWidth(780);
+  auto* root = new QVBoxLayout(&dialog);
+  auto* steps = new QLabel("1  Drawing     ›     2  Align     ›     3  Points     ›     4  Confirm", &dialog);
+  steps->setObjectName("addDrawingSteps");
+  steps->setTextFormat(Qt::RichText);
+  steps->setStyleSheet("font-size: 13px; padding: 8px;");
+  root->addWidget(steps);
+  auto* stack = new QStackedWidget(&dialog);
+  stack->setObjectName("addDrawingPages");
+  root->addWidget(stack, 1);
+
+  auto* alignPage = new QWidget(stack);
+  auto* align = new QVBoxLayout(alignPage);
+  auto* source = new QLabel(QString("<b>%1</b><br>%2").arg(QFileInfo(sourcePath).fileName(), sourcePath.toHtmlEscaped()), alignPage);
+  source->setObjectName("addDrawingSource"); source->setTextFormat(Qt::RichText); source->setWordWrap(true);
+  align->addWidget(source);
+  auto* alignTitle = new QLabel("Coordinate alignment", alignPage); alignTitle->setStyleSheet("font-size: 16px; font-weight: 600;");
+  align->addWidget(alignTitle);
+  auto* alignment = new QLabel(alignPage); alignment->setObjectName("addDrawingAlignment"); alignment->setWordWrap(true);
+  auto refreshAlignment = [&] {
+    if (!plan.conversion.Needed()) {
+      alignment->setText("This drawing already matches the project's coordinate system and units.");
+      alignment->setStyleSheet("color:#67bd86;");
+    } else if (plan.converted) {
+      alignment->setText(QString("Converted copy to the project's coordinate system and units. Estimated leftover error at the drawing extents: %1 m.")
+          .arg(plan.conversion.residualMeters, 0, 'f', 4));
+      alignment->setStyleSheet("color:#67bd86;");
+    } else {
+      QString text = "The drawing differs from the project:";
+      if (plan.conversion.unitsDiffer) text += "\n• Linear units differ";
+      if (plan.conversion.zoneDiffers) text += "\n• Coordinate systems differ";
+      if (!plan.blockers.empty()) {
+        text += "\n\nThis drawing cannot be converted because it contains:";
+        for (const auto& blocker : plan.blockers) text += "\n• " + QString::fromUtf8(blocker.c_str());
+      } else if (!plan.conversion.ok) {
+        text += "\n\nConversion is unavailable: " + QString::fromUtf8(plan.conversion.error.c_str());
+      } else if (plan.conversion.zoneDiffers) {
+        text += QString("\n\nEstimated leftover error at the drawing extents: %1 m (maximum allowed 0.02 m).")
+            .arg(plan.conversion.residualMeters, 0, 'f', 4);
+      }
+      alignment->setText(text); alignment->setStyleSheet("color:#e9bd66;");
+    }
+  };
+  align->addWidget(alignment);
+  auto* convert = new QPushButton("Convert project copy", alignPage); convert->setObjectName("addDrawingConvert");
+  auto* convertRow = new QHBoxLayout(); convertRow->addWidget(convert); convertRow->addStretch(1);
+  align->addLayout(convertRow);
+  align->addStretch(1); stack->addWidget(alignPage);
+
+  auto* pointsPage = new QWidget(stack);
+  auto* pointLayout = new QVBoxLayout(pointsPage);
+  auto* summary = new QLabel(pointsPage); summary->setObjectName("addDrawingSummary"); summary->setWordWrap(true);
+  pointLayout->addWidget(summary);
+  auto* table = new QTableWidget(pointsPage); table->setObjectName("addDrawingConflicts");
+  table->setColumnCount(4); table->setHorizontalHeaderLabels({"Point", "Project value", "Drawing value", "Action"});
+  table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+  table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+  table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+  table->verticalHeader()->hide();
+  table->setEditTriggers(QAbstractItemView::NoEditTriggers); table->setSelectionMode(QAbstractItemView::NoSelection);
+  table->setAlternatingRowColors(true); pointLayout->addWidget(table, 1);
+  auto fillPoints = [&] {
+    const auto& sm = plan.summary;
+    summary->setText(QString("%1 point(s) found: %2 new, %3 identical and shared, %4 with different values. Duplicate numbers in the drawing: %5.")
+        .arg(sm.total).arg(sm.fresh).arg(sm.identical).arg(sm.differing).arg(sm.duplicates));
+    table->setRowCount(static_cast<int>(sm.conflicts.size()));
+    for (int row = 0; row < static_cast<int>(sm.conflicts.size()); ++row) {
+      const auto& conflict = sm.conflicts[static_cast<size_t>(row)];
+      table->setItem(row, 0, new QTableWidgetItem(QString::number(conflict.id)));
+      table->setItem(row, 1, new QTableWidgetItem(QString("%1, %2, %3 · %4").arg(conflict.existing.easting,0,'f',3).arg(conflict.existing.northing,0,'f',3).arg(conflict.existing.elevation,0,'f',3).arg(QString::fromUtf8(conflict.existing.description.c_str()))));
+      table->setItem(row, 2, new QTableWidgetItem(QString("%1, %2, %3 · %4").arg(conflict.incoming.easting,0,'f',3).arg(conflict.incoming.northing,0,'f',3).arg(conflict.incoming.elevation,0,'f',3).arg(QString::fromUtf8(conflict.incoming.description.c_str()))));
+      auto* choice = new QComboBox(table); choice->setObjectName(QString("addDrawingChoice_%1").arg(conflict.id));
+      choice->addItems({"Skip", "Overwrite", "Renumber"});
+      connect(choice, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, id = conflict.id](int index) {
+        plan.choices[id] = static_cast<projadd::Choice>(index);
+      });
+      table->setCellWidget(row, 3, choice);
+    }
+    table->setVisible(!sm.conflicts.empty());
+    if (sm.conflicts.empty()) table->setMaximumHeight(0); else table->setMaximumHeight(360);
+  };
+  stack->addWidget(pointsPage);
+
+  auto* confirmPage = new QWidget(stack);
+  auto* confirm = new QVBoxLayout(confirmPage);
+  auto* impact = new QLabel(confirmPage); impact->setObjectName("addDrawingImpact"); impact->setWordWrap(true);
+  confirm->addWidget(impact); confirm->addStretch(1); stack->addWidget(confirmPage);
+  auto updateConfirm = [&] {
+    size_t skipped = 0, overwritten = 0, renumbered = 0;
+    for (const auto& conflict : plan.summary.conflicts) {
+      const auto it = plan.choices.find(conflict.id);
+      const auto choice = it == plan.choices.end() ? projadd::Choice::Skip : it->second;
+      if (choice == projadd::Choice::Skip) ++skipped;
+      else if (choice == projadd::Choice::Overwrite) ++overwritten;
+      else ++renumbered;
+    }
+    QString text = QString("<b>Project:</b> %1<br><b>Copy:</b> Drawings/%2<br><br>%3 new point(s), %4 identical point(s) shared, %5 conflict(s) resolved.")
+      .arg(QString::fromUtf8(plan.projectName.c_str()), QFileInfo(sourcePath).fileName())
+      .arg(plan.summary.fresh).arg(plan.summary.identical).arg(plan.summary.differing);
+    text += QString("<br><br><b>Conflict choices:</b> %1 skipped, %2 overwritten, %3 renumbered.")
+        .arg(skipped).arg(overwritten).arg(renumbered);
+    if (!plan.overrides.empty()) {
+      text += "<br><br><b>Settings saved as drawing overrides:</b> ";
+      for (size_t i=0;i<plan.overrides.size();++i) text += (i ? ", " : "") + QString::fromUtf8(plan.overrides[i].c_str());
+    }
+    impact->setText(text);
+  };
+
+  auto* validation = new QLabel(&dialog); validation->setObjectName("addDrawingValidation");
+  validation->setStyleSheet("color:#ed9a8f;"); validation->setWordWrap(true); root->addWidget(validation);
+  auto* buttons = new QDialogButtonBox(&dialog); buttons->setObjectName("addDrawingButtons");
+  auto* back = buttons->addButton("Back", QDialogButtonBox::ButtonRole::ResetRole);
+  auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
+  auto* next = buttons->addButton("Continue", QDialogButtonBox::AcceptRole);
+  back->setObjectName("addDrawingBack"); cancel->setObjectName("addDrawingCancel"); next->setObjectName("addDrawingNext");
+  root->addWidget(buttons);
+  auto updateStep = [&] {
+    const int page = stack->currentIndex();
+    steps->setText(page == 0 ? "1  Drawing     ›     <b><span style='color:#62b4e4'>2  Align</span></b>     ›     3  Points     ›     4  Confirm" :
+                   page == 1 ? "✓  Drawing     ›     ✓  Align     ›     <b><span style='color:#62b4e4'>3  Points</span></b>     ›     4  Confirm" :
+                               "✓  Drawing     ›     ✓  Align     ›     ✓  Points     ›     <b><span style='color:#62b4e4'>4  Confirm</span></b>");
+    back->setVisible(page > 0); next->setText(page == 2 ? "Add Drawing" : "Continue");
+    next->setEnabled(page != 0 || !plan.Blocked()); validation->clear();
+    if (page == 2) updateConfirm();
+  };
+  connect(convert, &QPushButton::clicked, &dialog, [&] {
+    ChooseAddConvert(m_State, &plan, m_Log); refreshAlignment();
+    convert->setEnabled(plan.CanConvert());
+    updateStep();
+  });
+  connect(back, &QPushButton::clicked, &dialog, [&] { stack->setCurrentIndex(stack->currentIndex()-1); updateStep(); });
+  connect(next, &QPushButton::clicked, &dialog, [&] {
+    const int page = stack->currentIndex();
+    if (page == 0) {
+      if (plan.Blocked()) { validation->setText("Convert the copy before continuing, or cancel the workflow."); return; }
+      fillPoints(); stack->setCurrentIndex(1);
+    } else if (page == 1) stack->setCurrentIndex(2);
+    else {
+      auto committedProject = std::find_if(m_State.openProjects.begin(), m_State.openProjects.end(),
+          [projectUid](const auto& value) { return value.uid == projectUid; });
+      std::optional<projpts::Db> pointsBefore;
+      if (committedProject != m_State.openProjects.end() && committedProject->points)
+        pointsBefore = *committedProject->points;
+      AddDrawingResult result;
+      if (!CommitAddDrawing(m_State, plan, Now(), &result, m_Log)) {
+        validation->setText(plan.error.empty() ? "The drawing could not be added. The project was left unchanged." : QString::fromUtf8(plan.error.c_str()));
+        if (!plan.error.empty()) next->setEnabled(false);
+        return;
+      }
+      if (committedProject != m_State.openProjects.end() && !FlushProjectPointDb(*committedProject, m_Log)) {
+        std::error_code ec;
+        std::filesystem::remove(std::filesystem::u8path(result.destPath), ec);
+        if (committedProject->points && pointsBefore) {
+          // CommitAddDrawing only changed the in-memory database. Its atomic save failed, so restore
+          // the previous contents and leave the project copy out as well.
+          *committedProject->points = std::move(*pointsBefore);
+        }
+        validation->setText("The project point database could not be saved. No drawing was added; see the command log.");
+        next->setEnabled(false);
+        return;
+      }
+      dialog.accept();
+      OpenDrawing(QString::fromUtf8(result.destPath.c_str()));
+      return;
+    }
+    updateStep();
+  });
+  connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+  refreshAlignment();
+  convert->setVisible(plan.conversion.Needed() && !plan.converted);
+  convert->setEnabled(plan.CanConvert());
+  if (!plan.conversion.Needed()) stack->setCurrentIndex(1);
+  updateStep();
+  m_ModalOpen = true; dialog.exec(); m_ModalOpen = false;
+  Refresh();
 }
 
 void EditorWindow::RefreshProjects() {
