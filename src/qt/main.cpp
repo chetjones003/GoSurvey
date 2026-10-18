@@ -8,8 +8,10 @@
 #include <QApplication>
 #include <QFile>
 #include <QImage>
+#include <QFontMetrics>
 #include <QPainter>
 #include <QPalette>
+#include <QRectF>
 #include <QSettings>
 #include <QSplashScreen>
 #include <QThread>
@@ -54,15 +56,31 @@ int main(int argc, char** argv) {
     }
   }
   const bool previewSignIn = app.arguments().contains("--preview-sign-in");
-  QPixmap splashImage(QtAsset("splash-bg.png"));
-  if (splashImage.isNull()) { splashImage = QPixmap(800, 440); splashImage.fill(QColor("#242830")); }
-  splashImage = splashImage.scaled(800, 440, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+  QPixmap splashImage(QtAsset("qt-splash-bg.png"));
+  if (splashImage.isNull()) { splashImage = QPixmap(800, 450); splashImage.fill(QColor("#111820")); }
+  splashImage = splashImage.scaled(800, 450, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
   QPainter painter(&splashImage);
+  painter.setRenderHint(QPainter::TextAntialiasing);
+  const QFont wordmarkFont("Segoe UI", 40, QFont::DemiBold);
+  painter.setFont(wordmarkFont);
+  const QFontMetrics wordmarkMetrics(wordmarkFont);
+  const int wordmarkX = 46;
+  const int wordmarkY = 226;
+  painter.setPen(QColor("#1688ff"));
+  painter.drawText(wordmarkX, wordmarkY, "Go");
   painter.setPen(Qt::white);
-  painter.setFont(QFont("Segoe UI", 30, QFont::DemiBold));
-  painter.drawText(38, 350, "GoSurvey");
+  painter.drawText(wordmarkX + wordmarkMetrics.horizontalAdvance("Go"), wordmarkY, "Survey");
+  painter.setPen(QColor("#c2d0e2"));
+  painter.setFont(QFont("Segoe UI", 16));
+  painter.drawText(wordmarkX + 2, 268, "Tools for the Surveyor");
+  painter.setPen(QColor("#c2d0e2"));
   painter.setFont(QFont("Segoe UI", 11));
-  painter.drawText(40, 383, "Survey and civil design | Qt / Win32");
+  painter.drawText(wordmarkX + 2, 359, "Loading workspace…");
+  painter.setPen(Qt::NoPen);
+  painter.setBrush(QColor("#253c57"));
+  painter.drawRoundedRect(QRectF(wordmarkX + 2, 372, 280, 5), 2.5, 2.5);
+  painter.setBrush(QColor("#148cff"));
+  painter.drawRoundedRect(QRectF(wordmarkX + 2, 372, 106, 5), 2.5, 2.5);
   painter.end();
   QSplashScreen splash(splashImage);
   if (!smoke) { splash.show(); app.processEvents(); }

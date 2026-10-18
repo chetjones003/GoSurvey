@@ -549,8 +549,16 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     }
   } else if (command == "@batchPlot") {
     m_State.batchPlotSelected.clear(); if (m_State.activeSpaceIndex >= 0) m_State.batchPlotSelected.push_back(m_State.activeSpaceIndex); m_State.showBatchPlotDialog = true;
+  } else if (command == "@layoutManager") {
+    ShowLayoutManager();
   } else if (command == "@pageSetup") {
-    EnsureStandardPageSetup(m_State); m_State.pageSetupLayoutIdx = std::max(0, m_State.activeSpaceIndex); m_State.pageSetupManagerSel = -1; m_State.showPageSetupManager = true;
+    StartPageSetupCommand(m_State, m_Log);
+    if (m_State.showPageSetupManager) ShowPageSetupManager(); else QMessageBox::information(this, "Page Setup Manager", QString::fromUtf8(m_Log.back().c_str()));
+  } else if (command == "@vpScale") {
+    ShowViewportScale();
+  } else if (command == "@viewports") {
+    if (m_State.activeSpaceIndex < 0) QMessageBox::information(this, "Viewports", "Switch to a paper layout first.");
+    else ShowViewportsManager();
   } else if (command == "PLOT") {
     const auto path = QFileDialog::getSaveFileName(this, "Plot layout", {}, "PDF (*.pdf)");
     if (!path.isEmpty()) PlotLayoutsToPdf(m_State, {std::max(0, m_State.activeSpaceIndex)}, path.toUtf8().constData(), m_Log);

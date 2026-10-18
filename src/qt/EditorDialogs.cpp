@@ -479,6 +479,10 @@ void EditorWindow::ServiceUiRequests() {
     m_State.surfaceStyleEditorFocusName.clear();
     m_State.surfaceStyleUseSurfacesTitle = false;
     ShowSurfaceStyles(focus, surfacesTitle);
+  } else if (m_State.showPageSetupManager) {
+    const int layoutIndex = m_State.pageSetupLayoutIdx;
+    m_State.showPageSetupManager = false;
+    ShowPageSetupManager(layoutIndex);
   } else if (m_State.surveyReportSelectLatestPending) {
     ShowSurveyReports();
   }

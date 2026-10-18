@@ -104,6 +104,12 @@ private:
   void ShowSurfaceProperties(int surfaceIndex);
   void ShowSurfaceManager();
   void ShowSurfaceStyles(const QString& focusName, bool surfacesTitle);
+  void ShowLayoutManager();
+  void ShowPageSetupManager(int layoutIndex = -1);
+  void ShowPageSetupEditor(int targetIndex);
+  void ShowViewportScale();
+  void ShowViewportsManager();
+  bool ActiveDrawingReadOnly() const;
   void ShowToolspaceContextMenu(const QPoint& position);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
@@ -128,6 +134,7 @@ private:
   std::size_t m_LogShown = 0;
   EditorViewport* m_Viewport = nullptr;
   QTabBar* m_Tabs = nullptr;
+  QTabBar* m_SpaceTabs = nullptr;
   QStackedWidget* m_Pages = nullptr;
   QWidget* m_RecentTiles = nullptr;
   QWidget* m_ProjectTiles = nullptr;
