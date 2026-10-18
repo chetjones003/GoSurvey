@@ -1,7 +1,10 @@
 #pragma once
 
 #include <QOpenGLWidget>
+#include <QElapsedTimer>
+#include <QPoint>
 #include <QPointF>
+#include <QTimer>
 #include <functional>
 #include <memory>
 #include "CadCommands.hpp"
@@ -17,6 +20,8 @@ public:
   std::function<void()> thumbnailReady;
   std::function<void(double, double, double)> cursorChanged;
   std::function<void(const QString&)> textEntered;
+  /// The right-click verdict (REQ-084) is "open the shortcut menu"; the window builds the menu.
+  std::function<void(const QPoint& globalPosition)> contextMenuRequested;
   void SetOrientation(float azimuth, float elevation);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
@@ -34,6 +39,9 @@ private:
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
   void ClearTransientInput();
+  void RightPress(const QPoint& globalPosition);
+  void PerformRightClick(RightClickAction action, const QPoint& globalPosition);
+  void RightClickAsEnter();
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;
@@ -44,4 +52,9 @@ private:
   bool m_Grid = true;
   std::uint32_t m_RenderRevision = 0;
   QString m_Error;
+  /// Time-sensitive right-click (REQ-084 (b)): a press is decided by how long the button is held.
+  bool m_RightPending = false;
+  QElapsedTimer m_RightHeld;
+  QTimer m_RightTimer;
+  QPoint m_RightGlobal;
 };

@@ -2,6 +2,7 @@
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
 #include <QActionGroup>
+#include <QScrollArea>
 #include <QTreeWidgetItemIterator>
 #include <QSet>
 #include <QStyle>
@@ -507,6 +508,7 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
+  m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
   };
@@ -794,30 +796,8 @@ void EditorWindow::BuildDocks() {
   m_Toolspace->setIndentation(14);
   m_Toolspace->setMinimumWidth(215);
   makeDock("Toolspace", "toolspaceDock", Qt::LeftDockWidgetArea, m_Toolspace);
-  auto* propertyWidget = new QWidget(this);
-  auto* propertyLayout = new QVBoxLayout(propertyWidget);
-  propertyLayout->setContentsMargins(4, 4, 4, 4);
-  propertyLayout->setSpacing(3);
-  m_Layer = new QComboBox(propertyWidget);
-  m_Layer->setObjectName("selectionLayer");
-  m_Layer->setEditable(true);
-  propertyLayout->addWidget(new QLabel("Layer", propertyWidget));
-  propertyLayout->addWidget(m_Layer);
-  m_Properties = new QTreeWidget(propertyWidget);
-  m_Properties->setHeaderLabels({"Property", "Value"});
-  m_Properties->setRootIsDecorated(true);
-  m_Properties->setIndentation(12);
-  m_Properties->setUniformRowHeights(true);
-  m_Properties->setAlternatingRowColors(true);
-  m_Properties->header()->setSectionResizeMode(0, QHeaderView::Interactive);
-  m_Properties->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-  m_Properties->setColumnWidth(0, 118);
-  propertyLayout->addWidget(m_Properties);
-  makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, propertyWidget);
-  connect(m_Layer, &QComboBox::textActivated, this, [this](const QString& layer) {
-    CadRibbonPickLayer(m_State, layer.toUtf8().toStdString(), m_Log);
-    Refresh();
-  });
+  BuildPropertiesPanel();
+  makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, m_PropertiesScroll);
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
@@ -850,11 +830,6 @@ void EditorWindow::BuildDocks() {
   connect(m_Toolspace, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
     const auto index = item->data(0, Qt::UserRole);
     if (index.isValid()) SwitchDrawing(index.toInt());
-  });
-  connect(m_Properties, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
-    if (m_Refreshing || column != 1) return;
-    if (item->text(0) == "Color") CadRibbonPickColor(m_State, item->text(1).toUtf8().toStdString(), m_Log);
-    Refresh();
   });
 }
 
@@ -1297,24 +1272,7 @@ void EditorWindow::Refresh() {
         email->setText(QString::fromUtf8(m_State.authEmail.c_str()));
     }
   }
-  m_Properties->clear();
-  auto* general = new QTreeWidgetItem(m_Properties, {"General"});
-  general->setFirstColumnSpanned(true);
-  general->setBackground(0, palette().color(QPalette::Button)); general->setForeground(0, palette().color(QPalette::ButtonText));
-  auto sectionFont = general->font(0); sectionFont.setBold(true); general->setFont(0, sectionFont);
-  new QTreeWidgetItem(general, {"Selected", QString::number(m_State.selection.size())});
-  new QTreeWidgetItem(general, {"Lines", QString::number(m_State.userLinesFlat.size() / 6)});
-  new QTreeWidgetItem(general, {"Circles", QString::number(m_State.userCirclesCxCyZR.size() / 4)});
-  new QTreeWidgetItem(general, {"File", QString::fromUtf8(m_State.activeDocFilePath.c_str())});
-  general->setExpanded(true);
-  const QSignalBlocker layerBlock(m_Layer);
-  m_Layer->clear();
-  for (const auto& layer : m_State.drawingLayerTable) m_Layer->addItem(QString::fromUtf8(layer.name.c_str()));
-  const std::string selectedLayer = CadSelectionLayer(m_State);
-  m_Layer->setCurrentText(QString::fromUtf8((selectedLayer.empty() ? m_State.currentLayer : selectedLayer).c_str()));
-  auto* color = new QTreeWidgetItem(general, {"Color", QString::fromUtf8(
-      (m_State.selection.empty() ? m_State.currentColor : CadSelectionColor(m_State)).c_str())});
-  color->setFlags(color->flags() | Qt::ItemIsEditable);
+  RefreshProperties();
   auto itemPath = [](QTreeWidgetItem* item) {
     QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
     return parts.join(QChar(0x1f));

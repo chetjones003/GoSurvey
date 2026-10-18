@@ -41077,6 +41077,13 @@ int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped) {
       skipped);
 }
 
+int CadApplyTransparencyToSelection(AppCommandState& st, float transparency, int* skipped) {
+  const float stored = (transparency < -0.5f) ? -1.f : std::clamp(transparency, 0.f, 1.f);
+  return ApplyAttrFieldToSelection(
+      st, stored, "Change transparency", [](EntityAttributes& a) -> float& { return a.transparency; }, true,
+      skipped);
+}
+
 std::string CadSelectionColor(const AppCommandState& st) {
   std::string shared;
   for (const SelectedEntity& e : st.selection) {

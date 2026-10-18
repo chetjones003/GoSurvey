@@ -7558,48 +7558,7 @@ void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
 }
 
 void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
-  const float stored = (a < -0.5f) ? -1.f : std::clamp(a, 0.f, 1.f);
-  EnsureAttrCounts(cmd);
-  for (const auto& e : cmd.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
-        continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 4;
-      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
-        continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Annotation) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
-        continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Table) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
-          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
-        continue;
-      cmd.cadTableAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
-          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
-        continue;
-      cmd.userArcAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
-          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
-        continue;
-      cmd.userEllAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      const int np =
-          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
-      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
-        continue;
-      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].transparency = stored;
-    }
-  }
-  BumpCadGpuCache(cmd);
+  (void)CadApplyTransparencyToSelection(cmd, a);  // shared with Qt (#891); one undo step
   RefreshMixedHintFlags(cmd);
 }
 
@@ -14587,9 +14546,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Shift guard so the two gestures no longer collide.
       const bool allowSnapCycle = (cmd.active != AK::None || gripDragActive) && cmd.objectSnapEnabled &&
                                   (!blockSnapPickMenu || gripDragActive) && !ViewportIsObjectSelectionStep(cmd);
-      using DM = AppCommandState::RightClickDefaultMode;
-      using EM = AppCommandState::RightClickEditMode;
-      using CM = AppCommandState::RightClickCommandMode;
       const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
 
       // The preference-driven classification, shared by the press path and the time-sensitive
@@ -14602,36 +14558,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           RepeatLastCommand(cmd, log);
       };
       auto classifyByPreference = [&]() {
-        if (cmd.active != AK::None) {
-          switch (cmd.rightClickCommandMode) {
-          case CM::Enter:
-            UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
-            break;
-          case CM::ShortcutMenuAlways:
-          case CM::ShortcutMenuWhenOptions:
-            openShortcutMenu();
-            break;
-          }
-        } else if (hasSel) {
-          switch (cmd.rightClickEditMode) {
-          case EM::RepeatLastCommand:
-            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-            else openShortcutMenu();
-            break;
-          case EM::ShortcutMenu:
-            openShortcutMenu();
-            break;
-          }
-        } else {
-          switch (cmd.rightClickDefaultMode) {
-          case DM::RepeatLastCommand:
-            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-            else openShortcutMenu();
-            break;
-          case DM::ShortcutMenu:
-            openShortcutMenu();
-            break;
-          }
+        // The verdict is shared with the Qt frontend (#891); only the action is frontend-specific.
+        switch (CadClassifyRightClick(cmd, hasSel)) {
+        case RightClickAction::Enter:
+          UiSubmitCommandLine(cmdBuf, cmdBufSize, cmd, log);
+          break;
+        case RightClickAction::RepeatLast:
+          RepeatLastCommand(cmd, log);
+          break;
+        case RightClickAction::ShortcutMenu:
+          openShortcutMenu();
+          break;
         }
       };
 
@@ -14639,7 +14576,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Default and Command contexts — quick = ENTER, held = shortcut menu. A selection still goes
       // through Edit Mode, which is why the dialog leaves that group enabled. The menu therefore
       // opens on release-or-elapse rather than on press; that is the feature, not a defect.
-      const bool timeSensitive = cmd.rightClickTimeSensitive && !blockSnapPickMenu && !hasSel;
+      const bool timeSensitive = CadRightClickIsTimed(cmd, hasSel) && !blockSnapPickMenu;
 
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
