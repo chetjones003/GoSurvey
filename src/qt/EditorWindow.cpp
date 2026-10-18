@@ -729,6 +729,11 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
   file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
+  file->addAction(CommandAction("Project Health...", "settings.png", "PROJECTHEALTH"));
+  file->addAction(CommandAction("Refresh Project Files...", "Refresh.png", "REFRESH"));
+  file->addAction(CommandAction("Pack Project...", "Save.png", "PACKPROJECT"));
+  file->addAction(CommandAction("Open Packed Project...", "Open.png", "OPENPACK"));
+  file->addAction(CommandAction("Create Turnover...", "Active_File.png", "TURNOVER"));
   file->addAction(CommandAction("Add PDF to project...", "Pdf.png", "ADDPDFTOPROJECT"));
   file->addAction(CommandAction("Add Drawing to Project...", "Active_File.png", "ADDDRAWING"));
   file->addSeparator();
@@ -878,6 +883,17 @@ void EditorWindow::Submit(const QString& command) {
     }
   }
   else if (verb == "ADDPDFTOPROJECT") AddPdfToProjectFromDisk();
+  else if (verb == "PROJECTHEALTH" || verb == "PACKPROJECT" || verb == "TURNOVER" || verb == "REFRESH") {
+    const auto idx = m_State.activeDrawingIdx;
+    const std::uint32_t uid = idx > 0 && idx < static_cast<int>(m_State.drawingTabs.size())
+        ? m_State.drawingTabs[static_cast<size_t>(idx)].projectUid : 0;
+    if (!uid) QMessageBox::information(this, "Project", "Open a drawing that belongs to a project first.");
+    else if (verb == "PROJECTHEALTH") ShowProjectHealth(uid);
+    else if (verb == "PACKPROJECT") ShowProjectPack(uid);
+    else if (verb == "TURNOVER") ShowProjectTurnover(uid);
+    else RefreshProjectFiles();
+  }
+  else if (verb == "OPENPACK") OpenPackedProject();
   else if (verb == "OPEN") {
     const QString path = QFileDialog::getOpenFileName(this, "Open drawing", {}, "Drawing (*.dwg)");
     if (!path.isEmpty()) OpenDrawing(path);
