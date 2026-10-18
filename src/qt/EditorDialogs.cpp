@@ -401,6 +401,14 @@ void EditorWindow::ShowSettings() {
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();
   if (m_ModalOpen || m_TextDialogOpen) return;
+  if (m_State.blockEditCloseAsked) {
+    ShowBlockEditorClosePrompt();
+    return;
+  }
+  if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
+  else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
+  if (m_State.showConnectionModesWindow) ShowConnectionModes();
+  else if (auto* modes = findChild<QDialog*>("connectionModes")) modes->close();
   if (m_State.addDrawingToProjectUid != 0) {
     const auto uid = m_State.addDrawingToProjectUid;
     m_State.addDrawingToProjectUid = 0;

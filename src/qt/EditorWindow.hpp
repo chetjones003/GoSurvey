@@ -112,6 +112,9 @@ private:
   void ShowDrawingContextMenu(const QPoint& globalPosition);
   void ShowRightClickCustomization();
   void ShowSelectionList();
+  void ShowBlockAuthoringPalette();
+  void ShowConnectionModes();
+  void ShowBlockEditorClosePrompt();
   void ShowSignInGate();
   void ServiceAuth();
   void ServiceTelemetry();
