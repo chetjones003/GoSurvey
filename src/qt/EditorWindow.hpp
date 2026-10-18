@@ -90,6 +90,8 @@ private:
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
   void ShowPasteWarning();
+  void ShowProjectAttachPrompt();
+  void AddPdfToProjectFromDisk();
   void ShowSettings();
   void ShowSignInGate();
   void ServiceAuth();

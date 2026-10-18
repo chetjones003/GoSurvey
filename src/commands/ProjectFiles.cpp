@@ -267,6 +267,29 @@ bool ResolveProjectAttach(AppCommandState& st, bool copy, std::vector<std::strin
   return true;
 }
 
+bool CompleteProjectAttach(AppCommandState& st, AttachAnswer answer, std::vector<std::string>& log,
+                           std::string* pdfPath) {
+  const Kind kind = st.projectAttachPrompt.kind;
+  const std::uint32_t uid = st.projectAttachPrompt.projectUid;
+  if (kind == Kind::None)
+    return false;
+  if (answer == AttachAnswer::Cancel) {
+    st.projectAttachPrompt = {};
+    log.push_back("Attach cancelled.");
+    return false;
+  }
+  std::string finalPath;
+  if (!ResolveProjectAttach(st, answer == AttachAnswer::Copy, log, &finalPath))
+    return false;
+  if (kind == Kind::PdfTrack)  // REQ-379 clause 5: tracked only, never placed
+    return TrackProjectFile(st, uid, finalPath, log);
+  if (kind == Kind::PointCloud)
+    return StartPointCloudImportAsync(st, finalPath, log);
+  if (pdfPath != nullptr)
+    *pdfPath = finalPath;
+  return true;
+}
+
 void SyncProjectFilesOnSave(AppCommandState& st, int tabIdx, const std::string& savedPath,
                             std::vector<std::string>& log) {
   if (tabIdx < 1 || tabIdx >= static_cast<int>(st.drawingTabs.size()))

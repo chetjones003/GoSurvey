@@ -395,6 +395,8 @@ void EditorWindow::ServiceUiRequests() {
     ShowAddDrawing(uid);
   } else if (m_State.pointEditPrompt.active) {
     ShowProjectPointWarning();
+  } else if (m_State.projectAttachPrompt.kind != AppCommandState::ProjectAttachPrompt::Kind::None) {
+    ShowProjectAttachPrompt();
   } else if (m_State.pastePrompt.active) {
     ShowPasteWarning();
   } else if (m_State.showLayerManagerWindow) {

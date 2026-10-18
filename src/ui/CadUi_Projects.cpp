@@ -905,7 +905,6 @@ void DrawCloseTabWarningModal(AppCommandState& cmd) {
 
 void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log) {
   auto& pa = cmd.projectAttachPrompt;
-  using Kind = AppCommandState::ProjectAttachPrompt::Kind;
   if (pa.openRequested) {
     ImGui::OpenPopup("Attach to project##projattach");
     pa.openRequested = false;
@@ -944,20 +943,12 @@ void DrawProjectAttachModal(AppCommandState& cmd, std::vector<std::string>& log)
   if (ImGui::Button("Cancel"))
     answer = 3;
   if (answer != 0) {
-    const Kind kind = pa.kind;
-    const uint32_t attachUid = pa.projectUid;
     ImGui::CloseCurrentPopup();
-    std::string finalPath;
-    if (answer == 3) {
-      pa = {};
-      log.push_back("Attach cancelled.");
-    } else if (ResolveProjectAttach(cmd, answer == 1, log, &finalPath)) {
-      if (kind == Kind::PdfTrack) {  // REQ-379 clause 5: tracked only, never placed
-        TrackProjectFile(cmd, attachUid, finalPath, log);
-      } else if (kind == Kind::PointCloud) {
-        StartPointCloudImportAsync(cmd, finalPath, log);
-      } else if (finalPath.size() < sizeof(cmd.pdfAttachFilePath)) {
-        std::strcpy(cmd.pdfAttachFilePath, finalPath.c_str());
+    std::string pdfPath;
+    const AttachAnswer choice = answer == 1 ? AttachAnswer::Copy : answer == 2 ? AttachAnswer::Link : AttachAnswer::Cancel;
+    if (CompleteProjectAttach(cmd, choice, log, &pdfPath) && !pdfPath.empty()) {
+      if (pdfPath.size() < sizeof(cmd.pdfAttachFilePath)) {
+        std::strcpy(cmd.pdfAttachFilePath, pdfPath.c_str());
         StartPdfAttachBuild(cmd, log);
       } else {
         log.push_back("PDFATTACH - the file's path is too long; nothing was attached.");

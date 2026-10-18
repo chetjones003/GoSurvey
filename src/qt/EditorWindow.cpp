@@ -729,6 +729,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
   file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
+  file->addAction(CommandAction("Add PDF to project...", "Pdf.png", "ADDPDFTOPROJECT"));
   file->addAction(CommandAction("Add Drawing to Project...", "Active_File.png", "ADDDRAWING"));
   file->addSeparator();
   file->addAction(CommandAction("PDF viewer...", "Pdf.png", "PDFVIEW"));
@@ -876,6 +877,7 @@ void EditorWindow::Submit(const QString& command) {
       QMessageBox::information(this, "Project Settings", "Open a drawing that belongs to a project first.");
     }
   }
+  else if (verb == "ADDPDFTOPROJECT") AddPdfToProjectFromDisk();
   else if (verb == "OPEN") {
     const QString path = QFileDialog::getOpenFileName(this, "Open drawing", {}, "Drawing (*.dwg)");
     if (!path.isEmpty()) OpenDrawing(path);
