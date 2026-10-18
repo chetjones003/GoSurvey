@@ -3,6 +3,8 @@
 #include "ProjectSettings.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
+#include "RecentDrawings.hpp"
+#include "AppPaths.hpp"
 #include <QApplication>
 #include <QDateTime>
 #include <QFileDialog>
@@ -12,10 +14,22 @@
 #include <QPushButton>
 #include <algorithm>
 #include <chrono>
+#include <ctime>
 
 namespace {
 double Now() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+std::filesystem::path RecentProjectStorePath() {
+  const auto dir = UserDataDirectory();
+  return (dir.empty() ? std::filesystem::path(".") : dir) / "gosurvey-recent-projects.json";
+}
+void NoteRecentProject(const std::filesystem::path& path) {
+  std::error_code ec;
+  const auto absolute = std::filesystem::absolute(path, ec);
+  const auto& stored = ec ? path : absolute;
+  const auto utf8 = QString::fromStdWString(stored.wstring()).toUtf8().toStdString();
+  recent::Note(RecentProjectStorePath(), utf8, "", QDateTime::currentSecsSinceEpoch());
 }
 }
 
@@ -32,6 +46,8 @@ std::uint32_t EditorWindow::OpenProject(const QString& path, bool createDrawing)
   for (const auto& session : m_State.openProjects) {
     std::error_code ec;
     if (!std::filesystem::equivalent(session.project.file, file, ec)) continue;
+    NoteRecentProject(session.project.file);
+    RefreshRecentProjects();
     if (createDrawing) {
       for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i)
         if (m_State.drawingTabs[i].projectUid == session.uid) { SwitchDrawing(i); break; }
@@ -65,11 +81,13 @@ std::uint32_t EditorWindow::OpenProject(const QString& path, bool createDrawing)
   session.uid = m_State.nextProjectUid++;
   const auto uid = session.uid;
   OpenProjectPointDb(session, m_Log);
+  NoteRecentProject(session.project.file);
   m_State.openProjects.push_back(std::move(session));
   if (createDrawing) {
     NewDrawing(uid);
   }
   RefreshProjects();
+  RefreshRecentProjects();
   Refresh();
   return uid;
 }

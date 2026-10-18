@@ -8,6 +8,10 @@
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"
+#include "AppPaths.hpp"
+#include "RecentDrawings.hpp"
+#include "ThumbnailCache.hpp"
+#include <QDateTime>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QOpenGLContext>
@@ -105,6 +109,23 @@ void EditorViewport::paintGL() {
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
         &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
         &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
+    const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
+                                !m_State.pendingThumbnailPath.empty();
+    if (capturePending) {
+      const auto path = m_State.pendingThumbnailPath;
+      m_State.pendingThumbnailTabIdx = -1;
+      m_State.pendingThumbnailPath.clear();
+      const auto dataDir = UserDataDirectory().empty() ? std::filesystem::path(".") : UserDataDirectory();
+      const auto thumbnailDir = dataDir / "thumbnails";
+      std::error_code ec;
+      std::filesystem::create_directories(thumbnailDir, ec);
+      const auto fileName = thumbs::ThumbFileName(path);
+      if (!ec && m_Renderer->CaptureThumbnailBmp((thumbnailDir / fileName).u8string().c_str(), 512)) {
+        thumbs::EvictThumbnails(thumbnailDir, 64);
+        recent::Note(dataDir / "gosurvey-recent.json", path, fileName, QDateTime::currentSecsSinceEpoch());
+        if (thumbnailReady) thumbnailReady();
+      }
+    }
     // RenderScene uses its own FBO. Qt owns the destination FBO and can recreate it on resize.
     // RenderScene unbinds its FBO. Attach the published color texture for a GPU-only copy.
     GLuint readFbo = 0;
