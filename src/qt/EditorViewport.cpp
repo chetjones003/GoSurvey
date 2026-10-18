@@ -149,9 +149,12 @@ void EditorViewport::paintGL() {
     ext.featureLineOffsets = &m_State.featureLineOffsets;
     ext.featureLineClosed = &m_State.featureLineClosed;
     ext.featureLineAttrs = &m_State.featureLineAttrs;
+    ext.hiddenEntityIds = &m_State.hiddenEntityIds;
     ext.blockDefs = &m_State.blockDefs;
     ext.blockRefs = &m_State.cadBlockRefs;
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
+    ext.annotationScales = &m_State.annotationScales;
+    ext.currentAnnotationScaleIndex = m_State.currentAnnotationScaleIndex;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
     if (!qApp->property("cadLightTheme").toBool()) {

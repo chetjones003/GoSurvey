@@ -78,6 +78,8 @@ void DrawQtSurveyPoints(QPainter& painter, const AppCommandState& state, float w
 
 void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, float width, float height) {
   const auto camera = CadViewCamera(state);
+  const auto activeScaleName = CadActiveAnnotationScaleName(&state.annotationScales,
+      state.currentAnnotationScaleIndex, nullptr, state.modelUnitsPerPlottedInch);
   auto project = [&](double x, double y, double z) {
     float sx = 0, sy = 0;
     camera.WorldToScreen(x, y, z, width, height, &sx, &sy);
@@ -89,6 +91,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     const auto& annotation = state.cadAnnotations[i];
     const auto* attrs = i < state.cadAnnotationAttrs.size() ? &state.cadAnnotationAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
+    if (annotation.annotative && !annotation.annotativeVisibleScaleNames.empty() && !activeScaleName.empty() &&
+        std::find(annotation.annotativeVisibleScaleNames.begin(), annotation.annotativeVisibleScaleNames.end(), activeScaleName) ==
+            annotation.annotativeVisibleScaleNames.end()) continue;
     const CadLayerRow* layer = nullptr;
     if (attrs) {
       for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
@@ -120,7 +125,9 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.setBrush(Qt::NoBrush);
       x = strokes.labelX; y = strokes.labelY; rotation = strokes.labelRotRad;
     } else if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext) continue;
-    const double textWorld = CadAnnotationHeightWorld(annotation, state.modelUnitsPerPlottedInch);
+    const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
+        state.modelUnitsPerPlottedInch, &state.annotationScales, state.currentAnnotationScaleIndex);
+    const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
     if (!(textWorld > 0) || !std::isfinite(textWorld)) continue;
     std::string text = CadAnnotationResolvedText(state, annotation);
     if (annotation.bold) { text.insert(0, "[[b]]"); text.append("[[/b]]"); }

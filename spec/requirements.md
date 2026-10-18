@@ -12813,6 +12813,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) — D-2026-10-19-e, GitHub issue #910.
 - Revisions: 2026-10-19 — initial, D-2026-10-19-e, GitHub issue #910.
 
+### REQ-438 — Qt parity for annotation scale, object isolation, and perspective (GitHub issue #901)
+- Purpose: Qt migration issue #901. The existing 0.7.4 executable already defines these workflows in REQ-084 (object isolation), REQ-309 (perspective projection and FOV), and the annotation-scale requirements. A Qt ribbon action or shared command handler alone does not make a workflow usable: the user must be able to complete it through Qt and observe the same outcomes and safeguards.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-18-h (user confirmed full Qt parity scope for issue #901).
+- Depends on: REQ-084, REQ-309, REQ-201.
+- Statement: The Qt editor provides full workflow parity with the beta 0.7.4 executable for annotation-scale controls, object isolation, and perspective controls. For each feature, Qt exposes the complete user workflow and preserves the behavior already specified by the governing requirement or, for annotation-scale controls, the beta 0.7.4 executable, including validation, cancel, failure, undo, and read-only semantics wherever that behavior applies. Object isolation remains session-only and hidden objects remain unpickable as defined in REQ-084. Perspective and field of view retain REQ-309's model-view persistence and validation rules. Annotation-scale controls retain the beta 0.7.4 scale list, current-scale selection, annotative visibility, and entity/style editing behavior. No change to drawing data, command semantics, or the production executable's default is introduced by this parity port.
+- Acceptance:
+  - The Qt editor can select the current entry from the available annotation SCALE list and complete the beta 0.7.4 annotative visibility and property workflows for supported entities/styles; invalid input is refused without changing the prior value, and Cancel restores the pre-dialog state wherever a dialog offers Cancel.
+  - The Qt editor can isolate selected objects, hide selected objects, and end isolation. Hidden objects are not drawn, hovered, snapped, or selectable; isolation survives array compaction correctly, does not persist to `.gs`, and undo/redo and read-only behavior match the legacy workflow.
+  - The Qt editor can switch between orthographic and perspective, set and report field of view, reject invalid values without mutation, save/reopen the model view and named perspective views, and preserve coordinates and picking behavior as required by REQ-309.
+  - Each workflow's validation, cancellation, failure, undo, and read-only cases applicable in beta 0.7.4 have focused Qt workflow coverage. Tests exercise Qt-facing interaction and resulting document/view state, not merely command dispatch.
+  - The 0.7.4 Qt parity ledger records the implemented and tested behavior for all three areas; a shared command route or visible ribbon control by itself is not marked complete.
+- Owner-layer: Qt editor UI and interaction; existing command, document, renderer, and IO services remain authoritative for domain behavior.
+- Status: accepted (2026-10-18).
+- Revisions: 2026-10-18 — initial; user confirmed full Qt parity for issue #901.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -14003,6 +14020,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
 | REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
+| REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
