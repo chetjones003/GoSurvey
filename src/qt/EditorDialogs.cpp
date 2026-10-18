@@ -389,7 +389,11 @@ void EditorWindow::ShowSettings() {
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();
   if (m_ModalOpen || m_TextDialogOpen) return;
-  if (m_State.pointEditPrompt.active) {
+  if (m_State.addDrawingToProjectUid != 0) {
+    const auto uid = m_State.addDrawingToProjectUid;
+    m_State.addDrawingToProjectUid = 0;
+    ShowAddDrawing(uid);
+  } else if (m_State.pointEditPrompt.active) {
     ShowProjectPointWarning();
   } else if (m_State.pastePrompt.active) {
     ShowPasteWarning();

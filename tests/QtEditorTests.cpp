@@ -21,6 +21,8 @@
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
 #include "DwgIo.hpp"
+#include "ProjectAddFlow.hpp"
+#include "ProjectPoints.hpp"
 #include "UserPrefs.hpp"
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
@@ -427,6 +429,147 @@ private Q_SLOTS:
     window.ShowProjectSettings(projectUid);
     session.readOnly = false;
     QVERIFY(!session.settings->hasDefaults);
+  }
+
+  void addDrawingGuidedWorkflowConvertsReviewsConflictsAndCopiesIntoProject() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "North Ridge", &created, &error), error.c_str());
+    const auto sourcePath = directory.path() + "/Site Plan.dwg";
+    AppCommandState source;
+    source.drawingInsUnits = 2; // feet; the project below uses inches to exercise Convert.
+    SurveyPoint same; same.id = 11; same.easting = 10; same.northing = 20; same.elevation = 3;
+    same.description = "EG"; same.labelStyle = SurveyPointLabelStyle::None;
+    SurveyPoint conflict = same; conflict.id = 12; conflict.easting = 30; conflict.description = "FG";
+    SurveyPoint fresh = same; fresh.id = 13; fresh.easting = 40; fresh.northing = 50; fresh.elevation = 6;
+    source.surveyPoints = {same, conflict, fresh};
+    std::vector<std::string> log;
+    QVERIFY(ExportDwgFile(source, sourcePath.toUtf8().constData(), log));
+    QFile original(sourcePath); QVERIFY(original.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = original.readAll(); original.close();
+
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto project = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(project != window.State().openProjects.end());
+    project->settings->insUnits = 1; // inches
+    SurveyPoint projectSame = same; projectSame.easting *= 12; projectSame.northing *= 12; projectSame.elevation *= 12;
+    project->points->points.push_back({projectSame, "Drawings/Existing.dwg"});
+    SurveyPoint differing = conflict; differing.easting = 361; differing.northing *= 12; differing.elevation *= 12;
+    project->points->points.push_back({differing, "Drawings/Existing.dwg"});
+    QVERIFY(FlushProjectPointDb(*project, log));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("addDrawingDialog"); QVERIFY(dialog);
+      auto* pages = dialog->findChild<QStackedWidget*>("addDrawingPages"); QVERIFY(pages);
+      auto* convert = dialog->findChild<QPushButton*>("addDrawingConvert"); QVERIFY(convert);
+      auto* next = dialog->findChild<QPushButton*>("addDrawingNext"); QVERIFY(next);
+      auto* back = dialog->findChild<QPushButton*>("addDrawingBack"); QVERIFY(back);
+      auto* steps = dialog->findChild<QLabel*>("addDrawingSteps"); QVERIFY(steps);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-align.png")));
+      convert->click();
+      QVERIFY(dialog->findChild<QLabel*>("addDrawingAlignment")->text().contains("Converted copy"));
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-aligned.png")));
+      next->click(); QCOMPARE(pages->currentIndex(), 1);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-points.png")));
+      QCOMPARE(dialog->findChild<QLabel*>("addDrawingSummary")->text().contains("1 new"), true);
+      auto* choice = dialog->findChild<QComboBox*>("addDrawingChoice_12"); QVERIFY(choice);
+      choice->setCurrentIndex(2); // Renumber the differing point.
+      next->click(); QCOMPARE(pages->currentIndex(), 2);
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-confirm.png")));
+      QVERIFY(dialog->findChild<QLabel*>("addDrawingImpact")->text().contains("Site Plan.dwg"));
+      next->click();
+    });
+    window.ShowAddDrawing(uid, sourcePath);
+    QVERIFY(std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid && value.points && value.points->points.size() == 4; }) != window.State().openProjects.end());
+    QVERIFY(window.State().drawingTabs.size() >= 3);
+    QVERIFY(window.State().activeDocFilePath.find("North Ridge") != std::string::npos);
+    QVERIFY(std::filesystem::exists(std::filesystem::path(created.Folder()) / "Drawings" / "Site Plan.dwg"));
+    original.setFileName(sourcePath); QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), originalBytes); original.close();
+
+    const auto tabCount = window.State().drawingTabs.size();
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("addDrawingDialog"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-cancel.png")));
+      dialog->findChild<QPushButton*>("addDrawingCancel")->click();
+    });
+    window.ShowAddDrawing(uid, sourcePath);
+    QCOMPARE(window.State().drawingTabs.size(), tabCount);
+    project = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(project != window.State().openProjects.end());
+
+    const auto blockedFolder = std::filesystem::path(created.Folder()) / "NoDirectory";
+    { std::ofstream blocked(blockedFolder, std::ios::binary); blocked << "not a directory"; }
+    project->project.layout["drawings"] = "NoDirectory";
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("addDrawingDialog"); QVERIFY(dialog);
+      dialog->findChild<QPushButton*>("addDrawingConvert")->click();
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-failure.png")));
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      auto* validation = dialog->findChild<QLabel*>("addDrawingValidation"); QVERIFY(validation);
+      QVERIFY(!validation->text().isEmpty());
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-write-error.png")));
+      dialog->findChild<QPushButton*>("addDrawingCancel")->click();
+    });
+    window.ShowAddDrawing(uid, sourcePath);
+    QCOMPARE(window.State().drawingTabs.size(), tabCount);
+    QVERIFY(std::filesystem::exists(blockedFolder));
+    project = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(project != window.State().openProjects.end());
+    QCOMPARE(project->points->points.size(), size_t(4));
+    project->project.layout["drawings"] = "Drawings";
+
+    const auto databasePath = std::filesystem::path(created.Folder()) / "Points" / "survey-points.gspdb";
+    QVERIFY(std::filesystem::remove(databasePath));
+    QVERIFY(std::filesystem::create_directory(databasePath)); // atomic replace cannot rename over this directory
+    const auto databaseSourcePath = directory.path() + "/Database Failure.dwg";
+    AppCommandState databaseSource;
+    databaseSource.drawingInsUnits = 2;
+    SurveyPoint databasePoint = fresh; databasePoint.id = 99;
+    databaseSource.surveyPoints = {databasePoint};
+    QVERIFY(ExportDwgFile(databaseSource, databaseSourcePath.toUtf8().constData(), log));
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("addDrawingDialog"); QVERIFY(dialog);
+      dialog->findChild<QPushButton*>("addDrawingConvert")->click();
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      dialog->findChild<QPushButton*>("addDrawingNext")->click();
+      auto* validation = dialog->findChild<QLabel*>("addDrawingValidation"); QVERIFY(validation);
+      QVERIFY(validation->text().contains("point database could not be saved"));
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-887-add-drawing-database-save-error.png")));
+      dialog->findChild<QPushButton*>("addDrawingCancel")->click();
+    });
+    window.ShowAddDrawing(uid, databaseSourcePath);
+    project = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(project != window.State().openProjects.end());
+    QCOMPARE(project->points->points.size(), size_t(4));
+    QVERIFY(!std::filesystem::exists(std::filesystem::path(created.Folder()) / "Drawings" / "Database Failure.dwg"));
+
+    project->readOnly = true;
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+          message->grab().save(Issue886Shot("qt-887-add-drawing-read-only.png"));
+          message->accept();
+        }
+    });
+    window.ShowAddDrawing(uid, sourcePath);
+    QCOMPARE(window.State().drawingTabs.size(), tabCount);
   }
 
   void startupGateUsesApplicationLogoAndRequiresAChoice() {

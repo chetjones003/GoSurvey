@@ -76,6 +76,7 @@ private:
   void ShowPdf();
   void ShowAdjustment();
   void ShowProjectSettings(std::uint32_t projectUid);
+  void ShowAddDrawing(std::uint32_t projectUid, const QString& sourcePath = {});
   std::uint32_t OpenProject(const QString& path, bool createDrawing);
   void NewProject();
   void RefreshProjects();
