@@ -2195,6 +2195,142 @@ private Q_SLOTS:
     QVERIFY(!size->isEnabled());
   }
 
+  void releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    auto* groundPanel = window.findChild<QWidget*>("ribbonPanel_Home_Create Ground Data"); QVERIFY(groundPanel);
+    auto* designPanel = window.findChild<QWidget*>("ribbonPanel_Home_Create Design"); QVERIFY(designPanel);
+    QVERIFY(groundPanel->grab().save(artifacts + "qt-896-create-ground-data.png"));
+    QVERIFY(designPanel->grab().save(artifacts + "qt-896-create-design.png"));
+    auto* action = window.findChild<QAction*>("ribbon_CdPipeNetwork"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QCOMPARE(action->property("ribbonCommand").toString(), QString("PIPERUN"));
+
+    action->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitNominalSize);
+    auto* commandBar = window.findChild<QWidget*>("floatingCommandBar"); QVERIFY(commandBar);
+    QApplication::processEvents();
+    QVERIFY(commandBar->grab().save(artifacts + "qt-896-piperun-prompt.png"));
+    const auto runsBefore = state.cadPipeRuns.size();
+    window.Submit("not-a-size");
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitNominalSize);
+    QCOMPARE(state.cadPipeRuns.size(), runsBefore);
+    auto* historyToggle = window.findChild<QToolButton*>("commandHistoryToggle"); QVERIFY(historyToggle);
+    historyToggle->click();
+    QApplication::processEvents();
+    auto* commandConsole = window.findChild<QPlainTextEdit*>("commandConsole"); QVERIFY(commandConsole);
+    QVERIFY(commandConsole->isVisible());
+    QVERIFY(commandConsole->grab().save(artifacts + "qt-896-piperun-validation.png"));
+
+    window.Submit("2in");
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitWallThickness);
+    window.Submit(""); // Schedule 40 default wall.
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
+    window.Submit("0,0,0");
+    QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitNextPoint);
+    window.Submit("10,0,0");
+    window.Submit("END");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.cadPipeRuns.size(), runsBefore + 1);
+
+    window.Submit("UNDO");
+    QCOMPARE(state.cadPipeRuns.size(), runsBefore);
+
+    action->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.cadPipeRuns.size(), runsBefore);
+  }
+
+  void releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    auto* groundAction = window.findChild<QAction*>("ribbon_CgdFeatureLine"); QVERIFY(groundAction);
+    auto* designAction = window.findChild<QAction*>("ribbon_CdFeatureLine"); QVERIFY(designAction);
+    QVERIFY(groundAction->isEnabled()); QVERIFY(designAction->isEnabled());
+    QCOMPARE(groundAction->property("ribbonCommand").toString(), QString("FEATURELINE"));
+    QCOMPARE(designAction->property("ribbonCommand").toString(), QString("FEATURELINE"));
+
+    groundAction->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::FeatureLine);
+    const auto featureLinesBefore = state.featureLineClosed.size();
+    window.Submit("bad point");
+    QVERIFY(state.featureLineDraftVerts.empty());
+    window.Submit("0,0");
+    QVERIFY(state.featureLinePendingPoint);
+    window.Submit("not-an-elevation");
+    QVERIFY(state.featureLinePendingPoint); // Bad elevation leaves the pending point available.
+    auto* commandBar = window.findChild<QWidget*>("floatingCommandBar"); QVERIFY(commandBar);
+    QApplication::processEvents();
+    QVERIFY(commandBar->grab().save(artifacts + "qt-896-featureline-elevation-error.png"));
+    window.Submit("100");
+    QVERIFY(!state.featureLinePendingPoint);
+    QCOMPARE(state.featureLineDraftVerts.size(), std::size_t(3));
+    window.Submit("10,0,110");
+    QCOMPARE(state.featureLineDraftVerts.size(), std::size_t(6));
+    window.Submit("END");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.featureLineClosed.size(), featureLinesBefore + 1);
+    QCOMPARE(state.featureLineVerts.size(), std::size_t(6));
+
+    window.Submit("UNDO");
+    QCOMPARE(state.featureLineClosed.size(), featureLinesBefore);
+    QCOMPARE(state.featureLineVerts.size(), std::size_t(0));
+
+    designAction->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::FeatureLine);
+    window.Submit("20,30,40");
+    QVERIFY(!state.featureLineDraftVerts.empty());
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.featureLineDraftVerts.empty());
+    QCOMPARE(state.featureLineClosed.size(), featureLinesBefore);
+  }
+
+  void pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& state = window.State();
+    constexpr std::uint32_t projectUid = 912;
+    state.drawingTabs[static_cast<std::size_t>(state.activeDrawingIdx)].projectUid = projectUid;
+    AppCommandState::ProjectSession session;
+    session.uid = projectUid;
+    session.readOnly = true;
+    state.openProjects.push_back(session);
+
+    auto* pipe = window.findChild<QAction*>("ribbon_CdPipeNetwork"); QVERIFY(pipe);
+    pipe->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus(); QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    auto* feature = window.findChild<QAction*>("ribbon_CdFeatureLine"); QVERIFY(feature);
+    feature->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::FeatureLine);
+    commandInput->setFocus(); QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    QTimer::singleShot(0, &window, [&] {
+      auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(warning);
+      QVERIFY(warning->text().contains("read-only"));
+      warning->accept();
+    });
+    QVERIFY(!window.SaveDrawing());
+    QVERIFY(state.cadPipeRuns.empty());
+    QVERIFY(state.featureLineVerts.empty());
+  }
+
   void viewManagerRestoresUpdatesAndDeletesViewsAndNamedUcs() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     NamedView savedView;
