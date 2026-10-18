@@ -3312,6 +3312,226 @@ private Q_SLOTS:
     save(list->grab().toImage(), "qt-891-final-selection-list.png");
     list->close();
   }
+
+  void blockAuthoringPaletteUsesSharedCommandsAndDisabledToolsStayUnavailable() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    CadBlockDefinition definition;
+    definition.name = "Issue895PaletteBlock";
+    window.State().blockDefs.push_back(definition);
+    window.Submit("BEDIT Issue895PaletteBlock");
+    window.show();
+    QTest::qWait(80);
+
+    auto* palette = window.findChild<QDialog*>("blockAuthoringPalette");
+    QVERIFY(palette);
+    auto* point = palette->findChild<QPushButton*>("blockParameterPoint");
+    QVERIFY(point);
+    const int blockIndex = CadBlockFindDef(window.State().blockDefs, "Issue895PaletteBlock");
+    QVERIFY(blockIndex >= 0);
+    const auto initialParameters = window.State().blockDefs[blockIndex].parameters.size();
+    const auto initialActions = window.State().blockDefs[blockIndex].actions.size();
+    const auto initialUndoDepth = window.State().documents[window.State().activeDrawingIdx].undoStack.size();
+    point->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), initialParameters + 1);
+    QCOMPARE(window.State().documents[window.State().activeDrawingIdx].undoStack.size(), initialUndoDepth + 1);
+
+    window.Submit("UNDO");
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), initialParameters);
+    point->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), initialParameters + 1);
+    auto* actions = palette->findChild<QPushButton*>("blockAuthoringTab1");
+    QVERIFY(actions);
+    actions->click();
+    auto* move = palette->findChild<QPushButton*>("blockActionMove");
+    QVERIFY(move);
+    move->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].actions.size(), initialActions + 1);
+
+    auto* sets = palette->findChild<QPushButton*>("blockAuthoringTab2");
+    QVERIFY(sets);
+    sets->click();
+    auto* pointMove = palette->findChild<QPushButton*>("blockSetPointMove");
+    QVERIFY(pointMove);
+    pointMove->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), initialParameters + 2);
+    QCOMPARE(window.State().blockDefs[blockIndex].actions.size(), initialActions + 2);
+
+    auto* constraints = palette->findChild<QPushButton*>("blockAuthoringTab3");
+    QVERIFY(constraints);
+    constraints->click();
+    auto* coincident = palette->findChild<QPushButton*>("blockConstraintCoincident");
+    auto* aligned = palette->findChild<QPushButton*>("blockDimensionalAligned");
+    QVERIFY(coincident && aligned);
+    QVERIFY(!coincident->isEnabled());
+    QVERIFY(!aligned->isEnabled());
+    auto* actionTab = palette->findChild<QPushButton*>("blockAuthoringTab1");
+    actionTab->click();
+    auto* table = palette->findChild<QPushButton*>("unavailable_block properties table");
+    QVERIFY(table);
+    QVERIFY(!table->isEnabled());
+  }
+
+  void connectionModesDialogEditsUndoAndDirtyCloseChoicesWork() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    CadBlockDefinition definition;
+    definition.name = "Issue895ModesBlock";
+    CadBlockConnection connection;
+    connection.name = "Inlet";
+    connection.engagementLength = 0.25f;
+    CadBlockConnectionMode initial;
+    initial.name = "Pipe";
+    initial.target = CadConnectionModeTarget::PipeEnd;
+    initial.isDefault = true;
+    connection.modes.push_back(initial);
+    definition.connections.push_back(connection);
+    window.State().blockDefs.push_back(definition);
+    window.Submit("BEDIT Issue895ModesBlock");
+    window.show();
+    window.State().showConnectionModesWindow = true;
+    window.Refresh();
+    QTest::qWait(80);
+
+    auto* modes = window.findChild<QDialog*>("connectionModes");
+    QVERIFY(modes);
+    auto* list = modes->findChild<QListWidget*>("connectionPointList");
+    auto* table = modes->findChild<QTableWidget*>("connectionModeTable");
+    QVERIFY(list && table);
+    const int blockIndex = CadBlockFindDef(window.State().blockDefs, "Issue895ModesBlock");
+    QVERIFY(blockIndex >= 0);
+    QCOMPARE(table->rowCount(), 1);
+    const auto undoBeforeEdit = window.State().documents[window.State().activeDrawingIdx].undoStack.size();
+    table->item(0, 0)->setText("Pipe end");
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes[0].name, std::string("Pipe end"));
+    QCOMPARE(window.State().documents[window.State().activeDrawingIdx].undoStack.size(), undoBeforeEdit + 1);
+    window.Submit("UNDO");
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes[0].name, std::string("Pipe"));
+
+    table = modes->findChild<QTableWidget*>("connectionModeTable");
+    QVERIFY(table);
+    table->item(0, 0)->setText("");
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes[0].name, std::string("Pipe"));
+    QVERIFY(modes->findChild<QLabel*>("connectionModesStatus")->text().contains("needs a name"));
+    table = modes->findChild<QTableWidget*>("connectionModeTable");
+    auto* addMode = modes->findChild<QPushButton*>("addConnectionMode");
+    QVERIFY(table && addMode);
+    addMode->click();
+    QCoreApplication::processEvents();
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes.size(), std::size_t(2));
+    table = modes->findChild<QTableWidget*>("connectionModeTable");
+    QVERIFY(table);
+    auto* makeDefault = table->findChild<QCheckBox*>("connectionModeDefault1");
+    QVERIFY(makeDefault);
+    makeDefault->click();
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes[0].isDefault, false);
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes[1].isDefault, true);
+    QCoreApplication::processEvents();
+    table = modes->findChild<QTableWidget*>("connectionModeTable");
+    auto* remove = table->findChild<QPushButton*>("removeConnectionMode0");
+    QVERIFY(remove);
+    remove->click();
+    QCoreApplication::processEvents();
+    QCOMPARE(window.State().blockDefs[blockIndex].connections[0].modes.size(), std::size_t(1));
+    QVERIFY(window.State().blockDefs[blockIndex].connections[0].modes[0].isDefault);
+
+    // Parameter/action commands must dirty the BEDIT session, and each edit is undoable.
+    window.Submit("BPARAM Linear, linear");
+    QVERIFY(!window.State().blockDefs[blockIndex].parameters.empty());
+    const auto savedParameters = window.State().blockDefs[blockIndex].parameters.size();
+    auto answerClose = [&window](const QString& label) {
+      QTimer::singleShot(0, &window, [&window, label] {
+        auto* prompt = window.findChild<QMessageBox*>("blockEditClosePrompt");
+        QVERIFY(prompt);
+        for (auto* button : prompt->buttons())
+          if (button->text() == label) { button->click(); return; }
+        QFAIL("Expected dirty block-close choice was missing");
+      });
+      window.Submit("BCLOSE");
+    };
+    answerClose("Cancel");
+    QVERIFY(!window.State().blockEditorName.empty());
+    QVERIFY(!window.State().blockEditCloseAsked);
+    answerClose("Save Changes");
+    QVERIFY(window.State().blockEditorName.empty());
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), savedParameters);
+    QTRY_VERIFY(!window.findChild<QDialog*>("connectionModes"));
+
+    window.Submit("BEDIT Issue895ModesBlock");
+    window.Submit("BPARAM Rotation, rotation");
+    answerClose("Don't Save");
+    QVERIFY(window.State().blockEditorName.empty());
+    QCOMPARE(window.State().blockDefs[blockIndex].parameters.size(), savedParameters);
+  }
+
+  void qt895BlockEditorWorkflowScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    CadBlockDefinition definition;
+    definition.name = "Issue895ScreenshotBlock";
+    CadBlockConnection connection;
+    connection.name = "Inlet";
+    connection.engagementLength = 0.25f;
+    CadBlockConnectionMode mode;
+    mode.name = "Pipe end";
+    mode.target = CadConnectionModeTarget::PipeEnd;
+    mode.isDefault = true;
+    connection.modes.push_back(mode);
+    definition.connections.push_back(connection);
+    window.State().blockDefs.push_back(definition);
+    window.Submit("BEDIT Issue895ScreenshotBlock");
+    window.show();
+    QTest::qWait(100);
+
+    auto* palette = window.findChild<QDialog*>("blockAuthoringPalette");
+    QVERIFY(palette);
+    auto save = [](QWidget* widget, const char* name) {
+      const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+      QDir().mkpath(directory);
+      QVERIFY(widget->grab().save(QDir(directory).filePath(QString::fromLatin1(name))));
+    };
+    const char* tabNames[] = {"Parameters", "Actions", "Parameter Sets", "Constraints"};
+    for (int i = 0; i < 4; ++i) {
+      auto* tab = palette->findChild<QPushButton*>(QString("blockAuthoringTab%1").arg(i).toUtf8().constData());
+      QVERIFY(tab);
+      tab->click();
+      QTest::qWait(40);
+      save(palette, (QString("qt-895-palette-%1.png").arg(QString::fromLatin1(tabNames[i])).toUtf8().constData()));
+    }
+    window.State().showConnectionModesWindow = true;
+    window.Refresh();
+    QTest::qWait(80);
+    auto* modes = window.findChild<QDialog*>("connectionModes");
+    QVERIFY(modes);
+    save(modes, "qt-895-connection-modes.png");
+    auto* modeTable = modes->findChild<QTableWidget*>("connectionModeTable");
+    QVERIFY(modeTable);
+    save(modeTable, "qt-895-connection-mode-table.png");
+    modeTable->item(0, 0)->setText("");
+    QTest::qWait(40);
+    save(modes, "qt-895-connection-mode-invalid.png");
+    modes->close();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    const int blockIndex = CadBlockFindDef(window.State().blockDefs, "Issue895ScreenshotBlock");
+    QVERIFY(blockIndex >= 0);
+    window.State().blockDefs[blockIndex].connections.clear();
+    window.State().showConnectionModesWindow = true;
+    window.Refresh();
+    QTest::qWait(60);
+    auto* emptyModes = window.findChild<QDialog*>("connectionModes");
+    QVERIFY(emptyModes);
+    save(emptyModes, "qt-895-connection-modes-empty.png");
+    window.Submit("BPARAM Point, point");
+    QTimer::singleShot(0, &window, [&] {
+      auto* prompt = window.findChild<QMessageBox*>("blockEditClosePrompt");
+      QVERIFY(prompt);
+      save(prompt, "qt-895-close-unsaved.png");
+      for (auto* button : prompt->buttons())
+        if (button->text() == "Cancel") { button->click(); return; }
+      QFAIL("Cancel button missing");
+    });
+    window.Submit("BCLOSE");
+  }
 };
 
 int main(int argc, char** argv) {

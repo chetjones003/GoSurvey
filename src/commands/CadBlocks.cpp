@@ -3564,7 +3564,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BPARAM — value must be a number.");
       return true;
     }
+    PushUndoSnapshot(st, "Block parameter");
     st.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BPARAM — added " + f[0] + ".");
     return true;
   }
@@ -3593,7 +3596,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         return true;
       }
     }
+    PushUndoSnapshot(st, "Block action");
     st.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BACTION — bound to " + f[1] + ".");
     return true;
   }
@@ -3611,7 +3617,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
+    PushUndoSnapshot(st, "Block visibility state");
     st.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BVISIBILITY — state " + f[0] + ".");
     return true;
   }
