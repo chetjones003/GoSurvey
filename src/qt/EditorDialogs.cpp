@@ -434,6 +434,22 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showTraverseEditorWindow || m_State.showTraverseClosureWindow) {
     m_State.showTraverseEditorWindow = m_State.showTraverseClosureWindow = false;
     ShowAdjustment();
+  } else if (m_State.showCreateSurfaceWindow) {
+    m_State.showCreateSurfaceWindow = false;
+    ShowCreateSurface();
+  } else if (m_State.showSurfacePropertiesWindow) {
+    m_State.showSurfacePropertiesWindow = false;
+    ShowSurfaceProperties(m_State.surfacePropertiesIndex);
+  } else if (m_State.showSurfaceManagerWindow) {
+    m_State.showSurfaceManagerWindow = false;
+    ShowSurfaceManager();
+  } else if (m_State.showSurfaceStyleWindow) {
+    const QString focus = QString::fromUtf8(m_State.surfaceStyleEditorFocusName.c_str());
+    const bool surfacesTitle = m_State.surfaceStyleUseSurfacesTitle;
+    m_State.showSurfaceStyleWindow = false;
+    m_State.surfaceStyleEditorFocusName.clear();
+    m_State.surfaceStyleUseSurfacesTitle = false;
+    ShowSurfaceStyles(focus, surfacesTitle);
   } else if (m_State.surveyReportSelectLatestPending) {
     ShowSurveyReports();
   }

@@ -98,6 +98,12 @@ private:
   void ShowProjectPointWarning();
   void ShowPointTransfer(bool importing);
   void ShowSurveyReports();
+  // Issue #893: surface and surface-style dialogs (EditorSurfaces / EditorSurfaceManager / EditorSurfaceStyles).
+  void ShowCreateSurface();
+  void ShowSurfaceProperties(int surfaceIndex);
+  void ShowSurfaceManager();
+  void ShowSurfaceStyles(const QString& focusName, bool surfacesTitle);
+  void ShowToolspaceContextMenu(const QPoint& position);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
   void AddPdfToProjectFromDisk();
