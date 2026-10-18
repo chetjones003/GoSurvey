@@ -46,7 +46,11 @@ int main(int argc, char** argv) {
   {
     EditorWindow window;
     LoadUserStartupPrefSettings(window.State());
-    if (!smoke) window.StartAuth(previewSignIn);
+    if (!smoke) {
+      // Started before sign-in so the update offer, when there is one, is shown first (REQ-077).
+      window.StartUpdateCheck();
+      window.StartAuth(previewSignIn);
+    }
     window.show();
     splash.finish(&window);
     if (smoke) {

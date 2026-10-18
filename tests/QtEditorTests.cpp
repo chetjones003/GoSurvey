@@ -11,6 +11,10 @@
 #include "ProjectPoints.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
+#include "GsMigrate.hpp"
+#include "UserPrefs.hpp"
+#include "platform/HttpFetch.hpp"
+#include "update/UpdateService.hpp"
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtTest/QtTest>
@@ -32,6 +36,8 @@
 #include <QCheckBox>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QTextBrowser>
 #include <QToolButton>
 #include <QMenu>
 #include <QDockWidget>
@@ -45,6 +51,7 @@
 #include <QStyle>
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 #include <QDir>
 #include <QFileInfo>
 #include <QTimer>
@@ -78,6 +85,31 @@ void AnswerNextDialog(QMessageBox::StandardButton answer) {
       if (auto* message = qobject_cast<QMessageBox*>(widget))
         if (auto* button = message->button(answer)) button->click();
   });
+}
+/// Points the per-user preferences file (read from %APPDATA%) at a scratch folder, so a test that
+/// saves settings never touches the real ones.
+struct IsolatedUserData {
+  QTemporaryDir dir;
+  QByteArray previous = qgetenv("APPDATA");
+  bool hadPrevious = qEnvironmentVariableIsSet("APPDATA");
+  explicit IsolatedUserData(const QString& appData = {}) {
+    qputenv("APPDATA", QDir::toNativeSeparators(appData.isEmpty() ? dir.path() : appData).toUtf8());
+  }
+  ~IsolatedUserData() {
+    if (hadPrevious) qputenv("APPDATA", previous); else qunsetenv("APPDATA");
+  }
+};
+update::Manifest OfferedManifest(const std::string& version = "99.0.0") {
+  update::Manifest manifest;
+  manifest.version = version;
+  manifest.installerUrl = "http://127.0.0.1:1/GoSurvey-Installer.exe";  // nothing listens on port 1
+  manifest.sha256 = std::string(64, 'a');
+  manifest.notes = "## Highlights\n- Faster point import";
+  manifest.gsFormatVersion = kGsFormatVersion;
+  return manifest;
+}
+QPushButton* UpdateButton(QDialog* dialog, const char* name) {
+  return dialog->findChild<QPushButton*>(name);
 }
 }
 
@@ -183,6 +215,306 @@ private Q_SLOTS:
     QVERIFY(!window.State().authBusy);
     QCoreApplication::processEvents();
     QVERIFY(!window.findChild<QDialog *>("signInGate"));
+  }
+
+  // ---- REQ-077 / REQ-078 software update (issue #882) ----------------------------------------
+
+  static QDialog* OfferUpdate(EditorWindow& window, const update::Manifest& manifest) {
+    window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->available = manifest;
+    window.m_Update->phase = update::Phase::UpdateReady;
+    window.ServiceUpdate();
+    return window.findChild<QDialog*>("softwareUpdate");
+  }
+
+  void updateOfferShowsBothVersionsAndWaitsForAnExplicitChoice() {
+    EditorWindow window;
+    auto manifest = OfferedManifest();
+    manifest.gsFormatVersion = kGsFormatVersion + 1;
+    auto* dialog = OfferUpdate(window, manifest);
+    QVERIFY(dialog);
+    QTRY_VERIFY(dialog->isVisible());
+    QCOMPARE(dialog->windowModality(), Qt::ApplicationModal);
+    QVERIFY(!(dialog->windowFlags() & Qt::WindowCloseButtonHint));
+    QCOMPARE(dialog->findChild<QLabel*>("updateHeadline")->text(), QString("GoSurvey 99.0.0 is available."));
+    QCOMPARE(dialog->findChild<QLabel*>("updateDetail")->text(), QString("You are running 0.7.4."));
+    for (const char* name : {"updateNowButton", "updateRemindButton", "updateSkipButton"})
+      QVERIFY(UpdateButton(dialog, name)->isVisibleTo(dialog));
+    for (const char* name : {"updateCancelButton", "updateInstallButton", "updateNotNowButton", "updateCloseButton"})
+      QVERIFY(!UpdateButton(dialog, name)->isVisibleTo(dialog));
+    // No window-close or Escape path may stand in for a decision; nothing starts without a click.
+    dialog->close();
+    QTest::keyClick(dialog, Qt::Key_Escape);
+    QVERIFY(dialog->isVisible());
+    QVERIFY(!window.m_Update->task);
+    QCOMPARE(window.m_Update->phase, update::Phase::UpdateReady);
+    // Notes are rendered, and the compatibility notice sits ABOVE them.
+    auto* notes = dialog->findChild<QTextBrowser*>("updateNotes");
+    auto* compatibility = dialog->findChild<QLabel*>("updateCompatibility");
+    QVERIFY(notes->isVisibleTo(dialog));
+    QVERIFY(notes->toPlainText().contains("Faster point import"));
+    QVERIFY(compatibility->isVisibleTo(dialog));
+    QVERIFY(compatibility->mapTo(dialog, QPoint()).y() < notes->mapTo(dialog, QPoint()).y());
+    UpdateButton(dialog, "updateRemindButton")->click();
+  }
+
+  void updateCompatibilityNoticesAreDistinguishedAndAbsentWhenUndeclared() {
+    EditorWindow window;
+    struct Case { int format; bool breaking; bool shown; const char* text; };
+    const Case cases[] = {
+        {kGsFormatVersion, false, false, ""},                       // same format: nothing
+        {0, false, false, ""},                                      // predates the field: nothing
+        {kGsFormatVersion + 1, false, true, "changes the drawing file format"},
+        {kGsFormatVersion, true, true, "cannot open your existing drawings"},
+    };
+    for (const auto& c : cases) {
+      auto manifest = OfferedManifest();
+      manifest.gsFormatVersion = c.format;
+      manifest.breaksExistingDrawings = c.breaking;
+      manifest.compatibilityWarning = "Old DWG layouts are dropped.";
+      auto* dialog = OfferUpdate(window, manifest);
+      QVERIFY(dialog);
+      auto* label = dialog->findChild<QLabel*>("updateCompatibility");
+      QCOMPARE(label->isVisibleTo(dialog), c.shown);
+      if (c.shown) QVERIFY2(label->text().contains(c.text), qPrintable(label->text()));
+      if (c.breaking) QVERIFY(label->text().contains("Old DWG layouts are dropped."));
+      UpdateButton(dialog, "updateRemindButton")->click();
+      QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+    }
+  }
+
+  void updateRemindLaterWritesNothingAndSkipSuppressesOnlyThatVersion() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    auto* dialog = OfferUpdate(window, OfferedManifest("99.0.0"));
+    UpdateButton(dialog, "updateRemindButton")->click();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QVERIFY(window.State().updatePrefs.skippedVersion.empty());
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+
+    dialog = OfferUpdate(window, OfferedManifest("99.0.0"));
+    UpdateButton(dialog, "updateSkipButton")->click();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QCOMPARE(window.State().updatePrefs.skippedVersion, std::string("99.0.0"));
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+    AppCommandState reloaded;
+    LoadUserStartupPrefSettings(reloaded);
+    QCOMPARE(reloaded.updatePrefs.skippedVersion, std::string("99.0.0"));
+    std::string reason;
+    const std::string skipped = reloaded.updatePrefs.skippedVersion;
+    QCOMPARE(update::DecideUpdate("0.7.4", OfferedManifest("99.0.0"), skipped, reason), update::Decision::NoUpdate);
+    QCOMPARE(update::DecideUpdate("0.7.4", OfferedManifest("99.0.1"), skipped, reason), update::Decision::Offer);
+  }
+
+  void updateDownloadFailureIsReportedAndClosesToNormalWork() {
+    EditorWindow window;
+    auto* dialog = OfferUpdate(window, OfferedManifest());
+    UpdateButton(dialog, "updateNowButton")->click();
+    QVERIFY(window.m_Update->phase == update::Phase::Downloading ||
+            window.m_Update->phase == update::Phase::Failed);
+    // The unreachable installer URL fails; the reason is stated, not swallowed (REQ-201).
+    QTRY_COMPARE_WITH_TIMEOUT(window.m_Update->phase, update::Phase::Failed, 20000);
+    QTRY_COMPARE(dialog->findChild<QLabel*>("updateHeadline")->text(), QString("The update could not be completed."));
+    QTRY_VERIFY(dialog->findChild<QLabel*>("updateError")->isVisibleTo(dialog));
+    QVERIFY(!dialog->findChild<QLabel*>("updateError")->text().isEmpty());
+    QVERIFY(UpdateButton(dialog, "updateCloseButton")->isVisibleTo(dialog));
+    QVERIFY(!UpdateButton(dialog, "updateNowButton")->isVisibleTo(dialog));
+    UpdateButton(dialog, "updateCloseButton")->click();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+  }
+
+  void updateDownloadShowsProgressAndCancelReturnsToTheOffer() {
+    EditorWindow window;
+    auto* dialog = OfferUpdate(window, OfferedManifest());
+    // A synthetic in-flight download, so progress and cancellation are deterministic.
+    window.m_Update->phase = update::Phase::Downloading;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.m_Update->task->bytesReceived = 12 * 1024 * 1024;
+    window.m_Update->task->bytesTotal = 24 * 1024 * 1024;
+    auto* progress = dialog->findChild<QProgressBar*>("updateProgress");
+    QTRY_VERIFY(progress->isVisibleTo(dialog));
+    QTRY_COMPARE(progress->format(), QString("12.0 MB of 24.0 MB"));
+    QCOMPARE(progress->value(), 500);
+    QVERIFY(UpdateButton(dialog, "updateCancelButton")->isVisibleTo(dialog));
+    UpdateButton(dialog, "updateCancelButton")->click();
+    QVERIFY(window.m_Update->task->cancel.load());
+    window.m_Update->task->error = "cancelled";
+    window.m_Update->task->done.store(true, std::memory_order_release);
+    window.ServiceUpdate();
+    QCOMPARE(window.m_Update->phase, update::Phase::UpdateReady);
+    QTRY_VERIFY(UpdateButton(dialog, "updateNowButton")->isVisibleTo(dialog));
+    UpdateButton(dialog, "updateRemindButton")->click();
+  }
+
+  void updateInstallRunsThroughUnsavedChangesAndCancelCancelsTheUpdate() {
+    EditorWindow window;
+    window.show();
+    int launches = 0;
+    window.m_LaunchInstaller = [&launches](update::UpdateState&) { ++launches; return true; };
+    window.NewDrawing();
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
+    CancelActiveCommand(window.State(), window.m_Log);
+    QVERIFY(window.State().cadGpuRevision != window.State().activeDocSavedRevision);
+
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->available.installerUrl = "C:/verified/GoSurvey-99.0.0-Installer.exe";
+    window.m_Update->phase = update::Phase::ReadyToLaunch;
+    window.ServiceUpdate();
+    auto* dialog = window.findChild<QDialog*>("softwareUpdate");
+    QVERIFY(dialog);
+    QTRY_VERIFY(UpdateButton(dialog, "updateInstallButton")->isVisibleTo(dialog));
+    QVERIFY(UpdateButton(dialog, "updateNotNowButton")->isVisibleTo(dialog));
+
+    // Cancelling the save prompt cancels the update: nothing launches, the app stays open, and
+    // the verified installer is offered again.
+    UpdateButton(dialog, "updateInstallButton")->click();
+    QVERIFY(window.m_Update->awaitingUnsavedCheck);
+    AnswerNextDialog(QMessageBox::Cancel);
+    window.ServiceUpdate();
+    QCOMPARE(launches, 0);
+    QVERIFY(window.isVisible());
+    QVERIFY(!window.m_UpdateExitPending);
+    QCOMPARE(window.m_Update->phase, update::Phase::ReadyToLaunch);
+
+    // Discarding settles the prompt, and only then does the installer start.
+    QTRY_VERIFY(UpdateButton(dialog, "updateInstallButton")->isEnabled());
+    UpdateButton(dialog, "updateInstallButton")->click();
+    AnswerNextDialog(QMessageBox::Discard);
+    window.ServiceUpdate();
+    QCOMPARE(launches, 1);
+    QVERIFY(!window.isVisible());
+  }
+
+  void updateInstallerThatCannotStartKeepsTheApplicationOpenAndSaysWhy() {
+    EditorWindow window;
+    window.show();
+    window.m_LaunchInstaller = [](update::UpdateState& state) {
+      state.lastError = "could not start the installer (error 5)";
+      state.phase = update::Phase::Failed;
+      return false;
+    };
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->phase = update::Phase::ReadyToLaunch;
+    window.ServiceUpdate();
+    auto* dialog = window.findChild<QDialog*>("softwareUpdate");
+    QVERIFY(dialog);
+    UpdateButton(dialog, "updateInstallButton")->click();
+    window.ServiceUpdate();
+    QVERIFY(window.isVisible());
+    QVERIFY(!window.m_UpdateExitPending);
+    QCOMPARE(window.m_Update->phase, update::Phase::Failed);
+    QTRY_COMPARE(dialog->findChild<QLabel*>("updateError")->text(), QString("could not start the installer (error 5)"));
+    UpdateButton(dialog, "updateCloseButton")->click();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+  }
+
+  void updateNotNowKeepsTheInstallerForNextLaunch() {
+    EditorWindow window;
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->phase = update::Phase::ReadyToLaunch;
+    window.ServiceUpdate();
+    auto* dialog = window.findChild<QDialog*>("softwareUpdate");
+    QVERIFY(dialog);
+    UpdateButton(dialog, "updateNotNowButton")->click();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QTRY_VERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+  }
+
+  void updateCheckIsSilentWhenCurrentFailedOrDisabled() {
+    EditorWindow window;
+    // Disabled: no request is made at all.
+    window.State().updatePrefs.enabled = false;
+    window.StartUpdateCheck();
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QVERIFY(!window.m_Update->task);
+    QVERIFY(!window.UpdateBlocksLaunch());
+    // A finished check that found nothing newer, or failed, shows nothing and never blocks work.
+    for (const char* reason : {"0.7.4 is the latest", "HTTP 404", "malformed manifest"}) {
+      window.m_Update->phase = update::Phase::Checking;
+      window.m_Update->task = std::make_unique<update::UpdateTask>();
+      QVERIFY(window.UpdateBlocksLaunch());
+      window.m_Update->task->ok = false;
+      window.m_Update->task->error = reason;
+      window.m_Update->task->done.store(true, std::memory_order_release);
+      window.ServiceUpdate();
+      QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+      QVERIFY(!window.findChild<QDialog*>("softwareUpdate"));
+      QVERIFY(!window.UpdateBlocksLaunch());
+    }
+    // A newer build found by the check becomes the offer dialog.
+    window.m_Update->phase = update::Phase::Checking;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.m_Update->task->ok = true;
+    window.m_Update->task->manifest = OfferedManifest();
+    window.m_Update->task->done.store(true, std::memory_order_release);
+    window.ServiceUpdate();
+    QCOMPARE(window.m_Update->phase, update::Phase::UpdateReady);
+    auto* dialog = window.findChild<QDialog*>("softwareUpdate");
+    QVERIFY(dialog);
+    QVERIFY(window.UpdateBlocksLaunch());
+    UpdateButton(dialog, "updateRemindButton")->click();
+  }
+
+  void updateOfferIsShownBeforeTheSignInGate() {
+    EditorWindow window;
+    window.State().authGateResolved = false;
+    window.m_AuthStarted = true;
+    window.m_Update->phase = update::Phase::Checking;
+    window.ServiceAuth();
+    QVERIFY(!window.findChild<QDialog*>("signInGate"));
+    window.m_Update->phase = update::Phase::Idle;
+    window.ServiceAuth();
+    if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
+  }
+
+  void settingsUpdatesPersistRevertOnFailureAndClearSkip() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    window.State().updatePrefs.skippedVersion = "99.0.0";
+    auto* viewMenu = window.findChild<QMenu*>("viewMenu");
+    QVERIFY(viewMenu);
+    QAction* settings = nullptr;
+    for (auto* action : viewMenu->actions()) if (action->text() == "Settings…") settings = action;
+    QVERIFY(settings);
+    settings->trigger();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    auto* check = dialog->findChild<QCheckBox*>("updateCheckEnabled");
+    auto* beta = dialog->findChild<QCheckBox*>("updateUseBeta");
+    auto* skipped = dialog->findChild<QLabel*>("updateSkippedLabel");
+    auto* clear = dialog->findChild<QPushButton*>("updateClearSkip");
+    QVERIFY(check && beta && skipped && clear);
+    QVERIFY(dialog->findChild<QLabel*>("updateVersionLabel")->text().startsWith("Version "));
+    QVERIFY(check->isChecked());
+    QVERIFY(!beta->isChecked());
+    QCOMPARE(skipped->text(), QString("Skipping 99.0.0"));
+
+    beta->setChecked(true);
+    AppCommandState reloaded;
+    LoadUserStartupPrefSettings(reloaded);
+    QVERIFY(reloaded.updatePrefs.useBetaChannel);
+    check->setChecked(false);
+    QVERIFY(!window.State().updatePrefs.enabled);
+    QVERIFY(!beta->isEnabled());   // the channel is moot while checking is off
+    AppCommandState reloadedOff;
+    LoadUserStartupPrefSettings(reloadedOff);
+    QVERIFY(!reloadedOff.updatePrefs.enabled);
+    clear->click();
+    QVERIFY(window.State().updatePrefs.skippedVersion.empty());
+    QVERIFY(!clear->isVisibleTo(dialog));
+    AppCommandState reloadedClear;
+    LoadUserStartupPrefSettings(reloadedClear);
+    QVERIFY(reloadedClear.updatePrefs.skippedVersion.empty());
+
+    // A preferences file that cannot be written leaves the control showing what is really stored.
+    QTemporaryFile blocker;
+    QVERIFY(blocker.open());
+    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so the folder cannot exist
+    check->setChecked(true);
+    QVERIFY(!window.State().updatePrefs.enabled);
+    QVERIFY(!check->isChecked());
+    QVERIFY(!dialog->findChild<QLabel*>("updateSettingsError")->text().isEmpty());
   }
 
   void malformedOpenAndSavePreserveExistingSession() {

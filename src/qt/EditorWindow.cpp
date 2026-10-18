@@ -20,6 +20,7 @@
 #include "AppPaths.hpp"
 #include "UserPrefs.hpp"
 #include "auth/AuthService.hpp"
+#include "update/UpdateService.hpp"
 #include "platform/HttpFetch.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
@@ -95,6 +96,7 @@ QIcon CadCommandIcon(const QString& icon) {
 
 EditorWindow::EditorWindow() {
   m_State.measureAnnotationText = MeasureQtText;
+  InitUpdates();
   setObjectName("GoSurveyQtEditor");
   setWindowTitle("GoSurvey");
   setWindowFlag(Qt::FramelessWindowHint);
@@ -180,6 +182,7 @@ EditorWindow::EditorWindow() {
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
     ServiceAuth();
+    ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
     const auto logSize = m_Log.size();
     TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
@@ -264,7 +267,7 @@ void EditorWindow::ServiceAuth() {
   if (m_State.authGateResolved) {
     if (auto *gate = findChild<QDialog *>("signInGate"))
       gate->accept();
-  } else if (HasInternetConnectivity()) {
+  } else if (!UpdateBlocksLaunch() && HasInternetConnectivity()) {
     ShowSignInGate();
   }
 }
@@ -668,6 +671,15 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   }
   if (!ProjectsWithUnsavedPoints(m_State, 0, m_Log).empty()) {
     QMessageBox::warning(this, "Unsaved project points", "Project points could not be saved. Resolve the write error before exiting.");
+    SwitchDrawing(previous);
+    event->ignore();
+    return;
+  }
+  // REQ-078: the installer starts only once every save prompt is settled. If it cannot start
+  // (the user declined elevation, or the launch failed) the application stays open and the
+  // update dialog reports why, rather than quitting without having updated.
+  if (m_UpdateExitPending && !m_LaunchInstaller(*m_Update)) {
+    m_UpdateExitPending = false;
     SwitchDrawing(previous);
     event->ignore();
     return;
