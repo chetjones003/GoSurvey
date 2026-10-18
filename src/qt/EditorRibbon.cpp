@@ -46,7 +46,7 @@
 namespace {
 QString Text(const char* text) { return QString::fromUtf8(text); }
 bool NeedsNativeDialog(const QString& command) {
-  static const QSet<QString> pending = {"@viewManager", "@textStyles", "@dimStyles", "@leaderStyles",
+  static const QSet<QString> pending = {"@textStyles", "@dimStyles", "@leaderStyles",
       "@editElevations", "@createSurface", "@pointGroups", "@surfaceProperties", "@volumes",
       "@connectionModes", "@blockPalettes", "@createBlock", "@batchPlot", "@pageSetup", "@surfaceManager", "BEDIT", "INSERT"};
   return pending.contains(command);

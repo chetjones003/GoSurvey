@@ -45,6 +45,7 @@
 #include <QPlainTextEdit>
 #include <QTextBrowser>
 #include <QLineEdit>
+#include <QInputDialog>
 #include <QLabel>
 #include <QCompleter>
 #include <QAbstractItemView>
@@ -2251,7 +2252,17 @@ private Q_SLOTS:
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1500, 950); window.show(); auto& state = window.State();
+    if (auto* viewPage = window.findChild<QWidget*>("ribbonPage_View")) {
+      if (auto* ribbon = window.findChild<QTabWidget*>("ribbon")) ribbon->setCurrentWidget(viewPage);
+      QApplication::processEvents();
+      const QString artifact = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+      for (const auto& panelName : {QString("View"), QString("Named Views"), QString("Coordinates")}) {
+        auto* panel = viewPage->findChild<QWidget*>("ribbonPanel_View_" + panelName);
+        QVERIFY(panel);
+        QVERIFY(panel->grab().save(artifact + "qt-892-view-ribbon-" + panelName.toLower().replace(' ', '-') + ".png"));
+      }
+    }
     auto* style = window.findChild<QComboBox*>("ribbonVisualStyle"); QVERIFY(style);
     style->setCurrentIndex(2); QMetaObject::invokeMethod(style, "activated", Q_ARG(int, 2));
     QCOMPARE(state.viewportVisualStyle, VisualStyle::Shaded);
@@ -2276,6 +2287,86 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
     QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
     QVERIFY(!size->isEnabled());
+  }
+
+  void viewManagerRestoresUpdatesAndDeletesViewsAndNamedUcs() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
+    NamedView savedView;
+    savedView.name = "Site Overview";
+    savedView.panX = 12.0;
+    savedView.azimuthDeg = 45.0f;
+    savedView.elevationDeg = 35.264f;
+    savedView.projection = Camera::Projection::Perspective;
+    savedView.fovDeg = 72.0f;
+    state.namedViews.push_back(savedView);
+    ucs::Ucs savedFrame = ucs::Ucs{};
+    savedFrame.origin = {4.0, 5.0, 6.0};
+    state.ucsNamed.push_back({"Lot Grid", savedFrame});
+    bool dialogOpened = false;
+    bool viewsShot = false;
+    bool ucsShot = false;
+
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("viewManagerDialog");
+      if (!dialog) return;
+      dialogOpened = true;
+      auto* views = dialog->findChild<QListWidget*>("viewManagerSavedViews");
+      auto* frames = dialog->findChild<QListWidget*>("viewManagerSavedUcs");
+      auto* tabs = dialog->findChild<QTabWidget*>("viewManagerTabs");
+      if (!views || !frames || !tabs) { dialog->accept(); return; }
+      viewsShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-views.png");
+      views->setCurrentRow(0);
+      if (auto* restore = dialog->findChild<QPushButton*>("viewManagerRestore")) restore->click();
+      state.viewportPanX = 31.0;
+      if (auto* update = dialog->findChild<QPushButton*>("viewManagerUpdate")) update->click();
+
+      // Cancelling the nested name prompt leaves the saved-view collection untouched.
+      QTimer::singleShot(0, &window, [&] {
+        if (auto* prompt = window.findChild<QInputDialog*>()) prompt->reject();
+      });
+      if (auto* save = dialog->findChild<QPushButton*>("viewManagerNewView")) save->click();
+
+      tabs->setCurrentIndex(1);
+      ucsShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-ucs.png");
+      frames->setCurrentRow(0);
+      if (auto* restore = dialog->findChild<QPushButton*>("viewManagerRestore")) restore->click();
+      if (auto* remove = dialog->findChild<QPushButton*>("viewManagerDelete")) remove->click();
+      tabs->setCurrentIndex(0);
+      views->setCurrentRow(0);
+      if (auto* remove = dialog->findChild<QPushButton*>("viewManagerDelete")) remove->click();
+      dialog->accept();
+    });
+    window.Submit("VIEW");
+    QVERIFY(dialogOpened);
+    QVERIFY(viewsShot);
+    QVERIFY(ucsShot);
+    QVERIFY(state.namedViews.empty());
+    QVERIFY(state.ucsNamed.empty());
+    QCOMPARE(state.viewportPanX, 31.0);
+    QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
+    QVERIFY(ucs::FramesMatch(state.activeUcs, savedFrame));
+  }
+
+  void viewManagerShowsEmptyCollectionsAndClosePreservesState() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
+    const auto originalUcs = state.activeUcs;
+    bool sawEmptyLists = false;
+    bool emptyShot = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("viewManagerDialog");
+      if (!dialog) return;
+      auto* views = dialog->findChild<QListWidget*>("viewManagerSavedViews");
+      auto* frames = dialog->findChild<QListWidget*>("viewManagerSavedUcs");
+      sawEmptyLists = views && frames && views->count() == 0 && frames->count() == 0;
+      emptyShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-empty.png");
+      dialog->reject();
+    });
+    window.Submit("VIEW");
+    QVERIFY(sawEmptyLists);
+    QVERIFY(emptyShot);
+    QVERIFY(state.namedViews.empty());
+    QVERIFY(state.ucsNamed.empty());
+    QVERIFY(ucs::FramesMatch(state.activeUcs, originalUcs));
   }
 
   void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {
