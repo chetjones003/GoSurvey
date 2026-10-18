@@ -7,6 +7,7 @@
 #include <QStyle>
 #include <QAbstractButton>
 #include <QAbstractSpinBox>
+#include <QDebug>
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
@@ -78,6 +79,7 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFrame>
+#include <exception>
 #include <cstring>
 #include <unordered_map>
 
@@ -93,6 +95,17 @@ QString QtAsset(const QString& relative) {
 }
 
 namespace {
+template <typename Action>
+void RunUiActionSafely(Action&& action) noexcept {
+  try {
+    std::forward<Action>(action)();
+  } catch (const std::exception& error) {
+    qWarning() << "Recent item action failed:" << error.what();
+  } catch (...) {
+    qWarning() << "Recent item action failed with an unknown exception.";
+  }
+}
+
 QPixmap ProjectCover(const QString& name) {
   QPixmap cover(360, 150);
   const uint hash = qHash(name);
@@ -1252,7 +1265,8 @@ void EditorWindow::RefreshRecentDrawings() {
   const int rowHeight = m_RecentListView ? 54 : 128;
   const int rowsThatFit = std::max(1, m_RecentTiles->height() / rowHeight);
   const int maxVisible = std::min(12, columns * rowsThatFit);
-  const int visibleEntries = std::min<int>(entries.size(), maxVisible);
+  const int visibleEntries = static_cast<int>(std::min(entries.size(), static_cast<size_t>(maxVisible)));
+  const auto recentDrawingStore = std::make_shared<const std::filesystem::path>(dir / "gosurvey-recent.json");
   int i = 0;
   for (const auto& entry : entries) {
     if (i >= visibleEntries) break;
@@ -1295,44 +1309,56 @@ void EditorWindow::RefreshRecentDrawings() {
       painter.drawText(thumbnail.rect(), Qt::AlignCenter, "DWG");
     }
     tile->setIcon(QIcon(thumbnail));
-    const auto openRecentDrawing = [this, path, dir] {
-      const auto before = m_State.drawingTabs.size();
-      OpenDrawing(path);
-      if (m_State.drawingTabs.size() == before &&
-          QMessageBox::question(this, "Remove Recent Drawing?",
-                                "This drawing could not be opened. Remove it from Recent Drawings?",
-                                QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
-        recent::Remove(dir / "gosurvey-recent.json", path.toUtf8().toStdString());
-        RefreshRecentDrawings();
-      }
+    const auto openRecentDrawing = [this, path, recentDrawingStore]() noexcept {
+      RunUiActionSafely([&] {
+        const auto before = m_State.drawingTabs.size();
+        OpenDrawing(path);
+        if (m_State.drawingTabs.size() == before &&
+            QMessageBox::question(this, "Remove Recent Drawing?",
+                                  "This drawing could not be opened. Remove it from Recent Drawings?",
+                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+          recent::Remove(*recentDrawingStore, path.toUtf8().toStdString());
+          RefreshRecentDrawings();
+        }
+      });
     };
     tile->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tile, &QWidget::customContextMenuRequested, this,
-            [this, tile, path, dir, openRecentDrawing](const QPoint& position) {
+            [this, tile, path, recentDrawingStore, openRecentDrawing](const QPoint& position) noexcept {
+      RunUiActionSafely([&] {
       const bool fileExists = QFileInfo::exists(path);
       QMenu menu(tile);
       auto* openAction = menu.addAction("Open");
       openAction->setEnabled(fileExists);
-      auto* folderAction = menu.addAction("Open Containing Folder", this, [path, fileExists] {
-        if (fileExists) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+      auto* folderAction = menu.addAction("Open Containing Folder", this, [path, fileExists]() noexcept {
+        RunUiActionSafely([&] {
+          if (fileExists) QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath()));
+        });
       });
       folderAction->setEnabled(fileExists);
-      menu.addAction("Copy Full Path", this, [path] { QApplication::clipboard()->setText(path); });
-      menu.addSeparator();
-      menu.addAction("Remove From List", this, [this, path, dir] {
-        recent::Remove(dir / "gosurvey-recent.json", path.toUtf8().toStdString());
-        RefreshRecentDrawings();
+      menu.addAction("Copy Full Path", this, [path]() noexcept {
+        RunUiActionSafely([&] { QApplication::clipboard()->setText(path); });
       });
-      menu.addAction("Clear All Recent…", this, [this, dir] {
-        if (QMessageBox::question(this, "Clear Recent Drawings?",
-                                  "Remove every drawing from the Recent list?\nThis cannot be undone.",
-                                  QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes) {
-          recent::Clear(dir / "gosurvey-recent.json");
+      menu.addSeparator();
+      menu.addAction("Remove From List", this, [this, path, recentDrawingStore]() noexcept {
+        RunUiActionSafely([&] {
+          recent::Remove(*recentDrawingStore, path.toUtf8().toStdString());
           RefreshRecentDrawings();
-        }
+        });
+      });
+      menu.addAction("Clear All Recent…", this, [this, recentDrawingStore]() noexcept {
+        RunUiActionSafely([&] {
+          if (QMessageBox::question(this, "Clear Recent Drawings?",
+                                    "Remove every drawing from the Recent list?\nThis cannot be undone.",
+                                    QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes) {
+            recent::Clear(*recentDrawingStore);
+            RefreshRecentDrawings();
+          }
+        });
       });
       connect(openAction, &QAction::triggered, this, openRecentDrawing);
       menu.exec(tile->mapToGlobal(position));
+      });
     });
     connect(tile, &QToolButton::clicked, this, openRecentDrawing);
     grid->addWidget(tile, i / columns, i % columns);
@@ -1357,6 +1383,7 @@ void EditorWindow::RefreshRecentProjects() {
   const auto dataDir = UserDataDirectory();
   const auto store = (dataDir.empty() ? std::filesystem::path(".") : dataDir) /
                      "gosurvey-recent-projects.json";
+  const auto recentProjectStore = std::make_shared<const std::filesystem::path>(store);
   auto entries = recent::Load(store);
   if (entries.size() > 6) entries.resize(6);
   const int columns = std::max(1, std::min(3, m_ProjectTiles->width() / 174));
@@ -1380,29 +1407,35 @@ void EditorWindow::RefreshRecentProjects() {
         ? "QToolButton { text-align:left; padding:5px; border:1px solid #55585b; border-radius:6px; background:#303234; } QToolButton:hover { border-color:#85898d; background:#3b3d3f; }"
         : "QToolButton { text-align:left; padding:5px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
     tile->setToolTip(name + "\n" + projectFolder + "\n" + lastOpened);
-    const auto openRecentProject = [this, path, store] {
-      std::error_code ec;
-      if (!std::filesystem::is_regular_file(std::filesystem::path(path.toStdWString()), ec)) {
-        if (QMessageBox::question(this, "Remove Recent Project?",
-                                  "This project file could not be found. Remove it from Recent Projects?",
-                                  QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
-          recent::Remove(store, path.toUtf8().toStdString());
-          RefreshRecentProjects();
+    const auto openRecentProject = [this, path, recentProjectStore]() noexcept {
+      RunUiActionSafely([&] {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(std::filesystem::path(path.toStdWString()), ec)) {
+          if (QMessageBox::question(this, "Remove Recent Project?",
+                                    "This project file could not be found. Remove it from Recent Projects?",
+                                    QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+            recent::Remove(*recentProjectStore, path.toUtf8().toStdString());
+            RefreshRecentProjects();
+          }
+          return;
         }
-        return;
-      }
-      OpenProject(path, true);
+        OpenProject(path, true);
+      });
     };
     tile->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(tile, &QWidget::customContextMenuRequested, this,
-            [this, tile, path, store, openRecentProject](const QPoint& position) {
+            [this, tile, path, recentProjectStore, openRecentProject](const QPoint& position) noexcept {
+      RunUiActionSafely([&] {
       QMenu menu(tile);
       menu.addAction("Open", this, openRecentProject);
-      menu.addAction("Remove From List", this, [this, path, store] {
-        recent::Remove(store, path.toUtf8().toStdString());
-        RefreshRecentProjects();
+      menu.addAction("Remove From List", this, [this, path, recentProjectStore]() noexcept {
+        RunUiActionSafely([&] {
+          recent::Remove(*recentProjectStore, path.toUtf8().toStdString());
+          RefreshRecentProjects();
+        });
       });
       menu.exec(tile->mapToGlobal(position));
+      });
     });
     connect(tile, &QToolButton::clicked, this, openRecentProject);
     grid->addWidget(tile, index / columns, index % columns);
