@@ -28,6 +28,7 @@
 #include "Version.hpp"
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCompleter>
@@ -63,6 +64,8 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QStandardItemModel>
+#include <QStandardItem>
 #include <QVBoxLayout>
 #include <cstring>
 
@@ -171,6 +174,18 @@ EditorWindow::EditorWindow() {
   osnap->setText("OSNAP"); osnap->setCheckable(true); osnap->setChecked(m_State.objectSnapEnabled);
   statusBar()->addWidget(osnap);
   connect(osnap, &QToolButton::toggled, this, [this](bool on) { m_State.objectSnapEnabled = on; });
+  auto* annotationScale = new QComboBox(this);
+  annotationScale->setObjectName("statusAnnotationScale");
+  annotationScale->setMinimumWidth(110);
+  annotationScale->setAccessibleName("Annotation scale");
+  annotationScale->setToolTip("Current annotation scale");
+  statusBar()->addWidget(annotationScale);
+  connect(annotationScale, &QComboBox::activated, this, [this](int index) {
+    if (index < 0 || index >= static_cast<int>(m_State.annotationScales.size()) ||
+        index == m_State.currentAnnotationScaleIndex) return;
+    SetCurrentAnnotationScaleIndex(m_State, index);
+    Refresh();
+  });
   auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
   connect(escape, &QShortcut::activated, this, [this] { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
   connect(new QShortcut(QKeySequence(Qt::Key_F3), this), &QShortcut::activated, osnap, &QToolButton::toggle);
@@ -681,6 +696,14 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
+  if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
+    const QSignalBlocker block(annotationScale);
+    annotationScale->clear();
+    for (const auto& scale : m_State.annotationScales)
+      annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+    annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    annotationScale->setEnabled(!m_State.annotationScales.empty());
+  }
   RefreshProjects();
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
@@ -707,6 +730,8 @@ void EditorWindow::Refresh() {
     const auto title = m_Tabs->tabText(m_State.activeDrawingIdx) + QString::fromUtf8("  —  GoSurvey");
     m_WindowTitle->setText(title); setWindowTitle(title);
   }
+  for (const auto& name : {"propertyAnnotative", "propertyAnnotationScales"})
+    if (auto* widget = m_Properties->findChild<QWidget*>(name)) delete widget;
   m_Properties->clear();
   auto* general = new QTreeWidgetItem(m_Properties, {"General"});
   general->setFirstColumnSpanned(true);
@@ -717,6 +742,79 @@ void EditorWindow::Refresh() {
   new QTreeWidgetItem(general, {"Circles", QString::number(m_State.userCirclesCxCyZR.size() / 4)});
   new QTreeWidgetItem(general, {"File", QString::fromUtf8(m_State.activeDocFilePath.c_str())});
   general->setExpanded(true);
+  if (m_State.selection.size() == 1) {
+    const auto selected = m_State.selection.front();
+    const int index = selected.index;
+    bool* annotativeFlag = nullptr;
+    std::vector<std::string>* visibleScaleNames = nullptr;
+    if (selected.type == SelectedEntity::Type::Annotation && index >= 0 && index < static_cast<int>(m_State.cadAnnotations.size())) {
+      annotativeFlag = &m_State.cadAnnotations[static_cast<size_t>(index)].annotative;
+      visibleScaleNames = &m_State.cadAnnotations[static_cast<size_t>(index)].annotativeVisibleScaleNames;
+    } else if (selected.type == SelectedEntity::Type::FilledRegion && index >= 0 && index < static_cast<int>(m_State.cadFilledRegions.size())) {
+      annotativeFlag = &m_State.cadFilledRegions[static_cast<size_t>(index)].annotative;
+      visibleScaleNames = &m_State.cadFilledRegions[static_cast<size_t>(index)].annotativeVisibleScaleNames;
+    } else if (selected.type == SelectedEntity::Type::BlockRef && index >= 0 && index < static_cast<int>(m_State.cadBlockRefs.size())) {
+      annotativeFlag = &m_State.cadBlockRefs[static_cast<size_t>(index)].annotative;
+      visibleScaleNames = &m_State.cadBlockRefs[static_cast<size_t>(index)].annotativeVisibleScaleNames;
+    } else if (selected.type == SelectedEntity::Type::Multileader && index >= 0 && index < static_cast<int>(m_State.cadMultileaders.size())) {
+      annotativeFlag = &m_State.cadMultileaders[static_cast<size_t>(index)].annotative;
+      visibleScaleNames = &m_State.cadMultileaders[static_cast<size_t>(index)].annotativeVisibleScaleNames;
+    }
+    if (annotativeFlag && visibleScaleNames) {
+      auto* section = new QTreeWidgetItem(m_Properties, {"Annotation scale"});
+      section->setFirstColumnSpanned(true);
+      section->setBackground(0, palette().color(QPalette::Button));
+      section->setForeground(0, palette().color(QPalette::ButtonText));
+      section->setFont(0, sectionFont);
+      auto* annotative = new QCheckBox("Annotative", m_Properties);
+      annotative->setObjectName("propertyAnnotative"); annotative->setChecked(*annotativeFlag);
+      m_Properties->setItemWidget(new QTreeWidgetItem(section, {"Annotative"}), 1, annotative);
+      connect(annotative, &QCheckBox::toggled, this, [this, annotativeFlag](bool enabled) {
+        if (*annotativeFlag == enabled) return;
+        PushUndoSnapshot(m_State, "Annotative property");
+        *annotativeFlag = enabled;
+        BumpCadGpuCache(m_State); Refresh();
+      });
+      auto* scaleRow = new QTreeWidgetItem(section, {"Visible scales"});
+      auto* scales = new QComboBox(m_Properties); scales->setObjectName("propertyAnnotationScales");
+      auto* scaleModel = new QStandardItemModel(scales);
+      for (const auto& scale : m_State.annotationScales) {
+        auto* item = new QStandardItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+        item->setData(QString::fromUtf8(scale.name.c_str()), Qt::UserRole);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        const bool visible = visibleScaleNames->empty() ||
+            std::find(visibleScaleNames->begin(), visibleScaleNames->end(), scale.name) != visibleScaleNames->end();
+        item->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
+        scaleModel->appendRow(item);
+      }
+      scales->setModel(scaleModel);
+      scales->setEnabled(*annotativeFlag && !m_State.annotationScales.empty());
+      m_Properties->setItemWidget(scaleRow, 1, scales);
+      connect(scaleModel, &QStandardItemModel::itemChanged, this, [this, visibleScaleNames, scaleModel](QStandardItem* changed) {
+        std::vector<std::string> visibleNames;
+        int visibleCount = 0;
+        for (int row = 0; row < scaleModel->rowCount(); ++row) {
+          const auto* item = scaleModel->item(row);
+          if (item->checkState() == Qt::Checked) {
+            visibleNames.push_back(item->data(Qt::UserRole).toString().toUtf8().toStdString());
+            ++visibleCount;
+          }
+        }
+        if (!scaleModel->rowCount()) return;
+        if (!visibleCount) {
+          const QSignalBlocker block(scaleModel);
+          changed->setCheckState(Qt::Checked);
+          return;
+        }
+        if (visibleCount == scaleModel->rowCount()) visibleNames.clear();
+        if (*visibleScaleNames == visibleNames) return;
+        PushUndoSnapshot(m_State, "Annotative scale visibility");
+        *visibleScaleNames = std::move(visibleNames);
+        BumpCadGpuCache(m_State); Refresh();
+      });
+      section->setExpanded(true);
+    }
+  }
   const QSignalBlocker layerBlock(m_Layer);
   m_Layer->clear();
   for (const auto& layer : m_State.drawingLayerTable) m_Layer->addItem(QString::fromUtf8(layer.name.c_str()));
