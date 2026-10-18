@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "CadCommands.hpp"
 #include "CadColor.hpp"
 #include "NonDismissableDialog.hpp"
 #include "Version.hpp"
@@ -20,6 +21,8 @@
 #include <QSpinBox>
 #include <QPlainTextEdit>
 #include <QLabel>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QTimer>
 #include <QFileDialog>
 #include <QVBoxLayout>
@@ -423,6 +426,9 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showSelectionCyclingWindow) {
     m_State.showSelectionCyclingWindow = false;
     ShowSelectionList();
+  } else if (m_State.showViewManagerWindow) {
+    m_State.showViewManagerWindow = false;
+    ShowViewManager();
   } else if (m_State.showViewPointsWindow || m_State.showSurveyPointGridWindow) {
     const bool database = m_State.showSurveyPointGridWindow;
     m_State.showViewPointsWindow = m_State.showSurveyPointGridWindow = false;
@@ -437,6 +443,158 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.surveyReportSelectLatestPending) {
     ShowSurveyReports();
   }
+}
+
+void EditorWindow::ShowViewManager() {
+  m_ModalOpen = true;
+  QDialog dialog(this);
+  dialog.setObjectName("viewManagerDialog");
+  dialog.setWindowTitle("Manage Views & UCS");
+  dialog.resize(650, 510);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* current = new QLabel(&dialog);
+  current->setObjectName("viewManagerCurrentView");
+  current->setStyleSheet("background:#243a53;color:#f4f7fb;padding:10px 12px;font-weight:600;border-radius:5px;");
+  layout->addWidget(current);
+
+  auto* tabs = new QTabWidget(&dialog);
+  tabs->setObjectName("viewManagerTabs");
+  auto* views = new QListWidget(tabs);
+  views->setObjectName("viewManagerSavedViews");
+  views->setSelectionMode(QAbstractItemView::SingleSelection);
+  views->setSpacing(6);
+  views->setStyleSheet("QListWidget{border:0;background:transparent} QListWidget::item{background:#f3f6f8;border:1px solid #d7dee5;border-radius:5px;padding:10px;color:#202a33} QListWidget::item:selected{background:#e4eff7;border:1px solid #3879a2;color:#172d3b}");
+  auto* ucsList = new QListWidget(tabs);
+  ucsList->setObjectName("viewManagerSavedUcs");
+  ucsList->setSelectionMode(QAbstractItemView::SingleSelection);
+  ucsList->setSpacing(6);
+  ucsList->setStyleSheet(views->styleSheet());
+  tabs->addTab(views, "Views");
+  tabs->addTab(ucsList, "Coordinate Systems");
+  layout->addWidget(tabs, 1);
+
+  auto* actionRow = new QHBoxLayout();
+  auto* restore = new QPushButton("Restore", &dialog);
+  restore->setObjectName("viewManagerRestore");
+  auto* update = new QPushButton("Update", &dialog);
+  update->setObjectName("viewManagerUpdate");
+  auto* remove = new QPushButton("Delete", &dialog);
+  remove->setObjectName("viewManagerDelete");
+  auto* save = new QPushButton("New View…", &dialog);
+  save->setObjectName("viewManagerNewView");
+  actionRow->addWidget(restore);
+  actionRow->addWidget(update);
+  actionRow->addWidget(remove);
+  actionRow->addStretch();
+  actionRow->addWidget(save);
+  layout->addLayout(actionRow);
+  auto* close = new QPushButton("Close", &dialog);
+  close->setObjectName("viewManagerClose");
+  close->setDefault(true);
+  auto* closeRow = new QHBoxLayout();
+  closeRow->addStretch();
+  closeRow->addWidget(close);
+  layout->addLayout(closeRow);
+
+  auto refresh = [&] {
+    const auto* active = CurrentNamedView(m_State);
+    current->setText(active ? QString("Current view · %1").arg(QString::fromUtf8(active->name.c_str()))
+                            : "Current view · Unsaved View");
+    const QString selectedView = views->currentItem() ? views->currentItem()->data(Qt::UserRole).toString() : QString();
+    const QSignalBlocker blockViews(views);
+    const QSignalBlocker blockUcs(ucsList);
+    views->clear();
+    for (const auto& view : m_State.namedViews) {
+      const QString name = QString::fromUtf8(view.name.c_str());
+      const bool isCurrent = active && active->name == view.name;
+      const QString projection = view.projection == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
+      auto* item = new QListWidgetItem(QString("%1%2\n%3 · %4 · %5")
+                                           .arg(name, isCurrent ? "   CURRENT" : "", projection,
+                                                QString("FOV %1°").arg(view.fovDeg, 0, 'f', 0),
+                                                ucs::IsWorld(view.ucs) ? "WCS" : "UCS"),
+                                       views);
+      item->setData(Qt::UserRole, name);
+      item->setSizeHint(QSize(0, 58));
+      item->setToolTip(QString("Azimuth %1° · Elevation %2° · %3")
+                           .arg(view.azimuthDeg, 0, 'f', 1).arg(view.elevationDeg, 0, 'f', 1)
+                           .arg(DescribeUcs(view.ucs).c_str()));
+      if (name == selectedView || (selectedView.isEmpty() && isCurrent)) views->setCurrentItem(item);
+    }
+    if (!views->currentItem() && views->count()) views->setCurrentRow(0);
+
+    const QString selectedUcs = ucsList->currentItem() ? ucsList->currentItem()->data(Qt::UserRole).toString() : QString();
+    ucsList->clear();
+    for (const auto& named : m_State.ucsNamed) {
+      const QString name = QString::fromUtf8(named.name.c_str());
+      const bool isCurrent = ucs::FramesMatch(named.frame, m_State.activeUcs);
+      auto* item = new QListWidgetItem(QString("%1%2\n%3")
+                                           .arg(name, isCurrent ? "   CURRENT" : "", DescribeUcs(named.frame).c_str()),
+                                       ucsList);
+      item->setData(Qt::UserRole, name);
+      item->setSizeHint(QSize(0, 58));
+      if (name == selectedUcs || (selectedUcs.isEmpty() && isCurrent)) ucsList->setCurrentItem(item);
+    }
+    if (!ucsList->currentItem() && ucsList->count()) ucsList->setCurrentRow(0);
+    const bool onViews = tabs->currentIndex() == 0;
+    const bool hasSelection = onViews ? views->currentItem() != nullptr : ucsList->currentItem() != nullptr;
+    const bool currentUcsSelected = !onViews && ucsList->currentRow() >= 0 &&
+        ucs::FramesMatch(m_State.activeUcs, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].frame);
+    restore->setEnabled(hasSelection && (onViews || !currentUcsSelected));
+    update->setVisible(onViews);
+    save->setVisible(onViews);
+    update->setEnabled(onViews && hasSelection);
+    remove->setEnabled(hasSelection);
+    remove->setVisible(!onViews || hasSelection);
+    if (views->count() == 0 && onViews) current->setText("No saved views · Choose New View to save this view");
+    if (ucsList->count() == 0 && !onViews) current->setText("No saved coordinate systems · Save one with UCS N <name>");
+  };
+
+  connect(views, &QListWidget::currentRowChanged, &dialog, [&] { refresh(); });
+  connect(ucsList, &QListWidget::currentRowChanged, &dialog, [&] { refresh(); });
+  connect(tabs, &QTabWidget::currentChanged, &dialog, [&] { refresh(); });
+  connect(restore, &QPushButton::clicked, &dialog, [&] {
+    if (tabs->currentIndex() == 0 && views->currentRow() >= 0) {
+      const auto selected = m_State.namedViews[static_cast<size_t>(views->currentRow())];
+      RestoreNamedView(m_State, selected, m_Log);
+    } else if (tabs->currentIndex() == 1 && ucsList->currentRow() >= 0) {
+      RestoreNamedUcs(m_State, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
+    }
+    Refresh();
+    refresh();
+  });
+  connect(update, &QPushButton::clicked, &dialog, [&] {
+    if (views->currentRow() < 0) return;
+    const auto name = m_State.namedViews[static_cast<size_t>(views->currentRow())].name;
+    ProcessViewCommandLine(m_State, "S " + name, m_Log);
+    Refresh();
+    refresh();
+  });
+  connect(remove, &QPushButton::clicked, &dialog, [&] {
+    if (tabs->currentIndex() == 0 && views->currentRow() >= 0) {
+      const auto name = m_State.namedViews[static_cast<size_t>(views->currentRow())].name;
+      ProcessViewCommandLine(m_State, "D " + name, m_Log);
+    } else if (tabs->currentIndex() == 1 && ucsList->currentRow() >= 0) {
+      DeleteNamedUcs(m_State, m_State.ucsNamed[static_cast<size_t>(ucsList->currentRow())].name, m_Log);
+    }
+    Refresh();
+    refresh();
+  });
+  connect(save, &QPushButton::clicked, &dialog, [&] {
+    bool accepted = false;
+    const QString name = QInputDialog::getText(&dialog, "New View", "Save the current camera and coordinate frame as:",
+                                                QLineEdit::Normal, {}, &accepted).trimmed();
+    if (!accepted || name.isEmpty()) return;
+    ProcessViewCommandLine(m_State, "S " + name.toUtf8().toStdString(), m_Log);
+    Refresh();
+    refresh();
+  });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+  connect(&dialog, &QDialog::finished, this, [this] { m_State.showViewManagerWindow = false; });
+  refresh();
+  m_State.showViewManagerWindow = false;
+  dialog.exec();
+  m_ModalOpen = false;
+  Refresh();
 }
 
 void EditorWindow::ShowCreatePoints() {
