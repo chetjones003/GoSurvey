@@ -102,6 +102,10 @@ LockResult TryAcquire(const std::filesystem::path& gsprojFile, const LockInfo& m
 /// take it over with the explicit warning (REQ-382 clause 3).
 bool IsStale(const LockInfo& holder, const LockInfo& me, const std::function<bool(std::uint32_t)>& pidAlive);
 
+/// True when a process with this id is running on this machine (an id we may not open still counts as
+/// running). Platforms without a check answer true, so a lock is never wrongly called stale.
+bool ProcessIsRunning(std::uint32_t pid);
+
 /// Overwrites the lock with \p me (the user confirmed the takeover warning).
 bool TakeOver(const std::filesystem::path& gsprojFile, const LockInfo& me);
 

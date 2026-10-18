@@ -302,6 +302,21 @@ bool IsStale(const LockInfo& holder, const LockInfo& me, const std::function<boo
   return holder.machine == me.machine && !pidAlive(holder.pid);
 }
 
+bool ProcessIsRunning(std::uint32_t pid) {
+#if defined(_WIN32)
+  HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!h)
+    return GetLastError() == ERROR_ACCESS_DENIED;  // exists, just not ours to open
+  DWORD code = 0;
+  const bool running = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
+  CloseHandle(h);
+  return running;
+#else
+  (void)pid;
+  return true;
+#endif
+}
+
 bool TakeOver(const fs::path& gsprojFile, const LockInfo& me) {
   std::ofstream f(LockPath(gsprojFile), std::ios::binary | std::ios::trunc);
   if (!f)

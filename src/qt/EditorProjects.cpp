@@ -27,6 +27,8 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QFrame>
+#include <QPalette>
 #include <QComboBox>
 #include <QStackedWidget>
 #include <QTableWidget>
@@ -45,6 +47,7 @@
 #include <QFile>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <optional>
 
@@ -62,6 +65,116 @@ void NoteRecentProject(const std::filesystem::path& path) {
   const auto& stored = ec ? path : absolute;
   const auto utf8 = QString::fromStdWString(stored.wstring()).toUtf8().toStdString();
   recent::Note(RecentProjectStorePath(), utf8, "", QDateTime::currentSecsSinceEpoch());
+}
+enum class LockChoice : std::uint8_t { Cancel, ReadOnly, TakeOver };
+
+QString LockWhen(std::int64_t unix) {
+  if (unix <= 0) return "an unknown time";
+  return QDateTime::fromSecsSinceEpoch(unix).toString("yyyy-MM-dd HH:mm");
+}
+
+/// REQ-382 clauses 2-3: the project is held by another editor. Says who, whether the lock looks left
+/// over from a crash, and offers Open read-only, Take over, or Cancel (Esc). Take over is the stale
+/// takeover; for a live holder it carries the explicit warning that their unsaved work can be lost.
+LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const gsproj::LockInfo& holder, bool stale) {
+  const QString who = holder.user.empty() ? QString("someone") : QString::fromUtf8(holder.user.c_str());
+  const QString where = holder.machine.empty() ? QString() : QString(" on %1").arg(QString::fromUtf8(holder.machine.c_str()));
+  const bool dark = parent->palette().color(QPalette::Window).lightness() < 128;
+  const QString amber = dark ? "#f0b25a" : "#9a5b00";
+  const QString border = dark ? "#4b4e50" : "#c5d0da";
+  const QString cardFill = dark ? "#2d2f31" : "#ffffff";
+
+  QDialog dialog(parent);
+  dialog.setObjectName("projectLockDialog");
+  dialog.setWindowTitle("Project in use");
+  dialog.setWindowModality(Qt::ApplicationModal);
+  dialog.setMinimumWidth(620);
+  auto* layout = new QVBoxLayout(&dialog);
+  layout->setContentsMargins(24, 20, 24, 18);
+  layout->setSpacing(10);
+
+  auto label = [&](const QString& text, const char* name) {
+    auto* value = new QLabel(text, &dialog);
+    value->setObjectName(name);
+    value->setWordWrap(true);
+    value->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    return value;
+  };
+  auto button = [&](const char* name, const QString& text, bool primary) {
+    auto* value = new QPushButton(text, &dialog);
+    value->setObjectName(name);
+    value->setMinimumHeight(34);
+    if (primary) {
+      value->setDefault(true);
+      value->setStyleSheet("QPushButton { background:#438fda; color:white; font-weight:600; padding:6px 18px; "
+                           "border:0; border-radius:4px; } QPushButton:hover { background:#347cc3; }");
+    }
+    return value;
+  };
+  auto* headline = label(QString("“%1” is being edited by %2%3").arg(projectName, who, where), "projectLockHeadline");
+  QFont headlineFont = headline->font();
+  headlineFont.setPointSize(14);
+  headlineFont.setBold(true);
+  headline->setFont(headlineFont);
+  auto* since = label(QString("Since %1.").arg(LockWhen(holder.sinceUnix)), "projectLockSince");
+  auto* staleNote = label("That program is no longer running, so the lock looks left over from a crash.", "projectLockStale");
+  staleNote->setStyleSheet(QString("font-weight:600;color:%1;").arg(amber));
+  staleNote->setVisible(stale);
+  auto* readOnlyText = label("<b>Open read-only</b> lets you view and print but not change the project.", "projectLockReadOnlyText");
+  readOnlyText->setTextFormat(Qt::RichText);
+  auto* takeOverText = label(
+      stale ? "<b>Take over</b> removes the leftover lock and makes you the editor."
+            : "<b>Take over anyway</b> makes you the editor. Only do this if you are sure the other person is "
+              "not editing: their unsaved work in this project could be overwritten.",
+      "projectLockTakeOverText");
+  takeOverText->setTextFormat(Qt::RichText);
+  auto* readOnly = button("projectLockReadOnly", "Open read-only", true);
+  auto* takeOver = button("projectLockTakeOver", stale ? "Take over (stale lock)" : "Take over anyway", false);
+  auto* cancel = button("projectLockCancel", "Cancel", false);
+
+  auto card = [&](const char* name, const QString& title, const QString& tag, bool recommended) {
+    auto* frame = new QFrame(&dialog);
+    frame->setObjectName(name);
+    frame->setStyleSheet(QString("QFrame#%1 { background:%2; border:%3; border-radius:6px; }")
+                             .arg(name, cardFill, recommended ? "2px solid #438fda" : "1px solid " + border));
+    auto* box = new QVBoxLayout(frame);
+    box->setContentsMargins(14, 12, 14, 12);
+    box->setSpacing(8);
+    auto* titleLabel = new QLabel(title, frame);
+    titleLabel->setStyleSheet("font-size:14px;font-weight:600;");
+    box->addWidget(titleLabel);
+    auto* tagLabel = new QLabel(tag, frame);
+    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? "#438fda" : amber));
+    box->addWidget(tagLabel);
+    return box;
+  };
+  auto* readOnlyBox = card("projectLockReadOnlyCard", "Open read-only", "SAFE — nothing can be overwritten", true);
+  readOnlyBox->addWidget(readOnlyText);
+  readOnlyBox->addStretch();
+  readOnlyBox->addWidget(readOnly);
+  auto* takeOverBox = card("projectLockTakeOverCard", "Take over", stale ? "LEFT OVER FROM A CRASH" : "ONLY IF THEY ARE NOT EDITING", false);
+  takeOverBox->addWidget(takeOverText);
+  takeOverBox->addStretch();
+  takeOverBox->addWidget(takeOver);
+  auto* cards = new QHBoxLayout;
+  cards->setSpacing(12);
+  cards->addWidget(readOnlyBox->parentWidget());
+  cards->addWidget(takeOverBox->parentWidget());
+  auto* footer = new QHBoxLayout;
+  footer->addStretch();
+  footer->addWidget(cancel);
+  layout->addWidget(headline);
+  layout->addWidget(since);
+  layout->addWidget(staleNote);
+  layout->addLayout(cards);
+  layout->addLayout(footer);
+
+  LockChoice choice = LockChoice::Cancel;  // Esc and the window close button are Cancel
+  QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+  QObject::connect(readOnly, &QPushButton::clicked, &dialog, [&] { choice = LockChoice::ReadOnly; dialog.accept(); });
+  QObject::connect(takeOver, &QPushButton::clicked, &dialog, [&] { choice = LockChoice::TakeOver; dialog.accept(); });
+  dialog.exec();
+  return choice;
 }
 }
 
@@ -103,12 +216,16 @@ std::uint32_t EditorWindow::OpenProject(const QString& path, bool createDrawing)
   session.me.sinceUnix = QDateTime::currentSecsSinceEpoch();
   gsproj::LockInfo holder;
   if (gsproj::TryAcquire(session.project.file, session.me, &holder) != gsproj::LockResult::Acquired) {
-    const auto answer = QMessageBox::question(this, "Project in use",
-        QString("This project is locked by %1 on %2. Open it read-only?")
-          .arg(QString::fromUtf8(holder.user.c_str()), QString::fromUtf8(holder.machine.c_str())),
-        QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel);
-    if (answer != QMessageBox::Yes) return 0;
-    session.readOnly = true;
+    const bool stale = gsproj::IsStale(holder, session.me, gsproj::ProcessIsRunning);
+    const auto choice = AskLockedProject(this, QString::fromUtf8(session.project.name.c_str()), holder, stale);
+    if (choice == LockChoice::Cancel) return 0;
+    if (choice == LockChoice::ReadOnly) {
+      session.readOnly = true;
+    } else if (!gsproj::TakeOver(session.project.file, session.me)) {
+      QMessageBox::warning(this, "Project in use",
+          QString("Could not take over the project lock for %1.").arg(QString::fromUtf8(session.project.name.c_str())));
+      return 0;
+    }
   }
   session.uid = m_State.nextProjectUid++;
   const auto uid = session.uid;
