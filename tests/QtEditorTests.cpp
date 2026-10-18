@@ -1,6 +1,7 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "EditorViewport.hpp"
+#include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
@@ -8,6 +9,7 @@
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
+#include "util/gizmooverlay.hpp"
 #include "ProjectPoints.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
@@ -504,6 +506,162 @@ private Q_SLOTS:
     const qreal ratio = viewport->devicePixelRatioF();
     const auto face = image.pixelColor(qRound((viewport->width() - 55) * ratio), qRound(91 * ratio));
     QVERIFY2(face.blue() > 60 && face.red() > 40, qPrintable(face.name()));
+  }
+
+  void qtViewportRendersGizmoAndSectionPlaneOverlays() {
+    EditorWindow window;
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+
+    auto& state = window.State();
+    state.userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
+    state.userLineAttrs.push_back(EntityAttributes{});
+    viewport->InvalidateGeometry();
+    QTest::qWait(30);
+    const QImage base = viewport->grabFramebuffer();
+    QVERIFY(!base.isNull());
+
+    SelectedEntity line;
+    line.type = SelectedEntity::Type::LineSeg;
+    line.index = 0;
+    state.selection.push_back(line);
+    state.gizmoPersistent = true;
+    viewport->update();
+    QTest::qWait(30);
+    const QImage gizmo = viewport->grabFramebuffer();
+    QVERIFY(gizmo != base);
+    QVERIFY(gizmo.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-a.png"));
+
+    state.viewportSectionClip = true;
+    state.gizmoPersistent = false;
+    state.sectionPlaneSelected = true;
+    viewport->update();
+    QTest::qWait(30);
+    const QImage sectionGrips = viewport->grabFramebuffer();
+    QVERIFY(sectionGrips != gizmo);
+    QVERIFY(sectionGrips.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-b.png"));
+
+    state.gizmoPersistent = true;
+    state.viewportSectionClipOffset = 0.0;
+    state.sectionPlaneGripHover = static_cast<int>(SectionPlaneGrip::Move);
+    viewport->update();
+    QTest::qWait(30);
+    const QImage combined = viewport->grabFramebuffer();
+    QVERIFY(combined != sectionGrips);
+    CadGizmoOverlay combinedOverlay;
+    BuildGizmoOverlay(state, &combinedOverlay);
+    QVERIFY(!combinedOverlay.empty());
+    QVERIFY(combined.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-c.png"));
+  }
+
+  void qtViewportGizmoDragCommitsOneUndoableTransform() {
+    EditorWindow window;
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    viewport->SetOrientation(0.f, 90.f);
+
+    auto& state = window.State();
+    state.userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
+    state.userLineAttrs.push_back(EntityAttributes{});
+    SelectedEntity line;
+    line.type = SelectedEntity::Type::LineSeg;
+    line.index = 0;
+    state.selection.push_back(line);
+    state.gizmoPersistent = true;
+    viewport->InvalidateGeometry();
+
+    CadGizmoOverlay overlay;
+    BuildGizmoOverlay(state, &overlay);
+    QVERIFY(!overlay.empty());
+    const auto& axis = overlay.axis[0];
+    QVERIFY(axis.size() >= 6);
+    float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+    const auto camera = CadViewCamera(state);
+    camera.WorldToScreen(axis[0], axis[1], axis[2], static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &ax, &ay);
+    camera.WorldToScreen(axis[3], axis[4], axis[5], static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &bx, &by);
+    const double dx = bx - ax, dy = by - ay;
+    const double length = std::hypot(dx, dy);
+    QVERIFY(length > 8.0);
+    const QPoint start(qRound((ax + bx) * 0.5), qRound((ay + by) * 0.5));
+    const QPoint finish(start.x() + qRound(dx / length * 24.0),
+                        start.y() + qRound(dy / length * 24.0));
+    const auto before = state.userLinesFlat;
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, start);
+    QMouseEvent cancelledMove(QEvent::MouseMove, finish, viewport->mapToGlobal(finish),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &cancelledMove);
+    QVERIFY(state.gizmoDragActive);
+    QTest::mouseClick(viewport, Qt::RightButton);
+    QVERIFY(!state.gizmoDragActive);
+    QCOMPARE(state.userLinesFlat, before);
+
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, start);
+    QVERIFY(state.gizmoDragActive);
+    QMouseEvent move(QEvent::MouseMove, finish, viewport->mapToGlobal(finish),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &move);
+    QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, finish);
+    QVERIFY(!state.gizmoDragActive);
+    QVERIFY(state.userLinesFlat != before);
+    window.Submit("UNDO");
+    QCOMPARE(state.userLinesFlat, before);
+  }
+
+  void qtViewportSectionPlaneGripDragEndsOnReleaseAndUndoes() {
+    EditorWindow window;
+    window.Submit("NEW");
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    viewport->SetOrientation(32.f, 38.f);
+
+    auto& state = window.State();
+    state.userLinesFlat = {-20.0, -10.0, -2.0, 20.0, 10.0, 2.0};
+    state.userLineAttrs.push_back(EntityAttributes{});
+    state.viewportSectionClip = true;
+    state.viewportSectionClipFrameValid = true;
+    state.viewportSectionClipFrame = ucs::Ucs{};
+    state.viewportSectionClipExtent = SectionPlaneExtent{true, 0.0, 0.0, 20.0, 12.0};
+    state.sectionPlaneSelected = true;
+    viewport->InvalidateGeometry();
+
+    const auto grips = CadSectionPlaneGrips(state);
+    QVERIFY(grips.valid);
+    const auto camera = CadViewCamera(state);
+    float x = 0.f, y = 0.f;
+    const auto moveGrip = grips.at[static_cast<int>(SectionPlaneGrip::Move)];
+    camera.WorldToScreen(moveGrip.x, moveGrip.y, moveGrip.z,
+        static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &x, &y);
+    const QPoint start(qRound(x), qRound(y));
+    const QPoint finish = start + QPoint(12, -8);
+
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, start);
+    QVERIFY(state.sectionPlaneGripDrag >= 0);
+    QMouseEvent cancelledMove(QEvent::MouseMove, finish, viewport->mapToGlobal(finish),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &cancelledMove);
+    QVERIFY(std::abs(state.viewportSectionClipOffset) > 1e-6);
+    QTest::mouseClick(viewport, Qt::RightButton);
+    QCOMPARE(state.sectionPlaneGripDrag, -1);
+    QCOMPARE(state.viewportSectionClipOffset, 0.0);
+
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, start);
+    QVERIFY(state.sectionPlaneGripDrag >= 0);
+    QMouseEvent move(QEvent::MouseMove, finish, viewport->mapToGlobal(finish),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &move);
+    QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, finish);
+    QCOMPARE(state.sectionPlaneGripDrag, -1);
+    QVERIFY(std::abs(state.viewportSectionClipOffset) > 1e-6);
+    window.Submit("UNDO");
+    QCOMPARE(state.viewportSectionClipOffset, 0.0);
   }
 
   void nativeLayerManagerEditsAreUndoable() {
