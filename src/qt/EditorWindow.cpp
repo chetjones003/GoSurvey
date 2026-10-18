@@ -795,6 +795,8 @@ void EditorWindow::BuildDocks() {
   m_Toolspace->setUniformRowHeights(true);
   m_Toolspace->setIndentation(14);
   m_Toolspace->setMinimumWidth(215);
+  m_Toolspace->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(m_Toolspace, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowToolspaceContextMenu(position); });
   makeDock("Toolspace", "toolspaceDock", Qt::LeftDockWidgetArea, m_Toolspace);
   BuildPropertiesPanel();
   makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, m_PropertiesScroll);
@@ -1307,7 +1309,20 @@ void EditorWindow::Refresh() {
   points->setIcon(0, CadCommandIcon("Point.png"));
   auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
   surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (const auto& surface : m_State.cadSurfaces) new QTreeWidgetItem(surfaces, {QString::fromUtf8(surface.name.c_str())});
+  surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
+  for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
+    auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
+    surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
+    surface->setData(0, Qt::UserRole + 2, i);
+  }
+  auto* surfaceStyles = new QTreeWidgetItem(m_Toolspace, {"Surface Styles"});
+  surfaceStyles->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
+  for (const auto& surfaceStyle : m_State.surfaceStyles) {
+    auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
+    entry->setData(0, Qt::UserRole + 1, "style");
+    entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
+  }
   auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
   blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
   for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
