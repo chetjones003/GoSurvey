@@ -330,8 +330,8 @@ private Q_SLOTS:
     // A synthetic in-flight download, so progress and cancellation are deterministic.
     window.m_Update->phase = update::Phase::Downloading;
     window.m_Update->task = std::make_unique<update::UpdateTask>();
-    window.m_Update->task->bytesReceived = 12 * 1024 * 1024;
-    window.m_Update->task->bytesTotal = 24 * 1024 * 1024;
+    window.m_Update->task->bytesReceived = 12LL * 1024 * 1024;
+    window.m_Update->task->bytesTotal = 24LL * 1024 * 1024;
     auto* progress = dialog->findChild<QProgressBar*>("updateProgress");
     QTRY_VERIFY(progress->isVisibleTo(dialog));
     QTRY_COMPARE(progress->format(), QString("12.0 MB of 24.0 MB"));
