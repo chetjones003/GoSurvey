@@ -2000,6 +2000,100 @@ private Q_SLOTS:
     QVERIFY(window.State().drawingLayerTable[1].on);
   }
 
+  void pointGroupManagerCreatesAndUndoesFromEmptyState() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("pointGroupManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* matches = dialog->findChild<QLabel*>("pointGroupMatchCount"); QVERIFY(matches);
+      QVERIFY(matches->text().contains("No point group selected"));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-empty.png")));
+      auto* create = dialog->findChild<QPushButton*>("pointGroupNew"); QVERIFY(create); create->click();
+      QCOMPARE(window.State().pointGroups.size(), std::size_t(1));
+      QCOMPARE(window.State().pointGroups.front().name, std::string("Point Group"));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-new.png")));
+      dialog->findChild<QPushButton*>("pointGroupDelete")->click();
+      QVERIFY(window.State().pointGroups.empty());
+      dialog->findChild<QPushButton*>("pointGroupClose")->click();
+    });
+    window.RunRibbonAction("@pointGroups");
+    QCOMPARE(window.State().pointGroups.size(), std::size_t(0));
+    window.Submit("UNDO");
+    QCOMPARE(window.State().pointGroups.size(), std::size_t(1));
+    window.Submit("UNDO");
+    QVERIFY(window.State().pointGroups.empty());
+  }
+
+  void pointGroupManagerEditsRulesValidatesAndPreviewsMembers() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.surveyPoints = {{1, 0, 0, 0, "EG CL", "EG", ""},
+                          {2, 1, 0, 0, "EG TOE", "EG", ""},
+                          {3, 2, 0, 0, "Road", "RD", ""}};
+    AppCommandState::ProjectSession readOnlyProject; readOnlyProject.uid = 894; readOnlyProject.readOnly = true;
+    state.openProjects.push_back(readOnlyProject);
+    state.drawingTabs[1].projectUid = readOnlyProject.uid;
+    PointGroup ground; ground.name = "Existing Ground"; ground.rule.descriptionMatch = "EG*";
+    PointGroup curb; curb.name = "Curb Shots";
+    state.pointGroups = {ground, curb};
+    state.selectedSurveyPointIndices = {2};
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("pointGroupManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* picker = dialog->findChild<QComboBox*>("pointGroupPicker"); QVERIFY(picker);
+      QCOMPARE(picker->count(), 2);
+      picker->setCurrentIndex(1);
+      QCOMPARE(dialog->findChild<QLineEdit*>("pointGroupName")->text(), QString("Curb Shots"));
+      picker->setCurrentIndex(0);
+      auto* matches = dialog->findChild<QLabel*>("pointGroupMatchCount"); QVERIFY(matches);
+      QTRY_VERIFY(matches->text().contains("2 matched"));
+      auto* preview = dialog->findChild<QListWidget*>("pointGroupMemberPreview"); QVERIFY(preview);
+      QCOMPARE(preview->count(), 2);
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-populated.png")));
+
+      auto* name = dialog->findChild<QLineEdit*>("pointGroupName"); QVERIFY(name);
+      name->setText("Curb Shots");
+      QVERIFY(QMetaObject::invokeMethod(name, "editingFinished", Qt::DirectConnection));
+      QCOMPARE(state.pointGroups.front().name, std::string("Existing Ground"));
+      auto* validation = dialog->findChild<QLabel*>("pointGroupValidation"); QVERIFY(validation);
+      QVERIFY(validation->text().contains("already exists"));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-validation.png")));
+
+      auto* ranges = dialog->findChild<QLineEdit*>("pointGroupRanges"); QVERIFY(ranges);
+      ranges->setFocus(); ranges->selectAll(); QTest::keyClicks(ranges, "bad-range");
+      QVERIFY(QMetaObject::invokeMethod(ranges, "editingFinished", Qt::DirectConnection));
+      QVERIFY(dialog->findChild<QLabel*>("pointGroupRuleHint")->text().contains("Ignored invalid point number"));
+      QVERIFY(std::any_of(window.m_Log.begin(), window.m_Log.end(), [](const auto& entry) {
+        return entry.find("ignored unparseable id range") != std::string::npos;
+      }));
+
+      auto* description = dialog->findChild<QLineEdit*>("pointGroupDescription"); QVERIFY(description);
+      description->setFocus(); description->selectAll(); QTest::keyClicks(description, "Road*");
+      QVERIFY(QMetaObject::invokeMethod(description, "editingFinished", Qt::DirectConnection));
+      QCOMPARE(state.pointGroups.front().rule.descriptionMatch, std::string("Road*"));
+      QTRY_VERIFY(matches->text().contains("1 matched"));
+      QCOMPARE(preview->count(), 1);
+      auto* add = dialog->findChild<QPushButton*>("pointGroupAddSelection"); QVERIFY(add); add->click();
+      QCOMPARE(state.pointGroups.front().rule.explicitIds, std::vector<int>{3});
+      QTRY_VERIFY(matches->text().contains("1 matched"));
+      auto* clear = dialog->findChild<QPushButton*>("pointGroupClearPicks"); QVERIFY(clear); clear->click();
+      QVERIFY(state.pointGroups.front().rule.explicitIds.empty());
+
+      description->setFocus(); description->selectAll(); QTest::keyClicks(description, "Nothing*");
+      QVERIFY(QMetaObject::invokeMethod(description, "editingFinished", Qt::DirectConnection));
+      QVERIFY(validation->text().isEmpty());
+      QTRY_VERIFY(matches->text().contains("Matches 0 of 3"));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-no-match.png")));
+      QTest::keyClick(dialog, Qt::Key_Escape);
+    });
+    window.RunRibbonAction("@pointGroups");
+    QVERIFY(state.openProjects.front().readOnly);
+    QCOMPARE(state.pointGroups.front().rule.descriptionMatch, std::string("Nothing*"));
+    QVERIFY(state.pointGroups.front().rule.explicitIds.empty());
+    window.Submit("UNDO");
+    QCOMPARE(state.pointGroups.front().rule.descriptionMatch, std::string("Road*"));
+  }
+
   void nativeUnitsApplyWithoutMovingGeometry() {
     EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");

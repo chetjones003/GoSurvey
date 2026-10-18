@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "EditorPointGroups.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
 #include "NonDismissableDialog.hpp"
@@ -422,6 +423,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
+  } else if (m_State.showPointGroupManagerWindow) {
+    m_State.showPointGroupManagerWindow = false;
+    m_ModalOpen = true;
+    ShowPointGroupManager(this, m_State, m_Log);
+    m_ModalOpen = false;
+    Refresh();
   } else if (m_State.showUnitsWindow) {
     m_State.showUnitsWindow = false;
     ShowUnits();
