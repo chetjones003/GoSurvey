@@ -135,7 +135,7 @@ QPushButton* UpdateButton(QDialog* dialog, const char* name) {
   return dialog->findChild<QPushButton*>(name);
 }
 QString Issue886Shot(const char* name) {
-  const QString directory = QDir(QStringLiteral(GOSURVEY_SOURCE_DIR)).filePath("build");
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
@@ -161,7 +161,7 @@ private Q_SLOTS:
     window.State().cadPipeRuns.push_back(CadPipeRun{});
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-loss-r2018.png")));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-loss-r2018.png")));
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       auto* details = dialog->findChild<QLabel*>("dwgExportLossDetails"); QVERIFY(details);
       QVERIFY(details->text().contains("existing.dwg already exists"));
@@ -180,7 +180,7 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       version->setCurrentIndex(0);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-overwrite-r2000.png")));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-overwrite-r2000.png")));
       dialog->findChild<QPushButton*>("confirmDwgExport")->click();
     });
     QVERIFY(window.ConfirmDwgExport(path));
@@ -241,7 +241,7 @@ private Q_SLOTS:
     QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
     QTRY_COMPARE(action->text(), QString("Sign Out"));
     const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QCoreApplication::applicationDirPath() +
+    QVERIFY(accountShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
                              "/qt-880-account-final.png"));
     QTest::mouseClick(action, Qt::LeftButton);
     QVERIFY(window.State().authSignOutRequested);
@@ -443,7 +443,7 @@ private Q_SLOTS:
     QVERIFY(logo);
     QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
     const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QCoreApplication::applicationDirPath() +
+    QVERIFY(startupShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
                              "/qt-880-startup-final.png"));
     gate->close();
     QVERIFY(gate->isVisible());
@@ -667,7 +667,7 @@ private Q_SLOTS:
 
   /// Screenshots of the selected designs (report window B, Settings card B) for review.
   void failureReportAndUsageNoticeScreenshots() {
-    const QString dir = QCoreApplication::applicationDirPath();
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
     std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
                                                               SampleCrashReport()));
     dialog->resize(dialog->minimumSize());
@@ -827,7 +827,7 @@ private Q_SLOTS:
     window.show();
     int launches = 0;
     window.m_LaunchInstaller = [&launches](update::UpdateState&) { ++launches; return true; };
-    window.NewDrawing();
+    window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     CancelActiveCommand(window.State(), window.m_Log);
     QVERIFY(window.State().cadGpuRevision != window.State().activeDocSavedRevision);
@@ -1215,7 +1215,7 @@ private Q_SLOTS:
   }
 
   void typingHistoryAndEscapeWorkFromViewport() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
     auto* input = window.findChild<QLineEdit*>("commandInput");
@@ -1318,7 +1318,7 @@ private Q_SLOTS:
   }
 
   void tabsAppearInitiallyAndTypingRoutesFromEditorChrome() {
-    EditorWindow window; window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
     auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
@@ -1622,7 +1622,7 @@ private Q_SLOTS:
   }
 
   void nativeLayerManagerEditsAreUndoable() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     std::string error;
     QVERIFY(CadAddDrawingLayer(window.State(), "Survey", &error));
     QTimer::singleShot(0, &window, [&] {
@@ -1639,7 +1639,7 @@ private Q_SLOTS:
   }
 
   void nativeUnitsApplyWithoutMovingGeometry() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log;
     CancelActiveCommand(window.State(), log);
@@ -1662,7 +1662,7 @@ private Q_SLOTS:
   }
 
   void nativeQuickSelectFiltersAndCancelPreservesSelection() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     std::vector<std::string> log;
     for (const auto& endpoint : {"10,0", "20,0"}) {
       window.Submit("LINE"); window.Submit("0,0"); window.Submit(endpoint);
@@ -1790,7 +1790,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonHasIconsAndReachableCollapsedActions() {
-    EditorWindow window; window.show();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
     for (const auto& name : {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling"})
       QVERIFY(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name)));
@@ -1823,7 +1823,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonContextTracksSelectionAndRestoresNormalTab() {
-    EditorWindow window; window.show();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto* ribbon = window.findChild<QTabWidget*>("ribbon"); auto& state = window.State();
     auto index = [&](const char* name) { return ribbon->indexOf(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name))); };
     ribbon->setCurrentIndex(index("Modeling"));
@@ -1842,7 +1842,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     auto* style = window.findChild<QComboBox*>("ribbonVisualStyle"); QVERIFY(style);
     style->setCurrentIndex(2); QMetaObject::invokeMethod(style, "activated", Q_ARG(int, 2));
     QCOMPARE(state.viewportVisualStyle, VisualStyle::Shaded);
@@ -1870,7 +1870,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     auto* angle = window.findChild<QDoubleSpinBox*>("ribbonHatchAngle"); QVERIFY(angle);
     angle->setValue(30); QCOMPARE(state.hatchAngleDeg, 30.f);
     CadFilledRegion region; region.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0}; region.loopStart = {0};
@@ -1885,7 +1885,7 @@ private Q_SLOTS:
   }
 
   void nativePointCreationPlacesSelectsAndUndoes() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.show();
     window.Submit("CREATEPOINTS");
     auto* dialog = window.findChild<QDialog*>("createPoints");

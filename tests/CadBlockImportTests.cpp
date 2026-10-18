@@ -371,9 +371,7 @@ TEST_CASE("INSERT with attributes opens Edit Attributes after place", "[issue124
 
 TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue124][blockimport]") {
   namespace fs = std::filesystem;
-  const fs::path dxf = fs::exists(fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf")
-                           ? fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf"
-                           : fs::path("..") / "resources" / "blocks" / "_matchline_NORTHING.dxf";
+  const fs::path dxf = fs::path(GOSURVEY_SAMPLES_DIR).parent_path() / "resources" / "blocks" / "_matchline_NORTHING.dxf";
   REQUIRE(fs::exists(dxf));
   AppCommandState st;
   std::vector<std::string> log;
@@ -421,9 +419,7 @@ TEST_CASE("bundled _matchline_NORTHING DXF carries ATTDEF and labels", "[issue12
 TEST_CASE("matchline INSERT world annotations follow the insert, not the origin",
           "[issue124][blockimport]") {
   namespace fs = std::filesystem;
-  const fs::path dxf = fs::exists(fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf")
-                           ? fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf"
-                           : fs::path("..") / "resources" / "blocks" / "_matchline_NORTHING.dxf";
+  const fs::path dxf = fs::path(GOSURVEY_SAMPLES_DIR).parent_path() / "resources" / "blocks" / "_matchline_NORTHING.dxf";
   REQUIRE(fs::exists(dxf));
   AppCommandState st;
   std::vector<std::string> log;
@@ -476,9 +472,7 @@ TEST_CASE("bundled matchline import upgrades a definition that has no attributes
   stub.content.lines = {0.f, -2.f, 0.f, 0.f, 2.f, 0.f};
   st.blockDefs.push_back(stub);
   namespace fs = std::filesystem;
-  const fs::path dxf = fs::exists(fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf")
-                           ? fs::path("resources") / "blocks" / "_matchline_NORTHING.dxf"
-                           : fs::path("..") / "resources" / "blocks" / "_matchline_NORTHING.dxf";
+  const fs::path dxf = fs::path(GOSURVEY_SAMPLES_DIR).parent_path() / "resources" / "blocks" / "_matchline_NORTHING.dxf";
   REQUIRE(fs::exists(dxf));
   std::vector<std::string> log;
   REQUIRE(ImportCadBlocksFromPath(st, dxf.u8string().c_str(), log));

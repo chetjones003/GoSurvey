@@ -1,12 +1,16 @@
 {
   "version": 6,
-  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
   "configurePresets": [
     {
       "name": "ninja-release",
       "displayName": "Ninja Release, MSVC (run from a Developer Command Prompt)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build",
+      "binaryDir": "${sourceDir}/build/.cmake/release",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -18,7 +22,7 @@
       "name": "ninja-debug",
       "displayName": "Ninja Debug, MSVC (symbols, for VS Code / RemedyBG)",
       "generator": "Ninja",
-      "binaryDir": "${sourceDir}/build/debug",
+      "binaryDir": "${sourceDir}/build/.cmake/debug",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -34,7 +38,7 @@
         "value": "x64",
         "strategy": "set"
       },
-      "binaryDir": "${sourceDir}/build/vs",
+      "binaryDir": "${sourceDir}/build/.cmake/vs",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -47,7 +51,7 @@
         "value": "x64",
         "strategy": "set"
       },
-      "binaryDir": "${sourceDir}/build/vs",
+      "binaryDir": "${sourceDir}/build/.cmake/vs2022",
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
@@ -71,6 +75,28 @@
       "name": "vs-debug",
       "configurePreset": "vs",
       "configuration": "Debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "ninja-release",
+      "configurePreset": "ninja-release",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "ninja-debug",
+      "configurePreset": "ninja-debug",
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
     }
   ]
 }

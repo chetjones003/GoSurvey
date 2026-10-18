@@ -4,7 +4,7 @@
 // fails, so re-placing a real PDF is checked in the GUI, not here.)
 
 #include "CadCommands.hpp"
-#include "ProjectFiles.hpp"
+#include "commands/ProjectFiles.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
