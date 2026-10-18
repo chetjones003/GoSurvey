@@ -1,5 +1,6 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
+#include "io/DwgIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
@@ -11,11 +12,15 @@
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
 #include "ProjectPoints.hpp"
+#include "ProjectSettings.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include "io/Project.hpp"
 #include "ProjectSettings.hpp"
 #include "GsMigrate.hpp"
+#include "GsIo.hpp"
+#include "AppPaths.hpp"
+#include "DwgIo.hpp"
 #include "UserPrefs.hpp"
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
@@ -36,6 +41,7 @@
 #include <QAbstractItemView>
 #include <QMouseEvent>
 #include <QDialogButtonBox>
+#include <QListWidget>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QComboBox>
@@ -65,6 +71,8 @@
 #include <QFileInfo>
 #include <QTimer>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace {
@@ -132,6 +140,46 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
+    EditorWindow window;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("existing.dwg");
+    QFile existing(path);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    existing.write("original");
+    existing.close();
+
+    window.State().dwgExportVersion = DwgSaveVersion::R2018;
+    window.State().cadPipeRuns.push_back(CadPipeRun{});
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-loss-r2018.png")));
+      auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
+      auto* details = dialog->findChild<QLabel*>("dwgExportLossDetails"); QVERIFY(details);
+      QVERIFY(details->text().contains("existing.dwg already exists"));
+      QVERIFY(details->text().contains("AC1032"));
+      version->setCurrentIndex(0);
+      QVERIFY(details->text().contains("AC1015"));
+      dialog->findChild<QPushButton*>("cancelDwgExport")->click();
+    });
+    QVERIFY(!window.ConfirmDwgExport(path));
+    QCOMPARE(window.State().dwgExportVersion, DwgSaveVersion::R2018);
+    QFile check(path);
+    QVERIFY(check.open(QIODevice::ReadOnly));
+    QCOMPARE(check.readAll(), QByteArray("original"));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
+      auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
+      version->setCurrentIndex(0);
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-overwrite-r2000.png")));
+      dialog->findChild<QPushButton*>("confirmDwgExport")->click();
+    });
+    QVERIFY(window.ConfirmDwgExport(path));
+    QCOMPARE(window.State().dwgExportVersion, DwgSaveVersion::R2000);
+  }
 
   void rawObservationsSurviveStructuredSessionSave() {
     auto state = StateWithTraverse();
@@ -971,7 +1019,7 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.Submit("NEW"); window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
@@ -1089,6 +1137,184 @@ private Q_SLOTS:
     QCOMPARE(input->text(), QString("z")); QTRY_VERIFY(input->hasFocus());
     input->completer()->popup()->hide(); input->clear();
     dock->setFloating(false);
+  }
+
+  void qtDrawingTemplateWorkflowDiscoversCreatesCancelsAndPreservesFailure() {
+    IsolatedUserData userData;
+    const auto userTemplateDir = UserDataDirectory() / "drawing-templates";
+    std::filesystem::create_directories(userTemplateDir);
+    auto writeTemplate = [&](const QString& name, double x) {
+      AppCommandState source;
+      source.userLinesFlat = {x, 2.0, 0.0, x + 10.0, 2.0, 0.0};
+      source.userLineAttrs.push_back(EntityAttributes{});
+      const auto path = userTemplateDir / name.toStdWString();
+      const auto pathUtf8 = QString::fromStdWString(path.wstring()).toUtf8();
+      std::vector<std::string> log;
+      return SaveGoSurveyTemplateFile(source, pathUtf8.constData(), log) ?
+          QString::fromStdWString(path.wstring()) : QString{};
+    };
+    const QString alphaPath = writeTemplate("Alpha.gst", 21.0);
+    const QString userDuplicatePath = writeTemplate("Field Survey.gst", 31.0);
+    QVERIFY(!alphaPath.isEmpty()); QVERIFY(!userDuplicatePath.isEmpty());
+    QFile ignoredFile(QString::fromStdWString((userTemplateDir / L"ignore.txt").wstring()));
+    QVERIFY(ignoredFile.open(QIODevice::WriteOnly)); ignoredFile.write("not a template"); ignoredFile.close();
+    QFile sourceFile(userDuplicatePath); QVERIFY(sourceFile.open(QIODevice::ReadOnly));
+    const QByteArray sourceBytes = sourceFile.readAll(); sourceFile.close();
+
+    EditorWindow window;
+    window.SwitchDrawing(1);
+    window.State().userLinesFlat = {1.0, 3.0, 0.0, 4.0, 3.0, 0.0};
+    SaveDocumentToSnapshot(window.State(), window.State().activeDrawingIdx);
+    const auto beforeLines = window.State().userLinesFlat;
+    const auto beforeTabs = window.State().drawingTabs.size();
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      QVERIFY(list->count() >= 4);
+      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
+      bool bundledDuplicate = false, userDuplicate = false, hasAlpha = false, hasIgnored = false;
+      int userRow = -1;
+      for (int row = 0; row < list->count(); ++row) {
+        const auto* item = list->item(row);
+        bundledDuplicate |= item->text() == "Field Survey — Bundled";
+        if (item->text() == "Field Survey — Personal") { userDuplicate = true; userRow = row; }
+        hasAlpha |= item->text() == "Alpha — Personal";
+        hasIgnored |= item->text().contains("ignore");
+      }
+      QVERIFY(bundledDuplicate); QVERIFY(userDuplicate); QVERIFY(hasAlpha); QVERIFY(!hasIgnored);
+      QVERIFY(userRow >= 0);
+      list->setCurrentRow(userRow);
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
+    QCOMPARE(window.State().drawingTabs.size(), beforeTabs + 1);
+    QVERIFY(window.State().activeDrawingIdx > 1);
+    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
+    QCOMPARE(window.State().userLinesFlat[0], 31.0);
+    QCOMPARE(window.State().userLinesFlat[3], 41.0);
+    QCOMPARE(window.State().drawingTabs.back().projectUid, 0u);
+    const auto drawingPath = QString::fromStdWString((userTemplateDir / L"Created.dwg").wstring());
+    const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
+    std::vector<std::string> drawingLog;
+    QVERIFY(SaveDrawingDocument(window.State(), drawingPathUtf8.constData(), drawingLog));
+    AppCommandState reopened;
+    QVERIFY(OpenDrawingDocument(reopened, drawingPathUtf8.constData(), drawingLog));
+    QCOMPARE(reopened.userLinesFlat, window.State().userLinesFlat);
+    sourceFile.setFileName(userDuplicatePath);
+    QVERIFY(sourceFile.open(QIODevice::ReadOnly)); QCOMPARE(sourceFile.readAll(), sourceBytes); sourceFile.close();
+
+    const auto activeIdx = window.State().activeDrawingIdx;
+    const auto activeLines = window.State().userLinesFlat;
+    const auto tabCount = window.State().drawingTabs.size();
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
+    });
+    window.NewDrawing();
+    QCOMPARE(window.State().drawingTabs.size(), tabCount);
+    QCOMPARE(window.State().activeDrawingIdx, activeIdx);
+    QCOMPARE(window.State().userLinesFlat, activeLines);
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
+      list->setCurrentRow(0);
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
+    QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
+    QVERIFY(window.State().userLinesFlat.empty());
+    window.SwitchDrawing(activeIdx);
+
+    const auto badPath = userTemplateDir / L"Broken.gst";
+    { std::ofstream bad(badPath, std::ios::binary); bad << "{ malformed"; }
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      int brokenRow = -1;
+      for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
+      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* warning = qobject_cast<QMessageBox*>(widget))
+            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+      });
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
+    QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
+    QCOMPARE(window.State().activeDrawingIdx, activeIdx);
+    QCOMPARE(window.State().userLinesFlat, activeLines);
+  }
+
+  void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {
+    EditorWindow window;
+    auto& state = window.State();
+    AppCommandState::ProjectSession session;
+    session.uid = 92;
+    session.readOnly = true;
+    session.settings = std::make_shared<ProjectSettings>();
+    session.settings->insUnits = 2;
+    state.openProjects.push_back(session);
+    state.drawingTabs[1].projectUid = session.uid;
+    window.SwitchDrawing(1);
+    const auto tabsBefore = state.drawingTabs.size();
+    window.NewDrawing();
+    QCOMPARE(state.drawingTabs.size(), tabsBefore + 1);
+    QCOMPARE(state.drawingTabs.back().projectUid, session.uid);
+    QCOMPARE(state.drawingInsUnits, 2);
+    QVERIFY(state.userLinesFlat.empty());
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+    QCOMPARE(state.openProjects.front().settings->insUnits, 2);
+    QCOMPARE(state.openProjects.front().readOnly, true);
+  }
+
+  void qtDrawingTemplateScreenshotEvidenceForIssue885() {
+    IsolatedUserData userData;
+    const auto templateDir = UserDataDirectory() / "drawing-templates";
+    std::filesystem::create_directories(templateDir);
+    AppCommandState source;
+    source.userLinesFlat = {1.0, 2.0, 0.0, 5.0, 2.0, 0.0};
+    source.userLineAttrs.push_back(EntityAttributes{});
+    std::vector<std::string> log;
+    const auto templatePath = QString::fromStdWString((templateDir / L"Example.gst").wstring()).toUtf8();
+    QVERIFY(SaveGoSurveyTemplateFile(source, templatePath.constData(), log));
+    { std::ofstream broken(templateDir / L"Broken.gst", std::ios::binary); broken << "{ malformed"; }
+
+    EditorWindow window;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser.png")));
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      int exampleRow = -1;
+      for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->text() == "Example — Personal") exampleRow = row;
+      QVERIFY(exampleRow >= 0); list->setCurrentRow(exampleRow);
+      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser-selected.png")));
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
+    });
+    window.NewDrawing();
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      int brokenRow = -1;
+      for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
+      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* warning = qobject_cast<QMessageBox*>(widget)) {
+            QVERIFY(warning->grab().save(QDir::current().filePath("qt-885-template-error.png")));
+            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+          }
+      });
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
   }
 
   void appearanceChangesKeepDrawingAndToolspaceState() {
@@ -1243,7 +1469,7 @@ private Q_SLOTS:
     const auto output = directory.filePath("export.csv");
     QFile file(input); QVERIFY(file.open(QIODevice::WriteOnly));
     file.write("\xef\xbb\xbfP,N,E,Z,D\n12,100.125,200.25,30.123456789,EG\n13,101,201,31,Tree\n"); file.close();
-    EditorWindow window; window.Submit("NEW");
+    EditorWindow window; window.CreateDrawingFromTemplate();
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = window.findChild<QDialog*>("importSurveyPoints"); QVERIFY(dialog);
       dialog->findChild<QLineEdit*>("pointFilePath")->setText(input);
@@ -1279,7 +1505,7 @@ private Q_SLOTS:
     QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
     for (int i = 1; i <= 20000; ++i) file.write(QByteArray::number(i) + ",100,200,30,Survey point description\n");
     file.close();
-    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); auto& state = window.State();
     qstrncpy(state.surveyImportCsvPath, path.toUtf8().constData(), sizeof(state.surveyImportCsvPath));
     state.surveyImportCsvLayoutIdx = 0; state.surveyImportCsvSkipFirstRow = false;
     SurveyCsvRefreshImportPreview(state); QCOMPARE(state.surveyImportValidRowCount, 20000);
@@ -1301,7 +1527,7 @@ private Q_SLOTS:
   }
 
   void nativePasteWarningBlocksUnsafePasteAndCancels() {
-    EditorWindow window; window.Submit("NEW");
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.State().pastePrompt = {true, true, false, "Coordinate systems differ", true, false};
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = window.findChild<QMessageBox*>("pasteWarning"); QVERIFY(dialog);
@@ -1314,7 +1540,7 @@ private Q_SLOTS:
   }
 
   void nativePasteWarningConvertsUnitsBeforePlacement() {
-    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 1, 1, 0};
     state.selection.push_back({SelectedEntity::Type::LineSeg, 0});
     auto* copy = Action(window, "Copy"); QVERIFY(copy); copy->trigger();
@@ -1482,7 +1708,7 @@ private Q_SLOTS:
 
   void nativePointGridPreservesPrecisionIdentityAndUndo() {
     EditorWindow window;
-    window.Submit("NEW");
+    window.CreateDrawingFromTemplate();
     auto& state = window.State();
     state.worldDocumentOriginX = 6000000; state.worldDocumentOriginY = 4000000;
     std::vector<std::string> log;
@@ -1524,7 +1750,7 @@ private Q_SLOTS:
   void surveyJsonRoundTripsUnicodeRawCodesAndWorldCoordinates() {
     QTemporaryDir directory;
     const auto path = directory.filePath(QString::fromUtf8("測量-é.json"));
-    EditorWindow source; source.Submit("NEW");
+    EditorWindow source; source.CreateDrawingFromTemplate();
     auto& state = source.State();
     state.worldDocumentOriginX = 6000000; state.worldDocumentOriginY = 4000000;
     state.createPointsOpts.defaultDescription = "EG"; state.createPointsNextId = 0;
@@ -1535,7 +1761,7 @@ private Q_SLOTS:
     QVERIFY(SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
     // Replacing an existing file must work, including on Windows.
     QVERIFY(SaveSurveyPointsToJsonFile(state, path.toUtf8().constData(), log));
-    EditorWindow target; target.Submit("NEW");
+    EditorWindow target; target.CreateDrawingFromTemplate();
     target.State().worldDocumentOriginX = 6000100; target.State().worldDocumentOriginY = 4000200;
     target.State().createPointsNextId = 99;
     QVERIFY(TryPlaceSurveyPoint(target.State(), 10, 20, 30, log));
@@ -1561,7 +1787,7 @@ private Q_SLOTS:
   void surveyJsonFailurePreservesDrawingAndExistingFile() {
     QTemporaryDir directory;
     const auto path = directory.filePath("points.json");
-    EditorWindow window; window.Submit("NEW");
+    EditorWindow window; window.CreateDrawingFromTemplate();
     auto& state = window.State(); std::vector<std::string> log;
     QVERIFY(TryPlaceSurveyPoint(state, 10, 20, 30, log));
     const auto revision = state.cadGpuRevision;
@@ -1603,7 +1829,7 @@ private Q_SLOTS:
     QTemporaryDir directory; const auto path = directory.filePath("legacy.json");
     QFile file(path); QVERIFY(file.open(QIODevice::WriteOnly));
     file.write(R"({ "points" : [ { "id" : 2, "easting" : 1.5, "northing" : 2.5, "elevation" : 3.5, "description" : "EG\u00e9" } ] })"); file.close();
-    EditorWindow window; window.Submit("NEW"); std::vector<std::string> log;
+    EditorWindow window; window.CreateDrawingFromTemplate(); std::vector<std::string> log;
     QVERIFY(LoadSurveyPointsFromJsonFile(window.State(), path.toUtf8().constData(), log));
     QCOMPARE(window.State().surveyPoints[0].rawDescription, std::string("EGé"));
     QVERIFY(file.open(QIODevice::WriteOnly)); file.write("{\"points\":[]}"); file.close();
@@ -1623,7 +1849,7 @@ private Q_SLOTS:
 
   void nativeDatabaseGridResolvesCollisionAndHonorsReadOnly() {
     QTemporaryDir directory;
-    EditorWindow window; window.Submit("NEW");
+    EditorWindow window; window.CreateDrawingFromTemplate();
     auto& state = window.State();
     AppCommandState::ProjectSession session;
     session.uid = 8;
@@ -1686,7 +1912,7 @@ private Q_SLOTS:
     QVERIFY(QDir().mkpath(directory.filePath("Drawings")));
     QFile closedDrawing(directory.filePath("Drawings/Other.dwg"));
     QVERIFY(closedDrawing.open(QIODevice::WriteOnly)); closedDrawing.close();
-    EditorWindow window; window.Submit("NEW"); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); auto& state = window.State();
     AppCommandState::ProjectSession session;
     session.uid = 18; session.project.name = "Shared test";
     session.project.file = std::filesystem::path(directory.filePath("Shared.gsproj").toStdWString());

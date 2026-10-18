@@ -52,12 +52,15 @@ private:
   void BuildRibbonPages();
   void RefreshRibbon();
   void RunRibbonAction(const QString& id);
+  bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);
+  void CreateDrawingFromTemplate(std::uint32_t projectUid = 0, const QString& templatePath = {});
+  void ShowDrawingTemplateChooser();
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);

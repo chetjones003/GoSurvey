@@ -949,6 +949,7 @@ file(GLOB_RECURSE GOSURVEY_RESOURCE_DIR_FILES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches/*"
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks/*"
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts/*"
+  "${CMAKE_CURRENT_SOURCE_DIR}/resources/drawing-templates/*"
   "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki/*")
 set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_DEFAULT_TEMPLATE}"
@@ -971,6 +972,7 @@ add_custom_command(
           "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/drawing-templates"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -997,6 +999,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/drawing-templates"
+          "${CMAKE_CURRENT_BINARY_DIR}/resources/drawing-templates"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
           "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
