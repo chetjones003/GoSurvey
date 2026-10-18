@@ -37,6 +37,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/io/PdfPlot.cpp
   src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
+  src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp

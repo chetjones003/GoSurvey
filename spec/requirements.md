@@ -12538,6 +12538,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18).
 - Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896.
 
+### REQ-427 — Qt map, geolocation, and marker workflows (GitHub issue #899)
+
+- Purpose: bring the complete 0.7.4 map and geolocation workflows to Qt so a Qt user can configure a drawing's location, use its geographic markers, view and capture maps, and manage position markers without switching frontends.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-18-d. This is a Qt parity port; requirements REQ-357 through REQ-364 remain the behavior authority. Existing 0.7.4 workflows and provider choices are preserved; this requirement does not add a map provider.
+- Depends on: REQ-084, REQ-101, REQ-201, REQ-302, REQ-357, REQ-358, REQ-359, REQ-360, REQ-361, REQ-362, REQ-363, REQ-364.
+- Statement:
+  1. The Qt frontend provides complete native workflows for Drawing Settings (Units and Zone, Transformation, and Object Layers), the Geolocation contextual ribbon actions, the online map selector, capture area actions, and position-marker creation and editing, as applicable to the active drawing. Each action reaches its existing shared settings, command, map, marker, and persistence behavior; a ribbon button or command route alone is not parity.
+  2. Preserve the behavior specified by REQ-357 through REQ-364, including staged edits and Cancel, validation and visible failure, confirmation, cancellation, undo, per-drawing state, read-only rules, and the specified save/reopen behavior. Do not duplicate domain state or change map, coordinate, marker, or persistence semantics in the Qt layer.
+  3. The map choices remain those of REQ-363: USGS Imagery, USGS Imagery Topo, USGS Topo, and Map Off. Other providers are not added by this port. Capture Area, Pick Area, and Remove Captured Areas retain REQ-364's enabled/disabled, cancellation, limit, failure, persistence, and undo behavior.
+  4. The Qt workflow is usable through native Qt surfaces, including dialogs and viewport interaction required to finish each workflow. Preserve existing ribbon/contextual-tab behavior and do not expose unavailable controls as active actions.
+  5. For each major affected Qt surface, present 2–3 integrated screenshot options and apply the user's selected visual direction before the final implementation screenshots and completion review.
+- Acceptance:
+  - focused Qt workflow coverage exercises Drawing Settings entry points, staged edits, validation, Cancel/Apply/OK, undo, per-drawing state, and applicable read-only behavior;
+  - focused Qt workflow coverage exercises geolocation marker editing/reorientation/removal and position-marker placement/editing, including cancel, failure, undo, and the applicable persistence/read-only behavior;
+  - focused Qt workflow coverage exercises each map choice, no-request behavior when Map Off or not geolocated, map error/cache behavior, capture and pick-area completion/cancel/failure/limit, removal, undo, and save/reopen;
+  - all workflows use the existing shared services and meet their underlying REQ-357 through REQ-364 acceptance conditions;
+  - update `docs/qt-074-parity-ledger.md` with the Qt routes, focused evidence, and remaining gaps;
+  - present and apply a user-selected visual direction for every major affected surface, then capture the final affected Qt surfaces and meaningful states under `build/artifacts/` for user review.
+- Owner-layer: Qt UI (`src/qt/`); settings, map, marker, command, rendering, and persistence behavior remain in their existing owners.
+- Status: accepted (2026-10-18) — D-2026-10-18-d, GitHub issue #899.
+- Revisions: 2026-10-18 — initial, recording the Qt parity decision for GitHub issue #899.
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should

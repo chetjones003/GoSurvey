@@ -65,6 +65,8 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QRadioButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -854,6 +856,68 @@ void EditorWindow::BuildDocks() {
   makeDock("Toolspace", "toolspaceDock", Qt::LeftDockWidgetArea, m_Toolspace);
   BuildPropertiesPanel();
   makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, m_PropertiesScroll);
+  auto* mapPanel = new QWidget(this);
+  mapPanel->setObjectName("mapTaskPanel");
+  auto* mapLayout = new QVBoxLayout(mapPanel);
+  mapLayout->setContentsMargins(10, 10, 10, 10);
+  auto* mapIntro = new QLabel("Choose a USGS base map for this drawing. Captured areas remain available offline.", mapPanel);
+  mapIntro->setWordWrap(true);
+  mapLayout->addWidget(mapIntro);
+  auto* providerTitle = new QLabel("Map provider", mapPanel);
+  providerTitle->setStyleSheet("font-weight:600;");
+  mapLayout->addWidget(providerTitle);
+  auto* providerGroup = new QButtonGroup(mapPanel);
+  providerGroup->setExclusive(true);
+  for (const auto& info : kOnlineMaps) {
+    auto* option = new QRadioButton(QString::fromUtf8(info.label), mapPanel);
+    option->setObjectName(QString("mapProvider_%1").arg(static_cast<int>(info.map)));
+    option->setIcon(CadCommandIcon(QString::fromUtf8(info.icon) + ".png"));
+    option->setIconSize(QSize(24, 24));
+    option->setMinimumHeight(34);
+    providerGroup->addButton(option, static_cast<int>(info.map));
+    mapLayout->addWidget(option);
+    connect(option, &QRadioButton::clicked, this, [this, info] {
+      SetOnlineMap(m_State, info.map, m_Log);
+      Refresh();
+    });
+  }
+  auto* mapAttribution = new QLabel("Map: USGS The National Map", mapPanel);
+  mapAttribution->setObjectName("mapAttribution");
+  mapAttribution->setWordWrap(true);
+  mapAttribution->setStyleSheet("color:#65727e;");
+  mapLayout->addWidget(mapAttribution);
+  auto* captureTitle = new QLabel("Capture area", mapPanel);
+  captureTitle->setStyleSheet("font-weight:600;");
+  mapLayout->addWidget(captureTitle);
+  auto* captureView = new QPushButton("Capture visible map", mapPanel);
+  captureView->setObjectName("mapCaptureVisible");
+  mapLayout->addWidget(captureView);
+  auto* capturePick = new QPushButton("Pick area", mapPanel);
+  capturePick->setObjectName("mapCapturePick");
+  mapLayout->addWidget(capturePick);
+  auto* removeCapture = new QPushButton("Remove captured areas", mapPanel);
+  removeCapture->setObjectName("mapRemoveCaptures");
+  mapLayout->addWidget(removeCapture);
+  auto* captureStatus = new QLabel(mapPanel);
+  captureStatus->setObjectName("mapCaptureStatus");
+  captureStatus->setWordWrap(true);
+  mapLayout->addWidget(captureStatus);
+  auto* captureProgress = new QProgressBar(mapPanel);
+  captureProgress->setObjectName("mapCaptureProgress");
+  captureProgress->setTextVisible(true);
+  mapLayout->addWidget(captureProgress);
+  mapLayout->addStretch(1);
+  auto* mapDock = makeDock("Map", "mapTaskDock", Qt::RightDockWidgetArea, mapPanel);
+  mapDock->setMinimumWidth(250);
+  connect(captureView, &QPushButton::clicked, this, [this] {
+    StartCaptureMapArea(m_State, false, m_Log); Refresh();
+  });
+  connect(capturePick, &QPushButton::clicked, this, [this] {
+    StartCaptureMapArea(m_State, true, m_Log); Refresh();
+  });
+  connect(removeCapture, &QPushButton::clicked, this, [this] {
+    RemoveCapturedMapAreas(m_State, m_Log); Refresh();
+  });
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
@@ -1601,6 +1665,32 @@ void EditorWindow::Refresh() {
     toolspaceDock->setVisible(drawingActive);
   if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
     propertiesDock->setVisible(drawingActive);
+  if (auto* mapDock = findChild<QDockWidget*>("mapTaskDock"))
+    mapDock->setVisible(drawingActive);
+  const bool mapEnabled = drawingActive && m_State.drawingSettings.Geolocated() &&
+      m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off;
+  for (const auto& info : kOnlineMaps) {
+    if (auto* option = findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(info.map)))) {
+      const QSignalBlocker block(option);
+      option->setChecked(m_State.drawingSettings.onlineMap == info.map);
+    }
+  }
+  if (auto* capture = findChild<QPushButton*>("mapCaptureVisible")) capture->setEnabled(mapEnabled);
+  if (auto* capture = findChild<QPushButton*>("mapCapturePick")) capture->setEnabled(mapEnabled);
+  if (auto* remove = findChild<QPushButton*>("mapRemoveCaptures"))
+    remove->setEnabled(drawingActive && !m_State.drawingSettings.capturedAreas.empty());
+  if (auto* status = findChild<QLabel*>("mapCaptureStatus")) {
+    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
+    status->setText(capturing ? QString::fromUtf8(m_State.mapCapture.prompt.c_str())
+                              : QString("%1 captured area(s) stored in this drawing.").arg(m_State.drawingSettings.capturedAreas.size()));
+  }
+  if (auto* progress = findChild<QProgressBar*>("mapCaptureProgress")) {
+    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
+    progress->setVisible(capturing);
+    progress->setRange(0, capturing ? std::max(1, m_State.mapCapture.total) : 1);
+    progress->setValue(capturing ? m_State.mapCapture.gathered : 0);
+    if (capturing) progress->setFormat(QString("%1 / %2 tiles").arg(m_State.mapCapture.gathered).arg(m_State.mapCapture.total));
+  }
   while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
   QString commandHint;
   for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),

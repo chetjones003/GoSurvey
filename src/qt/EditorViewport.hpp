@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include "CadCommands.hpp"
+#include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
 
 class ViewportRenderer;
@@ -45,6 +46,11 @@ private:
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;
+  std::unique_ptr<OnlineMapController> m_OnlineMap;
+  QTimer m_MapTimer;
+  std::size_t m_LastMapLogSize = 0;
+  int m_LastCaptureGathered = -1;
+  int m_LastCaptureTotal = -1;
   QPointF m_Last;
   ray3d::Vec3 m_Cursor;
   CadSnap::Hit m_Snap;

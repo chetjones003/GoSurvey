@@ -784,6 +784,7 @@ add_executable(GoSurvey
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/GpuPreference.cpp
+  src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp
