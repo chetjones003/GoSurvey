@@ -13,6 +13,8 @@
 #include "QtAnnotations.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectFiles.hpp"
+#include "ProjectPack.hpp"
+#include "ProjectTurnover.hpp"
 #include "ProjectSettings.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
@@ -354,6 +356,126 @@ private Q_SLOTS:
       QCOMPARE(session.settings->insUnits, 6);
     });
     action->trigger();
+  }
+
+  void projectHealthPackAndTurnoverDialogsAreNativeAndDismissWithoutChanges() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Project Workflows", &created, &error), error.c_str());
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    const auto tracked = created.Folder() / "PDFs" / "current-sheet.pdf";
+    { std::ofstream output(tracked, std::ios::binary); output << "tracked pdf fixture"; }
+    QVERIFY(TrackProjectFile(window.State(), uid, tracked.string(), window.m_Log));
+    for (const char* command : {"command_PROJECTHEALTH", "command_PACKPROJECT", "command_OPENPACK", "command_TURNOVER", "command_REFRESH"})
+      QVERIFY2(window.findChild<QAction*>(command), command);
+
+    bool healthShown = false;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectHealthDialog"); QVERIFY(dialog);
+      healthShown = dialog->findChild<QLabel*>("projectHealthStatus")->text().contains("issue(s)") &&
+          dialog->findChild<QPlainTextEdit*>("projectHealthDetails")->toPlainText().contains("unsaved", Qt::CaseInsensitive);
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-health.png");
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-health.png");
+      dialog->reject();
+    });
+    window.ShowProjectHealth(uid);
+    QVERIFY(healthShown);
+
+    ApplyQtAppearance(*qApp, true);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectHealthDialog"); if (!dialog) return;
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-health.png");
+      dialog->reject();
+    });
+    window.ShowProjectHealth(uid);
+    ApplyQtAppearance(*qApp, false);
+
+    bool packShown = false;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectPackDialog"); if (!dialog) return;
+      packShown = dialog->findChild<QLabel*>("projectPackSummary")->text().contains("file");
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-pack.png");
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-pack.png");
+      dialog->reject();
+    });
+    window.ShowProjectPack(uid);
+    QVERIFY(packShown);
+    QVERIFY(!std::filesystem::exists(created.Folder() / "Project Workflows.gspack"));
+
+    ApplyQtAppearance(*qApp, true);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectPackDialog"); if (!dialog) return;
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-pack.png");
+      dialog->reject();
+    });
+    window.ShowProjectPack(uid);
+    ApplyQtAppearance(*qApp, false);
+
+    bool turnoverShown = false;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectTurnoverDialog"); if (!dialog) return;
+      turnoverShown = dialog->findChild<QLineEdit*>("projectTurnoverRecipient") != nullptr;
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-turnover.png");
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-turnover.png");
+      dialog->reject();
+    });
+    window.ShowProjectTurnover(uid);
+    QVERIFY(turnoverShown);
+    QVERIFY(projturn::List(created, nullptr).empty());
+
+    ApplyQtAppearance(*qApp, true);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectTurnoverDialog"); if (!dialog) return;
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-turnover.png");
+      dialog->reject();
+    });
+    window.ShowProjectTurnover(uid);
+    ApplyQtAppearance(*qApp, false);
+
+    const auto untracked = created.Folder() / "PDFs" / "new-sheet.pdf";
+    { std::ofstream output(untracked, std::ios::binary); output << "new pdf"; }
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectRefreshDialog"); if (!dialog) return;
+      auto* list = dialog->findChild<QListWidget*>("projectRefreshFiles");
+      if (!list || list->count() != 1) { dialog->reject(); return; }
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-refresh.png");
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-refresh.png");
+      dialog->findChild<QPushButton*>("projectRefreshAddSelected")->click();
+    });
+    window.RefreshProjectFiles();
+    auto session = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(session != window.State().openProjects.end());
+    QVERIFY(std::any_of(session->project.items.begin(), session->project.items.end(),
+        [](const auto& item) { return item.path == "PDFs/new-sheet.pdf"; }));
+
+    const auto secondUntracked = created.Folder() / "PDFs" / "new-sheet-light.pdf";
+    { std::ofstream output(secondUntracked, std::ios::binary); output << "second new pdf"; }
+    ApplyQtAppearance(*qApp, true);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectRefreshDialog"); if (!dialog) return;
+      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-refresh.png");
+      dialog->reject();
+    });
+    window.RefreshProjectFiles();
+    ApplyQtAppearance(*qApp, false);
+
+    const auto before = projturn::List(session->project, nullptr).size();
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectTurnoverDialog"); if (!dialog) return;
+      dialog->findChild<QLineEdit*>("projectTurnoverRecipient")->setText("Acme Design");
+      if (auto* acknowledge = dialog->findChild<QCheckBox*>("projectTurnoverAcknowledge")) acknowledge->setChecked(true);
+      dialog->findChild<QPushButton*>("projectTurnoverCreate")->click();
+    });
+    window.ShowProjectTurnover(uid);
+    session = std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [uid](const auto& value) { return value.uid == uid; });
+    QVERIFY(session != window.State().openProjects.end());
+    QCOMPARE(projturn::List(session->project, nullptr).size(), before + 1);
   }
 
   void projectSettingsValidationBlocksSaveAndCancelLeavesProjectUntouched() {

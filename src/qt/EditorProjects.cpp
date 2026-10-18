@@ -6,6 +6,13 @@
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
 #include "ProjectAddFlow.hpp"
+#include "ProjectFiles.hpp"
+#include "ProjectPack.hpp"
+#include "ProjectTurnover.hpp"
+#include "ProjectWarnings.hpp"
+#include "io/ProjectFiles.hpp"
+#include "io/ProjectPack.hpp"
+#include "io/ProjectTurnover.hpp"
 #include "RecentDrawings.hpp"
 #include "AppPaths.hpp"
 #include <QApplication>
@@ -27,6 +34,15 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QAbstractItemView>
+#include <QCheckBox>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QPlainTextEdit>
+#include <QFormLayout>
+#include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -330,6 +346,215 @@ void EditorWindow::ShowAddDrawing(std::uint32_t projectUid, const QString& selec
 void EditorWindow::RefreshProjects() {
   EnforceProjectSettings(m_State, m_Log);
   SyncProjectPoints(m_State, m_Log, Now());
+}
+
+namespace {
+AppCommandState::ProjectSession* ProjectSession(AppCommandState& state, std::uint32_t uid) {
+  const auto found = std::find_if(state.openProjects.begin(), state.openProjects.end(),
+      [uid](const auto& session) { return session.uid == uid; });
+  return found == state.openProjects.end() ? nullptr : &*found;
+}
+
+QString HealthText(const projfiles::Health& health) {
+  QStringList lines;
+  const auto append = [&lines](const QString& heading, const std::vector<std::string>& entries) {
+    if (entries.empty()) return;
+    lines << heading;
+    for (const auto& entry : entries) lines << "  • " + QString::fromUtf8(entry.c_str());
+  };
+  append("Linked files (will not travel with the project):", health.linked);
+  append("Missing files:", health.missing);
+  append("Files unavailable to this version:", health.unavailable);
+  append("Drawings with unsaved changes:", health.unsaved);
+  append("Point clouds omitted from a pack:", health.omitted);
+  return lines.join('\n');
+}
+
+void ApplyProjectWorkflowDarkStyle(QDialog& dialog) {
+  dialog.setStyleSheet(R"(
+    QDialog { background: #222426; color: #edf2f7; }
+    QLabel, QCheckBox { color: #edf2f7; }
+    QPlainTextEdit, QListWidget, QLineEdit {
+      background: #252729; color: #edf2f7; border: 1px solid #4b4e50;
+      selection-background-color: #356f96; selection-color: #ffffff;
+    }
+    QPushButton {
+      background: #383a3c; color: #edf2f7; border: 1px solid #4b4e50;
+      border-radius: 4px; padding: 6px 10px;
+    }
+    QPushButton:hover { background: #45484a; }
+    QPushButton:pressed { background: #303234; }
+    QPushButton:disabled { background: #303234; color: #8d9296; }
+    QScrollBar:vertical { background: #252729; width: 12px; }
+    QScrollBar::handle:vertical { background: #505457; min-height: 24px; }
+    QScrollBar:horizontal { background: #252729; height: 12px; }
+    QScrollBar::handle:horizontal { background: #505457; min-width: 24px; }
+  )");
+}
+}
+
+void EditorWindow::ShowProjectHealth(std::uint32_t uid) {
+  auto* session = ProjectSession(m_State, uid);
+  if (!session) return;
+  QDialog dialog(this);
+  dialog.setObjectName("projectHealthDialog");
+  dialog.setWindowTitle("Project Health — " + QString::fromUtf8(session->project.name.c_str()));
+  ApplyProjectWorkflowDarkStyle(dialog);
+  dialog.setMinimumWidth(560);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* heading = new QLabel("Project Health", &dialog); heading->setObjectName("projectHealthHeading");
+  QFont font = heading->font(); font.setPointSize(font.pointSize() + 3); font.setBold(true); heading->setFont(font);
+  layout->addWidget(heading);
+  auto* status = new QLabel(&dialog); status->setObjectName("projectHealthStatus"); status->setWordWrap(true);
+  auto* details = new QPlainTextEdit(&dialog); details->setObjectName("projectHealthDetails"); details->setReadOnly(true); details->setMinimumHeight(230);
+  details->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+  details->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  details->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  auto refresh = [&] {
+    const auto health = ProjectHealthFor(m_State, uid);
+    const int problems = static_cast<int>(health.linked.size() + health.missing.size() + health.unavailable.size() + health.unsaved.size());
+    status->setText(health.Clean() ? "No problems found. Every tracked file is in the project and every drawing is saved."
+                                   : QString("%1 project health issue(s) need attention or acknowledgment.").arg(problems));
+    details->setPlainText(health.Clean() && health.omitted.empty() ? "No file or drawing issues found."
+                                                                  : HealthText(health));
+  };
+  refresh(); layout->addWidget(status); layout->addWidget(details, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  auto* copy = buttons->addButton("Copy links into the project", QDialogButtonBox::ActionRole);
+  copy->setObjectName("projectHealthCopyLinks");
+  copy->setEnabled(!session->readOnly && !ProjectHealthFor(m_State, uid).linked.empty());
+  connect(copy, &QPushButton::clicked, &dialog, [&] {
+    size_t converted = 0; CopyProjectLinksIn(m_State, uid, m_Log, &converted); refresh();
+  });
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  connect(buttons, &QDialogButtonBox::clicked, &dialog, [&dialog](QAbstractButton* button) {
+    if (button->text() == "Close") dialog.accept();
+  });
+  layout->addWidget(buttons); m_ModalOpen = true; dialog.exec(); m_ModalOpen = false;
+}
+
+void EditorWindow::ShowProjectPack(std::uint32_t uid) {
+  auto* session = ProjectSession(m_State, uid);
+  if (!session) return;
+  QDialog dialog(this); dialog.setObjectName("projectPackDialog");
+  dialog.setWindowTitle("Pack Project — " + QString::fromUtf8(session->project.name.c_str())); dialog.setMinimumWidth(590);
+  ApplyProjectWorkflowDarkStyle(dialog);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* healthLabel = new QLabel(&dialog); healthLabel->setObjectName("projectPackHealth"); healthLabel->setWordWrap(true); layout->addWidget(healthLabel);
+  auto* acceptIssues = new QCheckBox("Pack anyway, with the problems above", &dialog); acceptIssues->setObjectName("projectPackAnyway"); layout->addWidget(acceptIssues);
+  auto* summary = new QLabel(&dialog); summary->setObjectName("projectPackSummary"); summary->setWordWrap(true); layout->addWidget(summary);
+  auto* omitClouds = new QCheckBox("Leave point clouds out of the pack", &dialog); omitClouds->setObjectName("projectPackExcludeClouds"); layout->addWidget(omitClouds);
+  auto* error = new QLabel(&dialog); error->setObjectName("projectPackError"); error->setWordWrap(true); error->setStyleSheet("color:#c5544f"); layout->addWidget(error);
+  gspack::PackPlan plan; std::string planError;
+  if (!FlushProjectPointDb(*session, m_Log)) {
+    QMessageBox::warning(this, "Pack Project", "The project's shared point database could not be saved. No pack was created.");
+    return;
+  }
+  const bool planned = gspack::PlanPack(session->project, {}, &plan, &planError);
+  if (!planned) error->setText(QString::fromUtf8(planError.c_str()));
+  auto refresh = [&] {
+    const auto h = ProjectHealthFor(m_State, uid); const QString health = HealthText(h);
+    healthLabel->setText(h.Clean() ? "Project Health: no problems found." : "Project Health\n" + health);
+    acceptIssues->setVisible(!h.Clean());
+    const auto bytes = plan.totalBytes - (omitClouds->isChecked() ? plan.pointCloudBytes : 0);
+    summary->setText(planned ? QString("%1 file%2 · %3 before compression.%4")
+      .arg(plan.files.size()).arg(plan.files.size() == 1 ? "" : "s")
+      .arg(QString::number(static_cast<double>(bytes) / (1024.0 * 1024.0), 'f', 1) + " MB")
+      .arg(plan.pointCloudBytes ? QString("\nPoint clouds account for %1 MB.").arg(static_cast<double>(plan.pointCloudBytes) / (1024.0 * 1024.0), 0, 'f', 1) : QString())
+      : QString("Project files could not be listed: %1").arg(QString::fromUtf8(planError.c_str())));
+    if (bytes >= gspack::kEmailWarnBytes) summary->setText(summary->text() + "\nThis is large for an email attachment (25 MB or more).");
+    if (plan.pointCloudBytes) omitClouds->setVisible(true); else omitClouds->setVisible(false);
+  };
+  refresh(); connect(omitClouds, &QCheckBox::toggled, &dialog, refresh);
+  auto* buttons = new QDialogButtonBox(&dialog); auto* pack = buttons->addButton("Pack…", QDialogButtonBox::AcceptRole);
+  auto* cancel = buttons->addButton(QDialogButtonBox::Cancel); pack->setObjectName("projectPackStart");
+  auto updatePackEnabled = [&] {
+    const auto h = ProjectHealthFor(m_State, uid);
+    pack->setEnabled(planned && (h.Clean() || acceptIssues->isChecked()));
+  };
+  connect(acceptIssues, &QCheckBox::toggled, &dialog, updatePackEnabled);
+  updatePackEnabled();
+  connect(pack, &QPushButton::clicked, &dialog, [&] {
+    const auto h = ProjectHealthFor(m_State, uid); if (!planned || (!h.Clean() && !acceptIssues->isChecked())) return;
+    const QString suggested = QString::fromUtf8(session->project.name.c_str()) + ".gspack";
+    const QString out = QFileDialog::getSaveFileName(&dialog, "Pack Project", suggested, "GoSurvey project pack (*.gspack)");
+    if (out.isEmpty()) return;
+    gspack::PackPlan current; std::string why;
+    gspack::PackOptions options; options.excludePointClouds = omitClouds->isChecked(); options.nowUnix = QDateTime::currentSecsSinceEpoch();
+    if (!gspack::PlanPack(session->project, std::filesystem::path(out.toStdWString()), &current, &why) ||
+        !gspack::WritePack(session->project, current, options, std::filesystem::path(out.toStdWString()), &why)) {
+      error->setText(QString::fromUtf8(why.c_str())); return;
+    }
+    dialog.accept();
+  });
+  connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject); layout->addWidget(buttons);
+  m_ModalOpen = true; dialog.exec(); m_ModalOpen = false;
+}
+
+void EditorWindow::OpenPackedProject() {
+  const QString pack = QFileDialog::getOpenFileName(this, "Open Packed Project", {}, "GoSurvey project pack (*.gspack)");
+  if (pack.isEmpty()) return;
+  const QString folder = QFileDialog::getExistingDirectory(this, "Choose an empty folder for the project");
+  if (folder.isEmpty()) return;
+  std::filesystem::path marker; gspack::Manifest manifest; std::string error;
+  if (!gspack::ExtractPack(std::filesystem::path(pack.toStdWString()), std::filesystem::path(folder.toStdWString()), &marker, &manifest, &error)) {
+    QMessageBox::warning(this, "Open Packed Project", QString::fromUtf8(error.c_str())); return;
+  }
+  OpenProject(QString::fromStdWString(marker.wstring()), true);
+}
+
+void EditorWindow::ShowProjectTurnover(std::uint32_t uid) {
+  auto* session = ProjectSession(m_State, uid); if (!session) return;
+  if (session->readOnly) { QMessageBox::warning(this, "Create Turnover", "This project is read-only. Nothing was written."); return; }
+  QDialog dialog(this); dialog.setObjectName("projectTurnoverDialog");
+  dialog.setWindowTitle("Create Turnover — " + QString::fromUtf8(session->project.name.c_str())); dialog.setMinimumSize(560, 520);
+  ApplyProjectWorkflowDarkStyle(dialog);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* healthLabel = new QLabel(&dialog); healthLabel->setObjectName("projectTurnoverHealth"); healthLabel->setWordWrap(true); layout->addWidget(healthLabel);
+  auto* acknowledge = new QCheckBox("Create the turnover anyway, with the problems above", &dialog); acknowledge->setObjectName("projectTurnoverAcknowledge"); layout->addWidget(acknowledge);
+  auto* copyLinks = new QPushButton("Copy links into the project", &dialog); copyLinks->setObjectName("projectTurnoverCopyLinks"); layout->addWidget(copyLinks);
+  auto* recipient = new QLineEdit(&dialog); recipient->setObjectName("projectTurnoverRecipient"); recipient->setPlaceholderText("Who receives this turnover");
+  auto* form = new QFormLayout(); form->addRow("Recipient", recipient); layout->addLayout(form);
+  auto* files = new QListWidget(&dialog); files->setObjectName("projectTurnoverFiles"); layout->addWidget(files, 1);
+  const auto candidates = projturn::Candidates(session->project);
+  for (const auto& path : candidates) { auto* item = new QListWidgetItem(QString::fromUtf8(path.c_str()), files); item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked); item->setData(Qt::UserRole, QString::fromUtf8(path.c_str())); }
+  auto refresh = [&] {
+    const auto h = ProjectHealthFor(m_State, uid);
+    healthLabel->setText(h.Clean() ? "Project Health: no problems found." : "Project Health\n" + HealthText(h));
+    acknowledge->setVisible(!h.Clean());
+    copyLinks->setEnabled(!session->readOnly && !h.linked.empty());
+  };
+  refresh(); connect(copyLinks, &QPushButton::clicked, &dialog, [&] { size_t n=0; CopyProjectLinksIn(m_State, uid, m_Log, &n); refresh(); });
+  auto* buttons = new QDialogButtonBox(&dialog); auto* create = buttons->addButton("Create turnover", QDialogButtonBox::AcceptRole); auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
+  create->setObjectName("projectTurnoverCreate");
+  connect(create, &QPushButton::clicked, &dialog, [&] {
+    std::vector<std::string> chosen;
+    for (int i=0; i<files->count(); ++i) if(files->item(i)->checkState()==Qt::Checked) chosen.push_back(files->item(i)->data(Qt::UserRole).toString().toUtf8().toStdString());
+    if (!CreateProjectTurnover(m_State, uid, recipient->text().toUtf8().toStdString(), chosen, acknowledge->isChecked(), m_Log)) {
+      QMessageBox::warning(&dialog, "Create Turnover", m_Log.empty() ? "The turnover could not be created." : QString::fromUtf8(m_Log.back().c_str())); return;
+    }
+    dialog.accept();
+  });
+  connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject); layout->addWidget(buttons);
+  m_ModalOpen = true; dialog.exec(); m_ModalOpen = false;
+}
+
+void EditorWindow::RefreshProjectFiles() {
+  if (!::RefreshProjectFiles(m_State, m_Log)) {
+    if (!m_Log.empty()) QMessageBox::information(this, "Refresh Project Files", QString::fromUtf8(m_Log.back().c_str()));
+    return;
+  }
+  auto& prompt = m_State.projectRefreshPrompt;
+  QDialog dialog(this); dialog.setObjectName("projectRefreshDialog"); dialog.setWindowTitle("New files found in project");
+  ApplyProjectWorkflowDarkStyle(dialog);
+  auto* layout = new QVBoxLayout(&dialog); layout->addWidget(new QLabel("Select the files to add to the project file list.", &dialog));
+  auto* list = new QListWidget(&dialog); list->setObjectName("projectRefreshFiles"); layout->addWidget(list);
+  for (const auto& path : prompt.files) { auto* item = new QListWidgetItem(QString::fromUtf8(path.c_str()), list); item->setFlags(item->flags() | Qt::ItemIsUserCheckable); item->setCheckState(Qt::Checked); }
+  auto* buttons = new QDialogButtonBox(&dialog); auto* add = buttons->addButton("Add selected", QDialogButtonBox::AcceptRole); auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
+  add->setObjectName("projectRefreshAddSelected");
+  connect(add, &QPushButton::clicked, &dialog, [&] { std::vector<std::string> selected; for(int i=0;i<list->count();++i) if(list->item(i)->checkState()==Qt::Checked) selected.push_back(prompt.files[static_cast<size_t>(i)]); TrackProjectFiles(m_State, prompt.projectUid, selected, m_Log); prompt = {}; dialog.accept(); });
+  connect(cancel, &QPushButton::clicked, &dialog, [&] { prompt = {}; dialog.reject(); });
+  layout->addWidget(buttons); m_ModalOpen = true; dialog.exec(); m_ModalOpen = false;
 }
 
 void EditorWindow::ShowPasteWarning() {
