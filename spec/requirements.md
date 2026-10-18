@@ -12465,6 +12465,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-14 — initial (D-2026-10-14-b). 2026-10-14 — accepted.
 
+### REQ-424 — Qt drawing-template workflow (GitHub issue #885)
+
+- Purpose: a Qt user can start a drawing from a known blank or templated document without altering the source template or the existing drawing.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-17-a.
+- Depends on: REQ-055 (drawing tabs), REQ-175 (drawing document), REQ-308 (Start tab), REQ-374 (project defaults).
+- Statement:
+  1. **Template library.** The Qt drawing-template chooser discovers `.gst` files from the bundled `resources/drawing-templates/` directory and the per-user `<UserDataDirectory>/drawing-templates/` directory. It also always offers **Blank Drawing**. The startup workspace template (`resources/default-template.gst` or the configured startup `.gst`) remains a separate startup concern and is not implicitly added to this chooser.
+  2. **Selection.** Choosing a template loads its document content into a fresh drawing tab and focuses that tab. The source template is read-only for this operation. Choosing Blank Drawing creates the same empty drawing as the existing 0.7.4 New Drawing action.
+  3. **Cancel and failure.** Cancelling the chooser creates no tab and leaves the active drawing unchanged. A template that cannot be read or validated is reported; it creates no tab, leaves the active drawing unchanged, and does not prevent choosing another template or Blank Drawing.
+  4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone template chooser.
+  5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
+- Acceptance:
+  - `[req424]` Qt workflow coverage: chooser lists Blank Drawing and valid bundled/user `.gst` templates, ignores unrelated file types, and presents deterministic ordering with duplicate names distinguishable.
+  - `[req424]` Qt workflow coverage: selecting a valid template creates and focuses a new tab with its content; saving/reopening preserves that content; the source template remains byte-identical.
+  - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
+  - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
+  - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
+  - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
+  - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
+- Owner-layer: UI (`src/qt/`); shared `.gst` loading remains in IO (`src/io/GsIo`).
+- Status: accepted (2026-10-17).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -13644,6 +13669,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
+| REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
