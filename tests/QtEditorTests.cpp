@@ -128,6 +128,21 @@ void AnswerAttachQuestion(EditorWindow& window, const char* button, std::functio
   });
   poll->start();
 }
+/// Clicks the named button of the "Project in use" question the moment it appears ("" = close the
+/// window, as Escape does). `inspect` runs first, with the dialog, to check what it says.
+void AnswerLockQuestion(EditorWindow& window, const char* button, std::function<void(QDialog&)> inspect = {}) {
+  auto* poll = new QTimer(&window);
+  poll->setInterval(10);
+  QObject::connect(poll, &QTimer::timeout, poll, [&window, poll, button, inspect] {
+    auto* dialog = window.findChild<QDialog*>("projectLockDialog");
+    if (!dialog) return;
+    poll->stop(); poll->deleteLater();
+    if (inspect) inspect(*dialog);
+    auto* target = *button ? dialog->findChild<QPushButton*>(button) : nullptr;
+    if (target) target->click(); else dialog->reject();
+  });
+  poll->start();
+}
 /// Dismisses any message box that appears and keeps what it said.
 struct MessageCatcher {
   QTimer timer;
@@ -2586,6 +2601,133 @@ private Q_SLOTS:
     QVERIFY(!AddPdfToProject(state, late.toUtf8().toStdString(), log));
     QVERIFY(state.projectAttachPrompt.kind == none);
     QVERIFY(QString::fromStdString(log.back()).contains("read-only"));
+  }
+
+  void staleProjectLockOffersReadOnlyTakeOverAndCancel() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString thisMachine = qEnvironmentVariable("COMPUTERNAME");
+    auto makeProject = [&](const char* name) {
+      gsproj::Project created; std::string error;
+      const bool made = gsproj::Create(directory.path().toStdWString(), name, &created, &error);
+      if (!made) qWarning("project not created: %s", error.c_str());
+      return created;
+    };
+    auto lockHeldBy = [](const gsproj::Project& project, const char* user, const std::string& machine, std::uint32_t pid) {
+      gsproj::LockInfo holder;
+      holder.user = user; holder.machine = machine; holder.pid = pid; holder.sinceUnix = 1760000000;
+      return gsproj::TryAcquire(project.file, holder, nullptr) == gsproj::LockResult::Acquired;
+    };
+    auto readLock = [](const gsproj::Project& project) {
+      gsproj::LockInfo held, none;
+      gsproj::TryAcquire(project.file, none, &held);
+      return held;
+    };
+    auto pathOf = [](const gsproj::Project& project) { return QString::fromStdWString(project.file.wstring()); };
+    constexpr std::uint32_t kDeadPid = 4294967280u;  // no process has this id
+    const auto myPid = static_cast<std::uint32_t>(QApplication::applicationPid());
+    MessageCatcher messages;
+    bool inspected = false;
+
+    // A lock held by a live editor on another machine: no stale note, a warning on Take over; Cancel
+    // and Esc open nothing and leave the other person's lock alone.
+    const auto live = makeProject("Live Job");
+    QVERIFY(lockHeldBy(live, "alice", "OTHERPC", 4242));
+    {
+      EditorWindow window;
+      AnswerLockQuestion(window, "projectLockCancel", [&](QDialog& dialog) {
+        const QString headline = dialog.findChild<QLabel*>("projectLockHeadline")->text();
+        inspected = headline.contains("alice") && headline.contains("OTHERPC") && headline.contains("Live Job") &&
+                    dialog.findChild<QLabel*>("projectLockSince")->text().contains("2025-") &&
+                    dialog.findChild<QLabel*>("projectLockStale")->isHidden() &&
+                    dialog.findChild<QLabel*>("projectLockTakeOverText")->text().contains("unsaved work") &&
+                    dialog.findChild<QPushButton*>("projectLockTakeOver")->text() == "Take over anyway" &&
+                    dialog.findChild<QPushButton*>("projectLockReadOnly")->isDefault();
+      });
+      QCOMPARE(window.OpenProject(pathOf(live), true), std::uint32_t(0));
+      QVERIFY(inspected);
+      QVERIFY(window.State().openProjects.empty());
+      AnswerLockQuestion(window, "");
+      QCOMPARE(window.OpenProject(pathOf(live), true), std::uint32_t(0));
+      QVERIFY(window.State().openProjects.empty());
+      QCOMPARE(readLock(live).user, std::string("alice"));
+
+      // Read-only opens the project for viewing and never touches the lock.
+      AnswerLockQuestion(window, "projectLockReadOnly");
+      const auto uid = window.OpenProject(pathOf(live), true);
+      QVERIFY(uid != 0);
+      QVERIFY(window.State().openProjects.front().readOnly);
+      QCOMPARE(readLock(live).user, std::string("alice"));
+
+      // Asking again for the project this window already has shares it: no question.
+      QCOMPARE(window.OpenProject(pathOf(live), false), uid);
+    }
+    QCOMPARE(readLock(live).user, std::string("alice"));  // closing a read-only view leaves it
+
+    // A leftover lock from a program on this machine that no longer runs is called out, and Take over
+    // makes this window the editor.
+    const auto stale = makeProject("Stale Job");
+    QVERIFY(lockHeldBy(stale, "bob", thisMachine.toStdString(), kDeadPid));
+    {
+      EditorWindow window;
+      inspected = false;
+      AnswerLockQuestion(window, "projectLockTakeOver", [&](QDialog& dialog) {
+        inspected = !dialog.findChild<QLabel*>("projectLockStale")->isHidden() &&
+                    dialog.findChild<QLabel*>("projectLockStale")->text().contains("no longer running") &&
+                    dialog.findChild<QPushButton*>("projectLockTakeOver")->text() == "Take over (stale lock)" &&
+                    !dialog.findChild<QLabel*>("projectLockTakeOverText")->text().contains("unsaved work");
+        dialog.grab().save(Issue886Shot("qt-890-stale-lock.png"));
+      });
+      const auto uid = window.OpenProject(pathOf(stale), true);
+      QVERIFY(inspected);
+      QVERIFY(uid != 0);
+      QVERIFY(!window.State().openProjects.front().readOnly);
+      QCOMPARE(readLock(stale).pid, myPid);
+    }
+    QVERIFY(!QFileInfo::exists(QString::fromStdWString(gsproj::LockPath(stale.file).wstring())));  // released on close
+
+    // A lock file nobody can read is stale too; a live process on this machine is not.
+    const auto unreadable = makeProject("Garbled Job");
+    {
+      QFile lock(QString::fromStdWString(gsproj::LockPath(unreadable.file).wstring()));
+      QVERIFY(lock.open(QIODevice::WriteOnly));
+      lock.write("not a lock");
+      lock.close();
+      EditorWindow window;
+      inspected = false;
+      AnswerLockQuestion(window, "projectLockCancel", [&](QDialog& dialog) {
+        inspected = !dialog.findChild<QLabel*>("projectLockStale")->isHidden();
+      });
+      QCOMPARE(window.OpenProject(pathOf(unreadable), true), std::uint32_t(0));
+      QVERIFY(inspected);
+    }
+    const auto running = makeProject("Running Job");
+    QVERIFY(lockHeldBy(running, "carol", thisMachine.toStdString(), myPid));
+    {
+      EditorWindow window;
+      inspected = false;
+      AnswerLockQuestion(window, "projectLockCancel", [&](QDialog& dialog) {
+        inspected = dialog.findChild<QLabel*>("projectLockStale")->isHidden();
+      });
+      QCOMPARE(window.OpenProject(pathOf(running), true), std::uint32_t(0));
+      QVERIFY(inspected);
+    }
+
+    // A takeover that cannot be written reports the failure and opens nothing.
+    const auto blocked = makeProject("Blocked Job");
+    QVERIFY(lockHeldBy(blocked, "dave", thisMachine.toStdString(), kDeadPid));
+    const QString blockedLock = QString::fromStdWString(gsproj::LockPath(blocked.file).wstring());
+    QVERIFY(QFile::setPermissions(blockedLock, QFileDevice::ReadOwner));
+    {
+      EditorWindow window;
+      messages.texts.clear();
+      AnswerLockQuestion(window, "projectLockTakeOver");
+      QCOMPARE(window.OpenProject(pathOf(blocked), true), std::uint32_t(0));
+      QVERIFY(window.State().openProjects.empty());
+      QTRY_VERIFY(!messages.texts.isEmpty());
+      QVERIFY(messages.texts.front().contains("Could not take over"));
+      QCOMPARE(readLock(blocked).user, std::string("dave"));
+    }
+    QFile::setPermissions(blockedLock, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
   }
 
   void projectAttachQuestionFollowsThroughToPointCloudImport() {

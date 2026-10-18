@@ -69,21 +69,6 @@ gsproj::LockInfo MakeMe() {
   return me;
 }
 
-bool PidAlive(std::uint32_t pid) {
-#if defined(_WIN32)
-  HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
-  if (!h)
-    return GetLastError() == ERROR_ACCESS_DENIED;  // exists, just not ours to open
-  DWORD code = 0;
-  const bool running = GetExitCodeProcess(h, &code) && code == STILL_ACTIVE;
-  CloseHandle(h);
-  return running;
-#else
-  (void)pid;
-  return true;
-#endif
-}
-
 enum class LockMode { Normal, ReadOnly, TakeOver };
 
 bool SamePath(const fs::path& a, const fs::path& b) {
@@ -140,7 +125,7 @@ std::uint32_t EnsureProjectOpen(AppCommandState& cmd, std::vector<std::string>& 
     // it back and let the user's next click go through the normal path.
     if (gsproj::TryAcquire(s.project.file, s.me, &pr.holder) == gsproj::LockResult::Acquired)
       gsproj::Release(s.project.file, s.me);
-    pr.stale = gsproj::IsStale(pr.holder, s.me, PidAlive);
+    pr.stale = gsproj::IsStale(pr.holder, s.me, gsproj::ProcessIsRunning);
     pr.openRequested = true;
     return 0;
   }
