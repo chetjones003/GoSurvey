@@ -42,7 +42,7 @@
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "NumFormat.hpp"
-#include "util/PlotScales.hpp"  // VPSCALE (REQ-401): PlotScaleLabel / metric-ratio helpers
+#include "util/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
@@ -3393,7 +3393,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
-        // A link means the same thing whichever way the rebuild was driven (ADR-062 (b)): the
+        // A link means the same thing whichever way the rebuild was driven (ADR-069 (b)): the
         // command path above and this async reap are the only two places a TIN is replaced.
         ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);
       } else {
@@ -4340,7 +4340,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
     PushUndoSnapshot(st, "Rebuild surfaces");
     for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
       BuildSurfaceFromSources(st, st.cadSurfaces[i], log);
-      ReDrapeLinkedToSurface(st, i, log);  // ADR-062 (b)
+      ReDrapeLinkedToSurface(st, i, log);  // ADR-069 (b)
     }
     BumpCadGpuCache(st);
     return;
@@ -4352,7 +4352,7 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   }
   PushUndoSnapshot(st, "Rebuild surface");
   BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
-  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-062 (b)
+  ReDrapeLinkedToSurface(st, static_cast<size_t>(si), log);  // ADR-069 (b)
   BumpCadGpuCache(st);
 }
 
@@ -38706,7 +38706,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
 }
 
 // ---------------------------------------------------------------------------------------------
-// LAYOUT (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's add/rename/
+// LAYOUT (REQ-025, issue #751/#753 V3) — typed equivalent of the layout tab bar's add/rename/
 // delete (REQ-025). One-shot, text-only, same shape as PIPESYS: a layout isn't routed or picked,
 // so it needs no `AppCommandState::Kind` of its own.
 // ---------------------------------------------------------------------------------------------
@@ -38813,7 +38813,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 }
 
 // ---------------------------------------------------------------------------------------------
-// VPSCALE (REQ-401, issue #751/#753 V3) — typed equivalent of the viewport-scale combo
+// VPSCALE (REQ-027, issue #751/#753 V3) — typed equivalent of the viewport-scale combo
 // (DrawPlotScaleCombo in CadUi.cpp), targeting the same "current viewport" `CurrentViewport`
 // resolves: the floating viewport when inside one, else the single selected paper viewport.
 // ---------------------------------------------------------------------------------------------
@@ -38879,7 +38879,7 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
 }
 
 // ---------------------------------------------------------------------------------------------
-// PAGESETUP (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's right-click
+// PAGESETUP (REQ-026, issue #751/#753 V3) — typed equivalent of the layout tab bar's right-click
 // "Page Setup Manager…" (CadUi.cpp), opening the same dialog for the active layout.
 // ---------------------------------------------------------------------------------------------
 
@@ -41074,6 +41074,13 @@ int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped) {
   const float stored = (mm < 0.f) ? -1.f : mm;
   return ApplyAttrFieldToSelection(
       st, stored, "Change lineweight", [](EntityAttributes& a) -> float& { return a.lineweightMm; }, true,
+      skipped);
+}
+
+int CadApplyTransparencyToSelection(AppCommandState& st, float transparency, int* skipped) {
+  const float stored = (transparency < -0.5f) ? -1.f : std::clamp(transparency, 0.f, 1.f);
+  return ApplyAttrFieldToSelection(
+      st, stored, "Change transparency", [](EntityAttributes& a) -> float& { return a.transparency; }, true,
       skipped);
 }
 
@@ -43679,21 +43686,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       HandlePipingSystemCommand(restOfLine, st, log);
       return;
     }
-    // LAYOUT (REQ-401, issue #751/#753 V3): typed NEW/RENAME/DELETE, mirroring the layout tab bar.
+    // LAYOUT (REQ-025, issue #751/#753 V3): typed NEW/RENAME/DELETE, mirroring the layout tab bar.
     if (plotTok == "layout") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandleLayoutCommand(restOfLine, st, log);
       return;
     }
-    // VPSCALE (REQ-401, issue #751/#753 V3): typed equivalent of the viewport-scale combo.
+    // VPSCALE (REQ-027, issue #751/#753 V3): typed equivalent of the viewport-scale combo.
     if (plotTok == "vpscale") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandleVpscaleCommand(restOfLine, st, log);
       return;
     }
-    // PAGESETUP (REQ-401, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
+    // PAGESETUP (REQ-026, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
     if (plotTok == "pagesetup") {
       StartPageSetupCommand(st, log);
       return;
@@ -44087,7 +44094,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
     // name both routinely contain spaces.
-    // ADR-062 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
+    // ADR-069 (d), GitHub #150: what in this drawing moves when a surface is rebuilt.
     if (plotTok == "drapelinks") {
       ExecuteDrapeLinksCommand(st, log);
       return;

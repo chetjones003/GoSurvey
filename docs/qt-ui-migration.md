@@ -13,7 +13,10 @@ merged `origin/master` at `90aa196d34692562effa18502c9b8ad0197e9e80`.
 into `build/qt-parity.json`. Source references do not count as verified parity.
 
 Build the native regression tests with `build-qt.bat GoSurveyQtTests`, then run
-`build/GoSurveyQtTests.exe` or `ctest --test-dir build -R '^qt.editor$'` on a desktop.
+`ctest --test-dir build -R '^qt.editor$'`. `ctest` runs them on a private invisible desktop
+(`tools/run-qt-tests-hidden.ps1`): no windows appear on screen, focus is not stolen, and a hung run is
+killed after its timeout. Run `build/GoSurveyQtTests.exe` directly to watch them on screen, or pass
+test function names to the script to run only those.
 They exercise lossless adjustment sessions, failures without mutation, worker
 solves, result acceptance, drawing commits and undo, network controls/elevations,
 unsaved-close cancellation, command input, camera pan, layers, units, PDF annotation
@@ -54,16 +57,20 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 
 ## Current coverage
 
+The release-specific beta 0.7.4 comparison, including command routes, dialogs,
+workflow evidence, and linked open gaps, is maintained in the
+[0.7.4 Qt parity ledger](qt-074-parity-ledger.md).
+
 | Area | Implemented | Remaining parity work |
 |---|---|---|
-| Startup | Splash using existing artwork; Start page; Markdown What's New window | Startup auth/update/telemetry/crash-report wiring; recent-file tiles; version-based What's New display policy |
+| Startup | Splash using existing artwork; Start page with recent drawing/project cards and thumbnails; Markdown What's New window with version-based display policy; REQ-091 sign-in choice and saved skip preference | Update/telemetry/crash-report wiring |
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
-| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
+| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close; successful opens/saves update the recent drawings list | Export-loss disclosures, full import/export UI, template workflow |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter; 3D gizmo axes/planes/hover/drag ghosts, section-plane clip indicator/hatch/grips/preview and Qt pointer routing (issue #900) | Exact graphics parity, paper-space rendering, tables, map tiles, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
-| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
+| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids; Surface Create / Properties / Surfaces manager / Surface Style dialogs, the Toolspace surface and style menus and the read-only Surface properties section (#893) | Complete geometry properties, context menus |
 | Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
-| Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; health/pack/turnover UI; stale-lock takeover UI |
+| Projects | Native create/open, lock acquisition, stale-lock detection and the read-only / take-over / cancel choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, Copy / Link / Cancel attach question (point cloud import, Add PDF to project), cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; health/pack/turnover UI |
 | PDF viewer | Async page rendering, navigation/zoom, text/line/rectangle/ellipse annotations, scaled measurements, scale presets, undo/redo, Save As, close protection, page extraction | Search/thumbnails, calibration/checks, snapping, coordinate extraction, compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
 | Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
 
@@ -91,7 +98,10 @@ Point Style artwork; the original text-only block-close button uses Block Editor
 artwork. No new bitmap artwork was generated.
 
 Home, Insert, Annotate, View, Manage, Output, Survey and Modeling use their release
-panels. Manage retains its release placeholder. Contextual Surface, Survey Point,
+panels. Manage retains its release placeholder. Model and layout tabs sit below
+the drawing viewport; layout tabs support creation and a rename/delete context menu.
+The sheet renderer draws paper geometry and tables, and composites the shared CAD
+renderer through each saved layout viewport. Contextual Surface, Survey Point,
 Point Cloud, Block Editor, Geolocation, PDF Underlay and Hatch pages follow editor
 state; Layout tools appear in paper space. Selection contexts activate on entry
 and restore the previous normal tab on exit; geolocation does not take focus.
@@ -108,7 +118,7 @@ during a run. Hatch controls edit creation defaults or selected regions; selecte
 changes are undoable and reject writes to read-only projects.
 
 **Inventory coverage is not workflow parity.** Release placeholders remain disabled.
-Buttons whose view/style/surface/group/block/page-setup/batch-plot dialogs still
+Buttons whose view/style/group/block/page-setup/batch-plot dialogs still
 lack native adapters are present but explicitly disabled with a tooltip, rather
 than silently setting an unserviced UI flag. Their shared routes remain identified
 in the catalog/router for later migration. Settings currently opens the native

@@ -1,6 +1,7 @@
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
+#include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
 #include "util/surfacestats.hpp"
 
@@ -13,76 +14,6 @@
 #include <vector>
 
 namespace {
-
-const char* kBandPalette[] = {"#3148F5", "#31A2F5", "#31F5C8", "#7CF531", "#F5E631", "#F5A031", "#F53131",
-                              "#C831F5"};
-
-bool SurfacePlanBounds(const CadSurface& s, float* mnX, float* mxX, float* mnY, float* mxY) {
-  if (!s.tin || s.tin->vertsXyz.size() < 3)
-    return false;
-  *mnX = *mxX = static_cast<float>(s.tin->vertsXyz[0]);
-  *mnY = *mxY = static_cast<float>(s.tin->vertsXyz[1]);
-  for (size_t i = 0; i + 2 < s.tin->vertsXyz.size(); i += 3) {
-    *mnX = std::min(*mnX, static_cast<float>(s.tin->vertsXyz[i]));
-    *mxX = std::max(*mxX, static_cast<float>(s.tin->vertsXyz[i]));
-    *mnY = std::min(*mnY, static_cast<float>(s.tin->vertsXyz[i + 1]));
-    *mxY = std::max(*mxY, static_cast<float>(s.tin->vertsXyz[i + 1]));
-  }
-  return true;
-}
-
-bool SurfaceElevRange(const CadSurface& s, double* lo, double* hi) {
-  if (!s.tin || s.tin->vertsXyz.size() < 3)
-    return false;
-  *lo = *hi = static_cast<double>(s.tin->vertsXyz[2]);
-  for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
-    const double z = static_cast<double>(s.tin->vertsXyz[i]);
-    *lo = std::min(*lo, z);
-    *hi = std::max(*hi, z);
-  }
-  return true;
-}
-
-template <typename T>
-void MoveSameKind(std::vector<T>* v, size_t i, int delta) {
-  const long long j = static_cast<long long>(i) + delta;
-  if (j < 0 || j >= static_cast<long long>(v->size()))
-    return;
-  std::swap((*v)[i], (*v)[static_cast<size_t>(j)]);
-}
-
-void MoveAddedPointTriple(std::vector<double>* v, size_t i, int delta) {
-  if (v == nullptr || v->size() % 3u != 0u)
-    return;
-  const size_t n = v->size() / 3;
-  const long long j = static_cast<long long>(i) + delta;
-  if (i >= n || j < 0 || j >= static_cast<long long>(n))
-    return;
-  const size_t ju = static_cast<size_t>(j);
-  for (size_t k = 0; k < 3; ++k)
-    std::swap((*v)[i * 3 + k], (*v)[ju * 3 + k]);
-}
-
-void ApplyInfo(AppCommandState& cmd, int si, const std::string& name, const std::string& description,
-               const std::string& styleName, std::vector<std::string>& log) {
-  if (si < 0 || si >= static_cast<int>(cmd.cadSurfaces.size()))
-    return;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(si)];
-  const int clash = FindSurfaceIndex(cmd, name);
-  if (name.empty()) {
-    log.push_back("Surface name cannot be empty — keeping \"" + s.name + "\".");
-    return;
-  }
-  if (clash >= 0 && clash != si) {
-    log.push_back("A surface named \"" + name + "\" already exists — rename refused.");
-    return;
-  }
-  PushUndoSnapshot(cmd, "Surface properties");
-  s.name = name;
-  s.description = description;
-  s.styleName = styleName;
-  BumpCadGpuCache(cmd);
-}
 
 void DrawInformationTab(AppCommandState& cmd, std::string* name, std::string* description, std::string* styleName) {
   ImGui::Spacing();
@@ -115,7 +46,7 @@ void DrawInformationTab(AppCommandState& cmd, std::string* name, std::string* de
   }
 }
 
-void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
+void DrawDefinitionTab(AppCommandState& cmd, int si, CadSurface& s) {
   ImGui::Spacing();
   PushPropertyPaperColors(cmd.displayColorThemeIdx);
   if (ImGui::BeginTable("##spdefopts", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -146,37 +77,7 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
   }
   PopPropertyPaperColors();
 
-  struct Row {
-    const char* type;
-    std::string param;
-    int kind;
-    size_t index;
-  };
-  std::vector<Row> rows;
-  for (size_t i = 0; i < s.sourcePointGroups.size(); ++i)
-    rows.push_back({"Point Group", s.sourcePointGroups[i], 0, i});
-  for (size_t i = 0; i < s.sourcePointFiles.size(); ++i)
-    rows.push_back({"Point File", s.sourcePointFiles[i].path, 1, i});
-  for (size_t i = 0; i < s.breaklines.size(); ++i)
-    rows.push_back({"Breakline",
-                    s.breaklines[i].description.empty() ? ("#" + std::to_string(i + 1)) : s.breaklines[i].description, 2,
-                    i});
-  for (size_t i = 0; i < s.contourSources.size(); ++i)
-    rows.push_back({"Contour",
-                    s.contourSources[i].description.empty() ? ("#" + std::to_string(i + 1))
-                                                            : s.contourSources[i].description,
-                    3, i});
-  for (size_t i = 0; i < s.boundaries.size(); ++i) {
-    const char* t = s.boundaries[i].kind == CadBoundaryKind::Mask ? "Mask" : "Boundary";
-    rows.push_back({t, s.boundaries[i].name.empty() ? ("#" + std::to_string(i + 1)) : s.boundaries[i].name, 4, i});
-  }
-  for (size_t i = 0; i < s.swappedEdgePicks.size(); ++i)
-    rows.push_back({"Edit", "Edge swap #" + std::to_string(i + 1), 5, i});
-  const size_t nAddPts = s.addedPointXyz.size() / 3;
-  for (size_t i = 0; i < nAddPts; ++i)
-    rows.push_back({"Edit", "Added point #" + std::to_string(i + 1), 6, i});
-  for (size_t i = 0; i < s.deletedPointPicks.size(); ++i)
-    rows.push_back({"Edit", "Deleted point #" + std::to_string(i + 1), 7, i});
+  const std::vector<surfedit::DefinitionRow> rows = surfedit::DefinitionRows(s);
 
   static int selOp = 0;
   if (selOp >= static_cast<int>(rows.size()))
@@ -184,37 +85,10 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
   if (selOp < 0)
     selOp = 0;
 
-  auto canMove = [&](int delta) {
-    if (rows.empty())
-      return false;
-    const int j = selOp + delta;
-    if (j < 0 || j >= static_cast<int>(rows.size()))
-      return false;
-    return rows[static_cast<size_t>(selOp)].kind == rows[static_cast<size_t>(j)].kind;
-  };
+  auto canMove = [&](int delta) { return surfedit::CanMoveDefinitionRow(rows, selOp, delta); };
   auto applyMove = [&](int delta) {
-    if (!canMove(delta))
-      return;
-    const Row r = rows[static_cast<size_t>(selOp)];
-    PushUndoSnapshot(cmd, "Reorder surface definition");
-    if (r.kind == 0)
-      MoveSameKind(&s.sourcePointGroups, r.index, delta);
-    else if (r.kind == 1)
-      MoveSameKind(&s.sourcePointFiles, r.index, delta);
-    else if (r.kind == 2)
-      MoveSameKind(&s.breaklines, r.index, delta);
-    else if (r.kind == 3)
-      MoveSameKind(&s.contourSources, r.index, delta);
-    else if (r.kind == 4)
-      MoveSameKind(&s.boundaries, r.index, delta);
-    else if (r.kind == 5)
-      MoveSameKind(&s.swappedEdgePicks, r.index, delta);
-    else if (r.kind == 6)
-      MoveAddedPointTriple(&s.addedPointXyz, r.index, delta);
-    else
-      MoveSameKind(&s.deletedPointPicks, r.index, delta);
-    BumpCadGpuCache(cmd);
-    selOp += delta;
+    if (surfedit::MoveDefinitionRow(cmd, si, rows, selOp, delta))
+      selOp += delta;
   };
 
   ImGui::Spacing();
@@ -259,24 +133,6 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
     ImGui::TextDisabled("(no definition items — add them from Toolspace)");
   ImGui::EndChild();
 }
-
-void FillElevationBands(SurfaceStyle* st, const CadSurface& s, int count) {
-  double lo = 0.0, hi = 0.0;
-  if (!SurfaceElevRange(s, &lo, &hi) || count < 1)
-    return;
-  if (hi <= lo)
-    hi = lo + 1.0;
-  st->analysisMode = SurfaceAnalysisMode::Elevation;
-  st->bands.clear();
-  const int n = std::min(count, 64);
-  for (int i = 1; i <= n; ++i) {
-    SurfaceBand b;
-    b.upperBound = lo + (hi - lo) * (static_cast<double>(i) / static_cast<double>(n));
-    b.color = kBandPalette[static_cast<size_t>((i - 1) % 8)];
-    st->bands.push_back(b);
-  }
-}
-
 void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<std::string>* log) {
   SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
   SurfaceStyle* st = SurfaceStyles::Find(cmd.surfaceStyles, s.styleName);
@@ -302,14 +158,9 @@ void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<st
     int modeIdx = static_cast<int>(st->analysisMode);
     ImGui::SetNextItemWidth(comboW("Slope angle"));
     if (ImGui::Combo("##spatype", &modeIdx, kModes, 5)) {
-      DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), log);
-      SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
-      if (found != nullptr) {
+      surfedit::SetAnalysisMode(cmd, si, static_cast<SurfaceAnalysisMode>(modeIdx), *log);
+      if (SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName))
         st = found;
-        PushUndoSnapshot(cmd, "Surface analysis");
-        st->analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
-        BumpCadGpuCache(cmd);
-      }
     }
 
     ImGui::Spacing();
@@ -343,14 +194,9 @@ void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<st
     ImGui::EndDisabled();
 
     if (ImGui::Button("Run", ImVec2(88.f, 0.f))) {
-      DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), log);
-      SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
-      if (found != nullptr) {
+      surfedit::RunElevationBands(cmd, si, rangeCount, *log);
+      if (SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName))
         st = found;
-        PushUndoSnapshot(cmd, "Surface analysis ranges");
-        FillElevationBands(st, s, rangeCount);
-        BumpCadGpuCache(cmd);
-      }
     }
 
     ImGui::TableNextColumn();
@@ -496,7 +342,7 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Definition")) {
-      DrawDefinitionTab(cmd, s);
+      DrawDefinitionTab(cmd, cmd.surfacePropertiesIndex, s);
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Analysis")) {
@@ -514,7 +360,7 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
   const float bw = 88.f;
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 4.f);
   if (StyledButton("OK", ImVec2(bw, 0.f), /*primary=*/true)) {
-    ApplyInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
+    surfedit::ApplySurfaceInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
     cmd.showSurfacePropertiesWindow = false;
     loadedFor = -1;
   }
@@ -525,7 +371,7 @@ void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>*
   }
   ImGui::SameLine();
   if (StyledButton("Apply", ImVec2(bw, 0.f), /*primary=*/true))
-    ApplyInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
+    surfedit::ApplySurfaceInfo(cmd, cmd.surfacePropertiesIndex, name, description, styleName, *log);
   ImGui::SameLine();
   ImGui::BeginDisabled();
   StyledButton("Help", ImVec2(bw, 0.f));

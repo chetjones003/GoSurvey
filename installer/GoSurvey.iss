@@ -6,7 +6,7 @@
 ;
 ; Version resolution, in priority order:
 ;   1. ISCC /DAppVersion=... /DAppVersionQuad=...   (what CI passes)
-;   2. build\generated\version.iss                  (written by CMake from project(VERSION))
+;   2. build\.cmake\release\generated\version.iss                  (written by CMake from project(VERSION))
 ;   3. the 0.0.0-local fallback below               (an un-configured tree)
 ; The fallback is deliberately not a plausible release number: a build that reaches it
 ; has bypassed the single version source and should be obvious at a glance.
@@ -15,8 +15,8 @@
 ; Or with an explicit version: iscc /DAppVersion=0.5.0-beta.7 /DAppVersionQuad=0.5.0.7 installer\GoSurvey.iss
 
 #ifndef AppVersion
-  #ifexist "..\build\generated\version.iss"
-    #include "..\build\generated\version.iss"
+  #ifexist "..\build\.cmake\release\generated\version.iss"
+    #include "..\build\.cmake\release\generated\version.iss"
   #endif
 #endif
 #ifndef AppVersion

@@ -9,6 +9,13 @@
 #include <filesystem>
 #include <fstream>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -221,6 +228,16 @@ TEST_CASE("lock: stale only when the holder is a dead process on this machine", 
   CHECK_FALSE(gsproj::IsStale(Me(10), Me(20), alive));
   CHECK_FALSE(gsproj::IsStale(Me(10, "OTHERPC"), Me(20), dead));  // cannot judge another machine
   CHECK(gsproj::IsStale(gsproj::LockInfo{}, Me(20), alive));      // unreadable lock
+}
+
+TEST_CASE("lock: ProcessIsRunning sees this process and not an unused id", "[req382]") {
+#if defined(_WIN32)
+  const auto self = static_cast<std::uint32_t>(GetCurrentProcessId());
+  CHECK_FALSE(gsproj::ProcessIsRunning(4294967280u));
+#else
+  const auto self = static_cast<std::uint32_t>(getpid());
+#endif
+  CHECK(gsproj::ProcessIsRunning(self));
 }
 
 TEST_CASE("lock: takeover replaces the holder; an unreadable lock reads as empty", "[req382]") {

@@ -79,3 +79,13 @@ It is open source free to use software and as such is depended upon by the help 
 Currently this project is funded solely by my own means. If you'd like to support development financially, you can buy me a coffee.
 
 **[Browse the repo](https://github.com/chetjones003/GoSurvey)** · **[Open issues](https://github.com/chetjones003/GoSurvey/issues)** · **[Contact me](mailto:chetjones003@gmail.com)** · **[☕ Buy me a coffee](https://buymeacoffee.com/gosurveycad)**
+
+### Unified local build
+
+Use `build.bat` for both frontends and tests; `build.bat imgui` builds the legacy frontend and `GoSurveyTestImGui`, while `build.bat qt` builds `GoSurveyQt` and `GoSurveyQtTests`. Add `debug` after the frontend selector for Debug. `build-qt.bat` forwards to the same entry point. Set `GOSURVEY_QT_ROOT` to your installed MSVC x64 Qt 6 kit (default `C:\Qt\6.8.3\msvc2022_64`).
+
+Release applications are `build/GoSurvey.exe`, `build/GoSurveyTestImGui.exe`, `build/GoSurveyQt.exe`, and `build/GoSurveyQtTests.exe`. Required DLLs, `qt-plugins/` and `resources/` accompany them. CMake caches, generated headers, static libraries, symbols and headless helper programs live under `build/.cmake/<preset>/`. Test screenshots and reports live under `build/artifacts/`. Debug applications live under `build/debug/`.
+
+Run all tests with `ctest --preset ninja-release`; use `-R qt.editor` for Qt. For direct CMake builds use `cmake --build --preset ninja-release`, not `cmake --build build`. A fresh configure is required for the new layout. To clean an old build, close the applications, remove only that checkout's generated `build/` directory, then run `build.bat`; source assets and unrelated worktrees are not part of cleanup.
+
+After a successful build, old screenshots, build files and experimental output folders are moved into `build/artifacts/legacy-output/`. Runtime assets are retained. This cleanup only touches the current checkout's build directory and preserves archived files for recovery.

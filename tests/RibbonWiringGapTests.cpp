@@ -12,7 +12,7 @@ namespace {
 
 std::string ReadCadUiSource() {
   const std::filesystem::path path =
-      std::filesystem::path("..") / "src" / "ui" / "CadUi.cpp";
+      std::filesystem::path(GOSURVEY_SAMPLES_DIR).parent_path() / "src" / "ui" / "CadUi.cpp";
   std::ifstream in(path, std::ios::binary);
   REQUIRE(in.good());
   std::ostringstream ss;

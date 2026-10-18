@@ -123,5 +123,59 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     document.drawContents(&painter);
     painter.restore();
   }
+  const float markerRadius = PositionMarkerRadiusWorld(state);
+  for (std::size_t i = 0; i < state.cadPositionMarkers.size(); ++i) {
+    const auto& marker = state.cadPositionMarkers[i];
+    const EntityAttributes* attrs = i < state.cadPositionMarkerAttrs.size() ? &state.cadPositionMarkerAttrs[i] : nullptr;
+    if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
+    const CadLayerRow* layer = nullptr;
+    if (attrs) for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+    if (layer && (!layer->on || layer->frozen)) continue;
+    float rgb[3]{0.9f, 0.9f, 0.9f};
+    if (attrs) CadColorResolveRgb(CadColorEffectiveStorage(attrs->color, layer ? layer->color : "White"),
+                                  0.9f, 0.9f, 0.9f, rgb);
+    QColor color = QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+    bool selected = false;
+    for (const auto& entity : state.selection)
+      selected |= entity.type == SelectedEntity::Type::PositionMarker && entity.index == static_cast<int>(i);
+    const QPointF center = project(marker.x, marker.y, marker.z);
+    const QPointF edge = project(marker.x + markerRadius, marker.y, marker.z);
+    const double radius = std::max(4.0, std::hypot(edge.x() - center.x(), edge.y() - center.y()));
+    if (selected) color = QColor("#62aaff");
+    QPen markerPen(color, selected ? 2.0 : 1.5); markerPen.setCosmetic(true);
+    painter.setPen(markerPen); painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(center, radius, radius);
+    painter.drawLine(QPointF(center.x() - radius, center.y()), QPointF(center.x() + radius, center.y()));
+    painter.drawLine(QPointF(center.x(), center.y() - radius), QPointF(center.x(), center.y() + radius));
+    if (!(state.mtextRichEditorOpen && state.mtextRichEditorMarkerIndex == static_cast<int>(i)) && !marker.label.text.empty()) {
+      painter.setPen(color);
+      painter.drawText(QPointF(center.x() + radius + 4, center.y() - 4),
+                       QString::fromUtf8(marker.label.text.c_str()));
+    }
+  }
+  if (state.drawingSettings.Geolocated()) {
+    const double x = state.drawingSettings.markerX - state.worldDocumentOriginX;
+    const double y = state.drawingSettings.markerY - state.worldDocumentOriginY;
+    const double angle = state.drawingSettings.markerNorthDeg * 3.14159265358979323846 / 180.0;
+    const QPointF center = project(x, y, 0.0);
+    const QPointF north = project(x + std::cos(angle), y + std::sin(angle), 0.0);
+    QPointF direction = north - center;
+    const double length = std::hypot(direction.x(), direction.y());
+    if (length > 1.e-6) {
+      direction /= length;
+      const QPointF tip = center + direction * 25.0;
+      const QColor geoColor("#f47721");
+      QPen geoPen(geoColor, 2.0); geoPen.setCosmetic(true);
+      painter.setPen(geoPen); painter.setBrush(Qt::NoBrush);
+      painter.drawEllipse(center, 8.0, 8.0);
+      painter.setBrush(geoColor);
+      painter.drawEllipse(center, 2.5, 2.5);
+      painter.drawLine(center + direction * 8.0, tip);
+      const QPointF perpendicular(-direction.y(), direction.x());
+      painter.drawPolygon(QPolygonF{tip, tip - direction * 8.0 + perpendicular * 4.0,
+                                    tip - direction * 8.0 - perpendicular * 4.0});
+      painter.drawText(tip + direction * 8.0 + QPointF(-4, 4), "N");
+    }
+  }
   painter.restore();
 }
