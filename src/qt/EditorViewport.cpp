@@ -370,14 +370,16 @@ void EditorViewport::paintGL() {
         const int rows = CadTableRowCount(table);
         for (int c = 1; c < table.cols; ++c) {
           float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
-          CadTableLocalToWorld(table, table.width * c / table.cols, 0, &ax, &ay);
-          CadTableLocalToWorld(table, table.width * c / table.cols, table.height, &bx, &by);
+          const float columnOffset = table.width * static_cast<float>(c) / static_cast<float>(table.cols);
+          CadTableLocalToWorld(table, columnOffset, 0.f, &ax, &ay);
+          CadTableLocalToWorld(table, columnOffset, table.height, &bx, &by);
           painter.drawLine(modelProject(ax, ay), modelProject(bx, by));
         }
         for (int r = 1; r < rows; ++r) {
           float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
-          CadTableLocalToWorld(table, 0, table.height * r / rows, &ax, &ay);
-          CadTableLocalToWorld(table, table.width, table.height * r / rows, &bx, &by);
+          const float rowOffset = table.height * static_cast<float>(r) / static_cast<float>(rows);
+          CadTableLocalToWorld(table, 0.f, rowOffset, &ax, &ay);
+          CadTableLocalToWorld(table, table.width, rowOffset, &bx, &by);
           painter.drawLine(modelProject(ax, ay), modelProject(bx, by));
         }
         const float textPx = std::clamp(table.plottedHeightInches * pxPerInch, 1.f, 100.f);
@@ -385,8 +387,10 @@ void EditorViewport::paintGL() {
         for (int i = 0; i < static_cast<int>(table.cells.size()); ++i) {
           const int row = i / std::max(1, table.cols), col = i % std::max(1, table.cols);
           float x = 0.f, y = 0.f;
-          CadTableLocalToWorld(table, table.width * col / std::max(1, table.cols),
-              table.height * row / rows, &x, &y);
+          const float columnOffset = table.width * static_cast<float>(col) /
+              static_cast<float>(std::max(1, table.cols));
+          const float rowOffset = table.height * static_cast<float>(row) / static_cast<float>(rows);
+          CadTableLocalToWorld(table, columnOffset, rowOffset, &x, &y);
           painter.drawText(modelProject(x, y), QString::fromUtf8(table.cells[static_cast<std::size_t>(i)].c_str()));
         }
       }
