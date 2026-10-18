@@ -19,7 +19,7 @@
 #include <string>
 
 int main(int argc, char** argv) {
-  // REQ-424 §2: a process relaunched by the crash handler only shows the report. It is read (and
+  // REQ-425 §2: a process relaunched by the crash handler only shows the report. It is read (and
   // sent) before the handler is installed, as in the ImGui build, so a fault here cannot recurse.
   std::string crashTitle;
   std::string crashReport;
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   const bool smoke = app.arguments().contains("--smoke-test");
-  // REQ-424 §4: the same launch-time graphics check the ImGui build makes. Skipped for the smoke
+  // REQ-425 §4: the same launch-time graphics check the ImGui build makes. Skipped for the smoke
   // run, where a modal report window would hang an unattended check.
   if (!smoke) {
     startupFailure::Stage stage{};

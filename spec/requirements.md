@@ -12465,12 +12465,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-14 — initial (D-2026-10-14-b). 2026-10-14 — accepted.
 
-### REQ-424 — Crash and startup-failure reports
+### REQ-424 — Qt drawing-template workflow (GitHub issue #885)
+
+- Purpose: a Qt user can start a drawing from a known blank or templated document without altering the source template or the existing drawing.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-17-a.
+- Depends on: REQ-055 (drawing tabs), REQ-175 (drawing document), REQ-308 (Start tab), REQ-374 (project defaults).
+- Statement:
+  1. **Template library.** The Qt drawing-template chooser discovers `.gst` files from the bundled `resources/drawing-templates/` directory and the per-user `<UserDataDirectory>/drawing-templates/` directory. It also always offers **Blank Drawing**. The startup workspace template (`resources/default-template.gst` or the configured startup `.gst`) remains a separate startup concern and is not implicitly added to this chooser.
+  2. **Selection.** Choosing a template loads its document content into a fresh drawing tab and focuses that tab. The source template is read-only for this operation. Choosing Blank Drawing creates the same empty drawing as the existing 0.7.4 New Drawing action.
+  3. **Cancel and failure.** Cancelling the chooser creates no tab and leaves the active drawing unchanged. A template that cannot be read or validated is reported; it creates no tab, leaves the active drawing unchanged, and does not prevent choosing another template or Blank Drawing.
+  4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone template chooser.
+  5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
+- Acceptance:
+  - `[req424]` Qt workflow coverage: chooser lists Blank Drawing and valid bundled/user `.gst` templates, ignores unrelated file types, and presents deterministic ordering with duplicate names distinguishable.
+  - `[req424]` Qt workflow coverage: selecting a valid template creates and focuses a new tab with its content; saving/reopening preserves that content; the source template remains byte-identical.
+  - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
+  - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
+  - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
+  - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
+  - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
+- Owner-layer: UI (`src/qt/`); shared `.gst` loading remains in IO (`src/io/GsIo`).
+- Status: accepted (2026-10-17).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
+
+### REQ-425 — Crash and startup-failure reports
 
 - Purpose: when GoSurvey crashes or cannot start, the user sees what went wrong and has a one-click way to report it, and the project learns about failures it would otherwise never hear of.
 - Priority: should
 - Type: functional
-- Decision: D-2026-10-17-a. Records the behaviour shipped in 0.7.4 (commits 61680b60, d048dc59, 5579a3ec, 8738b8a8), which had no requirement; it adds no new behaviour except the Qt port and the disclosure sentence in §6.
+- Decision: D-2026-10-17-b. Records the behaviour shipped in 0.7.4 (commits 61680b60, d048dc59, 5579a3ec, 8738b8a8), which had no requirement; it adds no new behaviour except the Qt port and the disclosure sentence in §6.
 - Depends on: REQ-080 (install ID, endpoint pattern, settings disclosure), REQ-201 (silent-failure exception).
 - Statement:
   1. **Crash capture.** An unhandled structured exception, an abort signal, or `std::terminate` in either front end (ImGui `GoSurvey.exe`, Qt `GoSurveyQt.exe`) builds a plain-text report: a one-line summary, the exception code and fault address when known, the version, the update channel, and a module + offset stack trace. The report is appended to `%APPDATA%\GoSurvey\crash.log`, written to a temporary bundle file, and the same executable is relaunched with `--gosurvey-crash-report=<bundle>`. The crashing process shows no UI.
@@ -12481,14 +12506,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. **Disclosure.** The Settings privacy disclosure required by REQ-080 also states that crash and startup error reports are sent automatically and can include file locations on this computer.
   7. **Test hook.** `--gosurvey-test-crash` deliberately crashes the process so §1–§3 can be checked by hand.
 - Acceptance:
-  - `[req424]` Qt test: the report window shows the report read-only with Send This Report and Close; Send copies the report to the clipboard, opens a GitHub new-issue URL with the title and report, reports the outcome, and leaves the window open; Close sends nothing further.
-  - `[req424]` Qt test: a crash bundle in the documented format is read back to its report and deleted; a malformed bundle is rejected.
-  - `[req424]` Qt test: the Settings disclosure mentions crash and startup reports.
+  - `[req425]` Qt test: the report window shows the report read-only with Send This Report and Close; Send copies the report to the clipboard, opens a GitHub new-issue URL with the title and report, reports the outcome, and leaves the window open; Close sends nothing further.
+  - `[req425]` Qt test: a crash bundle in the documented format is read back to its report and deleted; a malformed bundle is rejected.
+  - `[req425]` Qt test: the Settings disclosure mentions crash and startup reports.
   - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window.
 - Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`, Settings).
 - Status: accepted.
 - Known gap: the ImGui Settings disclosure predates §6 (and still says "at most once a day", which REQ-080 no longer describes); it is updated separately from the Qt port.
-- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-a).
+- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b).
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13669,7 +13694,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
-| REQ-424 | Platform/UI | `GoSurveyQtTests` `[req424]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
+| REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
+| REQ-425 | Platform/UI | `GoSurveyQtTests` `[req425]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

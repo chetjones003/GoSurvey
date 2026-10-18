@@ -34,7 +34,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/auth/AuthService.cpp
   src/auth/AuthPing.cpp
   src/update/UpdateService.cpp
-  # REQ-080 usage ping; REQ-424 crash and startup-failure reports
+  # REQ-080 usage ping; REQ-425 crash and startup-failure reports
   src/telemetry/TelemetryPing.cpp
   src/telemetry/TelemetryService.cpp
   src/platform/CrashReporter.cpp

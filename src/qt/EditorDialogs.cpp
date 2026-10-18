@@ -209,7 +209,7 @@ void EditorWindow::ShowSettings() {
   error->setStyleSheet("color:#c54646;");
   layout->addWidget(error);
 
-  // REQ-080 / REQ-424 §6: what leaves this machine, in plain words. Text, not a checkbox: there is
+  // REQ-080 / REQ-425 §6: what leaves this machine, in plain words. Text, not a checkbox: there is
   // no opt-out by decision (ADR-032), and a toggle that did nothing — or wording that implied
   // consent nobody is asked for — would be worse than saying so plainly. The email sentence
   // follows the live sign-in state, so the notice is never a stale promise.
