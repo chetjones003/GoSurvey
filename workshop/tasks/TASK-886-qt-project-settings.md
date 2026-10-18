@@ -58,4 +58,7 @@
 - Extended the selected neutral charcoal palette through the existing **Neutral gray** appearance: darker workspace/window surfaces, lighter gray ribbon and panels, neutral gray tabs, menus, docks, and controls. **Classic light** remains available.
 - Updated the appearance workflow to assert the window and button palette colors; the main workspace and start page captures are `build/qt-886-neutral-gray-app.png` and `build/qt-886-neutral-gray-start.png`.
 - Focused hidden-desktop workflows `customTitleBarAndFloatingCommandLineWork` and `appearanceChangesKeepDrawingAndToolspaceState`: pass (3 QtTest phases each). `git diff --check`: pass.
-- The app-wide appearance is awaiting the user's visual review before this UI work is considered complete.
+- User approved the full app's charcoal appearance and asked to push and merge this work.
+- Synced with current `origin/beta` (including #927 and #928); resolved the Qt workflow overlap and updated the appearance workflow to create its drawing from the current template service.
+- Post-sync focused workflows all pass individually: three Project Settings workflows, app chrome, appearance switching, both Qt drawing-template workflows, DWG export warning behavior, and the update progress/cancel workflow.
+- Post-sync full `ctest --test-dir build-issue886 -R qt.editor --output-on-failure` timed out at 280 seconds. Its log reached the update-dialog progress/cancel case, which passes individually. No full-suite pass is claimed.

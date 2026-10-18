@@ -1326,7 +1326,7 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
       QSettings().remove("editor/lightTheme");
     });
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
     const auto geometry = window.State().userLinesFlat;
