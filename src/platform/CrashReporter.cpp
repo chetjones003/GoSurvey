@@ -355,13 +355,7 @@ void TerminateHandler() {
   std::_Exit(3);
 }
 
-struct ParsedBundle {
-  std::string wireReason;
-  std::string channel;
-  std::string reportUtf8;
-};
-
-bool ParseBundleFile(const std::filesystem::path& path, ParsedBundle& out) {
+bool ParseBundleFile(const std::filesystem::path& path, CrashReport& out) {
   std::ifstream in(path, std::ios::binary);
   if (!in)
     return false;
@@ -451,7 +445,14 @@ bool CommandLineHasTestCrash() { return CommandLineHasArg(kTestCrashArg); }
   *invalid              = 0;
 }
 
-bool TryRunCrashReportUiMode() {
+bool ReadCrashBundle(const std::filesystem::path& bundlePath, CrashReport& out) {
+  const bool ok = ParseBundleFile(bundlePath, out);
+  std::error_code ec;
+  std::filesystem::remove(bundlePath, ec);
+  return ok;
+}
+
+bool TakeCrashReportFromCommandLine(std::string& titleUtf8, std::string& reportUtf8) {
   int     argc  = 0;
   LPWSTR* argvW = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
   if (!argvW)
@@ -471,12 +472,10 @@ bool TryRunCrashReportUiMode() {
   if (bundlePath.empty())
     return false;
 
-  ParsedBundle parsed;
-  if (!ParseBundleFile(bundlePath, parsed)) {
-    failureReportUi::ShowReportDialog(L"GoSurvey crash report",
-                                      "GoSurvey could not read the crash report file.\n");
-    std::error_code ec;
-    std::filesystem::remove(bundlePath, ec);
+  CrashReport parsed;
+  if (!ReadCrashBundle(bundlePath, parsed)) {
+    titleUtf8  = "GoSurvey crash report";
+    reportUtf8 = "GoSurvey could not read the crash report file.\n";
     return true;
   }
 
@@ -484,10 +483,18 @@ bool TryRunCrashReportUiMode() {
   g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
 
   TryPostCrashReportSilent(parsed.wireReason, parsed.reportUtf8);
-  failureReportUi::ShowReportDialog(L"GoSurvey encountered a problem", parsed.reportUtf8);
+  titleUtf8  = "GoSurvey encountered a problem";
+  reportUtf8 = std::move(parsed.reportUtf8);
+  return true;
+}
 
-  std::error_code ec;
-  std::filesystem::remove(bundlePath, ec);
+bool TryRunCrashReportUiMode() {
+  std::string title;
+  std::string report;
+  if (!TakeCrashReportFromCommandLine(title, report))
+    return false;
+  const std::wstring titleW(title.begin(), title.end());  // both titles are plain ASCII
+  failureReportUi::ShowReportDialog(titleW.c_str(), report);
   return true;
 }
 #endif
