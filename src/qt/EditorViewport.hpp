@@ -14,6 +14,7 @@ public:
   EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent);
   ~EditorViewport() override;
   std::function<void()> changed;
+  std::function<void()> thumbnailReady;
   std::function<void(double, double, double)> cursorChanged;
   std::function<void(const QString&)> textEntered;
   void SetOrientation(float azimuth, float elevation);

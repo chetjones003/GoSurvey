@@ -54,11 +54,15 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 
 ## Current coverage
 
+The release-specific beta 0.7.4 comparison, including command routes, dialogs,
+workflow evidence, and linked open gaps, is maintained in the
+[0.7.4 Qt parity ledger](qt-074-parity-ledger.md).
+
 | Area | Implemented | Remaining parity work |
 |---|---|---|
-| Startup | Splash using existing artwork; Start page; Markdown What's New window | Startup auth/update/telemetry/crash-report wiring; recent-file tiles; version-based What's New display policy |
+| Startup | Splash using existing artwork; Start page with recent drawing/project cards and thumbnails; Markdown What's New window with version-based display policy; REQ-091 sign-in choice and saved skip preference | Update/telemetry/crash-report wiring |
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
-| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
+| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close; successful opens/saves update the recent drawings list | Export-loss disclosures, full import/export UI, template workflow |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |

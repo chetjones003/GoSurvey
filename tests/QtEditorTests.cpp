@@ -1,5 +1,6 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
+#include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
 #include "RibbonCatalog.hpp"
@@ -20,6 +21,7 @@
 #include <QMessageBox>
 #include <QDialog>
 #include <QPlainTextEdit>
+#include <QTextBrowser>
 #include <QLineEdit>
 #include <QLabel>
 #include <QCompleter>
@@ -40,6 +42,7 @@
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QScrollArea>
 #include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
@@ -183,6 +186,59 @@ private Q_SLOTS:
     QVERIFY(!window.State().authBusy);
     QCoreApplication::processEvents();
     QVERIFY(!window.findChild<QDialog *>("signInGate"));
+  }
+
+  void qtStartScreenHasRecentDrawingSurfaceAndVersionGatedWhatsNew() {
+    EditorWindow window;
+    auto* tiles = window.findChild<QWidget*>("recentDrawingTiles");
+    QVERIFY(tiles);
+    QVERIFY(tiles->layout());
+    auto* projectTiles = window.findChild<QWidget*>("recentProjectTiles");
+    QVERIFY(projectTiles);
+    QVERIFY(projectTiles->layout());
+    QVERIFY(!window.findChild<QScrollArea*>("startScreenScrollArea"));
+    QVERIFY(window.findChild<QPushButton*>("newProjectButton"));
+    QVERIFY(window.findChild<QPushButton*>("openProjectButton"));
+    auto* gridMode = window.findChild<QToolButton*>("recentGridMode");
+    auto* listMode = window.findChild<QToolButton*>("recentListMode");
+    QVERIFY(gridMode);
+    QVERIFY(listMode);
+    QVERIFY(gridMode->isChecked());
+    listMode->click();
+    QVERIFY(listMode->isChecked());
+    QVERIFY(!gridMode->isChecked());
+    gridMode->click();
+    QVERIFY(gridMode->isChecked());
+    auto* signedIn = window.findChild<QWidget*>("startSignedInAccount");
+    QVERIFY(signedIn);
+    window.State().authSignedIn = true;
+    window.State().authEmail = "survey@example.com";
+    window.Refresh();
+    QVERIFY(!signedIn->isHidden());
+    QCOMPARE(window.findChild<QLabel*>("startAccountWelcome")->text(), QString("Welcome Survey!"));
+    QCOMPARE(window.findChild<QLabel*>("startAccountEmail")->text(), QString("survey@example.com"));
+
+    window.State().authGateResolved = true;
+    window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
+    window.InitializeStartup();
+    QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
+
+    EditorWindow firstRun;
+    firstRun.State().authGateResolved = true;
+    firstRun.State().whatsNewDismissedVersion.clear();
+    firstRun.InitializeStartup();
+    auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
+    QVERIFY(whatsNew);
+    QVERIFY(whatsNew->findChild<QLabel*>("whatsNewHeading"));
+    QVERIFY(whatsNew->findChild<QLabel*>("whatsNewVersion"));
+    QVERIFY(whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes"));
+    QVERIFY(whatsNew->findChild<QLabel*>("whatsNewReleasesLink"));
+    QVERIFY(whatsNew->findChild<QCheckBox*>("whatsNewDontShowAgain"));
+    auto* about = firstRun.findChild<QAction*>("aboutGoSurveyAction");
+    QVERIFY(about);
+    about->trigger();
+    QCOMPARE(firstRun.findChildren<QDialog*>("whatsNewDialog").size(), 1);
+    whatsNew->hide();
   }
 
   void malformedOpenAndSavePreserveExistingSession() {
