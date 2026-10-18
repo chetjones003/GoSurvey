@@ -827,7 +827,7 @@ private Q_SLOTS:
     window.show();
     int launches = 0;
     window.m_LaunchInstaller = [&launches](update::UpdateState&) { ++launches; return true; };
-    window.NewDrawing();
+    window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     CancelActiveCommand(window.State(), window.m_Log);
     QVERIFY(window.State().cadGpuRevision != window.State().activeDocSavedRevision);

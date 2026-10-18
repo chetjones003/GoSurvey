@@ -83,6 +83,8 @@ try {
     $wait = [HiddenDesktop]::WaitForSingleObject($pi.hProcess, [uint32]($TimeoutSec * 1000))
     if ($wait -ne 0) {
       [void][HiddenDesktop]::TerminateProcess($pi.hProcess, 124)
+      # Wait for process teardown to release the Qt log before reading it.
+      [void][HiddenDesktop]::WaitForSingleObject($pi.hProcess, 5000)
       Write-Host "TIMED OUT after $TimeoutSec s; test process killed."
       $exitCode = 124
     } else {
