@@ -98,7 +98,10 @@ Point Style artwork; the original text-only block-close button uses Block Editor
 artwork. No new bitmap artwork was generated.
 
 Home, Insert, Annotate, View, Manage, Output, Survey and Modeling use their release
-panels. Manage retains its release placeholder. Contextual Surface, Survey Point,
+panels. Manage retains its release placeholder. Model and layout tabs sit below
+the drawing viewport; layout tabs support creation and a rename/delete context menu.
+The sheet renderer draws paper geometry and tables, and composites the shared CAD
+renderer through each saved layout viewport. Contextual Surface, Survey Point,
 Point Cloud, Block Editor, Geolocation, PDF Underlay and Hatch pages follow editor
 state; Layout tools appear in paper space. Selection contexts activate on entry
 and restore the previous normal tab on exit; geolocation does not take focus.
