@@ -2,6 +2,7 @@
 #include "AppIcon.hpp"
 #include "FontRegistry.hpp"
 #include "StringUtil.hpp"
+#include "CadSurfaceEdit.hpp"
 #include "ProjectPoints.hpp"
 #include "io/ProjectFiles.hpp"
 #include "io/ProjectTurnover.hpp"
@@ -165,18 +166,6 @@ std::string NextPointGroupName(const AppCommandState& cmd) {
   for (int n = 2; n < 10000; ++n) {
     const std::string candidate = base + " (" + std::to_string(n) + ")";
     if (FindPointGroupIndex(cmd, candidate) < 0)
-      return candidate;
-  }
-  return base;
-}
-
-std::string NextSurfaceName(const AppCommandState& cmd) {
-  const std::string base = "Surface";
-  if (FindSurfaceIndex(cmd, base) < 0)
-    return base;
-  for (int n = 2; n < 10000; ++n) {
-    const std::string candidate = base + " (" + std::to_string(n) + ")";
-    if (FindSurfaceIndex(cmd, candidate) < 0)
       return candidate;
   }
   return base;
@@ -1242,27 +1231,7 @@ void DrawToolspaceDefDialogs(AppCommandState& cmd, std::vector<std::string>* log
   }
 }
 
-enum class CreateSurfaceKind : int { Tin = 0, Grid, Corridor, TinVolume, GridVolume };
-
-void ApplyCreatedSurfaceFields(AppCommandState& cmd, const std::string& name, const std::string& description,
-                               const std::string& styleName, const std::string& layer) {
-  assert(!name.empty());
-  const int ni = FindSurfaceIndex(cmd, name);
-  assert(ni >= 0);
-  if (ni < 0)
-    return;
-  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
-  s.description = description;
-  s.styleName = styleName;
-  // The surface was created on its Object Layers layer (REQ-361); a layer picked here (always one of
-  // the drawing's own) replaces it. The unpicked default is left to the creator, which also falls
-  // back to the row's layer when the name cannot be part of a layer name.
-  const std::string chosen = StringUtil::trimCopy(layer);
-  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size() && !chosen.empty() &&
-      chosen != ResolveObjectLayer(cmd.drawingSettings, ObjectLayerKind::Surface, name) &&
-      !cmd.drawingSettings.ObjectLayer(ObjectLayerKind::Surface).locked)
-    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = EnsureDrawingLayer(cmd, chosen);
-}
+using CreateSurfaceKind = surfedit::CreateKind;
 
 void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   static bool wasShown = false;
@@ -1280,7 +1249,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
 
   if (cmd.showCreateSurfaceWindow && !wasShown) {
     SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
-    name = NextSurfaceName(cmd);
+    name = surfedit::NextSurfaceName(cmd);
     description.clear();
     layerChosen = false;
     styleName = SurfaceStyles::kStandardName;
@@ -1494,62 +1463,23 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 2.f);
   ImGui::BeginDisabled(name.empty());
   if (StyledButton("OK", ImVec2(bw, 0.f), /*primary=*/true)) {
-    if (FindSurfaceIndex(cmd, name) >= 0) {
-      error = "A surface named \"" + name + "\" already exists.";
-    } else if (kind == CreateSurfaceKind::TinVolume || kind == CreateSurfaceKind::GridVolume) {
-      if (volBase.empty() || volComp.empty())
-        error = "Pick a base surface and a comparison surface.";
-      else if (volBase == volComp)
-        error = "Base and comparison must be different surfaces.";
-      else {
-        if (kind == CreateSurfaceKind::TinVolume) {
-          PushUndoSnapshot(cmd, "Create volume surface");
-          const int ni = CreateSurfaceFromVolumeParents(cmd, name, volBase, volComp, lg);
-          if (ni >= 0) {
-            ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
-            cmd.showCreateSurfaceWindow = false;
-          } else
-            error = lg.empty() ? "Could not create the volume surface." : lg.back();
-        } else {
-          SubmitLine(cmd, &lg, "SURFACECREATEVOLGRID " + name + ", " + volBase + ", " + volComp);
-          if (FindSurfaceIndex(cmd, name) >= 0) {
-            ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
-            cmd.showCreateSurfaceWindow = false;
-          } else
-            error = lg.empty() ? "Could not create the grid volume surface." : lg.back();
-        }
-      }
-    } else if (kind == CreateSurfaceKind::Grid) {
-      if (gridSx <= 0.0 || gridSy <= 0.0)
-        error = "Grid spacing must be positive.";
-      else {
-        std::string line = "SURFACECREATEGRID " + name + ", " + std::to_string(gridOx) + ", " +
-                           std::to_string(gridOy) + ", " + std::to_string(gridSx) + ", " +
-                           std::to_string(gridSy) + ", " + std::to_string(gridCols) + ", " +
-                           std::to_string(gridRows);
-        SubmitLine(cmd, &lg, line);
-        if (FindSurfaceIndex(cmd, name) >= 0) {
-          ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
-          cmd.showCreateSurfaceWindow = false;
-        } else
-          error = lg.empty() ? "Could not create the grid surface." : lg.back();
-      }
-    } else if (kind == CreateSurfaceKind::Corridor) {
-      SubmitLine(cmd, &lg, "SURFACECREATECORR " + name);
-      if (FindSurfaceIndex(cmd, name) >= 0) {
-        ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
-        cmd.showCreateSurfaceWindow = false;
-      } else
-        error = lg.empty() ? "Could not create the corridor surface." : lg.back();
-    } else {
-      PushUndoSnapshot(cmd, "Create surface");
-      const int ni = CreateSurfaceFromPointGroups(cmd, name, {}, lg);
-      if (ni >= 0) {
-        ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
-        cmd.showCreateSurfaceWindow = false;
-      } else
-        error = lg.empty() ? "Could not create the surface." : lg.back();
-    }
+    surfedit::CreateRequest request;
+    request.kind = kind;
+    request.name = name;
+    request.description = description;
+    request.styleName = styleName;
+    request.layer = layer;
+    request.gridOriginX = gridOx;
+    request.gridOriginY = gridOy;
+    request.gridSpacingX = gridSx;
+    request.gridSpacingY = gridSy;
+    request.gridCols = gridCols;
+    request.gridRows = gridRows;
+    request.volumeBase = volBase;
+    request.volumeComparison = volComp;
+    error = surfedit::CreateSurface(cmd, request, lg);
+    if (error.empty())
+      cmd.showCreateSurfaceWindow = false;
   }
   ImGui::EndDisabled();
   ImGui::SameLine();

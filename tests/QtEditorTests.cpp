@@ -33,6 +33,8 @@
 #include "FailureReport.hpp"
 #include "FailureReportUi.hpp"
 #include "StartupFailure.hpp"
+#include "CadSurfaceEdit.hpp"
+#include "SurfaceStyle.hpp"
 #include <QPdfWriter>
 #include <QPainter>
 #include <QtTest/QtTest>
@@ -71,6 +73,7 @@
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QDockWidget>
 #include <QStackedWidget>
 #include <QScrollArea>
 #include <QClipboard>
@@ -195,6 +198,49 @@ QString Issue886Shot(const char* name) {
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 }
+
+namespace {
+// Issue #893 fixtures: a drawing with six survey points, a point group over them and two surfaces.
+void Issue893Fixture(AppCommandState& st, bool buildSurfaces = true) {
+  for (int i = 0; i < 6; ++i) {
+    SurveyPoint point;
+    point.id = i + 1;
+    const int column = i % 3, row = i / 3;
+    point.easting = column * 10.0;
+    point.northing = row * 10.0;
+    point.elevation = 100.0 + i * 1.5;
+    st.surveyPoints.push_back(point);
+  }
+  PointGroup ground;
+  ground.name = "Ground";
+  ground.rule.idRangesText = "1-6";
+  st.pointGroups.push_back(ground);
+  PointGroup curb;
+  curb.name = "Curb";
+  curb.rule.idRangesText = "1-3";
+  st.pointGroups.push_back(curb);
+  std::vector<std::string> log;
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  if (buildSurfaces) {
+    CreateSurfaceFromPointGroups(st, "EG", {"Ground"}, log);
+    CreateSurfaceFromPointGroups(st, "Proposed", {}, log);
+  }
+}
+QString Issue893Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
+// Runs \p interact once the modal dialog a call is about to open is on screen; a watchdog rejects every
+// dialog if the interaction never closes it, so a failing test cannot hang the run.
+template <class F>
+void WhenDialogShows(EditorWindow& window, const F& interact) {
+  QTimer::singleShot(0, &window, interact);
+  QTimer::singleShot(20000, &window, [&window] {
+    for (auto* dialog : window.findChildren<QDialog*>()) dialog->reject();
+  });
+}
+}  // namespace
 
 class QtEditorTests final : public QObject {
   Q_OBJECT
@@ -3402,6 +3448,651 @@ private Q_SLOTS:
     QTest::qWait(50);
     save(list->grab().toImage(), "qt-891-final-selection-list.png");
     list->close();
+  }
+
+  // ---- Issue #893: surface and surface-style dialogs ----------------------------------------------
+
+  void createSurfaceDialogCancelsValidatesAndCreatesOneUndoStep() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    QCOMPARE(st.cadSurfaces.size(), size_t(2));
+    // Cancel changes nothing and records nothing.
+    const bool couldUndo = CanUndo(st);
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->grab().save(Issue893Shot("qt-893-create-default.png"));
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("Never created");
+      dialog->findChild<QPushButton*>("createSurfaceCancel")->click();
+    });
+    window.ShowCreateSurface();
+    QCOMPARE(st.cadSurfaces.size(), size_t(2));
+    QCOMPARE(CanUndo(st), couldUndo);
+    // A taken name is refused with the reason and keeps the dialog open; a new one creates the surface.
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      auto* name = dialog->findChild<QLineEdit*>("createSurfaceName");
+      auto* ok = dialog->findChild<QPushButton*>("createSurfaceOk");
+      QCOMPARE(name->text(), QString("Surface"));  // next free default name
+      name->setText("EG");
+      ok->click();
+      QVERIFY(dialog->isVisible());
+      QVERIFY(dialog->findChild<QLabel*>("createSurfaceError")->text().contains("already exists"));
+      name->setText("");
+      QVERIFY(!ok->isEnabled());  // an empty name cannot be submitted
+      name->setText("Pond");
+      dialog->findChild<QLineEdit*>("createSurfaceDescription")->setText("Retention pond");
+      ok->click();
+    });
+    window.ShowCreateSurface();
+    QCOMPARE(st.cadSurfaces.size(), size_t(3));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[2].name), QString("Pond"));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[2].description), QString("Retention pond"));
+    std::vector<std::string> log;
+    QVERIFY(DoUndo(st, log));
+    QCOMPARE(st.cadSurfaces.size(), size_t(2));
+  }
+
+  void createSurfaceDialogGridAndVolumeKindsShowTheirFieldsAndValidate() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      auto* kind = dialog->findChild<QComboBox*>("createSurfaceKind");
+      auto* grid = dialog->findChild<QWidget*>("createSurfaceGridGroup");
+      auto* volume = dialog->findChild<QWidget*>("createSurfaceVolumeGroup");
+      QVERIFY(!grid->isVisible() && !volume->isVisible());
+      kind->setCurrentIndex(1);
+      QVERIFY(grid->isVisible() && !volume->isVisible());
+      dialog->findChild<QDoubleSpinBox*>("createSurfaceSpacingX")->setValue(0.0);
+      dialog->findChild<QPushButton*>("createSurfaceOk")->click();
+      QCOMPARE(dialog->findChild<QLabel*>("createSurfaceError")->text(), QString("Grid spacing must be positive."));
+      dialog->findChild<QDoubleSpinBox*>("createSurfaceSpacingX")->setValue(5.0);
+      dialog->grab().save(Issue893Shot("qt-893-create-grid.png"));
+      kind->setCurrentIndex(3);
+      QVERIFY(!grid->isVisible() && volume->isVisible());
+      auto* base = dialog->findChild<QComboBox*>("createSurfaceBase");
+      auto* comparison = dialog->findChild<QComboBox*>("createSurfaceComparison");
+      QCOMPARE(base->currentText(), QString("EG"));
+      QCOMPARE(comparison->currentText(), QString("Proposed"));
+      comparison->setCurrentIndex(base->currentIndex());
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("Volume");
+      dialog->findChild<QPushButton*>("createSurfaceOk")->click();
+      QCOMPARE(dialog->findChild<QLabel*>("createSurfaceError")->text(), QString("Base and comparison must be different surfaces."));
+      dialog->findChild<QPushButton*>("createSurfaceCancel")->click();
+    });
+    window.ShowCreateSurface();
+    QCOMPARE(st.cadSurfaces.size(), size_t(2));
+    // A grid surface is created through the same command the command line uses.
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QComboBox*>("createSurfaceKind")->setCurrentIndex(1);
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("Grid");
+      dialog->findChild<QSpinBox*>("createSurfaceColumns")->setValue(3);
+      dialog->findChild<QSpinBox*>("createSurfaceRows")->setValue(3);
+      dialog->findChild<QPushButton*>("createSurfaceOk")->click();
+    });
+    window.ShowCreateSurface();
+    QCOMPARE(st.cadSurfaces.size(), size_t(3));
+    QVERIFY(st.cadSurfaces[2].kind == SurfaceKind::Grid);
+  }
+
+  void surfaceRequestsFromRibbonCommandsAndToolspaceOpenTheNativeDialogs() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    // Create Surface (ribbon / Toolspace set the flag the command layer sets).
+    st.showCreateSurfaceWindow = true;
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->reject();
+    });
+    window.Refresh();
+    QVERIFY(!st.showCreateSurfaceWindow);
+    // Surface Properties for the selected surface.
+    st.surfacePropertiesIndex = 1;
+    st.showSurfacePropertiesWindow = true;
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      QCOMPARE(dialog->windowTitle(), QString("Surface Properties - Proposed"));
+      dialog->reject();
+    });
+    window.Refresh();
+    QVERIFY(!st.showSurfacePropertiesWindow);
+    // SURFSTYLE opens the editor on the requested style, with the 0.7.4 title rule.
+    st.showSurfaceStyleWindow = true;
+    st.surfaceStyleUseSurfacesTitle = true;
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      QCOMPARE(dialog->windowTitle(), QString("Surfaces"));
+      dialog->reject();
+    });
+    window.Refresh();
+    QVERIFY(!st.showSurfaceStyleWindow);
+    st.showSurfaceStyleWindow = true;
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      QCOMPARE(dialog->windowTitle(), QString("Surface Style"));
+      dialog->reject();
+    });
+    window.Refresh();
+    // The Surfaces manager is modeless and is raised, not duplicated.
+    st.showSurfaceManagerWindow = true;
+    window.Refresh();
+    auto* manager = window.findChild<QDialog*>("surfaceManager");
+    QVERIFY(manager);
+    st.showSurfaceManagerWindow = true;
+    window.Refresh();
+    QCOMPARE(window.findChildren<QDialog*>("surfaceManager").size(), 1);
+    manager->close();
+    // The Toolspace lists surfaces and surface styles and tags them for its context menu.
+    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock")->findChild<QTreeWidget*>();
+    QVERIFY(toolspace);
+    QTreeWidgetItem* surfaces = nullptr;
+    QTreeWidgetItem* styles = nullptr;
+    for (int i = 0; i < toolspace->topLevelItemCount(); ++i) {
+      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "surfacesFolder") surfaces = toolspace->topLevelItem(i);
+      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "stylesFolder") styles = toolspace->topLevelItem(i);
+    }
+    QVERIFY(surfaces && styles);
+    QCOMPARE(surfaces->childCount(), 2);
+    QCOMPARE(surfaces->child(1)->data(0, Qt::UserRole + 2).toInt(), 1);
+    QCOMPARE(styles->child(0)->text(0), QString("Standard"));
+  }
+
+  void surfacePropertiesStagesInformationAppliesAsOneStepAndAnalysisIsImmediate() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    std::vector<std::string> log;
+    QVERIFY(surfedit::AddStyle(st, 0, "Roads", log));
+    st.cadSurfaces[0].sourcePointGroups = {"Ground", "Curb"};
+    // Cancel discards the staged information.
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      QCOMPARE(dialog->findChild<QLineEdit*>("surfacePropsName")->text(), QString("EG"));
+      dialog->findChild<QLineEdit*>("surfacePropsName")->setText("Changed");
+      dialog->findChild<QPushButton*>("surfacePropsCancel")->click();
+    });
+    window.ShowSurfaceProperties(0);
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("EG"));
+    // An empty or taken name is refused in the dialog and nothing changes; then OK applies all three fields.
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      auto* name = dialog->findChild<QLineEdit*>("surfacePropsName");
+      auto* problem = dialog->findChild<QLabel*>("surfacePropsNameProblem");
+      name->setText("");
+      dialog->findChild<QPushButton*>("surfacePropsOk")->click();
+      QVERIFY(dialog->isVisible());
+      QVERIFY(problem->text().contains("cannot be empty"));
+      name->setText("Proposed");
+      dialog->findChild<QPushButton*>("surfacePropsApply")->click();
+      QVERIFY(dialog->isVisible());
+      QVERIFY(problem->text().contains("already exists"));
+      name->setText("Ground");
+      dialog->findChild<QPlainTextEdit*>("surfacePropsDescription")->setPlainText("Existing ground");
+      dialog->findChild<QComboBox*>("surfacePropsStyle")->setCurrentText("Roads");
+      dialog->findChild<QPushButton*>("surfacePropsOk")->click();
+    });
+    window.ShowSurfaceProperties(0);
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("Ground"));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].description), QString("Existing ground"));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].styleName), QString("Roads"));
+    QVERIFY(DoUndo(st, log));  // one step undoes all three
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("EG"));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].styleName), QString());
+    // Definition reorder, analysis and statistics.
+    st.cadSurfaces[0].styleName = "Roads";
+    WhenDialogShows(window, [&window, &st] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>("surfacePropertiesTabs");
+      QCOMPARE(tabs->count(), 4);
+      tabs->setCurrentIndex(1);
+      auto* operations = dialog->findChild<QTableWidget*>("surfacePropsOperations");
+      QCOMPARE(operations->rowCount(), 2);
+      QCOMPARE(operations->item(0, 1)->text(), QString("Ground"));
+      operations->selectRow(0);
+      QVERIFY(!dialog->findChild<QPushButton*>("surfacePropsMoveUp")->isEnabled());
+      dialog->findChild<QPushButton*>("surfacePropsMoveDown")->click();
+      QCOMPARE(operations->item(0, 1)->text(), QString("Curb"));
+      QCOMPARE(QString::fromStdString(st.cadSurfaces[0].sourcePointGroups[0]), QString("Curb"));
+      dialog->grab().save(Issue893Shot("qt-893-properties-definition.png"));
+      tabs->setCurrentIndex(2);
+      auto* type = dialog->findChild<QComboBox*>("surfacePropsAnalysisType");
+      type->setCurrentIndex(1);
+      Q_EMIT type->activated(1);
+      const SurfaceStyle* style = SurfaceStyles::Find(st.surfaceStyles, "Roads");
+      QVERIFY(style && style->analysisMode == SurfaceAnalysisMode::Elevation);
+      dialog->findChild<QSpinBox*>("surfacePropsRangeCount")->setValue(4);
+      dialog->findChild<QPushButton*>("surfacePropsRun")->click();
+      style = SurfaceStyles::Find(st.surfaceStyles, "Roads");
+      QCOMPARE(style->bands.size(), size_t(4));
+      QCOMPARE(dialog->findChild<QTableWidget*>("surfacePropsBands")->rowCount(), 4);
+      dialog->grab().save(Issue893Shot("qt-893-properties-analysis.png"));
+      tabs->setCurrentIndex(3);
+      auto* stats = dialog->findChild<QTableWidget*>("surfacePropsStatistics");
+      QVERIFY(stats->rowCount() > 5);  // EG is built from six points
+      dialog->grab().save(Issue893Shot("qt-893-properties-statistics.png"));
+      tabs->setCurrentIndex(0);
+      dialog->grab().save(Issue893Shot("qt-893-properties-information.png"));
+      dialog->findChild<QPushButton*>("surfacePropsCancel")->click();
+    });
+    window.ShowSurfaceProperties(0);
+    QVERIFY(DoUndo(st, log));  // the Run step
+    QCOMPARE(SurfaceStyles::Find(st.surfaceStyles, "Roads")->bands.size(), size_t(0));
+    // A surface that was never built says so on the Statistics tab.
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->findChild<QLabel*>("surfacePropsStatsNote")->text().startsWith("Not built"));
+      dialog->reject();
+    });
+    window.ShowSurfaceProperties(1);
+  }
+
+  void surfaceStyleEditorEditsLiveCancelRestoresAndOkIsOneUndoStep() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    std::vector<std::string> log;
+    QVERIFY(surfedit::AddStyle(st, 0, "Roads", log));
+    st.cadSurfaces[0].styleName = "Roads";
+    const auto roads = [&st]() -> SurfaceStyle& { return *SurfaceStyles::Find(st.surfaceStyles, "Roads"); };
+    const double originalMinor = roads().minorIntervalFt;
+    const bool originalTriangles = roads().triangles.visible;
+    // Edits show in the drawing state as they are made; Cancel puts everything back.
+    WhenDialogShows(window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("surfaceStyleList");
+      QCOMPARE(list->currentItem()->text(), QString("Roads"));
+      dialog->findChild<QCheckBox*>("ssc_triangles_visible")->setChecked(!originalTriangles);
+      QCOMPARE(roads().triangles.visible, !originalTriangles);
+      // An invalid interval pair never reaches the style and disables OK, with REQ-070's message.
+      auto* minor = dialog->findChild<QDoubleSpinBox*>("surfaceStyleMinorInterval");
+      auto* major = dialog->findChild<QDoubleSpinBox*>("surfaceStyleMajorInterval");
+      major->setValue(10.0);
+      minor->setValue(3.0);
+      QVERIFY(!dialog->findChild<QPushButton*>("surfaceStyleOk")->isEnabled());
+      QVERIFY(dialog->findChild<QLabel*>("surfaceStyleIntervalProblem")->text().contains("whole multiple"));
+      QCOMPARE(roads().minorIntervalFt, originalMinor);
+      minor->setValue(5.0);
+      QVERIFY(dialog->findChild<QPushButton*>("surfaceStyleOk")->isEnabled());
+      QCOMPARE(roads().minorIntervalFt, 5.0);
+      dialog->findChild<QPushButton*>("surfaceStyleCancel")->click();
+    });
+    window.ShowSurfaceStyles("Roads", false);
+    QCOMPARE(roads().triangles.visible, originalTriangles);
+    QCOMPARE(roads().minorIntervalFt, originalMinor);
+    // OK keeps the whole session as ONE undo step.
+    WhenDialogShows(window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QCheckBox*>("ssc_triangles_visible")->setChecked(!originalTriangles);
+      dialog->findChild<QDoubleSpinBox*>("surfaceStyleMinorInterval")->setValue(5.0);
+      dialog->findChild<QSpinBox*>("surfaceStyleSmoothPasses")->setValue(2);
+      dialog->findChild<QPushButton*>("surfaceStyleOk")->click();
+    });
+    window.ShowSurfaceStyles("Roads", false);
+    QCOMPARE(roads().minorIntervalFt, 5.0);
+    QCOMPARE(roads().contourSmoothPasses, 2);
+    QVERIFY(DoUndo(st, log));
+    QCOMPARE(roads().minorIntervalFt, originalMinor);
+    QCOMPARE(roads().contourSmoothPasses, 0);
+    QCOMPARE(roads().triangles.visible, originalTriangles);
+  }
+
+  void surfaceStyleEditorRenamesAddsDeletesAndProtectsStandard() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    std::vector<std::string> log;
+    QVERIFY(surfedit::AddStyle(st, 0, "Roads", log));
+    st.cadSurfaces[0].styleName = "Roads";
+    WhenDialogShows(window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("surfaceStyleList");
+      auto* name = dialog->findChild<QLineEdit*>("surfaceStyleName");
+      auto* del = dialog->findChild<QPushButton*>("surfaceStyleDelete");
+      // Standard is selected first: it cannot be renamed or deleted.
+      list->setCurrentRow(0);
+      QVERIFY(!name->isEnabled());
+      QVERIFY(!del->isEnabled());
+      QVERIFY(del->toolTip().contains("Standard cannot be deleted"));
+      // Rename re-points the surfaces that use the style; a taken name is refused with the reason.
+      list->setCurrentRow(1);
+      name->setText("Standard");
+      Q_EMIT name->editingFinished();
+      QVERIFY(dialog->findChild<QLabel*>("surfaceStyleStatus")->text().contains("already exists"));
+      QCOMPARE(name->text(), QString("Roads"));
+      name->setText("Paving");
+      Q_EMIT name->editingFinished();
+      QCOMPARE(QString::fromStdString(st.cadSurfaces[0].styleName), QString("Paving"));
+      QCOMPARE(list->item(1)->text(), QString("Paving"));
+      // New... copies the selected style; a duplicate name disables OK.
+      WhenDialogShows(window, [&window] {
+        auto* entry = window.findChild<QDialog*>("newSurfaceStyleDialog");
+        QVERIFY(entry);
+        auto* newName = entry->findChild<QLineEdit*>("newSurfaceStyleName");
+        newName->setText("Standard");
+        QVERIFY(!entry->findChild<QPushButton*>("newSurfaceStyleOk")->isEnabled());
+        QVERIFY(!entry->findChild<QLabel*>("newSurfaceStyleDuplicate")->text().isEmpty());
+        newName->setText("Utilities");
+        entry->findChild<QPushButton*>("newSurfaceStyleOk")->click();
+      });
+      dialog->findChild<QPushButton*>("surfaceStyleNew")->click();
+      QCOMPARE(list->count(), 3);
+      QCOMPARE(list->currentItem()->text(), QString("Utilities"));
+      dialog->grab().save(Issue893Shot("qt-893-style-information.png"));
+      // Deleting a style that surfaces use keeps their name (REQ-070).
+      list->setCurrentRow(1);
+      del->click();
+      QCOMPARE(list->count(), 2);
+      QCOMPARE(QString::fromStdString(st.cadSurfaces[0].styleName), QString("Paving"));
+      dialog->findChild<QPushButton*>("surfaceStyleOk")->click();
+    });
+    window.ShowSurfaceStyles("Roads", false);
+    QCOMPARE(st.surfaceStyles.size(), size_t(2));
+    QVERIFY(SurfaceStyles::Find(st.surfaceStyles, "Utilities"));
+    QVERIFY(DoUndo(st, log));  // the whole session is one step
+    QCOMPARE(st.surfaceStyles.size(), size_t(2));
+    QVERIFY(SurfaceStyles::Find(st.surfaceStyles, "Roads"));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].styleName), QString("Roads"));
+  }
+
+  void surfaceStyleEditorBandsAndComponentPickersEditTheStyle() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    WhenDialogShows(window, [&] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>("surfaceStyleTabs");
+      QCOMPARE(tabs->count(), 8);
+      auto& style = st.surfaceStyles[0];
+      // Component pickers write colour, linetype and lineweight.
+      auto* color = dialog->findChild<QComboBox*>("ssc_major_color");
+      color->setCurrentIndex(color->findData("Red"));
+      Q_EMIT color->activated(color->currentIndex());
+      QCOMPARE(QString::fromStdString(style.majorContour.color), QString("Red"));
+      auto* linetype = dialog->findChild<QComboBox*>("ssc_major_linetype");
+      linetype->setCurrentIndex(linetype->findData("DASHED"));
+      Q_EMIT linetype->activated(linetype->currentIndex());
+      QCOMPARE(QString::fromStdString(style.majorContour.linetype), QString("DASHED"));
+      // The Display tab mirrors the same value.
+      QCOMPARE(dialog->findChild<QComboBox*>("ssc_display_major_color")->currentData().toString(), QString("Red"));
+      // Analysis bands stay ascending after a bound is edited.
+      tabs->setCurrentIndex(5);
+      auto* type = dialog->findChild<QComboBox*>("surfaceStyleAnalysisType");
+      type->setCurrentIndex(1);
+      Q_EMIT type->activated(1);
+      auto* add = dialog->findChild<QPushButton*>("surfaceStyleAddBand_bands");
+      add->click();
+      add->click();
+      QCOMPARE(style.bands.size(), size_t(2));
+      QCOMPARE(style.bands[1].upperBound, 1.0);
+      auto* firstBound = dialog->findChild<QDoubleSpinBox*>("surfaceStyleBound_bands_0");
+      firstBound->setValue(7.0);
+      Q_EMIT firstBound->editingFinished();
+      QCOMPARE(style.bands[0].upperBound, 1.0);  // re-sorted: 7 now sits above 1
+      QCOMPARE(style.bands[1].upperBound, 7.0);
+      dialog->findChild<QPushButton*>("surfaceStyleRemoveBand_bands_0")->click();
+      QCOMPARE(style.bands.size(), size_t(1));
+      QCOMPARE(style.bands[0].upperBound, 7.0);
+      add->click();
+      tabs->setCurrentIndex(1);
+      dialog->grab().save(Issue893Shot("qt-893-style-contours.png"));
+      tabs->setCurrentIndex(5);
+      dialog->grab().save(Issue893Shot("qt-893-style-analysis.png"));
+      dialog->findChild<QPushButton*>("surfaceStyleCancel")->click();
+    });
+    window.ShowSurfaceStyles("", false);
+    QVERIFY(st.surfaceStyles[0].bands.empty());
+    QCOMPARE(QString::fromStdString(st.surfaceStyles[0].majorContour.color), QString("Orange"));
+  }
+
+  void surfaceManagerEditsDefinitionRenamesAndCreatesAndDeletesSurfaces() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    window.ShowSurfaceManager();
+    auto* manager = window.findChild<QDialog*>("surfaceManager");
+    QVERIFY(manager);
+    auto* tree = manager->findChild<QTreeWidget*>("surfaceManagerTree");
+    QCOMPARE(tree->topLevelItemCount(), 2);
+    const auto find = [&](int type, int surface, int index) -> QTreeWidgetItem* {
+      for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if ((*it)->data(0, Qt::UserRole).toInt() == type && (*it)->data(0, Qt::UserRole + 1).toInt() == surface &&
+            (*it)->data(0, Qt::UserRole + 2).toInt() == index)
+          return *it;
+      return nullptr;
+    };
+    constexpr int kGroupCategory = 2, kBreaklineCategory = 3, kBoundaryCategory = 4, kGroupItem = 6, kBoundaryItem = 8;
+    // The seeded surface lists its point group.
+    QVERIFY(find(kGroupCategory, 0, 0)->text(0).startsWith("Point Groups (1)"));
+    // Add... on a category starts the matching action; adding a point group lists it.
+    tree->setCurrentItem(find(kGroupCategory, 1, 0));
+    auto* add = manager->findChild<QPushButton*>("surfaceManagerAdd");
+    QVERIFY(add->isEnabled());
+    WhenDialogShows(window, [&window] {
+      auto* entry = window.findChild<QDialog*>("surfaceAddPointGroup");
+      QVERIFY(entry);
+      auto* groups = entry->findChild<QListWidget*>("surfaceAddPointGroupList");
+      QCOMPARE(groups->count(), 2);
+      Q_EMIT groups->itemClicked(groups->item(1));  // Curb
+    });
+    add->click();
+    QCOMPARE(st.cadSurfaces[1].sourcePointGroups.size(), size_t(1));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[1].sourcePointGroups[0]), QString("Curb"));
+    // Remove, with the node button enabled only on an item.
+    auto* remove = manager->findChild<QPushButton*>("surfaceManagerRemove");
+    tree->setCurrentItem(find(kGroupCategory, 1, 0));
+    QVERIFY(!remove->isEnabled());
+    tree->setCurrentItem(find(kGroupItem, 1, 0));
+    QVERIFY(remove->isEnabled());
+    remove->click();
+    QVERIFY(st.cadSurfaces[1].sourcePointGroups.empty());
+    // Boundaries keep an order the user can change (REQ-069). Let the rebuild the removal asked for
+    // finish first: a rebuild drops boundaries whose entity no longer exists, and these are stand-ins.
+    QTest::qWait(600);
+    st.cadSurfaces[1].boundaries.push_back({31, CadBoundaryKind::Outer, "first"});
+    st.cadSurfaces[1].boundaries.push_back({32, CadBoundaryKind::Hide, "second"});
+    QTest::qWait(600);  // the manager notices the change on its refresh timer
+    tree->setCurrentItem(find(kBoundaryItem, 1, 0));
+    auto* up = manager->findChild<QPushButton*>("surfaceManagerMoveUp");
+    auto* down = manager->findChild<QPushButton*>("surfaceManagerMoveDown");
+    QVERIFY(!up->isEnabled());
+    QVERIFY(down->isEnabled());
+    down->click();
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[1].boundaries[0].name), QString("second"));
+    std::vector<std::string> log;
+    QVERIFY(DoUndo(st, log));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[1].boundaries[0].name), QString("first"));
+    // OK on Add Breakline only starts the pick command with the typed description.
+    tree->setCurrentItem(find(kBreaklineCategory, 0, 0));
+    WhenDialogShows(window, [&window] {
+      auto* entry = window.findChild<QDialog*>("surfaceAddBreakline");
+      QVERIFY(entry);
+      entry->findChild<QLineEdit*>("surfaceAddText")->setText("Top of curb");
+      entry->findChild<QPushButton*>("surfaceAddOk")->click();
+    });
+    add->click();
+    QCOMPARE(QString::fromStdString(st.designateBreaklineDescription), QString("Top of curb"));
+    QVERIFY(st.active != AppCommandState::Kind::None);
+    CancelActiveCommand(st, window.m_Log);
+    // The Add Boundaries dialog offers Outer / Hide / Show / Clip / Mask and Cancel starts nothing.
+    tree->setCurrentItem(find(kBoundaryCategory, 0, 0));
+    WhenDialogShows(window, [&window] {
+      auto* entry = window.findChild<QDialog*>("surfaceAddBoundary");
+      QVERIFY(entry);
+      QCOMPARE(entry->findChild<QComboBox*>("surfaceAddType")->count(), 5);
+      entry->findChild<QPushButton*>("surfaceAddCancel")->click();
+    });
+    add->click();
+    QVERIFY(st.active == AppCommandState::Kind::None);
+    // Rename: refusals leave the surface and say why; a free name applies.
+    auto* name = manager->findChild<QLineEdit*>("surfaceManagerName");
+    tree->setCurrentItem(tree->topLevelItem(0));
+    name->setText("Proposed");
+    Q_EMIT name->editingFinished();
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("EG"));
+    QVERIFY(manager->findChild<QLabel*>("surfaceManagerMessage")->text().contains("already exists"));
+    QCOMPARE(name->text(), QString("EG"));
+    name->setText("Existing ground");
+    Q_EMIT name->editingFinished();
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("Existing ground"));
+    // New surface / Delete; a volume surface needs two TINs.
+    manager->findChild<QPushButton*>("surfaceManagerNew")->click();
+    QCOMPARE(st.cadSurfaces.size(), size_t(3));
+    auto* newVolume = manager->findChild<QPushButton*>("surfaceManagerNewVolume");
+    QVERIFY(newVolume->isEnabled());
+    manager->findChild<QPushButton*>("surfaceManagerDelete")->click();
+    QCOMPARE(st.cadSurfaces.size(), size_t(2));
+    manager->findChild<QPushButton*>("surfaceManagerDelete")->click();
+    manager->findChild<QPushButton*>("surfaceManagerDelete")->click();
+    QVERIFY(st.cadSurfaces.empty());
+    QVERIFY(!newVolume->isEnabled());
+    QVERIFY(manager->findChild<QLabel*>("surfaceManagerEmpty")->isVisible());
+    manager->close();
+  }
+
+  void surfaceManagerShowsStateStyleAndFileLinks() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    st.cadSurfaces[0].styleName = "Deleted style";  // REQ-070: falls back to Standard, and says so
+    st.cadSurfaces[0].sourcePointFiles.push_back({"C:/data/points.csv", 1, true});
+    window.ShowSurfaceManager();
+    auto* manager = window.findChild<QDialog*>("surfaceManager");
+    QVERIFY(manager);
+    QTest::qWait(50);
+    QVERIFY(manager->findChild<QLabel*>("surfaceManagerStyleNote")->text().contains("no longer exists"));
+    QCOMPARE(manager->findChild<QComboBox*>("surfaceManagerStyle")->currentText(), QString("Standard"));
+    QVERIFY(manager->findChild<QLabel*>("surfaceManagerBuilt")->text().contains("triangles"));
+    auto* tree = manager->findChild<QTreeWidget*>("surfaceManagerTree");
+    bool fileRow = false;
+    for (QTreeWidgetItemIterator it(tree); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole).toInt() == 9) {  // FileItem
+        fileRow = (*it)->text(0) == "C:/data/points.csv  (PENZD, header)";
+        tree->setCurrentItem(*it);
+      }
+    QVERIFY(fileRow);
+    QVERIFY(manager->findChild<QPushButton*>("surfaceManagerImport")->isEnabled());
+    QCOMPARE(manager->findChild<QPushButton*>("surfaceManagerRemove")->text(), QString("Remove link"));
+    manager->findChild<QPushButton*>("surfaceManagerRemove")->click();
+    QVERIFY(st.cadSurfaces[0].sourcePointFiles.empty());
+    manager->close();
+  }
+
+  void surfaceRibbonButtonsAreEnabledAndOpenTheNativeDialogs() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st);
+    // Create Surface is live on both Survey ribbons (it was a disabled placeholder before #893).
+    for (const char* id : {"ribbon_SvyCreateSurf", "ribbon_SpCreateSurf"}) {
+      auto* create = window.findChild<QAction*>(id);
+      QVERIFY2(create, id);
+      QVERIFY(create->isEnabled());
+      QVERIFY(!create->property("nativeDialogPending").toBool());
+    }
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->reject();
+    });
+    window.findChild<QAction*>("ribbon_SvyCreateSurf")->trigger();
+    // A selected surface brings the contextual tab with live Surface Properties.
+    st.selection = {{SelectedEntity::Type::Surface, 1}};
+    window.Refresh();
+    auto* properties = window.findChild<QAction*>("ribbon_TsSurfProps");
+    QVERIFY(properties);
+    QVERIFY(properties->isEnabled());
+    // The Properties dock shows the selected surface read-only, as 0.7.4 did.
+    auto* surfaceName = window.findChild<QLabel*>("propSurfaceName");
+    QVERIFY(surfaceName);
+    QCOMPARE(surfaceName->text(), QString("Proposed"));
+    QVERIFY(window.findChild<QLabel*>("propertiesSummary")->text().contains("TIN Surface"));
+    QVERIFY(window.findChild<QLabel*>("propSurfaceNote")->text().contains("Surfaces manager"));
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->windowTitle().contains("Proposed"));
+      dialog->reject();
+    });
+    properties->trigger();
+  }
+
+  void surfaceDialogsRenderFinalScreenshots() {
+    EditorWindow window;
+    auto& st = window.State();
+    Issue893Fixture(st);
+    std::vector<std::string> log;
+    QVERIFY(surfedit::AddStyle(st, 0, "Roads", log));
+    st.cadSurfaces[0].sourcePointGroups = {"Ground", "Curb"};
+    st.userLinesFlat = {0, 0, 100, 10, 10, 104};  // a real line, so the breakline survives the rebuild
+    EnsureAttrCounts(st);
+    EnsureEntityIds(st);
+    st.cadSurfaces[0].breaklines.push_back({st.userLineAttrs[0].id, "Top of curb"});
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("EG");
+      dialog->findChild<QPushButton*>("createSurfaceOk")->click();  // refused: the name is taken
+      dialog->grab().save(Issue893Shot("qt-893-final-create-error.png"));
+      dialog->reject();
+    });
+    window.ShowCreateSurface();
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->grab().save(Issue893Shot("qt-893-final-create.png"));
+      dialog->reject();
+    });
+    window.ShowCreateSurface();
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfacePropertiesDialog");
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>("surfacePropertiesTabs");
+      for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i);
+        dialog->grab().save(Issue893Shot(QString("qt-893-final-properties-%1.png").arg(i).toUtf8().constData()));
+      }
+      dialog->reject();
+    });
+    window.ShowSurfaceProperties(0);
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("surfaceStyleDialog");
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>("surfaceStyleTabs");
+      for (int i : {0, 1, 5}) {
+        tabs->setCurrentIndex(i);
+        dialog->grab().save(Issue893Shot(QString("qt-893-final-style-%1.png").arg(i).toUtf8().constData()));
+      }
+      dialog->reject();
+    });
+    window.ShowSurfaceStyles("Standard", false);
+    window.ShowSurfaceManager();
+    auto* manager = window.findChild<QDialog*>("surfaceManager");
+    QVERIFY(manager);
+    manager->resize(960, 620);
+    QTest::qWait(900);  // let both surfaces finish their background rebuild
+    manager->grab().save(Issue893Shot("qt-893-final-manager.png"));
+    manager->close();
   }
 };
 
