@@ -130,7 +130,7 @@ void AnswerAttachQuestion(EditorWindow& window, const char* button, std::functio
 }
 /// Clicks the named button of the "Project in use" question the moment it appears ("" = close the
 /// window, as Escape does). `inspect` runs first, with the dialog, to check what it says.
-void AnswerLockQuestion(EditorWindow& window, const char* button, std::function<void(QDialog&)> inspect = {}) {
+void AnswerLockQuestion(EditorWindow& window, const char* button, const std::function<void(QDialog&)>& inspect = {}) {
   auto* poll = new QTimer(&window);
   poll->setInterval(10);
   QObject::connect(poll, &QTimer::timeout, poll, [&window, poll, button, inspect] {

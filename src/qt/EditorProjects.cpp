@@ -31,6 +31,7 @@
 #include <QAbstractItemView>
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <optional>
 
@@ -49,7 +50,7 @@ void NoteRecentProject(const std::filesystem::path& path) {
   const auto utf8 = QString::fromStdWString(stored.wstring()).toUtf8().toStdString();
   recent::Note(RecentProjectStorePath(), utf8, "", QDateTime::currentSecsSinceEpoch());
 }
-enum class LockChoice { Cancel, ReadOnly, TakeOver };
+enum class LockChoice : std::uint8_t { Cancel, ReadOnly, TakeOver };
 
 QString LockWhen(std::int64_t unix) {
   if (unix <= 0) return "an unknown time";
