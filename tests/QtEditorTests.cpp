@@ -1,5 +1,6 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
+#include "io/DwgIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
@@ -121,6 +122,46 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
+    EditorWindow window;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("existing.dwg");
+    QFile existing(path);
+    QVERIFY(existing.open(QIODevice::WriteOnly));
+    existing.write("original");
+    existing.close();
+
+    window.State().dwgExportVersion = DwgSaveVersion::R2018;
+    window.State().cadPipeRuns.push_back(CadPipeRun{});
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-loss-r2018.png")));
+      auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
+      auto* details = dialog->findChild<QLabel*>("dwgExportLossDetails"); QVERIFY(details);
+      QVERIFY(details->text().contains("existing.dwg already exists"));
+      QVERIFY(details->text().contains("AC1032"));
+      version->setCurrentIndex(0);
+      QVERIFY(details->text().contains("AC1015"));
+      dialog->findChild<QPushButton*>("cancelDwgExport")->click();
+    });
+    QVERIFY(!window.ConfirmDwgExport(path));
+    QCOMPARE(window.State().dwgExportVersion, DwgSaveVersion::R2018);
+    QFile check(path);
+    QVERIFY(check.open(QIODevice::ReadOnly));
+    QCOMPARE(check.readAll(), QByteArray("original"));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
+      auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
+      version->setCurrentIndex(0);
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-overwrite-r2000.png")));
+      dialog->findChild<QPushButton*>("confirmDwgExport")->click();
+    });
+    QVERIFY(window.ConfirmDwgExport(path));
+    QCOMPARE(window.State().dwgExportVersion, DwgSaveVersion::R2000);
+  }
 
   void rawObservationsSurviveStructuredSessionSave() {
     auto state = StateWithTraverse();

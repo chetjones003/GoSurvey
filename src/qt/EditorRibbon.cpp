@@ -17,8 +17,11 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -27,6 +30,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QResizeEvent>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSet>
 #include <QSpinBox>
@@ -540,12 +544,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     const bool dxf = command == "@exportDxf";
     const auto path = QFileDialog::getSaveFileName(this, "Export drawing", {}, dxf ? "DXF (*.dxf)" : "DWG (*.dwg)");
     if (!path.isEmpty()) {
-      bool proceed = true;
-      if (!dxf) {
-        const auto losses = ComputeDwgExportLosses(m_State); QStringList details;
-        for (const auto& loss : losses) details.append(QString("%1 %2").arg(loss.count).arg(Text(loss.label.c_str())));
-        if (!details.empty()) proceed = QMessageBox::question(this, "DWG export differences", "The exported DWG will omit or change:\n" + details.join('\n') + "\nContinue?", QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes;
-      }
+      const bool proceed = dxf || ConfirmDwgExport(path);
       if (proceed) { if (dxf) ExportDxfFile(m_State, path.toUtf8().constData(), m_Log); else ExportDwgFile(m_State, path.toUtf8().constData(), m_Log); }
     }
   } else if (command == "@batchPlot") {
@@ -559,4 +558,63 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     CancelActiveCommand(m_State, m_Log); Submit(command);
   }
   Refresh();
+}
+
+bool EditorWindow::ConfirmDwgExport(const QString& path) {
+  const auto losses = ComputeDwgExportLosses(m_State);
+  const bool overwriting = QFileInfo::exists(path);
+  QDialog dialog(this);
+  dialog.setObjectName("dwgExportWarning");
+  dialog.setWindowTitle("Export DWG");
+  dialog.setMinimumWidth(440);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* formatLabel = new QLabel("DWG format:", &dialog);
+  layout->addWidget(formatLabel);
+  auto* format = new QComboBox(&dialog);
+  format->setObjectName("dwgExportVersion");
+  size_t formatCount = 0;
+  const auto* formats = DwgExportFormatRows(&formatCount);
+  int selectedIndex = -1;
+  for (size_t i = 0; i < formatCount; ++i) {
+    if (!formats[i].selectable) continue;
+    format->addItem(QString("%1 (%2)").arg(Text(formats[i].displayName), Text(formats[i].acTag)),
+                    static_cast<int>(formats[i].version));
+    if (formats[i].version == m_State.dwgExportVersion) selectedIndex = format->count() - 1;
+  }
+  if (selectedIndex >= 0) format->setCurrentIndex(selectedIndex);
+  layout->addWidget(format);
+
+  auto* details = new QLabel(&dialog);
+  details->setObjectName("dwgExportLossDetails");
+  details->setWordWrap(true);
+  auto updateDetails = [&, details](int index) {
+    const auto version = static_cast<DwgSaveVersion>(format->itemData(index).toInt());
+    QStringList lines;
+    if (!losses.empty()) {
+      lines.append(QString("This export drops or changes (as %1):").arg(Text(DwgSaveVersionAcTag(version))));
+      for (const auto& loss : losses)
+        lines.append(QString("• %1 %2").arg(loss.count).arg(Text(loss.label.c_str())));
+    } else {
+      lines.append("This drawing has no known DWG export losses.");
+    }
+    if (overwriting)
+      lines.append(QString("\n%1 already exists. Exporting will replace its current contents.").arg(QFileInfo(path).fileName()));
+    details->setText(lines.join('\n'));
+  };
+  updateDetails(format->currentIndex());
+  connect(format, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, updateDetails);
+  layout->addWidget(details);
+
+  auto* buttons = new QDialogButtonBox(&dialog);
+  auto* proceed = buttons->addButton(overwriting ? "Overwrite" : "Export", QDialogButtonBox::AcceptRole);
+  proceed->setObjectName("confirmDwgExport");
+  auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
+  cancel->setObjectName("cancelDwgExport");
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+
+  if (dialog.exec() != QDialog::Accepted) return false;
+  m_State.dwgExportVersion = static_cast<DwgSaveVersion>(format->currentData().toInt());
+  return true;
 }
