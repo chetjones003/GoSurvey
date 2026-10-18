@@ -598,9 +598,19 @@ void EditorWindow::ServiceAuth() {
 
 void EditorWindow::EnableTelemetry() {
   // The launch-time channel, as the ImGui build sends: a Settings change applies from next launch.
-  const std::string channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
+  // A literal, not a std::string: the stored lambda is copied by std::function, and a capture
+  // whose copy can allocate (and so throw) is what bugprone-exception-escape rejects.
+  const char* channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
   m_SendTelemetry = [this, channel](const std::string& email) {
-    m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
+    // REQ-080: the ping must never fail the application. Starting its worker can throw (no thread
+    // or memory available); that is logged like a failed ping and the session carries on.
+    try {
+      m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
+    } catch (const std::exception& error) {
+      qWarning() << "[telemetry] ping not started:" << error.what();
+    } catch (...) {
+      qWarning() << "[telemetry] ping not started: unknown exception.";
+    }
   };
 }
 
