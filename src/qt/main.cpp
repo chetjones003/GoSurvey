@@ -61,6 +61,9 @@ int main(int argc, char** argv) {
     }
     window.show();
     splash.finish(&window);
+    // Startup dialogs need a visible owner, and What's New is eligible only after the
+    // Start tab has been established by the initial Refresh().
+    if (!smoke) window.InitializeStartup();
     if (smoke) {
       QTimer::singleShot(800, &window, [&] {
         QString error;

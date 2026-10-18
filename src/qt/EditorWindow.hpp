@@ -10,6 +10,7 @@ namespace update { struct UpdateState; }
 class EditorViewport;
 class QTabBar;
 class QLineEdit;
+class QResizeEvent;
 class QPlainTextEdit;
 class QTreeWidget;
 class QComboBox;
@@ -17,6 +18,8 @@ class QLabel;
 class QStackedWidget;
 class QAction;
 class QMenu;
+class QGridLayout;
+class QWidget;
 class FloatingCommandBar;
 
 class EditorWindow final : public QMainWindow {
@@ -31,12 +34,14 @@ public:
   /// True while the startup check is still waiting on the network, so the entry point can hold
   /// the splash screen until the answer is known (REQ-077: the check gates the session).
   bool UpdateCheckRunning() const;
+  void InitializeStartup();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
   void showEvent(QShowEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:
@@ -58,6 +63,9 @@ private:
   bool SaveDrawing(bool saveAs = false);
   bool ConfirmSave();
   void ShowWhatsNew();
+  void RefreshRecentDrawings();
+  void RefreshRecentProjects();
+  void MaybeAutoOpenWhatsNew();
   void ShowPdf();
   void ShowAdjustment();
   std::uint32_t OpenProject(const QString& path, bool createDrawing);
@@ -87,6 +95,9 @@ private:
   EditorViewport* m_Viewport = nullptr;
   QTabBar* m_Tabs = nullptr;
   QStackedWidget* m_Pages = nullptr;
+  QWidget* m_RecentTiles = nullptr;
+  QWidget* m_ProjectTiles = nullptr;
+  QLineEdit* m_RecentSearch = nullptr;
   QPlainTextEdit* m_Transcript = nullptr;
   QLineEdit* m_Command = nullptr;
   FloatingCommandBar* m_CommandBar = nullptr;
@@ -99,6 +110,9 @@ private:
   bool m_TextDialogOpen = false;
   bool m_AuthLastAttemptInteractive = false;
   bool m_AuthStarted = false;
+  bool m_StartupInitialized = false;
+  bool m_WhatsNewAutoOpened = false;
+  bool m_RecentListView = false;
   std::unique_ptr<auth::AuthTask> m_AuthTask;
   std::unique_ptr<update::UpdateState> m_Update;
   /// Hands the verified installer to the OS; replaceable so tests never run one.
