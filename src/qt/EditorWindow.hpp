@@ -1,9 +1,11 @@
 #pragma once
 #include <QMainWindow>
+#include <functional>
 #include <memory>
 #include "CadCommands.hpp"
 
 namespace auth { struct AuthTask; }
+namespace update { struct UpdateState; }
 
 class EditorViewport;
 class QTabBar;
@@ -26,6 +28,12 @@ public:
   ~EditorWindow() override;
   void Submit(const QString& command);
   void StartAuth(bool previewSignIn = false);
+  /// REQ-077: begins the unattended startup check. Called by the application entry
+  /// point (not the constructor) so test windows never touch the network.
+  void StartUpdateCheck();
+  /// True while the startup check is still waiting on the network, so the entry point can hold
+  /// the splash screen until the answer is known (REQ-077: the check gates the session).
+  bool UpdateCheckRunning() const;
   void InitializeStartup();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
@@ -76,6 +84,10 @@ private:
   void ShowSettings();
   void ShowSignInGate();
   void ServiceAuth();
+  void InitUpdates();
+  void ServiceUpdate();
+  void ShowUpdateDialog();
+  bool UpdateBlocksLaunch() const;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
@@ -102,6 +114,10 @@ private:
   bool m_WhatsNewAutoOpened = false;
   bool m_RecentListView = false;
   std::unique_ptr<auth::AuthTask> m_AuthTask;
+  std::unique_ptr<update::UpdateState> m_Update;
+  /// Hands the verified installer to the OS; replaceable so tests never run one.
+  std::function<bool(update::UpdateState&)> m_LaunchInstaller;
+  bool m_UpdateExitPending = false;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };

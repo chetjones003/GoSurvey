@@ -9,6 +9,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/QtAnnotations.cpp
   src/qt/EditorViewport.cpp
   src/qt/EditorProjects.cpp
+  src/qt/EditorUpdate.cpp
   src/qt/EditorDialogs.cpp
   src/qt/EditorPoints.cpp
   src/qt/EditorPointTransfer.cpp
@@ -31,6 +32,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/CredentialStore.cpp
   src/auth/AuthService.cpp
   src/auth/AuthPing.cpp
+  src/update/UpdateService.cpp
 )
 target_link_libraries(gosurvey_qt_frontend PUBLIC
   gosurvey_domain Qt6::Widgets Qt6::OpenGLWidgets OpenGL::GL glew_static pdfium

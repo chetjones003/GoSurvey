@@ -1,5 +1,9 @@
 #include "EditorWindow.hpp"
 #include "CadColor.hpp"
+#include "NonDismissableDialog.hpp"
+#include "Version.hpp"
+#include "update/UpdateService.hpp"
+#include "UserPrefs.hpp"
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -29,26 +33,10 @@
 #include <limits>
 #include <cstdio>
 
-namespace {
-class SignInGateDialog final : public QDialog {
-public:
-  using QDialog::QDialog;
-
-protected:
-  void closeEvent(QCloseEvent *event) override { event->ignore(); }
-  void keyPressEvent(QKeyEvent *event) override {
-    if (event->key() == Qt::Key_Escape)
-      event->ignore();
-    else
-      QDialog::keyPressEvent(event);
-  }
-};
-} // namespace
-
 void EditorWindow::ShowSignInGate() {
   if (findChild<QDialog *>("signInGate"))
     return;
-  auto *dialog = new SignInGateDialog(this);
+  auto *dialog = new NonDismissableDialog(this);
   dialog->setObjectName("signInGate");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Sign in to GoSurvey");
@@ -171,7 +159,7 @@ void EditorWindow::ShowSettings() {
   dialog->setObjectName("applicationSettings");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Settings");
-  dialog->resize(560, 285);
+  dialog->resize(560, 500);
   auto *layout = new QVBoxLayout(dialog);
   layout->setContentsMargins(20, 18, 20, 16);
   layout->setSpacing(12);
@@ -219,6 +207,90 @@ void EditorWindow::ShowSettings() {
   error->setWordWrap(true);
   error->setStyleSheet("color:#c54646;");
   layout->addWidget(error);
+
+  // REQ-077: the update check is switchable, and switching it off means no network request is
+  // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
+  // problem has somewhere to read it off.
+  layout->addStretch();
+  auto *divider = new QFrame(dialog);
+  divider->setFrameShape(QFrame::HLine);
+  layout->addWidget(divider);
+  auto *updatesHeading = new QLabel("Updates", dialog);
+  updatesHeading->setObjectName("updatesSettingsHeading");
+  updatesHeading->setFont(headingFont);
+  layout->addWidget(updatesHeading);
+  auto *versionLabel = new QLabel(QString("Version ") + GOSURVEY_VERSION_FULL, dialog);
+  versionLabel->setObjectName("updateVersionLabel");
+  versionLabel->setStyleSheet("color:#777f89;");
+  layout->addWidget(versionLabel);
+  auto *checkEnabled = new QCheckBox("Check for updates on startup", dialog);
+  checkEnabled->setObjectName("updateCheckEnabled");
+  layout->addWidget(checkEnabled);
+  auto *useBeta = new QCheckBox("Include beta releases", dialog);
+  useBeta->setObjectName("updateUseBeta");
+  layout->addWidget(useBeta);
+  auto *skippedRow = new QHBoxLayout();
+  auto *skippedLabel = new QLabel(dialog);
+  skippedLabel->setObjectName("updateSkippedLabel");
+  skippedRow->addWidget(skippedLabel);
+  // Without this the only way out of a skip is editing the prefs file by hand.
+  auto *clearSkip = new QPushButton("Clear", dialog);
+  clearSkip->setObjectName("updateClearSkip");
+  skippedRow->addWidget(clearSkip);
+  skippedRow->addStretch();
+  layout->addLayout(skippedRow);
+  auto *updatesError = new QLabel(dialog);
+  updatesError->setObjectName("updateSettingsError");
+  updatesError->setWordWrap(true);
+  updatesError->setStyleSheet("color:#c54646;");
+  layout->addWidget(updatesError);
+  auto syncUpdates = [this, checkEnabled, useBeta, skippedLabel, clearSkip] {
+    const QSignalBlocker blockCheck(checkEnabled);
+    const QSignalBlocker blockBeta(useBeta);
+    checkEnabled->setChecked(m_State.updatePrefs.enabled);
+    useBeta->setChecked(m_State.updatePrefs.useBetaChannel);
+    useBeta->setEnabled(m_State.updatePrefs.enabled);
+    const bool skipping = !m_State.updatePrefs.skippedVersion.empty();
+    skippedLabel->setText("Skipping " + QString::fromUtf8(m_State.updatePrefs.skippedVersion.c_str()));
+    skippedLabel->setVisible(skipping);
+    clearSkip->setVisible(skipping);
+  };
+  // Saved immediately, like the Account actions. A failed write puts the control back to what is
+  // actually stored, so the dialog never shows a setting that will not survive a restart.
+  auto applyUpdatePrefs = [this, updatesError, syncUpdates](const update::UpdatePrefs &next) {
+    const update::UpdatePrefs previous = m_State.updatePrefs;
+    m_State.updatePrefs = next;
+    if (SaveUserStartupPrefs(m_State)) {
+      updatesError->clear();
+      m_Update->prefs.skippedVersion = next.skippedVersion;
+    } else {
+      m_State.updatePrefs = previous;
+      updatesError->setText("Your update settings could not be saved.");
+    }
+    syncUpdates();
+  };
+  connect(checkEnabled, &QCheckBox::toggled, dialog, [this, applyUpdatePrefs](bool on) {
+    auto next = m_State.updatePrefs;
+    next.enabled = on;
+    applyUpdatePrefs(next);
+  });
+  connect(useBeta, &QCheckBox::toggled, dialog, [this, applyUpdatePrefs](bool on) {
+    auto next = m_State.updatePrefs;
+    next.useBetaChannel = on;
+    applyUpdatePrefs(next);
+  });
+  connect(clearSkip, &QPushButton::clicked, dialog, [this, applyUpdatePrefs] {
+    auto next = m_State.updatePrefs;
+    next.skippedVersion.clear();
+    applyUpdatePrefs(next);
+  });
+  syncUpdates();
+  // A skip chosen in the update dialog while Settings is open must show up here too.
+  auto *updatesSync = new QTimer(dialog);
+  updatesSync->setInterval(250);
+  connect(updatesSync, &QTimer::timeout, dialog, syncUpdates);
+  updatesSync->start();
+
   layout->addStretch();
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);

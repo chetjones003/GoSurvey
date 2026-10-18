@@ -9,6 +9,7 @@
 #include <QPalette>
 #include <QSettings>
 #include <QSplashScreen>
+#include <QThread>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <cstdio>
@@ -46,7 +47,18 @@ int main(int argc, char** argv) {
   {
     EditorWindow window;
     LoadUserStartupPrefSettings(window.State());
-    if (!smoke) window.StartAuth(previewSignIn);
+    if (!smoke) {
+      // Started before sign-in so the update offer, when there is one, is shown first (REQ-077).
+      window.StartUpdateCheck();
+      // REQ-077: the check gates the session. The splash stays up until it has an answer
+      // (bounded by the check's own short timeout), so no drawing can begin on a build that is
+      // about to offer to replace itself.
+      while (window.UpdateCheckRunning()) {
+        app.processEvents(QEventLoop::AllEvents, 50);
+        QThread::msleep(15);
+      }
+      window.StartAuth(previewSignIn);
+    }
     window.show();
     splash.finish(&window);
     // Startup dialogs need a visible owner, and What's New is eligible only after the

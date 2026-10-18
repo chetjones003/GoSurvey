@@ -25,6 +25,7 @@
 #include "WhatsNewLogic.hpp"
 #include "Project.hpp"
 #include "auth/AuthService.hpp"
+#include "update/UpdateService.hpp"
 #include "platform/HttpFetch.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
@@ -229,6 +230,7 @@ QIcon CadCommandIcon(const QString& icon) {
 
 EditorWindow::EditorWindow() {
   m_State.measureAnnotationText = MeasureQtText;
+  InitUpdates();
   setObjectName("GoSurveyQtEditor");
   setWindowTitle("GoSurvey");
   setWindowFlag(Qt::FramelessWindowHint);
@@ -501,6 +503,7 @@ EditorWindow::EditorWindow() {
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
     ServiceAuth();
+    ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
     const auto logSize = m_Log.size();
     TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
@@ -585,7 +588,7 @@ void EditorWindow::ServiceAuth() {
   if (m_State.authGateResolved) {
     if (auto *gate = findChild<QDialog *>("signInGate"))
       gate->accept();
-  } else if (HasInternetConnectivity()) {
+  } else if (!UpdateBlocksLaunch() && HasInternetConnectivity()) {
     ShowSignInGate();
   }
   MaybeAutoOpenWhatsNew();
@@ -613,6 +616,9 @@ void EditorWindow::StartAuth(bool previewSignIn) {
 
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
+  // REQ-078 before REQ-336: when the startup check found an update, What's New does not
+  // auto-open on this launch. The check has already answered by now (the splash waits for it).
+  if (UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
   MaybeAutoOpenWhatsNew();
 }
 
@@ -1033,6 +1039,19 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   QSettings settings;
   settings.setValue("editor/geometry", saveGeometry());
   settings.setValue("editor/layout", saveState(1));
+  // REQ-078: the installer starts only once every save prompt is settled, as the last step
+  // before closing. If it cannot start (the user declined elevation, or the launch failed) the
+  // application stays open and the update dialog reports why, rather than quitting without
+  // having updated.
+  if (m_UpdateExitPending && !m_LaunchInstaller(*m_Update)) {
+    m_UpdateExitPending = false;
+    // A declined elevation prompt reports "back to the offer", but the installer is already
+    // downloaded and verified: offer Install again, not a second download.
+    if (m_Update->phase == update::Phase::UpdateReady) m_Update->phase = update::Phase::ReadyToLaunch;
+    SwitchDrawing(previous);
+    event->ignore();
+    return;
+  }
   event->accept();
 }
 
