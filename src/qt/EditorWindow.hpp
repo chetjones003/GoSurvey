@@ -93,6 +93,7 @@ private:
   void ShowLayers();
   void ShowUnits();
   void ShowQuickSelect();
+  void ShowViewManager();
   void ShowCreatePoints();
   void ShowPoints(bool database);
   void ShowProjectPointWarning();
