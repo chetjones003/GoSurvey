@@ -231,6 +231,11 @@ QString Issue893Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue897Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 // Runs \p interact once the modal dialog a call is about to open is on screen; a watchdog rejects every
 // dialog if the interaction never closes it, so a failing test cannot hang the run.
 template <class F>
@@ -247,6 +252,108 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  void layoutManagerCreatesAndSwitchesLayoutAndHonorsReadOnly() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    window.Refresh();
+    window.resize(1280, 820); window.show(); QCoreApplication::processEvents();
+    auto* strip = window.findChild<QWidget*>("paperSpaceBar"); QVERIFY(strip);
+    QVERIFY(strip->grab().save(Issue897Shot("qt-897-layout-strip.png")));
+    QVERIFY(window.grab().save(Issue897Shot("qt-897-layout-surface.png")));
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("layoutManager"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-layout-manager.png")));
+      auto* add = dialog->findChild<QPushButton*>("layoutNew"); QVERIFY(add); add->click();
+      auto* set = dialog->findChild<QPushButton*>("layoutSetCurrent"); QVERIFY(set); set->click();
+      auto* close = dialog->findChild<QDialogButtonBox*>(); QVERIFY(close); close->button(QDialogButtonBox::Close)->click();
+    });
+    window.ShowLayoutManager();
+    QCOMPARE(window.State().paperLayouts.size(), size_t(2));
+    QCOMPARE(window.State().activeSpaceIndex, 1);
+    QCOMPARE(window.findChild<QTabBar*>("paperSpaceTabs")->count(), 3);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QCOMPARE(window.State().paperLayouts.size(), size_t(1));
+
+    window.State().drawingTabs[static_cast<size_t>(window.State().activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.readOnly = true;
+    window.State().openProjects.push_back(session);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("layoutManager"); QVERIFY(dialog);
+      QVERIFY(!dialog->findChild<QPushButton*>("layoutNew")->isEnabled());
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Close)->click();
+    });
+    window.ShowLayoutManager();
+  }
+
+  void pageSetupManagerAndEditorPreserveCancelAndReadOnlyState() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    window.State().activeSpaceIndex = 0;
+    const auto before = PageSetupFromLayout(window.State().paperLayouts[0], "");
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("pageSetupManager"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-page-setup-manager.png")));
+      auto* close = dialog->findChild<QPushButton*>("pageSetupClose"); QVERIFY(close); close->click();
+    });
+    window.ShowPageSetupManager(0);
+    QVERIFY(!window.State().savedPageSetups.empty());
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("pageSetupEditor"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-page-setup-editor.png")));
+      auto* buttons = dialog->findChild<QDialogButtonBox*>(); QVERIFY(buttons);
+      buttons->button(QDialogButtonBox::Cancel)->click();
+      QTimer::singleShot(0, [&] {
+        if (auto* manager = window.findChild<QDialog*>("pageSetupManager"))
+          manager->findChild<QPushButton*>("pageSetupClose")->click();
+      });
+    });
+    window.ShowPageSetupEditor(-1);
+    QCOMPARE(window.State().paperLayouts[0].portraitWidthIn, before.portraitWidthIn);
+    QCOMPARE(window.State().paperLayouts[0].portraitHeightIn, before.portraitHeightIn);
+    window.State().drawingTabs[static_cast<size_t>(window.State().activeDrawingIdx)].projectUid = 45;
+    AppCommandState::ProjectSession session; session.uid = 45; session.readOnly = true;
+    window.State().openProjects.push_back(session);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("pageSetupManager"); QVERIFY(dialog);
+      QVERIFY(!dialog->findChild<QPushButton*>("pageSetupNew")->isEnabled());
+      dialog->findChild<QPushButton*>("pageSetupClose")->click();
+    });
+    window.ShowPageSetupManager(0);
+  }
+
+  void viewportScaleWorkflowValidatesAndSupportsUndo() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    window.State().activeSpaceIndex = 0;
+    const int viewport = AddViewport(window.State(), 0);
+    const float initial = window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn;
+    window.Submit("VPSCALE 1:25");
+    QVERIFY(std::fabs(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn - 25.f) < 1e-4f);
+    window.Submit("VPSCALE not-a-scale");
+    QVERIFY(std::fabs(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn - 25.f) < 1e-4f);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, initial);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("viewportsManager"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-viewports-manager.png")));
+      QTimer::singleShot(0, [&] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* scaleDialog = qobject_cast<QInputDialog*>(widget); scaleDialog && scaleDialog->windowTitle() == "Viewport Scale") {
+            QVERIFY(scaleDialog->grab().save(Issue897Shot("qt-897-viewport-scale.png")));
+            scaleDialog->reject();
+            return;
+          }
+        QFAIL("Viewport Scale input dialog did not open");
+      });
+      dialog->findChild<QPushButton*>("viewportScale")->click();
+      dialog->findChild<QPushButton*>("viewportClose")->click();
+    });
+    window.ShowViewportsManager();
+  }
 
   void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
     EditorWindow window;
@@ -2167,7 +2274,7 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 280);
+    QCOMPARE(buttons, 284);
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);

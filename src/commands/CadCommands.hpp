@@ -6365,7 +6365,7 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
 /// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
 void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 
-// --- LAYOUT / VPSCALE / PAGESETUP (REQ-401, issue #751/#753 V3) -----------------------------------
+// --- LAYOUT / VPSCALE / PAGESETUP (REQ-025/026/027, issue #751/#753 V3) ----------------------------
 /// One-shot text dispatch for LAYOUT's NEW/RENAME/DELETE subverbs — the typed equivalent of the
 /// layout tab bar's add/rename/delete (REQ-025). \p args is everything typed after "LAYOUT".
 void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
