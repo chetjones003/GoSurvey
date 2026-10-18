@@ -7893,6 +7893,10 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
 int CadApplyLinetypeToSelection(AppCommandState& st, const std::string& linetype, int* skipped = nullptr);
 /// The same, for the lineweight in millimetres (\c -1 = ByLayer).
 int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped = nullptr);
+/// Transparency edit on the selection (0 = opaque, 1 = clear, -1 = ByLayer), over the same types as
+/// the line-style edits: one undo step, pushed only when something changes. The 0.7.4 Properties
+/// panel wrote transparency with no undo step; both frontends now share this service (#891).
+int CadApplyTransparencyToSelection(AppCommandState& st, float transparency, int* skipped = nullptr);
 /// What \ref CadSelectionColor returns when the selected objects carry more than one colour.
 inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
 /// The colour storage the selected objects share, \ref kCadSelectionColorVaries when they differ,
@@ -7902,6 +7906,34 @@ inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
 /// step), leaving the current colour alone; with nothing selected, sets \ref
 /// AppCommandState::currentColor.
 void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vector<std::string>& log);
+// --- Right-click classification (REQ-054, REQ-084) -------------------------------------------
+/// What a right-click in the drawing does. Both frontends classify with \ref CadClassifyRightClick
+/// so the preference dialog means the same thing in each (#891).
+enum class RightClickAction : std::uint8_t {
+  Enter,         ///< Submit an empty line (finish the command, or repeat the last when idle).
+  RepeatLast,    ///< Repeat the last command; only returned when there is one to repeat.
+  ShortcutMenu,  ///< Open the shortcut menu.
+};
+/// The verdict of the Default / Edit / Command Mode preferences (REQ-084 (a)) for a right-click
+/// PRESS. A mode that says "repeat" with nothing to repeat opens the menu rather than doing nothing.
+/// With time-sensitive right-click on and no selection, the caller measures the hold instead
+/// (\ref CadRightClickIsTimed) and uses \ref CadRightClickHoldIsMenu.
+[[nodiscard]] inline RightClickAction CadClassifyRightClick(const AppCommandState& st, bool hasSelection) {
+  using K = AppCommandState::Kind;
+  using CM = AppCommandState::RightClickCommandMode;
+  if (st.active != K::None)
+    return st.rightClickCommandMode == CM::Enter ? RightClickAction::Enter : RightClickAction::ShortcutMenu;
+  const bool repeat = hasSelection
+      ? st.rightClickEditMode == AppCommandState::RightClickEditMode::RepeatLastCommand
+      : st.rightClickDefaultMode == AppCommandState::RightClickDefaultMode::RepeatLastCommand;
+  return repeat && st.lastCommand != K::None ? RightClickAction::RepeatLast : RightClickAction::ShortcutMenu;
+}
+/// True when this right-click is decided by how long the button is held (REQ-084 (b)): the option
+/// is on and nothing is selected — a selection still goes through Edit Mode.
+[[nodiscard]] inline bool CadRightClickIsTimed(const AppCommandState& st, bool hasSelection) {
+  return st.rightClickTimeSensitive && !hasSelection;
+}
+
 /// True for \c Kind::ChProp / \c MatchProp / \c LayMCur.
 [[nodiscard]] bool IsPropCommandKind(AppCommandState::Kind k);
 void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log);

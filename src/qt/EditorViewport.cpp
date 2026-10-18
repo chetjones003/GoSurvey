@@ -27,6 +27,15 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   setMouseTracking(true);
   setMinimumSize(240, 180);
   setCursor(Qt::CrossCursor);
+  m_RightTimer.setSingleShot(true);
+  // Still held when the threshold passes: the menu appears at the press point without waiting.
+  QObject::connect(&m_RightTimer, &QTimer::timeout, this, [this] {
+    if (!m_RightPending) return;
+    m_RightPending = false;
+    PerformRightClick(RightClickAction::ShortcutMenu, m_RightGlobal);
+    if (changed) changed();
+    update();
+  });
 }
 
 EditorViewport::~EditorViewport() { Cleanup(); }
@@ -205,8 +214,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (right.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(90, 0); return; }
   }
   if (event->button() == Qt::RightButton) {
-    char empty[1]{};
-    ProcessCommandLineSubmit(empty, 1, m_State, m_Log);
+    RightPress(event->globalPosition().toPoint());
   } else if (event->button() == Qt::LeftButton && (WorldPoint(m_Last, m_Cursor) ||
              (m_State.active == AppCommandState::Kind::None && ViewPoint(m_Last, m_Cursor)))) {
     const Camera camera = CadViewCamera(m_State);
@@ -302,7 +310,49 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   update();
 }
 
-void EditorViewport::mouseReleaseEvent(QMouseEvent* event) { QOpenGLWidget::mouseReleaseEvent(event); }
+void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
+  if (event->button() == Qt::RightButton && m_RightPending) {
+    m_RightPending = false;
+    m_RightTimer.stop();
+    PerformRightClick(CadRightClickHoldIsMenu(static_cast<double>(m_RightHeld.elapsed()), m_State.rightClickLongerClickMs)
+                          ? RightClickAction::ShortcutMenu : RightClickAction::Enter, m_RightGlobal);
+    if (changed) changed();
+    update();
+    return;
+  }
+  QOpenGLWidget::mouseReleaseEvent(event);
+}
+
+void EditorViewport::RightPress(const QPoint& globalPosition) {
+  const bool hasSelection = !m_State.selection.empty() || !m_State.selectedSurveyPointIndices.empty();
+  if (CadRightClickIsTimed(m_State, hasSelection)) {
+    // Quick click = ENTER, held past the threshold = the menu, which appears as soon as the
+    // threshold passes if the button is still down.
+    m_RightPending = true;
+    m_RightGlobal = globalPosition;
+    m_RightHeld.start();
+    m_RightTimer.start(m_State.rightClickLongerClickMs);
+    return;
+  }
+  PerformRightClick(CadClassifyRightClick(m_State, hasSelection), globalPosition);
+}
+
+void EditorViewport::RightClickAsEnter() {
+  if (m_State.active != AppCommandState::Kind::None) {
+    char empty[2]{};
+    ProcessCommandLineSubmit(empty, sizeof(empty), m_State, m_Log);
+  } else if (m_State.lastCommand != AppCommandState::Kind::None) {
+    RepeatLastCommand(m_State, m_Log);
+  }
+}
+
+void EditorViewport::PerformRightClick(RightClickAction action, const QPoint& globalPosition) {
+  switch (action) {
+  case RightClickAction::Enter: RightClickAsEnter(); break;
+  case RightClickAction::RepeatLast: RepeatLastCommand(m_State, m_Log); break;
+  case RightClickAction::ShortcutMenu: if (contextMenuRequested) contextMenuRequested(globalPosition); break;
+  }
+}
 
 void EditorViewport::wheelEvent(QWheelEvent* event) {
   ray3d::Vec3 before, after;

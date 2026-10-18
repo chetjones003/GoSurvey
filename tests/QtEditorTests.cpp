@@ -60,6 +60,8 @@
 #include <QTextBrowser>
 #include <QToolButton>
 #include <QMenu>
+#include <QGroupBox>
+#include <QRadioButton>
 #include <QDockWidget>
 #include <QFrame>
 #include <QSettings>
@@ -2662,6 +2664,389 @@ private Q_SLOTS:
       green += color.green() > 50 && color.green() > 2 * color.red();
     }
     QVERIFY(red > 5); QVERIFY(green > 5);
+  }
+
+  // ---- Issue #891: core geometry Properties panel and the drawing shortcut menu -------------------
+  // The panel and menu are driven the way a user drives them (typing into the panel's own fields,
+  // right-clicking the viewport); the rules they enforce are covered by CadPropertyEditTests.
+  void Select891Line(EditorWindow& window) {
+    auto& st = window.State();
+    st.userLinesFlat = {0, 0, 0, 10, 0, 0};
+    st.userCirclesCxCyZR = {5, 5, 0, 2};
+    EnsureAttrCounts(st);
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    window.Refresh();
+  }
+  static void Commit891(QLineEdit* edit, const QString& text) {
+    edit->setText(text);
+    QTest::keyClick(edit, Qt::Key_Return);
+  }
+
+  void propertiesPanelEditsLineGeometryAsWorldCoordinatesWithUndo() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.worldDocumentOriginX = 1000.0;
+    Select891Line(window);
+    auto* summary = window.findChild<QLabel*>("propertiesSummary");
+    QVERIFY(summary); QVERIFY(summary->text().contains("Line"));
+    auto* endX = window.findChild<QLineEdit*>("propLineEndX");
+    QVERIFY(endX);
+    QCOMPARE(endX->text(), QString("1010.0000"));  // shown in world space (REQ-101)
+    Commit891(endX, "1025");
+    QCOMPARE(st.userLinesFlat[3], 25.0);            // stored local
+    QCOMPARE(window.findChild<QLineEdit*>("propLineEndX")->text(), QString("1025.0000"));
+    QCOMPARE(window.findChild<QLabel*>("propDerivedLength")->text(), QString("25.0000"));
+    Commit891(window.findChild<QLineEdit*>("propLineEndZ"), "4");
+    QCOMPARE(st.userLinesFlat[5], 4.0);
+    QVERIFY(window.findChild<QLabel*>("propDerivedRise"));  // a sloped line reports its rise
+    window.Submit("UNDO");
+    QCOMPARE(st.userLinesFlat[5], 0.0);
+    QCOMPARE(st.userLinesFlat[3], 25.0);
+    window.Submit("UNDO");
+    QCOMPARE(st.userLinesFlat[3], 10.0);
+  }
+
+  void propertiesPanelRefusesBadInputAndCorrectsRadiusWithAMessage() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    Select891Line(window);
+    const auto lineBefore = st.userLinesFlat;
+    Commit891(window.findChild<QLineEdit*>("propLineStartX"), "abc");
+    QCOMPARE(st.userLinesFlat, lineBefore);
+    auto* note = window.findChild<QLabel*>("propertiesNote");
+    QVERIFY(note); QVERIFY(note->text().contains("number"));
+    st.selection = {{SelectedEntity::Type::Circle, 0}};
+    window.Refresh();
+    QCOMPARE(window.findChild<QLineEdit*>("propCircleRadius")->text(), QString("2.0000"));
+    Commit891(window.findChild<QLineEdit*>("propCircleRadius"), "-3");
+    QVERIFY(st.userCirclesCxCyZR[3] > 0.0 && st.userCirclesCxCyZR[3] < 1e-3);
+    QVERIFY(window.findChild<QLabel*>("propertiesNote")->text().contains("positive"));
+    window.Submit("UNDO");
+    QCOMPARE(st.userCirclesCxCyZR[3], 2.0);
+  }
+
+  void propertiesPanelEditsTextContentHeightAndRotation() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    CadAnnotation text; text.kind = CadAnnotation::Kind::Text; text.text = "MH-1"; text.insX = 3.f; text.insY = 4.f;
+    st.cadAnnotations.push_back(text); EnsureAttrCounts(st);
+    st.selection = {{SelectedEntity::Type::Annotation, 0}};
+    window.Refresh();
+    QVERIFY(window.findChild<QLineEdit*>("propTextRotation"));       // TEXT has a rotation...
+    QVERIFY(!window.findChild<QLineEdit*>("propTextBoxMinX"));       // ...and no box
+    Commit891(window.findChild<QLineEdit*>("propTextRotation"), "90");
+    QVERIFY(std::fabs(BearingCwNorthDegFromMathAngleRad(st.cadAnnotations[0].rotationRad) - 90.f) < 1e-3f);
+    Commit891(window.findChild<QLineEdit*>("propTextHeight"), "0.2");
+    QVERIFY(std::fabs(st.cadAnnotations[0].plottedHeightInches - 0.2f) < 1e-6f);
+    auto* content = window.findChild<QPlainTextEdit*>("propTextContent");
+    QVERIFY(content);
+    content->setPlainText("MH-2");
+    QTest::keyClick(content, Qt::Key_Return, Qt::ControlModifier);
+    QCOMPARE(QString::fromStdString(st.cadAnnotations[0].text), QString("MH-2"));
+    window.Submit("UNDO");
+    QCOMPARE(QString::fromStdString(st.cadAnnotations[0].text), QString("MH-1"));
+  }
+
+  void propertiesPanelGeneralEditsApplyToTheWholeMixedSelectionAsOneUndoStep() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    Select891Line(window);
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}, {SelectedEntity::Type::Circle, 0}};
+    window.Refresh();
+    QVERIFY(window.findChild<QLabel*>("propertiesSummary")->text().contains("Mixed"));
+    QVERIFY(!window.findChild<QLineEdit*>("propLineStartX"));  // mixed: geometry is read-only
+    QVERIFY(window.findChild<QLabel*>("propertiesMixedNote"));
+    auto* layer = window.findChild<QComboBox*>("propLayer");
+    QVERIFY(layer && layer->isEnabled());
+    layer->lineEdit()->setText("CURB");
+    QTest::keyClick(layer->lineEdit(), Qt::Key_Return);
+    QCOMPARE(QString::fromStdString(st.userLineAttrs[0].layer), QString("CURB"));
+    QCOMPARE(QString::fromStdString(st.userCircleAttrs[0].layer), QString("CURB"));
+    auto* transparency = window.findChild<QComboBox*>("propTransparency");
+    QMetaObject::invokeMethod(transparency, "activated", Q_ARG(int, 3));  // 50 %
+    QCOMPARE(st.userLineAttrs[0].transparency, 0.5f);
+    QCOMPARE(st.userCircleAttrs[0].transparency, 0.5f);
+    auto* linetype = window.findChild<QComboBox*>("propLinetype");
+    QMetaObject::invokeMethod(linetype, "activated", Q_ARG(int, 3));      // Dashed
+    QCOMPARE(QString::fromStdString(st.userCircleAttrs[0].linetype), QString("DASHED"));
+    window.Submit("UNDO"); window.Submit("UNDO");
+    QCOMPARE(st.userCircleAttrs[0].transparency, -1.f);
+    QCOMPARE(QString::fromStdString(st.userCircleAttrs[0].layer), QString("CURB"));
+    window.Submit("UNDO");
+    QCOMPARE(QString::fromStdString(st.userCircleAttrs[0].layer), QString("0"));
+    // Selecting objects that differ shows "(varies)" rather than one object's value.
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}, {SelectedEntity::Type::Circle, 0}};
+    st.userCircleAttrs[0].lineweightMm = 0.5f;
+    window.m_PropertiesFingerprint = ~0ull; window.Refresh();
+    QCOMPARE(window.findChild<QComboBox*>("propLineweight")->currentText(), QString("(varies)"));
+  }
+
+  void propertiesPanelWithNothingSelectedShowsDimmedGeneralAndGeometry() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.State().selection.clear(); window.Refresh();
+    QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("No selection"));
+    QVERIFY(!window.findChild<QComboBox*>("propLayer")->isEnabled());
+    QVERIFY(!window.findChild<QComboBox*>("propTransparency")->isEnabled());
+    QVERIFY(!window.findChild<QLineEdit*>("propLineStartX"));
+  }
+
+  QMenu* RightClick891(EditorWindow& window) {
+    if (auto* old = window.findChild<QMenu*>("drawingContextMenu")) { old->close(); delete old; }
+    auto* viewport = window.findChild<QWidget*>("modelViewport");
+    QTest::mouseClick(viewport, Qt::RightButton, Qt::NoModifier, QPoint(40, 40));
+    return window.findChild<QMenu*>("drawingContextMenu");
+  }
+  static QAction* MenuAction891(QMenu* menu, const char* object) {
+    for (auto* action : menu->findChildren<QAction*>(object)) return action;
+    return nullptr;
+  }
+
+  void shortcutMenuWithASelectionOffersTheSharedEditActions() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    Select891Line(window);
+    auto* menu = RightClick891(window);
+    QVERIFY(menu);                                   // right-click with a selection opens the menu
+    QVERIFY(MenuAction891(menu, "ctxSelectSimilar"));
+    QVERIFY(MenuAction891(menu, "ctxQuickSelect"));
+    QVERIFY(!MenuAction891(menu, "ctxEnter"));
+    auto* modify = menu->findChild<QMenu*>("ctxModify");
+    QVERIFY(modify && modify->isEnabled());
+    QStringList tools; for (auto* action : modify->actions()) tools << action->text();
+    for (const char* tool : {"Move", "Copy Selection", "Rotate", "Scale", "Erase", "Offset", "Trim", "Join"}) QVERIFY2(tools.contains(tool), tool);
+    // Find... is deliberately absent (REQ-084).
+    for (auto* action : menu->actions()) QVERIFY(!action->text().startsWith("Find"));
+    MenuAction891(menu, "ctxClearSelection")->trigger();
+    QVERIFY(st.selection.empty());
+    // Isolation items come from the same commands the ribbon uses.
+    Select891Line(window);
+    menu = RightClick891(window);
+    MenuAction891(menu, "ctxHideObjects")->trigger();
+    QVERIFY(!st.hiddenEntityIds.empty());
+    menu = RightClick891(window);
+    QVERIFY(MenuAction891(menu, "ctxEndIsolation")->isEnabled());
+    MenuAction891(menu, "ctxEndIsolation")->trigger();
+    QVERIFY(st.hiddenEntityIds.empty());
+  }
+
+  void shortcutMenuModifyToolStartsTheCommandOnTheSelection() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    Select891Line(window);
+    auto* menu = RightClick891(window);
+    auto* modify = menu->findChild<QMenu*>("ctxModify");
+    for (auto* action : modify->actions()) if (action->text() == "Move") action->trigger();
+    QCOMPARE(window.State().active, AppCommandState::Kind::Move);
+    // A running command gets the short Command Mode menu only when its preference says so.
+    window.State().rightClickCommandMode = AppCommandState::RightClickCommandMode::ShortcutMenuAlways;
+    menu = RightClick891(window);
+    QVERIFY(menu);
+    QVERIFY(MenuAction891(menu, "ctxEnter")); QVERIFY(MenuAction891(menu, "ctxCancel"));
+    QVERIFY(!menu->findChild<QMenu*>("ctxModify"));
+    MenuAction891(menu, "ctxCancel")->trigger();
+    QCOMPARE(window.State().active, AppCommandState::Kind::None);
+  }
+
+  void rightClickModesFollowThePreferencesForEveryContext() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.rightClickDefaultMode = AppCommandState::RightClickDefaultMode::RepeatLastCommand;
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
+    std::vector<std::string> log; CancelActiveCommand(st, log);
+    st.selection.clear();
+    QVERIFY(!RightClick891(window));                 // no menu: Default Mode repeats LINE
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    CancelActiveCommand(st, log);
+    st.rightClickDefaultMode = AppCommandState::RightClickDefaultMode::ShortcutMenu;
+    QVERIFY(RightClick891(window));                  // Default Mode = Shortcut Menu
+    window.Submit("LINE");
+    st.rightClickCommandMode = AppCommandState::RightClickCommandMode::Enter;
+    QVERIFY(!RightClick891(window));                 // Command Mode = ENTER: no menu
+    st.rightClickCommandMode = AppCommandState::RightClickCommandMode::ShortcutMenuAlways;
+    QVERIFY(RightClick891(window));
+  }
+
+  void timeSensitiveRightClickIsEnterWhenQuickAndTheMenuWhenHeld() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& st = window.State();
+    st.rightClickTimeSensitive = true;
+    st.rightClickLongerClickMs = 150;
+    st.rightClickDefaultMode = AppCommandState::RightClickDefaultMode::RepeatLastCommand;
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
+    std::vector<std::string> log; CancelActiveCommand(st, log);
+    st.selection.clear();
+    auto* viewport = window.findChild<QWidget*>("modelViewport");
+    QTest::mouseClick(viewport, Qt::RightButton, Qt::NoModifier, QPoint(40, 40));   // quick = ENTER = repeat
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    QVERIFY(!window.findChild<QMenu*>("drawingContextMenu"));
+    CancelActiveCommand(st, log);
+    QTest::mousePress(viewport, Qt::RightButton, Qt::NoModifier, QPoint(40, 40));   // held = menu
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QMenu*>("drawingContextMenu"), 2000);
+    QTest::mouseRelease(viewport, Qt::RightButton, Qt::NoModifier, QPoint(40, 40));
+    QVERIFY(window.findChild<QMenu*>("drawingContextMenu"));
+    QCOMPARE(st.active, AppCommandState::Kind::None);                                // release did not also repeat
+  }
+
+  void rightClickCustomizationCancelsApplyPersistsAndGreysTimerGovernedModes() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    window.ShowRightClickCustomization();
+    auto* dialog = window.findChild<QDialog*>("rightClickCustomization");
+    QVERIFY(dialog);
+    auto* timed = dialog->findChild<QCheckBox*>("rightClickTimeSensitive");
+    auto* duration = dialog->findChild<QSpinBox*>("rightClickLongerClickMs");
+    QVERIFY(!timed->isChecked()); QVERIFY(!duration->isEnabled());
+    timed->setChecked(true);
+    QVERIFY(duration->isEnabled());
+    QVERIFY(!dialog->findChild<QGroupBox*>("rightClickDefaultMode")->isEnabled());   // greyed, not ignored
+    QVERIFY(dialog->findChild<QGroupBox*>("rightClickEditMode")->isEnabled());      // Edit Mode stays live
+    QVERIFY(!dialog->findChild<QGroupBox*>("rightClickCommandMode")->isEnabled());
+    timed->setChecked(false);
+    QVERIFY(dialog->findChild<QGroupBox*>("rightClickDefaultMode")->isEnabled());
+    timed->setChecked(true); duration->setValue(400);
+    dialog->findChild<QRadioButton*>("rightClickEditMode_0")->setChecked(true);
+    dialog->findChild<QPushButton*>("rightClickCancel")->click();                   // Cancel leaves everything alone
+    QVERIFY(!st.rightClickTimeSensitive);
+    QCOMPARE(st.rightClickLongerClickMs, 250);
+    QCOMPARE(st.rightClickEditMode, AppCommandState::RightClickEditMode::ShortcutMenu);
+
+    window.ShowRightClickCustomization();
+    dialog = window.findChild<QDialog*>("rightClickCustomization");
+    dialog->findChild<QCheckBox*>("rightClickTimeSensitive")->setChecked(true);
+    dialog->findChild<QSpinBox*>("rightClickLongerClickMs")->setValue(400);
+    dialog->findChild<QRadioButton*>("rightClickEditMode_0")->setChecked(true);
+    dialog->findChild<QPushButton*>("rightClickApply")->click();
+    QVERIFY(st.rightClickTimeSensitive);
+    QCOMPARE(st.rightClickLongerClickMs, 400);
+    QCOMPARE(st.rightClickEditMode, AppCommandState::RightClickEditMode::RepeatLastCommand);
+    AppCommandState reloaded; LoadUserStartupPrefs(reloaded);                        // it survives a restart
+    QVERIFY(reloaded.rightClickTimeSensitive);
+    QCOMPARE(reloaded.rightClickLongerClickMs, 400);
+    QCOMPARE(reloaded.rightClickEditMode, AppCommandState::RightClickEditMode::RepeatLastCommand);
+  }
+
+  void rightClickCustomizationSaveFailureChangesNothing() {
+    IsolatedUserData userData;
+    // A directory where the preferences file belongs makes the write fail.
+    QVERIFY(QDir().mkpath(QDir(userData.dir.path()).filePath("GoSurvey/gosurvey-user.json")));
+    MessageCatcher messages;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    window.ShowRightClickCustomization();
+    auto* dialog = window.findChild<QDialog*>("rightClickCustomization");
+    dialog->findChild<QCheckBox*>("rightClickTimeSensitive")->setChecked(true);
+    dialog->findChild<QPushButton*>("rightClickApply")->click();
+    QVERIFY(!st.rightClickTimeSensitive);
+    QTRY_VERIFY(!messages.texts.isEmpty());
+    QVERIFY(messages.texts.first().contains("could not be saved"));
+    QVERIFY(window.findChild<QDialog*>("rightClickCustomization"));                 // stays open to retry
+  }
+
+  void shortcutMenuOptionsAndSelectionOpenNativeDialogs() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    Select891Line(window);
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}, {SelectedEntity::Type::Circle, 0}};
+    auto* menu = RightClick891(window);
+    MenuAction891(menu, "ctxSelectionList")->trigger();
+    auto* list = window.findChild<QDialog*>("selectionList");
+    QVERIFY(list);
+    auto* items = list->findChild<QListWidget*>("selectionListItems");
+    QCOMPARE(items->count(), 2);
+    items->item(1)->setCheckState(Qt::Unchecked);                                   // un-ticks just the circle
+    QCOMPARE(st.selection.size(), std::size_t(1));
+    QCOMPARE(st.selection.front().type, SelectedEntity::Type::LineSeg);
+    list->findChild<QPushButton*>("selectionListSelectAll")->click();
+    QCOMPARE(st.selection.size(), std::size_t(2));
+    list->findChild<QPushButton*>("selectionListDeselectAll")->click();
+    QVERIFY(st.selection.empty());
+    list->close();
+    Select891Line(window);
+    menu = RightClick891(window);
+    MenuAction891(menu, "ctxOptions")->trigger();
+    auto* settings = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(settings);
+    QVERIFY(settings->findChild<QPushButton*>("settingsRightClickCustomization"));
+    settings->findChild<QPushButton*>("settingsRightClickCustomization")->click();
+    QVERIFY(window.findChild<QDialog*>("rightClickCustomization"));
+  }
+
+  // Screenshot evidence for issue #891 (selected designs), written under build/artifacts.
+  static QImage GrabDock891(EditorWindow& window) {
+    QCoreApplication::processEvents();
+    auto* dock = window.findChild<QDockWidget*>("propertiesDock");
+    const QPoint origin = dock->mapTo(&window, QPoint(0, 0));
+    auto* body = dock->findChild<QWidget*>("propertiesBody");
+    const int height = body ? std::min(dock->height(), body->sizeHint().height() + 40) : dock->height();
+    return window.grab(QRect(origin, QSize(dock->width(), height))).toImage();
+  }
+
+  void qt891ScreenshotsOfPropertiesMenuAndRightClickDialog() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.resize(1500, 920); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto& st = window.State();
+    Select891Line(window);
+    st.userLinesFlat[5] = 1.5;
+    CadAnnotation text; text.kind = CadAnnotation::Kind::Text; text.text = "MH-1"; text.insX = 3.f; text.insY = 4.f;
+    st.cadAnnotations.push_back(text); EnsureAttrCounts(st);
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    QDir().mkpath(dir);
+    auto save = [&](const QImage& image, const char* name) { QVERIFY(image.save(QDir(dir).filePath(name))); };
+    struct Shot { const char* name; std::vector<SelectedEntity> selection; };
+    const Shot shots[] = {
+        {"qt-891-final-properties-line.png", {{SelectedEntity::Type::LineSeg, 0}}},
+        {"qt-891-final-properties-circle.png", {{SelectedEntity::Type::Circle, 0}}},
+        {"qt-891-final-properties-text.png", {{SelectedEntity::Type::Annotation, 0}}},
+        {"qt-891-final-properties-mixed.png", {{SelectedEntity::Type::LineSeg, 0}, {SelectedEntity::Type::Circle, 0}}},
+        {"qt-891-final-properties-empty.png", {}}};
+    for (const auto& shot : shots) {
+      st.selection = shot.selection;
+      window.m_PropertiesFingerprint = ~0ull; window.Refresh();
+      save(GrabDock891(window), shot.name);
+    }
+    // A refused entry stays visible in the panel.
+    st.selection = {{SelectedEntity::Type::Circle, 0}};
+    window.m_PropertiesFingerprint = ~0ull; window.Refresh();
+    Commit891(window.findChild<QLineEdit*>("propCircleRadius"), "-3");
+    save(GrabDock891(window), "qt-891-final-properties-corrected.png");
+    window.Submit("UNDO");
+    // Shortcut menu with a selection, and while a command runs.
+    Select891Line(window);
+    auto* menu = RightClick891(window);
+    QVERIFY(menu);
+    QTest::qWait(50);
+    save(menu->grab().toImage(), "qt-891-final-menu-selection.png");
+    menu->close();
+    st.rightClickCommandMode = AppCommandState::RightClickCommandMode::ShortcutMenuAlways;
+    window.Submit("LINE");
+    menu = RightClick891(window);
+    QVERIFY(menu);
+    QTest::qWait(50);
+    save(menu->grab().toImage(), "qt-891-final-menu-command.png");
+    menu->close();
+    CancelActiveCommand(st, window.m_Log);
+    // Right-click Customization: timer off and timer on.
+    window.ShowRightClickCustomization();
+    auto* dialog = window.findChild<QDialog*>("rightClickCustomization");
+    QVERIFY(dialog);
+    QTest::qWait(50);
+    save(dialog->grab().toImage(), "qt-891-final-rightclick-default.png");
+    dialog->findChild<QCheckBox*>("rightClickTimeSensitive")->setChecked(true);
+    QTest::qWait(50);
+    save(dialog->grab().toImage(), "qt-891-final-rightclick-timed.png");
+    dialog->close(); delete dialog;
+    // Selection list.
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}, {SelectedEntity::Type::Circle, 0}};
+    st.selectionCycleEntities = st.selection;
+    window.ShowSelectionList();
+    auto* list = window.findChild<QDialog*>("selectionList");
+    QVERIFY(list);
+    QTest::qWait(50);
+    save(list->grab().toImage(), "qt-891-final-selection-list.png");
+    list->close();
   }
 };
 

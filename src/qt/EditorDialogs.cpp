@@ -265,6 +265,15 @@ void EditorWindow::ShowSettings() {
   // REQ-077: the update check is switchable, and switching it off means no network request is
   // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
   // problem has somewhere to read it off.
+  // REQ-084: the right-click preferences live in their own dialog, reached from here as in 0.7.4.
+  auto *rightClickRow = new QHBoxLayout();
+  auto *rightClickButton = new QPushButton("Right-click Customization...", dialog);
+  rightClickButton->setObjectName("settingsRightClickCustomization");
+  connect(rightClickButton, &QPushButton::clicked, this, [this] { ShowRightClickCustomization(); });
+  rightClickRow->addWidget(rightClickButton);
+  rightClickRow->addStretch();
+  layout->addLayout(rightClickRow);
+
   layout->addStretch();
   auto *divider = new QFrame(dialog);
   divider->setFrameShape(QFrame::HLine);
@@ -408,6 +417,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showQuickSelectWindow) {
     m_State.showQuickSelectWindow = false;
     ShowQuickSelect();
+  } else if (m_State.showSettingsWindow) {
+    m_State.showSettingsWindow = false;  // OPTIONS / the shortcut menu's Options...
+    ShowSettings();
+  } else if (m_State.showSelectionCyclingWindow) {
+    m_State.showSelectionCyclingWindow = false;
+    ShowSelectionList();
   } else if (m_State.showViewPointsWindow || m_State.showSurveyPointGridWindow) {
     const bool database = m_State.showSurveyPointGridWindow;
     m_State.showViewPointsWindow = m_State.showSurveyPointGridWindow = false;
