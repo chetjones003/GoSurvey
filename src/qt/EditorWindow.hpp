@@ -28,6 +28,9 @@ public:
   /// REQ-077: begins the unattended startup check. Called by the application entry
   /// point (not the constructor) so test windows never touch the network.
   void StartUpdateCheck();
+  /// True while the startup check is still waiting on the network, so the entry point can hold
+  /// the splash screen until the answer is known (REQ-077: the check gates the session).
+  bool UpdateCheckRunning() const;
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool RunSmokeChecks(QString& error);

@@ -409,6 +409,41 @@ private Q_SLOTS:
     QCOMPARE(window.m_Update->phase, update::Phase::Idle);
   }
 
+  void updateDeclinedElevationOffersInstallAgainNotAnotherDownload() {
+    EditorWindow window;
+    window.show();
+    window.m_LaunchInstaller = [](update::UpdateState& state) {
+      state.phase = update::Phase::UpdateReady;   // what LaunchInstallerAndExit reports for UAC "No"
+      return false;
+    };
+    window.m_Update->available = OfferedManifest();
+    window.m_Update->available.installerUrl = "C:/verified/GoSurvey-99.0.0-Installer.exe";
+    window.m_Update->phase = update::Phase::ReadyToLaunch;
+    window.ServiceUpdate();
+    auto* dialog = window.findChild<QDialog*>("softwareUpdate");
+    QVERIFY(dialog);
+    UpdateButton(dialog, "updateInstallButton")->click();
+    window.ServiceUpdate();
+    QVERIFY(window.isVisible());
+    QCOMPARE(window.m_Update->phase, update::Phase::ReadyToLaunch);
+    QCOMPARE(window.m_Update->available.installerUrl, std::string("C:/verified/GoSurvey-99.0.0-Installer.exe"));
+    QTRY_VERIFY(UpdateButton(dialog, "updateInstallButton")->isVisibleTo(dialog));
+    QVERIFY(!UpdateButton(dialog, "updateNowButton")->isVisibleTo(dialog));
+    UpdateButton(dialog, "updateNotNowButton")->click();
+  }
+
+  void updateCheckGatesTheSessionOnlyWhileTheNetworkAnswerIsPending() {
+    EditorWindow window;
+    QVERIFY(!window.UpdateCheckRunning());
+    window.m_Update->phase = update::Phase::Checking;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    QVERIFY(window.UpdateCheckRunning());
+    window.m_Update->task->done.store(true, std::memory_order_release);
+    QVERIFY(!window.UpdateCheckRunning());
+    window.ServiceUpdate();   // consumes the finished (not newer) check
+    QVERIFY(!window.UpdateBlocksLaunch());
+  }
+
   void updateNotNowKeepsTheInstallerForNextLaunch() {
     EditorWindow window;
     window.m_Update->available = OfferedManifest();

@@ -20,7 +20,8 @@
   the save prompt cancels the update. The installer starts only after that path completes.
 - Settings → Updates: check on startup, include beta releases, skipped version with Clear;
   saved immediately, reverting the control if the write fails.
-- Offer is shown before the sign-in gate (matches the ImGui launch sequence).
+- Offer is shown before the sign-in gate (matches the ImGui launch sequence). The splash is held
+  until the check has an answer (bounded by the 3 s check timeout), as the ImGui splash is.
 
 ## Files and boundaries
 
@@ -36,10 +37,11 @@ no new dependency, no change to `update::` or `platform/`.
   that way; no manual "Check now" was added (it would be a new requirement).
 - Deviation (judgement call): if the installer cannot start (UAC declined / launch error), Qt stays
   open and the dialog reports it. The ImGui loop exits regardless. The service itself documents a
-  declined UAC prompt as "returns to the offer".
+  declined UAC prompt as "returns to the offer"; Qt returns to the verified-installer step
+  (Install and Restart) so Update Now is not asked to re-download a local file.
 - UI direction selected by the user: dialog option C (navy banner), settings option A (one page).
 
 ## Verification
 
-- Qt build and `GoSurveyQtTests` (all tests, including 11 new update/settings workflow tests).
+- Qt build and `GoSurveyQtTests` (all tests, including 13 new update/settings workflow tests).
 - Not automated: live manifest fetch, successful download + hash, real elevated installer launch.

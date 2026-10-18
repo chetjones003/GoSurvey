@@ -675,18 +675,22 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
     event->ignore();
     return;
   }
-  // REQ-078: the installer starts only once every save prompt is settled. If it cannot start
-  // (the user declined elevation, or the launch failed) the application stays open and the
-  // update dialog reports why, rather than quitting without having updated.
+  QSettings settings;
+  settings.setValue("editor/geometry", saveGeometry());
+  settings.setValue("editor/layout", saveState(1));
+  // REQ-078: the installer starts only once every save prompt is settled, as the last step
+  // before closing. If it cannot start (the user declined elevation, or the launch failed) the
+  // application stays open and the update dialog reports why, rather than quitting without
+  // having updated.
   if (m_UpdateExitPending && !m_LaunchInstaller(*m_Update)) {
     m_UpdateExitPending = false;
+    // A declined elevation prompt reports "back to the offer", but the installer is already
+    // downloaded and verified: offer Install again, not a second download.
+    if (m_Update->phase == update::Phase::UpdateReady) m_Update->phase = update::Phase::ReadyToLaunch;
     SwitchDrawing(previous);
     event->ignore();
     return;
   }
-  QSettings settings;
-  settings.setValue("editor/geometry", saveGeometry());
-  settings.setValue("editor/layout", saveState(1));
   event->accept();
 }
 

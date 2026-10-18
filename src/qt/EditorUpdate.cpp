@@ -58,6 +58,11 @@ void EditorWindow::StartUpdateCheck() {
   update::BeginStartupCheck(*m_Update, "chetjones003/GoSurvey");
 }
 
+bool EditorWindow::UpdateCheckRunning() const {
+  return m_Update && m_Update->phase == update::Phase::Checking && m_Update->task &&
+         !m_Update->task->done.load(std::memory_order_acquire);
+}
+
 bool EditorWindow::UpdateBlocksLaunch() const {
   return m_Update && m_Update->phase != update::Phase::Idle;
 }
@@ -158,11 +163,15 @@ void EditorWindow::ShowUpdateDialog() {
   });
   connect(skipVersion, &QPushButton::clicked, dialog, [this] {
     update::SkipAvailableVersion(*m_Update);
+    const std::string previousSkip = m_State.updatePrefs.skippedVersion;
     m_State.updatePrefs.skippedVersion = m_Update->prefs.skippedVersion;
-    if (!SaveUserStartupPrefs(m_State))
+    if (!SaveUserStartupPrefs(m_State)) {
+      // Roll back so an unrelated later save cannot quietly persist a choice reported as lost.
+      m_State.updatePrefs.skippedVersion = previousSkip;
       QMessageBox::warning(this, "Skip this version",
                            "Your choice to skip this version could not be saved, so it may be "
                            "offered again next time.");
+    }
   });
   connect(cancelDownload, &QPushButton::clicked, dialog, [this] {
     if (m_Update->task) m_Update->task->cancel.store(true, std::memory_order_relaxed);
@@ -189,6 +198,9 @@ void EditorWindow::ShowUpdateDialog() {
     const bool downloading = phase == Phase::Downloading;
     const bool ready = phase == Phase::ReadyToLaunch;
     const bool failed = phase == Phase::Failed;
+    // A button just ended the flow; ServiceUpdate closes the dialog on its next tick. Until then
+    // leave the last frame alone rather than redrawing it as the failure state.
+    if (!offering && !downloading && !ready && !failed) return;
 
     QString title;
     QString sub;
@@ -279,7 +291,12 @@ void EditorWindow::ShowUpdateDialog() {
     notNow->setEnabled(!m_UpdateExitPending);
     closeFailure->setVisible(failed);
     dialog->layout()->activate();
+    const QSize before = dialog->size();
     dialog->adjustSize();
+    // The height changes between phases; re-centre over the window so the buttons cannot grow
+    // off the bottom of the screen. Only on a size change, so a dragged dialog stays put.
+    if (dialog->size() != before)
+      dialog->move(geometry().center() - QPoint(dialog->width() / 2, dialog->height() / 2));
   };
   // A navy banner carries the branding; the content sits beneath it.
   dialog->setFixedWidth(720);

@@ -285,6 +285,11 @@ void EditorWindow::ShowSettings() {
     applyUpdatePrefs(next);
   });
   syncUpdates();
+  // A skip chosen in the update dialog while Settings is open must show up here too.
+  auto *updatesSync = new QTimer(dialog);
+  updatesSync->setInterval(250);
+  connect(updatesSync, &QTimer::timeout, dialog, syncUpdates);
+  updatesSync->start();
 
   layout->addStretch();
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
