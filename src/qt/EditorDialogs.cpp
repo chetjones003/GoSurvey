@@ -380,6 +380,9 @@ void EditorWindow::ShowSettings() {
     error->setText(QString::fromUtf8(m_State.authError.c_str()));
   });
   refresh->start();
+  // The wrapped notices need more height than the fixed starting size; open tall enough that
+  // no paragraph is squeezed (about 670 px at this width, which still fits a 720 px screen).
+  dialog->resize(dialog->width(), std::max(dialog->height(), dialog->heightForWidth(dialog->width())));
   dialog->show();
 }
 

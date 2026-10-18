@@ -445,7 +445,8 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(settings);
-    settings->adjustSize();
+    // As opened: tall enough for its wrapped text.
+    QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
     QTest::qWait(250);  // let the account card's refresh fill in its status
     QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
