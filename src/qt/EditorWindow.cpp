@@ -720,6 +720,7 @@ void EditorWindow::BuildRibbon() {
   auto* applicationMenu = new QMenu(this);
   applicationMenu->setObjectName("goSurveyApplicationMenu");
   auto* file = applicationMenu->addMenu("&File");
+  file->setObjectName("fileMenu");
   file->addAction(CommandAction("&New", "New.png", "NEW", QKeySequence::New));
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
@@ -727,6 +728,7 @@ void EditorWindow::BuildRibbon() {
   file->addSeparator();
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
+  file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
   file->addSeparator();
   file->addAction(CommandAction("PDF viewer...", "Pdf.png", "PDFVIEW"));
   file->addSeparator();
@@ -863,6 +865,15 @@ void EditorWindow::Submit(const QString& command) {
   else if (verb == "OPENPROJECT") {
     const auto path = QFileDialog::getOpenFileName(this, "Open project", {}, "GoSurvey project (*.gsproj)");
     if (!path.isEmpty()) OpenProject(path, true);
+  }
+  else if (verb == "PROJECTSETTINGS") {
+    if (m_State.activeDrawingIdx > 0 &&
+        m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size()) &&
+        m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid != 0) {
+      ShowProjectSettings(m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid);
+    } else {
+      QMessageBox::information(this, "Project Settings", "Open a drawing that belongs to a project first.");
+    }
   }
   else if (verb == "OPEN") {
     const QString path = QFileDialog::getOpenFileName(this, "Open drawing", {}, "Drawing (*.dwg)");
@@ -1476,8 +1487,8 @@ void EditorWindow::RefreshRecentDrawings() {
     const QString cardBg = dark ? "#303234" : "#ffffff";
     const QString cardEdge = dark ? "#55585b" : "#c5c8cb";
     const QString cardHover = dark ? "#3b3d3f" : "#f0f1f2";
-    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; padding:5px; border:1px solid %1; border-radius:6px; background:%2; } QToolButton#recentDrawingTile:hover { border-color:#65a9ec; background:%3; }")
-                            .arg(cardEdge, cardBg, cardHover));
+    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; padding:5px; border:1px solid %1; border-radius:6px; background:%2; } QToolButton#recentDrawingTile:hover { border-color:%4; background:%3; }")
+                            .arg(cardEdge, cardBg, cardHover, dark ? "#a9afb3" : "#65a9ec"));
     const auto thumbPath = dir / "thumbnails" / std::filesystem::path(QString::fromUtf8(entry.thumb.c_str()).toStdWString());
     const QImage savedThumbnail(QString::fromStdWString(thumbPath.wstring()));
     QPixmap thumbnail;

@@ -4,6 +4,7 @@
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
+#include "QtAppearance.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
@@ -14,6 +15,8 @@
 #include "ProjectSettings.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
+#include "io/Project.hpp"
+#include "ProjectSettings.hpp"
 #include "GsMigrate.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
@@ -31,6 +34,7 @@
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QPalette>
 #include <QMessageBox>
 #include <QDialog>
 #include <QPlainTextEdit>
@@ -48,6 +52,7 @@
 #include <QCheckBox>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QListWidget>
 #include <QProgressBar>
 #include <QTextBrowser>
 #include <QToolButton>
@@ -58,6 +63,7 @@
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QScrollArea>
 #include <QClipboard>
 #include <QScopeGuard>
@@ -127,6 +133,11 @@ update::Manifest OfferedManifest(const std::string& version = "99.0.0") {
 }
 QPushButton* UpdateButton(QDialog* dialog, const char* name) {
   return dialog->findChild<QPushButton*>(name);
+}
+QString Issue886Shot(const char* name) {
+  const QString directory = QDir(QStringLiteral(GOSURVEY_SOURCE_DIR)).filePath("build");
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
 }
 }
 
@@ -234,6 +245,188 @@ private Q_SLOTS:
                              "/qt-880-account-final.png"));
     QTest::mouseClick(action, Qt::LeftButton);
     QVERIFY(window.State().authSignOutRequested);
+  }
+
+  void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "North Ridge", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    QAction* action = window.findChild<QAction*>("command_PROJECTSETTINGS");
+    QVERIFY(action);
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* category = dialog->findChild<QComboBox*>("projectZoneCategory");
+      auto* systems = dialog->findChild<QComboBox*>("projectCoordinateSystem");
+      auto* angular = dialog->findChild<QComboBox*>("projectAngularUnits");
+      auto* foot = dialog->findChild<QComboBox*>("projectFootDefinition");
+      auto* scale = dialog->findChild<QComboBox*>("projectPlotScale");
+      auto* customScale = dialog->findChild<QDoubleSpinBox*>("projectCustomScale");
+      auto* inserted = dialog->findChild<QCheckBox*>("projectScaleInsertedObjects");
+      auto* layer = dialog->findChild<QComboBox*>("projectLayerName0");
+      auto* applyButton = dialog->findChild<QPushButton*>("projectSettingsApply");
+      auto* buttons = dialog->findChild<QDialogButtonBox*>();
+      auto* navigation = dialog->findChild<QListWidget*>("projectSettingsNavigation");
+      auto* pages = dialog->findChild<QStackedWidget*>("projectSettingsPages");
+      QVERIFY(units && category && systems && angular && foot && scale && customScale && inserted && layer && applyButton && buttons && navigation && pages);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-units.png")));
+      navigation->setCurrentRow(1);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-object-layers.png")));
+      navigation->setCurrentRow(0);
+      units->setCurrentIndex(units->findData(6));
+      QVERIFY(category->count() > 1);
+      category->setCurrentIndex(1);
+      QVERIFY(!systems->currentData().toString().isEmpty());
+      angular->setCurrentIndex(1);
+      foot->setCurrentIndex(1);
+      scale->setCurrentIndex(scale->findData(-1.0));
+      customScale->setValue(123.5);
+      inserted->setChecked(false);
+      layer->setCurrentText("C-PROJECT-POINT");
+      applyButton->click();
+      QVERIFY(dialog->isVisible());
+
+      auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+          [projectUid](const auto& item) { return item.uid == projectUid; });
+      QCOMPARE(session.settings->insUnits, 6);
+      QCOMPARE(session.settings->defaults.angularUnits, DrawingSettings::AngularUnits::Radians);
+      QCOMPARE(session.settings->defaults.footDefinition, DrawingSettings::FootDefinition::International);
+      QVERIFY(!session.settings->defaults.scaleInsertedObjects);
+      QCOMPARE(session.settings->zoneCode, systems->currentData().toString().toUtf8().toStdString());
+      QCOMPARE(session.settings->defaults.objectLayers[0].layer, std::string("C-PROJECT-POINT"));
+      QVERIFY(std::fabs(session.settings->plotScale - 123.5f) < 0.001f);
+
+      gsproj::Project stored;
+      QVERIFY2(gsproj::Load(created.file, &stored, &error), error.c_str());
+      ProjectSettings reloaded;
+      QVERIFY2(ParseProjectSettings(stored.settingsJson, &reloaded, &error), error.c_str());
+      QCOMPARE(reloaded.insUnits, 6);
+      QCOMPARE(reloaded.zoneCode, session.settings->zoneCode);
+      QCOMPARE(reloaded.defaults.objectLayers[0].layer, std::string("C-PROJECT-POINT"));
+
+      units->setCurrentIndex(units->findData(4));
+      buttons->button(QDialogButtonBox::Cancel)->click();
+      QCOMPARE(session.settings->insUnits, 6);
+    });
+    action->trigger();
+  }
+
+  void projectSettingsValidationBlocksSaveAndCancelLeavesProjectUntouched() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Validation Job", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      auto* layer = dialog->findChild<QComboBox*>("projectLayerName0");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      auto* validation = dialog->findChild<QLabel*>("projectSettingsValidation");
+      auto* navigation = dialog->findChild<QListWidget*>("projectSettingsNavigation");
+      QVERIFY(layer && apply && validation);
+      QVERIFY(navigation);
+      navigation->setCurrentRow(1);
+      layer->setCurrentText("");
+      QVERIFY(!validation->text().isEmpty());
+      QVERIFY(!apply->isEnabled());
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-validation.png")));
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [projectUid](const auto& item) { return item.uid == projectUid; });
+    QVERIFY(!session.settings->hasDefaults);
+    gsproj::Project stored;
+    QVERIFY2(gsproj::Load(created.file, &stored, &error), error.c_str());
+    ProjectSettings reloaded;
+    QVERIFY(ParseProjectSettings(stored.settingsJson, &reloaded, &error));
+    QVERIFY(!reloaded.hasDefaults);
+  }
+
+  void projectSettingsSaveFailureAndReadOnlyDoNotChangeSession() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    gsproj::Project created;
+    std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Locked Job", &created, &error), error.c_str());
+
+    EditorWindow window;
+    const auto projectUid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(projectUid != 0);
+    auto& session = *std::find_if(window.State().openProjects.begin(), window.State().openProjects.end(),
+        [projectUid](const auto& item) { return item.uid == projectUid; });
+    const auto originalPath = session.project.file;
+    session.project.file = originalPath.parent_path() / "missing-folder" / originalPath.filename();
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-save-error.png")));
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      QVERIFY(units && apply);
+      units->setCurrentIndex(units->findData(6));
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+            message->grab().save(Issue886Shot("qt-886-project-settings-save-error-message.png"));
+            message->accept();
+          }
+      });
+      apply->click();
+      QCOMPARE(session.settings->insUnits, -1);
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    session.project.file = originalPath;
+    QVERIFY(!session.settings->hasDefaults);
+
+    session.readOnly = true;
+    QTimer::singleShot(15000, &window, [&window] {
+      if (auto* dialog = window.findChild<QDialog*>("projectSettingsDialog")) dialog->reject();
+    });
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("projectSettingsDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-886-project-settings-read-only.png")));
+      auto* units = dialog->findChild<QComboBox*>("projectLinearUnits");
+      auto* apply = dialog->findChild<QPushButton*>("projectSettingsApply");
+      QVERIFY(units && apply);
+      units->setCurrentIndex(units->findData(6));
+      QTimer::singleShot(0, [] {
+        for (auto* widget : QApplication::topLevelWidgets())
+          if (auto* message = qobject_cast<QMessageBox*>(widget)) {
+            message->grab().save(Issue886Shot("qt-886-project-settings-read-only-message.png"));
+            message->accept();
+          }
+      });
+      apply->click();
+      QCOMPARE(session.settings->insUnits, -1);
+      dialog->reject();
+    });
+    window.ShowProjectSettings(projectUid);
+    session.readOnly = false;
+    QVERIFY(!session.settings->hasDefaults);
   }
 
   void startupGateUsesApplicationLogoAndRequiresAChoice() {
@@ -1049,6 +1242,14 @@ private Q_SLOTS:
 
   void customTitleBarAndFloatingCommandLineWork() {
     QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
@@ -1109,7 +1310,10 @@ private Q_SLOTS:
     maximize->click(); QTRY_VERIFY(window.isMaximized());
     maximize->click(); QTRY_VERIFY(!window.isMaximized());
     window.resize(1500, 950); QTest::qWait(100);
-    QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/qt-chrome-preview.png"));
+    QVERIFY(window.grab().save(Issue886Shot("qt-886-neutral-gray-app.png")));
+    auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    tabs->setCurrentIndex(0); QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue886Shot("qt-886-neutral-gray-start.png")));
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
   }
 
@@ -1353,7 +1557,7 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
       QSettings().remove("editor/lightTheme");
     });
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
     const auto geometry = window.State().userLinesFlat;
@@ -1369,6 +1573,10 @@ private Q_SLOTS:
       QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
       QVERIFY(tree->currentItem()); QCOMPARE(tree->currentItem()->text(0), selected);
       QCOMPARE(qApp->property("cadLightTheme").toBool(), theme == "Classic light");
+      if (theme == "Neutral gray") {
+        QCOMPARE(qApp->palette().color(QPalette::Window), QColor("#222426"));
+        QCOMPARE(qApp->palette().color(QPalette::Button), QColor("#383a3c"));
+      }
     }
     window.Submit("UNDO"); QVERIFY(window.State().userLinesFlat.empty());
     QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
