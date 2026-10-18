@@ -69,7 +69,7 @@ jobs:
         run: cmake --preset ninja-release
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build --preset ninja-release
 
       - name: Perform CodeQL analysis
         id: analyze

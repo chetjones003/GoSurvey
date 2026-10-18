@@ -144,7 +144,7 @@ private Q_SLOTS:
     window.State().cadPipeRuns.push_back(CadPipeRun{});
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-loss-r2018.png")));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-loss-r2018.png")));
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       auto* details = dialog->findChild<QLabel*>("dwgExportLossDetails"); QVERIFY(details);
       QVERIFY(details->text().contains("existing.dwg already exists"));
@@ -163,7 +163,7 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       version->setCurrentIndex(0);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_SOURCE_DIR)).filePath("build/qt-884-dwg-overwrite-r2000.png")));
+      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-overwrite-r2000.png")));
       dialog->findChild<QPushButton*>("confirmDwgExport")->click();
     });
     QVERIFY(window.ConfirmDwgExport(path));
@@ -224,7 +224,7 @@ private Q_SLOTS:
     QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
     QTRY_COMPARE(action->text(), QString("Sign Out"));
     const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QCoreApplication::applicationDirPath() +
+    QVERIFY(accountShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
                              "/qt-880-account-final.png"));
     QTest::mouseClick(action, Qt::LeftButton);
     QVERIFY(window.State().authSignOutRequested);
@@ -244,7 +244,7 @@ private Q_SLOTS:
     QVERIFY(logo);
     QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
     const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QCoreApplication::applicationDirPath() +
+    QVERIFY(startupShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
                              "/qt-880-startup-final.png"));
     gate->close();
     QVERIFY(gate->isVisible());
@@ -878,7 +878,7 @@ private Q_SLOTS:
     maximize->click(); QTRY_VERIFY(window.isMaximized());
     maximize->click(); QTRY_VERIFY(!window.isMaximized());
     window.resize(1500, 950); QTest::qWait(100);
-    QVERIFY(window.grab().save(QCoreApplication::applicationDirPath() + "/qt-chrome-preview.png"));
+    QVERIFY(window.grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-chrome-preview.png"));
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
   }
 

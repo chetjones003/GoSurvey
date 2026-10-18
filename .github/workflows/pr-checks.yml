@@ -67,7 +67,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build --preset ninja-release
 
       - name: sccache stats
         if: always()
@@ -135,7 +135,7 @@ jobs:
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
 
       - name: Generate Qt test moc files
-        run: cmake --build build --target GoSurveyQtTests_autogen
+        run: cmake --build --preset ninja-release --target GoSurveyQtTests_autogen
 
       - name: clang-tidy (lines changed in this PR only)
         shell: pwsh
@@ -206,7 +206,7 @@ jobs:
             # local editor integration), where warnings-not-errors is the more useful default.
             # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
             # the exit code), so this also cuts the run time and log size on a large header.
-            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$lineFilter" -p build $file
+            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$lineFilter" -p build/.cmake/release $file
             if ($LASTEXITCODE -ne 0) { $failed = $true }
           }
           if ($failed) {
@@ -249,7 +249,7 @@ jobs:
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Build (findings become annotations, build is not failed by them)
-        run: cmake --build build
+        run: cmake --build --preset ninja-release
 
   # ---------------------------------------------------------------------------
   # security / gitleaks — secret scanning over the PR diff.

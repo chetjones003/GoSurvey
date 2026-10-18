@@ -1,0 +1,23 @@
+# Unified build output
+
+Status: done. Authority: user request 2026-10-18; REQ-200 (artifacts confined to build), REQ-203 (headless regression coverage), REQ-300 (tests). Owning subsystem: Build/Platform.
+
+Acceptance: one build entry point supports both frontends; visible executables are GoSurvey.exe, GoSurveyTestImGui.exe, GoSurveyQt.exe, GoSurveyQtTests.exe; generated PNGs and build internals do not clutter their directory. Required runtime assets remain available.
+
+Plan review: APPROVE. Keep MSVC/CMake/Ninja and existing dependencies. Consolidate Catch2 source lists into one executable linked to the existing domain library. Put caches/libraries/helper tools in build/.cmake and screenshots/reports in build/artifacts. Keep release executable paths compatible with packaging. Risks: duplicate sources/symbols in merged tests, runtime resource paths, Qt deployment and stale caches. Verify clean configure/build, test enumeration, Catch2 and Qt tests, incremental build, missing Qt kit failure, and output inventory.
+
+Assumption: local beta is the intended Qt baseline, since this worktree predates Qt and beta already contains both frontends. Merged beta into this isolated branch before implementation. No other worktrees modified. Existing clutter in other worktrees is not deleted.
+
+## Completion report
+
+- Requirements: the requested four application executables exist in build/, both frontends build through build.bat, and no loose PNGs or compiler intermediates remain beside them. Existing regression coverage remains registered.
+- Changes: CMake/presets separate caches, libraries, symbols and helper tools from runtime output; Catch2 suites share GoSurveyTestImGui; Qt plugins use qt-plugins/ and qt.conf; Qt captures/logs and headless reports use artifacts/. Tests with relative source-resource assumptions now use explicit source paths. One ambiguous ProjectFiles.hpp include now names commands/ProjectFiles.hpp. Build wrappers, CI compile-database/build paths, installer version lookup and README match the layout.
+- Migration: successful build.bat invocations archive legacy files/folders under build/artifacts/legacy-output, retaining runtime files and configurations. Archives preserve bytes; no unrelated worktree output is modified.
+- Build verification: clean Release configure/build completed with MSVC and installed Qt 6.8.3. Final incremental all, imgui-only and qt-only builds PASS. Debug configure PASS (Debug compilation not run). Visual Studio generator compilation not run. Existing compiler warnings remain; no domain/application implementation changed.
+- Tests: full ctest --preset ninja-release -j 8 ran 2642 groups: 2640 passed, two groups failed. Qt group: 51 passed, 4 failed. The four Qt failures (focus, layer-manager checkbox, survey-point context ribbon and hatch context ribbon) reproduce using the older executable in the main checkout, as does headless.regression-surfacedelete-selection (selection-in-range after deleting surface). Logs: build/artifacts/ctest-final.log, baseline-qt.log, baseline-qt/results.log, baseline-surface-delete.log. No new failures remain.
+- Output-layout test PASS; missing-executable failure path rejects invalid output. Cleanup happy-path fixture preserves application/runtime resources and archives captures/folders without losing content; repeat cleanup is idempotent. Cleanup rejects paths outside this checkout's build directory. Missing Qt-kit selection fails clearly. git diff --check PASS.
+- Review: build/output gate PASS; full regression suite remains FAIL on independently reproduced existing defects. Architecture/code/dependency review: no application layering, runtime behavior or new dependency changes. No runtime performance changes. No architectural decisions made by Workshop.
+- Assumptions: user subsequently confirmed beta as the Qt baseline. Required DLLs and runtime resource images remain deployed; removing them would break the applications. Screenshot generation was redirected, not disabled.
+- Limitations/debt: existing test failures above are outside this build cleanup. Binary determinism across two complete clean builds was not remeasured. No new dependencies.
+
+- PR preparation: reapplied only this build commit on origin/beta b115659a to exclude the original branch's unrelated skill commit. Preserved #928 drawing-template deployment in the new runtime directory. Rebuilt Release successfully and ran all three newly merged Qt template tests (5 QtTest passes including setup/cleanup); output-layout check remains PASS.

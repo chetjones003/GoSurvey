@@ -192,7 +192,7 @@ jobs:
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build --preset ninja-release
 
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.

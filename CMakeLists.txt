@@ -15,6 +15,25 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Keep runnable applications separate from generator files, libraries and helper tools.
+set(GOSURVEY_RUNTIME_DIR "${CMAKE_SOURCE_DIR}/build" CACHE PATH "Application output directory")
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  string(APPEND GOSURVEY_RUNTIME_DIR "/debug")
+endif()
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${GOSURVEY_RUNTIME_DIR}")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols")
+set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols")
+if(CMAKE_CONFIGURATION_TYPES)
+  foreach(_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+    string(TOUPPER "${_config}" _upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${_upper} "${CMAKE_SOURCE_DIR}/build/${_config}")
+  endforeach()
+endif()
+set(GOSURVEY_ARTIFACT_DIR "${CMAKE_BINARY_DIR}/../../artifacts/${CMAKE_BUILD_TYPE}")
+file(MAKE_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
+
 # sccache cannot hash MSVC's default /Zi PDB. CI passes CMAKE_CXX_COMPILER_LAUNCHER=sccache;
 # local builds leave the launcher unset and keep the default debug format.
 if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
@@ -231,7 +250,7 @@ add_library(laszip STATIC
   # directory on the include path, not its parent — the PUBLIC "include" dir below only satisfies
   # the <laszip/laszip_common.h>-style angle include dll/laszip_api.h itself uses.
 target_include_directories(laszip PRIVATE "${_lasz}" "${laszip_SOURCE_DIR}/include/laszip")
-# PUBLIC: consumers (gosurvey_domain, GoSurveyTests, ...) get laszip_api.h's "laszip/..." angle
+# PUBLIC: consumers (gosurvey_domain, GoSurveyTestImGui, ...) get laszip_api.h's "laszip/..." angle
 # includes and the bare laszip_api.h/laszip_common.h/laszip_api_version.h names for free, the same
 # way LibreDWG::libredwg's PUBLIC include already covers its consumers below.
 target_include_directories(laszip PUBLIC
@@ -417,7 +436,7 @@ target_compile_definitions(imgui_backend PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 target_link_libraries(imgui_backend PUBLIC glfw)
 
 # ---------------------------------------------------------------------------
-# Domain sources — shared by GoSurvey, gosurvey_headless, and GoSurveySnapTests
+# Domain sources — shared by GoSurvey, gosurvey_headless, and GoSurveyTestImGui
 # (ADR-031 (a), REQ-203).
 #
 # ONE list, deliberately: a source added to the application must not be silently absent from the
@@ -522,7 +541,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # results through — pure <filesystem>, no window.
   src/io/UserPrefs.cpp
   # REQ-308 recent-drawings MRU store (D-2026-08-30-b). Pure — <filesystem>/<fstream>/json, path
-  # and clock passed in by the caller — so GoSurveyTests links it directly too (see that target).
+  # and clock passed in by the caller — so the shared test executable exercises it through gosurvey_domain.
   src/io/RecentDrawings.cpp
   # REQ-373/374/382 (#696 P1) project file, join detection, lock file. Pure <filesystem>/json.
   src/io/Project.cpp
@@ -958,56 +977,56 @@ set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_SPLASH_BG}"
   ${GOSURVEY_WHATS_NEW_IMAGES}
   ${GOSURVEY_RESOURCE_DIR_FILES})
-set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources.stamp")
+set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources-$<CONFIG>.stamp")
 add_custom_command(
   OUTPUT "${_GOSURVEY_RESOURCE_STAMP}"
   DEPENDS ${GOSURVEY_BUNDLED_RESOURCE_FILES}
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/resources/layouts"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
   # `copy_directory` never removes files that were deleted or renamed in the source tree, so a
   # rebuild after dropping an old icon left the stale copy beside the exe (and in the installer
   # payload) forever. Wipe the mirrored dirs first so the deploy is an exact copy of source.
   COMMAND ${CMAKE_COMMAND} -E rm -rf
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/drawing-templates"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/fonts"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/drawing-templates"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/wiki"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/default-template.gst"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gst"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_MD}"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new.md"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new.md"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_BG}"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new-bg.png"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_SPLASH_BG}"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/splash-bg.png"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/fonts"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/fonts"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/drawing-templates"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/drawing-templates"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/drawing-templates"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/wiki"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/wiki"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${GOSURVEY_WHATS_NEW_IMG_DIR}"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/whats-new"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
   COMMENT "Stage bundled resources beside GoSurvey executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
@@ -1016,14 +1035,14 @@ add_dependencies(GoSurvey gosurvey_stage_resources)
 # CS-MAP dictionaries + US grid files (REQ-358, D-2026-09-29-d) → resources/csmap/. Their own stamp:
 # ~230 MB is copied only when one of them changes, not on every resource edit.
 file(GLOB_RECURSE GOSURVEY_CSMAP_DICTIONARY_FILES CONFIGURE_DEPENDS "${GOSURVEY_CSMAP_DIR}/dictionaries/*")
-set(_GOSURVEY_CSMAP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_csmap.stamp")
+set(_GOSURVEY_CSMAP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_csmap-$<CONFIG>.stamp")
 add_custom_command(
   OUTPUT "${_GOSURVEY_CSMAP_STAMP}"
   DEPENDS ${GOSURVEY_CSMAP_DICTIONARY_FILES}
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:GoSurvey>/resources/csmap"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${GOSURVEY_CSMAP_DIR}/dictionaries"
-          "${CMAKE_CURRENT_BINARY_DIR}/resources/csmap"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/csmap"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_CSMAP_STAMP}"
   COMMENT "Stage CS-MAP dictionaries beside GoSurvey executable")
 add_custom_target(gosurvey_stage_csmap DEPENDS "${_GOSURVEY_CSMAP_STAMP}")
@@ -1139,7 +1158,7 @@ if(GOSURVEY_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH "${GOSURVEY_CATCH2_DIR}")
 
   enable_testing()
-  add_executable(GoSurveyTests
+  add_executable(GoSurveyTestImGui
     tests/TraverseTests.cpp
     tests/EcefTransformTests.cpp
     tests/NumFormatTests.cpp
@@ -1479,7 +1498,7 @@ if(GOSURVEY_BUILD_TESTS)
     # AuthService, not by this pure module or its tests.
     src/auth/AuthPing.cpp
   )
-  target_include_directories(GoSurveyTests PRIVATE
+  target_include_directories(GoSurveyTestImGui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
@@ -1507,11 +1526,11 @@ if(GOSURVEY_BUILD_TESTS)
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
-  target_compile_definitions(GoSurveyTests PRIVATE
+  target_compile_definitions(GoSurveyTestImGui PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
-  target_sources(GoSurveyTests PRIVATE
+  target_sources(GoSurveyTestImGui PRIVATE
     tests/PdfViewerTests.cpp
     tests/PdfSplitTests.cpp
     tests/PdfAnnotateTests.cpp
@@ -1538,38 +1557,31 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
     src/pdf/PdfDiff.cpp)
-  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
+  target_link_libraries(GoSurveyTestImGui PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
-    add_custom_command(TARGET GoSurveyTests POST_BUILD
+    add_custom_command(TARGET GoSurveyTestImGui POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
-              "$<TARGET_FILE_DIR:GoSurveyTests>/pdfium.dll"
-      COMMENT "Copy pdfium.dll beside GoSurveyTests")
+              "$<TARGET_FILE_DIR:GoSurveyTestImGui>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyTestImGui")
   endif()
-  gosurvey_target_warnings(GoSurveyTests)
-  gosurvey_enable_pch(GoSurveyTests)
 
   include(Catch)
-  catch_discover_tests(GoSurveyTests)
 
   # ---------------------------------------------------------------------------
-  # GoSurveySnapTests (issue #103): CadSnap::FindBest needs AppCommandState AND the rest of
-  # gosurvey_domain it transitively calls into (SurveyPoints.cpp reaches into CadCommands.cpp
-  # for EraseCadAnnotationAtIndex/FindEntityById etc.), which is exactly what GoSurveyTests above
-  # is built to avoid linking. It is otherwise identical to gosurvey_headless's link set — domain
-  # library + imgui_core, no GLFW/OpenGL/window — just with a Catch2 main instead of the
-  # transcript driver.
+  # Command-layer cases share the Catch2 executable and existing domain library.
+  # No GLFW/OpenGL/window dependency is added to these tests.
   # ---------------------------------------------------------------------------
-  add_executable(GoSurveySnapTests
+  target_sources(GoSurveyTestImGui PRIVATE
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
     # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
-    # so it rides with GoSurveySnapTests like the other command tests above.
+    # so it rides with GoSurveyTestImGui like the other command tests above.
     tests/DrapeCommandTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
-    # with GoSurveySnapTests like the other command tests above.
+    # with GoSurveyTestImGui like the other command tests above.
     tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
@@ -1577,16 +1589,16 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GsMigrateLegacyBreaklineTests.cpp
     # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
     # ImGui frame for CalcTextSize (font metrics), same headless-font-atlas pattern
-    # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveySnapTests
-    # (links imgui_core) rather than the imgui-free GoSurveyTests.
+    # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveyTestImGui
+    # (links imgui_core) rather than the imgui-free GoSurveyTestImGui.
     tests/RibbonLayoutMeasureTests.cpp
     # REQ-302/ADR-053 (issue #324) — ribbon layout place pass. Pure layout math (no live ImGui
     # frame needed), but includes RibbonLayoutMeasure.hpp for ImVec2/RibbonMeasuredButton, so it
-    # rides with GoSurveySnapTests (has the imgui include path) rather than GoSurveyTests.
+    # rides with GoSurveyTestImGui (has the imgui include path) rather than GoSurveyTestImGui.
     tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
     # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
-    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveySnapTests like
+    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveyTestImGui like
     # ViewportUcsTests.cpp above.
     tests/OrthoUcsConstrainTests.cpp
     # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
@@ -1627,11 +1639,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ProjectFilesFlowTests.cpp
     # issue #486 increment B2 (REQ-347) — the PIPERUN command layer: StartPipeRunCommand /
     # HandlePipeRunTextInput / SubmitPipeRunViewportPick live in CadCommands.cpp, so this rides
-    # with GoSurveySnapTests (gosurvey_domain), not GoSurveyTests, like CadBlockImportTests above.
+    # with gosurvey_domain, like CadBlockImportTests above.
     tests/CadPipeRunCommandTests.cpp
     # REQ-350 / TASK-275 — the Pipe Fittings palette's filtering and grouping rules. Pure functions,
     # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
-    # GoSurveySnapTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
+    # GoSurveyTestImGui (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
     tests/CadPipePaletteTests.cpp
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
@@ -1663,7 +1675,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-363 / D-2026-09-30-b / ADR-064: the online base map (issue #583 increment 1).
     tests/OnlineMapTests.cpp
     # issue #166 — the TRIM cut-line rubber preview. Needs gosurvey_domain (it calls into
-    # CadCommands.cpp's trim helpers), so it rides with GoSurveySnapTests, not GoSurveyTests.
+    # CadCommands.cpp's trim helpers), so it rides with gosurvey_domain.
     tests/TrimLinePreviewTests.cpp
     # issue #399 increment 1 — 3D Line-vs-Line TRIM via a pick ray. Same reason as
     # TrimLinePreviewTests above (needs gosurvey_domain for SubmitTrimViewportPick).
@@ -1691,7 +1703,7 @@ if(GOSURVEY_BUILD_TESTS)
     # Overlapping pick disambiguation — depth tie-break when SEL is off.
     tests/PickDisambiguationTests.cpp
   )
-  target_include_directories(GoSurveySnapTests PRIVATE
+  target_include_directories(GoSurveyTestImGui PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
@@ -1710,14 +1722,19 @@ if(GOSURVEY_BUILD_TESTS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
-  target_compile_definitions(GoSurveySnapTests PRIVATE
+  target_link_libraries(GoSurveyTestImGui PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  target_compile_definitions(GoSurveyTestImGui PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
-    GOSURVEY_CSMAP_DICTIONARY_DIR="${CMAKE_CURRENT_BINARY_DIR}/resources/csmap")
-  add_dependencies(GoSurveySnapTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
-  gosurvey_target_warnings(GoSurveySnapTests)
-  gosurvey_enable_pch(GoSurveySnapTests)
-  catch_discover_tests(GoSurveySnapTests)
+    GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurvey>/resources/csmap")
+  add_dependencies(GoSurveyTestImGui gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
+  gosurvey_target_warnings(GoSurveyTestImGui)
+  gosurvey_enable_pch(GoSurveyTestImGui)
+  # Domain implementations are linked once via gosurvey_domain, not compiled again.
+  get_target_property(_test_sources GoSurveyTestImGui SOURCES)
+  list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
+  list(REMOVE_DUPLICATES _test_sources)
+  set_property(TARGET GoSurveyTestImGui PROPERTY SOURCES "${_test_sources}")
+  catch_discover_tests(GoSurveyTestImGui WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
 
   if(NOT GOSURVEY_DEVELOPER_SHELL)
     add_test(NAME req161-release-no-devshell
@@ -1736,7 +1753,7 @@ if(GOSURVEY_BUILD_TESTS)
       get_filename_component(_name "${_t}" NAME_WE)
       add_test(NAME headless.${_name}
                COMMAND gosurvey_headless run "${_t}"
-                       --out "${CMAKE_BINARY_DIR}/headless-out/${_name}")
+                       --out "${GOSURVEY_ARTIFACT_DIR}/headless/${_name}")
       # Transcripts write only under the build tree (CON-07, REQ-200) and must not depend on the
       # directory ctest happens to start them in.
       set_tests_properties(headless.${_name} PROPERTIES
@@ -1779,7 +1796,7 @@ if(GOSURVEY_BUILD_TESTS)
     # genuine finding and should be triaged, not silenced by moving the range.
     add_test(NAME headless.fuzz-smoke
              COMMAND gosurvey_headless fuzz --seeds 1..12
-                     --out "${CMAKE_BINARY_DIR}/headless-out/fuzz-smoke"
+                     --out "${GOSURVEY_ARTIFACT_DIR}/headless/fuzz-smoke"
                      --timeout-ms 120000)
     set_tests_properties(headless.fuzz-smoke PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -1795,4 +1812,18 @@ endif()
 
 if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
   include(cmake/GoSurveyQtTests.cmake)
+  add_test(NAME build.output-layout COMMAND "${CMAKE_COMMAND}"
+    "-DRUNTIME_DIR=$<TARGET_FILE_DIR:GoSurveyQt>"
+    -P "${CMAKE_SOURCE_DIR}/tests/cmake/BuildOutputLayout.cmake")
 endif()
+
+# Developer-only helpers remain available to ctest/tools without adding app executables.
+foreach(_helper gosurvey_headless GsJsonDwgFixture)
+  if(TARGET ${_helper})
+    set_target_properties(${_helper} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+    foreach(_config IN LISTS CMAKE_CONFIGURATION_TYPES)
+      string(TOUPPER "${_config}" _upper)
+      set_target_properties(${_helper} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${_upper} "${CMAKE_BINARY_DIR}/tools/${_config}")
+    endforeach()
+  endif()
+endforeach()

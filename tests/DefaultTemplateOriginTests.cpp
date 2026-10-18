@@ -10,6 +10,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -19,7 +20,8 @@
 #include "GsIo.hpp"
 
 TEST_CASE("Bundled default-template.gst has a zero document origin", "[io][template][req101]") {
-  std::ifstream f("resources/default-template.gst", std::ios::binary);
+  std::ifstream f(std::filesystem::path(GOSURVEY_SAMPLES_DIR).parent_path() /
+                      "resources/default-template.gst", std::ios::binary);
   REQUIRE(f.good());
   std::ostringstream ss;
   ss << f.rdbuf();

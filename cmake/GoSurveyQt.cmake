@@ -41,10 +41,6 @@ target_include_directories(gosurvey_qt_frontend PUBLIC "${CMAKE_CURRENT_SOURCE_D
 target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
 gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
-set(GOSURVEY_QT_RUNTIME_DIR "" CACHE PATH "Optional Qt preview output directory")
-if(GOSURVEY_QT_RUNTIME_DIR)
-  set_target_properties(GoSurveyQt PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${GOSURVEY_QT_RUNTIME_DIR}")
-endif()
 target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
 gosurvey_target_warnings(GoSurveyQt)
 if(MSVC)
@@ -60,7 +56,10 @@ add_custom_command(TARGET GoSurveyQt POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different
     "$<TARGET_FILE:pdfium>" "$<TARGET_FILE_DIR:GoSurveyQt>"
   COMMAND "${GOSURVEY_WINDEPLOYQT}" --no-translations --no-compiler-runtime
+    --plugindir "$<TARGET_FILE_DIR:GoSurveyQt>/qt-plugins"
     "$<TARGET_FILE:GoSurveyQt>"
-  COMMAND "${CMAKE_COMMAND}" -E copy_directory
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources" "$<TARGET_FILE_DIR:GoSurveyQt>/resources"
+  COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+    "${CMAKE_CURRENT_SOURCE_DIR}/cmake/qt.conf" "$<TARGET_FILE_DIR:GoSurveyQt>/qt.conf"
   VERBATIM)
+
+add_dependencies(GoSurveyQt gosurvey_stage_resources gosurvey_stage_csmap)

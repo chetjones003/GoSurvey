@@ -21,14 +21,19 @@ param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [int]$TimeoutSec = 600,
   [string]$Log = "",
+  [string]$WorkingDirectory = "",
   # Anything left over is passed to the test executable, e.g. test function names.
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$TestArgs = @()
 )
 
 $ErrorActionPreference = 'Stop'
 $exePath = (Resolve-Path -LiteralPath $Exe).Path
-$workDir = Split-Path -Parent $exePath
-if (-not $Log) { $Log = Join-Path ([System.IO.Path]::GetTempPath()) 'gosurvey-qt-tests.txt' }
+$workDir = $WorkingDirectory
+if (-not $workDir) { $workDir = Join-Path (Split-Path -Parent $exePath) 'artifacts/qt' }
+New-Item -ItemType Directory -Force -Path $workDir | Out-Null
+$workDir = (Resolve-Path -LiteralPath $workDir).Path
+if (-not $Log) { $Log = Join-Path $workDir "qt-tests-$PID.log" }
+$Log = [IO.Path]::GetFullPath($Log)
 if (Test-Path -LiteralPath $Log) { Remove-Item -LiteralPath $Log -Force }
 
 Add-Type -TypeDefinition @"
