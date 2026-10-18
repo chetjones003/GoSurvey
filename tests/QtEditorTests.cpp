@@ -1215,7 +1215,7 @@ private Q_SLOTS:
   }
 
   void typingHistoryAndEscapeWorkFromViewport() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
     auto* input = window.findChild<QLineEdit*>("commandInput");
@@ -1318,7 +1318,7 @@ private Q_SLOTS:
   }
 
   void tabsAppearInitiallyAndTypingRoutesFromEditorChrome() {
-    EditorWindow window; window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
     auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
@@ -1622,7 +1622,7 @@ private Q_SLOTS:
   }
 
   void nativeLayerManagerEditsAreUndoable() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     std::string error;
     QVERIFY(CadAddDrawingLayer(window.State(), "Survey", &error));
     QTimer::singleShot(0, &window, [&] {
@@ -1639,7 +1639,7 @@ private Q_SLOTS:
   }
 
   void nativeUnitsApplyWithoutMovingGeometry() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log;
     CancelActiveCommand(window.State(), log);
@@ -1662,7 +1662,7 @@ private Q_SLOTS:
   }
 
   void nativeQuickSelectFiltersAndCancelPreservesSelection() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     std::vector<std::string> log;
     for (const auto& endpoint : {"10,0", "20,0"}) {
       window.Submit("LINE"); window.Submit("0,0"); window.Submit(endpoint);
@@ -1790,7 +1790,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonHasIconsAndReachableCollapsedActions() {
-    EditorWindow window; window.show();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
     for (const auto& name : {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling"})
       QVERIFY(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name)));
@@ -1823,7 +1823,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonContextTracksSelectionAndRestoresNormalTab() {
-    EditorWindow window; window.show();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto* ribbon = window.findChild<QTabWidget*>("ribbon"); auto& state = window.State();
     auto index = [&](const char* name) { return ribbon->indexOf(window.findChild<QWidget*>(QString("ribbonPage_%1").arg(name))); };
     ribbon->setCurrentIndex(index("Modeling"));
@@ -1842,7 +1842,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     auto* style = window.findChild<QComboBox*>("ribbonVisualStyle"); QVERIFY(style);
     style->setCurrentIndex(2); QMetaObject::invokeMethod(style, "activated", Q_ARG(int, 2));
     QCOMPARE(state.viewportVisualStyle, VisualStyle::Shaded);
@@ -1870,7 +1870,7 @@ private Q_SLOTS:
   }
 
   void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     auto* angle = window.findChild<QDoubleSpinBox*>("ribbonHatchAngle"); QVERIFY(angle);
     angle->setValue(30); QCOMPARE(state.hatchAngleDeg, 30.f);
     CadFilledRegion region; region.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0}; region.loopStart = {0};
@@ -1885,7 +1885,7 @@ private Q_SLOTS:
   }
 
   void nativePointCreationPlacesSelectsAndUndoes() {
-    EditorWindow window;
+    EditorWindow window; window.CreateDrawingFromTemplate();
     window.show();
     window.Submit("CREATEPOINTS");
     auto* dialog = window.findChild<QDialog*>("createPoints");
