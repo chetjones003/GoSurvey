@@ -52,6 +52,7 @@ private:
   void BuildRibbonPages();
   void RefreshRibbon();
   void RunRibbonAction(const QString& id);
+  bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
