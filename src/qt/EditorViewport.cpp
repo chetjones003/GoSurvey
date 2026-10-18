@@ -8,6 +8,9 @@
 #include "CadColor.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"
+#include "SectionClip.hpp"
+#include "ViewportPickPolicy.hpp"
+#include "util/gizmooverlay.hpp"
 #include "AppPaths.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
@@ -119,6 +122,14 @@ void EditorViewport::paintGL() {
     BuildTransformPreview(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
         &preview, &previewCircles, camera.orthoHalfH, h);
     BuildSelectionHighlight(m_State, &highlight, &highlightCircles);
+    CadGizmoOverlay gizmoOverlay;
+    BuildGizmoOverlay(m_State, &gizmoOverlay);
+    if (m_State.gizmoDragActive) {
+      std::vector<float> ghostLines, ghostCircles;
+      BuildGizmoDragGhost(m_State, &ghostLines, &ghostCircles);
+      preview.insert(preview.end(), ghostLines.begin(), ghostLines.end());
+      previewCircles.insert(previewCircles.end(), ghostCircles.begin(), ghostCircles.end());
+    }
     RefreshSolidDisplayGeometry(m_State);
     RefreshSurfaceDisplayGeometry(m_State);
     CadExtendedGeometryInput ext;
@@ -141,6 +152,22 @@ void EditorViewport::paintGL() {
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
+    if (m_State.viewportSectionClip) {
+      tuning.sectionClip = CadSectionClipPlane(m_State);
+      tuning.sectionClipIndicator = CadSectionClipIndicator(m_State);
+      tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(tuning.sectionClipIndicator);
+      tuning.sectionPlaneGrips = CadSectionPlaneGrips(m_State);
+      tuning.sectionPlaneGripHover = m_State.sectionPlaneGripHover;
+      tuning.sectionPlaneGripDrag = m_State.sectionPlaneGripDrag;
+    }
+    SectionClipIndicator sectionPreview{};
+    if (CadSectionPlanePreviewIndicator(m_State, &sectionPreview)) {
+      tuning.sectionClipIndicator = sectionPreview;
+      tuning.sectionPlaneGraphics = SectionPlaneGraphicsFor(sectionPreview);
+      tuning.sectionPlaneGrips = SectionPlaneGrips{};
+      tuning.sectionPlaneGripHover = -1;
+      tuning.sectionPlaneGripDrag = -1;
+    }
     if (m_State.drawingSettings.Geolocated() &&
         (m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off ||
          !m_State.drawingSettings.capturedAreas.empty() ||
@@ -155,7 +182,8 @@ void EditorViewport::paintGL() {
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
         &m_State.pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
-        &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+        &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, nullptr,
+        gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
         &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
     const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
                                 !m_State.pendingThumbnailPath.empty();
@@ -473,7 +501,19 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (right.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(90, 0); return; }
   }
   if (event->button() == Qt::RightButton) {
-    RightPress(event->globalPosition().toPoint());
+    if (m_State.sectionPlaneGripDrag >= 0) {
+      AbortSectionPlaneGripDrag(m_State);
+      m_Log.push_back("Section plane drag cancelled.");
+    } else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) {
+      CancelGizmoDrag(m_State);
+      m_Log.push_back("Gizmo drag cancelled.");
+    } else {
+      RightPress(event->globalPosition().toPoint());
+    }
+    if (changed) changed();
+    update();
+    event->accept();
+    return;
   } else if (event->button() == Qt::LeftButton && (WorldPoint(m_Last, m_Cursor) ||
              (m_State.active == AppCommandState::Kind::None && ViewPoint(m_Last, m_Cursor)))) {
     const Camera camera = CadViewCamera(m_State);
@@ -491,6 +531,41 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
+    const auto route = ViewportClickRouteFor(m_State);
+    bool overlayHandled = false;
+    if (route == ViewportClickRoute::SubObjectFacePick &&
+        m_State.active == AppCommandState::Kind::SectionPlane) {
+      if (m_State.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+        SubmitSectionPlanePointPick(m_State, static_cast<float>(m_Cursor.x),
+            static_cast<float>(m_Cursor.y), m_Log);
+        overlayHandled = true;
+      } else {
+        solidpick::Tolerance faceTol;
+        faceTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
+        faceTol.edge = faceTol.vertex;
+        overlayHandled = SubmitSectionPlaneFacePick(m_State, ray, faceTol, m_Log);
+      }
+    }
+    if (!overlayHandled && (route == ViewportClickRoute::IdleSelection ||
+                            route == ViewportClickRoute::GizmoHandlePick) &&
+        (m_State.gizmoDragActive || !(event->modifiers() & Qt::ControlModifier))) {
+      overlayHandled = SubmitGizmoClick(m_State, ray,
+          static_cast<double>(CadSnap::WorldToleranceFromPixels(
+              static_cast<float>(height()), camera.orthoHalfH, kGizmoHandleGrabPx)), m_Log);
+    }
+    if (!overlayHandled && route == ViewportClickRoute::IdleSelection &&
+        !(event->modifiers() & Qt::ControlModifier)) {
+      overlayHandled = SubmitSectionPlaneClick(m_State, ray,
+          static_cast<double>(CadSnap::WorldToleranceFromPixels(
+              static_cast<float>(height()), camera.orthoHalfH, kGizmoHandleGrabPx)), m_Log);
+    }
+    if (overlayHandled || route == ViewportClickRoute::GizmoHandlePick ||
+        route == ViewportClickRoute::SubObjectFacePick) {
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     if (m_State.showCreatePointsWindow && m_State.active == AppCommandState::Kind::None) {
       int hit = -1;
       double nearest = 100.0;
@@ -600,21 +675,77 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const Camera camera = CadViewCamera(m_State);
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
-    m_Snap = m_State.active != AppCommandState::Kind::None ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
-        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
+    const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
+        ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
+            camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
+            CadViewIsPlan(m_State) ? nullptr : &ray)
+        : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
+    m_State.viewportSnapPickValid = m_Snap.valid;
+    m_State.viewportSnapPickLocalX = m_Cursor.x;
+    m_State.viewportSnapPickLocalY = m_Cursor.y;
+    m_State.viewportSnapPickLocalZ = m_Cursor.z;
+    if (m_Snap.valid) m_State.viewportSnapPickKind = static_cast<int>(m_Snap.kind);
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
     if (m_State.selBoxWaitingSecond) UpdateSelectionBoxPreview(m_State, static_cast<float>(m_Cursor.x),
         static_cast<float>(m_Cursor.y), m_Last.x() >= m_State.selBoxAnchorScreenX,
         CadViewIsPlan(m_State) ? nullptr : &camera, static_cast<float>(width()), static_cast<float>(height()));
+    const auto route = ViewportClickRouteFor(m_State);
+    if (sectionGripDrag && m_State.activeSpaceIndex == kModelSpaceIndex) {
+      const bool namedFeature = m_Snap.valid &&
+          CadSnap::SnapClass(m_Snap.kind) == 1;
+      const ray3d::Vec3 snapLocal{m_Snap.x, m_Snap.y, m_Snap.z};
+      UpdateSectionPlaneGripDrag(m_State, ray, namedFeature ? &snapLocal : nullptr);
+    } else if (m_State.activeSpaceIndex == kModelSpaceIndex &&
+               m_State.viewportSectionClip && route == ViewportClickRoute::IdleSelection &&
+               !(event->modifiers() & Qt::ControlModifier)) {
+      UpdateSectionPlaneGripHover(m_State, ray,
+          static_cast<double>(CadSnap::WorldToleranceFromPixels(
+              static_cast<float>(height()), camera.orthoHalfH, kGizmoHandleGrabPx)));
+    } else if (m_State.sectionPlaneGripHover >= 0 && !sectionGripDrag) {
+      m_State.sectionPlaneGripHover = -1;
+    }
+    if (m_State.activeSpaceIndex == kModelSpaceIndex &&
+        (m_State.gizmoDragActive || (route == ViewportClickRoute::IdleSelection ||
+                                     route == ViewportClickRoute::GizmoHandlePick) &&
+                                    !(event->modifiers() & Qt::ControlModifier))) {
+      if (m_State.gizmoDragActive) UpdateGizmoDrag(m_State, ray);
+      else UpdateGizmoHover(m_State, ray,
+          static_cast<double>(CadSnap::WorldToleranceFromPixels(
+              static_cast<float>(height()), camera.orthoHalfH, kGizmoHandleGrabPx)));
+    } else if (m_State.gizmoHoverAxis >= 0 && !m_State.gizmoDragActive) {
+      m_State.gizmoHoverAxis = -1;
+    }
+    if (m_State.active == AppCommandState::Kind::SectionPlane &&
+        m_State.sectionPlanePhase == AppCommandState::SectionPlanePhase::WaitThroughPoint) {
+      solidpick::Tolerance previewTol;
+      previewTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
+      previewTol.edge = previewTol.vertex;
+      UpdateSectionPlanePreview(m_State, ray, previewTol);
+    }
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
   }
   update();
 }
 
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
+  if (event->button() == Qt::LeftButton) {
+    const auto camera = CadViewCamera(m_State);
+    const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()),
+        static_cast<float>(event->position().y()), static_cast<float>(width()),
+        static_cast<float>(height()));
+    const double tol = CadSnap::WorldToleranceFromPixels(
+        static_cast<float>(height()), camera.orthoHalfH, kGizmoHandleGrabPx);
+    if (m_State.sectionPlaneGripDrag >= 0)
+      (void)SubmitSectionPlaneClick(m_State, ray, tol, m_Log);
+    else if (m_State.gizmoDragActive)
+      (void)SubmitGizmoClick(m_State, ray, tol, m_Log);
+    if (changed) changed();
+    update();
+  }
   if (event->button() == Qt::RightButton && m_RightPending) {
     m_RightPending = false;
     m_RightTimer.stop();
@@ -673,7 +804,19 @@ void EditorViewport::wheelEvent(QWheelEvent* event) {
 }
 
 void EditorViewport::keyPressEvent(QKeyEvent* event) {
-  if (event->key() == Qt::Key_Escape) { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); ClearTransientInput(); }
+  if (event->key() == Qt::Key_Escape) {
+    m_State.showCreatePointsWindow = false;
+    if (m_State.sectionPlaneGripDrag >= 0) {
+      AbortSectionPlaneGripDrag(m_State);
+      m_Log.push_back("Section plane drag cancelled.");
+    } else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) {
+      CancelGizmoDrag(m_State);
+      m_Log.push_back("Gizmo drag cancelled.");
+    } else {
+      CancelActiveCommand(m_State, m_Log);
+    }
+    ClearTransientInput();
+  }
   else if (event->key() == Qt::Key_Delete) ExecuteDeleteSelection(m_State, m_Log);
   else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Space) {
     char empty[1]{};

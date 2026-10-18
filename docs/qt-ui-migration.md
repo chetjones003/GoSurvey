@@ -66,7 +66,7 @@ workflow evidence, and linked open gaps, is maintained in the
 | Startup | Splash using existing artwork; Start page with recent drawing/project cards and thumbnails; Markdown What's New window with version-based display policy; REQ-091 sign-in choice and saved skip preference | Update/telemetry/crash-report wiring |
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close; successful opens/saves update the recent drawings list | Export-loss disclosures, full import/export UI, template workflow |
-| Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays, annotation scale/isolation and perspective verification |
+| Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter; 3D gizmo axes/planes/hover/drag ghosts, section-plane clip indicator/hatch/grips/preview and Qt pointer routing (issue #900) | Exact graphics parity, paper-space rendering, tables, map tiles, annotation scale/isolation and perspective verification |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids; Surface Create / Properties / Surfaces manager / Surface Style dialogs, the Toolspace surface and style menus and the read-only Surface properties section (#893) | Complete geometry properties, context menus |
 | Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
@@ -149,6 +149,27 @@ links GLFW; icons and windows are managed by Qt.
   tests and the temporary AppData block-library fixture need that access.
 - These green gates do not establish full UI parity. The outstanding workflow,
   graphics, dependency-removal and packaging gates above remain open.
+
+## Qt viewport overlays (issue #900)
+
+The Qt viewport now builds the shared 3D gizmo overlay and drag ghost, populates
+the shared section clip/indicator/graphics/grips tuning, and routes gizmo and
+section-plane picks, hover, snapped drags and release through the existing shared
+interaction APIs. Right-click cancels persistent gizmo and section-plane grip
+drags; Escape cancels through the shared command cancellation path. No parallel
+geometry or transform model is introduced.
+
+Focused `GoSurveyQtTests` cover rendered gizmo/section-plane states, gizmo drag
+commit and cancellation with one-step undo, and section-plane grip commit,
+cancellation and undo. These workflows use the existing requirement behavior
+for snap/refusal/read-only handling in the shared command layer. The full Qt
+suite was run on a desktop; it still fails at
+`tabsAppearInitiallyAndTypingRoutesFromEditorChrome` because `tree->hasFocus()`
+is false. That keyboard-focus failure has not been tied to this viewport change.
+The shared gizmo and section-plane domain regressions pass (175 assertions in
+16 test cases). For the issue #900 visual review, the user selected the gizmo
+focused state (option A) as the approved presentation when an entity is selected.
+Exact graphics parity and perspective-view verification remain outstanding.
 
 Survey JSON version 1 saves drawing-local double coordinates with `originX` and
 `originY`, retaining world positions when loaded into another drawing. It also
