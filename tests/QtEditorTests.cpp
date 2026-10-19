@@ -1455,7 +1455,7 @@ private Q_SLOTS:
     st.modelUnitsPerPlottedInch = 50;
     st.surveyPointCrossSpanPlottedInches = 1.f / 30.f; // 8 px span, matching the legacy cross.
     for (int i = 0; i < 1000; ++i) {
-      SurveyPoint point; point.easting = (i % 40) - 20.; point.northing = (i / 40) - 12.;
+      SurveyPoint point; point.easting = static_cast<double>(i % 40) - 20.; point.northing = static_cast<double>(i / 40) - 12.;
       st.surveyPoints.push_back(point);
     }
     const auto camera = CadViewCamera(st);
@@ -1471,10 +1471,10 @@ private Q_SLOTS:
         painter.drawLine(QPointF(x - 4, y + 4), QPointF(x + 4, y - 4));
       }
     }
-    const double before = timer.nsecsElapsed() / 30000000.;
+    const double before = static_cast<double>(timer.nsecsElapsed()) / 30000000.;
     timer.restart();
     for (int frame = 0; frame < 30; ++frame) DrawQtSurveyPoints(painter, st, 640, 480);
-    qInfo("1000 survey markers, raster ms/frame: legacy %.3f; port %.3f", before, timer.nsecsElapsed() / 30000000.);
+    qInfo("1000 survey markers, raster ms/frame: legacy %.3f; port %.3f", before, static_cast<double>(timer.nsecsElapsed()) / 30000000.);
   }
 
   void surveyDisplayScreenshotOptions() {
