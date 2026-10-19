@@ -1157,7 +1157,7 @@ void EditorWindow::Submit(const QString& command) {
   }
   else if (verb == "ADDPDFTOPROJECT") AddPdfToProjectFromDisk();
   else if (verb == "POINTCLOUDATTACH" || verb == "IMPORTPOINTCLOUD") ShowPointCloudAttach();
-  else if (verb.startsWith("POINTCLOUDATTACH ") && ActiveDrawingReadOnly())
+  else if ((verb.startsWith("POINTCLOUDATTACH ") || verb.startsWith("IMPORTPOINTCLOUD ")) && ActiveDrawingReadOnly())
     QMessageBox::information(this, "Attach Point Cloud", "This drawing is read-only. No point cloud was attached.");
   else if (verb == "EXPORTPTS") ShowPointCloudExport(0);
   else if (verb == "EXPORTPTX") ShowPointCloudExport(1);
