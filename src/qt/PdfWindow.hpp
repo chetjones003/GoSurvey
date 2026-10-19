@@ -5,6 +5,8 @@
 #include "PdfSnap.hpp"
 #include <QPointF>
 #include "PdfCoordExtract.hpp"
+#include "PdfAlign.hpp"
+#include "PdfDiff.hpp"
 #include <QString>
 #include <atomic>
 #include <future>
@@ -16,6 +18,7 @@ class QActionGroup;
 class QPushButton;
 class PdfThumbnails;
 class QCheckBox;
+class QComboBox;
 class QDockWidget;
 class QLabel;
 class QLineEdit;
@@ -26,6 +29,9 @@ class QSpinBox;
 class QScrollArea;
 class QTimer;
 class QDialog;
+class QSlider;
+class QDoubleSpinBox;
+class QProgressBar;
 class QTableWidget;
 class EditorWindow;
 
@@ -44,6 +50,7 @@ public:
   /// REQ-430: the scale in force on a zero-based page (the session's change, else the file's); null = unscaled.
   const pdfview::PageScale* EffectiveScale(int page) const;
   bool SnapEnabled() const { return m_SnapOn; }
+  void ShowScaleAudit();
   /// The Set scale dialog's remembered entries.
   struct ScaleForm {
     int mode = 0;       ///< 0 preset, 1 typed ratio
@@ -183,4 +190,85 @@ private:
   QTimer* m_SnapPoll = nullptr;
   QPointF m_LastPointer;                ///< the pointer on the canvas, for the snap marker and the check rubber band
   bool m_PointerIn = false;
+
+  // REQ-395 Qt workflow. Reading and matching run away from the UI thread; the result is only a suggestion
+  // until the user explicitly applies the consensus scale through the undoable annotation session.
+  struct AuditOutcome {
+    bool ok = false;
+    pdfview::DimMatchSet matches;
+  };
+  std::future<AuditOutcome> m_AuditWork;
+  std::atomic<bool> m_AuditCancel{false};
+  QTimer* m_AuditPoll = nullptr;
+  QDialog* m_AuditDialog = nullptr;
+  QTableWidget* m_AuditTable = nullptr;
+  QLabel* m_AuditSummary = nullptr;
+  QCheckBox* m_AuditAllRows = nullptr;
+  QCheckBox* m_AuditShowSheet = nullptr;
+  int m_AuditSelected = -1;
+  pdfview::DimAudit m_AuditResult;
+  pdfview::DimMatchSet m_AuditMatches;
+  int m_AuditPage = -1;
+  bool m_AuditReady = false;
+  std::vector<int> m_AuditRows;
+  void StartScaleAudit();
+  void PollScaleAudit();
+  void RefreshScaleAudit();
+  void DrawAuditOverlay(QPainter& painter);
+
+  // REQ-392/393 Qt comparison session. All CPU rendering, alignment, and change detection run on a worker.
+  struct CompareOutcome {
+    bool ok = false;
+    std::string error;
+    std::unique_ptr<pdfview::PdfDocument> openedRevision;
+    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView;
+    pdfalign::AutoResult alignment;
+    pdfalign::Transform automaticTransform;
+    bool hasAlignment = false;
+    pdfdiff::Result changes;
+  };
+  struct CompareSession {
+    std::unique_ptr<pdfview::PdfDocument> revision;
+    QString source;
+    int basePage = 0, revisionPage = 0;
+    pdfalign::Transform transform;
+    pdfalign::Transform automatic;
+    QImage overlay;
+    QImage revisionOverlay;
+    QImage baseView;
+    QImage revisionView;
+    std::vector<pdfdiff::Region> changes;
+    int mode = 0; // Tint, Opacity, Base, Revision
+    int opacity = 50;
+    bool busy = false, aligned = false, haveChanges = false, lowConfidence = false;
+    bool manualAlignment = false;
+    pdfdiff::Settings settings;
+    std::atomic<bool> cancel{false};
+  };
+  std::unique_ptr<CompareSession> m_Compare;
+  std::future<CompareOutcome> m_CompareWork;
+  QTimer* m_ComparePoll = nullptr;
+  QDialog* m_CompareDialog = nullptr;
+  QComboBox* m_CompareMode = nullptr;
+  QSlider* m_CompareOpacity = nullptr;
+  QSpinBox* m_CompareBasePage = nullptr;
+  QSpinBox* m_CompareRevisionPage = nullptr;
+  QDoubleSpinBox* m_CompareTolerance = nullptr;
+  QDoubleSpinBox* m_CompareMinRegion = nullptr;
+  QCheckBox* m_CompareShowHighlights = nullptr;
+  QLabel* m_CompareStatus = nullptr;
+  QProgressBar* m_CompareProgress = nullptr;
+  QTableWidget* m_CompareTable = nullptr;
+  bool m_ComparePicking = false;
+  bool m_CompareClosePending = false;
+  int m_ComparePickCount = 0;
+  int m_ComparePickTarget = 0;
+  pdfalign::Pt m_ComparePicks[4];
+  void BeginCompare();
+  void StartCompare(bool findChanges);
+  void PollCompare();
+  void UpdateCompareOverlay();
+  void DrawCompareOverlay(QPainter& painter);
+  void ComparePick(QPointF point, Qt::MouseButton button);
+  void SaveCompareChanges();
 };

@@ -6,11 +6,13 @@
 #include <future>
 #include <functional>
 #include <memory>
+#include <QStringList>
 class QPlainTextEdit;
 class QTableWidget;
 class QLabel;
 class QTimer;
 class QAction;
+class QListWidget;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -22,6 +24,7 @@ public:
   ~AdjustmentWindow() override;
   bool RunSmokeChecks(QString& error);
   bool LoadFile(const QString& path, QString& error);
+  int ImportFiles(const QStringList& paths, QStringList& failures);
   bool SaveFile(const QString& path, QString& error);
   bool AcceptResult(QString& error);
   int CommitToDrawing();
@@ -45,6 +48,7 @@ private:
   void ExportReport();
   void EditWeights();
   void SetBusy(bool busy);
+  void RefreshImportedFiles();
   void RefreshPreview();
   void RefreshFilesAndSummary();
   void BuildOptionsBar(QWidget* parent);
@@ -67,6 +71,7 @@ private:
   QPlainTextEdit* m_Output;
   QTableWidget* m_Coordinates;
   QTableWidget* m_Residuals;
+  QListWidget* m_ImportedFiles;
   TraverseData m_Data;
   LsaWeights m_Weights;
   QString m_Path;

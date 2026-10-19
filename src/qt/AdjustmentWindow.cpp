@@ -35,10 +35,13 @@
 #include <QDoubleSpinBox>
 #include <QDebug>
 #include <QDialogButtonBox>
+#include <QColor>
+#include <QLabel>
+#include <QListWidget>
+#include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
-#include <QLabel>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QTextBlock>
@@ -150,6 +153,26 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Files->setWordWrap(true);
   m_Files->setTextInteractionFlags(Qt::TextSelectableByMouse);
   filesLayout->addWidget(m_Files);
+  auto* importFilesButton = new QPushButton("Import raw files…", files);
+  importFilesButton->setObjectName("issue913ImportRawFiles");
+  connect(importFilesButton, &QPushButton::clicked, this, [this] {
+    if (IsBusy()) return;
+    const QStringList paths = QFileDialog::getOpenFileNames(this, "Import raw traverse files", {},
+        "Raw traverse files (*.fbk *.dat *.rw5 *.jxl *.xml);;All files (*)");
+    if (paths.isEmpty()) return;
+    QStringList failures;
+    const int imported = ImportFiles(paths, failures);
+    if (imported == 0 && !failures.isEmpty())
+      QMessageBox::warning(this, "Import raw files", failures.join("\n"));
+    else if (!failures.isEmpty())
+      statusBar()->showMessage(QString("Imported %1 file(s); %2 failed. See Files for details.").arg(imported).arg(failures.size()));
+  });
+  filesLayout->addWidget(importFilesButton);
+  m_ImportedFiles = new QListWidget(files);
+  m_ImportedFiles->setObjectName("issue913ImportedFiles");
+  m_ImportedFiles->setWordWrap(true);
+  filesLayout->addWidget(m_ImportedFiles, 1);
+  RefreshImportedFiles();
   auto* summary = new QGroupBox("Summary", left);
   auto* summaryLayout = new QVBoxLayout(summary);
   m_Summary = new QLabel(summary);
@@ -479,27 +502,32 @@ void AdjustmentWindow::changeEvent(QEvent* event) {
 }
 
 void AdjustmentWindow::Import() {
-  if (IsBusy() || !ConfirmDiscard()) return;
+  if (IsBusy()) return;
   const QString path = QFileDialog::getOpenFileName(this, "Import observations", {},
       "Survey observations (*.gstrav *.gsdat *.gstc *.fbk *.dat *.rw5 *.jxl *.xml);;All files (*)");
   if (path.isEmpty()) return;
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  const bool raw = suffix == "fbk" || suffix == "dat" || suffix == "rw5" || suffix == "jxl" || suffix == "xml";
+  if (!raw && !ConfirmDiscard()) return;
   QString error;
   if (!LoadFile(path, error)) QMessageBox::warning(this, "Import observations", error);
 }
 
 bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   if (IsBusy()) { reason = "An adjustment is running."; return false; }
+  const QString suffix = QFileInfo(path).suffix().toLower();
+  if (suffix == "fbk" || suffix == "dat" || suffix == "rw5" || suffix == "jxl" || suffix == "xml") {
+    QStringList failures;
+    if (ImportFiles({path}, failures) > 0) return true;
+    reason = failures.join("\n");
+    return false;
+  }
   TraverseData data;
   LsaWeights weights = m_State.traverseLsaWeights;
   std::string error;
   const QByteArray utf8 = path.toUtf8();
-  const QString suffix = QFileInfo(path).suffix().toLower();
   bool ok = false;
   if (suffix == "gstrav") ok = traverseio::Load(utf8.toStdString(), data, weights, error);
-  else if (suffix == "fbk") ok = FbkImport(utf8.constData(), data, error);
-  else if (suffix == "dat") ok = StarNetImport(utf8.constData(), data, error);
-  else if (suffix == "rw5") ok = Rw5Import(utf8.constData(), data, error);
-  else if (suffix == "jxl" || suffix == "xml") ok = JobXmlImport(utf8.constData(), data, error);
   else {
     QFile file(path);
     if (file.open(QIODevice::ReadOnly)) ok = travcmd::Parse(file.readAll().toStdString(), data, weights, error);
@@ -519,9 +547,76 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   else if (suffix == "gsdat") m_State.traverseGsdatFilePath = path.toUtf8().toStdString();
   m_Coordinates->setRowCount(0); m_Residuals->setRowCount(0);
   m_Output->setPlainText("Loaded " + path + "\nSave as .gstrav to retain raw measurement sets.");
+  RefreshImportedFiles();
   setWindowModified(HasUnsavedChanges());
   ValidateNow();
   return true;
+}
+
+int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failures) {
+  failures.clear();
+  if (paths.isEmpty()) return 0;
+  if (IsBusy()) { failures.push_back("An adjustment is running."); return 0; }
+  QString parseError;
+  if (!ParseEditor(parseError)) { failures.push_back(parseError); return 0; }
+
+  int importedCount = 0;
+  std::size_t totalLegs = 0;
+  for (const QString& path : paths) {
+    const QString suffix = QFileInfo(path).suffix().toLower();
+    const QByteArray utf8 = path.toUtf8();
+    TraverseData imported;
+    std::string reason;
+    bool ok = false;
+    const char* format = "raw traverse";
+    if (suffix == "fbk") { ok = FbkImport(utf8.constData(), imported, reason); format = "FBK"; }
+    else if (suffix == "dat") { ok = StarNetImport(utf8.constData(), imported, reason); format = "STAR*NET"; }
+    else if (suffix == "rw5") { ok = Rw5Import(utf8.constData(), imported, reason); format = "RW5"; }
+    else if (suffix == "jxl" || suffix == "xml") { ok = JobXmlImport(utf8.constData(), imported, reason); format = "JobXML"; }
+    else reason = "Unsupported raw traverse file type.";
+
+    if (!ok) {
+      const QString message = QString("%1 — %2").arg(path, QString::fromUtf8(reason.c_str()));
+      failures.push_back(message);
+      auto* item = new QListWidgetItem("Failed · " + QFileInfo(path).fileName() + " — " + QString::fromUtf8(reason.c_str()), m_ImportedFiles);
+      item->setForeground(QColor(176, 55, 48));
+      item->setToolTip(message);
+      m_Log.push_back("TRAVERSE — " + std::string(format) + " import failed (" + utf8.toStdString() + "): " + reason);
+      continue;
+    }
+
+    const std::size_t importedLegs = imported.legs.size();
+    TraverseAppendImported(m_Data, std::move(imported));
+    m_Data.importedFiles.push_back(utf8.toStdString());
+    totalLegs += importedLegs;
+    ++importedCount;
+    auto* item = new QListWidgetItem(QString("Imported · %1 (%2 legs)").arg(QFileInfo(path).fileName()).arg(importedLegs), m_ImportedFiles);
+    item->setForeground(QColor(34, 120, 78));
+    item->setToolTip(path);
+    m_Log.push_back("TRAVERSE — imported " + std::string(format) + " (" + std::to_string(importedLegs) + " legs): " + utf8.toStdString());
+  }
+
+  if (importedCount == 0) return 0;
+  m_Path.clear();
+  m_Imported = true;
+  m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(m_Data, m_Weights).c_str()));
+  m_SourceText = m_Editor->toPlainText();
+  m_Coordinates->setRowCount(0);
+  m_Residuals->setRowCount(0);
+  m_Output->setPlainText(QString("Imported %1 file(s), %2 leg(s).\nSave as .gstrav to retain raw measurement sets.")
+      .arg(importedCount).arg(totalLegs));
+  setWindowModified(HasUnsavedChanges());
+  statusBar()->showMessage(QString("Imported %1 raw file(s)%2.").arg(importedCount)
+      .arg(failures.isEmpty() ? QString{} : QString("; %1 failed — see Files").arg(failures.size())));
+  return importedCount;
+}
+
+void AdjustmentWindow::RefreshImportedFiles() {
+  m_ImportedFiles->clear();
+  for (const std::string& path : m_Data.importedFiles) {
+    auto* item = new QListWidgetItem("Imported · " + QFileInfo(QString::fromUtf8(path.c_str())).fileName(), m_ImportedFiles);
+    item->setToolTip(QString::fromUtf8(path.c_str()));
+  }
 }
 
 void AdjustmentWindow::Calculate() {
@@ -625,12 +720,14 @@ bool AdjustmentWindow::HasUnsavedChanges() const {
 
 bool AdjustmentWindow::ParseEditor(QString& error) {
   if (m_Editor->toPlainText() == m_SourceText) return true;
+  const auto importedFiles = m_Data.importedFiles;
   TraverseData data;
   LsaWeights weights = m_Weights;
   std::string reason;
   if (!travcmd::Parse(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
     error = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str())); return false;
   }
+  data.importedFiles = importedFiles;
   m_Data = std::move(data); m_Weights = weights;
   m_SourceText = m_Editor->toPlainText();
   return true;

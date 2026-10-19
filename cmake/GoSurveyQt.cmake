@@ -31,6 +31,9 @@ add_library(gosurvey_qt_frontend STATIC
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
   src/pdf/PdfDocument.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
   src/pdf/PdfViewerCore.cpp
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfMeasure.cpp
