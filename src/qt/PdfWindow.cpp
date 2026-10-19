@@ -628,9 +628,10 @@ void PdfWindow::StartSearch() {
   m_SearchCancel = false;
   m_FindStatus->setText("Searching... (Esc cancels)");
   pdfview::PdfDocument* document = m_Document.get();
-  m_Search = std::async(std::launch::async, [this, document, query, matchCase] {
+  const auto text = std::make_shared<const std::u16string>(query); // shared so the worker's capture copy cannot throw
+  m_Search = std::async(std::launch::async, [this, document, text, matchCase] {
     SearchOutcome outcome;
-    try { outcome.ok = document->SearchText(query, matchCase, outcome.result, [this] { return m_SearchCancel.load(); }); }
+    try { outcome.ok = document->SearchText(*text, matchCase, outcome.result, [this] { return m_SearchCancel.load(); }); }
     catch (...) { outcome.ok = false; } // reported as "The search could not be completed."
     return outcome;
   });
