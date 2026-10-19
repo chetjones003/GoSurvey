@@ -46498,7 +46498,7 @@ void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
   build->specifyInsert = capturedSpec;
   auto* buildPtr = build.get();
   buildPtr->thread = std::thread([buildPtr, capturedPath, capturedPage, capturedDpi,
-                                  capturedLines, capturedCirc, capturedText] {
+                                  capturedLines, capturedCirc, capturedText]() noexcept {
     try {
       PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
                               capturedLines, capturedCirc, capturedText, buildPtr->result);
