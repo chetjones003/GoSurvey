@@ -251,7 +251,7 @@ QString Issue905Shot(const char* name) {
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
-  const QString path = directory.filePath(QString::fromLatin1(name));
+  QString path = directory.filePath(QString::fromLatin1(name));
   QFile file(path);
   if (!file.open(QIODevice::WriteOnly)) return {};
   file.write(bytes.data(), static_cast<qint64>(bytes.size()));

@@ -67,7 +67,7 @@ public:
   }
   ~PdfThumbnails() override {
     m_Cancel = true;
-    if (m_Work.valid()) m_Work.wait();
+    try { if (m_Work.valid()) m_Work.wait(); } catch (...) { qWarning() << "PDF thumbnail wait failed during shutdown"; }
   }
 
   /// The document must outlive its use here: pass nullptr (which waits for the worker) before destroying it.
@@ -167,8 +167,10 @@ private:
     pdfview::PdfDocument* document = m_Doc;
     m_Work = std::async(std::launch::async, [this, document, next, size, refine] {
       Result result;
-      result.ok = document->RenderPage(next, size.width(), size.height(), result.bitmap, [this] { return m_Cancel.load(); },
-                                       pdfview::PdfDocument::kDisplayFlags, refine ? 0 : kDraftBudgetMs);
+      try {
+        result.ok = document->RenderPage(next, size.width(), size.height(), result.bitmap, [this] { return m_Cancel.load(); },
+                                         pdfview::PdfDocument::kDisplayFlags, refine ? 0 : kDraftBudgetMs);
+      } catch (...) { result.ok = false; } // the page keeps its blank sheet
       if (refine) result.bitmap.partial = false;
       return result;
     });
@@ -203,7 +205,7 @@ public:
     }
     const QPixmap picture = index.data(Qt::DecorationRole).value<QPixmap>();
     const QRectF art(cell.left() + (cell.width() - picture.width()) / 2,
-                     cell.top() + 6 + (PdfThumbnails::kBox - picture.height()) / 2, picture.width(), picture.height());
+                     cell.top() + 6 + (PdfThumbnails::kBox - picture.height()) / 2.0, picture.width(), picture.height());
     painter->drawPixmap(art.topLeft(), picture);
     painter->setPen(QPen(QColor(120, 120, 120), 1));
     painter->setBrush(Qt::NoBrush);
@@ -628,7 +630,8 @@ void PdfWindow::StartSearch() {
   pdfview::PdfDocument* document = m_Document.get();
   m_Search = std::async(std::launch::async, [this, document, query, matchCase] {
     SearchOutcome outcome;
-    outcome.ok = document->SearchText(query, matchCase, outcome.result, [this] { return m_SearchCancel.load(); });
+    try { outcome.ok = document->SearchText(query, matchCase, outcome.result, [this] { return m_SearchCancel.load(); }); }
+    catch (...) { outcome.ok = false; } // reported as "The search could not be completed."
     return outcome;
   });
   m_SearchPoll->start();
