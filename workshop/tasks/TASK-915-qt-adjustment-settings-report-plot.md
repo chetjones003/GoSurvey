@@ -1,7 +1,7 @@
 # TASK-915 — Qt adjustment project settings, report export, and plotting
 
 - Type: feature
-- Status: awaiting final screenshot approval
+- Status: complete
 - Opened: 2026-10-19
 - GitHub issue: #915, child of #878
 
@@ -64,3 +64,4 @@
 - Documentation: the 0.7.4 parity ledger now records the Qt routes, focused evidence, and screenshots.
 - Assumptions and remaining technical debt: issue #915's plot means the existing adjusted-station plan view. This is covered by REQ-418/422/423; no SPEC change was needed. The full CTest target should be run when a test-registered CMake tree is available.
 - PR target: `beta`.
+- Pull request: https://github.com/chetjones003/GoSurvey/pull/962.
