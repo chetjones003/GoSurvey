@@ -3,6 +3,7 @@
 #include "EditorViewport.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadRubberPreview.hpp"
+#include "CadDynInput.hpp"
 #include "TransformPreview.hpp"
 #include "MtextRichFormat.hpp"
 #include "CadColor.hpp"
@@ -449,6 +450,30 @@ void EditorViewport::paintGL() {
     painter.drawRect(QRectF(QPointF(m_State.selBoxAnchorScreenX, m_State.selBoxAnchorScreenY), m_Last).normalized());
   }
   painter.setPen(QColor("#bcc6d3"));
+  // The guide uses the same UCS constraint as the shared preview/commit path.
+  const auto inputPrompt = CadDynInputPromptFor(m_State);
+  const bool pipeCompass = m_State.active == AppCommandState::Kind::PipeRun && m_State.pipeRunCompassOn;
+  if (!paperSpace && inputPrompt.haveBase && (m_State.polarMode || pipeCompass)) {
+    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.worldDocumentOriginX,
+        inputPrompt.baseWorld.y - m_State.worldDocumentOriginY, inputPrompt.baseWorld.z};
+    float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y), z = static_cast<float>(m_Cursor.z);
+    if (pipeCompass) ApplyPipeRunCompassFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+        &x, &y, true, static_cast<float>(anchor.z), z, &z);
+    else ApplyPolarConstrainFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y),
+        &x, &y, true, static_cast<float>(anchor.z), z, &z);
+    const auto camera = CadViewCamera(m_State);
+    float ax = 0, ay = 0, bx = 0, by = 0;
+    camera.WorldToScreen(anchor.x, anchor.y, anchor.z, width(), height(), &ax, &ay);
+    camera.WorldToScreen(x, y, z, width(), height(), &bx, &by);
+    const QLineF line(QPointF(ax, ay), QPointF(bx, by));
+    if (line.length() > 0.1) {
+      const QPointF direction = (line.p2() - line.p1()) / line.length();
+      painter.setPen(QPen(QColor("#78eb8c"), 1, Qt::DashLine));
+      const double reach = std::hypot(width(), height());
+      painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
+    }
+  }
+  painter.setPen(QColor("#bcc6d3"));
   painter.drawText(16, 26, paperSpace ? "[Paper]" : "[Model]  [Orthographic]");
   if (!paperSpace && m_OnlineMap && m_OnlineMap->Drawing()) {
     painter.fillRect(QRectF(width() - 268, height() - 36, 252, 26), QColor(20, 24, 28, 190));
@@ -501,6 +526,10 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (right.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(90, 0); return; }
   }
   if (event->button() == Qt::RightButton) {
+    if ((event->modifiers() & Qt::ShiftModifier) && snapMenuRequested) {
+      snapMenuRequested(event->globalPosition().toPoint());
+      event->accept(); return;
+    }
     if (m_State.sectionPlaneGripDrag >= 0) {
       AbortSectionPlaneGripDrag(m_State);
       m_Log.push_back("Section plane drag cancelled.");
@@ -519,10 +548,14 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     const Camera camera = CadViewCamera(m_State);
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
+    const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
+    const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
     m_Snap = m_State.active != AppCommandState::Kind::None ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
-        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {}, CadViewIsPlan(m_State) ? nullptr : &ray) : CadSnap::Hit{};
+        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
+        CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     m_State.viewportSnapPickValid = m_Snap.valid;
+    if (m_Snap.valid) m_State.viewportSnapPickKind = static_cast<int>(m_Snap.kind);
     m_State.viewportSnapPickLocalX = m_Cursor.x;
     m_State.viewportSnapPickLocalY = m_Cursor.y;
     m_State.viewportSnapPickLocalZ = m_Cursor.z;
@@ -531,6 +564,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
+    if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
+    if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
     const auto route = ViewportClickRouteFor(m_State);
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
@@ -676,10 +711,12 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
+    const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
+    const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
     m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
-            CadViewIsPlan(m_State) ? nullptr : &ray)
+            CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)
         : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
     m_State.viewportSnapPickValid = m_Snap.valid;
@@ -818,7 +855,7 @@ void EditorViewport::keyPressEvent(QKeyEvent* event) {
     ClearTransientInput();
   }
   else if (event->key() == Qt::Key_Delete) ExecuteDeleteSelection(m_State, m_Log);
-  else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Space) {
+  else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
     char empty[1]{};
     ProcessCommandLineSubmit(empty, 1, m_State, m_Log);
   } else if (!event->text().isEmpty() && !(event->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) && textEntered) {
