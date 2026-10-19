@@ -62,6 +62,7 @@ protected:
   void closeEvent(QCloseEvent* event) override;
 private:
   friend class QtEditorTests;
+  struct SaveResult { bool succeeded = false; std::string error; };
   void RequestRender();
   void PollRender();
   void PollOpen();
@@ -71,7 +72,7 @@ private:
   std::future<pdfview::PdfDocument::OpenResult> m_OpenWork;
   QString m_OpenPath;
   QTimer* m_OpenPoll = nullptr;
-  std::future<std::string> m_SaveWork;
+  std::future<SaveResult> m_SaveWork;
   QString m_SaveDestination;
   uint64_t m_Revision = 0;
   uint64_t m_SaveRevision = 0;
