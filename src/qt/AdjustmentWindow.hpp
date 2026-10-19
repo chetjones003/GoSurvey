@@ -1,6 +1,7 @@
 #pragma once
 #include <QMainWindow>
 #include "CadCommands.hpp"
+#include "AdjustmentEditor.hpp"
 #include <future>
 #include <functional>
 class QPlainTextEdit;
@@ -24,6 +25,8 @@ public:
   int CommitToDrawing();
   bool IsBusy() const { return m_Work.valid(); }
   bool HasUnsavedChanges() const;
+  /// REQ-431: check the text now instead of after the typing pause.
+  void ValidateNow();
   std::function<void()> drawingChanged;
 protected:
   void closeEvent(QCloseEvent* event) override;
@@ -40,6 +43,8 @@ private:
   void ExportReport();
   void EditWeights();
   void SetBusy(bool busy);
+  void RefreshPreview();
+  void RefreshFilesAndSummary();
   void BuildOptionsBar(QWidget* parent);
   void InvalidateResult();
   void SyncOptionsFromText();
@@ -50,7 +55,13 @@ private:
   QString UnitSuffix() const;
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
-  QPlainTextEdit* m_Editor;
+  AdjustmentCodeEdit* m_Editor;
+  AdjustmentPlanView* m_Plan;
+  QLabel* m_Files;
+  QLabel* m_Summary;
+  QLabel* m_TextStatus;
+  QTimer* m_ValidateTimer;
+  TraverseData m_PreviewData;  ///< the text as last read without error, solved for the plan only
   QPlainTextEdit* m_Output;
   QTableWidget* m_Coordinates;
   QTableWidget* m_Residuals;

@@ -17,6 +17,11 @@
 #include <QHeaderView>
 #include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QLabel>
+#include <QApplication>
+#include <QVBoxLayout>
+#include <QGroupBox>
+#include <set>
 #include <QSaveFile>
 #include <QSplitter>
 #include <QTabWidget>
@@ -90,14 +95,39 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   file->addAction("Save As...", QKeySequence::SaveAs, this, [this] { Save(true); });
   file->addAction("Export report...", this, [this] { ExportReport(); });
   auto* splitter = new QSplitter(this);
-  m_Editor = new QPlainTextEdit(splitter);
+  // REQ-431: left panel (Files, Summary, plan preview) | command editor | results.
+  auto* left = new QWidget(splitter);
+  left->setObjectName("adjustmentLeftPanel");
+  auto* leftLayout = new QVBoxLayout(left);
+  leftLayout->setContentsMargins(4, 4, 4, 4);
+  auto* files = new QGroupBox("Files", left);
+  auto* filesLayout = new QVBoxLayout(files);
+  m_Files = new QLabel(files);
+  m_Files->setObjectName("adjustmentFiles");
+  m_Files->setWordWrap(true);
+  m_Files->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  filesLayout->addWidget(m_Files);
+  auto* summary = new QGroupBox("Summary", left);
+  auto* summaryLayout = new QVBoxLayout(summary);
+  m_Summary = new QLabel(summary);
+  m_Summary->setObjectName("adjustmentSummary");
+  m_Summary->setWordWrap(true);
+  summaryLayout->addWidget(m_Summary);
+  auto* preview = new QGroupBox("Preview", left);
+  auto* previewLayout = new QVBoxLayout(preview);
+  m_Plan = new AdjustmentPlanView(preview);
+  m_Plan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawingInsUnits)));
+  previewLayout->addWidget(m_Plan);
+  leftLayout->addWidget(files);
+  leftLayout->addWidget(summary);
+  leftLayout->addWidget(preview, 1);
+  m_Editor = new AdjustmentCodeEdit(splitter);
   m_Editor->setObjectName("adjustmentCommands");
-  m_Editor->setFont(QFont("Consolas", 11));
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(state.traverseData, state.traverseLsaWeights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
-  m_Editor->setLineWrapMode(QPlainTextEdit::NoWrap);
   auto* results = new QTabWidget(splitter);
   m_Output = new QPlainTextEdit(results);
+  m_Output->setObjectName("adjustmentOutput");
   m_Output->setReadOnly(true);
   m_Output->setFont(QFont("Consolas", 10));
   m_Output->setPlainText("Import observations or enter GoSurvey traverse commands, then run adjustment.");
@@ -122,9 +152,9 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   residualsLayout->addWidget(m_ResidualNote);
   residualsLayout->addWidget(m_Residuals, 1);
   results->addTab(residualsPage, "Residuals");
-  splitter->addWidget(m_Editor);
-  splitter->addWidget(results);
-  splitter->setSizes({550, 650});
+  splitter->insertWidget(0, left);
+  splitter->setSizes({300, 520, 480});
+  splitter->setStretchFactor(1, 1);
   auto* central = new QWidget(this);
   auto* centralLayout = new QVBoxLayout(central);
   centralLayout->setContentsMargins(0, 0, 0, 0);
@@ -133,6 +163,16 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   centralLayout->addWidget(m_OptionsBar);
   centralLayout->addWidget(splitter, 1);
   setCentralWidget(central);
+  m_TextStatus = new QLabel(this);
+  m_TextStatus->setObjectName("adjustmentTextStatus");
+  statusBar()->addPermanentWidget(m_TextStatus, 1);
+  m_ValidateTimer = new QTimer(this);
+  m_ValidateTimer->setSingleShot(true);
+  m_ValidateTimer->setInterval(300);
+  connect(m_ValidateTimer, &QTimer::timeout, this, [this] { ValidateNow(); });
+  const auto palette = AdjustmentPalette(QApplication::palette().color(QPalette::Window).lightness() < 128);
+  m_Editor->SetPalette(palette);
+  m_Plan->SetPalette(palette);
   m_Poll = new QTimer(this);
   // Results are derived and tied to a particular drawing/session. Reopening the
   // editor requires a fresh solve before accepting or committing them.
@@ -144,9 +184,75 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
     SyncOptionsFromText();
     InvalidateResult();
     setWindowModified(HasUnsavedChanges());
+    m_ValidateTimer->start();  // REQ-431 clause 3: check once the typing pauses
+    RefreshPreview();          // any earlier result no longer matches the text
   });
   SyncOptionsFromText();
   SetBusy(false);
+  ValidateNow();
+}
+
+// REQ-431 clause 3: read the text without touching the working traverse, the results or any file.
+void AdjustmentWindow::ValidateNow() {
+  m_ValidateTimer->stop();
+  TraverseData data;
+  LsaWeights weights = m_Weights;
+  std::string reason;
+  if (travcmd::Parse(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
+    ComputeTraverse(data);
+    m_PreviewData = std::move(data);
+    m_Editor->SetError(0, {});
+    m_TextStatus->setText("Command text is valid");
+    m_TextStatus->setStyleSheet({});
+  } else {
+    const QString message = QString::fromUtf8(reason.c_str());
+    int line = 0;
+    QString detail = message;
+    if (message.startsWith("line ")) {
+      const int colon = static_cast<int>(message.indexOf(':'));
+      line = message.mid(5, colon - 5).toInt();
+      if (colon > 0) detail = message.mid(colon + 1).trimmed();
+    }
+    m_Editor->SetError(line, detail);
+    m_TextStatus->setText("Parse error \u2014 " + message);
+    m_TextStatus->setStyleSheet("color:" + m_Editor->Palette().error.name());
+  }
+  RefreshPreview();
+}
+
+void AdjustmentWindow::RefreshPreview() {
+  const bool current = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
+  m_Plan->SetTraverse(m_PreviewData, current ? &m_State.traverseLsaResult : nullptr);
+  RefreshFilesAndSummary();
+}
+
+void AdjustmentWindow::RefreshFilesAndSummary() {
+  auto path = [](const std::string& value) { return value.empty() ? QString("(unsaved)") : QString::fromUtf8(value.c_str()); };
+  m_Files->setText(".gstrav: " + path(m_State.traverseFilePath) + "\n.gsdat: " + path(m_State.traverseGsdatFilePath));
+  const auto& data = m_PreviewData;
+  std::set<int> ids;  // a loop's last foresight is the start monument, so it counts once
+  if (!data.legs.empty() || data.networkStations.empty()) ids.insert(data.startStationId);
+  for (const auto& leg : data.legs) ids.insert(leg.stationId);
+  for (const auto& station : data.networkStations) ids.insert(station.id);
+  const int stations = static_cast<int>(ids.size());
+  QStringList lines{QString("Stations: %1").arg(stations)};
+  if (data.closureValid) {
+    lines << QString("Misclosure: %1").arg(data.closureLinear, 0, 'f', 4);
+    lines << (data.closureLinear > 1e-6 ? QString("Precision: 1:%1").arg(data.closurePrecision, 0, 'f', 0)
+                                        : QString("Precision: perfect"));
+  } else {
+    lines << "No closure (open traverse or not computed).";
+  }
+  const auto& result = m_State.traverseLsaResult;
+  if (m_State.traverseLsaComputed && result.ok) {
+    lines << QString("Std dev of unit weight: %1").arg(result.refStdDev, 0, 'f', 4);
+    lines << QString("Redundancy: %1").arg(result.redundancy);
+  } else if (m_State.traverseLsaComputed) {
+    lines << "LSA: " + QString::fromUtf8(result.message.c_str());
+  } else {
+    lines << "Run adjustment for the standard deviation and redundancy.";
+  }
+  m_Summary->setText(lines.join('\n'));
 }
 
 void AdjustmentWindow::InvalidateResult() {
@@ -364,9 +470,12 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   m_Path = suffix == "gstrav" || suffix == "gstc" || suffix == "gsdat" ? path : QString{};
   m_Imported = m_Path.isEmpty();
+  if (suffix == "gstrav") m_State.traverseFilePath = path.toUtf8().toStdString();
+  else if (suffix == "gsdat") m_State.traverseGsdatFilePath = path.toUtf8().toStdString();
   m_Coordinates->setRowCount(0); m_Residuals->setRowCount(0);
   m_Output->setPlainText("Loaded " + path + "\nSave as .gstrav to retain raw measurement sets.");
   setWindowModified(HasUnsavedChanges());
+  ValidateNow();
   return true;
 }
 
@@ -406,6 +515,7 @@ void AdjustmentWindow::PollCalculation() {
     m_Output->setPlainText(QString::fromUtf8(error.what()));
   }
   SetBusy(false);
+  ValidateNow();  // the plan and summary take the finished result
 }
 
 void AdjustmentWindow::PresentResult() {
@@ -497,6 +607,7 @@ bool AdjustmentWindow::SaveFile(const QString& path, QString& error) {
         TrackProjectFile(m_State, uid, path.toUtf8().toStdString(), m_Log);
   }
   statusBar()->showMessage("Saved " + path);
+  RefreshFilesAndSummary();
   return true;
 }
 
@@ -548,6 +659,7 @@ bool AdjustmentWindow::AcceptResult(QString& error) {
   m_Log.push_back("TRAVERSE: accepted least-squares adjustment.");
   SetBusy(false);
   statusBar()->showMessage("Adjustment accepted. Commit to drawing to place adjusted stations.");
+  RefreshPreview();
   return true;
 }
 
@@ -561,6 +673,11 @@ int AdjustmentWindow::CommitToDrawing() {
   const int count = CommitTraverseToDrawing(m_State, m_Data,
       m_State.traverseLsaAccepted ? &m_State.traverseLsaResult : nullptr, m_Log);
   if (drawingChanged) drawingChanged();
+  if (count == 0) {  // REQ-431 clause 7: say why nothing was placed
+    const QString why = m_Log.empty() ? QString("No points were placed.") : QString::fromUtf8(m_Log.back().c_str());
+    QMessageBox::warning(this, "Commit traverse", why);
+    return 0;
+  }
   statusBar()->showMessage(QString("Committed %1 points to the drawing.").arg(count));
   return count;
 }
