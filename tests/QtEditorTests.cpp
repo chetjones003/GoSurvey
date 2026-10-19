@@ -12,6 +12,7 @@
 #include "traverse/TraverseIo.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
+#include "PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "util/gizmooverlay.hpp"
 #include "ProjectPoints.hpp"
@@ -39,6 +40,10 @@
 #include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
 #include <QPdfWriter>
+#include <QCheckBox>
+#include <QDockWidget>
+#include <QListView>
+#include <QToolBar>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -241,6 +246,27 @@ QString Issue897Shot(const char* name) {
   const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
+}
+QString Issue905Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
+QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
+  QString path = directory.filePath(QString::fromLatin1(name));
+  QFile file(path);
+  if (!file.open(QIODevice::WriteOnly)) return {};
+  file.write(bytes.data(), static_cast<qint64>(bytes.size()));
+  return path;
+}
+// The current search match is orange over white (255, ~187, ~105); the other matches are yellow.
+bool Issue905HasHighlight(const QImage& image) {
+  for (int y = 0; y < image.height(); ++y)
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor c = image.pixelColor(x, y);
+      if (c.red() > 240 && c.green() > 170 && c.green() < 205 && c.blue() < 125) return true;
+    }
+  return false;
 }
 // Runs \p interact once the modal dialog a call is about to open is on screen; a watchdog rejects every
 // dialog if the interaction never closes it, so a failing test cannot hang the run.
@@ -3601,6 +3627,217 @@ private Q_SLOTS:
     annotation.kind = pdfview::Annot::Kind::Rect;
     annotation.x0 = std::numeric_limits<float>::quiet_NaN();
     QVERIFY(!window.AddAnnotation(annotation, error));
+  }
+
+  // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----
+  void pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "find.pdf", pdfview::MakeSyntheticPdf(12, 3, 0));
+    PdfWindow window(nullptr);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* bar = window.findChild<QToolBar*>("pdfFindBar");
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    auto* matchCase = window.findChild<QCheckBox*>("pdfFindMatchCase");
+    auto* spin = window.findChild<QSpinBox*>();
+    QVERIFY(bar && edit && status && matchCase && spin);
+    QVERIFY(!bar->isVisible());
+
+    pdfview::Annot rect;
+    rect.kind = pdfview::Annot::Kind::Rect;
+    rect.x0 = 20; rect.y0 = 30; rect.x1 = 80; rect.y1 = 100;
+    QVERIFY2(window.AddAnnotation(rect, error), qPrintable(error));
+
+    window.findChild<QAction*>("pdfFindAction")->trigger(); // Ctrl+F
+    QVERIFY(bar->isVisible());
+    QTRY_VERIFY(edit->hasFocus());
+
+    QTest::keyClicks(edit, "page 1");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "1 of 4", 10000);
+    QCOMPARE(spin->value(), 1);
+    QTest::keyClick(edit, Qt::Key_Return); // Enter again = next match
+    QTRY_COMPARE(status->text(), QString("2 of 4"));
+    QCOMPARE(spin->value(), 10);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QCOMPARE(status->text(), QString("4 of 4"));
+    QCOMPARE(spin->value(), 12);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(status->text().startsWith("1 of 4") && status->text().contains("wrapped"));
+    QCOMPARE(spin->value(), 1);
+    window.findChild<QAction*>("pdfFindPrevious")->trigger();
+    QVERIFY(status->text().startsWith("4 of 4") && status->text().contains("wrapped"));
+    QCOMPARE(spin->value(), 12);
+    window.findChild<QAction*>("pdfFindPrevious")->trigger();
+    QCOMPARE(status->text(), QString("3 of 4"));
+
+    // The current match is highlighted on the page (orange over white), the page itself is not edited.
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    QVERIFY(canvas);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && Issue905HasHighlight(canvas->grab().toImage()), 10000);
+    QVERIFY(canvas->grab().save(Issue905Shot("qt-905-find-highlight.png")));
+
+    // Match case: the text is "Page", so the lower-case query matches nothing.
+    matchCase->setChecked(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "No matches", 10000);
+    edit->setText("Page 1");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "3 of 4", 10000); // first match on or after page 11
+
+    // An empty text does nothing and clears the results.
+    edit->clear();
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(status->text().isEmpty());
+
+    // Searching never changes the annotation session: still one unsaved annotation, undoable once.
+    QVERIFY(window.HasUnsavedChanges());
+    QTest::keyClick(&window, Qt::Key_Escape); // Esc closes the bar
+    QVERIFY(!bar->isVisible());
+    QVERIFY(window.HasUnsavedChanges());
+  }
+
+  void pdfFindBarReportsNoTextAndCancel() {
+    QTemporaryDir directory;
+    // A page with line work only: no text layer, like a scan.
+    const QString scan = Issue905WritePdf(directory, "scan.pdf", pdfview::MakeLineWorkPdf(612, 792, 50, 1, 0));
+    PdfWindow window(nullptr);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(scan, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    window.findChild<QAction*>("pdfFindAction")->trigger();
+    QTest::keyClicks(edit, "anything");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("This PDF has no searchable text"));
+
+    const QString text = Issue905WritePdf(directory, "text.pdf", pdfview::MakeSyntheticPdf(40, 3, 0));
+    QVERIFY2(window.LoadFile(text, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QVERIFY(status->text().isEmpty()); // opening another file clears the search
+    edit->setText("nothing like this");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("No matches"));
+
+    // Esc cancels a running search: hold the PDFium lock so the worker cannot finish before the key arrives.
+    edit->setText("Page");
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      QTest::keyClick(edit, Qt::Key_Return);
+      QVERIFY(window.IsSearching());
+      QTest::keyClick(&window, Qt::Key_Escape);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("Search cancelled"));
+    QVERIFY(window.findChild<QToolBar*>("pdfFindBar")->isVisible()); // Esc cancelled the search; the bar stays
+  }
+
+  void pdfThumbnailStripListsPagesRendersOnlyVisibleOnesAndFollowsThePage() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "plans.pdf", pdfview::MakeSyntheticPdf(500, 10, 50));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 20000);
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    auto* dock = window.findChild<QDockWidget*>("pdfThumbnails");
+    auto* spin = window.findChild<QSpinBox*>();
+    QVERIFY(list && dock && spin);
+    QVERIFY(dock->isVisible()); // shown by default
+    QCOMPARE(list->model()->rowCount(), 500);
+
+    // Only what is on screen gets an image, and never more than the cache bound.
+    QTRY_VERIFY_WITH_TIMEOUT(window.ThumbnailsKept() >= 3, 20000);
+    QTest::qWait(600);
+    QVERIFY2(window.ThumbnailsKept() < 60, qPrintable(QString::number(window.ThumbnailsKept())));
+    QVERIFY(list->grab().save(Issue905Shot("qt-905-thumbnails.png")));
+
+    // Clicking a thumbnail opens that page.
+    const QModelIndex second = list->model()->index(1, 0);
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, list->visualRect(second).center());
+    QCOMPARE(spin->value(), 2);
+
+    // The strip follows the page chosen elsewhere.
+    spin->setValue(300);
+    const QModelIndex current = list->model()->index(299, 0);
+    QCOMPARE(list->currentIndex(), current);
+    QVERIFY(list->viewport()->rect().intersects(list->visualRect(current)));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 20000);
+
+    // Paging through the whole file keeps the strip within its bound.
+    for (int page = 1; page <= 500; page += 25) { spin->setValue(page); QTest::qWait(5); }
+    QTest::qWait(300);
+    QVERIFY(window.ThumbnailsKept() <= 120);
+
+    // Hide and show again from the toolbar.
+    auto* toggle = window.findChild<QAction*>("pdfThumbnailsAction");
+    QVERIFY(toggle);
+    toggle->trigger();
+    QVERIFY(!dock->isVisible());
+    toggle->trigger();
+    QVERIFY(dock->isVisible());
+  }
+
+  void pdfThumbnailOfAnUnreadablePageStaysBlankAndTheOthersStillDraw() {
+    // Page 3 (object 8) is turned into an array of the same length, so PDFium cannot load it as a page.
+    std::string bytes = pdfview::MakeSyntheticPdf(6, 20, 0);
+    const std::size_t object = bytes.find("\n8 0 obj\n<<");
+    QVERIFY(object != std::string::npos);
+    bytes.replace(object + 9, 2, "[ ");
+    const std::size_t close = bytes.find(">>\nendobj", object);
+    QVERIFY(close != std::string::npos);
+    bytes.replace(close, 2, " ]");
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "broken-page.pdf", bytes);
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    QVERIFY(list);
+    QCOMPARE(list->model()->rowCount(), 6);
+    const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
+    QVERIFY(lastVisible >= 3); // the unreadable page 3 is on screen
+    QTRY_COMPARE_WITH_TIMEOUT(window.ThumbnailsKept(), lastVisible, 20000); // every visible page but page 3 (rows 0..lastVisible)
+    QTest::qWait(300);
+    QCOMPARE(window.ThumbnailsKept(), lastVisible);
+    const QPixmap blank = list->model()->index(2, 0).data(Qt::DecorationRole).value<QPixmap>();
+    QVERIFY(!blank.isNull());
+    QCOMPARE(blank.toImage().pixelColor(blank.width() / 2, blank.height() / 2), QColor(Qt::white));
+  }
+
+  void qtPdfSearchAndThumbnailScreenshotEvidenceForIssue905() {
+    QTemporaryDir directory;
+    PdfWindow window(nullptr);
+    window.resize(1000, 700);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(Issue905WritePdf(directory, "evidence.pdf", pdfview::MakeSyntheticPdf(24, 60, 6)), error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= 4, 20000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-thumbnails.png"))); // find bar closed
+    window.findChild<QAction*>("pdfFindAction")->trigger();
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    QTest::keyClicks(edit, "page 2");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text().contains(" of "), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QTest::qWait(400);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-match.png")));
+    edit->setText("no such words");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("No matches"), 10000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-no-matches.png")));
   }
 
   void dimensionStrokesRenderAndHonorLayerVisibility() {

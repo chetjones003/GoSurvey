@@ -11770,7 +11770,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      `PdfAttach` already does).
   5. **Memory.** Viewing a 500-page file keeps resident memory bounded by the cache cap, not by page
      count.
-  6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search, form filling,
+  6. **Out of scope for this REQ:** editing (REQ-388), splitting (REQ-389), text search (the Qt viewer gains it in REQ-429), form filling,
      digital signatures, printing.
   7. **Window control (D-2026-10-06-b).** Each viewer is **its own Windows window**: it opens on the
      same monitor as GoSurvey with the standard title-bar **minimize, maximize/restore and close**
@@ -12641,6 +12641,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Qt UI (`src/qt/`); settings, map, marker, command, rendering, and persistence behavior remain in their existing owners.
 - Status: accepted (2026-10-18) — D-2026-10-18-d, GitHub issue #899.
 - Revisions: 2026-10-18 — initial, recording the Qt parity decision for GitHub issue #899.
+
+### REQ-429 — Qt PDF viewer: thumbnail strip and text search (GitHub issue #905)
+
+- Purpose: bring the 0.7.4 PDF viewer's page thumbnail strip to Qt, and give the Qt viewer text search, so a Qt user can move around a long plan set and find a word in it without leaving GoSurvey.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-18-g. The thumbnail strip is a parity port of REQ-387 clause 2. Text search is a **new feature** (0.7.4 has none): it supersedes REQ-387 clause 6's "text search" exclusion for the Qt viewer only; the ImGui viewer is unchanged. Form filling, signatures and printing stay out of scope.
+- Depends on: REQ-201 (honest failure), REQ-300 (PDFium is already in the tree), REQ-387 (viewer), REQ-388 (annotation session; search must not touch it).
+- Statement:
+  1. **Thumbnail strip.** The Qt PDF window has a dockable thumbnail strip, shown by default and toggled from the toolbar. It lists every page with its number; clicking a page opens it, and the strip follows the page chosen by the page box, Previous/Next or search. Only the thumbnails on screen are drawn (a 500-page file never creates 500 images); thumbnails render off the UI thread nearest-visible first, a page not drawn yet shows its blank sheet, and the number of kept thumbnails is bounded. A page that cannot be drawn shows its blank sheet and never blocks the strip or the viewer.
+  2. **Find bar.** Ctrl+F shows a find bar and focuses its text box. Enter searches the whole document, case-insensitively unless "Match case" is ticked, off the UI thread; Esc cancels a running search and otherwise closes the bar. The first match on or after the current page is shown. Enter again (or F3 / the Next button) goes to the next match and Shift+Enter (or Shift+F3 / Previous) to the previous one, wrapping at either end and saying so. The bar shows "n of m".
+  3. **Highlights.** Every match on the page being shown is highlighted; the current match is emphasised and the viewer shows its page.
+  4. **Honest results (REQ-201).** An empty search text does nothing and clears earlier results. No match shows "No matches". A document with no text layer (for example a scan) shows "This PDF has no searchable text". At most 10,000 matches are kept; hitting the limit is stated ("n of 10000+"). Opening another file clears the search.
+  5. **Read-only.** Search never changes the PDF, the annotations, their undo/redo history or the unsaved-changes state.
+  6. The search itself lives in `pdfview::PdfDocument` (shared, PDFium, takes the PDFium lock per page); the Qt layer only presents it.
+- Acceptance:
+  - `[req429]` unit test: a generated PDF is searched case-insensitively and case-sensitively; the matches carry the right page and a box inside the page; an empty query and a query that matches nothing return no hits; a cancelled search returns no hits; a PDF with no text reports no searchable text.
+  - `GoSurveyQtTests` coverage: Ctrl+F opens the bar; a search finds, steps forward and back, wraps and reports "n of m"; "No matches" and "no searchable text" messages; Esc cancels a running search; the annotation dirty state is unchanged by searching.
+  - `GoSurveyQtTests` coverage: the strip lists every page, renders only visible thumbnails within the cache bound, follows page changes both ways, can be hidden and shown, and a failed page render leaves a blank sheet.
+  - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md`; the ledger states that search is new in Qt and not part of 0.7.4.
+  - Screenshot options were presented and the user's selected direction applied before the issue is closed.
+- Owner-layer: Qt UI (`src/qt/PdfWindow`) over the shared `src/pdf/PdfDocument`.
+- Status: accepted (2026-10-18) — D-2026-10-18-g, GitHub issue #905.
+- Revisions: 2026-10-18 — initial, D-2026-10-18-g, GitHub issue #905.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13824,6 +13848,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
 | REQ-425 | Platform/UI | `GoSurveyQtTests` `[req425]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
+| REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

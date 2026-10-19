@@ -303,6 +303,72 @@ TEST_CASE("PdfDocument returns a stated error for a corrupt, empty, missing or e
 
 // Hidden benchmark (run by name): thumbnail render cost on a real, large construction set.
 //   set GOSURVEY_BENCH_PDF to the file, then: GoSurveyTests "thumbnail render cost on a real PDF"
+TEST_CASE("SearchText finds every page that names the text, with a box on the page", "[pdfview][req429]") {
+  const auto path = WritePdf("gs_pdfview_search.pdf", MakeSyntheticPdf(12, 5, 0));
+  auto r = PdfDocument::Open(path);
+  REQUIRE(r.doc != nullptr);
+  const auto never = [] { return false; };
+
+  TextSearch found;
+  REQUIRE(r.doc->SearchText(u"page 1", false, found, never)); // "Page 1", "Page 10", "Page 11", "Page 12"
+  CHECK(found.anyText);
+  CHECK_FALSE(found.truncated);
+  REQUIRE(found.hits.size() == 4);
+  CHECK(found.hits[0].page == 0);
+  CHECK(found.hits[1].page == 9);
+  CHECK(found.hits[3].page == 11);
+  for (const TextHit& hit : found.hits) {
+    REQUIRE_FALSE(hit.boxes.empty());
+    const PageSize size = r.doc->Sizes()[static_cast<size_t>(hit.page)];
+    for (const ObjBox& box : hit.boxes) {
+      CHECK(box.x0 >= 0.f);
+      CHECK(box.y0 >= 0.f);
+      CHECK(box.x1 <= size.wPt);
+      CHECK(box.y1 <= size.hPt);
+      CHECK(box.x0 < box.x1);
+      CHECK(box.y0 < box.y1);
+    }
+  }
+
+  TextSearch exact;
+  REQUIRE(r.doc->SearchText(u"page 1", true, exact, never)); // the text is "Page", so a capital P is needed
+  CHECK(exact.hits.empty());
+  REQUIRE(r.doc->SearchText(u"Page 1", true, exact, never));
+  CHECK(exact.hits.size() == 4);
+
+  r.doc.reset();
+  std::filesystem::remove(path);
+}
+
+TEST_CASE("SearchText: an empty query, no match, a cancel and a scan with no text", "[pdfview][req429]") {
+  const auto path = WritePdf("gs_pdfview_search2.pdf", MakeSyntheticPdf(5, 5, 0));
+  auto r = PdfDocument::Open(path);
+  REQUIRE(r.doc != nullptr);
+  const auto never = [] { return false; };
+
+  TextSearch out;
+  REQUIRE(r.doc->SearchText(u"", false, out, never));
+  CHECK(out.hits.empty());
+  REQUIRE(r.doc->SearchText(u"no such words", false, out, never));
+  CHECK(out.hits.empty());
+  CHECK(out.anyText); // the pages have text; it just does not contain the query
+
+  CHECK_FALSE(r.doc->SearchText(u"Page", false, out, [] { return true; }));
+  CHECK(out.hits.empty());
+
+  const auto linework = WritePdf("gs_pdfview_search_nolayer.pdf", MakeLineWorkPdf(612, 792, 50, 1, 0));
+  auto s = PdfDocument::Open(linework);
+  REQUIRE(s.doc != nullptr);
+  REQUIRE(s.doc->SearchText(u"Page", false, out, never));
+  CHECK(out.hits.empty());
+  CHECK_FALSE(out.anyText);
+
+  r.doc.reset();
+  s.doc.reset();
+  std::filesystem::remove(path);
+  std::filesystem::remove(linework);
+}
+
 TEST_CASE("thumbnail render cost on a real PDF", "[.thumbbench]") {
   const char* env = std::getenv("GOSURVEY_BENCH_PDF");
   if (env == nullptr)
