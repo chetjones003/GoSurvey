@@ -6,6 +6,7 @@
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
+#include "TopographicArtwork.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
@@ -79,6 +80,7 @@
 #include <QTabWidget>
 #include <QDockWidget>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QScrollArea>
 #include <QClipboard>
 #include <QScopeGuard>
@@ -256,6 +258,108 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  void approvedTopographyStaysInPanelBackgrounds() {
+    IsolatedUserData isolated;
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window;
+    window.resize(1672, 941);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    tabs->setCurrentIndex(1);
+    auto* properties = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(properties);
+    auto* panel = properties->findChild<QScrollArea*>("propertiesPanel"); QVERIFY(panel);
+    auto* tree = panel->widget(); QVERIFY(tree);
+    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(toolspace);
+    window.resizeDocks({properties, toolspace}, {300, 290}, Qt::Horizontal);
+    QTest::qWait(250);
+    auto captureDrawing = [&](const char* name) {
+      if (auto* recent = window.findChild<QLabel*>("commandRecent")) recent->hide();
+      auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
+      QImage shot = window.grab().toImage();
+      if (viewport && viewport->isVisible()) {
+        const auto frame = viewport->grabFramebuffer();
+        QPainter painter(&shot);
+        painter.drawImage(QRect(viewport->mapTo(&window, QPoint()), viewport->size()), frame);
+        // grabFramebuffer excludes the floating Qt controls hosted by the viewport.
+        for (auto* child : viewport->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
+          if (child->isVisible())
+            child->render(&painter, child->mapTo(&window, QPoint()), QRegion(), QWidget::DrawChildren);
+      }
+      return shot.save(Issue886Shot(name));
+    };
+    QVERIFY(captureDrawing("qt-topo-drawing.png"));
+    QVERIFY(properties->grab().save(Issue886Shot("qt-topo-properties.png")));
+    const int terrainHeight = qMin(tree->height(), tree->width() * 220 / 300);
+    QVERIFY(tree->grab(QRect(0, tree->height() - terrainHeight,
+                                        tree->width(), terrainHeight))
+                .save(Issue886Shot("qt-topo-properties-detail.png")));
+    QVERIFY(toolspace->grab().save(Issue886Shot("qt-topo-toolspace.png")));
+    // Art belongs inside the tree's existing background, without consuming row space.
+    const int gap = panel->viewport()->height() - tree->height();
+    QVERIFY2(gap <= 8, qPrintable(QString("Contour decoration reserves %1 px below Properties").arg(gap)));
+    const auto image = tree->grab().toImage();
+    int amberPixels = 0;
+    for (int y = image.height() * 2 / 3; y < image.height(); ++y)
+      for (int x = 0; x < image.width(); ++x) {
+        const auto c = image.pixelColor(x, y);
+        amberPixels += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QVERIFY2(amberPixels > 30, "The approved amber terrain contour must be visible in the Properties background");
+    QImage art(300, 220, QImage::Format_ARGB32);
+    art.fill(QColor("#061725"));
+    { QPainter painter(&art); qtArtwork::DrawTerrainContours(painter, art.rect()); }
+    auto amberNear = [&](int x, int y) {
+      for (int yy = y - 4; yy <= y + 4; ++yy)
+        for (int xx = x - 4; xx <= x + 4; ++xx) {
+          const auto c = art.pixelColor(xx, yy);
+          if (c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue()) return true;
+        }
+      return false;
+    };
+    // The reference's amber ridge descends toward the lower right; it does not
+    // turn upward like the repeated U-shaped wave that caused this regression.
+    QVERIFY(amberNear(50, 93));
+    QVERIFY(amberNear(123, 164));
+    QVERIFY(amberNear(181, 213));
+    QVERIFY(!amberNear(230, 100));
+    QVERIFY(art.save(Issue886Shot("qt-topo-artwork.png")));
+    window.resize(1672, 1100);
+    tabs->setCurrentIndex(0); QTest::qWait(150);
+    QVERIFY(window.grab().save(Issue886Shot("qt-topo-start.png")));
+    auto* body = window.findChild<QWidget*>("startPageBody"); QVERIFY(body);
+    const auto startImage = body->grab().toImage();
+    int startAmber = 0;
+    for (int y = startImage.height() / 2; y < startImage.height(); ++y)
+      for (int x = 0; x < startImage.width() * 2 / 5; ++x) {
+        const auto c = startImage.pixelColor(x, y);
+        startAmber += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QVERIFY2(startAmber > 80, "Recent drawings must not cover the Start-page terrain artwork");
+    QVERIFY(window.findChild<QWidget*>("ribbonBar")->isVisible());
+    QVERIFY(window.statusBar()->isVisible());
+    tabs->setCurrentIndex(1);
+    window.resize(1200, 800); QTest::qWait(150);
+    QVERIFY(captureDrawing("qt-topo-drawing-compact.png"));
+    ApplyQtAppearance(*qApp, true); QTest::qWait(100);
+    QVERIFY(captureDrawing("qt-topo-light.png"));
+    const auto light = tree->grab().toImage();
+    amberPixels = 0;
+    for (int y = light.height() * 2 / 3; y < light.height(); ++y)
+      for (int x = 0; x < light.width(); ++x) {
+        const auto c = light.pixelColor(x, y);
+        amberPixels += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QCOMPARE(amberPixels, 0);
+  }
 
   void layoutManagerCreatesAndSwitchesLayoutAndHonorsReadOnly() {
     EditorWindow window;
@@ -1780,26 +1884,21 @@ private Q_SLOTS:
     QVERIFY(projectTiles);
     QVERIFY(projectTiles->layout());
     QVERIFY(!window.findChild<QScrollArea*>("startScreenScrollArea"));
-    QVERIFY(window.findChild<QPushButton*>("newProjectButton"));
-    QVERIFY(window.findChild<QPushButton*>("openProjectButton"));
+    QVERIFY(window.findChild<QPushButton*>("startNewProject"));
+    QVERIFY(window.findChild<QPushButton*>("startOpenProject"));
     auto* gridMode = window.findChild<QToolButton*>("recentGridMode");
     auto* listMode = window.findChild<QToolButton*>("recentListMode");
     QVERIFY(gridMode);
     QVERIFY(listMode);
-    QVERIFY(gridMode->isChecked());
+    QVERIFY(listMode->isChecked());
     listMode->click();
     QVERIFY(listMode->isChecked());
     QVERIFY(!gridMode->isChecked());
     gridMode->click();
     QVERIFY(gridMode->isChecked());
-    auto* signedIn = window.findChild<QWidget*>("startSignedInAccount");
-    QVERIFY(signedIn);
-    window.State().authSignedIn = true;
-    window.State().authEmail = "survey@example.com";
-    window.Refresh();
-    QVERIFY(!signedIn->isHidden());
-    QCOMPARE(window.findChild<QLabel*>("startAccountWelcome")->text(), QString("Welcome Survey!"));
-    QCOMPARE(window.findChild<QLabel*>("startAccountEmail")->text(), QString("survey@example.com"));
+    QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
+    QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
+    QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
 
     window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;

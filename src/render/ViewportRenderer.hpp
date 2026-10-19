@@ -29,6 +29,10 @@ struct RenderTuning {
   float bgR = 0.f;                  ///< Display → Window Elements: viewport background (clear) color. Default black preserves prior behavior.
   float bgG = 0.f;
   float bgB = 0.f;
+  float gridR = 0.14f;               ///< Qt Dark may tint the drafting grid; other callers keep the legacy gray.
+  float gridG = 0.14f;
+  float gridB = 0.15f;
+  float gridA = 0.28f;
   /// REQ-064. Defaulting to Wireframe2D is what keeps every existing call site — and the pixel
   /// output it produces — unchanged: that style takes the same depth-off path as before.
   VisualStyle visualStyle = VisualStyle::Wireframe2D;

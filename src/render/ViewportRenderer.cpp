@@ -1664,7 +1664,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform4f(locCol, 0.14f, 0.14f, 0.15f, 0.28f);
+    glUniform4f(locCol, tuning.gridR, tuning.gridG, tuning.gridB, tuning.gridA);
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
     glBindVertexArray(0);

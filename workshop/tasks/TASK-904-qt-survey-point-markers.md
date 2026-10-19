@@ -26,7 +26,7 @@ controls as the accepted Qt parity target, preserving their existing state,
 validation, persistence, cancellation, undo and read-only behavior where applicable.
 No new marker shapes or new filtering behavior are proposed.
 
-User resolved the gap: “Yes. Full Qt port”. REQ-428 and D-2026-10-18-e record
+User resolved the gap: “Yes. Full Qt port”. REQ-428 and D-2026-10-18-f record
 the decision. Plan verified: UI uses existing state, label services and preference IO;
 no new dependency, ownership model or format. The existing live-edit/Close behavior
 is retained; geometry undo and coordinate storage remain unchanged.
