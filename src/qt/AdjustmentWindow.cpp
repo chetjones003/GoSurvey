@@ -35,6 +35,8 @@
 #include <QDoubleSpinBox>
 #include <QDebug>
 #include <QDialogButtonBox>
+#include <QScrollArea>
+#include <QSpinBox>
 #include <QColor>
 #include <QLabel>
 #include <QListWidget>
@@ -120,7 +122,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   toolbar->setMovable(false);
   toolbar->addAction(QIcon(QtAsset("icons/Open.png")), "Import observations...", this, [this] { Import(); });
   toolbar->addAction(QIcon(QtAsset("icons/Save.png")), "Save", this, [this] { Save(); });
-  toolbar->addAction("Settings...", this, [this] { EditWeights(); });
+  toolbar->addAction("Settings", this, [this] { ShowSettings(); });
   toolbar->addSeparator();
   m_RunAction = toolbar->addAction(QIcon(QtAsset("icons/Adjust.png")), "Run adjustment", this, [this] { Calculate(); });
   m_RunAction->setShortcut(QKeySequence(Qt::Key_F5));
@@ -142,7 +144,10 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   file->addAction("Export report...", this, [this] { ExportReport(); });
   auto* splitter = new QSplitter(this);
   // REQ-431: left panel (Files, Summary, plan preview) | command editor | results.
-  auto* left = new QWidget(splitter);
+  auto* contextTabs = new QTabWidget(splitter);
+  contextTabs->setObjectName("adjustmentContextTabs");
+  m_ContextTabs = contextTabs;
+  auto* left = new QWidget(contextTabs);
   left->setObjectName("adjustmentLeftPanel");
   auto* leftLayout = new QVBoxLayout(left);
   leftLayout->setContentsMargins(4, 4, 4, 4);
@@ -192,11 +197,43 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(state.traverseData, state.traverseLsaWeights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   auto* results = new QTabWidget(splitter);
-  m_Output = new QPlainTextEdit(results);
+  results->setObjectName("adjustmentResults");
+  auto* reportPage = new QWidget(results);
+  auto* reportLayout = new QVBoxLayout(reportPage);
+  reportLayout->setContentsMargins(0, 0, 0, 0);
+  auto* reportActions = new QHBoxLayout();
+  reportActions->addWidget(new QLabel("Adjustment report", reportPage));
+  reportActions->addStretch(1);
+  auto* exportTxt = new QPushButton("Export TXT…", reportPage);
+  exportTxt->setObjectName("issue915ExportTxt");
+  auto* exportRtf = new QPushButton("Export RTF…", reportPage);
+  exportRtf->setObjectName("issue915ExportRtf");
+  auto* exportPdf = new QPushButton("Export PDF…", reportPage);
+  exportPdf->setObjectName("issue915ExportPdf");
+  reportActions->addWidget(exportTxt);
+  reportActions->addWidget(exportRtf);
+  reportActions->addWidget(exportPdf);
+  reportLayout->addLayout(reportActions);
+  auto* reportSplit = new QSplitter(Qt::Horizontal, reportPage);
+  m_Output = new QPlainTextEdit(reportSplit);
   m_Output->setObjectName("adjustmentOutput");
   m_Output->setReadOnly(true);
+  m_Output->setLineWrapMode(QPlainTextEdit::NoWrap);
   m_Output->setFont(QFont("Consolas", 10));
   m_Output->setPlainText("Import observations or enter GoSurvey traverse commands, then run adjustment.");
+  m_ResultPlan = new AdjustmentPlanView(reportSplit);
+  m_ResultPlan->setObjectName("adjustmentResultPlan");
+  m_ResultPlan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawingInsUnits)));
+  reportSplit->addWidget(m_Output);
+  reportSplit->addWidget(m_ResultPlan);
+  reportSplit->setSizes({720, 240});
+  reportSplit->setStretchFactor(0, 3);
+  reportSplit->setStretchFactor(1, 1);
+  reportLayout->addWidget(reportSplit, 1);
+  results->addTab(reportPage, "Report & plot");
+  connect(exportTxt, &QPushButton::clicked, this, [this] { ExportReportAs("txt"); });
+  connect(exportRtf, &QPushButton::clicked, this, [this] { ExportReportAs("rtf"); });
+  connect(exportPdf, &QPushButton::clicked, this, [this] { ExportReportAs("pdf"); });
   m_Coordinates = new QTableWidget(results);
   m_Coordinates->setObjectName("adjustmentCoordinates");
   m_Coordinates->setColumnCount(4);
@@ -209,7 +246,6 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
   }
-  results->addTab(m_Output, "Output");
   results->addTab(m_Coordinates, "Adjusted coordinates");
   auto* residualsPage = new QWidget(results);
   auto* residualsLayout = new QVBoxLayout(residualsPage);
@@ -220,8 +256,81 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   residualsLayout->addWidget(m_ResidualNote);
   residualsLayout->addWidget(m_Residuals, 1);
   results->addTab(residualsPage, "Residuals");
-  splitter->insertWidget(0, left);
-  splitter->setSizes({300, 520, 480});
+  contextTabs->addTab(left, "Session");
+  auto* settingsScroll = new QScrollArea(contextTabs);
+  settingsScroll->setObjectName("adjustmentSettingsPane");
+  settingsScroll->setWidgetResizable(true);
+  auto* settingsPage = new QWidget(settingsScroll);
+  auto* settingsLayout = new QVBoxLayout(settingsPage);
+  settingsLayout->setContentsMargins(8, 8, 8, 8);
+  m_SettingsStatus = new QLabel(settingsPage);
+  m_SettingsStatus->setObjectName("issue915SettingsStatus");
+  m_SettingsStatus->setWordWrap(true);
+  m_SettingsStatus->setMinimumHeight(42);
+  settingsLayout->addWidget(m_SettingsStatus);
+  auto* projectOptions = new QGroupBox("Project options", settingsPage);
+  auto* projectForm = new QFormLayout(projectOptions);
+  m_SettingsAdjustmentType = new QComboBox(projectOptions);
+  m_SettingsAdjustmentType->setObjectName("issue915AdjustmentType");
+  m_SettingsAdjustmentType->addItems({"2D", "3D"});
+  projectForm->addRow("Adjustment type", m_SettingsAdjustmentType);
+  m_SettingsMaxIterations = new QSpinBox(projectOptions);
+  m_SettingsMaxIterations->setObjectName("issue915MaxIterations");
+  m_SettingsMaxIterations->setRange(1, std::numeric_limits<int>::max());
+  projectForm->addRow("Maximum iterations", m_SettingsMaxIterations);
+  auto* convergence = new QDoubleSpinBox(projectOptions);
+  convergence->setObjectName("issue915ConvergenceLimit");
+  convergence->setDecimals(12); convergence->setRange(1.e-12, 1.0);
+  projectForm->addRow("Convergence limit", convergence);
+  auto* refraction = new QDoubleSpinBox(projectOptions);
+  refraction->setObjectName("issue915RefractionCoefficient");
+  refraction->setDecimals(6); refraction->setRange(0.0, 1.0);
+  projectForm->addRow("Coefficient of refraction", refraction);
+  settingsLayout->addWidget(projectOptions);
+  auto* instrumentOptions = new QGroupBox("Instrument standard errors", settingsPage);
+  auto* instrumentForm = new QFormLayout(instrumentOptions);
+  struct SettingsField { const char* name; const char* label; double LsaWeights::* member; double minimum; double maximum; int decimals; bool linear; };
+  const SettingsField settingsFields[] = {
+      {"issue915DistanceConstant", "Distance constant", &LsaWeights::sigmaDistConstFt, 0.000001, 1000, 6, true},
+      {"issue915DistancePpm", "Distance ppm", &LsaWeights::sigmaDistPpm, 0, 100000, 4, false},
+      {"issue915AngleSigma", "Angle (arc-seconds)", &LsaWeights::sigmaAngleSec, 0.000001, 3600, 4, false},
+      {"issue915AzimuthSigma", "Azimuth / bearing (arc-seconds)", &LsaWeights::sigmaAzimuthSec, 0.000001, 3600, 4, false},
+      {"issue915ZenithSigma", "Zenith (arc-seconds)", &LsaWeights::sigmaZenithSec, 0.000001, 3600, 4, false},
+      {"issue915ElevationConstant", "Elevation constant", &LsaWeights::sigmaVertConstFt, 0.000001, 1000, 6, true},
+      {"issue915ElevationPpm", "Elevation ppm", &LsaWeights::sigmaVertPpm, 0, 100000, 4, false},
+      {"issue915LevelSigma", "Differential level run", &LsaWeights::sigmaLevelFt, 0.000001, 1000, 6, true},
+      {"issue915InstrumentCentering", "Instrument centering", &LsaWeights::centeringInstrumentFt, 0, 1000, 6, true},
+      {"issue915TargetCentering", "Target centering", &LsaWeights::centeringTargetFt, 0, 1000, 6, true},
+      {"issue915VerticalCentering", "Vertical centering", &LsaWeights::centeringVerticalFt, 0, 1000, 6, true},
+  };
+  for (const auto& field : settingsFields) {
+    auto* editor = new QDoubleSpinBox(instrumentOptions);
+    editor->setObjectName(field.name);
+    editor->setDecimals(field.decimals);
+    editor->setRange(field.minimum, field.maximum);
+    QString label = QString::fromUtf8(field.label);
+    if (field.linear) label += " (" + UnitSuffix() + ")";
+    instrumentForm->addRow(label, editor);
+    m_SettingsWeightEditors.push_back(editor);
+  }
+  settingsLayout->addWidget(instrumentOptions);
+  auto* settingsButtons = new QHBoxLayout();
+  settingsButtons->addStretch(1);
+  auto* discardSettings = new QPushButton("Discard edits", settingsPage);
+  discardSettings->setObjectName("issue915DiscardSettings");
+  auto* applySettings = new QPushButton("Apply settings", settingsPage);
+  applySettings->setObjectName("issue915ApplySettings");
+  settingsButtons->addWidget(discardSettings);
+  settingsButtons->addWidget(applySettings);
+  settingsLayout->addLayout(settingsButtons);
+  settingsLayout->addStretch(1);
+  settingsScroll->setWidget(settingsPage);
+  contextTabs->addTab(settingsScroll, "Settings");
+  connect(discardSettings, &QPushButton::clicked, this, [this] { ResetSettingsDraft(); });
+  connect(applySettings, &QPushButton::clicked, this, [this] { ApplySettingsDraft(); });
+  ResetSettingsDraft();
+  splitter->insertWidget(0, contextTabs);
+  splitter->setSizes({430, 400, 600});
   splitter->setStretchFactor(1, 1);
   auto* central = new QWidget(this);
   auto* centralLayout = new QVBoxLayout(central);
@@ -241,6 +350,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   const auto palette = AdjustmentPalette(QApplication::palette().color(QPalette::Window).lightness() < 128);
   m_Editor->SetPalette(palette);
   m_Plan->SetPalette(palette);
+  m_ResultPlan->SetPalette(palette);
   m_Poll = new QTimer(this);
   // Results are derived and tied to a particular drawing/session. Reopening the
   // editor requires a fresh solve before accepting or committing them.
@@ -291,6 +401,7 @@ void AdjustmentWindow::ValidateNow() {
 void AdjustmentWindow::RefreshPreview() {
   const bool current = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
   m_Plan->SetTraverse(m_PreviewData, current ? &m_State.traverseLsaResult : nullptr);
+  m_ResultPlan->SetTraverse(m_PreviewData, current ? &m_State.traverseLsaResult : nullptr);
   RefreshFilesAndSummary();
 }
 
@@ -798,11 +909,15 @@ void AdjustmentWindow::closeEvent(QCloseEvent* event) {
 
 void AdjustmentWindow::SetBusy(bool busy) {
   m_Editor->setReadOnly(busy);
+  if (auto* apply = findChild<QPushButton*>("issue915ApplySettings")) apply->setEnabled(!busy);
+  if (auto* discard = findChild<QPushButton*>("issue915DiscardSettings")) discard->setEnabled(!busy);
   m_RunAction->setEnabled(!busy);
   m_StopAction->setEnabled(busy && m_CancelRequested && !m_CancelRequested->load(std::memory_order_acquire));
   const bool solved = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
   m_AcceptAction->setEnabled(!busy && solved && !m_State.traverseLsaAccepted);
   m_CommitAction->setEnabled(!busy && solved);
+  for (const char* name : {"issue915ExportTxt", "issue915ExportRtf", "issue915ExportPdf"})
+    if (auto* exportButton = findChild<QPushButton*>(name)) exportButton->setEnabled(!busy && solved);
 }
 
 bool AdjustmentWindow::AcceptResult(QString& error) {
@@ -849,52 +964,93 @@ void AdjustmentWindow::ExportReport() {
       "Text report (*.txt);;Rich text (*.rtf);;PDF (*.pdf)", &filter);
   if (path.isEmpty()) return;
   if (QFileInfo(path).suffix().isEmpty()) path += filter.contains("pdf") ? ".pdf" : filter.contains("rtf") ? ".rtf" : ".txt";
-  const auto report = traverserpt::BuildReportText(m_Data, m_Weights, m_State.traverseLsaResult, "",
-      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits));
-  std::string error;
-  const auto utf8 = path.toUtf8().toStdString();
-  const auto suffix = QFileInfo(path).suffix().toLower();
-  const bool ok = suffix == "pdf" ? traverserpt::ExportReportPdf(utf8, report, error) :
-      suffix == "rtf" ? traverserpt::ExportReportRtf(utf8, report, error) : traverserpt::ExportReportTxt(utf8, report, error);
-  if (!ok) QMessageBox::warning(this, "Export report", QString::fromUtf8(error.c_str()));
+  QString error;
+  if (!ExportReportFile(path, error)) QMessageBox::warning(this, "Export report", error);
 }
 
-void AdjustmentWindow::EditWeights() {
+bool AdjustmentWindow::ExportReportFile(const QString& path, QString& error) {
+  if (IsBusy() || !m_State.traverseLsaComputed || !m_State.traverseLsaResult.ok) {
+    error = "Run a successful adjustment before exporting its report.";
+    return false;
+  }
+  const auto report = traverserpt::BuildReportText(m_Data, m_Weights, m_State.traverseLsaResult, "",
+      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits));
+  const auto utf8 = path.toUtf8().toStdString();
+  const auto suffix = QFileInfo(path).suffix().toLower();
+  std::string reason;
+  const bool ok = suffix == "pdf" ? traverserpt::ExportReportPdf(utf8, report, reason) :
+      suffix == "rtf" ? traverserpt::ExportReportRtf(utf8, report, reason) :
+      suffix == "txt" ? traverserpt::ExportReportTxt(utf8, report, reason) : false;
+  if (!ok) {
+    error = reason.empty() ? "Choose a .txt, .rtf, or .pdf report file." : QString::fromUtf8(reason.c_str());
+    return false;
+  }
+  return true;
+}
+
+void AdjustmentWindow::ExportReportAs(const QString& extension) {
+  if (IsBusy() || !m_State.traverseLsaComputed || !m_State.traverseLsaResult.ok) {
+    QMessageBox::information(this, "Export report", "Run a successful adjustment first.");
+    return;
+  }
+  const QString ext = extension.toLower();
+  const QString filter = ext == "pdf" ? "PDF report (*.pdf)" :
+      ext == "rtf" ? "Rich text report (*.rtf)" : "Text report (*.txt)";
+  QString path = QFileDialog::getSaveFileName(this, "Export " + ext.toUpper() + " report", {}, filter);
+  if (path.isEmpty()) return;
+  if (QFileInfo(path).suffix().isEmpty()) path += "." + ext;
+  QString error;
+  if (!ExportReportFile(path, error)) QMessageBox::warning(this, "Export report", error);
+}
+
+void AdjustmentWindow::ShowSettings() {
+  if (m_ContextTabs) m_ContextTabs->setCurrentIndex(1);
+}
+
+void AdjustmentWindow::ResetSettingsDraft() {
+  constexpr double LsaWeights::* members[] = {
+      &LsaWeights::sigmaDistConstFt, &LsaWeights::sigmaDistPpm, &LsaWeights::sigmaAngleSec,
+      &LsaWeights::sigmaAzimuthSec, &LsaWeights::sigmaZenithSec, &LsaWeights::sigmaVertConstFt,
+      &LsaWeights::sigmaVertPpm, &LsaWeights::sigmaLevelFt, &LsaWeights::centeringInstrumentFt,
+      &LsaWeights::centeringTargetFt, &LsaWeights::centeringVerticalFt};
+  for (std::size_t i = 0; i < m_SettingsWeightEditors.size(); ++i)
+    m_SettingsWeightEditors[i]->setValue(m_Weights.*members[i]);
+  if (m_SettingsAdjustmentType) m_SettingsAdjustmentType->setCurrentIndex(m_Weights.adjustmentIs3D ? 1 : 0);
+  if (m_SettingsMaxIterations) m_SettingsMaxIterations->setValue(m_Weights.maxIterations);
+  if (auto* editor = findChild<QDoubleSpinBox*>("issue915ConvergenceLimit")) editor->setValue(m_Weights.convergenceLimit);
+  if (auto* editor = findChild<QDoubleSpinBox*>("issue915RefractionCoefficient")) editor->setValue(m_Weights.refractionCoefficient);
+  if (m_SettingsStatus) m_SettingsStatus->clear();
+}
+
+void AdjustmentWindow::ApplySettingsDraft() {
   if (IsBusy()) return;
   QString error;
-  if (!ParseEditor(error)) { QMessageBox::warning(this, "Settings", error); return; }
-  QDialog dialog(this);
-  dialog.setWindowTitle("Instrument / Adjustment Settings");
-  auto* layout = new QFormLayout(&dialog);
-  struct Field { const char* label; double LsaWeights::* member; double minimum; double maximum; };
-  const Field fields[] = {{"Angle sigma (arcsec)", &LsaWeights::sigmaAngleSec, 0.000001, 3600},
-      {"Distance sigma (drawing units)", &LsaWeights::sigmaDistConstFt, 0.000001, 1000},
-      {"Distance sigma (ppm)", &LsaWeights::sigmaDistPpm, 0, 100000},
-      {"Vertical sigma (drawing units)", &LsaWeights::sigmaVertConstFt, 0.000001, 1000},
-      {"Vertical sigma (ppm)", &LsaWeights::sigmaVertPpm, 0, 100000},
-      {"Azimuth sigma (arcsec)", &LsaWeights::sigmaAzimuthSec, 0.000001, 3600},
-      {"Zenith sigma (arcsec)", &LsaWeights::sigmaZenithSec, 0.000001, 3600},
-      {"Level sigma (drawing units)", &LsaWeights::sigmaLevelFt, 0.000001, 1000},
-      {"Instrument centering (drawing units)", &LsaWeights::centeringInstrumentFt, 0, 1000},
-      {"Target centering (drawing units)", &LsaWeights::centeringTargetFt, 0, 1000},
-      {"Vertical centering (drawing units)", &LsaWeights::centeringVerticalFt, 0, 1000},
-      {"Refraction coefficient", &LsaWeights::refractionCoefficient, 0, 1},
-      {"Convergence limit", &LsaWeights::convergenceLimit, 1.e-12, 1}};
-  std::vector<QDoubleSpinBox*> editors;
-  for (const auto& field : fields) {
-    auto* editor = new QDoubleSpinBox(&dialog);
-    editor->setDecimals(12); editor->setRange(field.minimum, field.maximum); editor->setValue(m_Weights.*field.member);
-    layout->addRow(QString(field.label).replace("drawing units", UnitSuffix()), editor); editors.push_back(editor);
+  if (!ParseEditor(error)) {
+    m_SettingsStatus->setText("Settings were not applied: " + error);
+    return;
   }
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  layout->addRow(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  if (dialog.exec() != QDialog::Accepted) return;
-  for (std::size_t i = 0; i < editors.size(); ++i) m_Weights.*fields[i].member = editors[i]->value();
+  constexpr double LsaWeights::* members[] = {
+      &LsaWeights::sigmaDistConstFt, &LsaWeights::sigmaDistPpm, &LsaWeights::sigmaAngleSec,
+      &LsaWeights::sigmaAzimuthSec, &LsaWeights::sigmaZenithSec, &LsaWeights::sigmaVertConstFt,
+      &LsaWeights::sigmaVertPpm, &LsaWeights::sigmaLevelFt, &LsaWeights::centeringInstrumentFt,
+      &LsaWeights::centeringTargetFt, &LsaWeights::centeringVerticalFt};
+  for (std::size_t i = 0; i < m_SettingsWeightEditors.size(); ++i)
+    m_Weights.*members[i] = m_SettingsWeightEditors[i]->value();
+  m_Weights.adjustmentIs3D = m_SettingsAdjustmentType->currentIndex() == 1;
+  m_Weights.maxIterations = m_SettingsMaxIterations->value();
+  m_Weights.convergenceLimit = findChild<QDoubleSpinBox*>("issue915ConvergenceLimit")->value();
+  m_Weights.refractionCoefficient = findChild<QDoubleSpinBox*>("issue915RefractionCoefficient")->value();
+  m_State.traverseData = m_Data;
+  m_State.traverseLsaWeights = m_Weights;
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(m_Data, m_Weights).c_str()));
-  m_SourceText = m_Editor->toPlainText(); m_Imported = true;
-  m_State.traverseLsaComputed = false; SetBusy(false); setWindowModified(true);
+  m_SourceText = m_Editor->toPlainText();
+  m_Imported = true;
+  InvalidateResult();
+  SetBusy(false);
+  setWindowModified(true);
+  m_SettingsStatus->setText("Settings applied. Save .gstrav to keep them.");
+  m_Output->setPlainText("Settings changed. Run the adjustment to update the report and plot.");
+  RefreshPreview();
 }
 
 bool AdjustmentWindow::RunSmokeChecks(QString& error) {

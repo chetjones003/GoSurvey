@@ -2791,22 +2791,142 @@ private Q_SLOTS:
     QVERIFY(warning->isHidden());
   }
 
-  void issue911SettingsDialogLabelsDistancesInTheDrawingUnit() {
+  void issue915SettingsPaneLabelsLinearValuesInTheDrawingUnit() {
     auto state = StateWithTraverse();
     state->drawingInsUnits = 6;
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
-    QString labels;
-    QTimer::singleShot(100, [&] {
-      for (auto* widget : QApplication::topLevelWidgets())
-        if (widget->windowTitle() == "Instrument / Adjustment Settings") {
-          for (auto* label : widget->findChildren<QLabel*>()) labels += label->text() + "\n";
-          static_cast<QDialog*>(widget)->reject();
-        }
-    });
-    Action(window, "Settings...")->trigger();
-    QVERIFY2(labels.contains("Distance sigma (m)"), qPrintable(labels));
-    QVERIFY(!labels.contains("drawing units"));
+    Action(window, "Settings")->trigger();
+    auto* settings = window.findChild<QScrollArea*>("adjustmentSettingsPane");
+    QVERIFY(settings);
+    QVERIFY(window.findChild<QDoubleSpinBox*>("issue915DistanceConstant"));
+    QVERIFY(window.findChild<QDoubleSpinBox*>("issue915ElevationConstant"));
+    const auto labels = settings->findChildren<QLabel*>();
+    bool distanceUsesMeters = false;
+    for (const auto* label : labels) distanceUsesMeters |= label->text().contains("Distance constant (m)");
+    QVERIFY(distanceUsesMeters);
+    QVERIFY(window.findChild<QDoubleSpinBox*>("issue915DistanceConstant")->minimum() > 0.0);
+  }
+
+  void issue915SettingsApplyDiscardValidationAndSessionPersistence() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 6;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.resize(1280, 800);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
+    Action(window, "Settings")->trigger();
+    auto* type = window.findChild<QComboBox*>("issue915AdjustmentType");
+    auto* iterations = window.findChild<QSpinBox*>("issue915MaxIterations");
+    auto* distancePpm = window.findChild<QDoubleSpinBox*>("issue915DistancePpm");
+    auto* centering = window.findChild<QDoubleSpinBox*>("issue915VerticalCentering");
+    auto* convergence = window.findChild<QDoubleSpinBox*>("issue915ConvergenceLimit");
+    auto* refraction = window.findChild<QDoubleSpinBox*>("issue915RefractionCoefficient");
+    auto* status = window.findChild<QLabel*>("issue915SettingsStatus");
+    QVERIFY(type); QVERIFY(iterations); QVERIFY(distancePpm); QVERIFY(centering); QVERIFY(convergence); QVERIFY(refraction); QVERIFY(status);
+    auto* contextTabs = window.findChild<QTabWidget*>("adjustmentContextTabs");
+    QVERIFY(contextTabs);
+    QVERIFY(contextTabs->grab().save(Issue914Shot("qt-915-settings-pane.png")));
+
+    const LsaWeights original = state->traverseLsaWeights;
+    distancePpm->setValue(12.5);
+    window.findChild<QPushButton*>("issue915DiscardSettings")->click();
+    QCOMPARE(distancePpm->value(), original.sigmaDistPpm);
+    QCOMPARE(state->traverseLsaWeights.sigmaDistPpm, original.sigmaDistPpm);
+
+    const auto validText = window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText();
+    window.findChild<QPlainTextEdit*>("adjustmentCommands")->setPlainText("NOT_A_COMMAND 1 2");
+    distancePpm->setValue(12.5);
+    window.findChild<QPushButton*>("issue915ApplySettings")->click();
+    QVERIFY(status->text().contains("Settings were not applied"));
+    QCOMPARE(state->traverseLsaWeights.sigmaDistPpm, original.sigmaDistPpm);
+    QVERIFY(contextTabs->grab().save(Issue914Shot("qt-915-settings-validation-error.png")));
+    window.findChild<QPlainTextEdit*>("adjustmentCommands")->setPlainText(validText);
+
+    type->setCurrentIndex(1);
+    iterations->setValue(24);
+    distancePpm->setValue(12.5);
+    centering->setValue(.035);
+    convergence->setValue(5.e-8);
+    refraction->setValue(.21);
+    window.findChild<QPushButton*>("issue915ApplySettings")->click();
+    QVERIFY(status->text().contains("Save .gstrav"));
+    QCOMPARE(state->traverseLsaWeights.adjustmentIs3D, true);
+    QCOMPARE(state->traverseLsaWeights.maxIterations, 24);
+    QCOMPARE(state->traverseLsaWeights.sigmaDistPpm, 12.5);
+    QCOMPARE(state->traverseLsaWeights.centeringVerticalFt, .035);
+    QCOMPARE(state->traverseLsaWeights.convergenceLimit, 5.e-8);
+    QCOMPARE(state->traverseLsaWeights.refractionCoefficient, .21);
+    QVERIFY(!state->traverseLsaComputed);
+    QVERIFY(contextTabs->grab().save(Issue914Shot("qt-915-settings-applied.png")));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const auto path = directory.filePath("adjustment.gstrav");
+    QVERIFY2(window.SaveFile(path, error), qPrintable(error));
+    TraverseData loaded;
+    LsaWeights loadedWeights;
+    std::string reason;
+    QVERIFY2(traverseio::Load(path.toUtf8().toStdString(), loaded, loadedWeights, reason), reason.c_str());
+    QCOMPARE(loadedWeights.adjustmentIs3D, true);
+    QCOMPARE(loadedWeights.maxIterations, 24);
+    QCOMPARE(loadedWeights.sigmaDistPpm, 12.5);
+    QCOMPARE(loadedWeights.centeringVerticalFt, .035);
+    QCOMPARE(loadedWeights.convergenceLimit, 5.e-8);
+    QCOMPARE(loadedWeights.refractionCoefficient, .21);
+  }
+
+  void issue915ReportExportsAndStationPlotFollowSuccessfulAdjustment() {
+    auto state = StateWithTraverse();
+    state->traverseData.importedFiles = {"survey-a.dat", "survey-b.rw5"};
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.resize(1280, 800);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
+    SolveAdjustment(window);
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* plotWidget = window.findChild<QWidget*>("adjustmentResultPlan");
+    auto* plot = static_cast<AdjustmentPlanView*>(plotWidget);
+    auto* results = window.findChild<QTabWidget*>("adjustmentResults");
+    QVERIFY(output); QVERIFY(plotWidget); QVERIFY(plot); QVERIFY(results);
+    QVERIFY(state->traverseLsaResult.ok);
+    QVERIFY(output->toPlainText().contains("survey-a.dat"));
+    const auto text = output->toPlainText();
+    const qsizetype filesAt = text.indexOf("Data File List:");
+    const qsizetype optionsAt = text.indexOf("Project Option Settings");
+    const qsizetype errorsAt = text.indexOf("Instrument Standard Error Settings");
+    const qsizetype residualsAt = text.indexOf("Measurement Residuals");
+    QVERIFY(filesAt >= 0 && filesAt < optionsAt && optionsAt < errorsAt && errorsAt < residualsAt);
+    QCOMPARE(plot->StationCount(), 4);
+    QCOMPARE(plot->LegCount(), 4);
+    QVERIFY(plot->EllipseCount() > 0);
+    QVERIFY(results->grab().save(Issue914Shot("qt-915-report-and-plot.png")));
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString error;
+    const QString txtPath = directory.filePath("adjustment.txt");
+    const QString rtfPath = directory.filePath("adjustment.rtf");
+    const QString pdfPath = directory.filePath("adjustment.pdf");
+    QVERIFY2(window.ExportReportFile(txtPath, error), qPrintable(error));
+    QVERIFY2(window.ExportReportFile(rtfPath, error), qPrintable(error));
+    QVERIFY2(window.ExportReportFile(pdfPath, error), qPrintable(error));
+    QFile txt(txtPath), rtf(rtfPath), pdf(pdfPath);
+    QVERIFY(txt.open(QIODevice::ReadOnly));
+    QVERIFY(rtf.open(QIODevice::ReadOnly));
+    QVERIFY(pdf.open(QIODevice::ReadOnly));
+    QCOMPARE(txt.readAll(), text.toUtf8());
+    QVERIFY(rtf.readAll().startsWith("{\\rtf"));
+    QVERIFY(pdf.readAll().startsWith("%PDF-"));
+
+    const QString beforeFailure = output->toPlainText();
+    QVERIFY(!window.ExportReportFile(directory.filePath("missing/report.txt"), error));
+    QVERIFY(!error.isEmpty());
+    QCOMPARE(output->toPlainText(), beforeFailure);
+    QVERIFY(state->traverseLsaComputed);
   }
 
   // Issue #911: screenshots of the chosen layout (options bar under the toolbar) for review; they are
