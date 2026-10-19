@@ -218,30 +218,6 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 }
 #endif
 
-// REQ-363 / ADR-064 — the online map's platform hooks: where tiles are cached and how one is fetched
-// (WinHTTP, on the tile service's worker threads). Texture upload is the renderer's.
-//
-// The cache is under LOCAL app data, not the roaming UserDataDirectory(): up to 500 MB of tiles
-// must not travel with a roaming profile.
-static std::filesystem::path MapTileCacheDirectory()
-{
-#ifdef _WIN32
-  wchar_t local[MAX_PATH];
-  if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, MAX_PATH) > 0)
-    return std::filesystem::path(local) / "GoSurvey" / "MapTiles";
-#endif
-  const std::filesystem::path dir = UserDataDirectory();
-  return dir.empty() ? dir : dir / "MapTiles";
-}
-
-static MapTileStatus FetchMapTileOverWinHttp(const std::string &url, std::string &body, std::string &error)
-{
-  int status = 0;
-  if (HttpGetString(url, 10000, body, error, std::string(), &status))  // also bounds the exit wait
-    return MapTileStatus::Ok;
-  return status == 404 ? MapTileStatus::NotFound : MapTileStatus::Failed;
-}
-
 // GitHub issue #168 — append one diagnostic line per stall episode to
 // `%APPDATA%\GoSurvey\frame-watch.log`. Written to a file, not the command line, for the same reason
 // BENCH is (CadCommands_Bench.cpp): a stall that forces a kill of the app takes the scrollback with

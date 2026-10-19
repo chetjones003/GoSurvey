@@ -3,6 +3,7 @@
 #include "QtAppearance.hpp"
 #include "TopographicArtwork.hpp"
 #include <QActionGroup>
+#include <QScrollArea>
 #include <QTreeWidgetItemIterator>
 #include <QSet>
 #include <QStyle>
@@ -33,6 +34,7 @@
 #include "ProjectFiles.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"
+#include "util/PlotScales.hpp"
 #include "MtextRichFormat.hpp"
 #include "Version.hpp"
 #include <QAction>
@@ -48,6 +50,10 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGroupBox>
+#include <QFormLayout>
+#include <QDoubleSpinBox>
+#include <QCheckBox>
+#include <QRadioButton>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QImage>
@@ -61,6 +67,8 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QProgressBar>
+#include <QRadioButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -659,6 +667,7 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
+  m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
   };
@@ -670,6 +679,21 @@ EditorWindow::EditorWindow() {
   modelLayout->addWidget(m_Viewport, 1);
   m_Pages->addWidget(modelPage);
   centerLayout->addWidget(m_Pages, 1);
+  auto* spaceBar = new QWidget(center);
+  spaceBar->setObjectName("paperSpaceBar");
+  auto* spaceRow = new QHBoxLayout(spaceBar);
+  spaceRow->setContentsMargins(6, 2, 6, 2);
+  spaceRow->setSpacing(4);
+  m_SpaceTabs = new QTabBar(spaceBar);
+  m_SpaceTabs->setObjectName("paperSpaceTabs");
+  m_SpaceTabs->setExpanding(false);
+  m_SpaceTabs->setContextMenuPolicy(Qt::CustomContextMenu);
+  spaceRow->addWidget(m_SpaceTabs, 1);
+  auto* manageLayouts = new QToolButton(spaceBar);
+  manageLayouts->setObjectName("manageLayoutsButton");
+  manageLayouts->setText("Manage layouts…");
+  spaceRow->addWidget(manageLayouts);
+  centerLayout->addWidget(spaceBar);
   setCentralWidget(center);
   BuildRibbon();
   BuildDocks();
@@ -709,6 +733,40 @@ EditorWindow::EditorWindow() {
   service->start();
   connect(m_Tabs, &QTabBar::currentChanged, this, [this](int index) { if (!m_Refreshing) SwitchDrawing(index); });
   connect(m_Tabs, &QTabBar::tabCloseRequested, this, [this](int index) { CloseDrawing(index); });
+  connect(m_SpaceTabs, &QTabBar::currentChanged, this, [this](int tab) {
+    if (m_Refreshing || tab < 0 || m_State.activeDrawingIdx == 0) return;
+    const int space = tab == 0 ? kModelSpaceIndex : tab - 1;
+    if (space != m_State.activeSpaceIndex) { SetActiveSpace(m_State, space); Refresh(); }
+  });
+  connect(m_SpaceTabs, &QTabBar::customContextMenuRequested, this, [this](const QPoint& pos) {
+    const int tab = m_SpaceTabs->tabAt(pos);
+    if (tab <= 0) return;
+    const int layoutIndex = tab - 1;
+    QMenu menu(this);
+    menu.addAction("Set Current", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); Refresh(); });
+    menu.addAction("Page Setup Manager…", this, [this, layoutIndex] { ShowPageSetupManager(layoutIndex); });
+    menu.addAction("Viewports…", this, [this, layoutIndex] { SetActiveSpace(m_State, layoutIndex); m_State.showViewportsWindow = true; Refresh(); });
+    menu.addSeparator();
+    menu.addAction("Rename…", this, [this, layoutIndex] {
+      if (ActiveDrawingReadOnly()) return;
+      bool ok = false;
+      const QString name = QInputDialog::getText(this, "Rename Layout", "Layout name:", QLineEdit::Normal,
+          QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str()), &ok).trimmed();
+      if (!ok || name.isEmpty()) return;
+      const auto before = m_Log.size();
+      HandleLayoutCommand("RENAME " + m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name + " " + name.toUtf8().toStdString(), m_State, m_Log);
+      if (m_Log.size() > before && m_Log.back().find("renamed") == std::string::npos) QMessageBox::warning(this, "Rename Layout", QString::fromUtf8(m_Log.back().c_str()));
+      Refresh();
+    });
+    menu.addAction("Delete", this, [this, layoutIndex] {
+      if (ActiveDrawingReadOnly() || layoutIndex >= static_cast<int>(m_State.paperLayouts.size())) return;
+      const QString name = QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str());
+      if (QMessageBox::question(this, "Delete Layout", "Delete layout “" + name + "”? This can be undone.") != QMessageBox::Yes) return;
+      DeletePaperLayout(m_State, layoutIndex); Refresh();
+    });
+    menu.exec(m_SpaceTabs->mapToGlobal(pos));
+  });
+  connect(manageLayouts, &QToolButton::clicked, this, &EditorWindow::ShowLayoutManager);
   QSettings settings;
   restoreGeometry(settings.value("editor/geometry").toByteArray());
   restoreState(settings.value("editor/layout").toByteArray(), 2);
@@ -881,6 +939,13 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
   file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
+  file->addAction(CommandAction("Project Health...", "settings.png", "PROJECTHEALTH"));
+  file->addAction(CommandAction("Refresh Project Files...", "Refresh.png", "REFRESH"));
+  file->addAction(CommandAction("Pack Project...", "Save.png", "PACKPROJECT"));
+  file->addAction(CommandAction("Open Packed Project...", "Open.png", "OPENPACK"));
+  file->addAction(CommandAction("Create Turnover...", "Active_File.png", "TURNOVER"));
+  file->addAction(CommandAction("Add PDF to project...", "Pdf.png", "ADDPDFTOPROJECT"));
+  file->addAction(CommandAction("Add Drawing to Project...", "Active_File.png", "ADDDRAWING"));
   file->addSeparator();
   file->addAction(CommandAction("PDF viewer...", "Pdf.png", "PDFVIEW"));
   file->addSeparator();
@@ -938,6 +1003,8 @@ void EditorWindow::BuildDocks() {
   m_Toolspace->setUniformRowHeights(true);
   m_Toolspace->setIndentation(14);
   m_Toolspace->setMinimumWidth(0);
+  m_Toolspace->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(m_Toolspace, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowToolspaceContextMenu(position); });
   auto* toolspaceTabs = new QTabWidget(this);
   toolspaceTabs->setObjectName("toolspaceTabs");
   toolspaceTabs->addTab(m_Toolspace, "Prospector");
@@ -952,75 +1019,71 @@ void EditorWindow::BuildDocks() {
   connect(settingsButton, &QPushButton::clicked, this, [this] { ShowSettings(); });
   toolspaceTabs->addTab(toolSettings, "Settings");
   auto* toolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
-  auto* propertyWidget = new QWidget(this);
-  auto* propertyLayout = new QVBoxLayout(propertyWidget);
-  propertyLayout->setContentsMargins(4, 4, 4, 4);
-  propertyLayout->setSpacing(3);
-  m_Layer = new QComboBox(propertyWidget);
-  m_Layer->setObjectName("selectionLayer");
-  m_Layer->setEditable(true);
-  auto* layerLabel = new QLabel("Layer", propertyWidget);
-  propertyLayout->addWidget(layerLabel);
-  propertyLayout->addWidget(m_Layer);
-  m_Properties = new TopographicTreeWidget(false, propertyWidget);
-  m_Properties->setObjectName("propertiesTree");
-  m_Properties->setHeaderLabels({"Property", "Value"});
-  m_Properties->header()->hide();
-  m_Properties->setRootIsDecorated(true);
-  m_Properties->setIndentation(12);
-  m_Properties->setUniformRowHeights(true);
-  m_Properties->setAlternatingRowColors(true);
-  m_Properties->header()->setSectionResizeMode(0, QHeaderView::Interactive);
-  m_Properties->header()->setSectionResizeMode(1, QHeaderView::Stretch);
-  m_Properties->setColumnWidth(0, 118);
-  propertyLayout->addWidget(m_Properties, 1);
-  auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, propertyWidget);
-  propertiesDock->setMinimumWidth(235);
-  toolspaceDock->setMinimumWidth(255);
-
-  auto* mapWidget = new TopographicMapPanel(this);
-  mapWidget->setObjectName("drawingMapPanel");
-  auto* mapLayout = new QVBoxLayout(mapWidget);
-  mapLayout->setContentsMargins(9, 8, 9, 9);
-  mapLayout->setSpacing(6);
-  auto* mapIntro = new QLabel("Choose a USGS base map for this drawing. Captured areas remain available offline.", mapWidget);
+  BuildPropertiesPanel();
+  auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
+  auto* mapPanel = new TopographicMapPanel(this);
+  mapPanel->setObjectName("mapTaskPanel");
+  auto* mapLayout = new QVBoxLayout(mapPanel);
+  mapLayout->setContentsMargins(10, 10, 10, 10);
+  auto* mapIntro = new QLabel("Choose a USGS base map for this drawing. Captured areas remain available offline.", mapPanel);
   mapIntro->setWordWrap(true);
   mapLayout->addWidget(mapIntro);
-  auto* mapProviderTitle = new QLabel("Map provider", mapWidget);
-  mapProviderTitle->setStyleSheet("font-weight:600;");
-  mapLayout->addWidget(mapProviderTitle);
-  auto* mapGroup = new QButtonGroup(mapWidget);
-  for (const auto& map : kOnlineMaps) {
-    auto* radio = new QRadioButton(QString::fromUtf8(map.label), mapWidget);
-    radio->setObjectName("onlineMap_" + QString::number(static_cast<int>(map.map)));
-    radio->setIcon(CadCommandIcon(QString::fromUtf8(map.icon)));
-    radio->setIconSize(QSize(25, 25));
-    mapGroup->addButton(radio, static_cast<int>(map.map));
-    mapLayout->addWidget(radio);
-    connect(radio, &QRadioButton::toggled, this, [this, radio, map] {
-      if (radio->isChecked()) RunRibbonAction("@map:" + QString::number(static_cast<int>(map.map)));
+  auto* providerTitle = new QLabel("Map provider", mapPanel);
+  providerTitle->setStyleSheet("font-weight:600;");
+  mapLayout->addWidget(providerTitle);
+  auto* providerGroup = new QButtonGroup(mapPanel);
+  providerGroup->setExclusive(true);
+  for (const auto& info : kOnlineMaps) {
+    auto* option = new QRadioButton(QString::fromUtf8(info.label), mapPanel);
+    option->setObjectName(QString("mapProvider_%1").arg(static_cast<int>(info.map)));
+    option->setIcon(CadCommandIcon(QString::fromUtf8(info.icon) + ".png"));
+    option->setIconSize(QSize(24, 24));
+    option->setMinimumHeight(34);
+    providerGroup->addButton(option, static_cast<int>(info.map));
+    mapLayout->addWidget(option);
+    connect(option, &QRadioButton::clicked, this, [this, info] {
+      SetOnlineMap(m_State, info.map, m_Log);
+      Refresh();
     });
   }
-  m_MapStatus = new QLabel(mapWidget);
-  m_MapStatus->setObjectName("drawingMapStatus");
-  mapLayout->addWidget(m_MapStatus);
-  auto addMapButton = [&](const QString& label, const QString& route, const QString& objectName) {
-    auto* button = new QPushButton(label, mapWidget);
-    button->setObjectName(objectName);
-    mapLayout->addWidget(button);
-    connect(button, &QPushButton::clicked, this, [this, route] { RunRibbonAction(route); });
-    return button;
-  };
-  auto* captureVisible = addMapButton("Capture visible map", "@captureViewport", "captureVisibleMap");
-  auto* pickArea = addMapButton("Pick area", "@captureArea", "captureMapArea");
-  auto* removeCaptures = addMapButton("Remove captured areas", "@removeCaptures", "removeCapturedAreas");
-  Q_UNUSED(captureVisible); Q_UNUSED(pickArea); Q_UNUSED(removeCaptures);
-  auto* mapDock = makeDock("Map", "mapDock", Qt::RightDockWidgetArea, mapWidget);
+  auto* mapAttribution = new QLabel("Map: USGS The National Map", mapPanel);
+  mapAttribution->setObjectName("mapAttribution");
+  mapAttribution->setWordWrap(true);
+  mapAttribution->setStyleSheet("color:#65727e;");
+  mapLayout->addWidget(mapAttribution);
+  auto* captureTitle = new QLabel("Capture area", mapPanel);
+  captureTitle->setStyleSheet("font-weight:600;");
+  mapLayout->addWidget(captureTitle);
+  auto* captureView = new QPushButton("Capture visible map", mapPanel);
+  captureView->setObjectName("mapCaptureVisible");
+  mapLayout->addWidget(captureView);
+  auto* capturePick = new QPushButton("Pick area", mapPanel);
+  capturePick->setObjectName("mapCapturePick");
+  mapLayout->addWidget(capturePick);
+  auto* removeCapture = new QPushButton("Remove captured areas", mapPanel);
+  removeCapture->setObjectName("mapRemoveCaptures");
+  mapLayout->addWidget(removeCapture);
+  auto* captureStatus = new QLabel(mapPanel);
+  captureStatus->setObjectName("mapCaptureStatus");
+  captureStatus->setWordWrap(true);
+  mapLayout->addWidget(captureStatus);
+  auto* captureProgress = new QProgressBar(mapPanel);
+  captureProgress->setObjectName("mapCaptureProgress");
+  captureProgress->setTextVisible(true);
+  mapLayout->addWidget(captureProgress);
+  mapLayout->addStretch(1);
+  auto* mapDock = makeDock("Map", "mapTaskDock", Qt::RightDockWidgetArea, mapPanel);
+  mapDock->setMinimumWidth(250);
   splitDockWidget(toolspaceDock, mapDock, Qt::Vertical);
   propertiesDock->raise();
-  connect(m_Layer, &QComboBox::textActivated, this, [this](const QString& layer) {
-    CadRibbonPickLayer(m_State, layer.toUtf8().toStdString(), m_Log);
-    Refresh();
+  connect(captureView, &QPushButton::clicked, this, [this] {
+    StartCaptureMapArea(m_State, false, m_Log); Refresh();
+  });
+  connect(capturePick, &QPushButton::clicked, this, [this] {
+    StartCaptureMapArea(m_State, true, m_Log); Refresh();
+  });
+  connect(removeCapture, &QPushButton::clicked, this, [this] {
+    RemoveCapturedMapAreas(m_State, m_Log); Refresh();
   });
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
@@ -1055,11 +1118,6 @@ void EditorWindow::BuildDocks() {
     const auto index = item->data(0, Qt::UserRole);
     if (index.isValid()) SwitchDrawing(index.toInt());
   });
-  connect(m_Properties, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* item, int column) {
-    if (m_Refreshing || column != 1) return;
-    if (item->text(0) == "Color") CadRibbonPickColor(m_State, item->text(1).toUtf8().toStdString(), m_Log);
-    Refresh();
-  });
 }
 
 void EditorWindow::Submit(const QString& command) {
@@ -1069,6 +1127,20 @@ void EditorWindow::Submit(const QString& command) {
     m_HistoryIndex = static_cast<int>(m_CommandHistory.size());
   }
   const QString verb = command.trimmed().toUpper();
+  if (verb == "LAYOUT") { ShowLayoutManager(); return; }
+  if (verb.startsWith("LAYOUT ")) {
+    if (m_State.activeDrawingIdx == 0) { m_Log.push_back("LAYOUT - open a drawing first."); Refresh(); return; }
+    if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Layouts cannot be changed in a read-only drawing."); return; }
+    HandleLayoutCommand(command.mid(7).toUtf8().toStdString(), m_State, m_Log); Refresh(); return;
+  }
+  if (verb == "PAGESETUP") { StartPageSetupCommand(m_State, m_Log); if (m_State.showPageSetupManager) ShowPageSetupManager(); else Refresh(); return; }
+  if (verb == "VPSCALE" || verb.startsWith("VPSCALE ")) {
+    const QString value = command.trimmed().mid(7).trimmed();
+    if (value.isEmpty()) ShowViewportScale();
+    else if (ActiveDrawingReadOnly()) QMessageBox::information(this, "Read-only drawing", "Viewport scale cannot be changed in a read-only drawing.");
+    else { HandleVpscaleCommand(value.toUtf8().toStdString(), m_State, m_Log); Refresh(); }
+    return;
+  }
   if (verb == "NEW") NewDrawing();
   else if (verb == "COPYCLIP") CopySelectionToClipboard(m_State, m_Log);
   else if (verb == "PASTECLIP") StartPasteCommand(m_State, m_Log);
@@ -1086,6 +1158,18 @@ void EditorWindow::Submit(const QString& command) {
       QMessageBox::information(this, "Project Settings", "Open a drawing that belongs to a project first.");
     }
   }
+  else if (verb == "ADDPDFTOPROJECT") AddPdfToProjectFromDisk();
+  else if (verb == "PROJECTHEALTH" || verb == "PACKPROJECT" || verb == "TURNOVER" || verb == "REFRESH") {
+    const auto idx = m_State.activeDrawingIdx;
+    const std::uint32_t uid = idx > 0 && idx < static_cast<int>(m_State.drawingTabs.size())
+        ? m_State.drawingTabs[static_cast<size_t>(idx)].projectUid : 0;
+    if (!uid) QMessageBox::information(this, "Project", "Open a drawing that belongs to a project first.");
+    else if (verb == "PROJECTHEALTH") ShowProjectHealth(uid);
+    else if (verb == "PACKPROJECT") ShowProjectPack(uid);
+    else if (verb == "TURNOVER") ShowProjectTurnover(uid);
+    else RefreshProjectFiles();
+  }
+  else if (verb == "OPENPACK") OpenPackedProject();
   else if (verb == "OPEN") {
     const QString path = QFileDialog::getOpenFileName(this, "Open drawing", {}, "Drawing (*.dwg)");
     if (!path.isEmpty()) OpenDrawing(path);
@@ -1102,6 +1186,274 @@ void EditorWindow::Submit(const QString& command) {
     ProcessCommandLineSubmit(buffer.data(), static_cast<int>(buffer.size()), m_State, m_Log);
   }
   Refresh();
+}
+
+bool EditorWindow::ActiveDrawingReadOnly() const {
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) return false;
+  const auto uid = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid;
+  for (const auto& session : m_State.openProjects) if (session.uid == uid) return session.readOnly;
+  return false;
+}
+
+void EditorWindow::ShowLayoutManager() {
+  if (m_State.activeDrawingIdx == 0) { QMessageBox::information(this, "Layout Manager", "Open a drawing to manage its layouts."); return; }
+  QDialog dialog(this); dialog.setObjectName("layoutManager"); dialog.setWindowTitle("Layout Manager"); dialog.resize(520, 380);
+  auto* outer = new QVBoxLayout(&dialog);
+  auto* description = new QLabel("Switch between model space and paper layouts, or manage the drawing’s sheets.", &dialog);
+  description->setWordWrap(true); outer->addWidget(description);
+  auto* list = new QListWidget(&dialog); list->setObjectName("layoutManagerList"); outer->addWidget(list, 1);
+  auto* row = new QHBoxLayout(); outer->addLayout(row);
+  auto* setCurrent = new QPushButton("Set Current", &dialog); setCurrent->setObjectName("layoutSetCurrent");
+  auto* add = new QPushButton("New", &dialog); add->setObjectName("layoutNew");
+  auto* rename = new QPushButton("Rename…", &dialog); rename->setObjectName("layoutRename");
+  auto* remove = new QPushButton("Delete", &dialog); remove->setObjectName("layoutDelete");
+  auto* setup = new QPushButton("Page Setup…", &dialog); setup->setObjectName("layoutPageSetup");
+  row->addWidget(setCurrent); row->addWidget(add); row->addWidget(rename); row->addWidget(remove); row->addWidget(setup); row->addStretch();
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog); outer->addWidget(buttons);
+  const bool writable = !ActiveDrawingReadOnly();
+  for (auto* b : {add, rename, remove}) b->setEnabled(writable);
+  auto refill = [&] {
+    list->clear();
+    list->addItem("Model");
+    for (const auto& layout : m_State.paperLayouts) list->addItem(QString::fromUtf8(layout.name.c_str()));
+    list->setCurrentRow(m_State.activeSpaceIndex < 0 ? 0 : m_State.activeSpaceIndex + 1);
+    setup->setEnabled(list->currentRow() > 0);
+  };
+  refill();
+  connect(setCurrent, &QPushButton::clicked, &dialog, [&] {
+    const int rowIndex = list->currentRow();
+    if (rowIndex >= 0) { SetActiveSpace(m_State, rowIndex == 0 ? kModelSpaceIndex : rowIndex - 1); Refresh(); refill(); }
+  });
+  connect(list, &QListWidget::currentRowChanged, &dialog, [&, list, setup](int rowIndex) { setup->setEnabled(rowIndex > 0); });
+  connect(list, &QListWidget::itemDoubleClicked, &dialog, [&, list](QListWidgetItem*) {
+    const int rowIndex = list->currentRow();
+    SetActiveSpace(m_State, rowIndex == 0 ? kModelSpaceIndex : rowIndex - 1); Refresh();
+  });
+  connect(add, &QPushButton::clicked, &dialog, [&] {
+    PushUndoSnapshot(m_State, "Create layout");
+    const int index = AddPaperLayout(m_State);
+    SetActiveSpace(m_State, index); Refresh(); refill(); list->setCurrentRow(index + 1);
+  });
+  connect(rename, &QPushButton::clicked, &dialog, [&] {
+    const int rowIndex = list->currentRow(); if (rowIndex <= 0) return;
+    const int index = rowIndex - 1;
+    bool ok = false;
+    const QString name = QInputDialog::getText(&dialog, "Rename Layout", "Layout name:", QLineEdit::Normal,
+        QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(index)].name.c_str()), &ok).trimmed();
+    if (!ok) return;
+    const auto previous = m_Log.size();
+    HandleLayoutCommand("RENAME " + m_State.paperLayouts[static_cast<size_t>(index)].name + " " + name.toUtf8().toStdString(), m_State, m_Log);
+    if (m_Log.size() > previous && m_Log.back().find("renamed") == std::string::npos)
+      QMessageBox::warning(&dialog, "Rename Layout", QString::fromUtf8(m_Log.back().c_str()));
+    Refresh(); refill(); list->setCurrentRow(index + 1);
+  });
+  connect(remove, &QPushButton::clicked, &dialog, [&] {
+    const int rowIndex = list->currentRow(); if (rowIndex <= 0) return;
+    const int index = rowIndex - 1;
+    const QString name = list->currentItem()->text();
+    if (QMessageBox::question(&dialog, "Delete Layout", "Delete layout “" + name + "”? This can be undone.") != QMessageBox::Yes) return;
+    DeletePaperLayout(m_State, index); Refresh(); refill();
+  });
+  connect(setup, &QPushButton::clicked, &dialog, [&] { const int rowIndex = list->currentRow(); if (rowIndex > 0) ShowPageSetupManager(rowIndex - 1); });
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::accept);
+  dialog.exec();
+}
+
+void EditorWindow::ShowPageSetupManager(int layoutIndex) {
+  m_State.showPageSetupManager = false;
+  if (layoutIndex < 0) layoutIndex = m_State.activeSpaceIndex;
+  if (layoutIndex < 0 || layoutIndex >= static_cast<int>(m_State.paperLayouts.size())) {
+    QMessageBox::information(this, "Page Setup Manager", "Switch to a paper layout first."); return;
+  }
+  m_State.pageSetupLayoutIdx = layoutIndex;
+  const bool writable = !ActiveDrawingReadOnly();
+  if (writable) EnsureStandardPageSetup(m_State);
+  QDialog dialog(this); dialog.setObjectName("pageSetupManager"); dialog.setWindowTitle("Page Setup Manager"); dialog.resize(650, 430);
+  auto* outer = new QVBoxLayout(&dialog);
+  auto* current = new QLabel("Current layout: “" + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str()) + "”", &dialog);
+  outer->addWidget(current);
+  auto* row = new QHBoxLayout(); outer->addLayout(row);
+  auto* list = new QListWidget(&dialog); list->setObjectName("pageSetupList"); list->setMinimumWidth(250); row->addWidget(list, 1);
+  auto* details = new QLabel(&dialog); details->setObjectName("pageSetupDetails"); details->setWordWrap(true); row->addWidget(details, 1);
+  auto* actions = new QVBoxLayout(); row->addLayout(actions);
+  auto* apply = new QPushButton("Set Current", &dialog); apply->setObjectName("pageSetupApply");
+  auto* create = new QPushButton("New…", &dialog); create->setObjectName("pageSetupNew");
+  auto* modify = new QPushButton("Modify…", &dialog); modify->setObjectName("pageSetupModify");
+  auto* close = new QPushButton("Close", &dialog); close->setObjectName("pageSetupClose");
+  actions->addWidget(apply); actions->addWidget(create); actions->addWidget(modify); actions->addStretch(); actions->addWidget(close);
+  auto* onNew = new QCheckBox("Display when creating a new layout", &dialog); onNew->setChecked(m_State.pageSetupDisplayOnNew); onNew->setEnabled(writable); outer->addWidget(onNew);
+  const auto& layout = m_State.paperLayouts[static_cast<size_t>(layoutIndex)];
+  const QString layoutRow = "*" + QString::fromUtf8(layout.name.c_str()) + "*";
+  auto refill = [&] {
+    list->clear(); list->addItem(layoutRow);
+    for (const auto& setup : m_State.savedPageSetups) list->addItem(QString::fromUtf8(setup.name.c_str()));
+    int selected = m_State.pageSetupManagerSel < 0 ? 0 : m_State.pageSetupManagerSel + 1;
+    list->setCurrentRow(std::clamp(selected, 0, list->count() - 1));
+  };
+  auto updateDetails = [&] {
+    const int selected = list->currentRow();
+    const PageSetup value = selected > 0 && selected - 1 < static_cast<int>(m_State.savedPageSetups.size())
+        ? m_State.savedPageSetups[static_cast<size_t>(selected - 1)] : PageSetupFromLayout(layout, "");
+    const QString paper = value.presetIdx >= 0 && value.presetIdx < kPaperSizePresetCount
+        ? QString::fromUtf8(kPaperSizePresets[value.presetIdx].name) : "Custom";
+    const float width = value.landscape ? std::max(value.portraitWidthIn, value.portraitHeightIn) : std::min(value.portraitWidthIn, value.portraitHeightIn);
+    const float height = value.landscape ? std::min(value.portraitWidthIn, value.portraitHeightIn) : std::max(value.portraitWidthIn, value.portraitHeightIn);
+    details->setText(QString("Device\nGoSurvey PDF (vector)\n\nPaper\n%1\n%2 × %3 in · %4\n\nPlot area\nLayout\n\nScale\n%5")
+        .arg(paper).arg(width, 0, 'f', 2).arg(height, 0, 'f', 2).arg(value.landscape ? "Landscape" : "Portrait")
+        .arg(value.fitToPaper ? "Fit to paper" : QString::number(value.scaleModelPerPaperIn, 'g', 5) + " model units / inch"));
+    const bool saved = selected > 0 && selected - 1 < static_cast<int>(m_State.savedPageSetups.size());
+    apply->setEnabled(writable && saved); modify->setEnabled(writable); create->setEnabled(writable);
+    m_State.pageSetupManagerSel = selected - 1;
+  };
+  refill(); updateDetails();
+  connect(list, &QListWidget::currentRowChanged, &dialog, [&] { updateDetails(); });
+  connect(apply, &QPushButton::clicked, &dialog, [&] {
+    const int selected = list->currentRow() - 1;
+    if (selected < 0 || selected >= static_cast<int>(m_State.savedPageSetups.size())) return;
+    PushUndoSnapshot(m_State, "Apply page setup");
+    ApplyPageSetupToLayout(m_State.paperLayouts[static_cast<size_t>(layoutIndex)], m_State.savedPageSetups[static_cast<size_t>(selected)]);
+    BumpCadGpuCache(m_State); Refresh(); updateDetails();
+  });
+  connect(create, &QPushButton::clicked, &dialog, [&] {
+    bool ok = false; const QString name = QInputDialog::getText(&dialog, "New Page Setup", "Name:", QLineEdit::Normal,
+        QString("Setup%1").arg(m_State.savedPageSetups.size() + 1), &ok).trimmed();
+    if (!ok) return;
+    if (name.isEmpty()) { QMessageBox::warning(&dialog, "New Page Setup", "Enter a page setup name."); return; }
+    for (const auto& item : m_State.savedPageSetups) if (QString::fromUtf8(item.name.c_str()).compare(name, Qt::CaseInsensitive) == 0) {
+      QMessageBox::warning(&dialog, "New Page Setup", "A page setup with that name already exists."); return;
+    }
+    PageSetup value = PageSetupFromLayout(m_State.paperLayouts[static_cast<size_t>(layoutIndex)], name.toUtf8().toStdString());
+    m_State.savedPageSetups.push_back(value); m_State.pageSetupManagerSel = static_cast<int>(m_State.savedPageSetups.size()) - 1;
+    refill(); updateDetails();
+  });
+  connect(modify, &QPushButton::clicked, &dialog, [&] { const int target = list->currentRow() - 1; dialog.accept(); ShowPageSetupEditor(target); });
+  connect(onNew, &QCheckBox::toggled, &dialog, [&](bool value) { m_State.pageSetupDisplayOnNew = value; });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+  dialog.exec();
+  Refresh();
+}
+
+void EditorWindow::ShowPageSetupEditor(int targetIndex) {
+  const int layoutIndex = m_State.pageSetupLayoutIdx;
+  const bool saved = targetIndex >= 0 && targetIndex < static_cast<int>(m_State.savedPageSetups.size());
+  if (!saved && (layoutIndex < 0 || layoutIndex >= static_cast<int>(m_State.paperLayouts.size()))) return;
+  PageSetup draft = saved ? m_State.savedPageSetups[static_cast<size_t>(targetIndex)]
+      : PageSetupFromLayout(m_State.paperLayouts[static_cast<size_t>(layoutIndex)], "*" + m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name + "*");
+  QDialog dialog(this); dialog.setObjectName("pageSetupEditor"); dialog.setWindowTitle("Page Setup — " + QString::fromUtf8(draft.name.c_str()));
+  auto* form = new QFormLayout(&dialog);
+  auto* paper = new QComboBox(&dialog); paper->setObjectName("pageSetupPaper");
+  for (int i = 0; i < kPaperSizePresetCount; ++i) paper->addItem(QString::fromUtf8(kPaperSizePresets[i].name), i);
+  paper->addItem("Custom", -1); paper->setCurrentIndex(std::max(0, draft.presetIdx < 0 ? paper->count() - 1 : draft.presetIdx)); form->addRow("Paper size", paper);
+  auto* orientation = new QComboBox(&dialog); orientation->addItems({"Portrait", "Landscape"}); orientation->setCurrentIndex(draft.landscape ? 1 : 0); form->addRow("Orientation", orientation);
+  auto* customWidth = new QDoubleSpinBox(&dialog); customWidth->setRange(0.1, 1e5); customWidth->setDecimals(3); customWidth->setSuffix(" in"); customWidth->setValue(draft.portraitWidthIn); form->addRow("Custom width", customWidth);
+  auto* customHeight = new QDoubleSpinBox(&dialog); customHeight->setRange(0.1, 1e5); customHeight->setDecimals(3); customHeight->setSuffix(" in"); customHeight->setValue(draft.portraitHeightIn); form->addRow("Custom height", customHeight);
+  auto* fit = new QCheckBox("Fit to paper", &dialog); fit->setChecked(draft.fitToPaper); form->addRow("Plot scale", fit);
+  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Model units / inch", scale);
+  auto* offsetX = new QDoubleSpinBox(&dialog); offsetX->setRange(-1e6, 1e6); offsetX->setDecimals(3); offsetX->setValue(draft.offsetXIn); form->addRow("Offset X (in)", offsetX);
+  auto* offsetY = new QDoubleSpinBox(&dialog); offsetY->setRange(-1e6, 1e6); offsetY->setDecimals(3); offsetY->setValue(draft.offsetYIn); form->addRow("Offset Y (in)", offsetY);
+  auto* center = new QCheckBox("Center the plot", &dialog); center->setChecked(draft.centerPlot); form->addRow("Placement", center);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog); form->addRow(buttons);
+  const bool writable = !ActiveDrawingReadOnly();
+  for (QWidget* widget : {static_cast<QWidget*>(paper), static_cast<QWidget*>(orientation), static_cast<QWidget*>(customWidth), static_cast<QWidget*>(customHeight), static_cast<QWidget*>(fit), static_cast<QWidget*>(scale), static_cast<QWidget*>(offsetX), static_cast<QWidget*>(offsetY), static_cast<QWidget*>(center)}) widget->setEnabled(writable);
+  auto updateCustom = [paper, customWidth, customHeight, writable] {
+    const bool custom = paper->currentData().toInt() < 0;
+    customWidth->setEnabled(custom && writable);
+    customHeight->setEnabled(custom && writable);
+  };
+  connect(paper, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [updateCustom](int) { updateCustom(); });
+  updateCustom();
+  connect(fit, &QCheckBox::toggled, scale, &QWidget::setDisabled);
+  scale->setDisabled(!writable || draft.fitToPaper);
+  connect(paper, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&](int index) {
+    const int preset = paper->itemData(index).toInt(); if (preset >= 0 && preset < kPaperSizePresetCount) {
+      draft.presetIdx = preset; draft.portraitWidthIn = kPaperSizePresets[preset].widthIn; draft.portraitHeightIn = kPaperSizePresets[preset].heightIn;
+    } else draft.presetIdx = -1;
+  });
+  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  if (dialog.exec() != QDialog::Accepted || !writable) { ShowPageSetupManager(layoutIndex); return; }
+  const int preset = paper->currentData().toInt(); draft.presetIdx = preset;
+  if (preset >= 0 && preset < kPaperSizePresetCount) { draft.portraitWidthIn = kPaperSizePresets[preset].widthIn; draft.portraitHeightIn = kPaperSizePresets[preset].heightIn; }
+  else { draft.portraitWidthIn = static_cast<float>(customWidth->value()); draft.portraitHeightIn = static_cast<float>(customHeight->value()); }
+  draft.landscape = orientation->currentIndex() == 1; draft.fitToPaper = fit->isChecked(); draft.scaleModelPerPaperIn = static_cast<float>(scale->value());
+  draft.offsetXIn = static_cast<float>(offsetX->value()); draft.offsetYIn = static_cast<float>(offsetY->value()); draft.centerPlot = center->isChecked();
+  if (saved) m_State.savedPageSetups[static_cast<size_t>(targetIndex)] = draft;
+  else {
+    PushUndoSnapshot(m_State, "Modify page setup");
+    ApplyPageSetupToLayout(m_State.paperLayouts[static_cast<size_t>(layoutIndex)], draft);
+  }
+  BumpCadGpuCache(m_State); Refresh(); ShowPageSetupManager(layoutIndex);
+}
+
+void EditorWindow::ShowViewportScale() {
+  Viewport* viewport = CurrentViewport(m_State);
+  if (!viewport) { QMessageBox::information(this, "Viewport Scale", "Select one viewport in a paper layout or enter floating model space first."); return; }
+  bool ok = false;
+  const QString current = QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, viewport->safeScale()).c_str());
+  const QString scale = QInputDialog::getText(this, "Viewport Scale", "Enter a scale such as 1:50 or model units per inch:", QLineEdit::Normal, current, &ok);
+  if (!ok) return;
+  if (ActiveDrawingReadOnly()) { QMessageBox::information(this, "Read-only drawing", "Viewport scale cannot be changed in a read-only drawing."); return; }
+  const auto previous = m_Log.size(); HandleVpscaleCommand(scale.toUtf8().toStdString(), m_State, m_Log);
+  if (m_Log.size() > previous && m_Log.back().find("could not read") != std::string::npos)
+    QMessageBox::warning(this, "Viewport Scale", QString::fromUtf8(m_Log.back().c_str()));
+  Refresh();
+}
+
+void EditorWindow::ShowViewportsManager() {
+  const int layoutIndex = m_State.activeSpaceIndex;
+  if (layoutIndex < 0 || layoutIndex >= static_cast<int>(m_State.paperLayouts.size())) {
+    QMessageBox::information(this, "Viewports", "Switch to a paper layout first."); return;
+  }
+  QDialog dialog(this); dialog.setObjectName("viewportsManager"); dialog.setWindowTitle("Viewports — " + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str())); dialog.resize(450, 350);
+  auto* outer = new QVBoxLayout(&dialog);
+  auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList"); outer->addWidget(list, 1);
+  auto* row = new QHBoxLayout(); outer->addLayout(row);
+  auto* add = new QPushButton("Add viewport", &dialog); add->setObjectName("viewportAdd");
+  auto* scale = new QPushButton("Set scale…", &dialog); scale->setObjectName("viewportScale");
+  auto* remove = new QPushButton("Delete viewport", &dialog); remove->setObjectName("viewportDelete");
+  auto* close = new QPushButton("Close", &dialog); close->setObjectName("viewportClose");
+  row->addWidget(add); row->addWidget(scale); row->addWidget(remove); row->addStretch(); row->addWidget(close);
+  const bool writable = !ActiveDrawingReadOnly(); add->setEnabled(writable); scale->setEnabled(writable); remove->setEnabled(writable);
+  auto refill = [&] {
+    list->clear(); const auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    for (size_t i = 0; i < viewports.size(); ++i) {
+      const auto& vp = viewports[i];
+      list->addItem(QString("Viewport %1 — %2 · %3 × %4 in")
+          .arg(i + 1).arg(QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, vp.safeScale()).c_str()))
+          .arg(vp.paperWIn, 0, 'f', 2).arg(vp.paperHIn, 0, 'f', 2));
+    }
+    if (list->count() > 0) list->setCurrentRow(std::clamp(m_State.selectedViewportIndex, 0, list->count() - 1));
+    scale->setEnabled(writable && list->currentRow() >= 0); remove->setEnabled(writable && list->currentRow() >= 0);
+  };
+  refill();
+  connect(list, &QListWidget::currentRowChanged, &dialog, [&, writable](int rowIndex) {
+    if (rowIndex >= 0) SelectViewport(m_State, rowIndex, false);
+    scale->setEnabled(writable && rowIndex >= 0); remove->setEnabled(writable && rowIndex >= 0);
+  });
+  connect(add, &QPushButton::clicked, &dialog, [&] {
+    PushUndoSnapshot(m_State, "Create viewport");
+    const int index = AddViewport(m_State, layoutIndex); Refresh(); refill(); list->setCurrentRow(index);
+  });
+  connect(scale, &QPushButton::clicked, &dialog, [&] {
+    const int index = list->currentRow(); if (index < 0) return;
+    SelectViewport(m_State, index, false);
+    bool ok = false;
+    const auto& viewport = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports[static_cast<size_t>(index)];
+    const QString value = QInputDialog::getText(&dialog, "Viewport Scale", "Scale (for example 1:50 or 50 model units/in):", QLineEdit::Normal,
+        QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, viewport.safeScale()).c_str()), &ok);
+    if (!ok) return;
+    const auto previous = m_Log.size(); HandleVpscaleCommand(value.toUtf8().toStdString(), m_State, m_Log);
+    if (m_Log.size() > previous && m_Log.back().find("could not read") != std::string::npos)
+      QMessageBox::warning(&dialog, "Viewport Scale", QString::fromUtf8(m_Log.back().c_str()));
+    Refresh(); refill(); list->setCurrentRow(index);
+  });
+  connect(remove, &QPushButton::clicked, &dialog, [&] {
+    const int index = list->currentRow(); if (index < 0) return;
+    if (QMessageBox::question(&dialog, "Delete Viewport", "Delete the selected viewport? This can be undone.") != QMessageBox::Yes) return;
+    PushUndoSnapshot(m_State, "Delete viewport"); DeleteViewport(m_State, layoutIndex, index); Refresh(); refill();
+  });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::accept);
+  dialog.exec(); Refresh();
 }
 
 bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
@@ -1460,6 +1812,22 @@ void EditorWindow::Refresh() {
   }
   m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
   m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
+  {
+    const QSignalBlocker spaceBlock(m_SpaceTabs);
+    while (m_SpaceTabs->count() > static_cast<int>(m_State.paperLayouts.size()) + 1)
+      m_SpaceTabs->removeTab(m_SpaceTabs->count() - 1);
+    const QString modelLabel = m_State.floatingViewportIndex >= 0 ? "Model (Floating)" : "Model";
+    if (m_SpaceTabs->count() == 0) m_SpaceTabs->addTab(modelLabel);
+    else m_SpaceTabs->setTabText(0, modelLabel);
+    for (int i = 0; i < static_cast<int>(m_State.paperLayouts.size()); ++i) {
+      const QString name = QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(i)].name.c_str());
+      if (i + 1 == m_SpaceTabs->count()) m_SpaceTabs->addTab(name);
+      else m_SpaceTabs->setTabText(i + 1, name);
+    }
+    m_SpaceTabs->setCurrentIndex(m_State.activeSpaceIndex < 0 ? 0 : m_State.activeSpaceIndex + 1);
+  }
+  if (auto* spaceBar = findChild<QWidget*>("paperSpaceBar"))
+    spaceBar->setVisible(m_State.activeDrawingIdx > 0);
   m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   const bool drawingActive = m_State.activeDrawingIdx > 0;
@@ -1472,17 +1840,31 @@ void EditorWindow::Refresh() {
     toolspaceDock->setVisible(drawingActive);
   if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
     propertiesDock->setVisible(drawingActive);
-  if (auto* mapDock = findChild<QDockWidget*>("mapDock")) mapDock->setVisible(drawingActive);
-  if (m_MapStatus) {
-    m_MapStatus->setText("Map: " + QString::fromUtf8(OnlineMapInfoOf(m_State.drawingSettings.onlineMap).label) +
-                         "\n" + QString::number(m_State.drawingSettings.capturedAreas.size()) +
-                         " captured area(s) stored in this drawing.");
-  }
-  for (const auto& map : kOnlineMaps) {
-    if (auto* radio = findChild<QRadioButton*>("onlineMap_" + QString::number(static_cast<int>(map.map)))) {
-      const QSignalBlocker blocker(radio);
-      radio->setChecked(m_State.drawingSettings.onlineMap == map.map);
+  if (auto* mapDock = findChild<QDockWidget*>("mapTaskDock"))
+    mapDock->setVisible(drawingActive);
+  const bool mapEnabled = drawingActive && m_State.drawingSettings.Geolocated() &&
+      m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off;
+  for (const auto& info : kOnlineMaps) {
+    if (auto* option = findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(info.map)))) {
+      const QSignalBlocker block(option);
+      option->setChecked(m_State.drawingSettings.onlineMap == info.map);
     }
+  }
+  if (auto* capture = findChild<QPushButton*>("mapCaptureVisible")) capture->setEnabled(mapEnabled);
+  if (auto* capture = findChild<QPushButton*>("mapCapturePick")) capture->setEnabled(mapEnabled);
+  if (auto* remove = findChild<QPushButton*>("mapRemoveCaptures"))
+    remove->setEnabled(drawingActive && !m_State.drawingSettings.capturedAreas.empty());
+  if (auto* status = findChild<QLabel*>("mapCaptureStatus")) {
+    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
+    status->setText(capturing ? QString::fromUtf8(m_State.mapCapture.prompt.c_str())
+                              : QString("%1 captured area(s) stored in this drawing.").arg(m_State.drawingSettings.capturedAreas.size()));
+  }
+  if (auto* progress = findChild<QProgressBar*>("mapCaptureProgress")) {
+    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
+    progress->setVisible(capturing);
+    progress->setRange(0, capturing ? std::max(1, m_State.mapCapture.total) : 1);
+    progress->setValue(capturing ? m_State.mapCapture.gathered : 0);
+    if (capturing) progress->setFormat(QString("%1 / %2 tiles").arg(m_State.mapCapture.gathered).arg(m_State.mapCapture.total));
   }
   while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
   QString commandHint;
@@ -1509,33 +1891,7 @@ void EditorWindow::Refresh() {
         email->setText(QString::fromUtf8(m_State.authEmail.c_str()));
     }
   }
-  m_Properties->clear();
-  auto* noSelection = new QTreeWidgetItem(m_Properties, {m_State.selection.empty() ? "No selection" :
-      QString::number(m_State.selection.size()) + " selected"});
-  noSelection->setFirstColumnSpanned(true);
-  auto* general = new QTreeWidgetItem(m_Properties, {"General"});
-  general->setFirstColumnSpanned(true);
-  general->setBackground(0, palette().color(QPalette::Button)); general->setForeground(0, palette().color(QPalette::ButtonText));
-  auto sectionFont = general->font(0); sectionFont.setBold(true); general->setFont(0, sectionFont);
-  new QTreeWidgetItem(general, {"Layer", QString::fromUtf8((m_State.selection.empty() ? m_State.currentLayer : CadSelectionLayer(m_State)).c_str())});
-  auto* color = new QTreeWidgetItem(general, {"Color", QString::fromUtf8(
-      (m_State.selection.empty() ? m_State.currentColor : CadSelectionColor(m_State)).c_str())});
-  color->setFlags(color->flags() | Qt::ItemIsEditable);
-  new QTreeWidgetItem(general, {"Linetype", "ByLayer"});
-  new QTreeWidgetItem(general, {"Lineweight", "ByLayer"});
-  new QTreeWidgetItem(general, {"Transparency", "ByLayer"});
-  general->setExpanded(true);
-  auto* geometry = new QTreeWidgetItem(m_Properties, {"Geometry"});
-  geometry->setFirstColumnSpanned(true);
-  geometry->setBackground(0, palette().color(QPalette::Button)); geometry->setForeground(0, palette().color(QPalette::ButtonText));
-  geometry->setFont(0, sectionFont);
-  for (const auto* name : {"Start X", "Start Y", "End X", "End Y"}) new QTreeWidgetItem(geometry, {name, "—"});
-  geometry->setExpanded(true);
-  const QSignalBlocker layerBlock(m_Layer);
-  m_Layer->clear();
-  for (const auto& layer : m_State.drawingLayerTable) m_Layer->addItem(QString::fromUtf8(layer.name.c_str()));
-  const std::string selectedLayer = CadSelectionLayer(m_State);
-  m_Layer->setCurrentText(QString::fromUtf8((selectedLayer.empty() ? m_State.currentLayer : selectedLayer).c_str()));
+  RefreshProperties();
   auto itemPath = [](QTreeWidgetItem* item) {
     QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
     return parts.join(QChar(0x1f));
@@ -1570,7 +1926,20 @@ void EditorWindow::Refresh() {
   points->setIcon(0, CadCommandIcon("Point.png"));
   auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
   surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (const auto& surface : m_State.cadSurfaces) new QTreeWidgetItem(surfaces, {QString::fromUtf8(surface.name.c_str())});
+  surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
+  for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
+    auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
+    surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
+    surface->setData(0, Qt::UserRole + 2, i);
+  }
+  auto* surfaceStyles = new QTreeWidgetItem(m_Toolspace, {"Surface Styles"});
+  surfaceStyles->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
+  for (const auto& surfaceStyle : m_State.surfaceStyles) {
+    auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
+    entry->setData(0, Qt::UserRole + 1, "style");
+    entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
+  }
   auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
   blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
   for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});

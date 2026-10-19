@@ -24,6 +24,7 @@
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
+#include "CadSurfaceEdit.hpp"
 #include "CadUiHelpers.hpp"
 #include "CadUiStyleWidgets.hpp"
 #include "SurfaceStyle.hpp"
@@ -37,13 +38,6 @@
 #include <vector>
 
 namespace {
-
-std::string TrimStyleName(const std::string& s) {
-  size_t b = 0, e = s.size();
-  while (b < e && (s[b] == ' ' || s[b] == '\t')) ++b;
-  while (e > b && (s[e - 1] == ' ' || s[e - 1] == '\t')) --e;
-  return s.substr(b, e - b);
-}
 
 /// The colour a component actually resolves to, for the swatch. A component's "ByLayer" defers to
 /// the surface's own colour, which may itself be ByLayer — the swatch shows the end of that chain
@@ -387,24 +381,8 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::SetNextItemWidth(-1);
       ImGui::BeginDisabled(isStandard);
       std::string nameBuf = s.name;
-      if (ImGui::InputText("##sstname", &nameBuf, ImGuiInputTextFlags_EnterReturnsTrue)) {
-        const std::string nm = TrimStyleName(nameBuf);
-        if (nm.empty())
-          log->push_back("A surface style name cannot be empty — keeping \"" + s.name + "\".");
-        else if (SurfaceStyles::Find(cmd.surfaceStyles, nm) && nm != s.name)
-          log->push_back("A surface style named \"" + nm + "\" already exists — rename refused.");
-        else {
-          PushUndoSnapshot(cmd, "Rename surface style");
-          // Every surface referencing the old name is re-pointed, so a rename does not silently
-          // orphan them into the Standard fallback.
-          for (CadSurface& surf : cmd.cadSurfaces)
-            if (surf.styleName == s.name)
-              surf.styleName = nm;
-          log->push_back("Renamed surface style \"" + s.name + "\" to \"" + nm + "\".");
-          s.name = nm;
-          changed = true;
-        }
-      }
+      if (ImGui::InputText("##sstname", &nameBuf, ImGuiInputTextFlags_EnterReturnsTrue))
+        changed |= surfedit::RenameStyle(cmd, static_cast<size_t>(selIdx), nameBuf, *log);
       ImGui::EndDisabled();
       if (isStandard)
         ImGui::TextDisabled("Standard cannot be renamed.");
@@ -441,9 +419,7 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       } else if (scratchMinor != s.minorIntervalFt || scratchMajor != s.majorIntervalFt) {
         // Valid and different: commit. This is the "apply on commit" half of Q3 — the table only
         // ever holds a pair that passed the rule.
-        PushUndoSnapshot(cmd, "Surface style interval");
-        s.minorIntervalFt = scratchMinor;
-        s.majorIntervalFt = scratchMajor;
+        surfedit::SetStyleIntervals(cmd, static_cast<size_t>(selIdx), scratchMinor, scratchMajor);
         changed = true;
       }
 
@@ -616,7 +592,7 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::TextUnformatted("Style name:");
     ImGui::SetNextItemWidth(260.f);
     ImGui::InputText("##sstnewname", &newName);
-    const std::string nm = TrimStyleName(newName);
+    const std::string nm = surfedit::TrimStyleName(newName);
     const bool dup = !nm.empty() && SurfaceStyles::Find(cmd.surfaceStyles, nm) != nullptr;
     if (dup)
       ImGui::TextColored(ImVec4(1.f, 0.5f, 0.4f, 1.f), "A style with that name already exists.");
@@ -624,13 +600,10 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::Spacing();
     ImGui::BeginDisabled(nm.empty() || dup);
     if (ImGui::Button("OK", ImVec2(110.f, 0.f))) {
-      PushUndoSnapshot(cmd, "Add surface style");
-      SurfaceStyle ns = s;
-      ns.name = nm;
-      cmd.surfaceStyles.push_back(ns);
-      selIdx = static_cast<int>(cmd.surfaceStyles.size()) - 1;
-      log->push_back("Surface style added: " + nm);
-      changed = true;
+      if (surfedit::AddStyle(cmd, static_cast<size_t>(selIdx), nm, *log)) {
+        selIdx = static_cast<int>(cmd.surfaceStyles.size()) - 1;
+        changed = true;
+      }
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndDisabled();
@@ -660,19 +633,11 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
   }
 
   if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.surfaceStyles.size())) {
-    PushUndoSnapshot(cmd, "Delete surface style");
-    const std::string nm = cmd.surfaceStyles[static_cast<size_t>(deleteIdx)].name;
-    const int used = SurfacesUsing(cmd, nm);
-    cmd.surfaceStyles.erase(cmd.surfaceStyles.begin() + deleteIdx);
-    if (selIdx >= static_cast<int>(cmd.surfaceStyles.size()))
-      selIdx = static_cast<int>(cmd.surfaceStyles.size()) - 1;
-    // Surfaces keep their styleName on purpose (REQ-070): they fall back to Standard for now, and
-    // re-creating a style with that name adopts them back rather than leaving the reference rewritten.
-    log->push_back("Surface style deleted: " + nm +
-                   (used > 0 ? ". " + std::to_string(used) +
-                                   " surface(s) using it now draw with \"Standard\"."
-                             : std::string()));
-    changed = true;
+    if (surfedit::DeleteStyle(cmd, static_cast<size_t>(deleteIdx), *log)) {
+      if (selIdx >= static_cast<int>(cmd.surfaceStyles.size()))
+        selIdx = static_cast<int>(cmd.surfaceStyles.size()) - 1;
+      changed = true;
+    }
   }
 
   if (changed)

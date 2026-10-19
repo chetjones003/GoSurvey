@@ -128,6 +128,63 @@ TEST_CASE("req379 an attach whose project went read-only attaches nothing", "[re
   CHECK_FALSE(fs::exists(s.project.Folder() / "PDFs" / "plan.pdf"));
 }
 
+TEST_CASE("req379 CompleteProjectAttach carries each answer through to the attach that asked", "[req379][issue888]") {
+  TempDir root("complete");
+  const fs::path outside = root.path / "outside" / "plan.pdf";
+  WriteText(outside, "pdf-bytes");
+  std::vector<std::string> log;
+  AppCommandState st;
+  auto& s = OpenProjectTab(st, root.path / "proj");
+  std::string pdfPath;
+
+  // Cancel: nothing is copied, tracked or handed back, and the question is gone.
+  REQUIRE(RequestProjectAttach(st, Kind::PdfTrack, outside.u8string(), log));
+  CHECK_FALSE(CompleteProjectAttach(st, AttachAnswer::Cancel, log, &pdfPath));
+  CHECK(st.projectAttachPrompt.kind == Kind::None);
+  CHECK_FALSE(fs::exists(s.project.Folder() / "PDFs" / "plan.pdf"));
+  CHECK(s.project.items.empty());
+  CHECK(log.back() == "Attach cancelled.");
+
+  // Add PDF + Copy: the copy is tracked as in-project and no placement is requested.
+  REQUIRE(RequestProjectAttach(st, Kind::PdfTrack, outside.u8string(), log));
+  CHECK(CompleteProjectAttach(st, AttachAnswer::Copy, log, &pdfPath));
+  CHECK(pdfPath.empty());
+  REQUIRE(s.project.items.size() == 1);
+  CHECK(s.project.items[0].kind == gsproj::kKindInProject);
+  CHECK(fs::exists(s.project.Folder() / "PDFs" / "plan.pdf"));
+
+  // Add PDF + Link: tracked in place, flagged local-link, the original untouched.
+  const fs::path other = root.path / "outside" / "survey.pdf";
+  WriteText(other, "more-pdf");
+  REQUIRE(RequestProjectAttach(st, Kind::PdfTrack, other.u8string(), log));
+  CHECK(CompleteProjectAttach(st, AttachAnswer::Link, log, &pdfPath));
+  REQUIRE(s.project.items.size() == 2);
+  CHECK(s.project.items[1].kind == gsproj::kKindLocalLink);
+  CHECK_FALSE(fs::exists(s.project.Folder() / "PDFs" / "survey.pdf"));
+  CHECK(fs::exists(other));
+
+  // A PDF placement is handed back to the caller, which starts it.
+  const fs::path placed = root.path / "outside" / "sheet.pdf";
+  WriteText(placed, "sheet");
+  REQUIRE(RequestProjectAttach(st, Kind::Pdf, placed.u8string(), log));
+  CHECK(CompleteProjectAttach(st, AttachAnswer::Link, log, &pdfPath));
+  CHECK(pdfPath == placed.u8string());
+
+  // An answer with no question pending does nothing.
+  pdfPath.clear();
+  CHECK_FALSE(CompleteProjectAttach(st, AttachAnswer::Copy, log, &pdfPath));
+  CHECK(pdfPath.empty());
+
+  // A project that went read-only before the answer attaches nothing.
+  const fs::path late = root.path / "outside" / "late.pdf";
+  WriteText(late, "late");
+  REQUIRE(RequestProjectAttach(st, Kind::PdfTrack, late.u8string(), log));
+  s.readOnly = true;
+  CHECK_FALSE(CompleteProjectAttach(st, AttachAnswer::Copy, log, &pdfPath));
+  CHECK(s.project.items.size() == 2);
+  CHECK_FALSE(fs::exists(s.project.Folder() / "PDFs" / "late.pdf"));
+}
+
 TEST_CASE("req379 saving records the drawing's clouds and PDFs; opening finds them under another path",
           "[req379]") {
   TempDir root("saveopen");

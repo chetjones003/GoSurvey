@@ -42,7 +42,7 @@
 #include "DwgIo.hpp"
 #include "WinFileDialogs.hpp"
 #include "NumFormat.hpp"
-#include "util/PlotScales.hpp"  // VPSCALE (REQ-401): PlotScaleLabel / metric-ratio helpers
+#include "util/PlotScales.hpp"  // VPSCALE (REQ-027): PlotScaleLabel / metric-ratio helpers
 #include "MtextRichFormat.hpp"
 #include "AppPaths.hpp"
 
@@ -38706,7 +38706,7 @@ void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std
 }
 
 // ---------------------------------------------------------------------------------------------
-// LAYOUT (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's add/rename/
+// LAYOUT (REQ-025, issue #751/#753 V3) — typed equivalent of the layout tab bar's add/rename/
 // delete (REQ-025). One-shot, text-only, same shape as PIPESYS: a layout isn't routed or picked,
 // so it needs no `AppCommandState::Kind` of its own.
 // ---------------------------------------------------------------------------------------------
@@ -38813,7 +38813,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 }
 
 // ---------------------------------------------------------------------------------------------
-// VPSCALE (REQ-401, issue #751/#753 V3) — typed equivalent of the viewport-scale combo
+// VPSCALE (REQ-027, issue #751/#753 V3) — typed equivalent of the viewport-scale combo
 // (DrawPlotScaleCombo in CadUi.cpp), targeting the same "current viewport" `CurrentViewport`
 // resolves: the floating viewport when inside one, else the single selected paper viewport.
 // ---------------------------------------------------------------------------------------------
@@ -38879,7 +38879,7 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
 }
 
 // ---------------------------------------------------------------------------------------------
-// PAGESETUP (REQ-401, issue #751/#753 V3) — typed equivalent of the layout tab bar's right-click
+// PAGESETUP (REQ-026, issue #751/#753 V3) — typed equivalent of the layout tab bar's right-click
 // "Page Setup Manager…" (CadUi.cpp), opening the same dialog for the active layout.
 // ---------------------------------------------------------------------------------------------
 
@@ -41074,6 +41074,13 @@ int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped) {
   const float stored = (mm < 0.f) ? -1.f : mm;
   return ApplyAttrFieldToSelection(
       st, stored, "Change lineweight", [](EntityAttributes& a) -> float& { return a.lineweightMm; }, true,
+      skipped);
+}
+
+int CadApplyTransparencyToSelection(AppCommandState& st, float transparency, int* skipped) {
+  const float stored = (transparency < -0.5f) ? -1.f : std::clamp(transparency, 0.f, 1.f);
+  return ApplyAttrFieldToSelection(
+      st, stored, "Change transparency", [](EntityAttributes& a) -> float& { return a.transparency; }, true,
       skipped);
 }
 
@@ -43679,21 +43686,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       HandlePipingSystemCommand(restOfLine, st, log);
       return;
     }
-    // LAYOUT (REQ-401, issue #751/#753 V3): typed NEW/RENAME/DELETE, mirroring the layout tab bar.
+    // LAYOUT (REQ-025, issue #751/#753 V3): typed NEW/RENAME/DELETE, mirroring the layout tab bar.
     if (plotTok == "layout") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandleLayoutCommand(restOfLine, st, log);
       return;
     }
-    // VPSCALE (REQ-401, issue #751/#753 V3): typed equivalent of the viewport-scale combo.
+    // VPSCALE (REQ-027, issue #751/#753 V3): typed equivalent of the viewport-scale combo.
     if (plotTok == "vpscale") {
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandleVpscaleCommand(restOfLine, st, log);
       return;
     }
-    // PAGESETUP (REQ-401, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
+    // PAGESETUP (REQ-026, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".
     if (plotTok == "pagesetup") {
       StartPageSetupCommand(st, log);
       return;

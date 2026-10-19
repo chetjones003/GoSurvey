@@ -478,6 +478,10 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
   src/commands/CadColor.cpp
+  # Issue #891: property-panel edit services shared by the ImGui and Qt Properties panels
+  src/commands/CadPropertyEdit.cpp
+  # Issue #893: surface / surface-style edit services shared by the ImGui and Qt surface dialogs
+  src/commands/CadSurfaceEdit.cpp
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
@@ -780,6 +784,7 @@ add_executable(GoSurvey
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/GpuPreference.cpp
+  src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp
@@ -1648,6 +1653,9 @@ if(GOSURVEY_BUILD_TESTS)
     # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
     # GoSurveyTestImGui (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
     tests/CadPipePaletteTests.cpp
+    # Issue #891: property-panel edit services and the shared right-click classifier
+    tests/CadPropertyEditTests.cpp
+    tests/CadSurfaceEditTests.cpp
     # REQ-351 / D-2026-09-28-f — MOVE / ROTATE / SCALE / MIRROR / COPY / ARRAY on a pipe run.
     tests/ModifyPipeRunTests.cpp
     # REQ-352 / D-2026-09-28-g — layer and colour edits on solids and pipe runs.

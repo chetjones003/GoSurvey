@@ -10,10 +10,18 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorViewport.cpp
   src/qt/EditorProjects.cpp
   src/qt/EditorProjectSettings.cpp
+  src/qt/EditorProjectAttach.cpp
   src/qt/EditorUpdate.cpp
   src/qt/EditorDialogs.cpp
   src/qt/EditorPoints.cpp
+  src/qt/EditorPointGroups.cpp
+  src/qt/EditorProperties.cpp
+  src/qt/EditorSurfaces.cpp
+  src/qt/EditorSurfaceManager.cpp
+  src/qt/EditorSurfaceStyles.cpp
+  src/qt/EditorContextMenu.cpp
   src/qt/EditorPointTransfer.cpp
+  src/qt/EditorBlockAuthoring.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/PdfWindow.cpp
   src/qt/FailureReport.cpp
@@ -29,6 +37,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/io/PdfPlot.cpp
   src/traverse/TraverseReport.cpp
   src/platform/WinFileDialogs.cpp
+  src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
   src/platform/OAuthListener.cpp
   src/platform/CredentialStore.cpp

@@ -102,7 +102,7 @@ None. Mockup sample names, dates, paths and counts are illustrative; real Qt mod
   page visible.
 - 2026-10-18 — User requested New project/Open project actions beside New drawing/Open drawing,
   a “Welcome to GoSurvey” heading without subtitle, unclipped recent-project rows, and irregular
-  mountain/valley contours on Start and drawing panels. Updated REQ-081/REQ-308 and D-2026-10-18-c.
+  mountain/valley contours on Start and drawing panels. Updated REQ-081/REQ-308 and D-2026-10-18-e.
   Reused existing `NewProject()` and `OPENPROJECT` flows, removed the Import data card, increased
   project row height/padding and viewport height, and replaced circular decorative paths with
   asymmetric terrain contours in the Start body, panel overlays, and title strip.
@@ -166,3 +166,9 @@ None. Mockup sample names, dates, paths and counts are illustrative; real Qt mod
 
 - User approved the screenshot result by requesting a PR to beta and admin merge after CI is green.
 
+
+- Integration preserves beta's functional Properties controls, Map capture progress/actions, Toolspace context menus, and section overlays. Renamed the style refinement decision to D-2026-10-18-e to avoid beta's existing decision ID.
+
+- Current-beta integration: Qt Release build PASS; contour/background, title/command-bar, and revised Start surface checks PASS (5 QtTest results including setup/cleanup). The native editable Properties panel now paints the traced terrain in its body background; no form rows or Map workflows were removed.
+
+- Integration workflow checks PASS: Map settings/task panel plus five Properties editing/validation/undo/empty-state cases (8 QtTest results including setup/cleanup). User authorized PR and admin merge after CI; screenshots were shown again after beta integration.

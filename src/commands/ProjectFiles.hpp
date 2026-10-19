@@ -26,6 +26,16 @@ bool RequestProjectAttach(AppCommandState& st, AppCommandState::ProjectAttachPro
 /// file to attach and true is returned; on failure (REQ-201 in \p log) false, and nothing is attached.
 bool ResolveProjectAttach(AppCommandState& st, bool copy, std::vector<std::string>& log, std::string* finalPath);
 
+/// The three answers to the Copy / Link / Cancel question.
+enum class AttachAnswer { Copy, Link, Cancel };
+
+/// Carries out the user's answer for every frontend: resolves the pending prompt, then goes on with the
+/// attach that asked (a point cloud import starts, an Add-PDF file becomes tracked). For a PDF placement
+/// \p pdfPath receives the file to attach and the caller starts the placement. False when the attach did
+/// not go ahead (cancelled, or failed with the reason in \p log); nothing is attached then.
+bool CompleteProjectAttach(AppCommandState& st, AttachAnswer answer, std::vector<std::string>& log,
+                           std::string* pdfPath);
+
 /// REQ-379 clause 5: Add PDF to project. A PDF already inside the project is tracked at once; one outside
 /// raises the copy/link prompt (kind PdfTrack) and is tracked by TrackProjectFile once answered.
 /// Returns true when a prompt was raised or the file was tracked.
