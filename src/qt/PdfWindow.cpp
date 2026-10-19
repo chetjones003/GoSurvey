@@ -313,7 +313,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   thumbnailsAction->setObjectName("pdfThumbnailsAction");
   tools->addAction(thumbnailsAction);
 
-  // REQ-428: the find bar, on its own row under the toolbars.
+  // REQ-429: the find bar, on its own row under the toolbars.
   addToolBarBreak(Qt::TopToolBarArea);
   m_FindBar = addToolBar("Find in PDF");
   m_FindBar->setObjectName("pdfFindBar");

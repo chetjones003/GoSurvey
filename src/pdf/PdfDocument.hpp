@@ -39,7 +39,7 @@ struct ObjBox {
   float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
 };
 
-/// REQ-428: one occurrence of a search text.
+/// REQ-429: one occurrence of a search text.
 struct TextHit {
   int page = 0;
   std::vector<ObjBox> boxes;
@@ -92,7 +92,7 @@ public:
   /// comparison itself is of the drawn picture. \p cancel is polled; false on failure or cancel.
   bool TextBoxes(int page, std::vector<ObjBox>& out, const std::function<bool()>& cancel);
 
-  /// REQ-428: where \p query (UTF-16) occurs in the document's text, page by page. Each hit has the page and
+  /// REQ-429: where \p query (UTF-16) occurs in the document's text, page by page. Each hit has the page and
   /// the boxes covering the match (one per line fragment), in the viewer's page coordinates like TextBoxes.
   /// An empty query finds nothing. \p cancel is polled between pages and matches; false on failure or cancel.
   /// The PDFium lock is held for one page at a time, so rendering is not starved while a long file is searched.

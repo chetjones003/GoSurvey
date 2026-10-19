@@ -115,6 +115,7 @@ private:
   void ShowProjectAttachPrompt();
   void AddPdfToProjectFromDisk();
   void ShowSettings();
+  void ShowSurveyPointDisplay();
   void ShowDrawingContextMenu(const QPoint& globalPosition);
   void ShowRightClickCustomization();
   void ShowSelectionList();

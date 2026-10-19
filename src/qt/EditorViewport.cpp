@@ -441,16 +441,7 @@ void EditorViewport::paintGL() {
   } else {
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
   }
-  painter.setPen(QColor("#a7c9d9"));
-  if (!paperSpace) for (const auto& point : m_State.surveyPoints) {
-    float x = 0, y = 0;
-    overlayCamera.WorldToScreen(point.easting, point.northing, point.elevation,
-        static_cast<float>(width()), static_cast<float>(height()), &x, &y);
-    if (!std::isfinite(x) || !std::isfinite(y) || !rect().contains(qRound(x), qRound(y))) continue;
-    painter.drawLine(QPointF(x - 4, y - 4), QPointF(x + 4, y + 4));
-    painter.drawLine(QPointF(x - 4, y + 4), QPointF(x + 4, y - 4));
-    if (m_State.surveyPointShowIdInViewport) painter.drawText(QPointF(x + 7, y - 5), QString::number(point.id));
-  }
+  if (!paperSpace) DrawQtSurveyPoints(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
   if (m_State.selBoxWaitingSecond) {
     const bool window = m_Last.x() >= m_State.selBoxAnchorScreenX;
     const QColor color = window ? QColor(70, 140, 220) : QColor(65, 190, 125);

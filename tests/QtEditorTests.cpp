@@ -74,6 +74,8 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QGroupBox>
+#include <QBoxLayout>
+#include <QStyledItemDelegate>
 #include <QRadioButton>
 #include <QDockWidget>
 #include <QFrame>
@@ -1336,6 +1338,209 @@ private Q_SLOTS:
   }
 
   /// Screenshots of the selected designs (report window B, Settings card B) for review.
+  void surveyDisplayControlsApplyLiveAndPersistWithoutGeometryEdits() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    SurveyPoint point; point.id = 904; point.easting = 12.345678; point.northing = 6.123456;
+    point.elevation = 3.456789; point.description = "Control";
+    point.labelStyle = SurveyPointLabelStyle::NumberNorthEastElev;
+    st.surveyPoints.push_back(point); EnsureSurveyPointLabelMtext(st, 0, nullptr);
+    const auto undoCount = CadActiveUndoStackSize(st);
+    AppCommandState::ProjectSession session; session.uid = 904; session.readOnly = true;
+    st.openProjects.push_back(std::move(session));
+    st.drawingTabs[st.activeDrawingIdx].projectUid = 904;
+    window.ShowSettings();
+    auto* settings = window.findChild<QDialog*>("applicationSettings"); QVERIFY(settings);
+    settings->findChild<QPushButton*>("surveyPointDisplaySettings")->click();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    auto field = [dialog](const char* name) { return dialog->findChild<QDoubleSpinBox*>(name); };
+    QVERIFY(field("surveyCrossSpan")->isEnabled());
+    field("surveyCrossSpan")->setValue(.25);
+    dialog->findChild<QCheckBox*>("surveyShowId")->setChecked(false);
+    dialog->findChild<QSpinBox*>("surveyPrecision")->setValue(4);
+    field("surveyLabelHeight")->setValue(.15);
+    const int index = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(index >= 0);
+    const double oldX = st.cadAnnotations[index].boxMinX;
+    field("surveyLabelEast")->setValue(.8);
+    field("surveyLabelNorth")->setValue(.6);
+    field("surveyLeaderWidth")->setValue(12);
+    QVERIFY(st.cadAnnotations[index].boxMinX != oldX);
+    QVERIFY(st.cadAnnotations[index].text.find("12.3457") != std::string::npos);
+    QCOMPARE(st.surveyPointCrossSpanPlottedInches, .25f);
+    QCOMPARE(st.surveyPointLabelPlottedHeightInches, .15f);
+    QCOMPARE(st.surveyLabelLeaderArrowPx, 12.f);
+    QCOMPARE(st.surveyPoints[0].easting, point.easting);
+    QCOMPARE(st.surveyPoints[0].northing, point.northing);
+    QCOMPARE(st.surveyPoints[0].elevation, point.elevation);
+    QCOMPARE(CadActiveUndoStackSize(st), undoCount);
+    field("surveyCrossSpan")->setValue(-1); QCOMPARE(field("surveyCrossSpan")->value(), .02);
+    field("surveyLabelHeight")->setValue(10); QCOMPARE(field("surveyLabelHeight")->value(), .5);
+    field("surveyLeaderWidth")->setValue(100); QCOMPARE(field("surveyLeaderWidth")->value(), 30.);
+    dialog->findChild<QPushButton*>("surveyDisplaySave")->click();
+    QCOMPARE(dialog->findChild<QLabel*>("surveyDisplaySaveStatus")->text(), QString("Preferences saved."));
+    AppCommandState loaded; LoadUserStartupPrefs(loaded);
+    QCOMPARE(loaded.surveyPointCrossSpanPlottedInches, st.surveyPointCrossSpanPlottedInches);
+    QCOMPARE(loaded.surveyPointShowIdInViewport, false);
+    QCOMPARE(loaded.surveyPointDisplayPrecision, 4);
+    QCOMPARE(loaded.surveyPointLabelPlottedHeightInches, .5f);
+    QCOMPARE(loaded.surveyLabelOffsetEastPlottedIn, .8f);
+    QCOMPARE(loaded.surveyLabelOffsetNorthPlottedIn, .6f);
+    QCOMPARE(loaded.surveyLabelLeaderArrowPx, 30.f);
+    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-saved-read-only.png"));
+    QTest::keyClick(dialog, Qt::Key_Escape);
+    QCOMPARE(st.surveyPointShowIdInViewport, false);
+    QCOMPARE(CadActiveUndoStackSize(st), undoCount);
+    // The same modeless window edits the current drawing, never a captured point vector.
+    st.surveyPoints.clear(); st.cadAnnotations.clear(); st.cadAnnotationAttrs.clear();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    window.ShowSurveyPointDisplay();
+    dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    dialog->findChild<QSpinBox*>("surveyPrecision")->setValue(2);
+    QVERIFY(st.surveyPoints.empty()); QVERIFY(st.cadAnnotations.empty());
+    dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Close)->click();
+    QCOMPARE(st.surveyPointDisplayPrecision, 2);
+  }
+
+  void surveyDisplaySaveFailureIsVisibleAndRetainsLiveChanges() {
+    IsolatedUserData userData;
+    QVERIFY(QDir().mkpath(QDir(userData.dir.path()).filePath("GoSurvey/gosurvey-user.json")));
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.ShowSurveyPointDisplay();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    dialog->findChild<QDoubleSpinBox*>("surveyCrossSpan")->setValue(.4);
+    const int dialogWidth = dialog->width();
+    dialog->findChild<QPushButton*>("surveyDisplaySave")->click();
+    QCOMPARE(dialog->width(), dialogWidth);
+    QVERIFY(dialog->findChild<QLabel*>("surveyDisplaySaveStatus")->text().contains("could not be saved"));
+    auto* status = dialog->findChild<QLabel*>("surveyDisplaySaveStatus");
+    QVERIFY(status->height() >= status->heightForWidth(status->width()));
+    QVERIFY(dialog->isVisible()); QCOMPARE(window.State().surveyPointCrossSpanPlottedInches, .4f);
+    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-save-error.png"));
+  }
+
+  void surveyDisplayRenderingHonorsSizeIdsLayerAndLeader() {
+    AppCommandState st;
+    SurveyPoint point; point.id = 904; point.labelStyle = SurveyPointLabelStyle::None; point.layer = "Points";
+    st.surveyPoints.push_back(point); st.surveyPointShowIdInViewport = false;
+    st.modelUnitsPerPlottedInch = 20;
+    auto render = [&] {
+      QImage result(640, 480, QImage::Format_ARGB32_Premultiplied); result.fill(Qt::black);
+      QPainter painter(&result); DrawQtModelAnnotations(painter, st, 640, 480);
+      DrawQtSurveyPoints(painter, st, 640, 480); return result;
+    };
+    auto ink = [](const QImage& image) {
+      int count = 0;
+      for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
+        if (image.pixelColor(x, y) != QColor(Qt::black)) ++count;
+      return count;
+    };
+    st.surveyPointCrossSpanPlottedInches = .1f; const auto small = render(); QVERIFY(ink(small) > 0);
+    st.surveyPointCrossSpanPlottedInches = .5f; const auto large = render(); QVERIFY(ink(large) > ink(small));
+    st.modelUnitsPerPlottedInch *= 2;
+    QVERIFY(ink(render()) > ink(large));
+    st.modelUnitsPerPlottedInch /= 2;
+    st.viewportElevationDeg = 15; QVERIFY(ink(render()) > 0);
+    st.viewportElevationDeg = 90;
+    st.surveyPointShowIdInViewport = true; const auto ids = render(); QVERIFY(ids != large);
+    CadLayerRow layer; layer.name = "Points"; layer.on = false; st.drawingLayerTable.push_back(layer);
+    QCOMPARE(ink(render()), 0);
+    st.drawingLayerTable.back().on = true; st.drawingLayerTable.back().frozen = true;
+    QCOMPARE(ink(render()), 0);
+    st.drawingLayerTable.back().frozen = false;
+    st.surveyPoints[0].labelStyle = SurveyPointLabelStyle::NumberOnly;
+    EnsureSurveyPointLabelMtext(st, 0, nullptr);
+    const int ai = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(ai >= 0);
+    auto& label = st.cadAnnotations[ai];
+    label.surveyLabelHasUserOffset = true;
+    label.boxMinX = 10; label.boxMaxX = 15; label.boxMinY = 4; label.boxMaxY = 8;
+    st.surveyLabelLeaderArrowPx = 2; const auto thin = render();
+    st.surveyLabelLeaderArrowPx = 20; QVERIFY(render() != thin);
+  }
+
+  void surveyDisplayPrecisionFormatsGridWithoutRoundingEditorValues() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    SurveyPoint point; point.id = 904; point.northing = 12.3456789;
+    window.State().surveyPoints.push_back(point);
+    window.State().surveyPointDisplayPrecision = 2;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("surveyPointGrid"); QVERIFY(dialog);
+      const auto closeDialog = qScopeGuard([dialog] { dialog->reject(); });
+      auto* table = dialog->findChild<QTableWidget*>("pointGrid"); QVERIFY(table);
+      const auto* delegate = qobject_cast<QStyledItemDelegate*>(table->itemDelegateForColumn(1)); QVERIFY(delegate);
+      QCOMPARE(delegate->displayText(table->item(0, 1)->data(Qt::DisplayRole), QLocale()), QString("12.35"));
+      QVERIFY(std::abs(table->item(0, 1)->data(Qt::EditRole).toDouble() - point.northing) < 1.e-10);
+      dialog->reject();
+    });
+    window.ShowPoints(false);
+    QCOMPARE(window.State().surveyPoints[0].northing, point.northing);
+  }
+
+  void surveyDisplayMarkerTiming() {
+    AppCommandState st; st.surveyPointShowIdInViewport = false;
+    st.modelUnitsPerPlottedInch = 50;
+    st.surveyPointCrossSpanPlottedInches = 1.f / 30.f; // 8 px span, matching the legacy cross.
+    for (int i = 0; i < 1000; ++i) {
+      const int column = i % 40; const int row = i / 40;
+      SurveyPoint point; point.easting = column - 20.; point.northing = row - 12.;
+      st.surveyPoints.push_back(point);
+    }
+    const auto camera = CadViewCamera(st);
+    QImage image(640, 480, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::black);
+    QPainter painter(&image);
+    QElapsedTimer timer; timer.start();
+    for (int frame = 0; frame < 30; ++frame) {
+      painter.setPen(QColor("#a7c9d9"));
+      for (const auto& point : st.surveyPoints) {
+        float x = 0, y = 0;
+        camera.WorldToScreen(point.easting, point.northing, point.elevation, 640, 480, &x, &y);
+        painter.drawLine(QPointF(x - 4, y - 4), QPointF(x + 4, y + 4));
+        painter.drawLine(QPointF(x - 4, y + 4), QPointF(x + 4, y - 4));
+      }
+    }
+    const double before = static_cast<double>(timer.nsecsElapsed()) / 30000000.;
+    timer.restart();
+    for (int frame = 0; frame < 30; ++frame) DrawQtSurveyPoints(painter, st, 640, 480);
+    qInfo("1000 survey markers, raster ms/frame: legacy %.3f; port %.3f", before, static_cast<double>(timer.nsecsElapsed()) / 30000000.);
+  }
+
+  void surveyDisplayScreenshotOptions() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800); window.show();
+    auto& st = window.State();
+    st.modelUnitsPerPlottedInch = 20;
+    SurveyPoint point; point.id = 101; point.description = "Control monument";
+    point.easting = -12; point.northing = 4; st.surveyPoints.push_back(point);
+    point.id = 102; point.easting = 12; point.northing = -6; point.description = "Boundary corner";
+    st.surveyPoints.push_back(point);
+    for (std::size_t i = 0; i < st.surveyPoints.size(); ++i) EnsureSurveyPointLabelMtext(st, i, nullptr);
+    window.Refresh(); window.ShowSurveyPointDisplay();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    QTest::qWait(200);
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    QVERIFY(dialog->grab().save(dir + "/qt-904-option-a.png"));
+    // Alternative integrated layout of the same working controls, for user selection.
+    auto* groups = dialog->findChild<QBoxLayout*>("surveyDisplayGroups"); QVERIFY(groups);
+    groups->setDirection(QBoxLayout::LeftToRight);
+    dialog->layout()->activate(); QTest::qWait(50);
+    dialog->resize(850, 380); QTest::qWait(100);
+    QVERIFY(dialog->grab().save(dir + "/qt-904-option-b.png"));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(dir + "/qt-904-viewport.png"));
+    const QImage normalFrame = window.m_Viewport->grabFramebuffer();
+    QVERIFY(normalFrame.copy(normalFrame.width() / 3, normalFrame.height() / 3,
+        normalFrame.width() * 2 / 3, normalFrame.height() / 3).save(dir + "/qt-904-viewport-detail.png"));
+    const int label = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(label >= 0);
+    st.cadAnnotations[label].surveyLabelHasUserOffset = true;
+    st.cadAnnotations[label].surveyLabelUserOffsetEast = 5;
+    st.cadAnnotations[label].surveyLabelUserOffsetNorth = 15;
+    RepositionSurveyLabelMtextForPoint(st, 0);
+    window.Refresh(); QTest::qWait(100);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(dir + "/qt-904-leader.png"));
+    const QImage leaderFrame = window.m_Viewport->grabFramebuffer();
+    QVERIFY(leaderFrame.copy(leaderFrame.width() / 3, leaderFrame.height() / 4,
+        leaderFrame.width() * 2 / 3, leaderFrame.height() / 2).save(dir + "/qt-904-leader-detail.png"));
+  }
+
   void failureReportAndUsageNoticeScreenshots() {
     const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
     std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
@@ -2288,6 +2493,7 @@ private Q_SLOTS:
 
   void qtViewportRendersGizmoAndSectionPlaneOverlays() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -2310,7 +2516,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage gizmo = viewport->grabFramebuffer();
     QVERIFY(gizmo != base);
-    QVERIFY(gizmo.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-a.png"));
+    QVERIFY(gizmo.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-a.png"));
 
     state.viewportSectionClip = true;
     state.gizmoPersistent = false;
@@ -2319,7 +2525,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage sectionGrips = viewport->grabFramebuffer();
     QVERIFY(sectionGrips != gizmo);
-    QVERIFY(sectionGrips.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-b.png"));
+    QVERIFY(sectionGrips.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-b.png"));
 
     state.gizmoPersistent = true;
     state.viewportSectionClipOffset = 0.0;
@@ -2331,11 +2537,12 @@ private Q_SLOTS:
     CadGizmoOverlay combinedOverlay;
     BuildGizmoOverlay(state, &combinedOverlay);
     QVERIFY(!combinedOverlay.empty());
-    QVERIFY(combined.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-c.png"));
+    QVERIFY(combined.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-c.png"));
   }
 
   void qtViewportGizmoDragCommitsOneUndoableTransform() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -2393,7 +2600,7 @@ private Q_SLOTS:
 
   void qtViewportSectionPlaneGripDragEndsOnReleaseAndUndoes() {
     EditorWindow window;
-    window.Submit("NEW");
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -3422,7 +3629,7 @@ private Q_SLOTS:
     QVERIFY(!window.AddAnnotation(annotation, error));
   }
 
-  // ---- Issue #905 / REQ-428: PDF find bar and thumbnail strip ----
+  // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----
   void pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations() {
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "find.pdf", pdfview::MakeSyntheticPdf(12, 3, 0));

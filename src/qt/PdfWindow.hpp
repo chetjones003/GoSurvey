@@ -48,7 +48,7 @@ private:
   std::map<int, pdfview::PageScale> m_Scales;
   int m_Tool = -1;
   std::vector<std::pair<float, float>> m_Draft;
-  // REQ-428: the find bar. Results are read-only: nothing here touches the annotation session.
+  // REQ-429: the find bar. Results are read-only: nothing here touches the annotation session.
   struct SearchOutcome {
     bool ok = false;
     pdfview::TextSearch result;
@@ -77,7 +77,7 @@ private:
   std::vector<pdfview::TextHit> m_Hits;
   bool m_HitsTruncated = false;
   int m_HitIndex = -1;
-  // REQ-387 clause 2 / REQ-428: the thumbnail strip.
+  // REQ-387 clause 2 / REQ-429: the thumbnail strip.
   QDockWidget* m_ThumbDock = nullptr;
   QListView* m_ThumbView = nullptr;
   PdfThumbnails* m_Thumbs = nullptr;

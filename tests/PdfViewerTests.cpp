@@ -303,7 +303,7 @@ TEST_CASE("PdfDocument returns a stated error for a corrupt, empty, missing or e
 
 // Hidden benchmark (run by name): thumbnail render cost on a real, large construction set.
 //   set GOSURVEY_BENCH_PDF to the file, then: GoSurveyTests "thumbnail render cost on a real PDF"
-TEST_CASE("SearchText finds every page that names the text, with a box on the page", "[pdfview][req428]") {
+TEST_CASE("SearchText finds every page that names the text, with a box on the page", "[pdfview][req429]") {
   const auto path = WritePdf("gs_pdfview_search.pdf", MakeSyntheticPdf(12, 5, 0));
   auto r = PdfDocument::Open(path);
   REQUIRE(r.doc != nullptr);
@@ -340,7 +340,7 @@ TEST_CASE("SearchText finds every page that names the text, with a box on the pa
   std::filesystem::remove(path);
 }
 
-TEST_CASE("SearchText: an empty query, no match, a cancel and a scan with no text", "[pdfview][req428]") {
+TEST_CASE("SearchText: an empty query, no match, a cancel and a scan with no text", "[pdfview][req429]") {
   const auto path = WritePdf("gs_pdfview_search2.pdf", MakeSyntheticPdf(5, 5, 0));
   auto r = PdfDocument::Open(path);
   REQUIRE(r.doc != nullptr);
