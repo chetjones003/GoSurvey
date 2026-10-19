@@ -30,7 +30,7 @@
 
 ## 5. Verification
 - User chose **Option A** (full-width options bar under the toolbar) from three integrated options on 2026-10-19.
-- `.uild.bat qt` — PASS.
+- `.\build.bat qt` — PASS.
 - Focused hidden-desktop workflows — PASS: the 7 `issue911*` workflow tests (units, default-off scale, Combined/Grid-only with text sync, unresolvable factor, save/load, curvature/refraction, Settings labels) plus the screenshot capture.
 - Full Qt suite, run per test because one crashing test aborts `ctest -R qt.editor` at that point: every test other than the crash below ran and all passed except four, none in code this change touches. Crash: `approvedTopographyStaysInPanelBackgrounds` (access violation, crashes alone, constructs `EditorWindow` only). Failures: `customTitleBarAndFloatingCommandLineWork` (hint text), `issue903PolarSettingsAndOneShotSnap` (artifact folder `artifacts/issue903` missing next to the exe), `tabsAppearInitiallyAndTypingRoutesFromEditorChrome` (known focus assertion), `appearanceChangesKeepDrawingAndToolspaceState` (theme colour). Not re-run on an unmodified `beta` build, so "pre-existing" is not proven.
 - Screenshots: `build/artifacts/Release/qt-911-*.png` (not committed).
