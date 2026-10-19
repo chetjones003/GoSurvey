@@ -16,6 +16,7 @@
 #include "traverse/TraverseReport.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -213,6 +214,30 @@ TEST_CASE("A network distance blunder is marked", "[lsa][req419]") {
             markedDistance = true;
     }
     CHECK(markedDistance);
+}
+
+TEST_CASE("Least-squares cancellation returns no partial solution", "[lsa][issue914]") {
+    const char* text =
+        "CTRL 1 0 0 ! !\n"
+        "CTRL 2 100 0 ! !\n"
+        "CTRL 3 50 86.6025403784 * *\n"
+        "DIST 1 2 100\n"
+        "DIST 2 3 100\n"
+        "DIST 1 3 100\n"
+        "ANGLE 1 2 3 -60\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse(text, td, weights, error));
+
+    std::atomic<bool> cancelRequested{true};
+    const LsaResult result = ComputeTraverseLeastSquares(td, weights, &cancelRequested);
+    CHECK(result.cancelled);
+    CHECK_FALSE(result.ok);
+    CHECK(result.message == "Adjustment cancelled.");
+    CHECK(result.stationIds.empty());
+    CHECK(result.adjEasting.empty());
+    CHECK(result.measResiduals.empty());
 }
 
 TEST_CASE("A standardized residual over 3 is marked", "[lsa][req418]") {

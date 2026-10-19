@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -139,10 +140,12 @@ struct LsaGpsResidual {
     double upResidualFt    = 0.0;
 };
 
-/// Result of a weighted least-squares adjustment of a closed-loop traverse,
-/// optionally including GPS vectors (REQ-417).
+/// Result of a weighted least-squares adjustment of an open or closed traverse,
+/// optionally including GPS vectors (REQ-417). A cancelled result is never usable
+/// and contains no partial adjusted coordinates or residuals.
 struct LsaResult {
     bool        ok = false;       ///< True if an adjustment was produced.
+    bool        cancelled = false;///< True when the caller requested cooperative cancellation.
     std::string message;          ///< Reason when !ok (REQ-017); short summary when ok.
 
     /// True when at least one usable GPS vector (resolved + a-priori covariance)
@@ -226,4 +229,5 @@ double LsaChiSquareCritical(double probability, int degreesOfFreedom);
 ///
 /// Never throws and never emits NaN; on any degenerate input it returns a
 /// well-formed failed result.
-LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& weights);
+LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& weights,
+                                      const std::atomic<bool>* cancelRequested = nullptr);
