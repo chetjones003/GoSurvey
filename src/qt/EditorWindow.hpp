@@ -59,6 +59,7 @@ private:
   void ShowLayers();
   void ShowUnits();
   void ShowQuickSelect();
+  void ShowSelectionList();
   void ShowCreatePoints();
   void ShowPoints(bool database);
   void ShowProjectPointWarning();

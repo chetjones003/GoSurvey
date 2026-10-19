@@ -32,8 +32,10 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QTableWidget>
+#include <QListWidget>
 #include <QPushButton>
 #include <QToolButton>
+#include <QStatusBar>
 #include <QMenu>
 #include <QDockWidget>
 #include <QFrame>
@@ -580,6 +582,174 @@ private Q_SLOTS:
     QCOMPARE(window.State().selection.size(), std::size_t(1));
     QCOMPARE(window.State().selection.front().index, 1);
     QCOMPARE(window.State().qsObjectType, AppCommandState::QsObjectType::Line);
+  }
+
+  void qtSelectionListSnapshotAndMultiSelectionToggle() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    window.State().selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    QToolButton* multi = nullptr;
+    for (auto* button : window.statusBar()->findChildren<QToolButton*>())
+      if (button->text() == "Multi Selection") multi = button;
+    QVERIFY(multi);
+    multi->click();
+    QVERIFY(window.State().multiSelectionEnabled);
+
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QVERIFY(viewport->selectionListRequested);
+    viewport->selectionListRequested();
+    auto* dialog = window.findChild<QDialog*>();
+    QTRY_VERIFY(dialog);
+    auto* list = dialog->findChild<QListWidget*>("selectionSnapshotList");
+    QVERIFY(list);
+    QCOMPARE(list->count(), 1);
+    list->item(0)->setCheckState(Qt::Unchecked);
+    QVERIFY(window.State().selection.empty());
+    dialog->findChild<QPushButton*>("selectionSelectAll")->click();
+    QCOMPARE(window.State().selection.size(), std::size_t(1));
+    QCOMPARE(window.State().selection.front().type, SelectedEntity::Type::LineSeg);
+    dialog->findChild<QPushButton*>("selectionRefresh")->click();
+    QCOMPARE(list->count(), 1);
+  }
+
+  void qtViewportGripDragCommitsAndEscapeRestores() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(1);
+    state.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    QTest::qWait(150);
+    const Camera camera = CadViewCamera(state);
+    float sx = 0, sy = 0, dx = 0, dy = 0;
+    camera.WorldToScreen(0, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &sx, &sy);
+    camera.WorldToScreen(0, 5, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &dx, &dy);
+    const QPointF start(sx, sy), destination(dx, dy);
+    auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
+      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &event);
+    };
+    sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, destination, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, destination, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(std::abs(state.userLinesFlat[0]) < 0.02);
+    QVERIFY(std::abs(state.userLinesFlat[1] - 5.0) < 0.1);
+    window.Submit("UNDO");
+    QCOMPARE(state.userLinesFlat[1], 0.0);
+
+    camera.WorldToScreen(10, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &sx, &sy);
+    camera.WorldToScreen(10, -5, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &dx, &dy);
+    sendMouse(QEvent::MouseButtonPress, QPointF(sx, sy), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, QPointF(dx, dy), Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    QCOMPARE(state.userLinesFlat[3], 10.0);
+    QCOMPARE(state.userLinesFlat[4], 0.0);
+  }
+
+  void qtCtrlClickSelectsSolidSubObjectAndPlainClickSelectsWholeSolid() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    brep::Solid solid;
+    brep::Problem problem{};
+    QVERIFY(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 10.0, &solid, &problem));
+    state.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+    state.cadSolidAttrs.emplace_back();
+    RefreshSolidDisplayGeometry(state);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    float x = 0, y = 0;
+    CadViewCamera(state).WorldToScreen(10, 10, 10, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &x, &y);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::ControlModifier, QPoint(qRound(x), qRound(y)));
+    QVERIFY(!state.subObjectSelection.empty());
+    QVERIFY(state.selection.empty());
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(x), qRound(y)));
+    QVERIFY(state.subObjectSelection.empty());
+    QCOMPARE(state.selection.size(), std::size_t(1));
+    QCOMPARE(state.selection.front().type, SelectedEntity::Type::Solid);
+    QCOMPARE(state.selection.front().index, 0);
+  }
+
+  void qtOverlappingPickMenuSelectsChosenVisibleEntity() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0, 0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(2);
+    state.multiSelectionEnabled = true;
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    float x = 0, y = 0;
+    CadViewCamera(state).WorldToScreen(5, 0, 0, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &x, &y);
+    auto* menuPoll = new QTimer(&window);
+    auto attempts = std::make_shared<int>(0);
+    connect(menuPoll, &QTimer::timeout, &window, [menuPoll, attempts, &window] {
+      for (QMenu* menu : window.findChildren<QMenu*>()) {
+        for (QAction* action : menu->actions())
+          if (action->text().startsWith("Line 2")) {
+            menuPoll->stop(); action->trigger(); return;
+          }
+      }
+      if (++*attempts > 300) {
+        menuPoll->stop();
+        for (QMenu* menu : window.findChildren<QMenu*>()) menu->close();
+      }
+    });
+    menuPoll->start(10);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(x), qRound(y)));
+    QTRY_COMPARE(state.selection.size(), std::size_t(1));
+    QCOMPARE(state.selection.front().type, SelectedEntity::Type::LineSeg);
+    QCOMPARE(state.selection.front().index, 1);
+  }
+
+  void qtCrossingSelectionDragAndEscapeCancellation() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(1);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    const Camera camera = CadViewCamera(state);
+    auto screenPoint = [&](double wx, double wy) {
+      float x = 0, y = 0;
+      camera.WorldToScreen(wx, wy, 0, static_cast<float>(viewport->width()),
+          static_cast<float>(viewport->height()), &x, &y);
+      return QPointF(x, y);
+    };
+    auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
+      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &event);
+    };
+    const QPointF from = screenPoint(12, 4), to = screenPoint(-2, -4);
+    sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(!state.selection.empty());
+    QVERIFY(!state.selBoxWaitingSecond);
+    const auto selected = state.selection;
+    const QPointF blank = screenPoint(30, 20);
+    sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    QCOMPARE(state.selection.size(), selected.size());
+    QVERIFY(!state.selBoxWaitingSecond);
   }
 
   void nativePointTransferImportsExportsAndUndoes() {
