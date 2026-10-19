@@ -9,7 +9,7 @@
 ## 1. Authority
 
 - Goal: Qt migration to beta 0.7.4 parity.
-- Requirement: REQ-431 (accepted by D-2026-10-19-c), with existing traverse/import requirements REQ-015, REQ-016, REQ-201, REQ-403, REQ-417–REQ-423 as behavior authority.
+- Requirement: REQ-432 (accepted by D-2026-10-19-d), with existing traverse/import requirements REQ-015, REQ-016, REQ-201, REQ-403, REQ-417–REQ-423 as behavior authority.
 - Constraints: REQ-300 (no new dependency), REQ-301 (no abstraction without two current uses).
 - Acceptance: See REQ-431.
 - Owning subsystem: Qt Traverse Editor over existing shared `src/traverse/` importers and traverse services.
@@ -32,7 +32,7 @@
 ## 4. Plan
 
 - [x] Read repository governance, issue #913, related traverse requirements, and neighboring Qt parity tasks.
-- [x] Record D-2026-10-19-c and accept REQ-431 based on the user's “Full Qt parity” decision.
+- [x] Record D-2026-10-19-d and accept REQ-432 based on the user's “Full Qt parity” decision.
 - [x] Verify the plan against beta 0.7.4 behavior, existing importers, architecture boundaries, and the Qt implementation; identify the major screenshot surfaces/states.
 - [x] Present 2–3 integrated visual options for the Adjustment window's import and merged-traverse review surface; record the user's selection before implementing visible UI changes.
 - [x] Implement the complete Qt workflows using the shared traverse merge service and existing importers.
@@ -43,8 +43,8 @@
 
 ## 5. Implementation log
 
-- 2026-10-19 — User decision: “Full Qt parity”; REQ-431 and D-2026-10-19-c recorded.
+- 2026-10-19 — User decision: “Full Qt parity”; REQ-432 and D-2026-10-19-d recorded.
 - 2026-10-19 — Plan verification: `src/ui/CadUi_TraverseEditor.cpp` is the beta behavior source for ordered multi-file import, append/renumber merge, per-file reporting, import markers and imported-file records. Existing importers are shared. `src/qt/AdjustmentWindow.cpp` imported one file by replacing its working traverse and had no multi-file workflow. The merge algorithm is now shared in `src/traverse/TraverseCalc.*`, used by Qt and ImGui; this keeps the domain operation below both UI layers.
 - 2026-10-19 — Presented three integrated layout options for the Qt Adjustment window's import and merged-traverse review: A (familiar left Files panel), B (navy title/hierarchy), C (compact batch-first layout). User selected A.
 - 2026-10-19 — Added the left Files panel, multi-select raw import, per-file results, JobXML import, and shared station remapping. Added `issue913RawImportsMergeAndReportPerFileFailures` and `issue913JobXmlImportsThroughQtAndCancelKeepsTheSession`. Captures are `qt-913-files-success.png`, `qt-913-files-error.png`, and `qt-913-jobxml-import.png` under `build/artifacts/Release/`.
-- 2026-10-19 — Verification: `build.bat` passed; focused Qt tests passed (2 tests, 4 QtTest totals including setup/cleanup); Catch2 `[traverse]` passed (26 cases, 158 assertions). The full Qt CTest `qt.editor` fails before reaching issue 913 in `approvedTopographyStaysInPanelBackgrounds`, crashing in `QWidget::grab` on the hidden desktop; the new focused tests pass through the same runner.
+- 2026-10-19 — Merged the beta update carrying #912: integrated the import list into the LSA Files panel, kept the preview/editor behavior, and renumbered this issue requirement to REQ-432 because REQ-431 is now assigned to #912. Combined Qt build passed; focused #912 and #913 workflows passed.\n- 2026-10-19 — Verification: `build.bat` passed; focused Qt tests passed (2 tests, 4 QtTest totals including setup/cleanup); Catch2 `[traverse]` passed (26 cases, 158 assertions). The full Qt CTest `qt.editor` fails before reaching issue 913 in `approvedTopographyStaysInPanelBackgrounds`, crashing in `QWidget::grab` on the hidden desktop; the new focused tests pass through the same runner.
