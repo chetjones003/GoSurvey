@@ -1,9 +1,10 @@
 # CodeQL static analysis (REQ-324) — additive, security/quality-focused C++ scan.
 #
 # Deliberately separate from release.yml: this must never be able to slow down or block REQ-202's
-# build/test/package/publish gate, so it has its own trigger (pull_request + a weekly schedule, not
-# every push) and its own job. It shares release.yml's MSVC/Ninja setup because CodeQL's C++ analysis
-# needs the project actually built with tracing, not merely configured.
+# build/test/package/publish gate, so it has its own trigger (pull_request into master and
+# workflow_dispatch, not every push) and its own job. It shares release.yml's MSVC/Ninja setup
+# because CodeQL's C++ analysis needs the project actually built with tracing, not merely configured.
+# A validated docs-only PR skips analysis; workflow_dispatch always runs it.
 #
 # Findings land on the repository's Security tab (code scanning alerts) AND fail the PR check
 # (REQ-402) when any new error/critical-severity result is found in the SARIF output — see the
@@ -21,6 +22,7 @@ name: codeql
 on:
   pull_request:
     branches: [master]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   workflow_dispatch:
 
 concurrency:
@@ -29,10 +31,37 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
+  classify-docs-only:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Check out classifier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate docs-only label against changed paths
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/classify_docs_only.py
+
   analyze:
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (github.event_name != 'pull_request' ||
+       needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: windows-latest
     steps:
       - name: Check out

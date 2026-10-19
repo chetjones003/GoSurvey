@@ -14002,6 +14002,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
+| REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
