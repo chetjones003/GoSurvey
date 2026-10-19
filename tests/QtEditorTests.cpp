@@ -303,12 +303,45 @@ QString Issue907Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue908Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
   QString path = directory.filePath(QString::fromLatin1(name));
   QFile file(path);
   if (!file.open(QIODevice::WriteOnly)) return {};
   file.write(bytes.data(), static_cast<qint64>(bytes.size()));
   return path;
+}
+std::string Issue908AuditPdf() {
+  std::string content = "0.5 w\n";
+  for (int i = 0; i < 5; ++i) {
+    const int y = 100 + i * 60;
+    content += "50 " + std::to_string(y) + " m 250 " + std::to_string(y) + " l S\n";
+    content += "50 " + std::to_string(y - 5) + " m 50 " + std::to_string(y + 10) + " l S\n";
+    content += "250 " + std::to_string(y - 5) + " m 250 " + std::to_string(y + 10) + " l S\n";
+    content += "BT /F1 8 Tf 130 " + std::to_string(y + 12) + " Td (100'-0\") Tj ET\n";
+  }
+  std::vector<std::string> objects = {
+      "<</Type/Catalog/Pages 2 0 R>>", "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+      "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+      "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "endstream",
+      "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"};
+  std::string pdf = "%PDF-1.4\n";
+  std::vector<size_t> offsets;
+  for (size_t i = 0; i < objects.size(); ++i) {
+    offsets.push_back(pdf.size());
+    pdf += std::to_string(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(objects.size() + 1) + "\n0000000000 65535 f \n";
+  for (size_t offset : offsets) {
+    char line[32]; std::snprintf(line, sizeof(line), "%010zu 00000 n \n", offset); pdf += line;
+  }
+  pdf += "trailer\n<</Size " + std::to_string(objects.size() + 1) + "/Root 1 0 R>>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return pdf;
 }
 // The current search match is orange over white (255, ~187, ~105); the other matches are yellow.
 bool Issue905HasHighlight(const QImage& image) {
@@ -4916,6 +4949,161 @@ private Q_SLOTS:
     QTest::keyClick(edit, Qt::Key_Return);
     QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("No matches"), 10000);
     QVERIFY(window.grab().save(Issue905Shot("qt-905-final-no-matches.png")));
+  }
+
+  // ---- Issue #908 / REQ-392/393/395: Qt PDF comparison and automatic scale audit ----
+  void pdfScaleAuditShowsMatchesAndAppliesConsensusAsOneUndoableChange() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "audit-sheet.pdf", Issue908AuditPdf());
+    PdfWindow window(nullptr);
+    window.resize(1100, 850); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::PageScale originalScale;
+    originalScale.pageValue = 1; originalScale.pageUnit = pdfview::Unit::Inch;
+    originalScale.realValue = 20; originalScale.realUnit = pdfview::Unit::Foot;
+    QVERIFY(window.m_Annotations.SetScales({{0, originalScale}}));
+    window.findChild<QAction*>("pdfAuditScale")->trigger();
+    auto* dialog = window.findChild<QDialog*>("pdfScaleAuditDialog");
+    auto* table = window.findChild<QTableWidget*>("pdfAuditTable");
+    auto* summary = window.findChild<QLabel*>("pdfAuditSummary");
+    QVERIFY(dialog && table && summary);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_AuditReady, 10000);
+    QVERIFY(window.m_AuditResult.consensusValid);
+    QCOMPARE(window.m_AuditMatches.matches.size(), size_t(5));
+    QVERIFY(summary->text().contains("Current scale"));
+    window.findChild<QCheckBox*>("pdfAuditAllRows")->setChecked(true);
+    QCOMPARE(table->rowCount(), 5);
+    QVERIFY(window.grab().save(Issue908Shot("qt-908-audit-dialog.png")));
+
+    window.findChild<QPushButton*>("pdfAuditUseConsensus")->click();
+    QVERIFY(window.EffectiveScale(0));
+    QVERIFY(window.HasUnsavedChanges());
+    QVERIFY(std::abs(window.EffectiveScale(0)->realValue - originalScale.realValue) > 0.1);
+    QVERIFY(window.m_Annotations.Undo());
+    QVERIFY(window.EffectiveScale(0));
+    QCOMPARE(window.EffectiveScale(0)->realValue, originalScale.realValue);
+
+    // Cancellation while the worker waits on PDFium must discard its partial result.
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      window.StartScaleAudit();
+      QVERIFY(window.m_AuditWork.valid());
+      window.findChild<QPushButton*>("pdfAuditCancel")->click();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(summary->text().contains("cancelled. No partial result"), 10000);
+    QVERIFY(!window.m_AuditReady);
+  }
+
+  void pdfCompareRunsDiffAndSupportsManualAlignmentAndFailure() {
+    QTemporaryDir directory;
+    const QString basePath = Issue905WritePdf(directory, "base.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 0));
+    const QString revisionPath = Issue905WritePdf(directory, "revision.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 1));
+    PdfWindow window(nullptr);
+    window.resize(1200, 900); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(basePath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = revisionPath;
+    window.m_CompareDialog->show();
+    window.StartCompare(true);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Compare && !window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->revision);
+    QVERIFY(!window.m_Compare->overlay.isNull());
+    QVERIFY(window.m_Compare->haveChanges);
+    QVERIFY(!window.m_Compare->changes.empty());
+    QCOMPARE(window.findChild<QTableWidget*>("pdfCompareChanges")->rowCount(), static_cast<int>(window.m_Compare->changes.size()));
+    QVERIFY(window.grab().save(Issue908Shot("qt-908-compare-overlay.png")));
+    QVERIFY(window.findChild<QDialog*>("pdfCompareDialog")->grab().save(Issue908Shot("qt-908-compare-controls.png")));
+
+    // One matching point and two matching points both use Qt's Base / Revision page picking sequence.
+    window.findChild<QPushButton*>("pdfComparePickOne")->click();
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->manualAlignment);
+    QVERIFY(std::abs(window.m_Compare->transform.tx - window.m_Compare->automatic.tx) < 0.01);
+    window.findChild<QPushButton*>("pdfComparePickTwo")->click();
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(2);
+    window.ComparePick(QPointF(220, 130), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(220, 130), Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->manualAlignment);
+
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = revisionPath;
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      window.StartCompare(true);
+      QVERIFY(window.m_Compare->busy);
+      window.findChild<QPushButton*>("pdfCompareCancel")->click();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 10000);
+    QVERIFY(window.m_CompareStatus->text().contains("cancelled. No partial result"));
+    QVERIFY(window.m_Compare->changes.empty());
+
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = directory.filePath("missing.pdf");
+    window.StartCompare(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 10000);
+    QVERIFY(window.m_CompareStatus->text().contains("Could not open the revision"));
+    QVERIFY(window.m_Compare->overlay.isNull());
+  }
+
+  void qtPdfCompareAndAuditDeepNavyScreenshotsForIssue908() {
+    const auto saveComposite = [](PdfWindow& window, QWidget* dialog, const QString& path) {
+      QTest::qWait(80);
+      const QImage viewer = window.grab().toImage();
+      const QImage panel = dialog->grab().toImage();
+      const QSize size(std::max(viewer.width(), panel.width()), std::max(viewer.height(), panel.height()));
+      QImage image(size, QImage::Format_ARGB32_Premultiplied);
+      image.fill(QColor("#10151f"));
+      QPainter painter(&image);
+      painter.drawImage(0, 0, viewer);
+      painter.drawImage((image.width() - panel.width()) / 2, (image.height() - panel.height()) / 2, panel);
+      painter.end();
+      return image.save(path);
+    };
+
+    QTemporaryDir directory;
+    const QString auditPath = Issue905WritePdf(directory, "audit-options.pdf", Issue908AuditPdf());
+    PdfWindow auditWindow(nullptr);
+    auditWindow.resize(1200, 900); auditWindow.show();
+    QString error;
+    QVERIFY2(auditWindow.LoadFile(auditPath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!auditWindow.IsBusy(), 10000);
+    pdfview::PageScale scale;
+    scale.pageValue = 1; scale.pageUnit = pdfview::Unit::Inch;
+    scale.realValue = 20; scale.realUnit = pdfview::Unit::Foot;
+    QVERIFY(auditWindow.m_Annotations.SetScales({{0, scale}}));
+    auditWindow.findChild<QAction*>("pdfAuditScale")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(auditWindow.m_AuditReady, 10000);
+    auditWindow.findChild<QCheckBox*>("pdfAuditAllRows")->setChecked(true);
+    auto* auditDialog = auditWindow.findChild<QDialog*>("pdfScaleAuditDialog");
+    QVERIFY(auditDialog);
+    QVERIFY(saveComposite(auditWindow, auditDialog, Issue908Shot("qt-908-audit-deep-navy.png")));
+
+    const QString basePath = Issue905WritePdf(directory, "compare-base.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 0));
+    const QString revisionPath = Issue905WritePdf(directory, "compare-revision.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 1));
+    PdfWindow compareWindow(nullptr);
+    compareWindow.resize(1200, 900); compareWindow.show();
+    QVERIFY2(compareWindow.LoadFile(basePath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!compareWindow.IsBusy(), 10000);
+    compareWindow.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    compareWindow.m_Compare->source = revisionPath;
+    compareWindow.m_CompareDialog->show();
+    compareWindow.StartCompare(true);
+    QTRY_VERIFY_WITH_TIMEOUT(compareWindow.m_Compare && !compareWindow.m_Compare->busy && compareWindow.m_Compare->haveChanges, 30000);
+    auto* compareDialog = compareWindow.findChild<QDialog*>("pdfCompareDialog");
+    QVERIFY(compareDialog);
+    QVERIFY(saveComposite(compareWindow, compareDialog, Issue908Shot("qt-908-compare-deep-navy.png")));
   }
 
   // ---- Issue #906 / REQ-430: PDF calibration, scale checks and snapping ----
