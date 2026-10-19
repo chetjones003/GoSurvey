@@ -1,6 +1,7 @@
 #include "EditorChrome.hpp"
 #include "EditorWindow.hpp"
 #include "CommandBar.hpp"
+#include "TopographicArtwork.hpp"
 #include <QApplication>
 #include <QLabel>
 #include <QLineEdit>
@@ -10,6 +11,8 @@
 #include <QPlainTextEdit>
 #include <QGraphicsOpacityEffect>
 #include <QPropertyAnimation>
+#include <QPainter>
+#include <QPainterPath>
 #include <QSettings>
 #include <QShortcut>
 #include <QTimer>
@@ -27,6 +30,21 @@ class TitleStrip final : public QWidget {
 public:
   explicit TitleStrip(QMainWindow* window) : QWidget(window), m_Window(window) { setObjectName("editorTitleBar"); window->installEventFilter(this); }
 protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    const bool dark = palette().color(QPalette::Window).lightness() < 128;
+    if (!dark) {
+      painter.fillRect(rect(), palette().color(QPalette::Window));
+      return;
+    }
+    QLinearGradient background(0, 0, width(), height());
+    background.setColorAt(0.0, QColor("#061421"));
+    background.setColorAt(0.65, QColor("#07192a"));
+    background.setColorAt(1.0, QColor("#0a2031"));
+    painter.fillRect(rect(), background);
+    qtArtwork::DrawTerrainContours(painter, QRectF(width() - 600, -170, 500, 366), true, .80);
+  }
+
   bool eventFilter(QObject* watched, QEvent* event) override {
     if (watched == m_Window && event->type() == QEvent::WindowStateChange)
       if (auto* button = findChild<QToolButton*>("windowMaximize")) button->setText(m_Window->isMaximized() ? "❐" : "□");
@@ -46,13 +64,11 @@ private:
 
 void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
   auto* strip = new TitleStrip(this);
-  strip->setFixedHeight(30);
-  strip->setAutoFillBackground(true);
-  if (!qApp->property("defaultQtStyle").toBool()) strip->setStyleSheet("#editorTitleBar { background:#242830; border-bottom:1px solid #191d23; } QToolButton { color:#dce2e9; border:0; padding:0; border-radius:0; } QToolButton:hover { background:#465565; } QToolButton#windowClose:hover { background:#c42b1c; } QToolButton#applicationMenu { background:#306c94; } QToolButton#applicationMenu:hover { background:#438ab5; }");
-  auto* row = new QHBoxLayout(strip); row->setContentsMargins(0, 0, 0, 0); row->setSpacing(2);
+  strip->setFixedHeight(42);
+  auto* row = new QHBoxLayout(strip); row->setContentsMargins(12, 0, 8, 0); row->setSpacing(8);
   auto* app = new QToolButton(strip); app->setObjectName("applicationMenu");
   app->setAccessibleName("GoSurvey application menu"); app->setToolTip("GoSurvey application menu (Alt+F)");
-  app->setIcon(windowIcon()); app->setIconSize(QSize(22, 22)); app->setFixedSize(40, 30); app->setAutoRaise(true);
+  app->setIcon(windowIcon()); app->setIconSize(QSize(28, 28)); app->setFixedSize(40, 34); app->setAutoRaise(true);
   app->setMenu(applicationMenu); app->setPopupMode(QToolButton::InstantPopup);
   row->addWidget(app);
   connect(new QShortcut(QKeySequence("Alt+F"), this), &QShortcut::activated, app, &QToolButton::showMenu);
@@ -60,16 +76,16 @@ void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
     const auto actions = findChildren<QAction*>("command_" + QString(command));
     if (actions.empty()) continue;
     auto* tool = new QToolButton(strip); tool->setObjectName("quick_" + QString(command));
-    tool->setDefaultAction(actions.first()); tool->setIconSize(QSize(17, 17)); tool->setFixedSize(26, 26); tool->setAutoRaise(true);
+    tool->setDefaultAction(actions.first()); tool->setIconSize(QSize(19, 19)); tool->setFixedSize(30, 30); tool->setAutoRaise(true);
     row->addWidget(tool);
   }
   row->addSpacing(16);
   m_WindowTitle = new QLabel(windowTitle(), strip); m_WindowTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-  if (!qApp->property("defaultQtStyle").toBool()) m_WindowTitle->setStyleSheet("color:#c8d0da; font-size:12px; background:transparent;");
+  m_WindowTitle->setObjectName("windowBrandTitle");
   m_WindowTitle->setMinimumWidth(0); row->addWidget(m_WindowTitle, 1);
   auto control = [&](const char* name, const char* label, const char* glyph) {
     auto* button = new QToolButton(strip); button->setObjectName(name); button->setAccessibleName(label); button->setToolTip(label);
-    button->setText(QString::fromUtf8(glyph)); button->setFont(QFont("Segoe UI", 11)); button->setFixedSize(40, 30); button->setAutoRaise(true); row->addWidget(button); return button;
+    button->setText(QString::fromUtf8(glyph)); button->setFont(QFont("Segoe UI", 13)); button->setFixedSize(46, 42); button->setAutoRaise(true); row->addWidget(button); return button;
   };
   connect(control("windowMinimize", "Minimize", "−"), &QToolButton::clicked, this, &QWidget::showMinimized);
   auto* maximize = control("windowMaximize", "Maximize / Restore", "□");
