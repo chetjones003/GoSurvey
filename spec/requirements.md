@@ -12482,6 +12482,68 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18).
 - Revisions: 2026-10-18 — initial; user confirmed full Qt parity for issue #901.
 
+### REQ-425 — Qt selection cycling and model-space grips (GitHub issue #902)
+
+- Purpose: the Qt editor currently has basic picking, while the beta editor also lets users choose
+  among overlapping picks and edit selected geometry directly from its grips. Those workflows must
+  remain available during the additive Qt migration.
+- Priority: must
+- Type: functional
+- Depends on: REQ-039, REQ-047, REQ-054, REQ-060, REQ-121, REQ-318, REQ-370, and migration tracker #878.
+- Statement:
+  1. **Existing selection rules remain authoritative.** Qt selection gestures follow REQ-039,
+     REQ-121, REQ-318, and REQ-370 where applicable. Selection math and hit testing stay in the
+     existing Commands/Viewport services; Qt owns event routing and presentation.
+  2. **Multi Selection.** The existing Multi Selection toggle controls disambiguation of overlapping
+     linework picks. With it off, a click selects the resolver's nearest visible candidate. With it
+     on, an ambiguous hover shows the overlap marker and clicking opens a cursor-adjacent list of
+     candidates with their type labels and color swatches. Choosing a row applies the click's
+     existing Shift behavior; dismissing the list changes no selection.
+  3. **Selection list.** The existing right-click Selection… action remains available when a
+     selection exists. Its modeless list reflects a snapshot of the current entity and survey-point
+     selection; Refresh takes a new snapshot, row checkboxes add/remove listed items, and Select All /
+     Deselect All affect the listed snapshot only.
+  4. **Model-space grips.** Qt presents and routes every model-space grip family already supported by
+     the beta editor: line endpoints; circle center/radius; polyline vertices and arc-segment bulge
+     grips; arc and ellipse grips where the shared helpers permit them; dynamic-block grips; and the
+     existing dimension and MTEXT grip workflows. A drag previews the edit while held and commits on
+     release as one undoable change. Escape or the beta grip-cancel gesture restores the original
+     geometry. A refused or read-only edit leaves the drawing unchanged. ORTHO, direct-distance
+     entry, and object snaps retain REQ-047 and the existing grip behavior.
+  5. **Advanced 3D selection.** Qt routes whole-solid picks through the camera ray and sub-object
+     picks through REQ-318. Ctrl+click names a solid face, edge, or vertex without entering a sticky
+     mode; while Ctrl is held, the candidate under the cursor is pre-highlighted. Shift and the
+     mutually exclusive whole-object/sub-object selection stores follow REQ-318. A miss or an
+     occluded sub-object is not selected.
+  6. **Migration boundary.** This requirement does not change the existing beta editor, switch the
+     production default, remove ImGui, or add new geometry/edit operations. The 3D gizmo and
+     section-plane overlay work remains under issue #900.
+- Acceptance:
+  - Qt tests prove ordinary click/Shift selection and left-to-right window / right-to-left crossing
+    drags, including live preview and cancellation without a selection change, in line with
+    REQ-370.
+  - With Multi Selection off, an overlapping pick chooses the nearest visible candidate. With it
+    on, the overlap marker and candidate list appear; choosing each listed candidate selects that
+    entity, Shift behavior is preserved, and dismissing the list leaves selection unchanged.
+  - The Selection… panel refreshes its snapshot and its row, Select All, and Deselect All actions
+    produce the corresponding entity and survey-point selection without changing drawing geometry.
+  - Qt exercises every model-space grip family listed in item 4. Each supported drag previews and
+    commits the expected geometry; one undo restores the original; Escape and the grip-cancel gesture
+    restore the original without committing; a refused or read-only edit leaves geometry unchanged.
+  - In an orbited 3D view, Qt selects the nearest visible solid, Ctrl+click selects each supported
+    face/edge/vertex kind, and Shift toggles those sub-objects. A far-side occluded sub-object and a
+    miss are not selected; switching between whole-object and sub-object selection follows
+    REQ-318's exclusivity rule.
+  - The parity ledger records the completed selection workflows and their focused Qt coverage.
+  - Before issue #902 is marked complete, the user reviews 2–3 integrated screenshot options for
+    each major affected UI surface and the selected visual direction is applied.
+- Owner-layer: Qt UI (`src/qt/EditorViewport.*`, `src/qt/EditorWindow.*`) / existing Commands and
+  Viewport services.
+- Decision: D-2026-10-18-b.
+- Status: accepted.
+- Revisions: 2026-10-18 — initial proposal; accepted by user.
+
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -13662,6 +13724,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
 | REQ-424 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
+| REQ-425 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

@@ -47,6 +47,7 @@
 #include <QTimer>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMessageBox>
 #include <QMenu>
 #include <QPlainTextEdit>
@@ -148,6 +149,7 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { Refresh(); };
+  m_Viewport->selectionListRequested = [this] { ShowSelectionList(); };
   m_Viewport->textEntered = [this](const QString& text) { if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible(); m_Command->setFocus(); m_Command->insert(text); };
   m_Viewport->cursorChanged = [this](double x, double y, double z) {
     m_Coordinates->setText(QString("E %1   N %2   Z %3").arg(x + m_State.worldDocumentOriginX, 0, 'f', 4)
@@ -186,8 +188,33 @@ EditorWindow::EditorWindow() {
     SetCurrentAnnotationScaleIndex(m_State, index);
     Refresh();
   });
+  auto* multiSelect = new QToolButton(this);
+  multiSelect->setText("Multi Selection"); multiSelect->setCheckable(true);
+  multiSelect->setChecked(m_State.multiSelectionEnabled);
+  multiSelect->setToolTip("Disambiguate overlapping linework picks.");
+  statusBar()->addWidget(multiSelect);
+  connect(multiSelect, &QToolButton::toggled, this, [this](bool on) {
+    m_State.multiSelectionEnabled = on;
+    if (!on) { m_State.viewportPickCandidates.clear(); m_State.viewportPickAmbiguous = false; }
+    m_Viewport->update();
+  });
   auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-  connect(escape, &QShortcut::activated, this, [this] { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
+  connect(escape, &QShortcut::activated, this, [this] {
+    if (m_State.entityGripMoveActive) { RestoreEntityGripOriginal(m_State); ClearEntityGripInteraction(m_State); BumpCadGpuCache(m_State); }
+    if (m_State.mtextGripMoveActive) { AbortMtextGripInteraction(m_State); BumpCadGpuCache(m_State); }
+    if (m_State.dimGripMoveActive) {
+      if (m_State.dimGripAnnotationIndex >= 0 && static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.cadAnnotations.size()) {
+        CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
+        ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
+        ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
+        ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
+        CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      }
+      ClearDimGripInteraction(m_State); BumpCadGpuCache(m_State);
+    }
+    m_Viewport->CancelSelectionBox();
+    m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh();
+  });
   connect(new QShortcut(QKeySequence(Qt::Key_F3), this), &QShortcut::activated, osnap, &QToolButton::toggle);
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
   connect(new QShortcut(QKeySequence(Qt::Key_F8), this), &QShortcut::activated, ortho, &QToolButton::toggle);
@@ -881,6 +908,100 @@ void EditorWindow::Refresh() {
     m_TextDialogOpen = false;
     Refresh();
   }
+}
+
+void EditorWindow::ShowSelectionList() {
+  auto* dialog = new QDialog(this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setObjectName("selectionList");
+  dialog->setWindowTitle("Selection");
+  dialog->resize(360, 420);
+  auto* layout = new QVBoxLayout(dialog);
+  auto* list = new QListWidget(dialog);
+  list->setObjectName("selectionSnapshotList");
+  layout->addWidget(list, 1);
+  auto* actions = new QHBoxLayout();
+  auto* refresh = new QPushButton("Refresh", dialog);
+  refresh->setObjectName("selectionRefresh");
+  auto* selectAll = new QPushButton("Select All", dialog);
+  selectAll->setObjectName("selectionSelectAll");
+  auto* deselectAll = new QPushButton("Deselect All", dialog);
+  deselectAll->setObjectName("selectionDeselectAll");
+  actions->addWidget(refresh); actions->addWidget(selectAll); actions->addWidget(deselectAll);
+  layout->addLayout(actions);
+  auto* close = new QPushButton("Close", dialog);
+  layout->addWidget(close);
+  auto populate = [this, list] {
+    QSignalBlocker blocker(list);
+    list->clear();
+    for (const SelectedEntity& entity : m_State.selection) {
+      const char* kind = "Object";
+      switch (entity.type) {
+        case SelectedEntity::Type::LineSeg: kind = "Line"; break;
+        case SelectedEntity::Type::Circle: kind = "Circle"; break;
+        case SelectedEntity::Type::Polyline: kind = "Polyline"; break;
+        case SelectedEntity::Type::Arc: kind = "Arc"; break;
+        case SelectedEntity::Type::Ellipse: kind = "Ellipse"; break;
+        case SelectedEntity::Type::Annotation: kind = "Annotation"; break;
+        case SelectedEntity::Type::Table: kind = "Table"; break;
+        case SelectedEntity::Type::BlockRef: kind = "Block"; break;
+        case SelectedEntity::Type::Solid: kind = "3D Solid"; break;
+        case SelectedEntity::Type::PipeRun: kind = "Pipe Run"; break;
+        default: break;
+      }
+      auto* item = new QListWidgetItem(QString("%1 %2").arg(kind).arg(entity.index + 1), list);
+      item->setData(Qt::UserRole, 0); item->setData(Qt::UserRole + 1, entity.index);
+      item->setData(Qt::UserRole + 2, static_cast<int>(entity.type));
+      item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+      item->setCheckState(Qt::Checked);
+    }
+    for (int index : m_State.selectedSurveyPointIndices) {
+      auto* item = new QListWidgetItem(QString("Survey point %1").arg(index + 1), list);
+      item->setData(Qt::UserRole, 1); item->setData(Qt::UserRole + 1, index);
+      item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+      item->setCheckState(Qt::Checked);
+    }
+  };
+  auto setChecked = [this, list](Qt::CheckState state) {
+    for (int row = 0; row < list->count(); ++row) list->item(row)->setCheckState(state);
+    Refresh();
+  };
+  connect(refresh, &QPushButton::clicked, dialog, populate);
+  connect(selectAll, &QPushButton::clicked, dialog, [setChecked] { setChecked(Qt::Checked); });
+  connect(deselectAll, &QPushButton::clicked, dialog, [setChecked] { setChecked(Qt::Unchecked); });
+  connect(close, &QPushButton::clicked, dialog, &QDialog::close);
+  connect(list, &QListWidget::itemChanged, dialog, [this, list](QListWidgetItem* item) {
+    const int index = item->data(Qt::UserRole + 1).toInt();
+    const bool survey = item->data(Qt::UserRole).toInt() == 1;
+    if (survey) {
+      auto it = std::find(m_State.selectedSurveyPointIndices.begin(), m_State.selectedSurveyPointIndices.end(), index);
+      if (item->checkState() == Qt::Checked && it == m_State.selectedSurveyPointIndices.end()) m_State.selectedSurveyPointIndices.push_back(index);
+      else if (item->checkState() != Qt::Checked && it != m_State.selectedSurveyPointIndices.end()) m_State.selectedSurveyPointIndices.erase(it);
+      SyncSurveyPointLinkedMtextSelection(m_State, index);
+    } else {
+      const auto type = static_cast<SelectedEntity::Type>(item->data(Qt::UserRole + 2).toInt());
+      auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [index, type](const SelectedEntity& e) { return e.index == index && e.type == type; });
+      if (item->checkState() == Qt::Checked && it == m_State.selection.end()) {
+        m_State.selection.push_back({static_cast<SelectedEntity::Type>(type), index});
+      } else if (item->checkState() != Qt::Checked && it != m_State.selection.end()) m_State.selection.erase(it);
+      if (type == SelectedEntity::Type::Annotation && index >= 0 && static_cast<std::size_t>(index) < m_State.cadAnnotations.size()) {
+        const CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(index)];
+        if (annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId >= 0) {
+          const int pointIndex = SurveyPointIndexForId(m_State, annotation.surveyPointLabelForId);
+          auto point = std::find(m_State.selectedSurveyPointIndices.begin(), m_State.selectedSurveyPointIndices.end(), pointIndex);
+          if (pointIndex >= 0 && item->checkState() == Qt::Checked && point == m_State.selectedSurveyPointIndices.end())
+            m_State.selectedSurveyPointIndices.push_back(pointIndex);
+          else if (pointIndex >= 0 && item->checkState() != Qt::Checked && point != m_State.selectedSurveyPointIndices.end())
+            m_State.selectedSurveyPointIndices.erase(point);
+          if (pointIndex >= 0) SyncSurveyPointLinkedMtextSelection(m_State, pointIndex);
+        }
+      }
+    }
+    if (m_Viewport) m_Viewport->update();
+    Refresh();
+  });
+  populate();
+  dialog->show();
 }
 
 void EditorWindow::ShowWhatsNew() {

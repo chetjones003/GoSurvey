@@ -60,7 +60,7 @@ line, drawing tabs, dockable Toolspace and Properties, and a status bar.
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
 | Viewport | Perspective/orthographic selector with validated FOV command; annotation-scale selector and selected-text annotation properties; model annotation scale visibility/rendering; stable-ID object isolation supplied to the renderer and annotation overlay; point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays |
-| Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
+| Input | Shared visibility-aware click/hover resolver; Shift removal; Multi Selection overlap marker and layer-aware candidate menu; click-drag and two-corner window/crossing selection with translucent preview and Escape/right-click cancel that restores the prior selection; line/circle/polyline/bulge/arc/ellipse/dynamic-block, aligned-dimension and MTEXT grips; live grip preview, commit, undo and cancel; Ctrl+click 3D sub-object hover/pick and whole-solid selection; modeless Selection… snapshot list for entities and survey points; object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Advanced selection edge cases and full keyboard focus/DPI parity |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
 | Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
 | Projects | Native create/open, lock acquisition and read-only choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; copy/link prompts; health/pack/turnover UI; stale-lock takeover UI |
@@ -73,11 +73,16 @@ Native Quick Select now exposes object/property filters, include/exclude, curren
 selection scope and append through the shared selection service. Numeric input
 is validated before applying; Cancel preserves the selection and saved filter.
 Native command typing routes from editor controls and floating docks to command
-entry while preserving editable fields and dialogs. Tabs reserve space before
+entry while preserving editable fields and dialogs. Selection/grip additions are
+tracked in REQ-424; focused Qt tests cover the selection snapshot, overlap chooser,
+grip commit/undo/cancel, and crossing-drag workflows. Tabs reserve space before
 the first viewport paint. Named orientations are under View rather than a toolbar
 row. History, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
-event loop. Exact annotation and all selection/gesture parity remain release gates.
+event loop. Qt selection cycling, gestures, grips, and the modeless Selection…
+list are implemented and recorded in REQ-424. The Qt test target builds, and
+the focused selection workflows pass on Qt 6.8.3. Exact annotation parity and
+advanced selection edge cases remain separate release gates.
 
 ## Version 0.7.2 ribbon inventory
 
