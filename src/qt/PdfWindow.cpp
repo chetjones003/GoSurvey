@@ -1,6 +1,8 @@
 #include "PdfWindow.hpp"
+#include "PdfCanvas.hpp"
 #include "EditorWindow.hpp"
 #include "PdfSplit.hpp"
+#include "PdfScaleCheck.hpp"
 #include "SurveyPoints.hpp"
 #include <QAction>
 #include <QFileDialog>
@@ -41,31 +43,6 @@
 #include <QAbstractItemView>
 #include <map>
 #include <set>
-
-class PdfCanvas final : public QWidget {
-public:
-  explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); }
-  QImage image;
-  std::function<void(QPointF, Qt::MouseButton)> clicked;
-  std::function<void(QPainter&)> overlay;
-  std::function<void(QPointF, Qt::MouseButton)> pressed;
-  std::function<void(QPointF)> moved;
-  std::function<void(QPointF, Qt::MouseButton)> released;
-protected:
-  void paintEvent(QPaintEvent*) override {
-    QPainter painter(this);
-    if (image.isNull()) { painter.drawText(rect(), Qt::AlignCenter, "Open a PDF to begin"); return; }
-    painter.drawImage(QPoint(0, 0), image);
-    painter.setRenderHint(QPainter::Antialiasing);
-    if (overlay) overlay(painter);
-  }
-  void mousePressEvent(QMouseEvent* event) override {
-    if (pressed) pressed(event->position(), event->button());
-    if (clicked) clicked(event->position(), event->button());
-  }
-  void mouseMoveEvent(QMouseEvent* event) override { if (moved) moved(event->position()); }
-  void mouseReleaseEvent(QMouseEvent* event) override { if (released) released(event->position(), event->button()); }
-};
 
 // REQ-387 clause 2: the thumbnail strip's model. Rows are pages; only the rows the view asks to paint are ever
 // rendered, one at a time on a worker, nearest the top of the strip first. A draft (time-budgeted) render shows
@@ -263,7 +240,11 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_PageNumber->setRange(1, 1);
   m_PageNumber->setPrefix("Page ");
   tools->addWidget(m_PageNumber);
-  connect(m_PageNumber, &QSpinBox::valueChanged, this, [this] { m_Draft.clear(); SyncThumbnail(); RequestRender(); });
+  connect(m_PageNumber, &QSpinBox::valueChanged, this, [this] {
+    m_Draft.clear(); m_SnapHit = false; m_SnapPrevValid = false;
+    SyncThumbnail(); UpdateScaleDisplay(); if (m_SnapOn) { StartSnapRead(m_PageNumber->value() - 1); UpdateSnap(m_LastPointer); }
+    RequestRender();
+  });
   tools->addAction("Previous", this, [this] { m_PageNumber->setValue(m_PageNumber->value() - 1); });
   tools->addAction("Next", this, [this] { m_PageNumber->setValue(m_PageNumber->value() + 1); });
   tools->addSeparator();
@@ -274,6 +255,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   tools->addAction("Extract pages...", this, [this] { SplitPages(); });
   auto* extract = tools->addAction("Extract coordinates", this, [this] {
     if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
+    SetTool(-1, QString()); // leave any scale pick in progress
     m_ExtractMode = true; m_ExtractDragging = false; m_ExtractResult.reset();
     statusBar()->showMessage("Drag a rectangle around selectable coordinate text. Esc cancels.");
     m_Page->setCursor(Qt::CrossCursor);
@@ -284,31 +266,42 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   findAction->setObjectName("pdfFindAction");
   findAction->setShortcut(QKeySequence::Find);
   findAction->setToolTip("Find text in the document (Ctrl+F)");
+  addToolBarBreak(Qt::TopToolBarArea); // the annotation tools get a row of their own (there are enough of them now)
   auto* annotationTools = addToolBar("PDF annotations and measurements");
   annotationTools->setObjectName("pdfAnnotationTools");
-  auto* group = new QActionGroup(this);
+  m_ToolGroup = new QActionGroup(this);
   const std::pair<const char*, int> kinds[] = {{"Browse", -1}, {"Text", 0}, {"Line", 1}, {"Rectangle", 2},
-      {"Ellipse", 3}, {"Length", 5}, {"Polyline length", 6}, {"Area", 7}, {"Angle", 8}};
+      {"Ellipse", 3}, {"Length", 5}, {"Polyline length", 6}, {"Area", 7}, {"Angle", 8}, {"Check", kToolCheck}};
   for (const auto& kind : kinds) {
     auto* action = annotationTools->addAction(kind.first);
-    action->setCheckable(true); group->addAction(action);
+    action->setCheckable(true); m_ToolGroup->addAction(action);
+    action->setData(kind.second);
     if (kind.second == -1) action->setChecked(true);
+    if (kind.second == kToolCheck) {
+      action->setObjectName("pdfCheckTool");
+      action->setToolTip("Check the page scale against a dimension the drawing states");
+    }
     connect(action, &QAction::triggered, this, [this, kind] {
-      m_Tool = kind.second; m_Draft.clear();
-      statusBar()->showMessage(m_Tool < 0 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
+      m_CheckTarget = 0;
+      if (kind.second == kToolCheck) SetTool(kToolCheck, "Check: click the two ends of a dimension the drawing states.");
+      else SetTool(kind.second, kind.second < 0 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
     });
   }
-  annotationTools->addAction("Scale...", this, [this] { EditScale(); });
-  annotationTools->addAction("Undo", this, [this] { m_Annotations.Undo(); m_Page->update(); setWindowModified(HasUnsavedChanges()); });
-  annotationTools->addAction("Redo", this, [this] { m_Annotations.Redo(); m_Page->update(); setWindowModified(HasUnsavedChanges()); });
+  auto* calibrateTool = new QAction("Calibrate", m_ToolGroup); // started from Set scale...; not a toolbar button
+  calibrateTool->setCheckable(true);
+  calibrateTool->setData(kToolCalibrate);
+  annotationTools->addAction("Undo", this, [this] { m_Annotations.Undo(); SceneChanged(); });
+  annotationTools->addAction("Redo", this, [this] { m_Annotations.Redo(); SceneChanged(); });
+  BuildScaleToolbar();
   m_Scroll = new QScrollArea(this);
   m_Scroll->setAlignment(Qt::AlignCenter);
   m_Page = new PdfCanvas(m_Scroll);
   m_Page->setMouseTracking(true);
   m_Page->clicked = [this](QPointF point, Qt::MouseButton button) { PageClick(point, button); };
-  m_Page->overlay = [this](QPainter& painter) { DrawHighlights(painter); DrawAnnotations(painter); DrawExtractOverlay(painter); };
+  m_Page->moved = [this](QPointF point) { MoveExtract(point); UpdateSnap(point); };
+  m_Page->left = [this] { if (m_SnapHit) { m_SnapHit = false; m_SnapPrevValid = false; m_Page->update(); } };
+  m_Page->overlay = [this](QPainter& painter) { DrawHighlights(painter); DrawAnnotations(painter); DrawScaleOverlay(painter); DrawExtractOverlay(painter); };
   m_Page->pressed = [this](QPointF point, Qt::MouseButton button) { BeginExtract(point, button); };
-  m_Page->moved = [this](QPointF point) { MoveExtract(point); };
   m_Page->released = [this](QPointF point, Qt::MouseButton button) { EndExtract(point, button); };
   m_Scroll->setWidget(m_Page);
   setCentralWidget(m_Scroll);
@@ -357,13 +350,11 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_FindBar->addWidget(m_FindEdit);
   auto* previousHit = new QAction("Previous", this);
   previousHit->setObjectName("pdfFindPrevious");
-  previousHit->setShortcut(QKeySequence::FindPrevious);
-  previousHit->setToolTip("Previous match (Shift+F3, Shift+Enter)");
+  previousHit->setToolTip("Previous match (Shift+Enter)");
   auto* nextHit = new QAction("Next", this);
   nextHit->setObjectName("pdfFindNext");
-  nextHit->setShortcut(QKeySequence::FindNext);
-  nextHit->setToolTip("Next match (F3, Enter)");
-  for (auto* action : {previousHit, nextHit}) { addAction(action); m_FindBar->addAction(action); } // addAction on the window keeps F3 live while the bar is hidden
+  nextHit->setToolTip("Next match (Enter)");
+  for (auto* action : {previousHit, nextHit}) { addAction(action); m_FindBar->addAction(action); } // F3 belongs to Snap (REQ-430)
   connect(previousHit, &QAction::triggered, this, [this] { StepHit(-1); });
   connect(nextHit, &QAction::triggered, this, [this] { StepHit(1); });
   m_FindMatchCase = new QCheckBox("Match case", m_FindBar);
@@ -388,6 +379,8 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
 }
 
 PdfWindow::~PdfWindow() {
+  for (auto& page : m_SnapPages) *page.second.cancel = true;
+  m_SnapPages.clear(); // each reader holds the document: the futures wait here
   CancelSearch(true);
   m_Thumbs->SetDocument(nullptr); // the document is destroyed before the model; the worker must be done with it
   m_Cancel = true;
@@ -410,7 +403,9 @@ bool PdfWindow::LoadFile(const QString& path, QString& error) {
   }
   auto result = pdfview::PdfDocument::Open(std::filesystem::path(path.toStdWString()));
   if (!result.doc) { error = QString::fromUtf8(result.error.c_str()); return false; }
-  CancelSearch(true); // the search and the thumbnail worker both hold the old document
+  CancelSearch(true); // the search, the snap readers and the thumbnail worker all hold the old document
+  for (auto& page : m_SnapPages) *page.second.cancel = true;
+  m_SnapPages.clear();
   m_Thumbs->SetDocument(nullptr);
   m_Document = std::move(result.doc);
   m_Thumbs->SetDocument(m_Document.get());
@@ -418,12 +413,18 @@ bool PdfWindow::LoadFile(const QString& path, QString& error) {
   m_Annotations = {}; m_Draft.clear();
   m_ExtractMode = false; m_ExtractDragging = false; m_ExtractResult.reset();
   if (m_ExtractReview) m_ExtractReview->hide();
-  m_Scales = pdfview::ReadPageScales(m_Document->Path()).scales;
+  m_RobustPicks.clear(); m_SelectedCheck = -1; m_SnapHit = false; m_SnapPrevValid = false;
+  m_FileScales = pdfview::ReadPageScales(m_Document->Path());
+  if (!m_FileScales.error.empty()) qWarning() << "PDF scale: could not read the scales in" << path << "-" << m_FileScales.error.c_str();
+  for (const auto& page : m_FileScales.unusable)
+    qWarning() << "PDF scale: page" << page.first + 1 << "of" << path << "has a scale that cannot be used -" << page.second.c_str();
   const QSignalBlocker pageBlock(m_PageNumber);
   m_PageNumber->setRange(1, m_Document->PageCount());
   m_PageNumber->setValue(1);
   SyncThumbnail();
   setWindowTitle("GoSurvey | " + path + "[*]"); setWindowModified(false);
+  UpdateScaleDisplay();
+  if (m_SnapOn) StartSnapRead(0);
   RequestRender();
   return true;
 }
@@ -465,11 +466,8 @@ void PdfWindow::PollRender() {
 }
 
 pdfview::PageScale PdfWindow::CurrentScale() const {
-  const int page = m_PageNumber->value() - 1;
-  const auto changed = m_Annotations.Scales().find(page);
-  if (changed != m_Annotations.Scales().end()) return changed->second;
-  const auto original = m_Scales.find(page);
-  return original != m_Scales.end() ? original->second : pdfview::PageScale{0, pdfview::Unit::Inch, 0};
+  const auto* scale = EffectiveScale(m_PageNumber->value() - 1);
+  return scale ? *scale : pdfview::PageScale{0, pdfview::Unit::Inch, 0};
 }
 
 bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) {
@@ -479,9 +477,8 @@ bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) 
   }
   for (const auto& point : annotation.pts)
     if (!std::isfinite(point.first) || !std::isfinite(point.second)) { error = "Measurement coordinates must be finite."; return false; }
-  auto scale = pdfview::PageScale{0, pdfview::Unit::Inch, 0};
-  if (const auto found = m_Scales.find(annotation.page); found != m_Scales.end()) scale = found->second;
-  if (const auto found = m_Annotations.Scales().find(annotation.page); found != m_Annotations.Scales().end()) scale = found->second;
+  const auto* inForce = EffectiveScale(annotation.page);
+  const auto scale = inForce ? *inForce : pdfview::PageScale{0, pdfview::Unit::Inch, 0};
   if (annotation.IsDimension() && (!pdfview::DimensionComplete(annotation) ||
       (annotation.kind != pdfview::Annot::Kind::Angle && !scale.Valid()))) {
     error = "Complete the measurement and set a page scale first."; return false;
@@ -494,9 +491,25 @@ bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) 
 void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (m_ExtractMode) return;
   if (!m_Document || m_Tool < 0 || IsBusy() || m_Page->image.isNull()) return;
+  UpdateSnap(point); // the click's own position, so a click without a prior move still snaps
   const auto size = m_Document->Sizes()[m_PageNumber->value() - 1];
-  if (button == Qt::LeftButton) m_Draft.emplace_back(static_cast<float>(point.x() * size.wPt / m_Page->width()),
-      static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
+  if (m_Tool == kToolCalibrate || m_Tool == kToolCheck) {
+    if (button != Qt::LeftButton) { m_Draft.clear(); m_Page->update(); return; }
+    if (m_Tool == kToolCheck && m_Draft.empty() && m_CheckTarget == 0 && !EffectiveScale(m_PageNumber->value() - 1)) {
+      statusBar()->showMessage("This page has no scale. Use Set scale... first.");
+      return;
+    }
+    const std::size_t index = m_Draft.size();
+    m_Draft.emplace_back(m_SnapHit ? m_SnapX : static_cast<float>(point.x() * size.wPt / m_Page->width()),
+        m_SnapHit ? m_SnapY : static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
+    if (m_Tool == kToolCalibrate && index < 2) m_CalSnapped[index] = m_SnapHit;
+    if (m_Draft.size() < 2) { statusBar()->showMessage(m_Tool == kToolCalibrate ? "Click the other point of the known distance." : "Click the other end of the dimension."); m_Page->update(); return; }
+    m_Page->update();
+    if (m_Tool == kToolCalibrate) FinishCalibrationPicks(); else FinishCheckPicks();
+    return;
+  }
+  if (button == Qt::LeftButton) m_Draft.emplace_back(m_SnapHit ? m_SnapX : static_cast<float>(point.x() * size.wPt / m_Page->width()),
+      m_SnapHit ? m_SnapY : static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
   const auto kind = static_cast<pdfview::Annot::Kind>(m_Tool);
   const bool multi = kind == pdfview::Annot::Kind::PolyLength || kind == pdfview::Annot::Kind::Area;
   const std::size_t required = kind == pdfview::Annot::Kind::Angle || kind == pdfview::Annot::Kind::Area ? 3 : 2;
@@ -650,36 +663,17 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     }
   }
   painter.setPen(QPen(QColor("#45a8df"), 2));
-  for (std::size_t i = 0; i < m_Draft.size(); ++i) {
+  for (std::size_t i = 0; m_Tool != kToolCalibrate && m_Tool != kToolCheck && i < m_Draft.size(); ++i) {
     const auto pt = map(m_Draft[i].first, m_Draft[i].second);
     painter.drawEllipse(pt, 3, 3);
     if (i) painter.drawLine(map(m_Draft[i - 1].first, m_Draft[i - 1].second), pt);
   }
 }
 
-void PdfWindow::EditScale() {
-  if (!m_Document) return;
-  QDialog dialog(this); dialog.setWindowTitle("PDF Page Scale");
-  auto* layout = new QFormLayout(&dialog);
-  auto* presets = new QComboBox(&dialog);
-  for (const auto& scale : pdfview::PresetScales()) presets->addItem(QString::fromUtf8(scale.RatioText().c_str()));
-  layout->addRow("Scale", presets);
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
-  layout->addRow(buttons);
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  if (dialog.exec() == QDialog::Accepted) {
-    m_Annotations.SetScales({{m_PageNumber->value() - 1, pdfview::PresetScales()[presets->currentIndex()]}});
-    setWindowModified(HasUnsavedChanges()); m_Page->update();
-  }
-}
-
 bool PdfWindow::SaveFile(const QString& path, QString& error) {
   if (!m_Document) { error = "Open a PDF first."; return false; }
-  auto scales = m_Scales;
-  for (const auto& changed : m_Annotations.Scales()) scales[changed.first] = changed.second;
   const auto reason = pdfview::SaveAnnotated(m_Document->Path(), m_Annotations.Items(),
-      std::filesystem::path(path.toStdWString()), m_Annotations.Scales(), scales);
+      std::filesystem::path(path.toStdWString()), m_Annotations.Scales(), ScalesInForce());
   if (!reason.empty()) { error = QString::fromUtf8(reason.c_str()); return false; }
   m_Annotations.MarkSaved(); setWindowModified(false);
   statusBar()->showMessage("Saved " + path);
@@ -739,6 +733,7 @@ void PdfWindow::EscapePressed() {
     statusBar()->showMessage("Coordinate extraction cancelled.");
   }
   else if (IsSearching()) CancelSearch(false); // the poll reports "Search cancelled"
+  else if (m_Tool >= 0 || !m_Draft.empty()) EscapeTool(); // REQ-430: a pick in progress, then the tool
   else if (m_FindBar->isVisible()) CloseFindBar();
 }
 

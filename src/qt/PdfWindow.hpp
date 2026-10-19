@@ -2,11 +2,18 @@
 #include <QMainWindow>
 #include "PdfDocument.hpp"
 #include "PdfAnnotate.hpp"
+#include "PdfSnap.hpp"
+#include <QPointF>
 #include "PdfCoordExtract.hpp"
 #include <QString>
 #include <atomic>
 #include <future>
+#include <memory>
 class PdfCanvas;
+class PdfScaleDialogs;
+class QAction;
+class QActionGroup;
+class QPushButton;
 class PdfThumbnails;
 class QCheckBox;
 class QDockWidget;
@@ -34,6 +41,20 @@ public:
   bool AddAnnotation(const pdfview::Annot& annotation, QString& error);
   bool IsSearching() const { return m_Search.valid(); }
   int ThumbnailsKept() const;
+  /// REQ-430: the scale in force on a zero-based page (the session's change, else the file's); null = unscaled.
+  const pdfview::PageScale* EffectiveScale(int page) const;
+  bool SnapEnabled() const { return m_SnapOn; }
+  /// The Set scale dialog's remembered entries.
+  struct ScaleForm {
+    int mode = 0;       ///< 0 preset, 1 typed ratio
+    int preset = 8;     ///< index into PresetScales()
+    double page = 1.0, real = 20.0;
+    int pageUnit = 0, realUnit = 1;
+    int scope = 0;      ///< 0 this page, 1 every page, 2 chosen pages
+    QString scopeText;
+    double calReal = 10.0; ///< the Known distance box
+    int calUnit = 1;
+  };
   void SetEditor(EditorWindow* editor) { m_Editor = editor; }
 protected:
   void closeEvent(QCloseEvent* event) override;
@@ -51,7 +72,7 @@ private:
   double m_Zoom = 1.0;
   bool m_Pending = false;
   pdfview::AnnotSession m_Annotations;
-  std::map<int, pdfview::PageScale> m_Scales;
+  pdfview::ScaleRead m_FileScales; ///< what the opened file already says (REQ-390 clause 3)
   int m_Tool = -1;
   std::vector<std::pair<float, float>> m_Draft;
   EditorWindow* m_Editor = nullptr;
@@ -103,9 +124,63 @@ private:
   void ExtractRegion();
   void ShowExtractReview();
   void DecideExtractCandidate(int row, bool accept);
-  void EditScale();
   void SaveAs();
   void SplitPages();
   bool ConfirmDiscard();
   pdfview::PageScale CurrentScale() const;
+
+  // REQ-430: scale display, calibration, scale checks and snapping (src/qt/PdfScaleUi.cpp).
+  friend class PdfScaleDialogs;
+  static constexpr int kToolCalibrate = 20; ///< m_Tool values beyond the annotation kinds
+  static constexpr int kToolCheck = 21;
+  struct SnapPage {
+    std::future<std::shared_ptr<pdfview::SnapIndex>> reading;
+    std::shared_ptr<pdfview::SnapIndex> index; ///< null until read, or if reading failed
+    std::shared_ptr<std::atomic<bool>> cancel = std::make_shared<std::atomic<bool>>(false);
+    bool started = false;
+    bool failed = false;
+  };
+  void BuildScaleToolbar();
+  void SetTool(int tool, const QString& status);
+  void ClearPending();
+  void EscapeTool();
+  void UpdateScaleDisplay();
+  void SceneChanged();                         ///< after anything the scale display or overlay depends on
+  void ShowSetScale();
+  void BeginCalibrate();
+  void FinishCalibrationPicks();
+  void FinishCheckPicks();
+  void ShowChecks(int tab);
+  bool ApplyScale(const pdfview::PageScale& scale, const ScaleForm& form, const pdfview::ScaleCheck* calibration, QString& error);
+  bool ScopePages(const ScaleForm& form, std::vector<int>& pages, QString& error) const;
+  void UpdateSnap(QPointF point);
+  void ToggleSnap();
+  void StartSnapRead(int page);
+  void DrawScaleOverlay(QPainter& painter);
+  QPointF PageToCanvas(float x, float y) const;
+  std::map<int, pdfview::PageScale> ScalesInForce() const;
+  QActionGroup* m_ToolGroup = nullptr;
+  QAction* m_SnapAction = nullptr;
+  QLabel* m_ScaleLabel = nullptr;
+  QLabel* m_SnapStatus = nullptr;
+  QPushButton* m_ChecksButton = nullptr;
+  QCheckBox* m_ShowChecksBox = nullptr;
+  ScaleForm m_ScaleForm;
+  pdfview::CheckLimits m_Limits;
+  pdfview::RobustParams m_Robust;
+  std::vector<std::pair<pdfview::ScaleCheck, bool>> m_RobustPicks; ///< robust calibration: dimension, and whether it is used
+  int m_CheckTarget = 0;   ///< 0: a check on the page's scale; 1: a dimension for the robust calibration
+  int m_CalPage = 0;
+  bool m_CalSnapped[2] = {false, false};
+  float m_CalX[2] = {0.f, 0.f}, m_CalY[2] = {0.f, 0.f};
+  int m_SelectedCheck = -1;
+  bool m_SnapOn = false;
+  std::map<int, SnapPage> m_SnapPages;  ///< the last few pages read
+  bool m_SnapHit = false;               ///< the marker is on a point of the page being shown
+  float m_SnapX = 0.f, m_SnapY = 0.f;
+  bool m_SnapPrevValid = false;
+  float m_SnapPrevX = 0.f, m_SnapPrevY = 0.f;
+  QTimer* m_SnapPoll = nullptr;
+  QPointF m_LastPointer;                ///< the pointer on the canvas, for the snap marker and the check rubber band
+  bool m_PointerIn = false;
 };
