@@ -6163,7 +6163,7 @@ Issue #126's acceptance list includes four items that cannot be honestly met, ea
 capability that does not exist. They are recorded here rather than quietly dropped:
 
 1. **Exact PLAN of a tilted UCS** — needs camera roll; see the documented limitation above.
-2. **"Polar tracking follows the UCS"** — polar tracking does not exist. It is a status-bar toggle
+2. **"Polar tracking follows the UCS"** — historical exclusion, superseded for the Qt port by REQ-428 (D-2026-10-19-a). The shipped shared POLAR implementation is now the parity target. Original rationale: polar tracking does not exist. It is a status-bar toggle
    with no drafting behaviour (`CadUi.cpp`, labelled "UI only for now"). The condition asks for the
    feature to be built first, which is its own requirement.
 3. **Per-viewport UCS and UCSFOLLOW isolation** (GitHub issue #155) — **promoted to its own
@@ -12590,7 +12590,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - The complete Qt workflow is usable through the native Qt UI; a shared command route or a visible ribbon button alone is insufficient.
   - Update `docs/qt-074-parity-ledger.md` with implemented routes, focused evidence, and remaining gaps.
 - Owner-layer: Qt UI (`src/qt/`); shared command and drawing behavior remain in their existing services.
-- Status: accepted (2026-10-18).
+- Status: accepted (2026-10-18) — D-2026-10-18-c, GitHub issue #896.
 - Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896.
 
 ### REQ-428 — Qt survey-point display controls (GitHub issue #904)
@@ -12642,6 +12642,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18) — D-2026-10-18-d, GitHub issue #899.
 - Revisions: 2026-10-18 — initial, recording the Qt parity decision for GitHub issue #899.
 
+### REQ-428 — Qt drafting input parity (GitHub issue #903)
+
+- Purpose: make the complete existing beta 0.7.4 drafting input workflow usable in Qt.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-19-a; user requested "Full Qt port" after the REQ-108 status conflict was explained.
+- Statement: Port existing UCS-aware ORTHO/POLAR, fixed keyboard shortcuts, focus routing and transient drafting controls through the shared command services. This accepts the shipped POLAR behavior for this port, not unimplemented object-snap tracking or customizable shortcuts from proposed REQ-108/116.
+- Acceptance:
+  - ORTHO and POLAR remain mutually exclusive; F8/F10 and status buttons agree, including during command entry. F3/F4 independently control 2D/3D snaps. Shared constraints preserve rotated/tilted UCS geometry, snapped elevation, preview/commit agreement and direct-distance entry.
+  - POLAR increment and additional angles use existing preferences. Native controls support editing and visible save failure without losing the previous settings.
+  - Shift+right-click offers the existing temporary snap kinds, with Perpendicular offered only when a reference exists. An override survives hover, ignores persistent per-kind toggles, and clears on pick/cancel without changing preferences.
+  - Native cursor input uses the shared dynamic-input model: coordinate/distance-angle fields, Tab, locked values, mode characters and keywords; command and cursor prompts agree. Preserve cancellation, validation, blank Enter defaults and one submission per keypress. Show existing polar/pipe compass guidance and segment bearing-pick interaction.
+  - Fixed shortcuts reach existing commands; text editors retain editing keys and clipboard/undo ownership. Typing from editor chrome reaches command entry; modal dialogs and other windows keep their input. Escape cancels the current gesture before the enclosing command, including bearing-pick and live section/gizmo drags.
+  - Preserve existing undo and read-only semantics through shared commands. Do not add geometry/persistence models or change the production frontend.
+  - Add focused Qt workflow coverage and update the parity ledger honestly. Present 2–3 integrated visual options for each major affected surface, apply the user's choice and show final meaningful states before completion.
+- Owner-layer: Qt UI; existing command/domain/persistence services retain behavior ownership.
+- Status: accepted (2026-10-19) — D-2026-10-19-a, GitHub issue #903.
 ### REQ-429 — Qt PDF viewer: thumbnail strip and text search (GitHub issue #905)
 
 - Purpose: bring the 0.7.4 PDF viewer's page thumbnail strip to Qt, and give the Qt viewer text search, so a Qt user can move around a long plan set and find a word in it without leaving GoSurvey.
@@ -12651,7 +12668,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-201 (honest failure), REQ-300 (PDFium is already in the tree), REQ-387 (viewer), REQ-388 (annotation session; search must not touch it).
 - Statement:
   1. **Thumbnail strip.** The Qt PDF window has a dockable thumbnail strip, shown by default and toggled from the toolbar. It lists every page with its number; clicking a page opens it, and the strip follows the page chosen by the page box, Previous/Next or search. Only the thumbnails on screen are drawn (a 500-page file never creates 500 images); thumbnails render off the UI thread nearest-visible first, a page not drawn yet shows its blank sheet, and the number of kept thumbnails is bounded. A page that cannot be drawn shows its blank sheet and never blocks the strip or the viewer.
-  2. **Find bar.** Ctrl+F shows a find bar and focuses its text box. Enter searches the whole document, case-insensitively unless "Match case" is ticked, off the UI thread; Esc cancels a running search and otherwise closes the bar. The first match on or after the current page is shown. Enter again (or the Next button) goes to the next match and Shift+Enter (or Previous) to the previous one, wrapping at either end and saying so. F3 is not a find key in the Qt PDF window: REQ-430 gives it to Snap (D-2026-10-19-a). The bar shows "n of m".
+  2. **Find bar.** Ctrl+F shows a find bar and focuses its text box. Enter searches the whole document, case-insensitively unless "Match case" is ticked, off the UI thread; Esc cancels a running search and otherwise closes the bar. The first match on or after the current page is shown. Enter again (or the Next button) goes to the next match and Shift+Enter (or Previous) to the previous one, wrapping at either end and saying so. F3 is not a find key in the Qt PDF window: REQ-430 gives it to Snap (D-2026-10-19-b). The bar shows "n of m".
   3. **Highlights.** Every match on the page being shown is highlighted; the current match is emphasised and the viewer shows its page.
   4. **Honest results (REQ-201).** An empty search text does nothing and clears earlier results. No match shows "No matches". A document with no text layer (for example a scan) shows "This PDF has no searchable text". At most 10,000 matches are kept; hitting the limit is stated ("n of 10000+"). Opening another file clears the search.
   5. **Read-only.** Search never changes the PDF, the annotations, their undo/redo history or the unsaved-changes state.
@@ -12664,14 +12681,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Screenshot options were presented and the user's selected direction applied before the issue is closed.
 - Owner-layer: Qt UI (`src/qt/PdfWindow`) over the shared `src/pdf/PdfDocument`.
 - Status: accepted (2026-10-18) — D-2026-10-18-g, GitHub issue #905.
-- Revisions: 2026-10-18 — initial, D-2026-10-18-g, GitHub issue #905. 2026-10-19 — clause 2: F3 / Shift+F3 no longer step through matches (REQ-430 uses F3 for Snap; the user chose "F3 = Snap everywhere", D-2026-10-19-a).
+- Revisions: 2026-10-18 — initial, D-2026-10-18-g, GitHub issue #905. 2026-10-19 — clause 2: F3 / Shift+F3 no longer step through matches (REQ-430 uses F3 for Snap; the user chose "F3 = Snap everywhere", D-2026-10-19-b).
 
 ### REQ-430 — Qt PDF viewer: calibration, scale checks and snapping (GitHub issue #906)
 
 - Purpose: bring the 0.7.4 PDF scale workflows to the Qt viewer, so a Qt user can set a sheet's scale by clicking two known points, test that scale against dimensions the drawing prints, correct it, and have clicks land exactly on the drawing's own line ends and corners.
 - Priority: must
 - Type: functional (UI)
-- Decision: D-2026-10-19-a; the user approved "Yes, REQ-430 with that scope". This is a Qt parity port: REQ-390 (scale), REQ-391 clause 5 (snap) and REQ-394 (scale check) remain the behaviour authority. Nothing is added to them and the ImGui viewer is unchanged.
+- Decision: D-2026-10-19-b; the user approved "Yes, REQ-430 with that scope". This is a Qt parity port: REQ-390 (scale), REQ-391 clause 5 (snap) and REQ-394 (scale check) remain the behaviour authority. Nothing is added to them and the ImGui viewer is unchanged.
 - Depends on: REQ-201 (honest failure), REQ-387 (viewer), REQ-388 (annotation session, Save As), REQ-390, REQ-391, REQ-394, REQ-429 (Qt PDF window).
 - Statement:
   1. **Set scale.** A Qt **Set scale...** dialog shows the current page's scale (or "unscaled"), and sets a scale from a **preset** (the architectural, engineering and metric list) or a **typed ratio** ("page length = real length", each with a unit). It applies to **this page**, **every page**, or **chosen pages** (REQ-389 page-list syntax; a bad list is refused with the reason and nothing changes). **Clear scale** removes it from the same pages. Every apply is **one undo step** and is logged.
@@ -12692,8 +12709,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md`.
   - Present 2-3 integrated screenshot options for each major affected surface, apply the user's selected direction, and show the final screenshots before the issue is closed.
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfScale*`) over the shared `src/pdf/` services (`PdfMeasure`, `PdfScaleCheck`, `PdfSnap`, `PdfAnnotate`).
-- Status: accepted (2026-10-19) - D-2026-10-19-a, GitHub issue #906.
-- Revisions: 2026-10-19 - initial, D-2026-10-19-a, GitHub issue #906.
+- Status: accepted (2026-10-19) - D-2026-10-19-b, GitHub issue #906.
+- Revisions: 2026-10-19 - initial, D-2026-10-19-b, GitHub issue #906.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13877,6 +13894,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
 | REQ-425 | Platform/UI | `GoSurveyQtTests` `[req425]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
+| REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |
 | REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |

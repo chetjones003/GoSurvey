@@ -252,6 +252,11 @@ QString Issue905Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue907Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
   QString path = directory.filePath(QString::fromLatin1(name));
   QFile file(path);
@@ -381,6 +386,137 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  // ---- Issue #907 / REQ-399: Qt PDF coordinate extraction ----
+  void pdfCoordinateReviewAcceptsAndDeniesThroughDrawingWorkflow() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-review.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
+    PdfWindow window(&editor);
+    window.SetEditor(&editor);
+    window.resize(1100, 820); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+
+    pdfview::CoordCandidate candidate;
+    candidate.northing = 303267.23; candidate.easting = 1887764.63;
+    candidate.elevation = 99.35; candidate.description = "BRASS CAP CONTROL";
+    candidate.sourceText = "BRASS CAP CONTROL\nN:303267.23\nE:1887764.63\nEL. 99.35";
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.m_ExtractStart = QPointF(350, 120); window.m_ExtractEnd = QPointF(710, 260);
+    window.ShowExtractReview();
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
+    auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates"); QVERIFY(table);
+    QCOMPARE(table->rowCount(), 1);
+
+    // Capture the selected deep navy review with the source PDF and viewer behind it.
+    QTest::qWait(80);
+    QImage composite(window.size(), QImage::Format_ARGB32_Premultiplied);
+    composite.fill(QColor("#101722"));
+    QPainter painter(&composite);
+    painter.drawPixmap(0, 0, window.grab());
+    painter.drawPixmap((window.width() - review->width()) / 2, 180, review->grab());
+    painter.end();
+    QVERIFY(composite.save(Issue907Shot("qt-907-review-deep-navy.png")));
+
+    auto* accept = review->findChild<QPushButton*>("pdfCoordinateAccept_0"); QVERIFY(accept);
+    accept->click();
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+    QCOMPARE(state.surveyPoints[0].id, 1);
+    QCOMPARE(state.surveyPoints[0].easting, candidate.easting);
+    QCOMPARE(state.surveyPoints[0].northing, candidate.northing);
+    QVERIFY(state.surveyPoints[0].description == candidate.description);
+    QVERIFY(state.documents[static_cast<std::size_t>(state.activeDrawingIdx)].undoStack.size() > 0);
+    QVERIFY(DoUndo(state, editor.m_Log));
+    QVERIFY(state.surveyPoints.empty());
+
+    candidate.pointNumber = 7; candidate.sourceText = "N:303000\nE:1887000";
+    candidate.description.clear(); candidate.elevation.reset();
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.ShowExtractReview();
+    auto* deny = review->findChild<QPushButton*>("pdfCoordinateDeny_0"); QVERIFY(deny);
+    deny->click();
+    QVERIFY(state.surveyPoints.empty()); // Deny never touches the drawing.
+  }
+
+  void pdfCoordinateRegionCancelAndNoTextAreSafe() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-scan.pdf",
+        pdfview::MakeLineWorkPdf(612, 792, 50, 1, 0));
+    PdfWindow window(nullptr); window.resize(1000, 760); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* action = window.findChild<QAction*>("pdfExtractCoordinates"); QVERIFY(action);
+    action->trigger();
+    QVERIFY(window.m_ExtractMode);
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!window.m_ExtractMode && !window.m_ExtractDragging);
+    QVERIFY(!window.m_ExtractResult.has_value());
+
+    action->trigger();
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas"); QVERIFY(canvas);
+    QVERIFY(canvas->width() > 20 && canvas->height() > 20);
+    QString message;
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(2, 2));
+    QTest::mouseMove(canvas, QPoint(canvas->width() - 2, canvas->height() - 2));
+    QVERIFY(window.grab().save(Issue907Shot("qt-907-region-selection.png")));
+    QTimer::singleShot(0, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      message = box->text();
+      QVERIFY(box->grab().save(Issue907Shot("qt-907-no-text-message.png")));
+      box->accept();
+    });
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(canvas->width() - 2, canvas->height() - 2));
+    QVERIFY(message.contains("scanned", Qt::CaseInsensitive));
+    QVERIFY(message.contains("OCR", Qt::CaseInsensitive));
+    QVERIFY(!window.m_ExtractResult.has_value());
+  }
+
+  void pdfCoordinateCommitHonorsReadOnlyAndPointConflicts() {
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = 1;
+    pdfview::CoordCandidate candidate;
+    candidate.northing = 400.0; candidate.easting = 500.0; candidate.elevation = 12.0;
+    candidate.pointNumber = 1; candidate.description = "PDF CONTROL";
+
+    AppCommandState::ProjectSession session; session.uid = 44; session.readOnly = true;
+    state.drawingTabs[1].projectUid = session.uid;
+    state.openProjects.push_back(session);
+    QTimer::singleShot(0, [] {
+      if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) box->accept();
+    });
+    QVERIFY(!editor.CommitPdfCoordinate(candidate));
+    QVERIFY(state.surveyPoints.empty());
+    state.openProjects.clear();
+    state.drawingTabs[1].projectUid = 0;
+
+    SurveyPoint existing{}; existing.id = 1; existing.easting = 10.0; existing.northing = 20.0;
+    existing.elevation = 1.0; existing.description = "EXISTING";
+    state.surveyPoints.push_back(existing);
+    QTimer::singleShot(0, [] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      for (auto* button : box->buttons()) if (button->text() == "Overwrite") { button->click(); return; }
+      QFAIL("Overwrite choice not found");
+    });
+    QVERIFY(editor.CommitPdfCoordinate(candidate));
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+    QCOMPARE(state.surveyPoints.front().easting, candidate.easting);
+    QCOMPARE(state.surveyPoints.front().description, candidate.description);
+    QVERIFY(DoUndo(state, editor.m_Log));
+    QCOMPARE(state.surveyPoints.front().description, existing.description);
+  }
 
   void approvedTopographyStaysInPanelBackgrounds() {
     IsolatedUserData isolated;
@@ -2284,6 +2420,218 @@ private Q_SLOTS:
     settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
   }
 
+  void issue903DraftingModesAndCursorFields() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& state = window.State();
+    state.objectSnapEnabled = false;
+    window.Submit("LINE");
+    auto* first = window.findChild<QLineEdit*>("dynamicField0");
+    auto* second = window.findChild<QLineEdit*>("dynamicField1");
+    QVERIFY(first && second && first->isVisible());
+    first->setFocus(); first->selectAll(); QTest::keyClicks(first, "10");
+    QTest::keyClick(first, Qt::Key_Tab); QVERIFY(second->hasFocus());
+    QTest::keyClicks(second, "20"); QTest::keyClick(second, Qt::Key_Return);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QVERIFY(std::abs(state.anchorX - 10) < 1e-5); QVERIFY(std::abs(state.anchorY - 20) < 1e-5);
+    first->setFocus(); first->selectAll();
+    const QString relativePoint("@5,3");
+    for (int i = 0; i < relativePoint.size(); ++i)
+      QTest::keyClicks(qobject_cast<QLineEdit*>(QApplication::focusWidget()), relativePoint.mid(i, 1));
+    QTest::keyClick(QApplication::focusWidget(), Qt::Key_Return);
+    QCOMPARE(state.userLinesFlat.size(), size_t(6));
+    QVERIFY(std::abs(state.userLinesFlat[3] - 15) < 1e-5);
+    QVERIFY(std::abs(state.userLinesFlat[4] - 23) < 1e-5);
+    QTest::keyClick(first, Qt::Key_F10);
+    QVERIFY(state.polarMode); QVERIFY(!state.orthoMode);
+    QVERIFY(window.findChild<QToolButton*>("draftPolar")->isChecked());
+    QTest::keyClick(first, Qt::Key_F8);
+    QVERIFY(state.orthoMode); QVERIFY(!state.polarMode);
+    QVERIFY(!window.findChild<QToolButton*>("draftPolar")->isChecked());
+    const bool snap3d = state.objectSnap3dEnabled;
+    QTest::keyClick(first, Qt::Key_F4); QCOMPARE(state.objectSnap3dEnabled, !snap3d);
+    QVERIFY(!state.objectSnapEnabled);
+    QTest::keyClick(first, Qt::Key_F3); QVERIFY(state.objectSnapEnabled);
+    QTest::keyClick(first, Qt::Key_Escape); QCOMPARE(state.active, AppCommandState::Kind::None);
+    window.Submit("UNDO"); QVERIFY(state.userLinesFlat.empty());
+    window.Submit("LINE"); first->setFocus(); first->selectAll(); QTest::keyClicks(first, "invalid");
+    QTest::keyClick(first, Qt::Key_Return);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedFirstPoint); QVERIFY(state.userLinesFlat.empty());
+    window.CancelDraftingInput();
+  }
+
+  void issue903PolarSettingsAndOneShotSnap() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& state = window.State(); const double original = state.polarIncrementDeg;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("polarSettingsDialog"); QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("polarExtraAngles")->setText("bad, 45");
+      auto* buttons = dialog->findChild<QDialogButtonBox*>(); buttons->button(QDialogButtonBox::Ok)->click();
+      QVERIFY(dialog->isVisible()); QVERIFY(!dialog->findChild<QLabel*>("polarSettingsError")->text().isEmpty());
+      QCOMPARE(state.polarIncrementDeg, original);
+      QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/artifacts/issue903/polar-settings-validation.png"));
+      dialog->reject();
+    });
+    window.ShowPolarSettings(); QCOMPARE(state.polarIncrementDeg, original);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("polarSettingsDialog"); QVERIFY(dialog);
+      dialog->findChild<QComboBox*>("polarIncrement")->setCurrentIndex(
+          dialog->findChild<QComboBox*>("polarIncrement")->findData(45.0));
+      dialog->findChild<QLineEdit*>("polarExtraAngles")->setText("12.5, 67.5");
+      dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+    });
+    window.ShowPolarSettings();
+    QCOMPARE(state.polarIncrementDeg, 45.0); QCOMPARE(state.polarExtraAnglesDeg, (std::vector<double>{12.5, 67.5}));
+    {
+      QTemporaryFile blocker; QVERIFY(blocker.open());
+      IsolatedUserData unwritable(blocker.fileName());
+      QTimer::singleShot(0, [&] {
+        auto* dialog = window.findChild<QDialog*>("polarSettingsDialog"); QVERIFY(dialog);
+        const int initialHeight = dialog->height();
+        dialog->findChild<QComboBox*>("polarIncrement")->setCurrentIndex(
+            dialog->findChild<QComboBox*>("polarIncrement")->findData(30.0));
+        dialog->findChild<QLineEdit*>("polarExtraAngles")->setText("4.5");
+        dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Ok)->click();
+        QVERIFY(dialog->isVisible());
+        QVERIFY(!dialog->findChild<QLabel*>("polarSettingsError")->text().isEmpty());
+        QVERIFY(dialog->height() > initialHeight);
+        QCOMPARE(state.polarIncrementDeg, 45.0);
+        QCOMPARE(state.polarExtraAnglesDeg, (std::vector<double>{12.5, 67.5}));
+        QVERIFY(dialog->grab().save(QCoreApplication::applicationDirPath() + "/artifacts/issue903/polar-settings-save-error.png"));
+        dialog->reject();
+      });
+      window.ShowPolarSettings();
+    }
+    window.Submit("LINE");
+    QTimer::singleShot(0, [&] {
+      auto* menu = window.findChild<QMenu*>("snapOverrideMenu"); QVERIFY(menu);
+      QVERIFY(!Action(*menu, "Perpendicular"));
+      auto* midpoint = Action(*menu, "Midpoint"); QVERIFY(midpoint); midpoint->trigger(); menu->close();
+    });
+    window.ShowSnapOverride(window.m_Viewport->mapToGlobal(QPoint(150, 100)));
+    QVERIFY(state.objectSnapKindOverrideValid);
+    QCOMPARE(state.objectSnapKindOverrideKind, static_cast<int>(CadSnap::Kind::Midpoint));
+    window.CancelDraftingInput(); QVERIFY(!state.objectSnapKindOverrideValid);
+  }
+
+  void issue903SnapOverrideAppliesToViewportPick() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY(window.m_Viewport->IsRendererReady());
+    auto& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 100, 0, 0};
+    state.objectSnapEnabled = false;
+    state.objectSnapMidpoint = false;
+    window.Submit("LINE");
+    QTimer::singleShot(0, [&] {
+      auto* menu = window.findChild<QMenu*>("snapOverrideMenu"); QVERIFY(menu);
+      auto* midpoint = Action(*menu, "Midpoint"); QVERIFY(midpoint);
+      midpoint->trigger(); menu->close();
+    });
+    window.ShowSnapOverride(window.m_Viewport->mapToGlobal(QPoint(180, 120)));
+    QVERIFY(state.objectSnapKindOverrideValid);
+    QCOMPARE(state.objectSnapKindOverrideKind, static_cast<int>(CadSnap::Kind::Midpoint));
+
+    const auto camera = CadViewCamera(state);
+    float px = 0.f, py = 0.f;
+    camera.WorldToScreen(50, 0, 0, static_cast<float>(window.m_Viewport->width()),
+        static_cast<float>(window.m_Viewport->height()), &px, &py);
+    const QPoint pick(qRound(px), qRound(py));
+    QMouseEvent move(QEvent::MouseMove, pick, window.m_Viewport->mapToGlobal(pick),
+        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(window.m_Viewport, &move);
+    QVERIFY(state.viewportSnapPickValid);
+    QCOMPARE(state.viewportSnapPickKind, static_cast<int>(CadSnap::Kind::Midpoint));
+    QMouseEvent press(QEvent::MouseButtonPress, pick, window.m_Viewport->mapToGlobal(pick),
+        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(window.m_Viewport, &press);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QVERIFY(std::abs(state.anchorX - 50.0) < 1e-4);
+    QVERIFY(std::abs(state.anchorY) < 1e-4);
+    QVERIFY(!state.objectSnapKindOverrideValid);
+    window.CancelDraftingInput();
+  }
+
+  void issue903OrthoAndPolarConstrainInActiveUcs() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.activeUcs.xAxis = {0, 1, 0}; state.activeUcs.yAxis = {-1, 0, 0};
+    state.activeUcs.zAxis = {0, 0, 1}; window.Submit("LINE"); window.Submit("0,0");
+    state.orthoMode = true;
+    SubmitViewportPick(state, 10, 7, window.m_Log);
+    QCOMPARE(state.userLinesFlat.size(), size_t(6));
+    QVERIFY(std::abs(state.userLinesFlat[3] - 10) < 1e-5);
+    QVERIFY(std::abs(state.userLinesFlat[4]) < 1e-5);
+    window.CancelDraftingInput();
+    window.Submit("LINE"); window.Submit("10,0");
+    state.orthoMode = false; state.polarMode = true; state.polarIncrementDeg = 90;
+    SubmitViewportPick(state, 1, 18, window.m_Log);
+    QCOMPARE(state.userLinesFlat.size(), size_t(12));
+    QVERIFY(std::abs(state.userLinesFlat[9]) < 1e-5);
+    QVERIFY(std::abs(state.userLinesFlat[10] - (10.0 + std::sqrt(65.0))) < 1e-4);
+    window.CancelDraftingInput();
+  }
+
+  void issue903VisualOptions() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY(window.m_Viewport->IsRendererReady());
+    const QString directory = QCoreApplication::applicationDirPath() + "/artifacts/issue903";
+    QVERIFY(QDir().mkpath(directory));
+    window.Submit("LINE");
+    const QPoint cursorPoint(240, 200);
+    QMouseEvent cursorMove(QEvent::MouseMove, cursorPoint, window.m_Viewport->mapToGlobal(cursorPoint),
+        Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(window.m_Viewport, &cursorMove);
+    QCOMPARE(window.m_Viewport->CursorPosition(), cursorPoint);
+    window.RefreshDraftingInput(); QTest::qWait(100);
+    QVERIFY(window.grab().save(directory + "/dynamic-final-first-point.png"));
+    auto saveCursorCrop = [&](const QString& name) {
+      const QRect crop = window.m_DynamicInput->geometry().adjusted(-18, -14, 18, 14)
+          .intersected(window.m_Viewport->rect());
+      QVERIFY(window.m_Viewport->grab(crop).save(directory + "/" + name));
+    };
+    saveCursorCrop("dynamic-final-first-point-crop.png");
+    QTimer::singleShot(0, [&] {
+      auto* menu = window.findChild<QMenu*>("snapOverrideMenu"); QVERIFY(menu);
+      QVERIFY(!Action(*menu, "Perpendicular"));
+      QVERIFY(menu->grab().save(directory + "/snap-menu-final-no-reference.png"));
+      menu->close();
+    });
+    window.ShowSnapOverride(window.m_Viewport->mapToGlobal(QPoint(240, 200)));
+    window.Submit("0,0"); window.State().polarMode = true; window.Refresh();
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(directory + "/dynamic-final-next-point.png"));
+    saveCursorCrop("dynamic-final-next-point-crop.png");
+    auto* distance = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(distance);
+    distance->setFocus(); distance->selectAll(); QTest::keyClicks(distance, "12.5"); QTest::qWait(100);
+    QVERIFY(window.grab().save(directory + "/dynamic-final-editing-value.png"));
+    saveCursorCrop("dynamic-final-editing-value-crop.png");
+    for (int option = 0; option < 2; ++option) {
+      QTimer::singleShot(0, [&] {
+        auto* dialog = window.findChild<QDialog*>("polarSettingsDialog"); QVERIFY(dialog);
+        if (option) dialog->findChild<QLabel*>("polarSettingsSummary")->setStyleSheet(
+            "background:#223e54; color:#ecf5fc; padding:16px; border-radius:5px;");
+        dialog->adjustSize();
+        QVERIFY(dialog->grab().save(directory + QString("/angles-%1.png").arg(option ? "B" : "A")));
+        if (!option) QVERIFY(dialog->grab().save(directory + "/polar-settings-final.png"));
+        dialog->reject();
+      });
+      window.ShowPolarSettings();
+      QTimer::singleShot(0, [&] {
+        auto* menu = window.findChild<QMenu*>("snapOverrideMenu"); QVERIFY(menu);
+        if (option) menu->setStyleSheet("QMenu { padding:7px; } QMenu::item { padding:7px 25px; } QMenu::section { color:#72bce8; }");
+        menu->adjustSize();
+        QVERIFY(menu->grab().save(directory + QString("/snap-%1.png").arg(option ? "B" : "A")));
+        if (!option) QVERIFY(menu->grab().save(directory + "/snap-menu-final-with-reference.png"));
+        menu->close();
+      });
+      window.ShowSnapOverride(window.m_Viewport->mapToGlobal(QPoint(240, 200)));
+    }
+    window.CancelDraftingInput();
+  }
+
   void tabsAppearInitiallyAndTypingRoutesFromEditorChrome() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
@@ -2311,7 +2659,10 @@ private Q_SLOTS:
     QCOMPARE(input->text(), QString("p")); QVERIFY(input->hasFocus());
     input->completer()->popup()->hide(); input->clear();
     // An editable property keeps text input rather than turning it into a CAD command.
-    auto* layer = window.findChild<QComboBox*>("selectionLayer"); QVERIFY(layer);
+    window.State().userLinesFlat = {0, 0, 0, 10, 0, 0};
+    EnsureAttrCounts(window.State());
+    window.State().selection = {{SelectedEntity::Type::LineSeg, 0}}; window.Refresh();
+    auto* layer = window.findChild<QComboBox*>("propLayer"); QVERIFY(layer);
     auto* edit = layer->lineEdit(); QVERIFY(edit); edit->setFocus(); edit->selectAll();
     QTest::keyClicks(edit, "Survey");
     QCOMPARE(edit->text(), QString("Survey")); QVERIFY(edit->hasFocus()); QVERIFY(input->text().isEmpty());

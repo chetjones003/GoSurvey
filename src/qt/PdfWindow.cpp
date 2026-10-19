@@ -3,6 +3,7 @@
 #include "EditorWindow.hpp"
 #include "PdfSplit.hpp"
 #include "PdfScaleCheck.hpp"
+#include "SurveyPoints.hpp"
 #include <QAction>
 #include <QFileDialog>
 #include <QImage>
@@ -34,6 +35,12 @@
 #include <QPixmap>
 #include <QShortcut>
 #include <QStyledItemDelegate>
+#include <QTableWidget>
+#include <QHeaderView>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QPushButton>
+#include <QAbstractItemView>
 #include <map>
 #include <set>
 
@@ -211,6 +218,11 @@ constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so 
     "#pdfFindEdit{background:#0e131c;color:#fff;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;}"
     "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#0e131c;}";
 
+constexpr const char* kPdfExtractReviewStyle =
+    "QDialog{background:#111827;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
+    "QTableWidget{background:#1f2937;color:#eef2ff;gridline-color:#475569;}"
+    "QPushButton{background:#25334a;color:#eef2ff;border:1px solid #536b8b;border-radius:4px;padding:6px 12px;}";
+
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
   setAttribute(Qt::WA_DeleteOnClose);
@@ -241,6 +253,14 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   tools->addAction("Fit width", this, [this] { m_Zoom = 1.0; RequestRender(); });
   tools->addAction("Save As...", this, [this] { SaveAs(); });
   tools->addAction("Extract pages...", this, [this] { SplitPages(); });
+  auto* extract = tools->addAction("Extract coordinates", this, [this] {
+    if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
+    SetTool(-1, QString()); // leave any scale pick in progress
+    m_ExtractMode = true; m_ExtractDragging = false; m_ExtractResult.reset();
+    statusBar()->showMessage("Drag a rectangle around selectable coordinate text. Esc cancels.");
+    m_Page->setCursor(Qt::CrossCursor);
+  });
+  extract->setObjectName("pdfExtractCoordinates");
   tools->addSeparator();
   auto* findAction = tools->addAction("Find...", this, [this] { ShowFindBar(); });
   findAction->setObjectName("pdfFindAction");
@@ -276,10 +296,13 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_Scroll = new QScrollArea(this);
   m_Scroll->setAlignment(Qt::AlignCenter);
   m_Page = new PdfCanvas(m_Scroll);
+  m_Page->setMouseTracking(true);
   m_Page->clicked = [this](QPointF point, Qt::MouseButton button) { PageClick(point, button); };
-  m_Page->moved = [this](QPointF point) { UpdateSnap(point); };
+  m_Page->moved = [this](QPointF point) { MoveExtract(point); UpdateSnap(point); };
   m_Page->left = [this] { if (m_SnapHit) { m_SnapHit = false; m_SnapPrevValid = false; m_Page->update(); } };
-  m_Page->overlay = [this](QPainter& painter) { DrawHighlights(painter); DrawAnnotations(painter); DrawScaleOverlay(painter); };
+  m_Page->overlay = [this](QPainter& painter) { DrawHighlights(painter); DrawAnnotations(painter); DrawScaleOverlay(painter); DrawExtractOverlay(painter); };
+  m_Page->pressed = [this](QPointF point, Qt::MouseButton button) { BeginExtract(point, button); };
+  m_Page->released = [this](QPointF point, Qt::MouseButton button) { EndExtract(point, button); };
   m_Scroll->setWidget(m_Page);
   setCentralWidget(m_Scroll);
   m_Poll = new QTimer(this);
@@ -387,7 +410,10 @@ bool PdfWindow::LoadFile(const QString& path, QString& error) {
   m_Document = std::move(result.doc);
   m_Thumbs->SetDocument(m_Document.get());
   ClearSearch();
-  m_Annotations = {}; m_Draft.clear(); m_RobustPicks.clear(); m_SelectedCheck = -1; m_SnapHit = false; m_SnapPrevValid = false;
+  m_Annotations = {}; m_Draft.clear();
+  m_ExtractMode = false; m_ExtractDragging = false; m_ExtractResult.reset();
+  if (m_ExtractReview) m_ExtractReview->hide();
+  m_RobustPicks.clear(); m_SelectedCheck = -1; m_SnapHit = false; m_SnapPrevValid = false;
   m_FileScales = pdfview::ReadPageScales(m_Document->Path());
   if (!m_FileScales.error.empty()) qWarning() << "PDF scale: could not read the scales in" << path << "-" << m_FileScales.error.c_str();
   for (const auto& page : m_FileScales.unusable)
@@ -463,6 +489,7 @@ bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) 
 }
 
 void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
+  if (m_ExtractMode) return;
   if (!m_Document || m_Tool < 0 || IsBusy() || m_Page->image.isNull()) return;
   UpdateSnap(point); // the click's own position, so a click without a prior move still snaps
   const auto size = m_Document->Sizes()[m_PageNumber->value() - 1];
@@ -502,6 +529,110 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   QString error;
   if (!AddAnnotation(annotation, error)) QMessageBox::warning(this, "PDF annotation", error);
   m_Draft.clear(); m_Page->update();
+}
+
+void PdfWindow::DrawExtractOverlay(QPainter& painter) {
+  if (!m_ExtractDragging && !m_ExtractResult) return;
+  painter.setPen(QPen(QColor("#e7a800"), 2, Qt::DashLine));
+  painter.setBrush(QColor(255, 208, 64, 55));
+  painter.drawRect(QRectF(m_ExtractStart, m_ExtractEnd).normalized());
+}
+
+void PdfWindow::BeginExtract(QPointF point, Qt::MouseButton button) {
+  if (!m_ExtractMode) return;
+  if (button != Qt::LeftButton) {
+    m_ExtractMode = false; m_Page->unsetCursor(); statusBar()->showMessage("Coordinate extraction cancelled."); return;
+  }
+  m_ExtractDragging = true; m_ExtractStart = m_ExtractEnd = point; m_Page->update();
+}
+
+void PdfWindow::MoveExtract(QPointF point) {
+  if (!m_ExtractDragging) return;
+  m_ExtractEnd = point; m_Page->update();
+}
+
+void PdfWindow::EndExtract(QPointF point, Qt::MouseButton button) {
+  if (!m_ExtractDragging || button != Qt::LeftButton) return;
+  m_ExtractEnd = point; m_ExtractDragging = false; m_ExtractMode = false;
+  m_Page->unsetCursor(); m_Page->update();
+  if (QRectF(m_ExtractStart, m_ExtractEnd).normalized().width() < 5 ||
+      QRectF(m_ExtractStart, m_ExtractEnd).normalized().height() < 5) {
+    statusBar()->showMessage("Selection was too small; coordinate extraction cancelled."); return;
+  }
+  ExtractRegion();
+}
+
+void PdfWindow::ExtractRegion() {
+  if (!m_Document || m_Page->image.isNull()) return;
+  std::vector<pdfview::DimText> texts;
+  std::vector<pdfview::DimSeg> segments;
+  if (!m_Document->AuditPageData(m_PageNumber->value() - 1, texts, segments, [] { return false; })) {
+    QMessageBox::warning(this, "Extract Coordinates", "Could not read selectable text from this PDF page."); return;
+  }
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
+  const QRectF box = QRectF(m_ExtractStart, m_ExtractEnd).normalized();
+  const float x0 = static_cast<float>(box.left() * size.wPt / m_Page->width());
+  const float x1 = static_cast<float>(box.right() * size.wPt / m_Page->width());
+  const float y0 = static_cast<float>((m_Page->height() - box.bottom()) * size.hPt / m_Page->height());
+  const float y1 = static_cast<float>((m_Page->height() - box.top()) * size.hPt / m_Page->height());
+  m_ExtractResult = pdfview::ExtractCoordinates(texts, x0, y0, x1, y1);
+  if (m_ExtractResult->status != pdfview::ExtractStatus::Ok) {
+    QMessageBox::information(this, "Extract Coordinates", QString::fromUtf8(m_ExtractResult->message.c_str()));
+    m_ExtractResult.reset(); return;
+  }
+  ShowExtractReview();
+}
+
+void PdfWindow::ShowExtractReview() {
+  if (!m_ExtractResult) return;
+  if (!m_ExtractReview) {
+    m_ExtractReview = new QDialog(this, Qt::Window);
+    m_ExtractReview->setObjectName("pdfCoordinateReview");
+    m_ExtractReview->setStyleSheet(QString::fromLatin1(kPdfExtractReviewStyle));
+    m_ExtractReview->setWindowTitle("Review extracted coordinates");
+    m_ExtractReview->resize(1040, 380);
+    auto* layout = new QVBoxLayout(m_ExtractReview);
+    auto* intro = new QLabel("Review each candidate against its source text. Accept creates drawing geometry; Deny discards it.", m_ExtractReview);
+    intro->setWordWrap(true); layout->addWidget(intro);
+    auto* table = new QTableWidget(0, 8, m_ExtractReview); table->setObjectName("pdfCoordinateCandidates");
+    table->setHorizontalHeaderLabels({"Source text", "Northing", "Easting", "Elevation", "Description", "Point #", "Creates", "Decision"});
+    table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    table->setWordWrap(true); table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
+    auto* close = new QPushButton("Close", m_ExtractReview); close->setObjectName("pdfCoordinateReviewClose");
+    connect(close, &QPushButton::clicked, m_ExtractReview, &QDialog::hide); layout->addWidget(close, 0, Qt::AlignRight);
+  }
+  auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates");
+  table->setRowCount(static_cast<int>(m_ExtractResult->candidates.size()));
+  for (int row = 0; row < table->rowCount(); ++row) {
+    const auto& c = m_ExtractResult->candidates[static_cast<std::size_t>(row)];
+    const QString cells[] = {QString::fromUtf8(c.sourceText.c_str()), QString::number(c.northing, 'f', 3),
+      QString::number(c.easting, 'f', 3), c.elevation ? QString::number(*c.elevation, 'f', 3) : "—",
+      c.description.empty() ? "—" : QString::fromUtf8(c.description.c_str()),
+      c.pointNumber ? QString::number(*c.pointNumber) : "Auto", c.IsSurveyPoint() ? "Survey point" : "Circle", {}};
+    for (int col = 0; col < 7; ++col) table->setItem(row, col, new QTableWidgetItem(cells[col]));
+    auto* decisions = new QWidget(table); auto* buttons = new QHBoxLayout(decisions); buttons->setContentsMargins(2, 2, 2, 2);
+    auto* accept = new QPushButton("Accept", decisions); auto* deny = new QPushButton("Deny", decisions);
+    accept->setObjectName(QString("pdfCoordinateAccept_%1").arg(row)); deny->setObjectName(QString("pdfCoordinateDeny_%1").arg(row));
+    buttons->addWidget(accept); buttons->addWidget(deny); table->setCellWidget(row, 7, decisions);
+    connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
+    connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
+  }
+  table->resizeRowsToContents();
+  m_ExtractReview->show(); m_ExtractReview->raise();
+}
+
+void PdfWindow::DecideExtractCandidate(int row, bool accept) {
+  if (!m_ExtractResult || row < 0 || row >= static_cast<int>(m_ExtractResult->candidates.size())) return;
+  if (accept) {
+    if (!m_Editor) { QMessageBox::information(this, "Extract Coordinates", "Open the PDF from an active drawing to accept coordinates."); return; }
+    if (!m_Editor->CommitPdfCoordinate(m_ExtractResult->candidates[static_cast<std::size_t>(row)])) return;
+  }
+  m_ExtractResult->candidates.erase(m_ExtractResult->candidates.begin() + row);
+  if (m_ExtractResult->candidates.empty()) {
+    if (auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates")) table->setRowCount(0);
+    statusBar()->showMessage(accept ? "Extracted coordinates accepted." : "Candidate denied; drawing unchanged.");
+  } else ShowExtractReview();
 }
 
 void PdfWindow::DrawAnnotations(QPainter& painter) {
@@ -597,7 +728,11 @@ void PdfWindow::CloseFindBar() {
 }
 
 void PdfWindow::EscapePressed() {
-  if (IsSearching()) CancelSearch(false); // the poll reports "Search cancelled"
+  if (m_ExtractMode || m_ExtractDragging) {
+    m_ExtractMode = false; m_ExtractDragging = false; m_Page->unsetCursor(); m_Page->update();
+    statusBar()->showMessage("Coordinate extraction cancelled.");
+  }
+  else if (IsSearching()) CancelSearch(false); // the poll reports "Search cancelled"
   else if (m_Tool >= 0 || !m_Draft.empty()) EscapeTool(); // REQ-430: a pick in progress, then the tool
   else if (m_FindBar->isVisible()) CloseFindBar();
 }

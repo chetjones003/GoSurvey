@@ -18,6 +18,7 @@
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
 #include "PdfWindow.hpp"
+#include "SurveyPoints.hpp"
 #include "CadBlocks.hpp"
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
@@ -666,15 +667,18 @@ EditorWindow::EditorWindow() {
   auto* modelLayout = new QVBoxLayout(modelPage);
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
-  m_Viewport->changed = [this] { Refresh(); };
+  m_Viewport->changed = [this] { ResetDraftingInput(); Refresh(); };
   m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
   };
   m_Viewport->textEntered = [this](const QString& text) { if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible(); m_Command->setFocus(); m_Command->insert(text); };
   m_Viewport->cursorChanged = [this](double x, double y, double z) {
-    m_Coordinates->setText(QString("E %1   N %2   Z %3").arg(x + m_State.worldDocumentOriginX, 0, 'f', 4)
-        .arg(y + m_State.worldDocumentOriginY, 0, 'f', 4).arg(z, 0, 'f', 4));
+    m_DynamicCursor = {x + m_State.worldDocumentOriginX, y + m_State.worldDocumentOriginY, z};
+    const auto local = ucs::WorldToUcs(m_State.activeUcs, m_DynamicCursor);
+    m_Coordinates->setText(QString("%1  X %2   Y %3   Z %4").arg(CadUcsIsWorld(m_State) ? "WCS" : "UCS")
+        .arg(local.x, 0, 'f', 4).arg(local.y, 0, 'f', 4).arg(local.z, 0, 'f', 4));
+    RefreshDraftingInput();
   };
   modelLayout->addWidget(m_Viewport, 1);
   m_Pages->addWidget(modelPage);
@@ -700,23 +704,15 @@ EditorWindow::EditorWindow() {
   UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
   statusBar()->addPermanentWidget(m_Coordinates, 1);
-  auto* ortho = new QToolButton(this);
-  ortho->setText("ORTHO"); ortho->setCheckable(true);
-  statusBar()->addWidget(ortho);
-  connect(ortho, &QToolButton::toggled, this, [this](bool on) { m_State.orthoMode = on; });
+  BuildDraftingInput();
   auto* grid = new QToolButton(this);
-  grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
+  grid->setObjectName("draftGrid"); grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
+  grid->setStyleSheet("QToolButton { color:#e6f2fb; background:#1b3f5a; border:1px solid #326486; "
+      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#245878; border-color:#56a6c8; } "
+      "QToolButton:checked { color:#ffffff; background:#087f97; border-color:#35d5ef; }");
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
-  auto* osnap = new QToolButton(this);
-  osnap->setText("OSNAP"); osnap->setCheckable(true); osnap->setChecked(m_State.objectSnapEnabled);
-  statusBar()->addWidget(osnap);
-  connect(osnap, &QToolButton::toggled, this, [this](bool on) { m_State.objectSnapEnabled = on; });
-  auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
-  connect(escape, &QShortcut::activated, this, [this] { m_State.showCreatePointsWindow = false; CancelActiveCommand(m_State, m_Log); m_Command->clear(); Refresh(); });
-  connect(new QShortcut(QKeySequence(Qt::Key_F3), this), &QShortcut::activated, osnap, &QToolButton::toggle);
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
-  connect(new QShortcut(QKeySequence(Qt::Key_F8), this), &QShortcut::activated, ortho, &QToolButton::toggle);
   auto* service = new QTimer(this);
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
@@ -1121,6 +1117,7 @@ void EditorWindow::BuildDocks() {
 }
 
 void EditorWindow::Submit(const QString& command) {
+  ResetDraftingInput();
   if (!command.trimmed().isEmpty()) {
     if (m_CommandHistory.isEmpty() || m_CommandHistory.last() != command) m_CommandHistory.push_back(command);
     if (m_CommandHistory.size() > 500) m_CommandHistory.removeFirst();
@@ -1457,6 +1454,7 @@ void EditorWindow::ShowViewportsManager() {
 }
 
 bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (DraftingInputEvent(watched, event)) return true;
   if (watched == m_Command && event->type() == QEvent::KeyPress) {
     auto* key = static_cast<QKeyEvent*>(event);
     if (key->key() == Qt::Key_Escape) {
@@ -1495,6 +1493,10 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
       if (m_CommandBar->isHidden()) m_CommandBar->ToggleVisible();
       if (widget->window() != this) {
         raise(); activateWindow();
+        QTimer::singleShot(0, this, [this] {
+          if (!QApplication::activeModalWidget() && !QApplication::activePopupWidget())
+            m_Command->setFocus(Qt::OtherFocusReason);
+        });
       }
       m_Command->setFocus(Qt::OtherFocusReason);
       QKeyEvent input(key->type(), key->key(), key->modifiers(), key->text(), key->isAutoRepeat(), key->count());
@@ -1874,6 +1876,7 @@ void EditorWindow::Refresh() {
       AlignCommandFooterHint(m_State), ZoomCommandFooterHint(m_State), DrawingExtrasFooterHint(m_State)})
     if (hint && *hint) { commandHint = QString::fromUtf8(hint); break; }
   m_CommandBar->SetHint(commandHint);
+  RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {
     const auto title = QString("GoSurvey");
     m_WindowTitle->setText(title); setWindowTitle(title);
@@ -2329,7 +2332,62 @@ void EditorWindow::RefreshRecentProjects() {
     grid->addWidget(new QLabel("No recent projects. Use New Project or Open Project.", m_ProjectTiles), 0, 0);
 }
 
-void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->show(); }
+void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->SetEditor(this); window->show(); }
+
+bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
+    QMessageBox::information(this, "Extract Coordinates", "Open a drawing before accepting extracted coordinates.");
+    return false;
+  }
+  if (ActiveDrawingReadOnly()) {
+    QMessageBox::information(this, "Read-only drawing", "Extracted coordinates cannot change a read-only drawing.");
+    return false;
+  }
+  if (c.IsSurveyPoint()) {
+    int id = c.pointNumber.value_or(1);
+    if (!c.pointNumber.has_value()) while (std::any_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(),
+        [id](const SurveyPoint& p) { return p.id == id; })) ++id;
+    SurveyPoint point{};
+    point.id = id; point.easting = c.easting; point.northing = c.northing;
+    point.elevation = *c.elevation; point.description = c.description; point.rawDescription = c.description;
+    if (std::any_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(), [id](const SurveyPoint& p) { return p.id == id; })) {
+      QMessageBox box(QMessageBox::Warning, "Point number already exists",
+                      QString("Point %1 already exists. Choose how to resolve the conflict.").arg(id), QMessageBox::NoButton, this);
+      auto* overwrite = box.addButton("Overwrite", QMessageBox::AcceptRole);
+      auto* offset = box.addButton("Offset", QMessageBox::ActionRole);
+      box.addButton(QMessageBox::Cancel);
+      box.exec();
+      if (box.clickedButton() != overwrite && box.clickedButton() != offset) return false;
+      int offsetBy = 0;
+      if (box.clickedButton() == offset) {
+        int maxId = 0; for (const auto& p : m_State.surveyPoints) maxId = std::max(maxId, p.id);
+        bool ok = false;
+        offsetBy = QInputDialog::getInt(this, "Offset point number", "ID offset", std::max(maxId, 1), 0, 1000000, 1, &ok);
+        if (!ok) return false;
+      }
+      PushUndoSnapshot(m_State, "Extract coordinates");
+      ResolveConflictingWorldSurveyPoints(m_State, {point}, box.clickedButton() == overwrite, offsetBy, &m_Log);
+    } else {
+      PushUndoSnapshot(m_State, "Extract coordinates");
+      point.easting -= m_State.worldDocumentOriginX; point.northing -= m_State.worldDocumentOriginY;
+      point.layer = CreatePointsLayer(m_State);
+      m_State.surveyPoints.push_back(point);
+      EnsureSurveyPointLabelMtext(m_State, m_State.surveyPoints.size() - 1, &m_Log);
+    }
+    m_Log.push_back("Extract Coordinates — survey point " + std::to_string(id) + " created.");
+  } else {
+    const float radius = SurveyPointCrossHalfWorldFromPaper(m_State.surveyPointCrossSpanPlottedInches,
+                                                              m_State.modelUnitsPerPlottedInch);
+    CommitCircleExternal(m_State, static_cast<float>(c.easting - m_State.worldDocumentOriginX),
+                         static_cast<float>(c.northing - m_State.worldDocumentOriginY),
+                         static_cast<float>(c.elevation.value_or(0.0)), radius, 0.f, 0.f, 1.f, m_Log);
+  }
+  StartZoomExtentsCommand(m_State, m_Log);
+  m_State.requestMainWindowFocus = true;
+  Refresh();
+  raise(); activateWindow();
+  return true;
+}
 void EditorWindow::ShowAdjustment() {
   if (auto* existing = findChild<QMainWindow*>("adjustmentWindow")) { existing->show(); existing->raise(); return; }
   auto* window = new AdjustmentWindow(m_State, m_Log, this);

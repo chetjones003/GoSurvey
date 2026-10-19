@@ -23,10 +23,13 @@ public:
   std::function<void(const QString&)> textEntered;
   /// The right-click verdict (REQ-084) is "open the shortcut menu"; the window builds the menu.
   std::function<void(const QPoint& globalPosition)> contextMenuRequested;
+  std::function<void(const QPoint& globalPosition)> snapMenuRequested;
+  std::function<bool()> submitLockedInput;
   void SetOrientation(float azimuth, float elevation);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
   bool IsRendererReady() const { return m_Ready; }
+  QPoint CursorPosition() const { return m_Last.toPoint(); }
 protected:
   void initializeGL() override;
   void paintGL() override;

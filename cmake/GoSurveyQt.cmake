@@ -2,6 +2,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
 add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorWindow.cpp
+  src/qt/EditorInput.cpp
   src/qt/EditorRibbon.cpp
   src/qt/EditorChrome.cpp
   src/qt/QtAppearance.cpp
@@ -34,6 +35,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/PdfMeasure.cpp
   src/pdf/PdfScaleCheck.cpp
   src/pdf/PdfSnap.cpp
+  src/pdf/PdfCoordExtract.cpp
   src/pdf/PdfRaw.cpp
   src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp
