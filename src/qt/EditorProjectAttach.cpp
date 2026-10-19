@@ -308,7 +308,8 @@ void EditorWindow::ShowPdfAttachDialog() {
       preview->setText("The selected page could not be previewed.");
       return;
     }
-    QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, bitmap.w * 4, QImage::Format_ARGB32);
+    QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, static_cast<qsizetype>(bitmap.w) * 4,
+                 QImage::Format_ARGB32);
     preview->setPixmap(QPixmap::fromImage(image.copy()).scaled(preview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
   };
   auto load = [&] {
