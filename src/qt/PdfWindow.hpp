@@ -9,6 +9,7 @@
 #include "PdfDiff.hpp"
 #include <QString>
 #include <atomic>
+#include <cstdint>
 #include <future>
 #include <memory>
 class PdfCanvas;
@@ -42,7 +43,8 @@ public:
   void Open(const QString& path);
   bool LoadFile(const QString& path, QString& error);
   bool SaveFile(const QString& path, QString& error);
-  bool IsBusy() const { return m_Work.valid(); }
+  bool IsBusy() const { return m_Work.valid() || m_OpenWork.valid(); }
+  bool IsSaving() const { return m_SaveWork.valid(); }
   bool HasUnsavedChanges() const { return m_Annotations.Dirty(); }
   bool AddAnnotation(const pdfview::Annot& annotation, QString& error);
   bool IsSearching() const { return m_Search.valid(); }
@@ -67,10 +69,21 @@ protected:
   void closeEvent(QCloseEvent* event) override;
 private:
   friend class QtEditorTests;
+  struct SaveResult { bool succeeded = false; std::string error; };
   void RequestRender();
   void PollRender();
+  void PollOpen();
+  bool AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error);
   std::unique_ptr<pdfview::PdfDocument> m_Document;
   std::future<pdfview::Bitmap> m_Work;
+  std::future<pdfview::PdfDocument::OpenResult> m_OpenWork;
+  QString m_OpenPath;
+  QTimer* m_OpenPoll = nullptr;
+  std::future<SaveResult> m_SaveWork;
+  QString m_SaveDestination;
+  uint64_t m_Revision = 0;
+  uint64_t m_SaveRevision = 0;
+  QTimer* m_SavePoll = nullptr;
   std::atomic<bool> m_Cancel{false};
   PdfCanvas* m_Page;
   QSpinBox* m_PageNumber;
@@ -80,8 +93,21 @@ private:
   bool m_Pending = false;
   pdfview::AnnotSession m_Annotations;
   pdfview::ScaleRead m_FileScales; ///< what the opened file already says (REQ-390 clause 3)
-  int m_Tool = -1;
+  int m_Tool = -2;
   std::vector<std::pair<float, float>> m_Draft;
+  int m_SelectedAnnotation = -1;
+  bool m_AnnotationDragging = false;
+  int m_AnnotationHandle = -1;
+  QPointF m_DragStart;
+  pdfview::Annot m_DragOriginal;
+  std::optional<pdfview::Annot> m_DragPreview;
+  unsigned m_AnnotationColor = 0xFF0000;
+  float m_AnnotationThickness = 1.f;
+  float m_AnnotationFontSize = 12.f;
+  bool m_AnnotationFill = false;
+  std::string m_AnnotationFont = "Helvetica";
+  bool m_AnnotationBold = false;
+  bool m_AnnotationItalic = false;
   EditorWindow* m_Editor = nullptr;
   bool m_ExtractMode = false;
   bool m_ExtractDragging = false;
@@ -123,6 +149,13 @@ private:
   QListView* m_ThumbView = nullptr;
   PdfThumbnails* m_Thumbs = nullptr;
   void PageClick(QPointF point, Qt::MouseButton button);
+  void EditSelectedAnnotation();
+  void MoveAnnotation(QPointF point);
+  void EndAnnotation(QPointF point, Qt::MouseButton button);
+  QPointF CanvasToPage(QPointF point) const;
+  QPointF PageToCanvas(float x, float y) const;
+  int HitAnnotation(QPointF pagePoint, float tolerance) const;
+  void ApplyAnnotationStyle(pdfview::Annot& annotation) const;
   void DrawAnnotations(QPainter& painter);
   void DrawExtractOverlay(QPainter& painter);
   void BeginExtract(QPointF point, Qt::MouseButton button);
@@ -132,6 +165,8 @@ private:
   void ShowExtractReview();
   void DecideExtractCandidate(int row, bool accept);
   void SaveAs();
+  void StartSaveAs(const QString& path);
+  void PollSave();
   void SplitPages();
   bool ConfirmDiscard();
   pdfview::PageScale CurrentScale() const;
@@ -164,7 +199,6 @@ private:
   void ToggleSnap();
   void StartSnapRead(int page);
   void DrawScaleOverlay(QPainter& painter);
-  QPointF PageToCanvas(float x, float y) const;
   std::map<int, pdfview::PageScale> ScalesInForce() const;
   QActionGroup* m_ToolGroup = nullptr;
   QAction* m_SnapAction = nullptr;
