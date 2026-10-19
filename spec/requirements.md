@@ -3114,9 +3114,8 @@ requirements is a planning failure, not a sign of rigor.
     in red, green or blue respectively; a non-axis row (e.g. Radius) shows none.
   - **(added 2026-08-16, revision 2; clause 1 and the accent clause amended by
     revision 3)** the palette is derived, not picked:
-    - every neutral is **achromatic** (R = G = B), so no surface carries a colour
-      cast and all chroma in the UI belongs to the accent and the semantic
-      triad — anything coloured is therefore meaningful;
+    - surfaces follow the approved dark navy and blue-charcoal palette; the
+      Dark theme is no longer constrained to achromatic neutrals;
     - the neutral ladder steps on roughly even **CIE L\*** intervals, and each
       structural relationship (panel over ground, seam under ground, field under
       panel, header over panel, panel over tab strip) is a stated L\* distance
@@ -3125,8 +3124,8 @@ requirements is a planning failure, not a sign of rigor.
       text meets **4.5:1** — `TextDisabled` carries real secondary content here
       (hints, derived readouts, command hints), so it is held to the text bar,
       not to the disabled-text exemption;
-    - the accent is one hue used at several lightnesses/alphas, warm against the
-      neutral ground so accented marks advance;
+    - aqua is the primary active-state accent and amber is a restrained secondary
+      detail accent, each used consistently at appropriate lightnesses/alphas;
     - the semantic triad (axis X/Y/Z, and any future danger/success/info) is
       **equiluminant within ~2 L\***, so no member visually outranks the others,
       and each carries its label at ≥ 4.5:1.
@@ -3150,7 +3149,16 @@ requirements is a planning failure, not a sign of rigor.
     visibly live when the window holds focus. This applies to **every** floating
     window without each one opting in, so a dialog added later is covered the day
     it is written; a theme opts out by setting no window shadow.
-- Owner-layer: UI (`src/ui/CadUi.cpp`)
+  - **(added 2026-10-18, revision 9; D-2026-10-18-a/b)** the Dark theme follows the approved
+    GoSurvey visual direction: deep navy/blue-charcoal surfaces, aqua active-state accents, and
+    restrained amber detail accents. Panel separation, recessed fields, elevation, and text
+    contrast requirements above still apply. Topographic contour decoration may appear around the
+    Start page and in open areas of Dark dock panels, especially Properties and Map. The lines form
+    irregular mountain ridges and valleys like the approved splash artwork rather than circular
+    rings. They stay behind the content visually and never reduce control legibility. The Dark
+    drawing canvas uses a deep navy ground with a fine, low-contrast blue grid. The Light theme
+    remains unchanged.
+- Owner-layer: UI (`src/ui/CadUi.cpp`; Qt frontend `src/qt/QtAppearance.cpp`, `src/qt/EditorChrome.cpp`, and `src/qt/EditorWindow.cpp`)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
   (`ApplyCadDarkTheme`, `ApplyCadLightTheme`) were written with no governing
@@ -3224,6 +3232,12 @@ requirements is a planning failure, not a sign of rigor.
     new colours needed for it;
   - every new colour is a `g_chrome` field, filled for both Dark and Light, and
     a Dark → Light → Dark switch leaves no stale dialog/button colour.
+  2026-10-18 (revision 8, D-2026-10-18-a) — user selected the modern/abstract GoSurvey mockup
+  direction and asked that the Qt shell match it. Dark shell surfaces may now use navy/blue-charcoal
+  hues with aqua and restrained amber accents; contrast, separation and elevation rules remain.
+  Peripheral contour-line decoration is permitted at low contrast. Light appearance is unchanged.
+  2026-10-18 (revision 9, D-2026-10-18-b) — the user supplied exact Qt Start and drawing workspace
+  references. The Dark canvas now follows the navy-ground/fine-blue-grid treatment shown there.
   Delivered against a live user visual pass, which pulled in three corrections
   on the same requirement (all Dark-theme only — the classic theme still renders
   as it did):
@@ -3237,8 +3251,13 @@ requirements is a planning failure, not a sign of rigor.
     rows, white bordered edit fields, dark body text, dark caret — with the
     dark header strip and its light labels kept; the old hard-coded pale-yellow
     Civil-3D row fill (which ignored the theme entirely) is gone.
+  2026-10-18 (revision 10, user follow-up to D-2026-10-18-b) — Dark contour lines may extend
+  into open background areas of the Properties, Toolspace, and Map panels; keep them subdued and
+  away from readable controls. The Light theme is unchanged.
   See TASK-165 for the one issue clause ("one shared helper used by both the
   Start screen and the dialogs") this revision does not fully satisfy, and why.
+  2026-10-18 (revision 11) — replace circular contour loops with irregular, terrain-like ridges
+  and valleys matching the approved splash artwork on Start and open Dark drawing panels.
 
 ### REQ-082 — Tabular data windows behave like a spreadsheet
 - Purpose: the Viewpoints and Layer Manager windows are the two places a surveyor
@@ -5080,45 +5099,68 @@ requirements is a planning failure, not a sign of rigor.
   immediately after Start; File > New, the tab bar's "+", and File > Open all create/append
   drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
 
-  The Start tab's content is three columns:
+  The Start tab follows the supplied Qt GoSurvey Start reference:
 
-  1. **Left** — the title **"GoSurvey <version>"** (the running build's `GOSURVEY_VERSION_FULL`,
-     ADR-029 (a)), an **Open…** button (same action as File > Open) and a **New** button (same as
-     File > New), and a text link reading **"Visit The Website"** (the URL itself is not shown) that
-     opens **https://chetjones003.github.io/GoSurvey** in the system browser. There is **no**
-     "Autodesk Projects" and **no** "Learning & Insights" entry.
-  2. **Middle** — **"Recent"**: a list of recently opened drawings, each with a **thumbnail**, the
-     drawing name, and its last-opened date. It offers a **grid view and a list view**, a **sort
-     control** (at least Last Opened and Name), and a **search box** that filters by name. Clicking
-     an entry opens that drawing in a new focused tab (a missing file logs REQ-201-style and is
-     offered for removal from the list). A drawing's thumbnail is **captured when it is saved or
-     opened**; an entry with no captured thumbnail shows the **default DWG file icon**.
-  3. **Right** — **"Connect"**: when signed in, **"Welcome <name>"** and the account email, exactly
-     as the Settings panel shows today. When **not signed in** (only reachable when the launch gate
-     was skipped for lack of any network — REQ-091 as amended), a short offline notice and a
-     **"Sign In"** button that starts the existing interactive sign-in flow
-     (`cmd.authSignInRequested`). Below that, a **"Help Me Improve This Product"** section with a
-     **"Send Feedback"** button that opens
-     **https://github.com/chetjones003/GoSurvey/issues** in the system browser.
+  1. In Start mode the application keeps the shared GoSurvey shell visible: brand title bar, ribbon,
+     Start/drawing tab strip, and drawing status bar. The Properties/Toolspace/Map docks and command
+     line stay hidden so the landing composition can use the full central work area. The title bar
+     keeps the app-menu button and window controls; it omits drawing quick-access commands. Opening
+     or creating a drawing restores the Properties/Toolspace/Map docks and command line.
+  2. The page has a bordered, rounded dark-navy surface with faint mountain-and-valley contour
+     linework at the periphery. Its two-column composition is about two-thirds left and one-third
+     right. The wider column has the **Welcome to GoSurvey** heading, then four large action cards:
+     **New drawing**, **Open drawing**, **New project**, and **Open project**. It has no subtitle or
+     Import data card. Beneath them, **Recent drawings** is a
+     structured table with separate name/file, preview, modified date/time, and location columns,
+     plus a **See all** action. Rows use real recent-drawing data and thumbnails (the default DWG
+     artwork when no thumbnail exists). Clicking a row opens the drawing; missing files can be
+     removed. **See all** exposes search, sorting, and grid/list options.
+  3. The narrower column stacks **Projects**, **Quick links**, and **Learning resources**. Projects
+     has a search field, a **View all** action, and compact recent-project rows showing the real
+     project name, path, drawing count, and navigation affordance. Quick links use four compact
+     tiles for **Templates**, **Survey setup**, **Import formats**, and **Application settings**.
+     Learning resources uses three compact links for **Getting started**, **User guide**, and
+     **Help & support**. The project creation/open actions and account controls remain available
+     through the app menu. Resource names and destinations must describe existing content; no
+     control may imply an unsupported workflow. Names, dates, paths, counts, and thumbnails in the
+     mockup are illustrative; the page displays the user's actual data.
 
   The recent-drawings list persists across sessions in a new user-scoped store
   (`gosurvey-recent.json`, D-2026-08-30-b); a missing or corrupt store yields an empty list, never
   an error. Thumbnails are cached BMPs under the user data directory with a bounded, LRU-evicted
   size (D-2026-08-30-c).
 
-  **Full-bleed.** While the Start tab is active the docked Properties, Reports and Toolspace panels
-  and the command line are not shown, so the Start screen fills the whole work area. Switching to
-  (or opening) a drawing restores those panels and the command line to their layout positions.
+  **Shell fit.** The Start page fills the central work area below the ribbon and drawing-tab strip,
+  and above the status bar. Switching to (or opening) a drawing replaces it with the viewport and
+  restores the docks and command line.
+
+  **Responsive fit.** At common widescreen desktop sizes (including 1920×1080), the welcome,
+  action cards, five recent drawings, and all three right-column cards fit together in the visible
+  work area without requiring vertical scrolling. Use compact, balanced card heights, row heights,
+  and margins like the supplied fitted reference. At smaller windows, preserve readable controls and
+  allow the Start page to scroll instead of clipping its content.
 - Acceptance:
   - fresh launch: the tab bar reads **"Start"** then **"Drawing 1"**, with Start active and the
     Start content (not a viewport) shown;
   - the Start tab has no close button and cannot be closed by any path; with Start + one drawing
     open, the drawing is still closeable;
   - File > New / "+" append "Drawing N" **after** Start and focus it; File > Open does likewise;
-  - the left column shows "GoSurvey " followed by the exact `GOSURVEY_VERSION_FULL` string, an
-    Open… and a New button that invoke the same actions as the File menu items, and a "Visit The
-    Website" link (no URL text) that opens `https://chetjones003.github.io/GoSurvey` in the browser;
-  - with the Start tab active, the Properties, Reports and Toolspace panels and the command line are
+  - Start mode keeps the ribbon, Start/drawing tab strip, and drawing status bar visible; it hides
+    the Properties/Toolspace/Map docks and command line;
+  - the Start page follows the supplied two-column composition and uses a single GoSurvey brand
+    title bar, “Welcome to GoSurvey” heading, four action cards, structured recent-drawings table, and the three
+    compact cards in the right column;
+  - New drawing and Open drawing invoke the same actions as the File menu items; New project opens
+    the existing project-creation flow; Open project opens the existing GoSurvey project picker;
+  - the Start action row contains no Import data card;
+  - Recent drawings has separately aligned columns for name/file, preview, modified date/time, and
+    location; See all exposes search, sorting, and grid/list options;
+  - Projects search filters real recent-project data; View all exposes the full recent-project list;
+  - each visible Recent Project row has enough vertical padding for both its name and path/date text;
+    no row text is clipped at the common widescreen desktop size;
+  - the four quick links and three learning-resource links invoke existing, accurately named
+    destinations;
+  - with the Start tab active, the Properties, Reports, Toolspace, and Map panels and the command line are
     not visible; opening a drawing or switching to a drawing tab brings them all back in place;
   - no "Autodesk Projects" or "Learning & Insights" text appears anywhere on the tab;
   - save a drawing, relaunch: it is listed under Recent with a bitmap thumbnail of its last view;
@@ -5127,11 +5169,11 @@ requirements is a planning failure, not a sign of rigor.
     by typed text;
   - clicking a recent entry opens that drawing in a new tab which becomes the active tab;
   - a recent entry pointing at a now-missing file does not crash and reports the miss;
-  - signed in: the right column reads "Welcome <name>" with the account email;
-  - not signed in (simulated): the right column shows the offline notice and a Sign In button that
-    sets `cmd.authSignInRequested`;
+  - account details, sign-in, and sign-out remain available through the existing app menu controls;
+  - drawing mode keeps the ribbon and tab strip, shows Properties left and Toolspace plus Map right,
+    and uses a deep navy canvas with a fine blue grid in Dark theme; Light stays unchanged;
   - a deleted/corrupt `gosurvey-recent.json` results in an empty Recent list and a normal launch.
-- Owner-layer: UI (`CadUi_StartScreen.cpp`, the tab bar's Start-tab special-casing in `CadUi.cpp`,
+- Owner-layer: UI (`CadUi_StartScreen.cpp`, Qt frontend `src/qt/EditorWindow.cpp`, the tab bar's Start-tab special-casing in `CadUi.cpp`,
   the viewport-vs-start branch in `DrawDrawingViewport`); IO (`RecentDrawings` store, capture hook
   in the save/open paths); Platform (`ThumbnailCache` FBO readback + BMP encode, `ShellExecuteA`
   URL open — already used by `auth`)
@@ -5139,6 +5181,16 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-30 — accepted (D-2026-08-30-a/b/c). Start tab as a non-document sentinel at
   index 0 (architecture §11.5 amended); new `gosurvey-recent.json` MRU store; thumbnail capture
   from the drawing `ViewportRenderer` FBO stored as BMP (in-tree writer, no new dependency).
+  2026-10-18 — revision 2 (D-2026-10-18-a): replace the three-column content arrangement with the
+  approved two-column start-page composition while retaining existing project, drawing, account,
+  import, settings, and help actions. Revision 3 (user follow-up to D-2026-10-18-b): tune the
+  composition to fit the supplied widescreen Start-page screenshot as a complete, balanced screen.
+  Revision 4: preserve the ribbon, Start/drawing tabs, and status bar around the Start content;
+  keep only drawing-specific docks and the command line hidden while Start is active. Revision 5
+  (2026-10-18 user follow-up): rename the welcome heading, remove its subtitle and Import data
+  action, add New project and Open project cards using existing project flows, give recent-project
+  rows enough height and padding to avoid clipping, and shape the decorative lines as mountain and
+  valley contours matching the approved splash artwork.
 
 ### REQ-309 — Selectable view projection: orthographic and perspective (GitHub issue #144)
 - Purpose: REQ-058 built a camera that already implements both projections — `Camera::Projection`,
@@ -11188,8 +11240,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. **Open Project.** Choosing a `.gsproj` (or its folder) opens the project. Opening a project does
      not open every drawing; the Project Files list (REQ-379) shows them.
   3. **Start screen.** The Start tab (REQ-308) shows **New Project** and **Open Project** buttons and a
-     **Recent Projects** list (name, folder path, last-opened date, thumbnail) **above** the existing
-     Recent Drawings. Each Recent Drawings entry carries its project's name as a tag, or
+     **Projects** panel containing recent projects (name, folder path, last-opened date, thumbnail).
+     The panel may sit beside Recent Drawings as in the approved two-column Qt layout. Each Recent
+     Drawings entry carries its project's name as a tag, or
      "Standalone". A missing project folder is offered for removal from the list (REQ-201).
   4. **Auto-detect and join.** On opening a DWG, GoSurvey looks in the drawing's folder, then each
      parent folder up to the drive root, and uses the **first** `.gsproj` found. The DWG joins that
@@ -11211,6 +11264,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: UI (Start tab, dialogs, tabs), Domain (project registry, join resolution), IO
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d).
+  2026-10-18 — Start-page project placement moved beside Recent Drawings by D-2026-10-18-a; the
+  project list and its persistence/missing-folder behavior are unchanged.
 
 ### REQ-375 — Project settings: enforced coordinate system and units, inheritable defaults, per-drawing overrides (GitHub issue #696, P2)
 

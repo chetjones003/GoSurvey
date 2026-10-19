@@ -23,6 +23,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QOpenGLContext>
+#include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -152,6 +153,15 @@ void EditorViewport::paintGL() {
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
+    if (!qApp->property("cadLightTheme").toBool()) {
+      tuning.bgR = 4.f / 255.f;
+      tuning.bgG = 18.f / 255.f;
+      tuning.bgB = 32.f / 255.f;
+      tuning.gridR = 0.055f;
+      tuning.gridG = 0.11f;
+      tuning.gridB = 0.16f;
+      tuning.gridA = 0.36f;
+    }
     if (m_State.viewportSectionClip) {
       tuning.sectionClip = CadSectionClipPlane(m_State);
       tuning.sectionClipIndicator = CadSectionClipIndicator(m_State);
