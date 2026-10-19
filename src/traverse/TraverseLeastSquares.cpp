@@ -15,6 +15,17 @@ constexpr double kDeg2Rad = kPi / 180.0;
 constexpr double kRad2Sec = 180.0 * 3600.0 / kPi;
 constexpr double kMetersToFeet = 1.0 / 0.3048;
 
+bool IsCancelled(const std::atomic<bool>* cancelRequested) {
+    return cancelRequested && cancelRequested->load(std::memory_order_acquire);
+}
+
+LsaResult CancelledResult() {
+    LsaResult result;
+    result.cancelled = true;
+    result.message = "Adjustment cancelled.";
+    return result;
+}
+
 // Azimuth (radians, CW from north) of the direction from (oe,on) to (pe,pn).
 double Azimuth(double oe, double on, double pe, double pn) {
     return std::atan2(pe - oe, pn - on);
@@ -29,9 +40,11 @@ double WrapPi(double a) {
 
 // Solve the symmetric positive-definite system N x = t in place by Cholesky
 // (N is u*u row-major). Returns false if N is not positive-definite (singular).
-bool SolveCholesky(std::vector<double>& N, std::vector<double>& t, int u) {
+bool SolveCholesky(std::vector<double>& N, std::vector<double>& t, int u,
+                   const std::atomic<bool>* cancelRequested = nullptr) {
     std::vector<double> L(static_cast<size_t>(u) * u, 0.0);
     for (int i = 0; i < u; ++i) {
+        if (IsCancelled(cancelRequested)) return false;
         for (int j = 0; j <= i; ++j) {
             double sum = N[static_cast<size_t>(i) * u + j];
             for (int k = 0; k < j; ++k)
@@ -298,8 +311,10 @@ double ComputedZenithRefracted(const NetSt& from, const NetSt& to, double refrac
 }
 
 
-LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
+LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w,
+                        const std::atomic<bool>* cancelRequested) {
     LsaResult result;
+    if (IsCancelled(cancelRequested)) return CancelledResult();
     bool solveUp = !td.networkElevDiffs.empty() || !td.networkZeniths.empty();
     for (const NetworkStation& station : td.networkStations)
         if (station.elevation.present) solveUp = true;
@@ -530,6 +545,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
     const int kMaxIter = w.maxIterations > 0 ? w.maxIterations : 12;
     int iter = 0;
     for (; iter < kMaxIter; ++iter) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         std::vector<double> normal(static_cast<size_t>(unknowns) * unknowns, 0.0);
         std::vector<double> rhs(static_cast<size_t>(unknowns), 0.0);
         auto addEq = [&](const std::vector<Term>& row, double sigma, double misclose) {
@@ -543,6 +559,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         };
 
         for (const NetworkAngleObs& angle : angles) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double computed = WrapPi(Azimuth(stations[angle.atId].e, stations[angle.atId].n,
                                                    stations[angle.toId].e, stations[angle.toId].n) -
                                            Azimuth(stations[angle.atId].e, stations[angle.atId].n,
@@ -557,6 +574,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                   WrapPi(angle.angleDeg * kDeg2Rad - computed));
         }
         for (const NetworkDistObs& dist : dists) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double de = stations[dist.toId].e - stations[dist.fromId].e;
             const double dn = stations[dist.toId].n - stations[dist.fromId].n;
             const double computed = std::sqrt(de * de + dn * dn);
@@ -572,6 +590,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
             addEq(row, distSigma(dist), dist.distance - computed);
         }
         for (const NetworkAzimuthObs& azimuth : azimuths) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double computed = Azimuth(stations[azimuth.fromId].e, stations[azimuth.fromId].n,
                                             stations[azimuth.toId].e, stations[azimuth.toId].n);
             std::vector<Term> row;
@@ -581,6 +600,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                   WrapPi(azimuth.azimuthDeg * kDeg2Rad - computed));
         }
         for (const NetworkElevDiffObs& diff : elevDiffs) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double computed = stations[diff.toId].up - stations[diff.fromId].up;
             std::vector<Term> row;
             AddPartial(row, colOf, diff.toId, 2, 1.0);
@@ -590,6 +610,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
             addEq(row, sigma, diff.deltaZ - computed);
         }
         for (const NetworkZenithObs& zenith : zeniths) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double computed = ComputedZenithRefracted(stations[zenith.fromId], stations[zenith.toId],
                                                              w.refractionCoefficient);
             std::vector<Term> row;
@@ -602,6 +623,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                   WrapPi(zenith.zenithDeg * kDeg2Rad - computed));
         }
         for (const NetworkDirectionObs& dir : directions) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
                                       stations[dir.toId].e, stations[dir.toId].n);
             const double computed = WrapPi(az - orient[static_cast<size_t>(dir.setId)]);
@@ -627,7 +649,8 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         }
 
         std::vector<double> delta = rhs;
-        if (!SolveCholesky(normal, delta, unknowns)) {
+        if (!SolveCholesky(normal, delta, unknowns, cancelRequested)) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             result.message = "The network normal equations are singular.";
             return result;
         }
@@ -665,6 +688,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         PushMeas(result.measResiduals, row);
     };
     for (const NetworkAngleObs& angle : angles) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double computed = WrapPi(Azimuth(stations[angle.atId].e, stations[angle.atId].n,
                                                stations[angle.toId].e, stations[angle.toId].n) -
                                        Azimuth(stations[angle.atId].e, stations[angle.atId].n,
@@ -676,6 +700,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                                     std::sqrt(extraTo * extraTo + extraFrom * extraFrom)));
     }
     for (const NetworkAzimuthObs& azimuth : azimuths) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double computed = Azimuth(stations[azimuth.fromId].e, stations[azimuth.fromId].n,
                                         stations[azimuth.toId].e, stations[azimuth.toId].n);
         const double extra = centeringExtraSec(HorizDistFt(stations[azimuth.fromId], stations[azimuth.toId]));
@@ -683,6 +708,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                       angleSigmaRad(azimuth.stdErrorSec, w.sigmaAzimuthSec, extra));
     }
     for (const NetworkDistObs& dist : dists) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double de = stations[dist.toId].e - stations[dist.fromId].e;
         const double dn = stations[dist.toId].n - stations[dist.fromId].n;
         const double computed = std::sqrt(de * de + dn * dn);
@@ -698,6 +724,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         PushMeas(result.measResiduals, row);
     }
     for (const NetworkElevDiffObs& diff : elevDiffs) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double computed = stations[diff.toId].up - stations[diff.fromId].up;
         const double defaultSigma = diff.isLevelRun ? w.sigmaLevelFt : w.sigmaVertConstFt;
         const double sigma = diff.stdError > 0.0 ? diff.stdError : defaultSigma;
@@ -712,6 +739,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
         PushMeas(result.measResiduals, row);
     }
     for (const NetworkZenithObs& zenith : zeniths) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double computed = ComputedZenithRefracted(stations[zenith.fromId], stations[zenith.toId],
                                                          w.refractionCoefficient);
         const double horizDist = HorizDistFt(stations[zenith.fromId], stations[zenith.toId]);
@@ -722,6 +750,7 @@ LsaResult AdjustNetwork(const TraverseData& td, const LsaWeights& w) {
                                     std::sqrt(baseCentering * baseCentering + vert * vert)));
     }
     for (const NetworkDirectionObs& dir : directions) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const double az = Azimuth(stations[dir.atId].e, stations[dir.atId].n,
                                   stations[dir.toId].e, stations[dir.toId].n);
         const double computed = WrapPi(az - orient[static_cast<size_t>(dir.setId)]);
@@ -803,9 +832,11 @@ double LsaChiSquareCritical(double probability, int degreesOfFreedom) {
     return 0.5 * (lo + hi);
 }
 
-LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& w) {
+LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& w,
+                                      const std::atomic<bool>* cancelRequested) {
+    if (IsCancelled(cancelRequested)) return CancelledResult();
     if (HasNetworkObservations(td))
-        return AdjustNetwork(td, w);
+        return AdjustNetwork(td, w, cancelRequested);
     LsaResult r;
 
     // ---- Preconditions (REQ-017: surface, never absorb) -------------------
@@ -828,6 +859,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         return r;
     }
     for (int k = 0; k < m; ++k) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         if (!td.legs[k].computed) {
             r.message = "All legs must have a horizontal angle and distance "
                         "(leg " + std::to_string(k + 1) + " is unresolved).";
@@ -852,6 +884,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     // they are excluded and counted, not silently dropped (REQ-201/REQ-017 style).
     std::vector<int> usableGps;
     for (int gi = 0; gi < static_cast<int>(td.gpsVectors.size()); ++gi) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const auto& gv = td.gpsVectors[gi];
         if (gv.computed && gv.hasCovariance) usableGps.push_back(gi);
         else if (gv.computed || gv.hasCovariance || !gv.errorMsg.empty()) ++r.gpsVectorsSkipped;
@@ -927,6 +960,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     };
     std::vector<GpsEdge> gpsEdges;
     for (int gi : usableGps) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const auto& gv = td.gpsVectors[gi];
         double covEcef[3][3] = {
             {gv.varXM2,  gv.covXYM2, gv.covXZM2},
@@ -966,6 +1000,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     std::vector<double> obsDist(m), obsAng(m), obsVert(m);
     std::vector<bool> hasVert(m, false);
     for (int k = 0; k < m; ++k) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         obsDist[k] = td.legs[k].computedHorizDist;
         obsAng[k]  = td.legs[k].computedHorizAngleDeg * kDeg2Rad;
         obsVert[k] = td.legs[k].computedDeltaZ;
@@ -979,6 +1014,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     std::vector<double> Nfinal;  // the last iteration's normal matrix, kept for the
                                   // post-convergence covariance/error-ellipse inversion below.
     for (; iter < kMaxIter; ++iter) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         std::vector<double> N(static_cast<size_t>(u) * u, 0.0);
         std::vector<double> t(u, 0.0);
 
@@ -1012,6 +1048,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
         bool degenerate = false;
         for (int k = 0; k < m && !degenerate; ++k) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const int Oid = posId[k], Fid = posId[k + 1];
             const Coord& O = coord[Oid];
             const Coord& F = coord[Fid];
@@ -1099,6 +1136,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
         // --- GPS vector observations (REQ-417) ---
         for (const auto& e : gpsEdges) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             const Coord& from = coord[e.fromId];
             const Coord& to   = coord[e.toId];
             const double comp[3] = {to.e - from.e, to.n - from.n, to.up - from.up};
@@ -1113,7 +1151,8 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
         Nfinal = N;  // SolveCholesky only reads N (via a local Cholesky factor), never mutates it.
         std::vector<double> delta = t;             // SolveCholesky writes solution here.
-        if (!SolveCholesky(N, delta, u)) {
+        if (!SolveCholesky(N, delta, u, cancelRequested)) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
             r.message = "Normal equations are singular (check geometry/weights).";
             return r;
         }
@@ -1139,6 +1178,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     double vtWv = 0.0;
     r.residuals.resize(m);
     for (int k = 0; k < m; ++k) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const int Oid = posId[k], Fid = posId[k + 1];
         const Coord& O = coord[Oid];
         const Coord& F = coord[Fid];
@@ -1201,6 +1241,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
 
     // GPS vector residuals.
     for (const auto& e : gpsEdges) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const Coord& from = coord[e.fromId];
         const Coord& to   = coord[e.toId];
         const double v[3] = {(to.e - from.e) - e.obs[0], (to.n - from.n) - e.obs[1],
@@ -1242,15 +1283,21 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     std::vector<double> Ninv(static_cast<size_t>(u) * u, 0.0);
     bool haveNinv = true;
     for (int col = 0; col < u && haveNinv; ++col) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         std::vector<double> Ncopy = Nfinal;
         std::vector<double> e(u, 0.0);
         e[col] = 1.0;
-        if (!SolveCholesky(Ncopy, e, u)) { haveNinv = false; break; }
+        if (!SolveCholesky(Ncopy, e, u, cancelRequested)) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
+            haveNinv = false;
+            break;
+        }
         for (int row = 0; row < u; ++row) Ninv[static_cast<size_t>(row) * u + col] = e[row];
     }
 
     // ---- Adjusted free-station coordinates + per-station error ellipse ----
     for (int fi = 0; fi < static_cast<int>(freeIds.size()); ++fi) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
         const int id = freeIds[fi];
         const Coord& c = coord[id];
         r.stationIds.push_back(id);

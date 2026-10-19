@@ -2,8 +2,10 @@
 #include <QMainWindow>
 #include "CadCommands.hpp"
 #include "AdjustmentEditor.hpp"
+#include <atomic>
 #include <future>
 #include <functional>
+#include <memory>
 class QPlainTextEdit;
 class QTableWidget;
 class QLabel;
@@ -60,8 +62,10 @@ private:
   bool m_Imported = false;
   std::uint32_t m_ResultDrawingUid = 0;
   std::future<std::pair<TraverseData, LsaResult>> m_Work;
+  std::shared_ptr<std::atomic<bool>> m_CancelRequested;
   QTimer* m_Poll;
   QAction* m_RunAction;
+  QAction* m_StopAction;
   QAction* m_AcceptAction;
   QAction* m_CommitAction;
 };
