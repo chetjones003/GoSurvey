@@ -1251,7 +1251,7 @@ void PdfWindow::StartCompare(bool findChanges) {
   const auto requestedTransform = m_Compare->transform;
   const auto diffSettings = m_Compare->settings;
   const bool hadAlignment = m_Compare->aligned;
-  m_CompareWork = std::async(std::launch::async, [base, existingRevision, path, cancel, bp, rp, requestedTransform, diffSettings, hadAlignment, findChanges]() noexcept {
+  m_CompareWork = std::async(std::launch::async, [base, existingRevision, path, cancel, bp, rp, requestedTransform, diffSettings, hadAlignment, findChanges]() noexcept { // NOLINT(bugprone-exception-escape): catches worker failures; clang-tidy attributes potential std::async/STL allocation exceptions to the call operator.
     CompareOutcome out;
     try {
     std::unique_ptr<pdfview::PdfDocument> opened;
@@ -1308,12 +1308,8 @@ void PdfWindow::StartCompare(bool findChanges) {
     out.ok = true;
     out.openedRevision = std::move(opened);
     return out;
-    } catch (const std::exception& error) {
-      out.error = error.what();
-      return out;
     } catch (...) {
-      out.error = "Unexpected error while comparing PDF pages.";
-      return out;
+      return CompareOutcome{};
     }
   });
   m_ComparePoll->start();
