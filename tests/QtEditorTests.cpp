@@ -8,6 +8,7 @@
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "QtAnnotations.hpp"
+#include "GsIo.hpp"
 #include "ProjectPoints.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
@@ -40,6 +41,7 @@
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QStandardItemModel>
 #include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
@@ -48,6 +50,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QTimer>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -736,6 +739,21 @@ private Q_SLOTS:
     QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
     auto* fov = window.findChild<QSpinBox*>("ribbonFov"); QVERIFY(fov); QVERIFY(fov->isEnabled());
     fov->setValue(75); QCOMPARE(state.viewportFovDeg, 75.f);
+    window.Submit("PERSPECTIVE sideways"); QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
+    window.Submit("FOV 180"); QCOMPARE(state.viewportFovDeg, 75.f);
+    window.Submit("VIEW S Qt Perspective"); QCOMPARE(state.namedViews.size(), std::size_t(1));
+    QCOMPARE(state.namedViews[0].projection, Camera::Projection::Perspective);
+    AppCommandState reopened; std::vector<std::string> ioLog;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(reopened, SerializeGoSurveyJson(state), ioLog));
+    QCOMPARE(reopened.viewportProjection, Camera::Projection::Perspective);
+    QCOMPARE(reopened.viewportFovDeg, 75.f);
+    QCOMPARE(reopened.namedViews.size(), std::size_t(1));
+    QCOMPARE(reopened.namedViews[0].fovDeg, 75.f);
+    auto* annotationScale = window.findChild<QComboBox*>("statusAnnotationScale"); QVERIFY(annotationScale);
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    window.Refresh(); QCOMPARE(annotationScale->count(), 2); QCOMPARE(annotationScale->currentIndex(), -1);
+    annotationScale->setCurrentIndex(1); QMetaObject::invokeMethod(annotationScale, "activated", Q_ARG(int, 1));
+    QCOMPARE(state.currentAnnotationScaleIndex, 1);
     auto* ucs = window.findChild<QComboBox*>("ribbonUcs"); QVERIFY(ucs);
     ucs->setCurrentIndex(3); QMetaObject::invokeMethod(ucs, "activated", Q_ARG(int, 3));
     QVERIFY(ucs::FramesMatch(state.activeUcs, ucs::OrthographicPresets()[2].frame));
@@ -752,6 +770,74 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::PipeRun);
     QCOMPARE(state.pipeRunPhase, AppCommandState::PipeRunPhase::WaitFirstPoint);
     QVERIFY(!size->isEnabled());
+  }
+
+  void qtIsolationCommandsHideAndRestoreStableEntities() {
+    EditorWindow window; window.show(); auto& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
+    state.userLineAttrs.resize(2);
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    window.Submit("ISOLATEOBJECTS");
+    QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
+    window.Submit("UNISOLATEOBJECTS");
+    QVERIFY(state.hiddenEntityIds.empty());
+    state.selection = {{SelectedEntity::Type::LineSeg, 1}};
+    window.Submit("HIDEOBJECTS");
+    QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
+    window.Submit("UNISOLATEOBJECTS");
+    QVERIFY(state.hiddenEntityIds.empty());
+  }
+
+  void qtAnnotationScaleControlsApplyVisibilityAndStableIsolation() {
+    AppCommandState state;
+    state.uiViewportWidthPx = 640.f; state.uiViewportHeightPx = 480.f;
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    state.currentAnnotationScaleIndex = 0;
+    CadAnnotation annotation; annotation.kind = CadAnnotation::Kind::Text; annotation.text = "Qt";
+    annotation.annotative = true; annotation.annotativeVisibleScaleNames = {"1:50"};
+    annotation.plottedHeightInches = 0.25f; state.cadAnnotations.push_back(annotation);
+    EntityAttributes attrs; attrs.id = 42; state.cadAnnotationAttrs.push_back(attrs);
+    auto render = [&] {
+      QImage image(640, 480, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
+      QPainter painter(&image); DrawQtModelAnnotations(painter, state, 640.f, 480.f); painter.end();
+      return image;
+    };
+    const QImage visible = render();
+    QVERIFY(std::any_of(visible.constBits(), visible.constBits() + visible.sizeInBytes(), [](uchar value) { return value != 0; }));
+    state.currentAnnotationScaleIndex = 1;
+    const QImage excludedScale = render();
+    QVERIFY(std::all_of(excludedScale.constBits(), excludedScale.constBits() + excludedScale.sizeInBytes(), [](uchar value) { return value == 0; }));
+    state.currentAnnotationScaleIndex = 0; state.hiddenEntityIds = {42};
+    const QImage hidden = render();
+    QVERIFY(std::all_of(hidden.constBits(), hidden.constBits() + hidden.sizeInBytes(), [](uchar value) { return value == 0; }));
+  }
+
+  void qtAnnotativePropertiesToggleAndUndoVisibleScales() {
+    EditorWindow window; window.show(); auto& state = window.State();
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    CadAnnotation annotation; annotation.kind = CadAnnotation::Kind::Text; annotation.text = "Qt";
+    state.cadAnnotations.push_back(annotation); state.cadAnnotationAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::Annotation, 0}}; window.Refresh();
+    auto* annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative);
+    annotative->setChecked(true); QVERIFY(state.cadAnnotations[0].annotative);
+    auto* scales = window.findChild<QComboBox*>("propertyAnnotationScales"); QVERIFY(scales);
+    auto* model = qobject_cast<QStandardItemModel*>(scales->model()); QVERIFY(model);
+    model->item(1)->setCheckState(Qt::Unchecked);
+    QCOMPARE(state.cadAnnotations[0].annotativeVisibleScaleNames, std::vector<std::string>{"1:50"});
+    window.Submit("UNDO");
+    QVERIFY(state.cadAnnotations[0].annotativeVisibleScaleNames.empty());
+    state.cadFilledRegions.emplace_back(); state.cadFilledRegionAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::FilledRegion, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadFilledRegions[0].annotative);
+    state.cadBlockRefs.emplace_back(); state.cadBlockRefAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::BlockRef, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadBlockRefs[0].annotative);
+    state.cadMultileaders.emplace_back(); state.cadMultileaderAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::Multileader, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadMultileaders[0].annotative);
   }
 
   void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {
