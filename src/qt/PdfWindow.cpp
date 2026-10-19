@@ -216,13 +216,13 @@ public:
 };
 
 // The selected look for the PDF window (issue #905, option B): deep navy chrome, a bright blue frame on the current thumbnail.
-constexpr const char* kPdfWindowStyle =
+constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so the dialogs it opens keep the application theme
     "QMainWindow{background:#10151f;} QToolBar{background:#1b2433;border:0;spacing:6px;padding:3px;}"
-    "QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolButton:hover{background:#2c3b57;}"
+    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#2c3b57;}"
     "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#1b2433;padding:6px;}"
     "#pdfThumbnailList{background:#141b28;color:#cfd8ea;border:0;selection-background-color:#3b82f6;selection-color:white;}"
     "#pdfFindEdit{background:#0e131c;color:#fff;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;}"
-    "QLabel,QCheckBox{color:#e8eef9;} QScrollArea{background:#0e131c;}";
+    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#0e131c;}";
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
