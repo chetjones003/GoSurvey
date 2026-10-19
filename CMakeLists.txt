@@ -496,16 +496,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # headlessly (REQ-107, D-2026-08-29-i).
   src/viewport/CadRubberPreview.cpp
 
-  # Text measurement + font registry. In the domain set because label geometry depends on metrics
-  # (ADR-031 (c′)) — these need ImGui core, never a backend.
+  # MTEXT rich-wire normalisation (pure; the ImGui layout lives in GOSURVEY_IMGUI_TEXT_SOURCES)
   src/ui/MtextRichFormat.cpp
-  src/ui/FontRegistry.cpp
-  src/ui/LegacyApplicationFonts.cpp
-  # REQ-302/ADR-053 (issue #323) — ribbon measure pass runtime (icon side override for tests + app).
-  src/ui/RibbonLayoutMeasure.cpp
-  # SHX stroke text emitter. Here because MtextRichFormat's layout calls Shx::DrawText to measure
-  # SHX runs — it takes an ImDrawList but issues no GL of its own, so headless links it happily.
-  src/ui/ShxDraw.cpp
 
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
   src/font/ShxFont.cpp
@@ -666,6 +658,21 @@ set(GOSURVEY_DOMAIN_SOURCES
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
 # once per configuration rather than once per executable that needs it.
+# ImGui-only text support (issue #917): the font registry and legacy font loading, MTEXT layout /
+# measurement through ImFont, the SHX draw-list emitter and the ribbon measure pass. These need ImGui
+# *core* (never a backend) and are linked by the ImGui app, the headless driver (which measures labels
+# through the same font, ADR-031 (c')) and the ImGui test executable - NOT by gosurvey_domain, so the
+# Qt frontend, which links the domain library, carries no ImGui core.
+set(GOSURVEY_IMGUI_TEXT_SOURCES
+  src/ui/MtextRichImGui.cpp
+  src/ui/FontRegistry.cpp
+  src/ui/LegacyApplicationFonts.cpp
+  # REQ-302/ADR-053 (issue #323) - ribbon measure pass runtime (icon side override for tests + app).
+  src/ui/RibbonLayoutMeasure.cpp
+  # SHX stroke text emitter: takes an ImDrawList but issues no GL of its own.
+  src/ui/ShxDraw.cpp
+)
+
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -686,7 +693,7 @@ target_include_directories(gosurvey_domain PUBLIC
   ${PUGIXML_INCLUDE}
   ${CMAKE_BINARY_DIR}/generated
 )
-target_link_libraries(gosurvey_domain PUBLIC imgui_core LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
+target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
   # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
@@ -694,6 +701,19 @@ if(WIN32)
 endif()
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
+
+# Issue #917: the shared domain library (and so the Qt frontend) must stay free of ImGui core.
+get_target_property(_domain_links gosurvey_domain LINK_LIBRARIES)
+if("imgui_core" IN_LIST _domain_links OR "imgui_core_testengine" IN_LIST _domain_links)
+  message(FATAL_ERROR "gosurvey_domain must not link ImGui; put ImGui-only code in GOSURVEY_IMGUI_TEXT_SOURCES")
+endif()
+
+# ImGui-only text support, linked by the ImGui app (Release), the headless driver and the ImGui tests.
+# The Debug Developer Shell compiles the same sources straight into GoSurvey (Test Engine ImGui ABI).
+add_library(gosurvey_imgui_text STATIC ${GOSURVEY_IMGUI_TEXT_SOURCES})
+target_link_libraries(gosurvey_imgui_text PUBLIC gosurvey_domain imgui_core)
+gosurvey_target_warnings(gosurvey_imgui_text)
+gosurvey_enable_pch(gosurvey_imgui_text)
 
 # Native Qt/Win32 presentation. Opt in while feature parity is being verified.
 option(GOSURVEY_BUILD_QT "Build the Qt Widgets editor using an installed Qt 6 kit" OFF)
@@ -841,7 +861,7 @@ target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devs
 if(GOSURVEY_DEVELOPER_SHELL)
   # Domain objects must share the Test Engine ImGui ABI (ADR-040). Do not link gosurvey_domain
   # (compiled against imgui_core without hooks) into the Debug windowed exe.
-  target_sources(GoSurvey PRIVATE ${GOSURVEY_DOMAIN_SOURCES})
+  target_sources(GoSurvey PRIVATE ${GOSURVEY_DOMAIN_SOURCES} ${GOSURVEY_IMGUI_TEXT_SOURCES})
   target_sources(GoSurvey PRIVATE
     src/devshell/DevShell.cpp
     src/devshell/DevShellTests.cpp
@@ -851,9 +871,9 @@ if(GOSURVEY_DEVELOPER_SHELL)
   target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
   # The domain sources are compiled into this target, so what gosurvey_domain links PUBLIC (miniz,
   # for ProjectPack / ProjectTurnover - REQ-380/381) has to be linked here too.
-  target_link_libraries(GoSurvey PRIVATE miniz)
+  target_link_libraries(GoSurvey PRIVATE miniz Laszip::laszip)
 else()
-  target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
+  target_link_libraries(GoSurvey PRIVATE gosurvey_imgui_text gosurvey_domain)
 endif()
 
 # ADR-063 (c): the only source that sees CS-MAP's headers. No PCH: cs_map.h is a C header with its
@@ -1109,7 +1129,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   # gosurvey_domain brings imgui_core. Adding imgui_backend here would drag in glfw and OpenGL
   # and silently undo the property this target exists to hold. LibreDWG::libredwg is linked
   # explicitly because gosurvey_domain compiles LibreDwgCad.cpp without exposing the lib.
-  target_link_libraries(gosurvey_headless PRIVATE gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(gosurvey_headless PRIVATE gosurvey_imgui_text gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
 
   # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
   # rather than to whoever's checkout the transcript was written in.
@@ -1140,7 +1160,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_imgui_text gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1635,6 +1655,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/GizmoSubObjectMoveTests.cpp
     tests/LibreDwgCadTests.cpp
     tests/CadBlockImportTests.cpp
+    tests/SurveyLabelMeasureTests.cpp
     # REQ-375 (#696 P2): project settings resolve against AppCommandState (EnforceProjectSettings), so
     # this rides with gosurvey_domain like CadBlockImportTests.
     tests/ProjectSettingsTests.cpp
@@ -1733,7 +1754,7 @@ if(GOSURVEY_BUILD_TESTS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveyTestImGui PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(GoSurveyTestImGui PRIVATE gosurvey_imgui_text gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
   target_compile_definitions(GoSurveyTestImGui PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
     GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurvey>/resources/csmap")

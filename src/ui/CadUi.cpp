@@ -17,6 +17,7 @@
 #include "viewport/Crosshair3d.hpp"  // 3D crosshair axis projection (REQ-310)
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
+#include "MtextRichImGui.hpp"
 #include "MtextToolbar.hpp"
 #include "MtextTextOps.hpp"
 #include "RichTextEdit.hpp"

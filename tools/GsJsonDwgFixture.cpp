@@ -10,6 +10,7 @@
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "DwgIo.hpp"
+#include "MtextRichImGui.hpp"
 
 #include <imgui.h>
 
@@ -49,6 +50,7 @@ static int Usage() {
 static int ToDwg(const char* inJson, const char* outDwg) {
   InitHeadlessImGuiLocal();
   AppCommandState st;
+  st.measureAnnotationText = MtextRichMeasureAnnotationImGui;
   std::vector<std::string> log;
   if (!LoadGoSurveyTemplateFile(st, inJson, log)) {
     for (auto& s : log) std::fprintf(stderr, "%s\n", s.c_str());
