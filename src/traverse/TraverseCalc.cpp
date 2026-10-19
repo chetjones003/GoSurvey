@@ -2,9 +2,11 @@
 
 #include "../geo/EcefTransform.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <string>
 #include <unordered_map>
 
@@ -273,6 +275,50 @@ void ReduceLegFromSets(TraverseLeg& leg) {
     } else {
         leg.hasSlopeDist = false;
     }
+}
+
+
+void TraverseAppendImported(TraverseData& into, TraverseData&& imported) {
+    if (into.legs.empty() && into.sideShots.empty() && into.gpsVectors.empty()) {
+        into = std::move(imported);
+        return;
+    }
+
+    int maxUsedId = into.startStationId;
+    for (const TraverseLeg& leg : into.legs) maxUsedId = std::max(maxUsedId, leg.stationId);
+    for (const TraverseSideShot& shot : into.sideShots)
+        maxUsedId = std::max({maxUsedId, shot.atStationId, shot.stationId});
+    for (const TraverseGpsVector& vector : into.gpsVectors)
+        maxUsedId = std::max({maxUsedId, vector.fromStationId, vector.toStationId});
+
+    const int chainEndId = into.legs.empty() ? into.startStationId : into.legs.back().stationId;
+    std::unordered_map<int, int> remap;
+    remap[imported.startStationId] = chainEndId;
+    int nextId = maxUsedId + 1;
+    auto mapId = [&](int oldId) {
+        const auto found = remap.find(oldId);
+        if (found != remap.end()) return found->second;
+        const int newId = nextId++;
+        remap.emplace(oldId, newId);
+        return newId;
+    };
+
+    for (TraverseLeg& leg : imported.legs) leg.stationId = mapId(leg.stationId);
+    for (TraverseSideShot& shot : imported.sideShots) {
+        shot.atStationId = mapId(shot.atStationId);
+        shot.stationId = mapId(shot.stationId);
+    }
+    for (TraverseGpsVector& vector : imported.gpsVectors) {
+        vector.fromStationId = mapId(vector.fromStationId);
+        vector.toStationId = mapId(vector.toStationId);
+    }
+
+    into.legs.insert(into.legs.end(), std::make_move_iterator(imported.legs.begin()),
+                     std::make_move_iterator(imported.legs.end()));
+    into.sideShots.insert(into.sideShots.end(), std::make_move_iterator(imported.sideShots.begin()),
+                          std::make_move_iterator(imported.sideShots.end()));
+    into.gpsVectors.insert(into.gpsVectors.end(), std::make_move_iterator(imported.gpsVectors.begin()),
+                           std::make_move_iterator(imported.gpsVectors.end()));
 }
 
 

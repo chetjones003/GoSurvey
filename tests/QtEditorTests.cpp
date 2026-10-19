@@ -10,6 +10,7 @@
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/FbkImport.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "PdfViewerCore.hpp"
@@ -99,6 +100,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -2218,6 +2220,103 @@ private Q_SLOTS:
     QVERIFY(!window.SaveFile(directory.filePath("bad-save.gstrav"), error));
     QVERIFY(!QFile::exists(directory.filePath("bad-save.gstrav")));
     QVERIFY(!window.AcceptResult(error));
+  }
+
+  void issue913RawImportsMergeAndReportPerFileFailures() {
+    auto state = StateWithTraverse();
+    state->traverseData = {};
+    AppCommandState::ProjectSession readOnlyProject;
+    readOnlyProject.uid = 913;
+    readOnlyProject.readOnly = true;
+    state->openProjects.push_back(readOnlyProject);
+    state->drawingTabs[1].projectUid = readOnlyProject.uid;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    const QString fbk = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/traverse_sample.fbk";
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile bad(directory.filePath("bad.xml"));
+    QVERIFY(bad.open(QIODevice::WriteOnly));
+    bad.write("<not-jobxml>"); bad.close();
+
+    QStringList failures;
+    QCOMPARE(window.ImportFiles({fbk, fbk}, failures), 2);
+    QVERIFY(failures.empty());
+    auto* files = window.findChild<QListWidget*>("issue913ImportedFiles");
+    QVERIFY(files);
+    QCOMPARE(files->count(), 2);
+    QVERIFY(files->item(0)->text().startsWith("Imported"));
+    QVERIFY(files->item(1)->text().startsWith("Imported"));
+    window.resize(1220, 780);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(files->parentWidget()->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-success.png")));
+
+    QCOMPARE(window.ImportFiles({bad.fileName()}, failures), 0);
+    QCOMPARE(failures.size(), 1);
+    QVERIFY(!failures.front().isEmpty());
+    QCOMPARE(files->count(), 3);
+    QVERIFY(files->item(2)->text().startsWith("Failed"));
+
+    TraverseData oneImport;
+    std::string reason;
+    QVERIFY(FbkImport(fbk.toUtf8().constData(), oneImport, reason));
+    const auto expectedLegs = oneImport.legs.size();
+    const auto expectedPoints = state->surveyPoints.size();
+    QVERIFY(!CanUndo(*state));
+    QString saveError;
+    const QString saved = directory.filePath("merged.gstrav");
+    QVERIFY2(window.SaveFile(saved, saveError), qPrintable(saveError));
+    TraverseData loaded;
+    LsaWeights weights;
+    QVERIFY(traverseio::Load(saved.toUtf8().toStdString(), loaded, weights, reason));
+    QCOMPARE(loaded.legs.size(), expectedLegs * 2);
+    QCOMPARE(loaded.importedFiles.size(), std::size_t(2));
+    std::vector<int> stationIds;
+    for (const auto& leg : loaded.legs) stationIds.push_back(leg.stationId);
+    std::sort(stationIds.begin(), stationIds.end());
+    QVERIFY(std::adjacent_find(stationIds.begin(), stationIds.end()) == stationIds.end());
+    QCOMPARE(state->surveyPoints.size(), expectedPoints);
+    QVERIFY(!CanUndo(*state));
+
+    QCoreApplication::processEvents();
+    QVERIFY(!files->item(2)->toolTip().isEmpty());
+    QVERIFY(files->parentWidget()->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-error.png")));
+    window.hide();
+  }
+
+  void issue913JobXmlImportsThroughQtAndCancelKeepsTheSession() {
+    auto state = StateWithTraverse();
+    state->traverseData = {};
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    const QString jobXml = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/closed_loop_trav.jxl";
+    QStringList failures;
+    QCOMPARE(window.ImportFiles({jobXml}, failures), 1);
+    QVERIFY(failures.empty());
+    window.resize(1220, 780);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.findChild<QListWidget*>("issue913ImportedFiles")->parentWidget()->grab().save(
+        QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-jobxml-import.png")));
+    const QString beforeCancel = window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText();
+    const int filesBeforeCancel = window.findChild<QListWidget*>("issue913ImportedFiles")->count();
+    QCOMPARE(window.ImportFiles({}, failures), 0);
+    QCOMPARE(window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText(), beforeCancel);
+    QCOMPARE(window.findChild<QListWidget*>("issue913ImportedFiles")->count(), filesBeforeCancel);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString saveError;
+    const QString saved = directory.filePath("jobxml.gstrav");
+    QVERIFY2(window.SaveFile(saved, saveError), qPrintable(saveError));
+    TraverseData loaded;
+    LsaWeights weights;
+    std::string reason;
+    QVERIFY(traverseio::Load(saved.toUtf8().toStdString(), loaded, weights, reason));
+    QCOMPARE(loaded.importedFiles.size(), std::size_t(1));
+    QCOMPARE(QString::fromUtf8(loaded.importedFiles.front().c_str()), jobXml);
+    QVERIFY(!loaded.legs.empty());
   }
 
   void asynchronousSolveAcceptanceCommitAndUndo() {
