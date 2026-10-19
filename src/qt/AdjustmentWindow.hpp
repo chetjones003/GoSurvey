@@ -9,6 +9,10 @@ class QTableWidget;
 class QLabel;
 class QTimer;
 class QAction;
+class QCheckBox;
+class QComboBox;
+class QDoubleSpinBox;
+class QEvent;
 
 class AdjustmentWindow final : public QMainWindow {
 public:
@@ -26,6 +30,7 @@ public:
   std::function<void()> drawingChanged;
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void changeEvent(QEvent* event) override;
 private:
   void Import();
   void Calculate();
@@ -40,6 +45,14 @@ private:
   void SetBusy(bool busy);
   void RefreshPreview();
   void RefreshFilesAndSummary();
+  void BuildOptionsBar(QWidget* parent);
+  void InvalidateResult();
+  void SyncOptionsFromText();
+  void WriteScaleDirective();
+  void ApplyOptionsToData();
+  void RefreshOptionsBar();
+  QString ApplyResolvedScale();
+  QString UnitSuffix() const;
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   AdjustmentCodeEdit* m_Editor;
@@ -64,4 +77,15 @@ private:
   QAction* m_RunAction;
   QAction* m_AcceptAction;
   QAction* m_CommitAction;
+  QWidget* m_OptionsBar = nullptr;
+  QLabel* m_UnitsLabel = nullptr;
+  QCheckBox* m_CurvRefr = nullptr;
+  QDoubleSpinBox* m_RefractionK = nullptr;
+  QLabel* m_RefractionWarning = nullptr;
+  QCheckBox* m_ScaleCheck = nullptr;
+  QComboBox* m_ScaleKind = nullptr;
+  QLabel* m_ScaleReadout = nullptr;
+  QLabel* m_ResidualNote = nullptr;
+  bool m_SyncingOptions = false;
+  QString m_ScaleNote;
 };

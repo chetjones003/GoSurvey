@@ -72,13 +72,14 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QTableWidget>
+#include <QGroupBox>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QListWidget>
 #include <QProgressBar>
 #include <QTextBrowser>
 #include <QToolButton>
 #include <QMenu>
-#include <QGroupBox>
 #include <QBoxLayout>
 #include <QStyledItemDelegate>
 #include <QRadioButton>
@@ -129,6 +130,25 @@ std::unique_ptr<AppCommandState> StateWithTraverse() {
 QAction* Action(QWidget& widget, const QString& text) {
   for (auto* action : widget.findChildren<QAction*>()) if (action->text() == text) return action;
   return nullptr;
+}
+/// Issue #911: a Texas Central (US feet) drawing whose Transformation tab resolves a real scale
+/// factor, with sea-level reduction on so Combined and Grid only differ.
+void GiveDrawingTexasScale(AppCommandState& state) {
+  if (!geo::DictionariesLoaded())
+    geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string());
+  state.drawingInsUnits = 2;
+  state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  auto& transform = state.drawingSettings.transform;
+  transform.refGridE = 3115243.14; transform.refGridN = 10077391.26;
+  transform.applySeaLevel = true; transform.elevation = 1000.0;
+  transform.spheroidRadiusM = 20906000.0 * 1200.0 / 3937.0;
+}
+/// Runs the adjustment and waits for the worker; the solved traverse is then in `state.traverseData`.
+void SolveAdjustment(AdjustmentWindow& window) {
+  auto* run = Action(window, "Run adjustment");
+  QVERIFY(run);
+  run->trigger();
+  QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
 }
 void AnswerNextDialog(QMessageBox::StandardButton answer) {
   QTimer::singleShot(0, [answer] {
@@ -2339,6 +2359,211 @@ private Q_SLOTS:
     AnswerNextDialog(QMessageBox::Discard);
     QVERIFY(window->close());
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+
+  void issue911TraverseUnitLabelsFollowTheDrawingUnit() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 6;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* units = window.findChild<QLabel*>("adjustmentUnits");
+    QVERIFY(units);
+    QCOMPARE(units->text(), QString("Units: Meters"));
+    auto* coordinates = window.findChild<QTableWidget*>();
+    QVERIFY(coordinates);
+    QCOMPARE(coordinates->horizontalHeaderItem(1)->text(), QString("Easting (m)"));
+    QVERIFY(window.findChild<QLabel*>("adjustmentResidualNote")->text().contains(" m."));
+    state->drawingInsUnits = 2;
+    AdjustmentWindow feet(*state, log, nullptr);
+    QCOMPARE(feet.findChild<QLabel*>("adjustmentUnits")->text(), QString("Units: Feet"));
+    QCOMPARE(feet.findChild<QTableWidget*>()->horizontalHeaderItem(2)->text(), QString("Northing (ft)"));
+  }
+
+  void issue911ScaleFactorIsOffByDefaultAndLeavesTheTraverseUnchanged() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    QVERIFY(!window.findChild<QCheckBox*>("adjustmentScaleFactor")->isChecked());
+    QVERIFY(!window.findChild<QComboBox*>("adjustmentScaleKind")->isEnabled());
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    QVERIFY(!state->traverseData.applyScaleFactor);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    for (const auto& leg : state->traverseData.legs) QCOMPARE(leg.computedHorizDist, leg.computedGroundHorizDist);
+  }
+
+  void issue911ScaleFactorCombinedGridOnlyAndTextStayInStep() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    double grid = 0.0, combined = 0.0;
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::GridOnly, &grid).empty());
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::Combined, &combined).empty());
+    QVERIFY(grid != combined);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* check = window.findChild<QCheckBox*>("adjustmentScaleFactor");
+    auto* kind = window.findChild<QComboBox*>("adjustmentScaleKind");
+    auto* readout = window.findChild<QLabel*>("adjustmentScaleReadout");
+    // Bar -> text: the checkbox rewrites the #SCALE line and the readout shows the resolved factor.
+    check->setChecked(true);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON COMBINED"));
+    QVERIFY(kind->isEnabled());
+    QCOMPARE(readout->text(), QString("k = %1").arg(combined, 0, 'f', 6));
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseData.scaleFactor, combined);
+    for (const auto& leg : state->traverseData.legs)
+      QVERIFY(std::abs(leg.computedHorizDist - leg.computedGroundHorizDist * combined) < 1e-9);
+    const double combinedPerimeter = state->traverseData.legs[1].computedHorizDist;
+    // Grid only ignores the sea-level reduction and invalidates the previous solve.
+    kind->setCurrentIndex(1);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON GRID"));
+    QVERIFY(!state->traverseLsaComputed);
+    QCOMPARE(readout->text(), QString("k = %1").arg(grid, 0, 'f', 6));
+    SolveAdjustment(window);
+    QCOMPARE(state->traverseData.scaleFactor, grid);
+    QVERIFY(state->traverseData.legs[1].computedHorizDist != combinedPerimeter);
+    // Text -> bar: hand-editing the directive moves the controls.
+    editor->setPlainText(editor->toPlainText().replace("#SCALE ON GRID", "#SCALE OFF COMBINED"));
+    QVERIFY(!check->isChecked());
+    QCOMPARE(kind->currentIndex(), 0);
+    SolveAdjustment(window);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    // A hand-written file with no #SCALE line gets one added without disturbing the rest.
+    editor->setPlainText(editor->toPlainText().replace(QRegularExpression("#SCALE[^\n]*\n"), ""));
+    QVERIFY(!editor->toPlainText().contains("#SCALE"));
+    const int lines = editor->document()->blockCount();
+    check->setChecked(true);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON COMBINED"));
+    QCOMPARE(editor->document()->blockCount(), lines + 1);
+  }
+
+  void issue911ScaleFactorReportsWhyItCannotBeApplied() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 2;   // no coordinate system: "No Datum, No Projection"
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    const QString readout = window.findChild<QLabel*>("adjustmentScaleReadout")->text();
+    QVERIFY(readout.startsWith("(") && readout.size() > 3);
+    SolveAdjustment(window);   // still solves, unscaled
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    for (const auto& leg : state->traverseData.legs) QCOMPARE(leg.computedHorizDist, leg.computedGroundHorizDist);
+    QVERIFY(window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText().contains("#SCALE ON"));
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    QVERIFY(output &&output->toPlainText().startsWith("Scale factor not applied"));
+  }
+
+  void issue911ScaleFactorSurvivesSaveAndLoad() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    window.findChild<QComboBox*>("adjustmentScaleKind")->setCurrentIndex(1);
+    QTemporaryDir directory;
+    QString error;
+    const QString path = directory.filePath("scaled.gstrav");
+    QVERIFY2(window.SaveFile(path, error), qPrintable(error));
+    TraverseData loaded; LsaWeights weights; std::string reason;
+    QVERIFY2(traverseio::Load(path.toUtf8().toStdString(), loaded, weights, reason), reason.c_str());
+    QVERIFY(loaded.applyScaleFactor);
+    QVERIFY(loaded.scaleFactorKind == TraverseData::ScaleFactorKind::GridOnly);
+    double grid = 0.0;
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::GridOnly, &grid).empty());
+    QCOMPARE(loaded.scaleFactor, grid);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(false);
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QVERIFY(window.findChild<QCheckBox*>("adjustmentScaleFactor")->isChecked());
+    QCOMPARE(window.findChild<QComboBox*>("adjustmentScaleKind")->currentIndex(), 1);
+  }
+
+  void issue911CurvatureRefractionControlsDriveElevations() {
+    auto state = StateWithTraverse();
+    for (auto& leg : state->traverseData.legs) { leg.hasVertAngle = true; leg.isZenithAngle = true; leg.vertAngleDeg = 89.5; }
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* check = window.findChild<QCheckBox*>("adjustmentCurvRefr");
+    auto* k = window.findChild<QDoubleSpinBox*>("adjustmentRefractionK");
+    auto* warning = window.findChild<QLabel*>("adjustmentRefractionWarning");
+    QVERIFY(check->isChecked());
+    QCOMPARE(k->value(), 0.14);
+    QVERIFY(k->isEnabled());
+    QVERIFY(warning->isHidden());
+    SolveAdjustment(window);
+    const double defaultDz = state->traverseData.legs[1].computedDeltaZ;
+    const double hd = state->traverseData.legs[1].computedHorizDist;
+    constexpr double earthRadius = 6371000.0;
+    // Off: plain trigonometry, and a previous solve is no longer committable.
+    check->setChecked(false);
+    QVERIFY(!k->isEnabled());
+    QVERIFY(!state->traverseLsaComputed);
+    SolveAdjustment(window);
+    const double plainDz = state->traverseData.legs[1].computedDeltaZ;
+    QVERIFY(std::abs((defaultDz - plainDz) - (1.0 - 0.14) * hd * hd / (2.0 * earthRadius)) < 1e-9);
+    // On with a different k.
+    check->setChecked(true);
+    k->setValue(0.5);
+    SolveAdjustment(window);
+    QVERIFY(std::abs((state->traverseData.legs[1].computedDeltaZ - plainDz) - 0.5 * hd * hd / (2.0 * earthRadius)) < 1e-9);
+    QVERIFY(warning->isHidden());
+    // A scale-directive edit re-reads the text; the curvature setting must survive it.
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    SolveAdjustment(window);
+    QVERIFY(state->traverseData.applyCurvRefCorr);
+    QCOMPARE(state->traverseData.refractionCoeff, 0.5);
+    // Out of the typical -2..+2 range warns, but still computes.
+    k->setValue(3.0);
+    QVERIFY(!warning->isHidden());
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    check->setChecked(false);
+    QVERIFY(warning->isHidden());
+  }
+
+  void issue911SettingsDialogLabelsDistancesInTheDrawingUnit() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 6;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    QString labels;
+    QTimer::singleShot(100, [&] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (widget->windowTitle() == "Instrument / Adjustment Settings") {
+          for (auto* label : widget->findChildren<QLabel*>()) labels += label->text() + "\n";
+          static_cast<QDialog*>(widget)->reject();
+        }
+    });
+    Action(window, "Settings...")->trigger();
+    QVERIFY2(labels.contains("Distance sigma (m)"), qPrintable(labels));
+    QVERIFY(!labels.contains("drawing units"));
+  }
+
+  // Issue #911: screenshots of the chosen layout (options bar under the toolbar) for review; they are
+  // written to build/artifacts and never committed.
+  void issue911CaptureTraverseOptionsBarScreenshots() {
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    auto capture = [&](const QString& name, bool texas, bool solve, double refraction) {
+      auto state = StateWithTraverse();
+      for (auto& leg : state->traverseData.legs) { leg.hasVertAngle = true; leg.isZenithAngle = true; leg.vertAngleDeg = 89.5; }
+      if (texas) GiveDrawingTexasScale(*state);
+      std::vector<std::string> log;
+      AdjustmentWindow window(*state, log, nullptr);
+      window.resize(1200, 520);
+      window.show();
+      window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+      window.findChild<QDoubleSpinBox*>("adjustmentRefractionK")->setValue(refraction);
+      if (solve) SolveAdjustment(window);
+      QCoreApplication::processEvents();
+      QVERIFY(window.grab().save(artifacts + "qt-911-" + name + ".png"));
+    };
+    capture("solved", true, true, 0.14);
+    capture("no-coordinate-system", false, false, 0.14);
+    capture("refraction-warning", true, false, 3.0);
+    QVERIFY(QFileInfo(artifacts + "qt-911-solved.png").size() > 0);
   }
 
   void issue912HighlighterColoursEachTokenKindAndKeepsText() {
