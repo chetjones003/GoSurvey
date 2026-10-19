@@ -31600,8 +31600,83 @@ void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log) {
     InstallPointCloudBenchScene(st, log);  // BENCH POINTCLOUD was waiting on this import
 }
 
-/// Shared by \ref ExportSelectedPointCloudsToPts, \ref ExportSelectedPointCloudsToPtx,
-/// \ref ExportSelectedPointCloudsToLas, and \ref ExportSelectedPointCloudsToLaz: resolves the
+namespace {
+/// "~2m 30s remaining" / "~45s remaining" — never a negative or absurd figure: `seconds` is
+/// clamped to a sane cap so an early, noisy fraction estimate (e.g. the first tick of phase 2,
+/// before enough points have finalized to trust the extrapolation) does not print "~11 hours."
+std::string FormatEtaRemaining(double seconds) {
+  if (!(seconds > 0.0)) return "estimating...";
+  seconds = std::min(seconds, 24.0 * 3600.0);
+  const int totalSec = static_cast<int>(seconds);
+  if (totalSec < 60) return "~" + std::to_string(totalSec) + "s remaining";
+  const int mins = totalSec / 60;
+  const int secs = totalSec % 60;
+  return "~" + std::to_string(mins) + "m " + std::to_string(secs) + "s remaining";
+}
+}  // namespace
+
+PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCloudImportAsync& job) {
+  const std::int64_t total = job.totalPointsEstimate;
+  const std::int64_t streamed = job.pointsStreamed.load(std::memory_order_relaxed);
+  const std::int64_t finalized = job.pointsFinalized.load(std::memory_order_relaxed);
+  const std::int64_t leavesRead = job.previewLeavesRead.load(std::memory_order_relaxed);
+  const std::int64_t totalLeaves = job.previewTotalLeaves.load(std::memory_order_relaxed);
+
+  // Three real phases, in strict sequence (see pointcloudcache::BuildFromE57 and
+  // RunPointCloudImportWorker): streaming completes fully before the recursive octree split
+  // starts, which completes fully before the preview sample is read back. Phase 3 was invisible
+  // before this fix — it re-reads the WHOLE cache off disk to subsample it, a real full pass with
+  // no progress signal at all, which is exactly what read as "stuck at 100%" (TASK-270 log): the
+  // bar itself was reporting phase 1+2 as 100% while the worker kept working on phase 3.
+  PointCloudImportProgress progress;
+  const bool phase1Done = total > 0 && streamed >= total;
+  const bool phase2Done = phase1Done && finalized >= total;
+  if (phase2Done) progress.phase = "Sampling preview...";
+  else if (phase1Done) progress.phase = "Building spatial index...";
+
+  // Weighted by rough relative cost, not by point count: phase 2 re-reads/re-writes the dataset
+  // across several octree levels (the slowest part), phase 3 is one more full read-back.
+  if (total > 0) {
+    const float p1 = std::min(1.f, static_cast<float>(streamed) / static_cast<float>(total));
+    const float p2 = std::min(1.f, static_cast<float>(finalized) / static_cast<float>(total));
+    const float p3 = totalLeaves > 0
+                         ? std::min(1.f, static_cast<float>(leavesRead) / static_cast<float>(totalLeaves))
+                         : 0.f;
+    progress.fraction = 0.35f * p1 + 0.45f * p2 + 0.20f * p3;
+  }
+
+  // Recomputed at most once a second — every-frame recomputation made the countdown jitter rather
+  // than tick like a clock, which is what a reader expects from a "time remaining" line.
+  const auto now = std::chrono::steady_clock::now();
+  if (total > 0 && std::chrono::duration<double>(now - job.lastEtaUpdate).count() >= 1.0) {
+    const double elapsed = std::chrono::duration<double>(now - job.startTime).count();
+    // Only trust the extrapolation once there is real progress to extrapolate FROM — an ETA
+    // computed from the first half-percent of a multi-hour build is noise, not information.
+    job.cachedEtaText = progress.fraction > 0.005f
+                            ? FormatEtaRemaining(elapsed * (1.0 - progress.fraction) / progress.fraction)
+                            : "estimating...";
+    job.lastEtaUpdate = now;
+  }
+  if (total > 0) progress.eta = job.cachedEtaText;
+  return progress;
+}
+
+/// The clouds an export covers: the selected ones, or every cloud in the drawing when none is
+/// selected (REQ-172: "Export writes the selected cloud(s) (or all, when none selected)").
+std::set<int> ResolvePointCloudsForExport(const AppCommandState& st) {
+  std::set<int> resolved;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.cadPointClouds.size())
+      resolved.insert(e.index);
+  }
+  if (resolved.empty()) {
+    for (int i = 0; i < static_cast<int>(st.cadPointClouds.size()); ++i) resolved.insert(i);
+  }
+  return resolved;
+}
+
+/// Shared by \ref ExportPointCloudsToFile: resolves the
 /// selected `CadPointCloud`(s) from `st.selection`, or every cloud in the drawing when none is
 /// selected (REQ-172 acceptance text: "Export writes the selected cloud(s) (or all, when none
 /// selected — stated in the command)"), and reads back every point each resolved cloud actually
@@ -31616,14 +31691,7 @@ void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& res
                                          std::vector<double>& xyz, std::vector<float>& colors,
                                          std::vector<float>& intensity,
                                          std::int64_t& totalCount) {
-  for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
-        static_cast<size_t>(e.index) < st.cadPointClouds.size())
-      resolved.insert(e.index);
-  }
-  if (resolved.empty()) {
-    for (int i = 0; i < static_cast<int>(st.cadPointClouds.size()); ++i) resolved.insert(i);
-  }
+  resolved = ResolvePointCloudsForExport(st);
 
   bool anyColor = false, anyIntensity = false;
   for (int idx : resolved) {
@@ -31683,21 +31751,58 @@ void CollectSelectedPointCloudsForExport(AppCommandState& st, std::set<int>& res
   }
 }
 
-/// REQ-172 PTS export increment — GoSurvey's first point-cloud EXPORT path (E57 has read only to
-/// date; confirmed by a grep across the tree before writing this). See
-/// \ref CollectSelectedPointCloudsForExport for cloud resolution, and writes the merged points to
-/// ONE PTS file at a user-chosen path.
+namespace {
+const char* PointCloudExportCommandName(PointCloudExportFormat format) {
+  switch (format) {
+    case PointCloudExportFormat::Pts: return "EXPORTPTS";
+    case PointCloudExportFormat::Ptx: return "EXPORTPTX";
+    case PointCloudExportFormat::Las: return "EXPORTLAS";
+    case PointCloudExportFormat::Laz: return "EXPORTLAZ";
+  }
+  return "EXPORTPTS";
+}
+}  // namespace
+
+PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudExportFormat format) {
+  PointCloudExportPlan plan;
+  const std::set<int> resolved = ResolvePointCloudsForExport(st);
+  plan.cloudCount = static_cast<int>(resolved.size());
+  plan.fromSelection = false;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::PointCloud && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.cadPointClouds.size())
+      plan.fromSelection = true;
+  for (int idx : resolved) {
+    const auto& cloud = st.cadPointClouds[static_cast<size_t>(idx)];
+    plan.pointCount += cloud->totalPointCount > 0 ? cloud->totalPointCount : cloud->pointCount();
+  }
+  const char* ext = format == PointCloudExportFormat::Pts ? ".pts"
+                  : format == PointCloudExportFormat::Ptx ? ".ptx"
+                  : format == PointCloudExportFormat::Las ? ".las" : ".laz";
+  plan.defaultFileName =
+      resolved.size() == 1
+          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
+                    .stem().u8string() + ext
+          : std::string("pointclouds") + ext;
+  return plan;
+}
+
+/// REQ-172 export (PTS issue #825 increment 1, PTX 2, LAS 3, LAZ 4) — the one writer behind
+/// `EXPORTPTS` / `EXPORTPTX` / `EXPORTLAS` / `EXPORTLAZ` and the Qt export dialog, which differ
+/// only in how \p pathUtf8 is chosen. See \ref CollectSelectedPointCloudsForExport for cloud
+/// resolution; the merged points are written to ONE file.
 ///
 /// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
-/// concatenated into a single file rather than written one-file-per-cloud. PTS has no per-cloud
-/// structure beyond a flat point list, so prompting a save dialog per cloud (or a folder picker)
-/// would be ceremony with nothing structural to show for it; the single-cloud case — the one
-/// REQ-172's PTS acceptance text actually exercises ("export of that cloud to PTS... preserves
-/// count and XYZ") — behaves exactly like exporting that one cloud alone.
-void ExportSelectedPointCloudsToPts(AppCommandState& st, std::vector<std::string>& log) {
+/// concatenated into a single file rather than written one-file-per-cloud (PTX: into one scan
+/// block with an identity setup transform — `WritePtxFile`'s documented choice). These formats
+/// have no per-cloud structure beyond a flat point list, and REQ-172's acceptance text only
+/// exercises the single-cloud case.
+bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
+                             const std::string& pathUtf8, std::vector<std::string>& log) {
+  const std::string name = PointCloudExportCommandName(format);
   if (st.cadPointClouds.empty()) {
-    log.push_back("EXPORTPTS — the drawing has no point clouds.");
-    return;
+    log.push_back(name + " — the drawing has no point clouds.");
+    return false;
   }
 
   std::set<int> resolved;
@@ -31707,177 +31812,67 @@ void ExportSelectedPointCloudsToPts(AppCommandState& st, std::vector<std::string
   CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
 
   if (xyz.empty()) {
-    log.push_back("EXPORTPTS — the selected point cloud(s) have no points to export.");
-    return;
+    log.push_back(name + " — the selected point cloud(s) have no points to export.");
+    return false;
   }
 
-  const std::string defaultName =
-      resolved.size() == 1
-          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
-                .stem().u8string() + ".pts"
-          : std::string("pointclouds.pts");
-  char buf[1024]{};
-  if (!BrowseSaveFilePtsUtf8(buf, sizeof(buf), defaultName.c_str())) {
-    log.push_back("EXPORTPTS — cancelled.");
-    return;
+  std::string error;
+  bool ok = false;
+  switch (format) {
+    case PointCloudExportFormat::Pts: {
+      const auto wr = pointcloud_pts::WritePtsFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Ptx: {
+      const auto wr = pointcloud_ptx::WritePtxFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Las: {
+      const auto wr = pointcloud_las::WriteLasFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
+    case PointCloudExportFormat::Laz: {
+      const auto wr = pointcloud_laz::WriteLazFile(pathUtf8, xyz, colors, intensity);
+      ok = wr.ok; error = wr.errorMessage; break;
+    }
   }
-
-  const pointcloud_pts::WriteResult wr = pointcloud_pts::WritePtsFile(buf, xyz, colors, intensity);
-  if (!wr.ok) {
-    log.push_back("EXPORTPTS — " + wr.errorMessage);
-    return;
+  if (!ok) {
+    log.push_back(name + " — " + error);
+    return false;
   }
   char msg[384];
-  std::snprintf(msg, sizeof(msg), "EXPORTPTS — wrote %lld point(s) from %zu cloud(s) to %s.",
+  std::snprintf(msg, sizeof(msg), " — wrote %lld point(s) from %zu cloud(s) to %s.",
                static_cast<long long>(totalCount), resolved.size(),
-               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
-  log.push_back(msg);
+               std::filesystem::u8path(pathUtf8).filename().u8string().c_str());
+  log.push_back(name + msg);
+  return true;
 }
 
-/// REQ-172 PTX export increment (issue #825 increment 2) — same shape as \ref
-/// ExportSelectedPointCloudsToPts. See \ref CollectSelectedPointCloudsForExport for cloud
-/// resolution, and writes the merged points to ONE PTX file at a user-chosen path, as a single
-/// degenerate scan block with an identity setup transform (`WritePtxFile`'s documented choice).
-///
-/// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
-/// concatenated into a single file's one scan block rather than written one-file-per-cloud or
-/// one-scan-block-per-cloud — same reasoning PTS's export already recorded: PTX's acceptance text
-/// only exercises the single-cloud case, and there is no multi-cloud-per-export UI to drive a
-/// per-cloud prompt yet.
-void ExportSelectedPointCloudsToPtx(AppCommandState& st, std::vector<std::string>& log) {
+/// `EXPORTPTS` / `EXPORTPTX` / `EXPORTLAS` / `EXPORTLAZ` command bodies: ask for a destination
+/// with the native save dialog, then hand off to \ref ExportPointCloudsToFile.
+static void ExportSelectedPointClouds(AppCommandState& st, PointCloudExportFormat format,
+                                      std::vector<std::string>& log) {
+  const std::string name = PointCloudExportCommandName(format);
   if (st.cadPointClouds.empty()) {
-    log.push_back("EXPORTPTX — the drawing has no point clouds.");
+    log.push_back(name + " — the drawing has no point clouds.");
     return;
   }
-
-  std::set<int> resolved;
-  std::vector<double> xyz;
-  std::vector<float> colors, intensity;
-  std::int64_t totalCount = 0;
-  CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
-
-  if (xyz.empty()) {
-    log.push_back("EXPORTPTX — the selected point cloud(s) have no points to export.");
+  const PointCloudExportPlan plan = PlanPointCloudExport(st, format);
+  if (plan.pointCount <= 0) {
+    log.push_back(name + " — the selected point cloud(s) have no points to export.");
     return;
   }
-
-  const std::string defaultName =
-      resolved.size() == 1
-          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
-                .stem().u8string() + ".ptx"
-          : std::string("pointclouds.ptx");
+  const std::string& defaultName = plan.defaultFileName;
   char buf[1024]{};
-  if (!BrowseSaveFilePtxUtf8(buf, sizeof(buf), defaultName.c_str())) {
-    log.push_back("EXPORTPTX — cancelled.");
+  const bool picked = format == PointCloudExportFormat::Pts ? BrowseSaveFilePtsUtf8(buf, sizeof(buf), defaultName.c_str())
+                    : format == PointCloudExportFormat::Ptx ? BrowseSaveFilePtxUtf8(buf, sizeof(buf), defaultName.c_str())
+                    : format == PointCloudExportFormat::Las ? BrowseSaveFileLasUtf8(buf, sizeof(buf), defaultName.c_str())
+                                                            : BrowseSaveFileLazUtf8(buf, sizeof(buf), defaultName.c_str());
+  if (!picked) {
+    log.push_back(name + " — cancelled.");
     return;
   }
-
-  const pointcloud_ptx::WriteResult wr = pointcloud_ptx::WritePtxFile(buf, xyz, colors, intensity);
-  if (!wr.ok) {
-    log.push_back("EXPORTPTX — " + wr.errorMessage);
-    return;
-  }
-  char msg[384];
-  std::snprintf(msg, sizeof(msg), "EXPORTPTX — wrote %lld point(s) from %zu cloud(s) to %s.",
-               static_cast<long long>(totalCount), resolved.size(),
-               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
-  log.push_back(msg);
-}
-
-/// REQ-172 LAS export increment (issue #825 increment 3) — same shape as \ref
-/// ExportSelectedPointCloudsToPts. See \ref CollectSelectedPointCloudsForExport for cloud
-/// resolution, and writes the merged points to ONE LAS file at a user-chosen path.
-///
-/// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
-/// concatenated into a single file rather than written one-file-per-cloud — same reasoning
-/// PTS's export already recorded: REQ-172's acceptance text only exercises the single-cloud
-/// case, and there is no multi-cloud-per-export UI to drive a per-cloud prompt yet.
-void ExportSelectedPointCloudsToLas(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.cadPointClouds.empty()) {
-    log.push_back("EXPORTLAS — the drawing has no point clouds.");
-    return;
-  }
-
-  std::set<int> resolved;
-  std::vector<double> xyz;
-  std::vector<float> colors, intensity;
-  std::int64_t totalCount = 0;
-  CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
-
-  if (xyz.empty()) {
-    log.push_back("EXPORTLAS — the selected point cloud(s) have no points to export.");
-    return;
-  }
-
-  const std::string defaultName =
-      resolved.size() == 1
-          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
-                .stem().u8string() + ".las"
-          : std::string("pointclouds.las");
-  char buf[1024]{};
-  if (!BrowseSaveFileLasUtf8(buf, sizeof(buf), defaultName.c_str())) {
-    log.push_back("EXPORTLAS — cancelled.");
-    return;
-  }
-
-  const pointcloud_las::WriteResult wr = pointcloud_las::WriteLasFile(buf, xyz, colors, intensity);
-  if (!wr.ok) {
-    log.push_back("EXPORTLAS — " + wr.errorMessage);
-    return;
-  }
-  char msg2[384];
-  std::snprintf(msg2, sizeof(msg2), "EXPORTLAS — wrote %lld point(s) from %zu cloud(s) to %s.",
-               static_cast<long long>(totalCount), resolved.size(),
-               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
-  log.push_back(msg2);
-}
-
-/// REQ-172 LAZ export increment (issue #825 increment 4) — same shape as \ref
-/// ExportSelectedPointCloudsToPts. See \ref CollectSelectedPointCloudsForExport for cloud
-/// resolution, and writes the merged points to ONE LAZ file at a user-chosen path.
-///
-/// **Documented choice, not a spec requirement either way**: multiple resolved clouds are
-/// concatenated into a single file rather than written one-file-per-cloud — same reasoning
-/// PTS/PTX's export already recorded: REQ-172's acceptance text only exercises the single-cloud
-/// case, and there is no multi-cloud-per-export UI to drive a per-cloud prompt yet.
-void ExportSelectedPointCloudsToLaz(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.cadPointClouds.empty()) {
-    log.push_back("EXPORTLAZ — the drawing has no point clouds.");
-    return;
-  }
-
-  std::set<int> resolved;
-  std::vector<double> xyz;
-  std::vector<float> colors, intensity;
-  std::int64_t totalCount = 0;
-  CollectSelectedPointCloudsForExport(st, resolved, xyz, colors, intensity, totalCount);
-
-  if (xyz.empty()) {
-    log.push_back("EXPORTLAZ — the selected point cloud(s) have no points to export.");
-    return;
-  }
-
-  const std::string defaultName =
-      resolved.size() == 1
-          ? std::filesystem::u8path(st.cadPointClouds[static_cast<size_t>(*resolved.begin())]->sourcePath)
-                .stem().u8string() + ".laz"
-          : std::string("pointclouds.laz");
-  char buf[1024]{};
-  if (!BrowseSaveFileLazUtf8(buf, sizeof(buf), defaultName.c_str())) {
-    log.push_back("EXPORTLAZ — cancelled.");
-    return;
-  }
-
-  const pointcloud_laz::WriteResult wr = pointcloud_laz::WriteLazFile(buf, xyz, colors, intensity);
-  if (!wr.ok) {
-    log.push_back("EXPORTLAZ — " + wr.errorMessage);
-    return;
-  }
-  char msg2[384];
-  std::snprintf(msg2, sizeof(msg2), "EXPORTLAZ — wrote %lld point(s) from %zu cloud(s) to %s.",
-               static_cast<long long>(totalCount), resolved.size(),
-               std::filesystem::u8path(std::string(buf)).filename().u8string().c_str());
-  log.push_back(msg2);
+  ExportPointCloudsToFile(st, format, buf, log);
 }
 
 // =================================================================================================
@@ -43512,19 +43507,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (plotTok == "exportpts") {
-      ExportSelectedPointCloudsToPts(st, log);
+      ExportSelectedPointClouds(st, PointCloudExportFormat::Pts, log);
       return;
     }
     if (plotTok == "exportptx") {
-      ExportSelectedPointCloudsToPtx(st, log);
+      ExportSelectedPointClouds(st, PointCloudExportFormat::Ptx, log);
       return;
     }
     if (plotTok == "exportlas") {
-      ExportSelectedPointCloudsToLas(st, log);
+      ExportSelectedPointClouds(st, PointCloudExportFormat::Las, log);
       return;
     }
     if (plotTok == "exportlaz") {
-      ExportSelectedPointCloudsToLaz(st, log);
+      ExportSelectedPointClouds(st, PointCloudExportFormat::Laz, log);
       return;
     }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,

@@ -48,6 +48,13 @@
 #include "StartupFailure.hpp"
 #include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
+#include "io/CadPointCloudLas.hpp"
+#include "io/CadPointCloudLaz.hpp"
+#include "io/CadPointCloudPts.hpp"
+#include "io/CadPointCloudPtx.hpp"
+#include <E57SimpleData.h>
+#include <E57SimpleWriter.h>
+#include <array>
 #include <QPdfWriter>
 #include <QCheckBox>
 #include <QDockWidget>
@@ -514,8 +521,406 @@ void WhenDialogShows(EditorWindow& window, const F& interact) {
 }
 }  // namespace
 
+namespace {
+// Issue #916 fixtures: scans of `count` distinct points that every writer stores exactly.
+std::vector<double> Issue916Points(int count, double base = 0.0) {
+  std::vector<double> xyz;
+  for (int i = 0; i < count; ++i) { xyz.push_back(base + i * 1.5); xyz.push_back(100.0 + i * 0.25); xyz.push_back(10.0 + i * 0.125); }
+  return xyz;
+}
+QString Issue916WriteScan(const QTemporaryDir& directory, const char* extension, int count, double base = 0.0) {
+  QString path = directory.filePath(QString("scan-%1-%2-%3.%1").arg(extension).arg(count).arg(static_cast<int>(base)));
+  const std::string utf8 = path.toUtf8().toStdString();
+  const std::vector<double> xyz = Issue916Points(count, base);
+  const std::string ext = extension;
+  if (ext == "pts") { if (!pointcloud_pts::WritePtsFile(utf8, xyz, {}, {}).ok) return {}; }
+  else if (ext == "ptx") { if (!pointcloud_ptx::WritePtxFile(utf8, xyz, {}, {}).ok) return {}; }
+  else if (ext == "las") { if (!pointcloud_las::WriteLasFile(utf8, xyz, {}, {}).ok) return {}; }
+  else if (ext == "laz") { if (!pointcloud_laz::WriteLazFile(utf8, xyz, {}, {}).ok) return {}; }
+  else {
+    e57::Writer writer(utf8, e57::WriterOptions{});
+    e57::Data3D header;
+    header.pointFields.cartesianXField = header.pointFields.cartesianYField = header.pointFields.cartesianZField = true;
+    header.pointCount = static_cast<std::size_t>(count);
+    const std::int64_t scan = writer.NewData3D(header);
+    e57::Data3DPointsData_t<double> buffers(header);
+    for (std::size_t i = 0; i < static_cast<std::size_t>(count); ++i) { buffers.cartesianX[i] = xyz[3 * i]; buffers.cartesianY[i] = xyz[3 * i + 1]; buffers.cartesianZ[i] = xyz[3 * i + 2]; }
+    e57::CompressedVectorWriter points = writer.SetUpData3DPointsData(scan, static_cast<std::size_t>(count), buffers);
+    points.write(static_cast<std::size_t>(count));
+    points.close();
+    writer.Close();
+  }
+  return path;
+}
+/// Same points in any order (the octree reorders them), within REQ-101's tolerance.
+bool Issue916SamePoints(std::vector<double> actual, std::vector<double> expected) {
+  auto sorted = [](std::vector<double>& xyz) {
+    std::vector<std::array<double, 3>> rows;
+    for (std::size_t i = 0; i + 2 < xyz.size(); i += 3) rows.push_back({xyz[i], xyz[i + 1], xyz[i + 2]});
+    std::sort(rows.begin(), rows.end());
+    return rows;
+  };
+  const auto a = sorted(actual), b = sorted(expected);
+  if (a.size() != b.size()) return false;
+  for (std::size_t i = 0; i < a.size(); ++i)
+    for (int axis = 0; axis < 3; ++axis) if (std::abs(a[i][axis] - b[i][axis]) > 0.003) return false;
+  return true;
+}
+}  // namespace
+
 class QtEditorTests final : public QObject {
   Q_OBJECT
+  // ---- Issue #916 / REQ-172: Qt point-cloud attach, import progress and export ----
+  static void AttachPointCloud(EditorWindow& window, const QString& path) {
+    WhenDialogShows(window, [&window, path] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudAttachDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("pointCloudAttachPath")->setText(path);
+      dialog->findChild<QPushButton*>("pointCloudAttachConfirm")->click();
+    });
+    window.ShowPointCloudAttach();
+  }
+  /// Opens the export dialog through the typed command, optionally lets `interact` look at it, then
+  /// exports to `path` (the dialog adds the extension when it is missing).
+  static void ExportPointCloud(EditorWindow& window, const char* command, const QString& path,
+                               const std::function<void(QDialog&)>& interact = {}) {
+    WhenDialogShows(window, [&window, path, interact] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudExportDialog");
+      QVERIFY(dialog);
+      if (interact) interact(*dialog);
+      dialog->findChild<QLineEdit*>("pointCloudExportPath")->setText(path);
+      dialog->findChild<QPushButton*>("pointCloudExportConfirm")->click();
+    });
+    window.Submit(command);
+  }
+
+private Q_SLOTS:
+  void issue916AttachDialogValidatesThenImportsEveryFormat() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    MessageCatcher messages;
+
+    // Nothing starts until the file is a readable scan of a supported type.
+    WhenDialogShows(window, [&window, &directory] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudAttachDialog");
+      QVERIFY(dialog);
+      auto* path = dialog->findChild<QLineEdit*>("pointCloudAttachPath");
+      auto* confirm = dialog->findChild<QPushButton*>("pointCloudAttachConfirm");
+      auto* status = dialog->findChild<QLabel*>("pointCloudAttachStatus");
+      QVERIFY(!confirm->isEnabled());
+      path->setText(directory.filePath("missing.pts"));
+      QVERIFY(!confirm->isEnabled());
+      QVERIFY(status->text().contains("does not exist"));
+      QFile other(directory.filePath("notes.xyz")); QVERIFY(other.open(QIODevice::WriteOnly)); other.write("1 2 3\n"); other.close();
+      path->setText(other.fileName());
+      QVERIFY(!confirm->isEnabled());
+      QVERIFY(status->text().contains("cannot attach .xyz"));
+      QFile empty(directory.filePath("empty.pts")); QVERIFY(empty.open(QIODevice::WriteOnly)); empty.close();
+      path->setText(empty.fileName());
+      QVERIFY(!confirm->isEnabled());
+      QVERIFY(status->text().contains("empty"));
+      path->setText(directory.path());
+      QVERIFY(!confirm->isEnabled());
+      QVERIFY(status->text().contains("folder"));
+      path->setText(Issue916WriteScan(directory, "pts", 12));
+      QVERIFY(confirm->isEnabled());
+      QVERIFY(dialog->findChild<QLabel*>("pointCloudAttachDetails")->text().contains("PTS"));
+      dialog->findChild<QPushButton*>("pointCloudAttachCancel")->click();
+    });
+    window.ShowPointCloudAttach();
+    QVERIFY(!state.pointCloudImportAsync);
+    QVERIFY(state.cadPointClouds.empty());
+
+    // Every supported format imports the same points, one undo step each.
+    const int count = 40;
+    const auto expected = Issue916Points(count);
+    std::size_t imported = 0;
+    for (const char* extension : {"pts", "ptx", "las", "laz", "e57"}) {
+      AttachPointCloud(window, Issue916WriteScan(directory, extension, count));
+      ++imported;
+      QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), imported, 20000);
+      QVERIFY2(!state.pointCloudImportAsync, extension);
+      const auto& cloud = *state.cadPointClouds.back();
+      QCOMPARE(cloud.totalPointCount, std::int64_t(count));
+      QVERIFY2(Issue916SamePoints(cloud.pointsXyz, expected), extension);
+    }
+    window.Submit("UNDO");
+    QCOMPARE(state.cadPointClouds.size(), imported - 1);
+    QVERIFY(messages.texts.isEmpty());
+  }
+
+  void issue916ImportFailureCancelAndReadOnlyLeaveTheDrawingUnchanged() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    const bool couldUndo = CanUndo(state);
+    MessageCatcher messages;
+
+    // A malformed scan is refused with the reason and adds nothing.
+    QFile broken(directory.filePath("broken.e57")); QVERIFY(broken.open(QIODevice::WriteOnly));
+    broken.write("this is not an E57 scan"); broken.close();
+    AttachPointCloud(window, broken.fileName());
+    QTRY_VERIFY_WITH_TIMEOUT(!messages.texts.isEmpty(), 20000);
+    QVERIFY(!messages.texts.front().isEmpty());
+    QVERIFY(state.cadPointClouds.empty());
+    QTRY_VERIFY(!state.pointCloudImportAsync);
+    QCOMPARE(CanUndo(state), couldUndo);
+
+    // Cancel from the progress window stops the background import without a failure message.
+    messages.texts.clear();
+    AttachPointCloud(window, Issue916WriteScan(directory, "pts", 3000000));
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("pointCloudImportProgress"), 10000);
+    auto* progress = window.findChild<QDialog*>("pointCloudImportProgress");
+    QVERIFY(!progress->findChild<QLabel*>("pointCloudImportPhase")->text().isEmpty());
+    QVERIFY(progress->findChild<QProgressBar*>("pointCloudImportBar"));
+    progress->findChild<QPushButton*>("pointCloudImportCancel")->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!state.pointCloudImportAsync, 60000);
+    QTRY_VERIFY(!window.findChild<QDialog*>("pointCloudImportProgress"));
+    QVERIFY(state.cadPointClouds.empty());
+    QVERIFY(messages.texts.isEmpty());
+    QVERIFY(std::any_of(window.m_Log.begin(), window.m_Log.end(), [](const std::string& line) { return line.find("cancelled") != std::string::npos; }));
+    QCOMPARE(CanUndo(state), couldUndo);
+  }
+
+  void issue916AttachRefusesReadOnlyProjectDrawingsAndAsksCopyOrLink() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Cloud Job", &created, &error), error.c_str());
+    QTemporaryDir scans; QVERIFY(scans.isValid());
+    EditorWindow window;
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto& state = window.State();
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(), [uid](const auto& item) { return item.uid == uid; });
+    const QString projectFolder = QString::fromStdWString(session.project.Folder().wstring());
+    MessageCatcher messages;
+
+    // Cancel at the Copy / Link question starts no import and copies nothing.
+    const QString outside = Issue916WriteScan(scans, "pts", 10);
+    AnswerAttachQuestion(window, "projectAttachCancel");
+    AttachPointCloud(window, outside);
+    QTRY_VERIFY(state.projectAttachPrompt.kind == AppCommandState::ProjectAttachPrompt::Kind::None);
+    QVERIFY(!state.pointCloudImportAsync);
+    QVERIFY(state.cadPointClouds.empty());
+    QVERIFY(!QFileInfo::exists(projectFolder + "/PointClouds/" + QFileInfo(outside).fileName()));
+
+    // Copy imports the project's copy.
+    AnswerAttachQuestion(window, "projectAttachCopy");
+    AttachPointCloud(window, outside);
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(1), 20000);
+    QVERIFY(QFileInfo::exists(projectFolder + "/PointClouds/" + QFileInfo(outside).fileName()));
+
+    // A read-only project drawing is not edited: neither the dialog nor the typed command imports.
+    session.readOnly = true;
+    window.ShowPointCloudAttach();
+    QVERIFY(!window.findChild<QDialog*>("pointCloudAttachDialog"));
+    QVERIFY(messages.texts.last().contains("read-only"));
+    messages.texts.clear();
+    window.Submit("POINTCLOUDATTACH \"" + QDir::toNativeSeparators(outside) + "\"");
+    QVERIFY(messages.texts.last().contains("read-only"));
+    QVERIFY(!state.pointCloudImportAsync);
+    QCOMPARE(state.cadPointClouds.size(), std::size_t(1));
+    session.readOnly = false;
+  }
+
+  void issue916ExportDialogWritesEveryFormatAndRoundTrips() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    MessageCatcher messages;
+
+    window.Submit("EXPORTLAS");
+    QVERIFY(messages.texts.last().contains("no point clouds"));
+    QVERIFY(!window.findChild<QDialog*>("pointCloudExportDialog"));
+
+    // Two clouds: A (20 points, PTS) and B (35 points, LAS).
+    AttachPointCloud(window, Issue916WriteScan(directory, "pts", 20));
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(1), 20000);
+    AttachPointCloud(window, Issue916WriteScan(directory, "las", 35, 1000.0));
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(2), 20000);
+    const auto secondPoints = Issue916Points(35, 1000.0);
+
+    // Nothing selected: the dialog says it exports everything, and refuses a bad destination.
+    state.selection.clear();
+    messages.texts.clear();
+    WhenDialogShows(window, [&window, &directory] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudExportDialog");
+      QVERIFY(dialog);
+      QVERIFY(dialog->findChild<QLabel*>("pointCloudExportSummary")->text().contains("all 2"));
+      QCOMPARE(dialog->findChild<QComboBox*>("pointCloudExportFormat")->currentIndex(), 0);
+      QVERIFY(dialog->findChild<QLabel*>("pointCloudExportNote")->text().contains("E57"));
+      auto* path = dialog->findChild<QLineEdit*>("pointCloudExportPath");
+      auto* status = dialog->findChild<QLabel*>("pointCloudExportStatus");
+      auto* confirm = dialog->findChild<QPushButton*>("pointCloudExportConfirm");
+      path->clear(); confirm->click();
+      QVERIFY(status->text().contains("Choose where"));
+      path->setText(directory.filePath("nowhere/all.pts")); confirm->click();
+      QVERIFY(status->text().contains("does not exist"));
+      QVERIFY(dialog->isVisible());
+      path->setText(directory.filePath("all"));  // no extension: the format's is added
+      confirm->click();
+    });
+    window.Submit("EXPORTPTS");
+    QVERIFY(QFileInfo::exists(directory.filePath("all.pts")));
+    QTRY_VERIFY(!messages.texts.isEmpty());
+    QVERIFY(messages.texts.last().contains("wrote 55 point(s) from 2 cloud(s)"));
+
+    // The selected cloud alone, in each format, re-imports with the same count and coordinates.
+    const char* commands[] = {"EXPORTPTS", "EXPORTPTX", "EXPORTLAS", "EXPORTLAZ"};
+    const char* extensions[] = {"pts", "ptx", "las", "laz"};
+    for (int i = 0; i < 4; ++i) {
+      state.selection.assign(1, SelectedEntity{});
+      state.selection.front().type = SelectedEntity::Type::PointCloud;
+      state.selection.front().index = 1;
+      const QString file = directory.filePath(QString("second-%1.%1").arg(extensions[i]));
+      ExportPointCloud(window, commands[i], file, [i](QDialog& dialog) {
+        QCOMPARE(dialog.findChild<QComboBox*>("pointCloudExportFormat")->currentIndex(), i);
+        QVERIFY(dialog.findChild<QLabel*>("pointCloudExportSummary")->text().contains("1 selected point cloud"));
+      });
+      QVERIFY2(QFileInfo(file).size() > 0, extensions[i]);
+      const std::size_t before = state.cadPointClouds.size();
+      AttachPointCloud(window, file);
+      QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), before + 1, 20000);
+      const auto& cloud = *state.cadPointClouds.back();
+      QCOMPARE(cloud.totalPointCount, std::int64_t(35));
+      QVERIFY2(Issue916SamePoints(cloud.pointsXyz, secondPoints), extensions[i]);
+      QTRY_VERIFY(!state.pointCloudImportAsync);
+    }
+    // Exporting is not a drawing edit: the two source clouds are unchanged, plus four re-imports.
+    QCOMPARE(state.cadPointClouds.size(), std::size_t(6));
+  }
+
+  void issue916ExportConfirmsReplacementAndReportsWriteFailure() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    MessageCatcher messages;
+    AttachPointCloud(window, Issue916WriteScan(directory, "pts", 10));
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(1), 20000);
+    state.selection.clear();
+
+    const QString target = directory.filePath("existing.pts");
+    QFile existing(target); QVERIFY(existing.open(QIODevice::WriteOnly)); existing.write("keep me"); existing.close();
+    messages.texts.clear();
+    // Declining the replacement leaves the file and keeps the dialog open.
+    WhenDialogShows(window, [&window, target] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudExportDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("pointCloudExportPath")->setText(target);
+      AnswerNextDialog(QMessageBox::Cancel);
+      dialog->findChild<QPushButton*>("pointCloudExportConfirm")->click();
+      QVERIFY(dialog->isVisible());
+      QFile file(target); QVERIFY(file.open(QIODevice::ReadOnly));
+      QCOMPARE(file.readAll(), QByteArray("keep me"));
+      file.close();
+      // A destination that cannot be written reports why and keeps the dialog open.
+      QVERIFY(QFile::setPermissions(target, QFileDevice::ReadOwner));
+      AnswerNextDialog(QMessageBox::Yes);
+      dialog->findChild<QPushButton*>("pointCloudExportConfirm")->click();
+      QVERIFY(dialog->isVisible());
+      QVERIFY(!dialog->findChild<QLabel*>("pointCloudExportStatus")->text().isEmpty());
+      QVERIFY(QFile::setPermissions(target, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+      // And once writable, accepting the replacement writes the cloud.
+      AnswerNextDialog(QMessageBox::Yes);
+      dialog->findChild<QPushButton*>("pointCloudExportConfirm")->click();
+    });
+    window.Submit("EXPORTPTS");
+    QVERIFY(QFileInfo(target).size() > 7);
+    QCOMPARE(state.cadPointClouds.size(), std::size_t(1));
+  }
+
+  void issue916CaptureScreenshotOptions() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    auto& state = window.State();
+    MessageCatcher messages;
+    const QString scan = Issue916WriteScan(directory, "las", 250000);
+    // The chosen look (option C, graphite with amber) is the dialogs' own style.
+    const std::pair<const char*, QString> options[] = {{"final-graphite-amber", {}}};
+
+    // Attach dialog: ready to attach, then the refusals.
+    for (const auto& [name, sheet] : options) {
+      WhenDialogShows(window, [&window, scan, name = QString(name), sheet] {
+        auto* dialog = window.findChild<QDialog*>("pointCloudAttachDialog");
+        QVERIFY(dialog);
+        if (!sheet.isEmpty()) dialog->setStyleSheet(sheet);
+        dialog->findChild<QLineEdit*>("pointCloudAttachPath")->setText(QDir::toNativeSeparators(scan));
+        QVERIFY(dialog->grab().save(Issue907Shot(("qt-916-attach-" + name + ".png").toUtf8().constData())));
+        dialog->findChild<QPushButton*>("pointCloudAttachCancel")->click();
+      });
+      window.ShowPointCloudAttach();
+    }
+    QFile notes(directory.filePath("notes.xyz")); QVERIFY(notes.open(QIODevice::WriteOnly)); notes.write("1 2 3\n"); notes.close();
+    WhenDialogShows(window, [&window, &directory] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudAttachDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("pointCloudAttachPath")->setText(directory.filePath("notes.xyz"));
+      QVERIFY(dialog->grab().save(Issue907Shot("qt-916-attach-error.png")));
+      dialog->findChild<QLineEdit*>("pointCloudAttachPath")->clear();
+      QVERIFY(dialog->grab().save(Issue907Shot("qt-916-attach-empty.png")));
+      dialog->findChild<QPushButton*>("pointCloudAttachCancel")->click();
+    });
+    window.ShowPointCloudAttach();
+
+    // Progress while a larger scan is indexed.
+    const QString big = Issue916WriteScan(directory, "pts", 3000000);
+    AttachPointCloud(window, big);
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("pointCloudImportProgress"), 10000);
+    auto* progress = window.findChild<QDialog*>("pointCloudImportProgress");
+    QTest::qWait(3000);
+    for (const auto& [name, sheet] : options) {
+      if (!sheet.isEmpty()) progress->setStyleSheet(sheet);
+      QVERIFY(progress->grab().save(Issue907Shot(("qt-916-progress-" + QString(name) + ".png").toUtf8().constData())));
+    }
+    progress->findChild<QPushButton*>("pointCloudImportCancel")->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!state.pointCloudImportAsync, 60000);
+
+    // Export dialog with two clouds in the drawing.
+    AttachPointCloud(window, scan);
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(1), 30000);
+    AttachPointCloud(window, Issue916WriteScan(directory, "pts", 1200, 500.0));
+    QTRY_COMPARE_WITH_TIMEOUT(state.cadPointClouds.size(), std::size_t(2), 30000);
+    state.selection.clear();
+    for (const auto& [name, sheet] : options) {
+      WhenDialogShows(window, [&window, name = QString(name), sheet] {
+        auto* dialog = window.findChild<QDialog*>("pointCloudExportDialog");
+        QVERIFY(dialog);
+        if (!sheet.isEmpty()) dialog->setStyleSheet(sheet);
+        QVERIFY(dialog->grab().save(Issue907Shot(("qt-916-export-" + name + ".png").toUtf8().constData())));
+        dialog->findChild<QPushButton*>("pointCloudExportCancel")->click();
+      });
+      window.Submit("EXPORTPTS");
+    }
+    // The ribbon entry points.
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    const char* pages[][2] = {{"ribbonPage_Insert", "ribbonPanel_Insert_Point Cloud"}, {"ribbonPage_Output", "ribbonPanel_Output_Export"}};
+    for (const auto& entry : pages) {
+      auto* page = window.findChild<QWidget*>(entry[0]); QVERIFY(page);
+      ribbon->setCurrentWidget(page);
+      QTest::qWait(150);
+      auto* widget = window.findChild<QWidget*>(entry[1]); QVERIFY(widget);
+      QVERIFY(widget->grab().save(Issue907Shot((QString("qt-916-") + entry[1] + ".png").replace(' ', '-').toUtf8().constData())));
+    }
+  }
+
+  void issue916RibbonOffersAttachAndExport() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto* attach = window.findChild<QAction*>("ribbon_RibbonPcAttach"); QVERIFY(attach);
+    QVERIFY(attach->isEnabled());
+    QCOMPARE(attach->property("ribbonCommand").toString(), QString("POINTCLOUDATTACH"));
+    auto* exporter = window.findChild<QAction*>("ribbon_RibbonExportPointCloud"); QVERIFY(exporter);
+    QVERIFY(exporter->isEnabled());
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("pointCloudAttachDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QPushButton*>("pointCloudAttachCancel")->click();
+    });
+    attach->trigger();
+    QVERIFY(!window.findChild<QDialog*>("pointCloudAttachDialog"));
+  }
+
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
@@ -4298,7 +4703,7 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 284);
+    QCOMPARE(buttons, 285);
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);

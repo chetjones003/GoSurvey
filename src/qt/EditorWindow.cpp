@@ -721,7 +721,7 @@ EditorWindow::EditorWindow() {
     ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
     const auto logSize = m_Log.size();
-    TickSurfaceRebuilds(m_State, m_Log); TickPointCloudImport(m_State, m_Log); TickVolumeDashboard(m_State);
+    TickSurfaceRebuilds(m_State, m_Log); ServicePointCloudImport(); TickVolumeDashboard(m_State);
     RefreshProjects();
     if (before != m_State.cadGpuRevision || logSize != m_Log.size()) Refresh();
     else ServiceUiRequests();
@@ -1156,6 +1156,13 @@ void EditorWindow::Submit(const QString& command) {
     }
   }
   else if (verb == "ADDPDFTOPROJECT") AddPdfToProjectFromDisk();
+  else if (verb == "POINTCLOUDATTACH" || verb == "IMPORTPOINTCLOUD") ShowPointCloudAttach();
+  else if ((verb.startsWith("POINTCLOUDATTACH ") || verb.startsWith("IMPORTPOINTCLOUD ")) && ActiveDrawingReadOnly())
+    QMessageBox::information(this, "Attach Point Cloud", "This drawing is read-only. No point cloud was attached.");
+  else if (verb == "EXPORTPTS") ShowPointCloudExport(0);
+  else if (verb == "EXPORTPTX") ShowPointCloudExport(1);
+  else if (verb == "EXPORTLAS") ShowPointCloudExport(2);
+  else if (verb == "EXPORTLAZ") ShowPointCloudExport(3);
   else if (verb == "PROJECTHEALTH" || verb == "PACKPROJECT" || verb == "TURNOVER" || verb == "REFRESH") {
     const auto idx = m_State.activeDrawingIdx;
     const std::uint32_t uid = idx > 0 && idx < static_cast<int>(m_State.drawingTabs.size())

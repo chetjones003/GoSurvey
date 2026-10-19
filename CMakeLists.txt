@@ -1608,6 +1608,8 @@ if(GOSURVEY_BUILD_TESTS)
     # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
     # so it rides with GoSurveyTestImGui like the other command tests above.
     tests/DrapeCommandTests.cpp
+    # Issue #916: the shared point-cloud export + import-progress helpers (ImGui commands and Qt dialogs).
+    tests/PointCloudExportTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
     # with GoSurveyTestImGui like the other command tests above.
     tests/PadSolidCommandTests.cpp

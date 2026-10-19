@@ -6644,6 +6644,42 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
 /// flight or the in-flight one has not finished yet.
 void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
 
+/// What a progress display (ImGui modal or Qt dialog) shows for an in-flight import (REQ-172,
+/// ADR-060): the build's three real phases weighted by rough cost, and an ETA recomputed at most
+/// once a second.
+struct PointCloudImportProgress {
+  /// "Reading scan..." / "Building spatial index..." / "Sampling preview...".
+  const char* phase = "Reading scan...";
+  /// 0..1, or negative when the point total is unknown (indeterminate bar).
+  float fraction = -1.f;
+  /// "estimating..." or "~2m 30s remaining"; empty when the total is unknown.
+  std::string eta;
+};
+PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCloudImportAsync& job);
+
+/// Which writer an export uses. REQ-172 delivers export for PTS, PTX, LAS and LAZ; E57 is
+/// import-only (no writer exists).
+enum class PointCloudExportFormat : std::uint8_t { Pts, Ptx, Las, Laz };
+
+/// What `EXPORTPTS` / `EXPORTPTX` / `EXPORTLAS` / `EXPORTLAZ` will write: the selected point
+/// clouds, or every cloud in the drawing when none is selected (REQ-172).
+struct PointCloudExportPlan {
+  int cloudCount = 0;
+  /// True when at least one cloud is selected, false when the export covers every cloud.
+  bool fromSelection = false;
+  /// Sum of the clouds' full point counts (not their bounded preview samples).
+  std::int64_t pointCount = 0;
+  /// Suggested file name: the cloud's own stem for one cloud, `pointclouds.<ext>` for several.
+  std::string defaultFileName;
+};
+PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudExportFormat format);
+
+/// Writes the planned point clouds to \p pathUtf8 in \p format, logging the outcome in the same
+/// words as the typed commands. Returns false (drawing and file untouched on a refusal) if there
+/// is nothing to export or the writer fails. Not a drawing edit, so there is nothing to undo.
+bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
+                             const std::string& pathUtf8, std::vector<std::string>& log);
+
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
 /// current when this checks it.
