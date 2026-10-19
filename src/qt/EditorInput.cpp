@@ -196,7 +196,9 @@ bool EditorWindow::SubmitDraftingInput(bool click) {
 
 void EditorWindow::CancelDraftingInput() {
   m_State.showCreatePointsWindow = false;
-  if (m_State.sectionPlaneGripDrag >= 0) AbortSectionPlaneGripDrag(m_State);
+  if (m_Viewport->CancelGripEdit()) {}
+  else if (m_State.selBoxWaitingSecond) m_Viewport->CancelSelectionBox();
+  else if (m_State.sectionPlaneGripDrag >= 0) AbortSectionPlaneGripDrag(m_State);
   else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) CancelGizmoDrag(m_State);
   else if ((m_State.active == AppCommandState::Kind::Line || m_State.active == AppCommandState::Kind::Polyline) &&
            m_State.segmentAnglePickPhase != AppCommandState::SegmentAnglePickPhase::Idle)

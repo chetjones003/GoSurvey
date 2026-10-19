@@ -7,7 +7,7 @@
 
 ## 1. Authority
 - Goal: Qt migration parity tracker #878, target beta 0.7.4.
-- Requirements: REQ-424 (accepted), REQ-084 (accepted), REQ-309 (accepted), REQ-201 (accepted).
+- Requirements: REQ-438 (accepted), REQ-084 (accepted), REQ-309 (accepted), REQ-201 (accepted).
 - Constraints: preserve beta 0.7.4 behavior; do not switch the production default or remove ImGui; no new dependency or document format change.
 - Acceptance: Qt completes the full annotation-scale, object-isolation, and perspective workflows with the applicable validation, cancel, failure, undo, read-only, persistence, and picking behavior of beta 0.7.4; Qt workflow tests cover these paths; update the parity ledger.
 - Owning subsystem: Qt editor UI and interaction; existing command, document, renderer, and IO services own domain behavior.
@@ -23,7 +23,7 @@
 ## 4. Questions
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
-| Q1 | What scope should issue #901 cover? | 2026-10-18 | Full Qt parity for all three named workflows, confirmed by user; recorded as D-2026-10-18-a / REQ-424. |
+| Q1 | What scope should issue #901 cover? | 2026-10-18 | Full Qt parity for all three named workflows, confirmed by user; recorded as D-2026-10-18-h / REQ-438. |
 
 ## 5. Assumptions
 - None. The beta 0.7.4 executable is the behavior reference where the existing specification does not spell out an annotation-scale control detail.
@@ -43,7 +43,7 @@
 - Feature: user confirmed scope; existing Qt code is the implementation baseline. Add focused coverage before/with each behavior.
 
 ## 8. Implementation log
-- 2026-10-18 — Confirmed issue scope with user; added accepted REQ-424 and D-2026-10-18-a.
+- 2026-10-18 — Confirmed issue scope with user; added accepted REQ-438 and D-2026-10-18-h.
 - 2026-10-18 — Found initial T3 checkout lacked Qt; created this task branch from `origin/test/win32UI`, the migration branch specified by parent tracker #878.
 - 2026-10-18 — Completed annotation-scale state/rendering and status-bar selector, selected-object annotative properties, stable-ID isolation rendering, and perspective/FOV controls. Applied the selected UI direction: status bar scale selector, current property section, current isolation ribbon menu.
 
@@ -61,7 +61,7 @@
 - Findings: `build-qt.bat GoSurveyQtTests` succeeds. Focused #901 QtTest report: 5 passed, 0 failed, 0 skipped. Full QtTest report: 41 passed, 1 failed, 0 skipped; the failure is the unrelated startup focus assertion in `tabsAppearInitiallyAndTypingRoutesFromEditorChrome` (`tests/QtEditorTests.cpp:411`). Final diff review found no additional issue.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-424
+- Requirements satisfied: REQ-438
 - Tests added: Qt scale/projection, annotation filtering/rendering, property undo, and isolate/hide/unisolate workflows
 - Docs updated: requirement, decision log, traceability, parity ledger
 - Done: implemented; unrelated full-suite focus failure remains recorded

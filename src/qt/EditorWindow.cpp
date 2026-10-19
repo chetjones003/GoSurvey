@@ -728,6 +728,16 @@ EditorWindow::EditorWindow() {
     SetCurrentAnnotationScaleIndex(m_State, index);
     Refresh();
   });
+  auto* multiSelect = new QToolButton(this);
+  multiSelect->setText("Multi Selection"); multiSelect->setCheckable(true);
+  multiSelect->setChecked(m_State.multiSelectionEnabled);
+  multiSelect->setToolTip("Disambiguate overlapping linework picks.");
+  statusBar()->addWidget(multiSelect);
+  connect(multiSelect, &QToolButton::toggled, this, [this](bool on) {
+    m_State.multiSelectionEnabled = on;
+    if (!on) { m_State.viewportPickCandidates.clear(); m_State.viewportPickAmbiguous = false; }
+    m_Viewport->update();
+  });
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
   auto* service = new QTimer(this);
   service->setInterval(33);
