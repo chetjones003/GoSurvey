@@ -1455,7 +1455,8 @@ private Q_SLOTS:
     st.modelUnitsPerPlottedInch = 50;
     st.surveyPointCrossSpanPlottedInches = 1.f / 30.f; // 8 px span, matching the legacy cross.
     for (int i = 0; i < 1000; ++i) {
-      SurveyPoint point; point.easting = static_cast<double>(i % 40) - 20.; point.northing = static_cast<double>(i / 40) - 12.;
+      const int column = i % 40; const int row = i / 40;
+      SurveyPoint point; point.easting = column - 20.; point.northing = row - 12.;
       st.surveyPoints.push_back(point);
     }
     const auto camera = CadViewCamera(st);
