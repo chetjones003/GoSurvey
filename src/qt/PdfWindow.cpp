@@ -454,7 +454,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     m_Page->update();
     const auto& match = m_AuditMatches.matches[static_cast<std::size_t>(m_AuditRows[static_cast<std::size_t>(row)])];
     const auto size = m_Document->Sizes()[m_AuditPage];
-    const double factor = m_Page->image.width() / std::max(1.0f, size.wPt);
+    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
     const int x = qRound(match.tx * factor), y = qRound((size.hPt - match.ty) * factor);
     m_Scroll->horizontalScrollBar()->setValue(std::max(0, x - m_Scroll->viewport()->width() / 2));
     m_Scroll->verticalScrollBar()->setValue(std::max(0, y - m_Scroll->viewport()->height() / 2));
@@ -577,7 +577,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     if (!m_Compare || row < 0 || row >= static_cast<int>(m_Compare->changes.size()) || m_Page->image.isNull()) return;
     const auto& region = m_Compare->changes[static_cast<std::size_t>(row)];
     const auto size = m_Document->Sizes()[m_Compare->basePage];
-    const double factor = m_Page->image.width() / std::max(1.0f, size.wPt);
+    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
     const int x = qRound((region.x0 + region.x1) * 0.5 * factor);
     const int y = qRound((size.hPt - (region.y0 + region.y1) * 0.5) * factor);
     m_Scroll->horizontalScrollBar()->setValue(std::max(0, x - m_Scroll->viewport()->width() / 2));
@@ -1195,7 +1195,7 @@ void PdfWindow::DrawAuditOverlay(QPainter& painter) {
       m_AuditSelected >= static_cast<int>(m_AuditMatches.matches.size()) || m_Page->image.isNull()) return;
   const auto& match = m_AuditMatches.matches[static_cast<std::size_t>(m_AuditSelected)];
   const auto size = m_Document->Sizes()[m_AuditPage];
-  const double factor = m_Page->image.width() / std::max(1.0f, size.wPt);
+  const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
   const QPointF first(match.x0 * factor, (size.hPt - match.y0) * factor);
   const QPointF last(match.x1 * factor, (size.hPt - match.y1) * factor);
   const auto& result = m_AuditResult.results[static_cast<std::size_t>(m_AuditSelected)];
@@ -1253,6 +1253,7 @@ void PdfWindow::StartCompare(bool findChanges) {
   const bool hadAlignment = m_Compare->aligned;
   m_CompareWork = std::async(std::launch::async, [base, existingRevision, path, cancel, bp, rp, requestedTransform, diffSettings, hadAlignment, findChanges] {
     CompareOutcome out;
+    try {
     std::unique_ptr<pdfview::PdfDocument> opened;
     pdfview::PdfDocument* revision = existingRevision;
     if (!revision) {
@@ -1307,6 +1308,13 @@ void PdfWindow::StartCompare(bool findChanges) {
     out.ok = true;
     out.openedRevision = std::move(opened);
     return out;
+    } catch (const std::exception& error) {
+      out.error = error.what();
+      return out;
+    } catch (...) {
+      out.error = "Unexpected error while comparing PDF pages.";
+      return out;
+    }
   });
   m_ComparePoll->start();
 }
@@ -1341,10 +1349,10 @@ void PdfWindow::PollCompare() {
   if (!m_Compare->aligned) m_Compare->transform = out.alignment.xf;
   m_Compare->aligned = true;
   m_Compare->lowConfidence = !out.alignment.matched && !m_Compare->manualAlignment;
-  m_Compare->overlay = QImage(out.tint.bgra.data(), out.tint.w, out.tint.h, out.tint.w * 4, QImage::Format_ARGB32).copy();
-  m_Compare->revisionOverlay = QImage(out.aligned.bgra.data(), out.aligned.w, out.aligned.h, out.aligned.w * 4, QImage::Format_ARGB32).copy();
-  m_Compare->baseView = QImage(out.baseView.bgra.data(), out.baseView.w, out.baseView.h, out.baseView.w * 4, QImage::Format_ARGB32).copy();
-  m_Compare->revisionView = QImage(out.revisionView.bgra.data(), out.revisionView.w, out.revisionView.h, out.revisionView.w * 4, QImage::Format_ARGB32).copy();
+  m_Compare->overlay = QImage(out.tint.bgra.data(), out.tint.w, out.tint.h, static_cast<qsizetype>(out.tint.w) * 4, QImage::Format_ARGB32).copy();
+  m_Compare->revisionOverlay = QImage(out.aligned.bgra.data(), out.aligned.w, out.aligned.h, static_cast<qsizetype>(out.aligned.w) * 4, QImage::Format_ARGB32).copy();
+  m_Compare->baseView = QImage(out.baseView.bgra.data(), out.baseView.w, out.baseView.h, static_cast<qsizetype>(out.baseView.w) * 4, QImage::Format_ARGB32).copy();
+  m_Compare->revisionView = QImage(out.revisionView.bgra.data(), out.revisionView.w, out.revisionView.h, static_cast<qsizetype>(out.revisionView.w) * 4, QImage::Format_ARGB32).copy();
   if (!out.changes.regions.empty() || m_CompareStatus->text().startsWith("Aligning")) {
     m_Compare->changes = std::move(out.changes.regions);
     m_Compare->haveChanges = true;
@@ -1381,7 +1389,7 @@ void PdfWindow::DrawCompareOverlay(QPainter& painter) {
   else if (m_Compare->mode == 3) painter.drawImage(QPoint(0, 0), m_Compare->revisionView);
   else painter.drawImage(QPoint(0, 0), m_Compare->overlay);
   if (m_Compare->haveChanges && m_CompareShowHighlights->isChecked()) {
-    const double factor = m_Page->image.width() / std::max(1, m_Compare->overlay.width());
+    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1, m_Compare->overlay.width());
     for (const auto& region : m_Compare->changes) {
       const QColor color = region.kind == pdfdiff::Kind::Added ? QColor(45, 205, 105, 90) :
         region.kind == pdfdiff::Kind::Removed ? QColor(235, 65, 65, 90) : QColor(240, 175, 45, 100);
@@ -1400,7 +1408,7 @@ void PdfWindow::ComparePick(QPointF point, Qt::MouseButton button) {
     m_CompareStatus->setText("Choose Base or Revision in the view selector before picking matching points."); return;
   }
   const auto size = m_Document->Sizes()[m_Compare->basePage];
-  const double factor = m_Page->image.width() / std::max(1.0f, size.wPt);
+  const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
   pdfalign::Pt picked{point.x() / factor, size.hPt - point.y() / factor};
   const bool isBase = m_CompareMode->currentIndex() == 2;
   const bool expectedBase = (m_ComparePickCount % 2) == 0;
