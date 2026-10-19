@@ -12538,6 +12538,31 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18).
 - Revisions: 2026-10-18 — initial, D-2026-10-18-c, GitHub issue #896.
 
+### REQ-428 — Qt survey-point display controls (GitHub issue #904)
+
+- Purpose: complete the Qt port of beta 0.7.4 survey-point marker and linked-label controls.
+- Priority: must
+- Type: functional
+- Decision: D-2026-10-18-e; user approved “Yes. Full Qt port”.
+- Statement: Qt exposes coordinate display precision, plotted cross span, viewport
+  point-ID visibility, plotted label height, east/north label offsets and leader-arrow
+  half-width, using existing preference storage, ranges and label services. Edits apply
+  live as in 0.7.4; Close/Escape does not roll them back. These display preferences
+  create no geometry undo step, do not change point coordinates, and remain available
+  for empty and read-only drawings. Qt rendering honors these controls, drawing scale,
+  linked labels/leaders and existing point/layer visibility. No new marker shapes or
+  project-filter semantics are introduced.
+- Acceptance:
+  - A native Settings workflow exposes every control; precision/height refresh labels
+    and offsets reposition labels through the existing shared services.
+  - Focused tests cover ranges, live effects, Close/Escape, empty/read-only drawings,
+    unchanged coordinates/undo history, preference round-trip and rendering effects.
+  - Present two or three integrated screenshot options, apply the user's selection,
+    and obtain final screenshot approval before committing.
+  - Update `docs/qt-074-parity-ledger.md` with actual evidence and remaining gaps.
+- Owner-layer: Qt UI; existing command/domain/IO owners retain authoritative state.
+- Status: accepted (2026-10-18)
+
 ### REQ-427 — Qt map, geolocation, and marker workflows (GitHub issue #899)
 
 - Purpose: bring the complete 0.7.4 map and geolocation workflows to Qt so a Qt user can configure a drawing's location, use its geographic markers, view and capture maps, and manage position markers without switching frontends.

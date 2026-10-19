@@ -36,6 +36,7 @@
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QFrame>
+#include <QGroupBox>
 #include <QStyle>
 #include <algorithm>
 #include <cmath>
@@ -370,6 +371,10 @@ void EditorWindow::ShowSettings() {
   layout->addWidget(usageDivider);
   layout->addWidget(usageBox);
 
+  auto* surveyDisplay = new QPushButton("Survey point display…", dialog);
+  surveyDisplay->setObjectName("surveyPointDisplaySettings");
+  layout->addWidget(surveyDisplay);
+  connect(surveyDisplay, &QPushButton::clicked, this, &EditorWindow::ShowSurveyPointDisplay);
   layout->addStretch();
   auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
@@ -402,6 +407,105 @@ void EditorWindow::ShowSettings() {
   // The wrapped notices need more height than the fixed starting size; open tall enough that
   // no paragraph is squeezed (about 670 px at this width, which still fits a 720 px screen).
   dialog->resize(dialog->width(), std::max(dialog->height(), dialog->heightForWidth(dialog->width())));
+  dialog->show();
+}
+
+void EditorWindow::ShowSurveyPointDisplay() {
+  if (auto* existing = findChild<QDialog*>("surveyPointDisplay")) {
+    existing->raise(); existing->activateWindow(); return;
+  }
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("surveyPointDisplay");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowTitle("Survey point display");
+  dialog->resize(580, 520);
+  auto* layout = new QVBoxLayout(dialog);
+  layout->setContentsMargins(20, 18, 20, 16);
+  layout->setSpacing(14);
+  auto* heading = new QLabel("Survey point display", dialog);
+  heading->setStyleSheet("font-size:20px; font-weight:600; color:#79b6f2;");
+  layout->addWidget(heading);
+  auto* note = new QLabel("Changes appear immediately. Close keeps your changes.\n"
+                         "Save Preferences remembers them for your next session.", dialog);
+  note->setWordWrap(true);
+  layout->addWidget(note);
+  auto* groups = new QBoxLayout(QBoxLayout::TopToBottom);
+  groups->setObjectName("surveyDisplayGroups");
+  groups->setSpacing(14);
+  layout->addLayout(groups);
+  auto* markers = new QGroupBox("Point markers", dialog);
+  auto* labels = new QGroupBox("Linked labels", dialog);
+  groups->addWidget(markers); groups->addWidget(labels);
+  auto* markerForm = new QFormLayout(markers);
+  auto* labelForm = new QFormLayout(labels);
+  markerForm->setVerticalSpacing(12); labelForm->setVerticalSpacing(12);
+  auto updateLabels = [this](bool reposition) {
+    for (std::size_t i = 0; i < m_State.surveyPoints.size(); ++i) {
+      if (reposition) RepositionSurveyLabelMtextForPoint(m_State, i);
+      else EnsureSurveyPointLabelMtext(m_State, i, nullptr);
+    }
+    BumpCadGpuCache(m_State);
+    Refresh();
+  };
+  // Store a pointer to the state member, never a point/annotation: drawings can change
+  // while this modeless preferences window is open.
+  auto number = [this, dialog, updateLabels](QFormLayout* form, const char* name,
+      const char* title, float* value, double low, double high, double step,
+      const char* suffix, int effect) {
+    auto* field = new QDoubleSpinBox(dialog);
+    field->setObjectName(name); field->setRange(low, high);
+    field->setDecimals(3); field->setSingleStep(step); field->setSuffix(suffix);
+    field->setKeyboardTracking(false); field->setValue(*value);
+    form->addRow(title, field);
+    connect(field, &QDoubleSpinBox::valueChanged, dialog, [this, value, effect, updateLabels](double chosen) {
+      *value = static_cast<float>(chosen);
+      if (effect) updateLabels(effect == 2);
+      else { BumpCadGpuCache(m_State); Refresh(); }
+    });
+  };
+  number(markerForm, "surveyCrossSpan", "Cross span on paper", &m_State.surveyPointCrossSpanPlottedInches,
+         .02, 2, .002, " in", 0);
+  auto* showId = new QCheckBox("Show point ID in viewport", markers);
+  showId->setObjectName("surveyShowId"); showId->setChecked(m_State.surveyPointShowIdInViewport);
+  markerForm->addRow(showId);
+  connect(showId, &QCheckBox::toggled, dialog, [this](bool checked) {
+    m_State.surveyPointShowIdInViewport = checked; Refresh();
+  });
+  auto* precision = new QSpinBox(labels);
+  precision->setObjectName("surveyPrecision"); precision->setRange(0, 12);
+  precision->setValue(m_State.surveyPointDisplayPrecision);
+  precision->setSuffix(" decimals"); labelForm->addRow("Coordinate precision", precision);
+  connect(precision, &QSpinBox::valueChanged, dialog, [this, updateLabels](int chosen) {
+    m_State.surveyPointDisplayPrecision = chosen; updateLabels(false);
+  });
+  number(labelForm, "surveyLabelHeight", "Text height on paper", &m_State.surveyPointLabelPlottedHeightInches,
+         .04, .5, .001, " in", 1);
+  number(labelForm, "surveyLabelEast", "Left edge east of point", &m_State.surveyLabelOffsetEastPlottedIn,
+         -2, 4, .002, " in", 2);
+  number(labelForm, "surveyLabelNorth", "Centre north of point", &m_State.surveyLabelOffsetNorthPlottedIn,
+         -2, 4, .002, " in", 2);
+  number(labelForm, "surveyLeaderWidth", "Leader arrow half-width", &m_State.surveyLabelLeaderArrowPx,
+         2, 30, .1, " px", 0);
+  auto* hint = new QLabel("Paper sizes follow the drawing scale. Leaders appear when a label is moved away from its point.", dialog);
+  hint->setWordWrap(true); layout->addWidget(hint);
+  auto* status = new QLabel(dialog);
+  status->setObjectName("surveyDisplaySaveStatus"); status->setWordWrap(true);
+  layout->addWidget(status);
+  layout->addStretch();
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+  auto* save = buttons->addButton("Save Preferences", QDialogButtonBox::ActionRole);
+  save->setObjectName("surveyDisplaySave");
+  connect(save, &QPushButton::clicked, dialog, [this, status, dialog] {
+    const bool saved = SaveUserStartupPrefs(m_State);
+    status->setText(saved ? "Preferences saved." :
+        "Preferences could not be saved. Check folder permissions and try again. Your current display changes are still active.");
+    status->setStyleSheet(saved ? "color:#8fca9a;" : "color:#f0ad79;");
+    status->setMinimumHeight(status->heightForWidth(status->width()));
+    dialog->resize(dialog->width(), std::max(dialog->height(), dialog->sizeHint().height()));
+    dialog->layout()->activate();
+  });
+  connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+  layout->addWidget(buttons);
   dialog->show();
 }
 
