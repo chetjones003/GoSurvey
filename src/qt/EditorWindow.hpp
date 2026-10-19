@@ -3,6 +3,8 @@
 #include <functional>
 #include <memory>
 #include "CadCommands.hpp"
+#include "CadDynInput.hpp"
+#include "WikiContent.hpp"
 #include "PdfCoordExtract.hpp"
 
 namespace auth { struct AuthTask; }
@@ -25,6 +27,7 @@ class QPoint;
 class QGridLayout;
 class QWidget;
 class FloatingCommandBar;
+class QFrame;
 
 class EditorWindow final : public QMainWindow {
 public:
@@ -65,6 +68,15 @@ private:
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
+  void BuildDraftingInput();
+  void RefreshDraftingInput(const QString& hint = {});
+  void ResetDraftingInput();
+  bool SubmitDraftingInput(bool click = false);
+  bool DraftingInputEvent(QObject* watched, QEvent* event);
+  void CancelDraftingInput();
+  void ShowPolarSettings();
+  void ShowSnapOverride(const QPoint& position);
+  void ShowContextualHelp();
   void BuildPropertiesPanel();
   void RefreshProperties();
   void Refresh();
@@ -145,6 +157,17 @@ private:
   QPlainTextEdit* m_Transcript = nullptr;
   QLineEdit* m_Command = nullptr;
   FloatingCommandBar* m_CommandBar = nullptr;
+  QFrame* m_DynamicInput = nullptr;
+  QLabel* m_DynamicPrompt = nullptr;
+  QLabel* m_DynamicLabels[3]{};
+  QLineEdit* m_DynamicFields[3]{};
+  dyninput::Group m_DynamicGroup;
+  WikiBundle m_WikiBundle;
+  bool m_WikiLoaded = false;
+  CadDynInputPrompt m_DynamicGeometry;
+  QString m_DynamicHint;
+  ray3d::Vec3 m_DynamicCursor{};
+  bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
   QTreeWidget* m_Toolspace = nullptr;
   QScrollArea* m_PropertiesScroll = nullptr;
