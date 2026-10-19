@@ -252,6 +252,11 @@ QString Issue905Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue907Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
   QString path = directory.filePath(QString::fromLatin1(name));
   QFile file(path);
@@ -284,6 +289,137 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  // ---- Issue #907 / REQ-399: Qt PDF coordinate extraction ----
+  void pdfCoordinateReviewAcceptsAndDeniesThroughDrawingWorkflow() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-review.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
+    PdfWindow window(&editor);
+    window.SetEditor(&editor);
+    window.resize(1100, 820); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+
+    pdfview::CoordCandidate candidate;
+    candidate.northing = 303267.23; candidate.easting = 1887764.63;
+    candidate.elevation = 99.35; candidate.description = "BRASS CAP CONTROL";
+    candidate.sourceText = "BRASS CAP CONTROL\nN:303267.23\nE:1887764.63\nEL. 99.35";
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.m_ExtractStart = QPointF(350, 120); window.m_ExtractEnd = QPointF(710, 260);
+    window.ShowExtractReview();
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
+    auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates"); QVERIFY(table);
+    QCOMPARE(table->rowCount(), 1);
+
+    // Capture the selected deep navy review with the source PDF and viewer behind it.
+    QTest::qWait(80);
+    QImage composite(window.size(), QImage::Format_ARGB32_Premultiplied);
+    composite.fill(QColor("#101722"));
+    QPainter painter(&composite);
+    painter.drawPixmap(0, 0, window.grab());
+    painter.drawPixmap((window.width() - review->width()) / 2, 180, review->grab());
+    painter.end();
+    QVERIFY(composite.save(Issue907Shot("qt-907-review-deep-navy.png")));
+
+    auto* accept = review->findChild<QPushButton*>("pdfCoordinateAccept_0"); QVERIFY(accept);
+    accept->click();
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+    QCOMPARE(state.surveyPoints[0].id, 1);
+    QCOMPARE(state.surveyPoints[0].easting, candidate.easting);
+    QCOMPARE(state.surveyPoints[0].northing, candidate.northing);
+    QVERIFY(state.surveyPoints[0].description == candidate.description);
+    QVERIFY(state.documents[static_cast<std::size_t>(state.activeDrawingIdx)].undoStack.size() > 0);
+    QVERIFY(DoUndo(state, editor.m_Log));
+    QVERIFY(state.surveyPoints.empty());
+
+    candidate.pointNumber = 7; candidate.sourceText = "N:303000\nE:1887000";
+    candidate.description.clear(); candidate.elevation.reset();
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.ShowExtractReview();
+    auto* deny = review->findChild<QPushButton*>("pdfCoordinateDeny_0"); QVERIFY(deny);
+    deny->click();
+    QVERIFY(state.surveyPoints.empty()); // Deny never touches the drawing.
+  }
+
+  void pdfCoordinateRegionCancelAndNoTextAreSafe() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-scan.pdf",
+        pdfview::MakeLineWorkPdf(612, 792, 50, 1, 0));
+    PdfWindow window(nullptr); window.resize(1000, 760); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* action = window.findChild<QAction*>("pdfExtractCoordinates"); QVERIFY(action);
+    action->trigger();
+    QVERIFY(window.m_ExtractMode);
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!window.m_ExtractMode && !window.m_ExtractDragging);
+    QVERIFY(!window.m_ExtractResult.has_value());
+
+    action->trigger();
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas"); QVERIFY(canvas);
+    QVERIFY(canvas->width() > 20 && canvas->height() > 20);
+    QString message;
+    QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(2, 2));
+    QTest::mouseMove(canvas, QPoint(canvas->width() - 2, canvas->height() - 2));
+    QVERIFY(window.grab().save(Issue907Shot("qt-907-region-selection.png")));
+    QTimer::singleShot(0, [&] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      message = box->text();
+      QVERIFY(box->grab().save(Issue907Shot("qt-907-no-text-message.png")));
+      box->accept();
+    });
+    QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier,
+                        QPoint(canvas->width() - 2, canvas->height() - 2));
+    QVERIFY(message.contains("scanned", Qt::CaseInsensitive));
+    QVERIFY(message.contains("OCR", Qt::CaseInsensitive));
+    QVERIFY(!window.m_ExtractResult.has_value());
+  }
+
+  void pdfCoordinateCommitHonorsReadOnlyAndPointConflicts() {
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = 1;
+    pdfview::CoordCandidate candidate;
+    candidate.northing = 400.0; candidate.easting = 500.0; candidate.elevation = 12.0;
+    candidate.pointNumber = 1; candidate.description = "PDF CONTROL";
+
+    AppCommandState::ProjectSession session; session.uid = 44; session.readOnly = true;
+    state.drawingTabs[1].projectUid = session.uid;
+    state.openProjects.push_back(session);
+    QTimer::singleShot(0, [] {
+      if (auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) box->accept();
+    });
+    QVERIFY(!editor.CommitPdfCoordinate(candidate));
+    QVERIFY(state.surveyPoints.empty());
+    state.openProjects.clear();
+    state.drawingTabs[1].projectUid = 0;
+
+    SurveyPoint existing{}; existing.id = 1; existing.easting = 10.0; existing.northing = 20.0;
+    existing.elevation = 1.0; existing.description = "EXISTING";
+    state.surveyPoints.push_back(existing);
+    QTimer::singleShot(0, [] {
+      auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(box);
+      for (auto* button : box->buttons()) if (button->text() == "Overwrite") { button->click(); return; }
+      QFAIL("Overwrite choice not found");
+    });
+    QVERIFY(editor.CommitPdfCoordinate(candidate));
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+    QCOMPARE(state.surveyPoints.front().easting, candidate.easting);
+    QCOMPARE(state.surveyPoints.front().description, candidate.description);
+    QVERIFY(DoUndo(state, editor.m_Log));
+    QCOMPARE(state.surveyPoints.front().description, existing.description);
+  }
 
   void approvedTopographyStaysInPanelBackgrounds() {
     IsolatedUserData isolated;
