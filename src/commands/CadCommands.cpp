@@ -46499,8 +46499,12 @@ void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
   auto* buildPtr = build.get();
   buildPtr->thread = std::thread([buildPtr, capturedPath, capturedPage, capturedDpi,
                                   capturedLines, capturedCirc, capturedText] {
-    PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
-                            capturedLines, capturedCirc, capturedText, buildPtr->result);
+    try {
+      PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
+                              capturedLines, capturedCirc, capturedText, buildPtr->result);
+    } catch (...) {
+      buildPtr->result.success = false;
+    }
     buildPtr->done.store(true, std::memory_order_release);
   });
   cmd.pdfAttachAsync = std::move(build);
