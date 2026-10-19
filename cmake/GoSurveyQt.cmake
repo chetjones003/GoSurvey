@@ -24,6 +24,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
   src/qt/AdjustmentWindow.cpp
+  src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
