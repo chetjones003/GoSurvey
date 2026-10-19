@@ -10,6 +10,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -18,6 +19,17 @@
 #include <functional>
 
 namespace {
+// Format only the painted value; the editor retains all stored digits.
+class PointCoordinateDelegate final : public QStyledItemDelegate {
+public:
+  PointCoordinateDelegate(const AppCommandState& state, QObject* parent)
+      : QStyledItemDelegate(parent), m_State(state) {}
+  QString displayText(const QVariant& value, const QLocale&) const override {
+    return QString::number(value.toDouble(), 'f', m_State.surveyPointDisplayPrecision);
+  }
+private:
+  const AppCommandState& m_State;
+};
 double PointGridNow() {
   return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
@@ -57,6 +69,8 @@ void EditorWindow::ShowPoints(bool database) {
   auto* filter = new QLineEdit(&dialog); filter->setPlaceholderText("Filter points…");
   filter->setObjectName("pointFilter"); layout->addWidget(filter);
   auto* table = new QTableWidget(&dialog); table->setObjectName("pointGrid");
+  auto* coordinates = new PointCoordinateDelegate(m_State, table);
+  for (int column = 1; column <= 3; ++column) table->setItemDelegateForColumn(column, coordinates);
   table->setColumnCount(9);
   table->setHorizontalHeaderLabels({"Number", "Northing", "Easting", "Elevation", "Description", "Layer", "Visible here", "Source drawing", "Point group"});
   table->setSelectionBehavior(QAbstractItemView::SelectRows);

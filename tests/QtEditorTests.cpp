@@ -6,11 +6,13 @@
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
+#include "TopographicArtwork.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
+#include "PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "util/gizmooverlay.hpp"
 #include "ProjectPoints.hpp"
@@ -38,6 +40,10 @@
 #include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
 #include <QPdfWriter>
+#include <QCheckBox>
+#include <QDockWidget>
+#include <QListView>
+#include <QToolBar>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -68,6 +74,8 @@
 #include <QToolButton>
 #include <QMenu>
 #include <QGroupBox>
+#include <QBoxLayout>
+#include <QStyledItemDelegate>
 #include <QRadioButton>
 #include <QDockWidget>
 #include <QFrame>
@@ -77,6 +85,7 @@
 #include <QTabWidget>
 #include <QDockWidget>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QScrollArea>
 #include <QClipboard>
 #include <QScopeGuard>
@@ -238,6 +247,27 @@ QString Issue897Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue905Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
+QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
+  QString path = directory.filePath(QString::fromLatin1(name));
+  QFile file(path);
+  if (!file.open(QIODevice::WriteOnly)) return {};
+  file.write(bytes.data(), static_cast<qint64>(bytes.size()));
+  return path;
+}
+// The current search match is orange over white (255, ~187, ~105); the other matches are yellow.
+bool Issue905HasHighlight(const QImage& image) {
+  for (int y = 0; y < image.height(); ++y)
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor c = image.pixelColor(x, y);
+      if (c.red() > 240 && c.green() > 170 && c.green() < 205 && c.blue() < 125) return true;
+    }
+  return false;
+}
 // Runs \p interact once the modal dialog a call is about to open is on screen; a watchdog rejects every
 // dialog if the interaction never closes it, so a failing test cannot hang the run.
 template <class F>
@@ -254,6 +284,108 @@ class QtEditorTests final : public QObject {
 private Q_SLOTS:
   void initTestCase() { QVERIFY(PdfAttach_Init()); }
   void cleanupTestCase() { PdfAttach_Shutdown(); }
+
+  void approvedTopographyStaysInPanelBackgrounds() {
+    IsolatedUserData isolated;
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window;
+    window.resize(1672, 941);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* tabs = window.findChild<QTabBar*>("drawingTabs"); QVERIFY(tabs);
+    tabs->setCurrentIndex(1);
+    auto* properties = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(properties);
+    auto* panel = properties->findChild<QScrollArea*>("propertiesPanel"); QVERIFY(panel);
+    auto* tree = panel->widget(); QVERIFY(tree);
+    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(toolspace);
+    window.resizeDocks({properties, toolspace}, {300, 290}, Qt::Horizontal);
+    QTest::qWait(250);
+    auto captureDrawing = [&](const char* name) {
+      if (auto* recent = window.findChild<QLabel*>("commandRecent")) recent->hide();
+      auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
+      QImage shot = window.grab().toImage();
+      if (viewport && viewport->isVisible()) {
+        const auto frame = viewport->grabFramebuffer();
+        QPainter painter(&shot);
+        painter.drawImage(QRect(viewport->mapTo(&window, QPoint()), viewport->size()), frame);
+        // grabFramebuffer excludes the floating Qt controls hosted by the viewport.
+        for (auto* child : viewport->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly))
+          if (child->isVisible())
+            child->render(&painter, child->mapTo(&window, QPoint()), QRegion(), QWidget::DrawChildren);
+      }
+      return shot.save(Issue886Shot(name));
+    };
+    QVERIFY(captureDrawing("qt-topo-drawing.png"));
+    QVERIFY(properties->grab().save(Issue886Shot("qt-topo-properties.png")));
+    const int terrainHeight = qMin(tree->height(), tree->width() * 220 / 300);
+    QVERIFY(tree->grab(QRect(0, tree->height() - terrainHeight,
+                                        tree->width(), terrainHeight))
+                .save(Issue886Shot("qt-topo-properties-detail.png")));
+    QVERIFY(toolspace->grab().save(Issue886Shot("qt-topo-toolspace.png")));
+    // Art belongs inside the tree's existing background, without consuming row space.
+    const int gap = panel->viewport()->height() - tree->height();
+    QVERIFY2(gap <= 8, qPrintable(QString("Contour decoration reserves %1 px below Properties").arg(gap)));
+    const auto image = tree->grab().toImage();
+    int amberPixels = 0;
+    for (int y = image.height() * 2 / 3; y < image.height(); ++y)
+      for (int x = 0; x < image.width(); ++x) {
+        const auto c = image.pixelColor(x, y);
+        amberPixels += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QVERIFY2(amberPixels > 30, "The approved amber terrain contour must be visible in the Properties background");
+    QImage art(300, 220, QImage::Format_ARGB32);
+    art.fill(QColor("#061725"));
+    { QPainter painter(&art); qtArtwork::DrawTerrainContours(painter, art.rect()); }
+    auto amberNear = [&](int x, int y) {
+      for (int yy = y - 4; yy <= y + 4; ++yy)
+        for (int xx = x - 4; xx <= x + 4; ++xx) {
+          const auto c = art.pixelColor(xx, yy);
+          if (c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue()) return true;
+        }
+      return false;
+    };
+    // The reference's amber ridge descends toward the lower right; it does not
+    // turn upward like the repeated U-shaped wave that caused this regression.
+    QVERIFY(amberNear(50, 93));
+    QVERIFY(amberNear(123, 164));
+    QVERIFY(amberNear(181, 213));
+    QVERIFY(!amberNear(230, 100));
+    QVERIFY(art.save(Issue886Shot("qt-topo-artwork.png")));
+    window.resize(1672, 1100);
+    tabs->setCurrentIndex(0); QTest::qWait(150);
+    QVERIFY(window.grab().save(Issue886Shot("qt-topo-start.png")));
+    auto* body = window.findChild<QWidget*>("startPageBody"); QVERIFY(body);
+    const auto startImage = body->grab().toImage();
+    int startAmber = 0;
+    for (int y = startImage.height() / 2; y < startImage.height(); ++y)
+      for (int x = 0; x < startImage.width() * 2 / 5; ++x) {
+        const auto c = startImage.pixelColor(x, y);
+        startAmber += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QVERIFY2(startAmber > 80, "Recent drawings must not cover the Start-page terrain artwork");
+    QVERIFY(window.findChild<QWidget*>("ribbonBar")->isVisible());
+    QVERIFY(window.statusBar()->isVisible());
+    tabs->setCurrentIndex(1);
+    window.resize(1200, 800); QTest::qWait(150);
+    QVERIFY(captureDrawing("qt-topo-drawing-compact.png"));
+    ApplyQtAppearance(*qApp, true); QTest::qWait(100);
+    QVERIFY(captureDrawing("qt-topo-light.png"));
+    const auto light = tree->grab().toImage();
+    amberPixels = 0;
+    for (int y = light.height() * 2 / 3; y < light.height(); ++y)
+      for (int x = 0; x < light.width(); ++x) {
+        const auto c = light.pixelColor(x, y);
+        amberPixels += c.red() > 30 && c.red() > c.green() * 1.25 && c.green() > c.blue();
+      }
+    QCOMPARE(amberPixels, 0);
+  }
 
   void layoutManagerCreatesAndSwitchesLayoutAndHonorsReadOnly() {
     EditorWindow window;
@@ -1206,6 +1338,209 @@ private Q_SLOTS:
   }
 
   /// Screenshots of the selected designs (report window B, Settings card B) for review.
+  void surveyDisplayControlsApplyLiveAndPersistWithoutGeometryEdits() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    SurveyPoint point; point.id = 904; point.easting = 12.345678; point.northing = 6.123456;
+    point.elevation = 3.456789; point.description = "Control";
+    point.labelStyle = SurveyPointLabelStyle::NumberNorthEastElev;
+    st.surveyPoints.push_back(point); EnsureSurveyPointLabelMtext(st, 0, nullptr);
+    const auto undoCount = CadActiveUndoStackSize(st);
+    AppCommandState::ProjectSession session; session.uid = 904; session.readOnly = true;
+    st.openProjects.push_back(std::move(session));
+    st.drawingTabs[st.activeDrawingIdx].projectUid = 904;
+    window.ShowSettings();
+    auto* settings = window.findChild<QDialog*>("applicationSettings"); QVERIFY(settings);
+    settings->findChild<QPushButton*>("surveyPointDisplaySettings")->click();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    auto field = [dialog](const char* name) { return dialog->findChild<QDoubleSpinBox*>(name); };
+    QVERIFY(field("surveyCrossSpan")->isEnabled());
+    field("surveyCrossSpan")->setValue(.25);
+    dialog->findChild<QCheckBox*>("surveyShowId")->setChecked(false);
+    dialog->findChild<QSpinBox*>("surveyPrecision")->setValue(4);
+    field("surveyLabelHeight")->setValue(.15);
+    const int index = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(index >= 0);
+    const double oldX = st.cadAnnotations[index].boxMinX;
+    field("surveyLabelEast")->setValue(.8);
+    field("surveyLabelNorth")->setValue(.6);
+    field("surveyLeaderWidth")->setValue(12);
+    QVERIFY(st.cadAnnotations[index].boxMinX != oldX);
+    QVERIFY(st.cadAnnotations[index].text.find("12.3457") != std::string::npos);
+    QCOMPARE(st.surveyPointCrossSpanPlottedInches, .25f);
+    QCOMPARE(st.surveyPointLabelPlottedHeightInches, .15f);
+    QCOMPARE(st.surveyLabelLeaderArrowPx, 12.f);
+    QCOMPARE(st.surveyPoints[0].easting, point.easting);
+    QCOMPARE(st.surveyPoints[0].northing, point.northing);
+    QCOMPARE(st.surveyPoints[0].elevation, point.elevation);
+    QCOMPARE(CadActiveUndoStackSize(st), undoCount);
+    field("surveyCrossSpan")->setValue(-1); QCOMPARE(field("surveyCrossSpan")->value(), .02);
+    field("surveyLabelHeight")->setValue(10); QCOMPARE(field("surveyLabelHeight")->value(), .5);
+    field("surveyLeaderWidth")->setValue(100); QCOMPARE(field("surveyLeaderWidth")->value(), 30.);
+    dialog->findChild<QPushButton*>("surveyDisplaySave")->click();
+    QCOMPARE(dialog->findChild<QLabel*>("surveyDisplaySaveStatus")->text(), QString("Preferences saved."));
+    AppCommandState loaded; LoadUserStartupPrefs(loaded);
+    QCOMPARE(loaded.surveyPointCrossSpanPlottedInches, st.surveyPointCrossSpanPlottedInches);
+    QCOMPARE(loaded.surveyPointShowIdInViewport, false);
+    QCOMPARE(loaded.surveyPointDisplayPrecision, 4);
+    QCOMPARE(loaded.surveyPointLabelPlottedHeightInches, .5f);
+    QCOMPARE(loaded.surveyLabelOffsetEastPlottedIn, .8f);
+    QCOMPARE(loaded.surveyLabelOffsetNorthPlottedIn, .6f);
+    QCOMPARE(loaded.surveyLabelLeaderArrowPx, 30.f);
+    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-saved-read-only.png"));
+    QTest::keyClick(dialog, Qt::Key_Escape);
+    QCOMPARE(st.surveyPointShowIdInViewport, false);
+    QCOMPARE(CadActiveUndoStackSize(st), undoCount);
+    // The same modeless window edits the current drawing, never a captured point vector.
+    st.surveyPoints.clear(); st.cadAnnotations.clear(); st.cadAnnotationAttrs.clear();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    window.ShowSurveyPointDisplay();
+    dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    dialog->findChild<QSpinBox*>("surveyPrecision")->setValue(2);
+    QVERIFY(st.surveyPoints.empty()); QVERIFY(st.cadAnnotations.empty());
+    dialog->findChild<QDialogButtonBox*>()->button(QDialogButtonBox::Close)->click();
+    QCOMPARE(st.surveyPointDisplayPrecision, 2);
+  }
+
+  void surveyDisplaySaveFailureIsVisibleAndRetainsLiveChanges() {
+    IsolatedUserData userData;
+    QVERIFY(QDir().mkpath(QDir(userData.dir.path()).filePath("GoSurvey/gosurvey-user.json")));
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.ShowSurveyPointDisplay();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    dialog->findChild<QDoubleSpinBox*>("surveyCrossSpan")->setValue(.4);
+    const int dialogWidth = dialog->width();
+    dialog->findChild<QPushButton*>("surveyDisplaySave")->click();
+    QCOMPARE(dialog->width(), dialogWidth);
+    QVERIFY(dialog->findChild<QLabel*>("surveyDisplaySaveStatus")->text().contains("could not be saved"));
+    auto* status = dialog->findChild<QLabel*>("surveyDisplaySaveStatus");
+    QVERIFY(status->height() >= status->heightForWidth(status->width()));
+    QVERIFY(dialog->isVisible()); QCOMPARE(window.State().surveyPointCrossSpanPlottedInches, .4f);
+    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-save-error.png"));
+  }
+
+  void surveyDisplayRenderingHonorsSizeIdsLayerAndLeader() {
+    AppCommandState st;
+    SurveyPoint point; point.id = 904; point.labelStyle = SurveyPointLabelStyle::None; point.layer = "Points";
+    st.surveyPoints.push_back(point); st.surveyPointShowIdInViewport = false;
+    st.modelUnitsPerPlottedInch = 20;
+    auto render = [&] {
+      QImage result(640, 480, QImage::Format_ARGB32_Premultiplied); result.fill(Qt::black);
+      QPainter painter(&result); DrawQtModelAnnotations(painter, st, 640, 480);
+      DrawQtSurveyPoints(painter, st, 640, 480); return result;
+    };
+    auto ink = [](const QImage& image) {
+      int count = 0;
+      for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
+        if (image.pixelColor(x, y) != QColor(Qt::black)) ++count;
+      return count;
+    };
+    st.surveyPointCrossSpanPlottedInches = .1f; const auto small = render(); QVERIFY(ink(small) > 0);
+    st.surveyPointCrossSpanPlottedInches = .5f; const auto large = render(); QVERIFY(ink(large) > ink(small));
+    st.modelUnitsPerPlottedInch *= 2;
+    QVERIFY(ink(render()) > ink(large));
+    st.modelUnitsPerPlottedInch /= 2;
+    st.viewportElevationDeg = 15; QVERIFY(ink(render()) > 0);
+    st.viewportElevationDeg = 90;
+    st.surveyPointShowIdInViewport = true; const auto ids = render(); QVERIFY(ids != large);
+    CadLayerRow layer; layer.name = "Points"; layer.on = false; st.drawingLayerTable.push_back(layer);
+    QCOMPARE(ink(render()), 0);
+    st.drawingLayerTable.back().on = true; st.drawingLayerTable.back().frozen = true;
+    QCOMPARE(ink(render()), 0);
+    st.drawingLayerTable.back().frozen = false;
+    st.surveyPoints[0].labelStyle = SurveyPointLabelStyle::NumberOnly;
+    EnsureSurveyPointLabelMtext(st, 0, nullptr);
+    const int ai = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(ai >= 0);
+    auto& label = st.cadAnnotations[ai];
+    label.surveyLabelHasUserOffset = true;
+    label.boxMinX = 10; label.boxMaxX = 15; label.boxMinY = 4; label.boxMaxY = 8;
+    st.surveyLabelLeaderArrowPx = 2; const auto thin = render();
+    st.surveyLabelLeaderArrowPx = 20; QVERIFY(render() != thin);
+  }
+
+  void surveyDisplayPrecisionFormatsGridWithoutRoundingEditorValues() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    SurveyPoint point; point.id = 904; point.northing = 12.3456789;
+    window.State().surveyPoints.push_back(point);
+    window.State().surveyPointDisplayPrecision = 2;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("surveyPointGrid"); QVERIFY(dialog);
+      const auto closeDialog = qScopeGuard([dialog] { dialog->reject(); });
+      auto* table = dialog->findChild<QTableWidget*>("pointGrid"); QVERIFY(table);
+      const auto* delegate = qobject_cast<QStyledItemDelegate*>(table->itemDelegateForColumn(1)); QVERIFY(delegate);
+      QCOMPARE(delegate->displayText(table->item(0, 1)->data(Qt::DisplayRole), QLocale()), QString("12.35"));
+      QVERIFY(std::abs(table->item(0, 1)->data(Qt::EditRole).toDouble() - point.northing) < 1.e-10);
+      dialog->reject();
+    });
+    window.ShowPoints(false);
+    QCOMPARE(window.State().surveyPoints[0].northing, point.northing);
+  }
+
+  void surveyDisplayMarkerTiming() {
+    AppCommandState st; st.surveyPointShowIdInViewport = false;
+    st.modelUnitsPerPlottedInch = 50;
+    st.surveyPointCrossSpanPlottedInches = 1.f / 30.f; // 8 px span, matching the legacy cross.
+    for (int i = 0; i < 1000; ++i) {
+      const int column = i % 40; const int row = i / 40;
+      SurveyPoint point; point.easting = column - 20.; point.northing = row - 12.;
+      st.surveyPoints.push_back(point);
+    }
+    const auto camera = CadViewCamera(st);
+    QImage image(640, 480, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::black);
+    QPainter painter(&image);
+    QElapsedTimer timer; timer.start();
+    for (int frame = 0; frame < 30; ++frame) {
+      painter.setPen(QColor("#a7c9d9"));
+      for (const auto& point : st.surveyPoints) {
+        float x = 0, y = 0;
+        camera.WorldToScreen(point.easting, point.northing, point.elevation, 640, 480, &x, &y);
+        painter.drawLine(QPointF(x - 4, y - 4), QPointF(x + 4, y + 4));
+        painter.drawLine(QPointF(x - 4, y + 4), QPointF(x + 4, y - 4));
+      }
+    }
+    const double before = static_cast<double>(timer.nsecsElapsed()) / 30000000.;
+    timer.restart();
+    for (int frame = 0; frame < 30; ++frame) DrawQtSurveyPoints(painter, st, 640, 480);
+    qInfo("1000 survey markers, raster ms/frame: legacy %.3f; port %.3f", before, static_cast<double>(timer.nsecsElapsed()) / 30000000.);
+  }
+
+  void surveyDisplayScreenshotOptions() {
+    IsolatedUserData userData;
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800); window.show();
+    auto& st = window.State();
+    st.modelUnitsPerPlottedInch = 20;
+    SurveyPoint point; point.id = 101; point.description = "Control monument";
+    point.easting = -12; point.northing = 4; st.surveyPoints.push_back(point);
+    point.id = 102; point.easting = 12; point.northing = -6; point.description = "Boundary corner";
+    st.surveyPoints.push_back(point);
+    for (std::size_t i = 0; i < st.surveyPoints.size(); ++i) EnsureSurveyPointLabelMtext(st, i, nullptr);
+    window.Refresh(); window.ShowSurveyPointDisplay();
+    auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
+    QTest::qWait(200);
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    QVERIFY(dialog->grab().save(dir + "/qt-904-option-a.png"));
+    // Alternative integrated layout of the same working controls, for user selection.
+    auto* groups = dialog->findChild<QBoxLayout*>("surveyDisplayGroups"); QVERIFY(groups);
+    groups->setDirection(QBoxLayout::LeftToRight);
+    dialog->layout()->activate(); QTest::qWait(50);
+    dialog->resize(850, 380); QTest::qWait(100);
+    QVERIFY(dialog->grab().save(dir + "/qt-904-option-b.png"));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(dir + "/qt-904-viewport.png"));
+    const QImage normalFrame = window.m_Viewport->grabFramebuffer();
+    QVERIFY(normalFrame.copy(normalFrame.width() / 3, normalFrame.height() / 3,
+        normalFrame.width() * 2 / 3, normalFrame.height() / 3).save(dir + "/qt-904-viewport-detail.png"));
+    const int label = FindSurveyLabelAnnIndex(st, st.surveyPoints[0]); QVERIFY(label >= 0);
+    st.cadAnnotations[label].surveyLabelHasUserOffset = true;
+    st.cadAnnotations[label].surveyLabelUserOffsetEast = 5;
+    st.cadAnnotations[label].surveyLabelUserOffsetNorth = 15;
+    RepositionSurveyLabelMtextForPoint(st, 0);
+    window.Refresh(); QTest::qWait(100);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(dir + "/qt-904-leader.png"));
+    const QImage leaderFrame = window.m_Viewport->grabFramebuffer();
+    QVERIFY(leaderFrame.copy(leaderFrame.width() / 3, leaderFrame.height() / 4,
+        leaderFrame.width() * 2 / 3, leaderFrame.height() / 2).save(dir + "/qt-904-leader-detail.png"));
+  }
+
   void failureReportAndUsageNoticeScreenshots() {
     const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
     std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
@@ -1576,26 +1911,21 @@ private Q_SLOTS:
     QVERIFY(projectTiles);
     QVERIFY(projectTiles->layout());
     QVERIFY(!window.findChild<QScrollArea*>("startScreenScrollArea"));
-    QVERIFY(window.findChild<QPushButton*>("newProjectButton"));
-    QVERIFY(window.findChild<QPushButton*>("openProjectButton"));
+    QVERIFY(window.findChild<QPushButton*>("startNewProject"));
+    QVERIFY(window.findChild<QPushButton*>("startOpenProject"));
     auto* gridMode = window.findChild<QToolButton*>("recentGridMode");
     auto* listMode = window.findChild<QToolButton*>("recentListMode");
     QVERIFY(gridMode);
     QVERIFY(listMode);
-    QVERIFY(gridMode->isChecked());
+    QVERIFY(listMode->isChecked());
     listMode->click();
     QVERIFY(listMode->isChecked());
     QVERIFY(!gridMode->isChecked());
     gridMode->click();
     QVERIFY(gridMode->isChecked());
-    auto* signedIn = window.findChild<QWidget*>("startSignedInAccount");
-    QVERIFY(signedIn);
-    window.State().authSignedIn = true;
-    window.State().authEmail = "survey@example.com";
-    window.Refresh();
-    QVERIFY(!signedIn->isHidden());
-    QCOMPARE(window.findChild<QLabel*>("startAccountWelcome")->text(), QString("Welcome Survey!"));
-    QCOMPARE(window.findChild<QLabel*>("startAccountEmail")->text(), QString("survey@example.com"));
+    QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
+    QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
+    QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
 
     window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
@@ -2378,6 +2708,7 @@ private Q_SLOTS:
 
   void qtViewportRendersGizmoAndSectionPlaneOverlays() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -2400,7 +2731,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage gizmo = viewport->grabFramebuffer();
     QVERIFY(gizmo != base);
-    QVERIFY(gizmo.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-a.png"));
+    QVERIFY(gizmo.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-a.png"));
 
     state.viewportSectionClip = true;
     state.gizmoPersistent = false;
@@ -2409,7 +2740,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage sectionGrips = viewport->grabFramebuffer();
     QVERIFY(sectionGrips != gizmo);
-    QVERIFY(sectionGrips.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-b.png"));
+    QVERIFY(sectionGrips.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-b.png"));
 
     state.gizmoPersistent = true;
     state.viewportSectionClipOffset = 0.0;
@@ -2421,11 +2752,12 @@ private Q_SLOTS:
     CadGizmoOverlay combinedOverlay;
     BuildGizmoOverlay(state, &combinedOverlay);
     QVERIFY(!combinedOverlay.empty());
-    QVERIFY(combined.save(QCoreApplication::applicationDirPath() + "/qt-viewport-option-c.png"));
+    QVERIFY(combined.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-c.png"));
   }
 
   void qtViewportGizmoDragCommitsOneUndoableTransform() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -2483,7 +2815,7 @@ private Q_SLOTS:
 
   void qtViewportSectionPlaneGripDragEndsOnReleaseAndUndoes() {
     EditorWindow window;
-    window.Submit("NEW");
+    window.CreateDrawingFromTemplate();
     window.show();
     auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
     QVERIFY(viewport);
@@ -3510,6 +3842,217 @@ private Q_SLOTS:
     annotation.kind = pdfview::Annot::Kind::Rect;
     annotation.x0 = std::numeric_limits<float>::quiet_NaN();
     QVERIFY(!window.AddAnnotation(annotation, error));
+  }
+
+  // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----
+  void pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "find.pdf", pdfview::MakeSyntheticPdf(12, 3, 0));
+    PdfWindow window(nullptr);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* bar = window.findChild<QToolBar*>("pdfFindBar");
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    auto* matchCase = window.findChild<QCheckBox*>("pdfFindMatchCase");
+    auto* spin = window.findChild<QSpinBox*>();
+    QVERIFY(bar && edit && status && matchCase && spin);
+    QVERIFY(!bar->isVisible());
+
+    pdfview::Annot rect;
+    rect.kind = pdfview::Annot::Kind::Rect;
+    rect.x0 = 20; rect.y0 = 30; rect.x1 = 80; rect.y1 = 100;
+    QVERIFY2(window.AddAnnotation(rect, error), qPrintable(error));
+
+    window.findChild<QAction*>("pdfFindAction")->trigger(); // Ctrl+F
+    QVERIFY(bar->isVisible());
+    QTRY_VERIFY(edit->hasFocus());
+
+    QTest::keyClicks(edit, "page 1");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "1 of 4", 10000);
+    QCOMPARE(spin->value(), 1);
+    QTest::keyClick(edit, Qt::Key_Return); // Enter again = next match
+    QTRY_COMPARE(status->text(), QString("2 of 4"));
+    QCOMPARE(spin->value(), 10);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QCOMPARE(status->text(), QString("4 of 4"));
+    QCOMPARE(spin->value(), 12);
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(status->text().startsWith("1 of 4") && status->text().contains("wrapped"));
+    QCOMPARE(spin->value(), 1);
+    window.findChild<QAction*>("pdfFindPrevious")->trigger();
+    QVERIFY(status->text().startsWith("4 of 4") && status->text().contains("wrapped"));
+    QCOMPARE(spin->value(), 12);
+    window.findChild<QAction*>("pdfFindPrevious")->trigger();
+    QCOMPARE(status->text(), QString("3 of 4"));
+
+    // The current match is highlighted on the page (orange over white), the page itself is not edited.
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    QVERIFY(canvas);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && Issue905HasHighlight(canvas->grab().toImage()), 10000);
+    QVERIFY(canvas->grab().save(Issue905Shot("qt-905-find-highlight.png")));
+
+    // Match case: the text is "Page", so the lower-case query matches nothing.
+    matchCase->setChecked(true);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "No matches", 10000);
+    edit->setText("Page 1");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "3 of 4", 10000); // first match on or after page 11
+
+    // An empty text does nothing and clears the results.
+    edit->clear();
+    QTest::keyClick(edit, Qt::Key_Return);
+    QVERIFY(status->text().isEmpty());
+
+    // Searching never changes the annotation session: still one unsaved annotation, undoable once.
+    QVERIFY(window.HasUnsavedChanges());
+    QTest::keyClick(&window, Qt::Key_Escape); // Esc closes the bar
+    QVERIFY(!bar->isVisible());
+    QVERIFY(window.HasUnsavedChanges());
+  }
+
+  void pdfFindBarReportsNoTextAndCancel() {
+    QTemporaryDir directory;
+    // A page with line work only: no text layer, like a scan.
+    const QString scan = Issue905WritePdf(directory, "scan.pdf", pdfview::MakeLineWorkPdf(612, 792, 50, 1, 0));
+    PdfWindow window(nullptr);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(scan, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    window.findChild<QAction*>("pdfFindAction")->trigger();
+    QTest::keyClicks(edit, "anything");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("This PDF has no searchable text"));
+
+    const QString text = Issue905WritePdf(directory, "text.pdf", pdfview::MakeSyntheticPdf(40, 3, 0));
+    QVERIFY2(window.LoadFile(text, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QVERIFY(status->text().isEmpty()); // opening another file clears the search
+    edit->setText("nothing like this");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("No matches"));
+
+    // Esc cancels a running search: hold the PDFium lock so the worker cannot finish before the key arrives.
+    edit->setText("Page");
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      QTest::keyClick(edit, Qt::Key_Return);
+      QVERIFY(window.IsSearching());
+      QTest::keyClick(&window, Qt::Key_Escape);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching(), 10000);
+    QCOMPARE(status->text(), QString("Search cancelled"));
+    QVERIFY(window.findChild<QToolBar*>("pdfFindBar")->isVisible()); // Esc cancelled the search; the bar stays
+  }
+
+  void pdfThumbnailStripListsPagesRendersOnlyVisibleOnesAndFollowsThePage() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "plans.pdf", pdfview::MakeSyntheticPdf(500, 10, 50));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 20000);
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    auto* dock = window.findChild<QDockWidget*>("pdfThumbnails");
+    auto* spin = window.findChild<QSpinBox*>();
+    QVERIFY(list && dock && spin);
+    QVERIFY(dock->isVisible()); // shown by default
+    QCOMPARE(list->model()->rowCount(), 500);
+
+    // Only what is on screen gets an image, and never more than the cache bound.
+    QTRY_VERIFY_WITH_TIMEOUT(window.ThumbnailsKept() >= 3, 20000);
+    QTest::qWait(600);
+    QVERIFY2(window.ThumbnailsKept() < 60, qPrintable(QString::number(window.ThumbnailsKept())));
+    QVERIFY(list->grab().save(Issue905Shot("qt-905-thumbnails.png")));
+
+    // Clicking a thumbnail opens that page.
+    const QModelIndex second = list->model()->index(1, 0);
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, {}, list->visualRect(second).center());
+    QCOMPARE(spin->value(), 2);
+
+    // The strip follows the page chosen elsewhere.
+    spin->setValue(300);
+    const QModelIndex current = list->model()->index(299, 0);
+    QCOMPARE(list->currentIndex(), current);
+    QVERIFY(list->viewport()->rect().intersects(list->visualRect(current)));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 20000);
+
+    // Paging through the whole file keeps the strip within its bound.
+    for (int page = 1; page <= 500; page += 25) { spin->setValue(page); QTest::qWait(5); }
+    QTest::qWait(300);
+    QVERIFY(window.ThumbnailsKept() <= 120);
+
+    // Hide and show again from the toolbar.
+    auto* toggle = window.findChild<QAction*>("pdfThumbnailsAction");
+    QVERIFY(toggle);
+    toggle->trigger();
+    QVERIFY(!dock->isVisible());
+    toggle->trigger();
+    QVERIFY(dock->isVisible());
+  }
+
+  void pdfThumbnailOfAnUnreadablePageStaysBlankAndTheOthersStillDraw() {
+    // Page 3 (object 8) is turned into an array of the same length, so PDFium cannot load it as a page.
+    std::string bytes = pdfview::MakeSyntheticPdf(6, 20, 0);
+    const std::size_t object = bytes.find("\n8 0 obj\n<<");
+    QVERIFY(object != std::string::npos);
+    bytes.replace(object + 9, 2, "[ ");
+    const std::size_t close = bytes.find(">>\nendobj", object);
+    QVERIFY(close != std::string::npos);
+    bytes.replace(close, 2, " ]");
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "broken-page.pdf", bytes);
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    QVERIFY(list);
+    QCOMPARE(list->model()->rowCount(), 6);
+    const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
+    QVERIFY(lastVisible >= 3); // the unreadable page 3 is on screen
+    QTRY_COMPARE_WITH_TIMEOUT(window.ThumbnailsKept(), lastVisible, 20000); // every visible page but page 3 (rows 0..lastVisible)
+    QTest::qWait(300);
+    QCOMPARE(window.ThumbnailsKept(), lastVisible);
+    const QPixmap blank = list->model()->index(2, 0).data(Qt::DecorationRole).value<QPixmap>();
+    QVERIFY(!blank.isNull());
+    QCOMPARE(blank.toImage().pixelColor(blank.width() / 2, blank.height() / 2), QColor(Qt::white));
+  }
+
+  void qtPdfSearchAndThumbnailScreenshotEvidenceForIssue905() {
+    QTemporaryDir directory;
+    PdfWindow window(nullptr);
+    window.resize(1000, 700);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(Issue905WritePdf(directory, "evidence.pdf", pdfview::MakeSyntheticPdf(24, 60, 6)), error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= 4, 20000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-thumbnails.png"))); // find bar closed
+    window.findChild<QAction*>("pdfFindAction")->trigger();
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    QTest::keyClicks(edit, "page 2");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text().contains(" of "), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QTest::qWait(400);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-match.png")));
+    edit->setText("no such words");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("No matches"), 10000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-905-final-no-matches.png")));
   }
 
   void dimensionStrokesRenderAndHonorLayerVisibility() {

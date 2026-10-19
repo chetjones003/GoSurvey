@@ -14,6 +14,7 @@
 #include <fpdfview.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 #if defined(_WIN32)
@@ -599,6 +600,72 @@ bool PdfDocument::TextBoxes(int page, std::vector<ObjBox>& out, const std::funct
   FPDF_ClosePage(p);
   if (cancel && cancel()) {
     out.clear();
+    return false;
+  }
+  return true;
+}
+
+bool PdfDocument::SearchText(const std::u16string& query, bool matchCase, TextSearch& out,
+                           const std::function<bool()>& cancel) {
+  out = {};
+  if (query.empty())
+    return true;
+  const auto cancelled = [&] { return cancel && cancel(); };
+  for (int page = 0; page < PageCount() && !out.truncated; ++page) {
+    if (cancelled()) {
+      out = {};
+      return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
+    FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
+    if (p == nullptr)
+      continue; // an unreadable page has no text to find; the others are still searched
+    FPDF_TEXTPAGE tp = FPDFText_LoadPage(p);
+    if (tp == nullptr) {
+      FPDF_ClosePage(p);
+      continue;
+    }
+    if (FPDFText_CountChars(tp) > 0)
+      out.anyText = true;
+    const Mat toViewer = ViewerMatrix(p);
+    FPDF_SCHHANDLE find = FPDFText_FindStart(tp, reinterpret_cast<FPDF_WIDESTRING>(query.c_str()),
+                                             matchCase ? FPDF_MATCHCASE : 0, 0);
+    while (find != nullptr && FPDFText_FindNext(find)) {
+      if (out.hits.size() >= TextSearch::kMaxHits) {
+        out.truncated = true;
+        break;
+      }
+      TextHit hit;
+      hit.page = page;
+      const int start = FPDFText_GetSchResultIndex(find), count = FPDFText_GetSchCount(find);
+      const int rects = FPDFText_CountRects(tp, start, count);
+      for (int r = 0; r < rects; ++r) {
+        double l = 0, t = 0, rt = 0, b = 0;
+        if (!FPDFText_GetRect(tp, r, &l, &t, &rt, &b))
+          continue;
+        float x0 = 1e30f, y0 = 1e30f, x1 = -1e30f, y1 = -1e30f;
+        for (const std::pair<double, double> c : {std::pair<double, double>{l, b}, {rt, b}, {l, t}, {rt, t}}) {
+          const float vx = toViewer.a * static_cast<float>(c.first) + toViewer.c * static_cast<float>(c.second) + toViewer.e;
+          const float vy = toViewer.b * static_cast<float>(c.first) + toViewer.d * static_cast<float>(c.second) + toViewer.f;
+          x0 = std::min(x0, vx);
+          x1 = std::max(x1, vx);
+          y0 = std::min(y0, vy);
+          y1 = std::max(y1, vy);
+        }
+        if (std::isfinite(x0) && std::isfinite(y0) && std::isfinite(x1) && std::isfinite(y1))
+          hit.boxes.push_back({x0, y0, x1, y1});
+      }
+      out.hits.push_back(std::move(hit));
+      if (cancelled())
+        break;
+    }
+    if (find != nullptr)
+      FPDFText_FindClose(find);
+    FPDFText_ClosePage(tp);
+    FPDF_ClosePage(p);
+  }
+  if (cancelled()) {
+    out = {};
     return false;
   }
   return true;

@@ -127,6 +127,7 @@ private:
   void ShowProjectAttachPrompt();
   void AddPdfToProjectFromDisk();
   void ShowSettings();
+  void ShowSurveyPointDisplay();
   void ShowDrawingContextMenu(const QPoint& globalPosition);
   void ShowRightClickCustomization();
   void ShowSelectionList();
@@ -178,6 +179,8 @@ private:
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
   bool m_RecentListView = false;
+  bool m_RecentShowAll = false;
+  bool m_ShowAllProjects = false;
   std::unique_ptr<auth::AuthTask> m_AuthTask;
   std::unique_ptr<update::UpdateState> m_Update;
   /// Hands the verified installer to the OS; replaceable so tests never run one.

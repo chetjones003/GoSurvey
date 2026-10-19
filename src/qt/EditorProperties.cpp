@@ -4,6 +4,9 @@
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
 // the ImGui panel also uses. This file is only the Qt widgets around them.
 #include "EditorWindow.hpp"
+#include "TopographicArtwork.hpp"
+#include <QApplication>
+#include <QPainter>
 
 #include "CadColor.hpp"
 #include "CadLinetype.hpp"
@@ -31,6 +34,17 @@
 #include <functional>
 
 namespace {
+
+class TerrainPropertiesBody final : public QWidget {
+ protected:
+  void paintEvent(QPaintEvent* event) override {
+    QWidget::paintEvent(event);
+    if (qApp->property("cadLightTheme").toBool()) return;
+    QPainter painter(this);
+    const qreal artHeight = width() * 220.0 / 300.0;
+    qtArtwork::DrawTerrainContours(painter, QRectF(0, height() - artHeight, width(), artHeight));
+  }
+};
 
 QString Text(const std::string& text) { return QString::fromUtf8(text.c_str()); }
 
@@ -88,7 +102,8 @@ void EditorWindow::RefreshProperties() {
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
   m_PropertiesFingerprint = fp;
 
-  auto* body = new QWidget;
+  auto* body = new TerrainPropertiesBody;
+  body->setAutoFillBackground(false);
   body->setObjectName("propertiesBody");
   auto* root = new QVBoxLayout(body);
   root->setContentsMargins(6, 6, 6, 6);

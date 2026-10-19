@@ -24,6 +24,7 @@
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QOpenGLContext>
+#include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
@@ -153,6 +154,15 @@ void EditorViewport::paintGL() {
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
+    if (!qApp->property("cadLightTheme").toBool()) {
+      tuning.bgR = 4.f / 255.f;
+      tuning.bgG = 18.f / 255.f;
+      tuning.bgB = 32.f / 255.f;
+      tuning.gridR = 0.055f;
+      tuning.gridG = 0.11f;
+      tuning.gridB = 0.16f;
+      tuning.gridA = 0.36f;
+    }
     if (m_State.viewportSectionClip) {
       tuning.sectionClip = CadSectionClipPlane(m_State);
       tuning.sectionClipIndicator = CadSectionClipIndicator(m_State);
@@ -432,16 +442,7 @@ void EditorViewport::paintGL() {
   } else {
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
   }
-  painter.setPen(QColor("#a7c9d9"));
-  if (!paperSpace) for (const auto& point : m_State.surveyPoints) {
-    float x = 0, y = 0;
-    overlayCamera.WorldToScreen(point.easting, point.northing, point.elevation,
-        static_cast<float>(width()), static_cast<float>(height()), &x, &y);
-    if (!std::isfinite(x) || !std::isfinite(y) || !rect().contains(qRound(x), qRound(y))) continue;
-    painter.drawLine(QPointF(x - 4, y - 4), QPointF(x + 4, y + 4));
-    painter.drawLine(QPointF(x - 4, y + 4), QPointF(x + 4, y - 4));
-    if (m_State.surveyPointShowIdInViewport) painter.drawText(QPointF(x + 7, y - 5), QString::number(point.id));
-  }
+  if (!paperSpace) DrawQtSurveyPoints(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
   if (m_State.selBoxWaitingSecond) {
     const bool window = m_Last.x() >= m_State.selBoxAnchorScreenX;
     const QColor color = window ? QColor(70, 140, 220) : QColor(65, 190, 125);

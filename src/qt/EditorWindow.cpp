@@ -1,6 +1,7 @@
 #include "EditorWindow.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
+#include "TopographicArtwork.hpp"
 #include <QActionGroup>
 #include <QScrollArea>
 #include <QTreeWidgetItemIterator>
@@ -55,6 +56,7 @@
 #include <QRadioButton>
 #include <QHeaderView>
 #include <QInputDialog>
+#include <QImage>
 #include <QKeyEvent>
 #include <QShortcut>
 #include <QTimer>
@@ -79,11 +81,14 @@
 #include <QTemporaryDir>
 #include <QPdfWriter>
 #include <QPainter>
+#include <QPainterPath>
 #include <QResizeEvent>
+#include <QScrollArea>
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
+#include <QBoxLayout>
 #include <QGridLayout>
 #include <QCheckBox>
 #include <QDateTime>
@@ -91,10 +96,11 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFrame>
+#include <QRadioButton>
 #include <exception>
 #include <cstring>
 #include <array>
-#include <unordered_map>
+#include <cmath>
 
 QString QtAsset(const QString& relative) {
   QString resolved = relative;
@@ -108,6 +114,75 @@ QString QtAsset(const QString& relative) {
 }
 
 namespace {
+class TopographicTreeWidget final : public QTreeWidget {
+ public:
+  explicit TopographicTreeWidget(bool rightCorner, QWidget* parent = nullptr)
+      : QTreeWidget(parent), m_RightCorner(rightCorner) {}
+
+ protected:
+  void paintEvent(QPaintEvent* event) override {
+    QTreeWidget::paintEvent(event);
+    if (qApp->property("cadLightTheme").toBool()) return;
+    // The tree owns the background. Exclude occupied rows so decoration can never
+    // cover a value, selection highlight, or an expanded project entry.
+    QRegion openBackground(viewport()->rect());
+    for (QTreeWidgetItemIterator it(this); *it; ++it) {
+      const QRect row = visualItemRect(*it);
+      if (row.isEmpty()) continue;
+      QRect content = row;
+      if (m_RightCorner && !(*it)->isSelected())
+        content.setRight(qMin(row.right(), row.left() + fontMetrics().horizontalAdvance((*it)->text(0)) + 30));
+      openBackground -= content.adjusted(-2, -1, 2, 1);
+    }
+    QPainter painter(viewport());
+    painter.setClipRegion(openBackground);
+    const qreal artWidth = viewport()->width() * (m_RightCorner ? .82 : 1.0);
+    const qreal artHeight = artWidth * (m_RightCorner ? 120.0 / 220.0 : 220.0 / 300.0);
+    const QRectF area(m_RightCorner ? viewport()->width() - artWidth : 0,
+                      viewport()->height() - artHeight, artWidth, artHeight);
+    if (m_RightCorner) qtArtwork::DrawRisingContours(painter, area);
+    else qtArtwork::DrawTerrainContours(painter, area);
+  }
+
+ private:
+  bool m_RightCorner;
+};
+
+class TopographicMapPanel final : public QWidget {
+ public:
+  explicit TopographicMapPanel(QWidget* parent = nullptr) : QWidget(parent) {}
+
+ protected:
+  void paintEvent(QPaintEvent* event) override {
+    QWidget::paintEvent(event);
+    if (qApp->property("cadLightTheme").toBool()) return;
+    QPainter painter(this);
+    const qreal artWidth = width() * .9;
+    qtArtwork::DrawRisingContours(painter,
+        QRectF(width() * .54, height() * .30, artWidth, artWidth * 120.0 / 220.0), .58);
+  }
+};
+
+class TopographicStartBody final : public QWidget {
+ public:
+  explicit TopographicStartBody(QWidget* parent = nullptr) : QWidget(parent) {}
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    const bool dark = !qApp->property("cadLightTheme").toBool();
+    painter.fillRect(rect(), dark ? QColor("#081724") : QColor("#f5f6f7"));
+    if (!dark) return;
+    const qreal cornerWidth = width() * .35;
+    const qreal cornerHeight = cornerWidth * 220.0 / 300.0;
+    qtArtwork::DrawTerrainContours(painter,
+        QRectF(width() - cornerWidth, -cornerHeight * .30, cornerWidth, cornerHeight), true, .70);
+    qtArtwork::DrawTerrainContours(painter,
+        QRectF(0, height() - cornerHeight, cornerWidth, cornerHeight), false, .75);
+  }
+
+};
+
 struct DrawingTemplateChoice {
   QString label;
   QString path;
@@ -157,76 +232,6 @@ void RunUiActionSafely(Action&& action) noexcept {
   }
 }
 
-QPixmap ProjectCover(const QString& name) {
-  QPixmap cover(360, 150);
-  const uint hash = qHash(name);
-  const QColor accent = QColor::fromHsv(0, 0, static_cast<int>(112 + hash % 24));
-  cover.fill(QColor("#e5e6e7"));
-  QPainter painter(&cover);
-  painter.setRenderHint(QPainter::Antialiasing);
-  QLinearGradient wash(0, 0, 360, 150);
-  wash.setColorAt(0, QColor("#d8dadd"));
-  wash.setColorAt(1, QColor("#f1f2f3"));
-  painter.fillRect(cover.rect(), wash);
-  // Project cover thumbnail: a folder with stacked drawing sheets, matching the legacy project
-  // cards. A project has no single drawing thumbnail, so keep this image stable and self-contained.
-  painter.setPen(Qt::NoPen);
-  painter.setBrush(accent.darker(120));
-  painter.drawRoundedRect(QRectF(135, 39, 98, 65), 9, 9);
-  painter.setBrush(QColor("#ffffff"));
-  painter.drawRoundedRect(QRectF(150, 27, 48, 61), 4, 4);
-  painter.setPen(QPen(QColor("#b9c8d7"), 2));
-  painter.drawLine(159, 44, 189, 44);
-  painter.drawLine(159, 53, 186, 53);
-  painter.drawLine(159, 62, 182, 62);
-  painter.setPen(Qt::NoPen);
-  painter.setBrush(accent);
-  painter.drawRoundedRect(QRectF(132, 53, 98, 52), 8, 8);
-  painter.setPen(QColor("#ffffff"));
-  painter.setFont(QFont("Segoe UI", 8, QFont::DemiBold));
-  painter.drawText(QRect(130, 111, 102, 18), Qt::AlignCenter, "PROJECT");
-  return cover;
-}
-
-QString PathKey(const std::filesystem::path& path) {
-  std::error_code ec;
-  const auto absolute = std::filesystem::absolute(path, ec).lexically_normal();
-  QString key = QString::fromStdWString((ec ? path : absolute).wstring()).toCaseFolded();
-  key.replace('\\', '/');
-  return key;
-}
-
-QPixmap ProjectThumbnail(const QString& name, const QString& projectPath) {
-  gsproj::Project project;
-  if (gsproj::Load(std::filesystem::path(projectPath.toStdWString()), &project, nullptr)) {
-    std::unordered_map<std::string, QString> thumbsByDrawing;
-    const auto dataDir = UserDataDirectory();
-    const auto recentDrawings = recent::Load((dataDir.empty() ? std::filesystem::path(".") : dataDir) /
-                                             "gosurvey-recent.json");
-    for (const auto& drawing : recentDrawings)
-      if (!drawing.thumb.empty())
-        thumbsByDrawing.emplace(PathKey(std::filesystem::u8path(drawing.path)).toUtf8().toStdString(),
-                                 QString::fromUtf8(drawing.thumb.c_str()));
-
-    for (const auto& item : project.items) {
-      std::filesystem::path drawingPath = std::filesystem::u8path(item.path);
-      if (item.kind != gsproj::kKindLocalLink)
-        drawingPath = project.Folder() / drawingPath;
-      if (QString::fromStdWString(drawingPath.extension().wstring()).compare(".dwg", Qt::CaseInsensitive) != 0)
-        continue;
-      const auto it = thumbsByDrawing.find(PathKey(drawingPath).toUtf8().toStdString());
-      if (it == thumbsByDrawing.end()) continue;
-      const auto imagePath = (dataDir.empty() ? std::filesystem::path(".") : dataDir) /
-                             "thumbnails" / std::filesystem::path(it->second.toStdWString());
-      QPixmap image(QString::fromStdWString(imagePath.wstring()));
-      if (image.isNull()) continue;
-      const auto scaled = image.scaled(360, 150, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
-      return scaled.copy((scaled.width() - 360) / 2, (scaled.height() - 150) / 2, 360, 150);
-    }
-  }
-  return ProjectCover(name);
-}
-
 QString DrawingProjectTag(const QString& drawingPath) {
   const auto found = gsproj::FindProjectFor(std::filesystem::path(drawingPath.toStdWString()));
   if (found.state == gsproj::FindState::Damaged) return "Project (damaged)";
@@ -274,6 +279,16 @@ QIcon CadCommandIcon(const QString& icon) {
           std::max({color.red(), color.green(), color.blue()}) - std::min({color.red(), color.green(), color.blue()}) < 15)
         image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
     }
+  } else {
+    // Keep command artwork cool-toned in the navy workspace while preserving semantic colors
+    // such as the amber accents in the supplied icon set.
+    for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
+      const auto color = image.pixelColor(x, y);
+      const int high = std::max({color.red(), color.green(), color.blue()});
+      const int low = std::min({color.red(), color.green(), color.blue()});
+      if (color.alpha() && high > 150 && high - low < 32)
+        image.setPixelColor(x, y, QColor(180, 232, 244, color.alpha()));
+    }
   }
   return QIcon(QPixmap::fromImage(image));
 }
@@ -309,100 +324,135 @@ EditorWindow::EditorWindow() {
   centerLayout->addWidget(m_Tabs);
   m_Pages = new QStackedWidget(center);
   auto* start = new QWidget(m_Pages);
+  start->setObjectName("startScreen");
   auto* startLayout = new QVBoxLayout(start);
-  startLayout->setContentsMargins(16, 14, 16, 10);
-  startLayout->setSpacing(12);
+  startLayout->setContentsMargins(9, 8, 9, 8);
+  startLayout->setSpacing(0);
   const bool darkStart = palette().color(QPalette::Window).lightness() < 128;
-  const QString panelColor = darkStart ? "#303234" : "#f0f1f2";
-  const QString cardColor = darkStart ? "#303234" : "#ffffff";
-  const QString edgeColor = darkStart ? "#55585b" : "#c5c8cb";
-  const QString textColor = darkStart ? "#f0f1f2" : "#303234";
-  auto* banner = new QFrame(start);
-  banner->setObjectName("startScreenBanner");
-  banner->setMinimumHeight(74);
-  banner->setMaximumHeight(82);
-  banner->setStyleSheet(QString("QFrame#startScreenBanner { background:%1; border:1px solid %2; border-radius:8px; }")
-                            .arg(panelColor, edgeColor));
-  auto* bannerLayout = new QHBoxLayout(banner);
-  bannerLayout->setContentsMargins(16, 8, 16, 8);
-  auto* logo = new QLabel(banner);
-  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(46, 46));
-  bannerLayout->addWidget(logo);
-  auto* brand = new QVBoxLayout();
-  auto* title = new QLabel("GoSurvey", banner);
-  title->setStyleSheet(QString("font-size:26px; font-weight:600; color:%1; border:0;").arg(textColor));
-  auto* tagline = new QLabel("Land surveying  ·  civil drafting  ·  CAD", banner);
-  tagline->setStyleSheet(QString("color:%1; border:0;").arg(darkStart ? "#c4c6c8" : "#66696c"));
-  brand->addWidget(title);
-  brand->addWidget(tagline);
-  bannerLayout->addLayout(brand);
-  bannerLayout->addStretch();
-  auto* versionBadge = new QLabel("v" + QString::fromUtf8(GOSURVEY_VERSION_FULL), banner);
-  versionBadge->setStyleSheet("background:#3787d6; color:white; border-radius:9px; padding:5px 10px; font-weight:600;");
-  bannerLayout->addWidget(versionBadge, 0, Qt::AlignVCenter);
-  startLayout->addWidget(banner);
+  const QString panelColor = darkStart ? "#0c1e2c" : "#f0f1f2";
+  const QString cardColor = darkStart ? "#10283a" : "#ffffff";
+  const QString edgeColor = darkStart ? "#1c3b50" : "#c5c8cb";
+  const QString textColor = darkStart ? "#f0f5fa" : "#303234";
+  const QString mutedColor = darkStart ? "#a5bac9" : "#66696c";
+  const QString aquaColor = darkStart ? "#29c9df" : "#0878c5";
+  const QString amberColor = darkStart ? "#d9a345" : "#a96e0e";
 
-  auto* content = new QHBoxLayout();
-  content->setSpacing(18);
-  auto* actionsPanel = new QWidget(start);
-  actionsPanel->setFixedWidth(184);
-  auto* actions = new QVBoxLayout(actionsPanel);
-  actions->setContentsMargins(0, 2, 0, 0);
-  actions->setSpacing(8);
-  auto* getStarted = new QLabel("Get Started", actionsPanel);
-  getStarted->setStyleSheet("font-size:17px; font-weight:600;");
-  actions->addWidget(getStarted);
-  auto* create = new QPushButton(QIcon(QtAsset("icons/New.png")), "New drawing", start);
-  auto* open = new QPushButton(QIcon(QtAsset("icons/Open.png")), "Open drawing...", start);
-  auto* newProject = new QPushButton("New Project", start);
-  newProject->setObjectName("newProjectButton");
-  auto* openProject = new QPushButton("Open Project...", start);
-  openProject->setObjectName("openProjectButton");
-  for (auto* action : {create, open, newProject, openProject}) {
-    action->setMinimumHeight(36);
-    action->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    actions->addWidget(action);
-  }
-  auto* news = new QPushButton("What's new", start);
-  news->setMinimumHeight(34);
-  actions->addWidget(news);
-  auto* resourcesHeading = new QLabel("Resources", actionsPanel);
-  resourcesHeading->setStyleSheet("font-size:16px; font-weight:600; margin-top:8px;");
-  actions->addWidget(resourcesHeading);
-  auto* website = new QPushButton("Visit the website", actionsPanel);
-  website->setFlat(true);
-  website->setCursor(Qt::PointingHandCursor);
-  website->setStyleSheet("text-align:left; color:#62a9ed; padding:2px;");
-  connect(website, &QPushButton::clicked, this, [] {
-    QDesktopServices::openUrl(QUrl("https://chetjones003.github.io/GoSurvey"));
-  });
-  actions->addWidget(website);
-  actions->addStretch();
-  content->addWidget(actionsPanel);
+  auto* pageScroll = new QScrollArea(start);
+  pageScroll->setObjectName("startPageScroll");
+  pageScroll->setFrameShape(QFrame::NoFrame);
+  pageScroll->setWidgetResizable(true);
+  pageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  pageScroll->setStyleSheet(QString("QScrollArea#startPageScroll { border:1px solid %1; border-radius:12px; background:%2; }")
+                                .arg(darkStart ? "#173a50" : "#c5c8cb", darkStart ? "#081724" : "#f5f6f7"));
+  auto* body = new TopographicStartBody(pageScroll);
+  body->setObjectName("startPageBody");
+  auto* bodyLayout = new QVBoxLayout(body);
+  bodyLayout->setContentsMargins(24, 7, 24, 6);
+  bodyLayout->setSpacing(6);
 
-  auto* centerPanel = new QWidget(start);
-  auto* centerColumn = new QVBoxLayout(centerPanel);
-  centerColumn->setContentsMargins(0, 2, 0, 0);
-  centerColumn->setSpacing(8);
-  auto* projectsHeading = new QLabel("Recent Projects", start);
-  projectsHeading->setStyleSheet("font-size:17px; font-weight:600; border-bottom:1px solid #526476; padding-bottom:3px;");
-  centerColumn->addWidget(projectsHeading);
-  m_ProjectTiles = new QWidget(centerPanel);
-  m_ProjectTiles->setObjectName("recentProjectTiles");
-  centerColumn->addWidget(m_ProjectTiles);
+  auto* welcome = new QWidget(body);
+  auto* welcomeLayout = new QVBoxLayout(welcome);
+  welcomeLayout->setContentsMargins(0, 0, 0, 0);
+  welcomeLayout->setSpacing(1);
+  auto* welcomeTitle = new QLabel("Welcome to GoSurvey", welcome);
+  welcomeTitle->setObjectName("startWelcomeTitle");
+  welcomeTitle->setStyleSheet(QString("font-size:34px; font-weight:700; color:%1; border:0;").arg(textColor));
+  welcomeLayout->addWidget(welcomeTitle);
+  bodyLayout->addWidget(welcome);
+
+  auto* actionRow = new QHBoxLayout();
+  actionRow->setSpacing(14);
+  auto addActionCard = [&](const QString& name, const QString& iconName, const QString& titleText,
+                           const QString& description, const QString& accent,
+                           std::function<void()> action) {
+    auto* card = new QPushButton(body);
+    card->setObjectName(name);
+    card->setAccessibleName(titleText);
+    card->setCursor(Qt::PointingHandCursor);
+    card->setMinimumHeight(104);
+    card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    card->setStyleSheet(QString(
+        "QPushButton#%1 { text-align:left; background:%2; border:1px solid %3; border-left:3px solid %4; border-radius:8px; padding:0; }"
+        "QPushButton#%1:hover { background:%5; border-color:%6; }"
+        "QPushButton#%1:pressed { background:%7; }")
+        .arg(name, cardColor, edgeColor, accent,
+             darkStart ? "#153247" : "#edf4fa", accent,
+             darkStart ? "#0b2233" : "#e4edf5"));
+    auto* cardLayout = new QVBoxLayout(card);
+    cardLayout->setContentsMargins(16, 10, 16, 10);
+    cardLayout->setSpacing(3);
+    auto* top = new QHBoxLayout();
+    auto* icon = new QLabel(card);
+    icon->setPixmap(CadCommandIcon(iconName).pixmap(34, 34));
+    icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    top->addWidget(icon);
+    top->addStretch();
+    auto* arrow = new QLabel("→", card);
+    arrow->setStyleSheet(QString("font-size:20px; color:%1; border:0;").arg(mutedColor));
+    arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
+    top->addWidget(arrow);
+    cardLayout->addLayout(top);
+    auto* heading = new QLabel(titleText, card);
+    heading->setStyleSheet(QString("font-size:18px; font-weight:650; color:%1; border:0;").arg(textColor));
+    heading->setAttribute(Qt::WA_TransparentForMouseEvents);
+    cardLayout->addWidget(heading);
+    auto* copy = new QLabel(description, card);
+    copy->setWordWrap(true);
+    copy->setStyleSheet(QString("color:%1; border:0;").arg(mutedColor));
+    copy->setAttribute(Qt::WA_TransparentForMouseEvents);
+    cardLayout->addWidget(copy);
+    connect(card, &QPushButton::clicked, this, [action = std::move(action)] { action(); });
+    actionRow->addWidget(card, 1);
+  };
+  addActionCard("startNewDrawing", "New_Drawing.png", "New drawing",
+                "Start a fresh survey drawing with a template.", aquaColor,
+                [this] { NewDrawing(); });
+  addActionCard("startOpenDrawing", "Open.png", "Open drawing",
+                "Browse your files and open an existing drawing.", aquaColor,
+                [this] { Submit("OPEN"); });
+  addActionCard("startNewProject", "New_Drawing.png", "New project",
+                "Create a project and its first drawing.", amberColor,
+                [this] { NewProject(); });
+  addActionCard("startOpenProject", "Open.png", "Open project",
+                "Open an existing GoSurvey project.", aquaColor,
+                [this] { Submit("OPENPROJECT"); });
+  bodyLayout->addLayout(actionRow);
+
+  auto* columns = new QBoxLayout(QBoxLayout::LeftToRight);
+  columns->setObjectName("startContentColumns");
+  columns->setSpacing(18);
+  auto* drawingsPanel = new QWidget(body);
+  drawingsPanel->setObjectName("startRecentDrawingsPanel");
+  auto* drawingsLayout = new QVBoxLayout(drawingsPanel);
+  drawingsLayout->setContentsMargins(0, 0, 0, 0);
+  drawingsLayout->setSpacing(6);
   auto* recentHeader = new QHBoxLayout();
-  auto* drawingsHeading = new QLabel("Recent Drawings", start);
-  drawingsHeading->setStyleSheet("font-size:17px; font-weight:600; border-bottom:1px solid #526476; padding-bottom:3px;");
+  auto* drawingsHeading = new QLabel("Recent drawings", drawingsPanel);
+  drawingsHeading->setStyleSheet(QString("font-size:21px; font-weight:650; color:%1;").arg(textColor));
   recentHeader->addWidget(drawingsHeading, 1);
-  auto* gridMode = new QToolButton(start);
+  auto* seeAllRecent = new QToolButton(drawingsPanel);
+  seeAllRecent->setObjectName("recentSeeAll");
+  seeAllRecent->setText("See all  ›");
+  seeAllRecent->setCursor(Qt::PointingHandCursor);
+  seeAllRecent->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:5px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  recentHeader->addWidget(seeAllRecent);
+  drawingsLayout->addLayout(recentHeader);
+
+  auto* recentOptions = new QWidget(drawingsPanel);
+  recentOptions->setObjectName("recentDrawingOptions");
+  auto* recentOptionsLayout = new QHBoxLayout(recentOptions);
+  recentOptionsLayout->setContentsMargins(0, 0, 0, 0);
+  recentOptionsLayout->setSpacing(7);
+  auto* gridMode = new QToolButton(drawingsPanel);
   gridMode->setObjectName("recentGridMode");
   gridMode->setText("Grid");
   gridMode->setCheckable(true);
-  gridMode->setChecked(true);
-  auto* listMode = new QToolButton(start);
+  auto* listMode = new QToolButton(drawingsPanel);
   listMode->setObjectName("recentListMode");
   listMode->setText("List");
   listMode->setCheckable(true);
+  m_RecentListView = true;
+  listMode->setChecked(true);
   connect(gridMode, &QToolButton::clicked, this, [this, gridMode, listMode] {
     m_RecentListView = false;
     gridMode->setChecked(true);
@@ -415,99 +465,201 @@ EditorWindow::EditorWindow() {
     listMode->setChecked(true);
     RefreshRecentDrawings();
   });
-  recentHeader->addWidget(gridMode);
-  recentHeader->addWidget(listMode);
-  auto* sort = new QComboBox(start);
+  recentOptionsLayout->addWidget(gridMode);
+  recentOptionsLayout->addWidget(listMode);
+  auto* sort = new QComboBox(drawingsPanel);
   sort->setObjectName("recentDrawingSort");
   sort->addItems({"Last opened", "Name"});
   sort->setMaximumWidth(120);
-  recentHeader->addWidget(sort);
-  m_RecentSearch = new QLineEdit(start);
+  recentOptionsLayout->addWidget(sort);
+  m_RecentSearch = new QLineEdit(drawingsPanel);
+  m_RecentSearch->setObjectName("recentDrawingSearch");
   m_RecentSearch->setPlaceholderText("Search drawings");
   m_RecentSearch->setMaximumWidth(250);
-  recentHeader->addWidget(m_RecentSearch);
-  centerColumn->addLayout(recentHeader);
-  m_RecentTiles = new QWidget(centerPanel);
+  recentOptionsLayout->addWidget(m_RecentSearch);
+  recentOptionsLayout->addStretch();
+  recentOptions->hide();
+  drawingsLayout->addWidget(recentOptions);
+  connect(seeAllRecent, &QToolButton::clicked, this, [this, seeAllRecent, recentOptions] {
+    m_RecentShowAll = !m_RecentShowAll;
+    seeAllRecent->setText(m_RecentShowAll ? "Show less  ‹" : "See all  ›");
+    recentOptions->setVisible(m_RecentShowAll);
+    RefreshRecentDrawings();
+  });
+  auto* recentColumns = new QHBoxLayout();
+  recentColumns->setContentsMargins(8, 2, 8, 3);
+  auto addRecentColumn = [&](const QString& text, int stretch) {
+    auto* label = new QLabel(text, drawingsPanel);
+    label->setStyleSheet(QString("font-size:10px; font-weight:650; letter-spacing:0.5px; color:%1; border:0;").arg(mutedColor));
+    recentColumns->addWidget(label, stretch);
+  };
+  addRecentColumn("NAME", 2);
+  addRecentColumn("PREVIEW", 1);
+  addRecentColumn("MODIFIED", 1);
+  addRecentColumn("LOCATION", 2);
+  recentColumns->addSpacing(30);
+  drawingsLayout->addLayout(recentColumns);
+  m_RecentTiles = new QWidget(drawingsPanel);
   m_RecentTiles->setObjectName("recentDrawingTiles");
-  centerColumn->addWidget(m_RecentTiles, 1);
+  auto* recentScroll = new QScrollArea(drawingsPanel);
+  recentScroll->setObjectName("recentDrawingsScroll");
+  recentScroll->setFrameShape(QFrame::NoFrame);
+  recentScroll->setWidgetResizable(true);
+  recentScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  recentScroll->setWidget(m_RecentTiles);
+  // QScrollArea makes its content opaque by default; keep the terrain visible
+  // through the open space between drawing cards.
+  m_RecentTiles->setAutoFillBackground(false);
+  recentScroll->viewport()->setAutoFillBackground(false);
+  recentScroll->setStyleSheet("QScrollArea#recentDrawingsScroll { background:transparent; border:0; }");
+  recentScroll->setMinimumHeight(300);
+  recentScroll->setMaximumHeight(QWIDGETSIZE_MAX);
+  drawingsLayout->addWidget(recentScroll, 1);
   connect(m_RecentSearch, &QLineEdit::textChanged, this, [this] { RefreshRecentDrawings(); });
   connect(sort, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int) { RefreshRecentDrawings(); });
-  content->addWidget(centerPanel, 1);
+  columns->addWidget(drawingsPanel, 2);
 
-  auto* sidePanel = new QWidget(start);
-  sidePanel->setObjectName("startConnectPanel");
-  sidePanel->setFixedWidth(210);
+  auto* sidePanel = new QWidget(body);
+  sidePanel->setObjectName("startRightColumn");
+  sidePanel->setMinimumWidth(360);
+  sidePanel->setMaximumWidth(560);
   auto* sideColumn = new QVBoxLayout(sidePanel);
-  sideColumn->setContentsMargins(0, 2, 0, 0);
-  sideColumn->setSpacing(8);
-  auto* connectHeading = new QLabel("Connect", sidePanel);
-  connectHeading->setStyleSheet("font-size:17px; font-weight:600; border-bottom:1px solid #526476; padding-bottom:3px;");
-  sideColumn->addWidget(connectHeading);
-  auto* account = new QFrame(sidePanel);
-  account->setObjectName("startAccountCard");
-  account->setStyleSheet(QString("QFrame { background:%1; border:1px solid %2; border-radius:7px; }").arg(cardColor, edgeColor));
-  auto* accountLayout = new QVBoxLayout(account);
-  auto* signedOut = new QWidget(account);
-  signedOut->setObjectName("startSignedOutAccount");
-  auto* signedOutLayout = new QVBoxLayout(signedOut);
-  signedOutLayout->setContentsMargins(0, 0, 0, 0);
-  auto* accountCopy = new QLabel("Sign in to sync projects and access your GoSurvey account.", signedOut);
-  accountCopy->setWordWrap(true);
-  accountCopy->setObjectName("startAccountMessage");
-  accountCopy->setStyleSheet("border:0;");
-  signedOutLayout->addWidget(accountCopy);
-  auto* signIn = new QPushButton("Sign In", signedOut);
-  signIn->setObjectName("startSignInButton");
-  signIn->setStyleSheet("QPushButton { background:#3787d6; color:white; border:0; border-radius:4px; padding:7px; }");
-  connect(signIn, &QPushButton::clicked, this, [this] { m_State.authSignInRequested = true; });
-  signedOutLayout->addWidget(signIn);
-  accountLayout->addWidget(signedOut);
-  auto* signedIn = new QWidget(account);
-  signedIn->setObjectName("startSignedInAccount");
-  auto* signedInLayout = new QVBoxLayout(signedIn);
-  signedInLayout->setContentsMargins(0, 0, 0, 0);
-  auto* welcome = new QLabel(signedIn);
-  welcome->setObjectName("startAccountWelcome");
-  signedInLayout->addWidget(welcome);
-  auto* email = new QLabel(signedIn);
-  email->setObjectName("startAccountEmail");
-  email->setStyleSheet("border:0;");
-  signedInLayout->addWidget(email);
-  auto* signOut = new QPushButton("Sign Out", signedIn);
-  signOut->setObjectName("startSignOutButton");
-  connect(signOut, &QPushButton::clicked, this, [this] {
-    m_State.authSignOutRequested = true;
-    Refresh();
+  sideColumn->setContentsMargins(0, 0, 0, 0);
+  sideColumn->setSpacing(4);
+
+  auto* projectsCard = new QFrame(sidePanel);
+  projectsCard->setObjectName("startProjectsCard");
+  projectsCard->setStyleSheet(QString("QFrame#startProjectsCard { background:%1; border:1px solid %2; border-radius:8px; }").arg(cardColor, edgeColor));
+  auto* projectsLayout = new QVBoxLayout(projectsCard);
+  projectsLayout->setContentsMargins(9, 5, 9, 5);
+  projectsLayout->setSpacing(3);
+  auto* projectsHeader = new QHBoxLayout();
+  auto* projectsHeading = new QLabel("Projects", projectsCard);
+  projectsHeading->setStyleSheet(QString("font-size:16px; font-weight:650; color:%1; border:0;").arg(textColor));
+  projectsHeader->addWidget(projectsHeading, 1);
+  auto* projectsSeeAll = new QToolButton(projectsCard);
+  projectsSeeAll->setObjectName("projectsSeeAll");
+  projectsSeeAll->setText("View all  ›");
+  projectsSeeAll->setCursor(Qt::PointingHandCursor);
+  projectsSeeAll->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:4px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  projectsHeader->addWidget(projectsSeeAll);
+  projectsLayout->addLayout(projectsHeader);
+  auto* projectSearch = new QLineEdit(projectsCard);
+  projectSearch->setObjectName("recentProjectSearch");
+  projectSearch->setPlaceholderText("⌕  Search projects…");
+  projectsLayout->addWidget(projectSearch);
+  m_ProjectTiles = new QWidget(projectsCard);
+  m_ProjectTiles->setObjectName("recentProjectTiles");
+  auto* projectsScroll = new QScrollArea(projectsCard);
+  projectsScroll->setObjectName("recentProjectsScroll");
+  projectsScroll->setFrameShape(QFrame::NoFrame);
+  projectsScroll->setWidgetResizable(true);
+  projectsScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  projectsScroll->setWidget(m_ProjectTiles);
+  projectsScroll->setMinimumHeight(250);
+  projectsScroll->setMaximumHeight(258);
+  projectsLayout->addWidget(projectsScroll);
+  connect(projectSearch, &QLineEdit::textChanged, this, [this] { RefreshRecentProjects(); });
+  connect(projectsSeeAll, &QToolButton::clicked, this, [this, projectsSeeAll] {
+    m_ShowAllProjects = !m_ShowAllProjects;
+    projectsSeeAll->setText(m_ShowAllProjects ? "Show less  ‹" : "View all  ›");
+    RefreshRecentProjects();
   });
-  signedInLayout->addWidget(signOut);
-  accountLayout->addWidget(signedIn);
-  sideColumn->addWidget(account);
-  auto* feedbackHeading = new QLabel("Help Me Improve This Product", sidePanel);
-  feedbackHeading->setWordWrap(true);
-  feedbackHeading->setStyleSheet("font-size:15px; font-weight:600; margin-top:8px;");
-  sideColumn->addWidget(feedbackHeading);
-  auto* feedbackCopy = new QLabel("Found a bug or have an idea? Open an issue on GitHub — every report helps.", sidePanel);
-  feedbackCopy->setWordWrap(true);
-  sideColumn->addWidget(feedbackCopy);
-  auto* feedback = new QPushButton("Send Feedback", sidePanel);
-  connect(feedback, &QPushButton::clicked, this, [] {
-    QDesktopServices::openUrl(QUrl("https://github.com/chetjones003/GoSurvey/issues/new"));
+  sideColumn->addWidget(projectsCard);
+
+  auto* quickCard = new QFrame(sidePanel);
+  quickCard->setObjectName("startQuickLinksCard");
+  quickCard->setStyleSheet(QString("QFrame#startQuickLinksCard { background:%1; border:1px solid %2; border-radius:8px; }").arg(cardColor, edgeColor));
+  auto* quickLayout = new QVBoxLayout(quickCard);
+  quickLayout->setContentsMargins(9, 5, 9, 5);
+  quickLayout->setSpacing(3);
+  auto* quickHeading = new QLabel("Quick links", quickCard);
+  quickHeading->setStyleSheet(QString("font-size:16px; font-weight:650; color:%1; border:0;").arg(textColor));
+  quickLayout->addWidget(quickHeading);
+  auto* quickGrid = new QGridLayout();
+  quickGrid->setSpacing(5);
+  auto addQuickLink = [&](const QString& label, const QString& detail, const QString& icon, int column,
+                          const QString& accent, std::function<void()> action) {
+    auto* link = new QToolButton(quickCard);
+    link->setObjectName("startQuickLink");
+    link->setAccessibleName(label);
+    link->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    QString linkText = label;
+    linkText.replace("&", "&&");
+    QString detailText = detail;
+    detailText.replace("&", "&&");
+    link->setText(linkText + "\n" + detailText);
+    link->setIcon(CadCommandIcon(icon));
+    link->setIconSize(QSize(23, 23));
+    link->setMinimumHeight(52);
+    link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    link->setStyleSheet(QString("QToolButton { color:%1; background:%2; border:1px solid %3; border-left:3px solid %4; border-radius:6px; padding:4px 2px; font-size:9px; } QToolButton:hover { background:%5; border-color:%4; }")
+                            .arg(textColor, cardColor, edgeColor, accent, darkStart ? "#153247" : "#edf4fa"));
+    connect(link, &QToolButton::clicked, this, [action = std::move(action)] { action(); });
+    quickGrid->addWidget(link, 0, column);
+  };
+  addQuickLink("Templates", "Use a survey template", "New_Drawing.png", 0, amberColor,
+               [this] { NewDrawing(); });
+  addQuickLink("Survey setup", "Drawing units & plot scale", "settings.png", 1, aquaColor,
+               [this] { ShowUnits(); });
+  addQuickLink("Import formats", "Survey point files", "Import.png", 2, aquaColor,
+               [this] { Submit("IMPORTPOINTS"); });
+  addQuickLink("Application settings", "Customize GoSurvey", "settings.png", 3, aquaColor,
+               [this] { ShowSettings(); });
+  quickLayout->addLayout(quickGrid);
+  sideColumn->addWidget(quickCard);
+
+  auto* resourcesCard = new QFrame(sidePanel);
+  resourcesCard->setObjectName("startLearningCard");
+  resourcesCard->setStyleSheet(QString("QFrame#startLearningCard { background:%1; border:1px solid %2; border-radius:8px; }").arg(cardColor, edgeColor));
+  auto* resourcesLayout = new QVBoxLayout(resourcesCard);
+  resourcesLayout->setContentsMargins(9, 5, 9, 5);
+  resourcesLayout->setSpacing(1);
+  auto* resourcesHeader = new QHBoxLayout();
+  auto* resourcesHeading = new QLabel("Learning resources", resourcesCard);
+  resourcesHeading->setStyleSheet(QString("font-size:16px; font-weight:650; color:%1; border:0;").arg(textColor));
+  resourcesHeader->addWidget(resourcesHeading, 1);
+  auto* resourcesSeeAll = new QToolButton(resourcesCard);
+  resourcesSeeAll->setText("View all  ›");
+  resourcesSeeAll->setCursor(Qt::PointingHandCursor);
+  resourcesSeeAll->setStyleSheet(QString("QToolButton { color:%1; border:0; padding:3px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  resourcesHeader->addWidget(resourcesSeeAll);
+  resourcesLayout->addLayout(resourcesHeader);
+  auto addResourceLink = [&](const QString& title, const QString& detail, const QString& icon,
+                             const QString& url, const QString& objectName) {
+    auto* link = new QToolButton(resourcesCard);
+    link->setObjectName(objectName);
+    link->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    link->setIcon(CadCommandIcon(icon));
+    link->setIconSize(QSize(16, 16));
+    QString linkTitle = title;
+    linkTitle.replace("&", "&&");
+    link->setText(linkTitle + "\n" + detail + "    ›");
+    link->setMinimumHeight(27);
+    link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    link->setStyleSheet(QString("QToolButton { text-align:left; color:%1; background:transparent; border:0; border-left:3px solid #d8a241; padding:1px 4px; font-size:10px; } QToolButton:hover { background:%2; }")
+                            .arg(textColor, darkStart ? "#132c3d" : "#edf4fa"));
+    connect(link, &QToolButton::clicked, this, [url] { QDesktopServices::openUrl(QUrl(url)); });
+    resourcesLayout->addWidget(link);
+  };
+  addResourceLink("Getting started", "Install and make your first drawing", "app.png",
+                  "https://gosurveycad.com/docs/", "startGettingStartedLink");
+  addResourceLink("User guide", "Guides, reference and workflows", "app.png",
+                  "https://gosurveycad.com/docs/", "startUserGuideLink");
+  addResourceLink("Help & support", "Find answers and contact support", "app.png",
+                  "https://github.com/chetjones003/GoSurvey/issues/new", "startFeedbackLink");
+  connect(resourcesSeeAll, &QToolButton::clicked, this, [] {
+    QDesktopServices::openUrl(QUrl("https://gosurveycad.com/docs/"));
   });
-  sideColumn->addWidget(feedback);
-  sideColumn->addStretch();
-  content->addWidget(sidePanel);
-  startLayout->addLayout(content, 1);
-  connect(create, &QPushButton::clicked, this, [this] { NewDrawing(); });
-  connect(open, &QPushButton::clicked, this, [this] { Submit("OPEN"); });
-  connect(newProject, &QPushButton::clicked, this, [this] { NewProject(); });
-  connect(openProject, &QPushButton::clicked, this, [this] {
-    const QString path = QFileDialog::getOpenFileName(this, "Open project", {}, "GoSurvey project (*.gsproj)");
-    if (!path.isEmpty()) OpenProject(path, true);
-  });
-  connect(news, &QPushButton::clicked, this, [this] { ShowWhatsNew(); });
+  sideColumn->addWidget(resourcesCard);
+  sideColumn->addStretch(1);
+  columns->addWidget(sidePanel, 1);
+  bodyLayout->addLayout(columns, 1);
+
+  pageScroll->setWidget(body);
+  startLayout->addWidget(pageScroll);
   RefreshRecentDrawings();
   RefreshRecentProjects();
-  start->setObjectName("startScreen");
   m_Pages->addWidget(start);
 
   auto* modelPage = new QWidget(m_Pages);
@@ -612,7 +764,7 @@ EditorWindow::EditorWindow() {
   connect(manageLayouts, &QToolButton::clicked, this, &EditorWindow::ShowLayoutManager);
   QSettings settings;
   restoreGeometry(settings.value("editor/geometry").toByteArray());
-  restoreState(settings.value("editor/layout").toByteArray(), 1);
+  restoreState(settings.value("editor/layout").toByteArray(), 2);
   Refresh();
   qApp->installEventFilter(this);
 }
@@ -841,17 +993,30 @@ void EditorWindow::BuildDocks() {
       if (menu->objectName() == "viewMenu") menu->addAction(dock->toggleViewAction());
     return dock;
   };
-  m_Toolspace = new QTreeWidget(this);
+  m_Toolspace = new TopographicTreeWidget(true, this);
   m_Toolspace->setHeaderLabel("Prospector");
   m_Toolspace->setUniformRowHeights(true);
   m_Toolspace->setIndentation(14);
-  m_Toolspace->setMinimumWidth(215);
+  m_Toolspace->setMinimumWidth(0);
   m_Toolspace->setContextMenuPolicy(Qt::CustomContextMenu);
   connect(m_Toolspace, &QWidget::customContextMenuRequested, this, [this](const QPoint& position) { ShowToolspaceContextMenu(position); });
-  makeDock("Toolspace", "toolspaceDock", Qt::LeftDockWidgetArea, m_Toolspace);
+  auto* toolspaceTabs = new QTabWidget(this);
+  toolspaceTabs->setObjectName("toolspaceTabs");
+  toolspaceTabs->addTab(m_Toolspace, "Prospector");
+  auto* toolSettings = new QWidget(toolspaceTabs);
+  auto* toolSettingsLayout = new QVBoxLayout(toolSettings);
+  auto* settingsNote = new QLabel("Workspace and drawing preferences", toolSettings);
+  settingsNote->setWordWrap(true);
+  toolSettingsLayout->addWidget(settingsNote);
+  auto* settingsButton = new QPushButton("Open application settings…", toolSettings);
+  toolSettingsLayout->addWidget(settingsButton);
+  toolSettingsLayout->addStretch();
+  connect(settingsButton, &QPushButton::clicked, this, [this] { ShowSettings(); });
+  toolspaceTabs->addTab(toolSettings, "Settings");
+  auto* toolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
   BuildPropertiesPanel();
-  makeDock("Properties", "propertiesDock", Qt::RightDockWidgetArea, m_PropertiesScroll);
-  auto* mapPanel = new QWidget(this);
+  auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
+  auto* mapPanel = new TopographicMapPanel(this);
   mapPanel->setObjectName("mapTaskPanel");
   auto* mapLayout = new QVBoxLayout(mapPanel);
   mapLayout->setContentsMargins(10, 10, 10, 10);
@@ -904,6 +1069,8 @@ void EditorWindow::BuildDocks() {
   mapLayout->addStretch(1);
   auto* mapDock = makeDock("Map", "mapTaskDock", Qt::RightDockWidgetArea, mapPanel);
   mapDock->setMinimumWidth(250);
+  splitDockWidget(toolspaceDock, mapDock, Qt::Vertical);
+  propertiesDock->raise();
   connect(captureView, &QPushButton::clicked, this, [this] {
     StartCaptureMapArea(m_State, false, m_Log); Refresh();
   });
@@ -1342,9 +1509,7 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
 
 void EditorWindow::showEvent(QShowEvent* event) {
   QMainWindow::showEvent(event);
-  // Reserve the tab strip before the first OpenGL composition, rather than waiting
-  // for a viewport click to trigger a layout/refresh.
-  m_Tabs->show(); m_Tabs->updateGeometry();
+  m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
   RefreshRecentProjects();
@@ -1353,8 +1518,13 @@ void EditorWindow::showEvent(QShowEvent* event) {
 
 void EditorWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
-  if (auto* sidePanel = findChild<QWidget*>("startConnectPanel"))
-    sidePanel->setVisible(width() >= 1120);
+  const bool compact = width() < 1120;
+  if (auto* columns = findChild<QBoxLayout*>("startContentColumns"))
+    columns->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+  if (auto* sidePanel = findChild<QWidget*>("startRightColumn")) {
+    sidePanel->setMaximumWidth(compact ? QWIDGETSIZE_MAX : 560);
+    sidePanel->setMinimumWidth(compact ? 0 : 430);
+  }
   QTimer::singleShot(0, this, [this] {
     RefreshRecentProjects();
     RefreshRecentDrawings();
@@ -1662,6 +1832,11 @@ void EditorWindow::Refresh() {
   m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   const bool drawingActive = m_State.activeDrawingIdx > 0;
+  if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(true);
+  m_Tabs->setVisible(true);
+  statusBar()->setVisible(true);
+  for (auto* button : findChildren<QToolButton*>())
+    if (button->objectName().startsWith("quick_")) button->setVisible(drawingActive);
   if (auto* toolspaceDock = findChild<QDockWidget*>("toolspaceDock"))
     toolspaceDock->setVisible(drawingActive);
   if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
@@ -1702,7 +1877,7 @@ void EditorWindow::Refresh() {
   m_CommandBar->SetHint(commandHint);
   RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {
-    const auto title = m_Tabs->tabText(m_State.activeDrawingIdx) + QString::fromUtf8("  —  GoSurvey");
+    const auto title = QString("GoSurvey");
     m_WindowTitle->setText(title); setWindowTitle(title);
   }
   if (auto* signedIn = findChild<QWidget*>("startSignedInAccount")) {
@@ -1876,13 +2051,12 @@ void EditorWindow::RefreshRecentDrawings() {
     }
     delete old;
   }
-  auto* grid = new QGridLayout(m_RecentTiles);
-  grid->setContentsMargins(0, 0, 0, 0);
-  grid->setSpacing(8);
-  grid->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+  auto* rows = new QVBoxLayout(m_RecentTiles);
+  rows->setContentsMargins(0, 0, 0, 0);
+  rows->setSpacing(3);
   const auto dir = UserDataDirectory().empty() ? std::filesystem::path(".") : UserDataDirectory();
   auto entries = recent::Load(dir / "gosurvey-recent.json");
-  const QString query = m_RecentSearch ? m_RecentSearch->text().trimmed() : QString();
+  const QString query = m_RecentShowAll && m_RecentSearch ? m_RecentSearch->text().trimmed() : QString();
   if (!query.isEmpty())
     entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
       return !QString::fromUtf8(entry.name.c_str()).contains(query, Qt::CaseInsensitive) &&
@@ -1892,39 +2066,21 @@ void EditorWindow::RefreshRecentDrawings() {
     std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
   if (auto* gridMode = findChild<QToolButton*>("recentGridMode")) gridMode->setChecked(!m_RecentListView);
   if (auto* listMode = findChild<QToolButton*>("recentListMode")) listMode->setChecked(m_RecentListView);
-  const int columns = m_RecentListView ? 1 : std::max(1, m_RecentTiles->width() / 168);
-  const int rowHeight = m_RecentListView ? 54 : 128;
-  const int rowsThatFit = std::max(1, m_RecentTiles->height() / rowHeight);
-  const int maxVisible = std::min(12, columns * rowsThatFit);
-  const int visibleEntries = static_cast<int>(std::min(entries.size(), static_cast<size_t>(maxVisible)));
+  const size_t visibleEntries = m_RecentShowAll ? entries.size() : std::min<size_t>(5, entries.size());
   const auto recentDrawingStore = std::make_shared<const std::filesystem::path>(dir / "gosurvey-recent.json");
-  int i = 0;
+  const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
+  const QString cardBg = dark ? "#091d2c" : "#ffffff";
+  const QString cardEdge = dark ? "#17384b" : "#c5c8cb";
+  const QString cardHover = dark ? "#102b3d" : "#f0f1f2";
+  size_t index = 0;
   for (const auto& entry : entries) {
-    if (i >= visibleEntries) break;
+    if (index >= visibleEntries) break;
     const QString name = QString::fromUtf8(entry.name.c_str());
     const QString path = QString::fromUtf8(entry.path.c_str());
-    const QString lastOpened = QDateTime::fromSecsSinceEpoch(entry.lastOpenedUnix).toString("ddd, MMM dd yyyy");
+    const auto opened = QDateTime::fromSecsSinceEpoch(entry.lastOpenedUnix);
+    const QString lastOpened = opened.toString("d MMM yyyy\nHH:mm");
     const QString projectTag = DrawingProjectTag(path);
-    auto* tile = new QToolButton(m_RecentTiles);
-    tile->setObjectName("recentDrawingTile");
-    tile->setToolButtonStyle(m_RecentListView ? Qt::ToolButtonTextBesideIcon : Qt::ToolButtonTextUnderIcon);
-    tile->setText(m_RecentListView ? name + "\n" + lastOpened + " · " + projectTag
-                                   : name + "\n" + lastOpened + " · " + projectTag);
-    tile->setToolTip(name + "\n" + path + "\n" + lastOpened + " · " + projectTag);
-    tile->setIconSize(m_RecentListView ? QSize(72, 40) : QSize(144, 60));
-    if (m_RecentListView) {
-      tile->setMinimumHeight(50);
-      tile->setMaximumHeight(54);
-      tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    } else {
-      tile->setFixedSize(158, 128);
-    }
-    const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
-    const QString cardBg = dark ? "#303234" : "#ffffff";
-    const QString cardEdge = dark ? "#55585b" : "#c5c8cb";
-    const QString cardHover = dark ? "#3b3d3f" : "#f0f1f2";
-    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; padding:5px; border:1px solid %1; border-radius:6px; background:%2; } QToolButton#recentDrawingTile:hover { border-color:%4; background:%3; }")
-                            .arg(cardEdge, cardBg, cardHover, dark ? "#a9afb3" : "#65a9ec"));
+    const QString folder = QDir::toNativeSeparators(QFileInfo(path).absolutePath());
     const auto thumbPath = dir / "thumbnails" / std::filesystem::path(QString::fromUtf8(entry.thumb.c_str()).toStdWString());
     const QImage savedThumbnail(QString::fromStdWString(thumbPath.wstring()));
     QPixmap thumbnail;
@@ -1932,14 +2088,13 @@ void EditorWindow::RefreshRecentDrawings() {
       thumbnail = QPixmap::fromImage(savedThumbnail);
     } else {
       thumbnail = QPixmap(320, 144);
-      thumbnail.fill(QColor("#303234"));
+      thumbnail.fill(QColor(dark ? "#061725" : "#303234"));
       QPainter painter(&thumbnail);
       painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(QColor("#c8cbce"));
-      painter.setFont(QFont("Segoe UI", 26, QFont::DemiBold));
+      painter.setPen(QColor(dark ? "#20bfd6" : "#c8cbce"));
+      painter.setFont(QFont("Segoe UI", 24, QFont::DemiBold));
       painter.drawText(thumbnail.rect(), Qt::AlignCenter, "DWG");
     }
-    tile->setIcon(QIcon(thumbnail));
     const auto openRecentDrawing = [this, path, recentDrawingStore]() noexcept {
       RunUiActionSafely([&] {
         const auto before = m_State.drawingTabs.size();
@@ -1953,12 +2108,10 @@ void EditorWindow::RefreshRecentDrawings() {
         }
       });
     };
-    tile->setContextMenuPolicy(Qt::CustomContextMenu);
-    connect(tile, &QWidget::customContextMenuRequested, this,
-            [this, tile, path, recentDrawingStore, openRecentDrawing](const QPoint& position) noexcept {
+    auto showDrawingMenu = [this, path, recentDrawingStore, openRecentDrawing](QWidget* owner, const QPoint& globalPosition) noexcept {
       RunUiActionSafely([&] {
       const bool fileExists = QFileInfo::exists(path);
-      QMenu menu(tile);
+      QMenu menu(owner);
       auto* openAction = menu.addAction("Open");
       openAction->setEnabled(fileExists);
       auto* folderAction = menu.addAction("Open Containing Folder", this, [path, fileExists]() noexcept {
@@ -1988,14 +2141,105 @@ void EditorWindow::RefreshRecentDrawings() {
         });
       });
       connect(openAction, &QAction::triggered, this, openRecentDrawing);
-      menu.exec(tile->mapToGlobal(position));
+      menu.exec(globalPosition);
       });
+    };
+    if (!m_RecentListView) {
+      auto* tile = new QToolButton(m_RecentTiles);
+      tile->setObjectName("recentDrawingTile");
+      tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+      tile->setText(name + "\n" + opened.toString("d MMM yyyy"));
+      tile->setIcon(QIcon(thumbnail));
+      tile->setIconSize(QSize(144, 58));
+      tile->setFixedSize(170, 130);
+      tile->setStyleSheet(QString("QToolButton#recentDrawingTile { border:1px solid %1; border-radius:7px; background:%2; padding:7px; } QToolButton#recentDrawingTile:hover { border-color:#20bfd6; background:%3; }")
+                              .arg(cardEdge, cardBg, cardHover));
+      tile->setContextMenuPolicy(Qt::CustomContextMenu);
+      connect(tile, &QWidget::customContextMenuRequested, this, [tile, showDrawingMenu](const QPoint& pos) {
+        showDrawingMenu(tile, tile->mapToGlobal(pos));
+      });
+      connect(tile, &QToolButton::clicked, this, openRecentDrawing);
+      rows->addWidget(tile);
+      ++index;
+      continue;
+    }
+    auto* tile = new QToolButton(m_RecentTiles);
+    tile->setObjectName("recentDrawingTile");
+    tile->setCursor(Qt::PointingHandCursor);
+    tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    tile->setMinimumHeight(64);
+    tile->setMaximumHeight(68);
+    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; border:1px solid %1; border-radius:7px; background:%2; padding:0; } QToolButton#recentDrawingTile:hover { border-color:#20bfd6; background:%3; }")
+                            .arg(cardEdge, cardBg, cardHover));
+    auto* row = new QHBoxLayout(tile);
+    row->setContentsMargins(9, 4, 7, 4);
+    row->setSpacing(9);
+    auto* fileIcon = new QLabel(tile);
+    fileIcon->setPixmap(CadCommandIcon("Active_File.png").pixmap(24, 24));
+    fileIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row->addWidget(fileIcon);
+    auto* identity = new QWidget(tile);
+    auto* identityLayout = new QVBoxLayout(identity);
+    identityLayout->setContentsMargins(0, 0, 0, 0);
+    identityLayout->setSpacing(1);
+    auto* title = new QLabel(name, identity);
+    title->setStyleSheet(QString("font-size:13px; font-weight:650; color:%1; border:0;").arg(dark ? "#f1f8fc" : "#202b36"));
+    title->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* fileName = new QLabel(QFileInfo(path).fileName(), identity);
+    fileName->setStyleSheet(QString("font-size:11px; color:%1; border:0;").arg(dark ? "#9db5c5" : "#6b7884"));
+    fileName->setAttribute(Qt::WA_TransparentForMouseEvents);
+    identityLayout->addWidget(title);
+    identityLayout->addWidget(fileName);
+    row->addWidget(identity, 2);
+    auto* preview = new QLabel(tile);
+    preview->setFixedSize(120, 46);
+    preview->setPixmap(thumbnail.scaled(preview->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
+    preview->setAlignment(Qt::AlignCenter);
+    preview->setStyleSheet(QString("background:%1; border:1px solid %2; border-radius:5px;").arg(dark ? "#061522" : "#edf1f4", cardEdge));
+    preview->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row->addWidget(preview, 1);
+    auto* modified = new QLabel(lastOpened, tile);
+    modified->setStyleSheet(QString("font-size:11px; line-height:1.3; color:%1; border:0;").arg(dark ? "#d1e0e9" : "#45525e"));
+    modified->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row->addWidget(modified, 1);
+    auto* location = new QWidget(tile);
+    auto* locationLayout = new QHBoxLayout(location);
+    locationLayout->setContentsMargins(0, 0, 0, 0);
+    locationLayout->setSpacing(7);
+    auto* folderIcon = new QLabel(location);
+    folderIcon->setPixmap(style()->standardIcon(QStyle::SP_DirIcon).pixmap(20, 20));
+    folderIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* folderText = new QLabel(tile->fontMetrics().elidedText(folder, Qt::ElideMiddle, 250), location);
+    folderText->setStyleSheet(QString("font-size:11px; color:%1; border:0;").arg(dark ? "#d1e0e9" : "#45525e"));
+    folderText->setAttribute(Qt::WA_TransparentForMouseEvents);
+    locationLayout->addWidget(folderIcon);
+    locationLayout->addWidget(folderText, 1);
+    location->setAttribute(Qt::WA_TransparentForMouseEvents);
+    row->addWidget(location, 2);
+    auto* more = new QToolButton(tile);
+    more->setText("⋮");
+    more->setAccessibleName("Recent drawing actions");
+    more->setToolTip(name + " actions");
+    more->setAutoRaise(true);
+    connect(more, &QToolButton::clicked, this, [more, showDrawingMenu] {
+      showDrawingMenu(more, more->mapToGlobal(QPoint(0, more->height())));
+    });
+    row->addWidget(more);
+    tile->setToolTip(name + "\n" + path + "\n" + lastOpened + " · " + projectTag);
+    tile->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(tile, &QWidget::customContextMenuRequested, this, [tile, showDrawingMenu](const QPoint& pos) {
+      showDrawingMenu(tile, tile->mapToGlobal(pos));
     });
     connect(tile, &QToolButton::clicked, this, openRecentDrawing);
-    grid->addWidget(tile, i / columns, i % columns);
-    ++i;
+    rows->addWidget(tile);
+    ++index;
   }
-  if (!i) grid->addWidget(new QLabel("Your recent drawings will appear here.", m_RecentTiles), 0, 0);
+  if (!index) {
+    auto* empty = new QLabel("Your recent drawings will appear here.", m_RecentTiles);
+    empty->setStyleSheet(QString("color:%1; padding:16px;").arg(dark ? "#9db5c5" : "#6b7884"));
+    rows->addWidget(empty);
+  }
+  rows->addStretch(1);
 }
 
 void EditorWindow::RefreshRecentProjects() {
@@ -2009,34 +2253,45 @@ void EditorWindow::RefreshRecentProjects() {
   }
   auto* grid = new QGridLayout(m_ProjectTiles);
   grid->setContentsMargins(0, 0, 0, 0);
-  grid->setSpacing(9);
+  grid->setSpacing(3);
   grid->setAlignment(Qt::AlignLeft | Qt::AlignTop);
   const auto dataDir = UserDataDirectory();
   const auto store = (dataDir.empty() ? std::filesystem::path(".") : dataDir) /
                      "gosurvey-recent-projects.json";
   const auto recentProjectStore = std::make_shared<const std::filesystem::path>(store);
   auto entries = recent::Load(store);
-  if (entries.size() > 6) entries.resize(6);
-  const int columns = std::max(1, std::min(3, m_ProjectTiles->width() / 174));
+  if (auto* search = findChild<QLineEdit*>("recentProjectSearch")) {
+    const auto query = search->text().trimmed();
+    if (!query.isEmpty())
+      entries.erase(std::remove_if(entries.begin(), entries.end(), [&](const auto& entry) {
+        return !QString::fromUtf8(entry.name.c_str()).contains(query, Qt::CaseInsensitive) &&
+               !QString::fromUtf8(entry.path.c_str()).contains(query, Qt::CaseInsensitive);
+      }), entries.end());
+  }
+  const size_t projectLimit = m_ShowAllProjects ? entries.size() : std::min<size_t>(5, entries.size());
+  const int columns = 1;
   int index = 0;
   for (const auto& entry : entries) {
+    if (static_cast<size_t>(index) >= projectLimit) break;
     const QString name = QString::fromUtf8(entry.name.c_str());
     const QString path = QString::fromUtf8(entry.path.c_str());
-    const QString lastOpened = QDateTime::fromSecsSinceEpoch(entry.lastOpenedUnix).toString("ddd, MMM dd yyyy");
+    const QString lastOpened = QDateTime::fromSecsSinceEpoch(entry.lastOpenedUnix).toString("d MMM yyyy");
     const QString projectFolder = QFileInfo(path).absolutePath();
     auto* tile = new QToolButton(m_ProjectTiles);
     tile->setObjectName("recentProjectTile");
-    tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    tile->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     const QString folderLabel = tile->fontMetrics().elidedText(QDir::toNativeSeparators(projectFolder),
-                                                               Qt::ElideMiddle, 150);
-    tile->setText(name + "\n" + lastOpened + "\n" + folderLabel);
-    tile->setIcon(QIcon(ProjectThumbnail(name, path)));
-    tile->setIconSize(QSize(150, 54));
-    tile->setFixedSize(166, 132);
+                                                               Qt::ElideMiddle, 270);
+    tile->setText(name + "\n" + folderLabel + " · " + lastOpened);
+    tile->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+    tile->setIconSize(QSize(26, 26));
+    tile->setMinimumHeight(46);
+    tile->setMaximumHeight(48);
+    tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
     tile->setStyleSheet(dark
-        ? "QToolButton { text-align:left; padding:5px; border:1px solid #55585b; border-radius:6px; background:#303234; } QToolButton:hover { border-color:#85898d; background:#3b3d3f; }"
-        : "QToolButton { text-align:left; padding:5px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
+        ? "QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid #d8a241; border-bottom:1px solid #17384b; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:#20bfd6; background:#10283a; }"
+        : "QToolButton { text-align:left; padding:6px 8px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
     tile->setToolTip(name + "\n" + projectFolder + "\n" + lastOpened);
     const auto openRecentProject = [this, path, recentProjectStore]() noexcept {
       RunUiActionSafely([&] {
