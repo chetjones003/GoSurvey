@@ -8,9 +8,9 @@
 
 ## 1. Authority
 - Goal: Qt migration to 0.7.4 parity (`test/win32UI` migration task).
-- Requirements: REQ-431 (accepted by D-2026-10-19-c), REQ-388 (annotation/session/save semantics), REQ-387 (PDF viewer), REQ-201 (honest failure), REQ-390/391/394 (scale, snap, measurement), REQ-429/430 (Qt PDF workflow integration).
+- Requirements: REQ-432 (accepted by D-2026-10-19-d), REQ-388 (annotation/session/save semantics), REQ-387 (PDF viewer), REQ-201 (honest failure), REQ-390/391/394 (scale, snap, measurement), REQ-429/430 (Qt PDF workflow integration).
 - Constraints: REQ-300 (no new dependency), REQ-301 (no one-use abstraction), architecture concurrency model (one-shot workers and generation validation).
-- Acceptance: see REQ-431 Acceptance; issue #910 additionally requires preserving beta 0.7.4 cancel, validation, failure, undo and read-only semantics.
+- Acceptance: see REQ-432 Acceptance; issue #910 additionally requires preserving beta 0.7.4 cancel, validation, failure, undo and read-only semantics.
 - Owning subsystem: Qt PDF presentation (`src/qt/PdfWindow`, `src/qt/PdfCanvas`) over existing `src/pdf/` services.
 
 ## 2. Scope
@@ -24,13 +24,13 @@
 ## 4. Questions
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
-| 1 | What scope should the SPEC authorize for issue #910? | 2026-10-19 | User selected option 1: full Qt parity for the issue's stated workflows. Recorded as REQ-431 / D-2026-10-19-c. |
+| 1 | What scope should the SPEC authorize for issue #910? | 2026-10-19 | User selected option 1: full Qt parity for the issue's stated workflows. Recorded as REQ-432 / D-2026-10-19-d. |
 
 ## 5. Assumptions
 - No unresolved assumptions. Existing REQ-388, 0.7.4 implementation and architecture worker rules are behavior/ownership authorities; inspect them before implementation and escalate any behavior or boundary they do not define.
 
 ## 6. Plan
-- Approach: characterize existing ImGui and shared PDF behavior, then implement the smallest Qt-side changes to match REQ-388 and REQ-431, reusing `AnnotSession`, `PdfDocument`, `PdfAnnotate`, and the established one-shot worker pattern.
+- Approach: characterize existing ImGui and shared PDF behavior, then implement the smallest Qt-side changes to match REQ-388 and REQ-432, reusing `AnnotSession`, `PdfDocument`, `PdfAnnotate`, and the established one-shot worker pattern.
 - Files/functions to touch: `src/qt/PdfWindow.*`, `src/qt/PdfCanvas.hpp` and Qt PDF UI files as needed; `tests/QtEditorTests.cpp` and PDF service tests only where acceptance requires; `docs/qt-074-parity-ledger.md`, `docs/qt-ui-migration.md`, this task log.
 - Test approach: happy path = full annotation create/edit/undo/save/reopen and rotated/high-DPI alignment; failure = cancel, invalid input, save failure/source preservation, stale async completion and document close/switch.
 - Steps:
@@ -41,14 +41,14 @@
   - [x] Update parity records; run applicable verification and report evidence.
 
 ## 6a. Plan review
-- REQ-431 is accepted and derives annotation/save behavior from REQ-388. Existing implementation confirms Qt currently creates annotations and saves synchronously but has no Select/grip editing, while the 0.7.4 viewer contains selection, move/resize/delete and the Length-line handle behavior. Qt coordinate conversion currently scales screen X/Y directly by page width/height, so page rotation needs an explicit shared mapping at the canvas boundary. Existing rendering already uses one-shot `std::async` work; changes must retain document lifetime, cancellation and stale-result protection. The Qt tests already provide generated PDF fixtures and window access. The work remains in the stated Qt/presentation and shared-service boundaries; no architecture decision or uncovered behavior ambiguity is identified at plan review.
-- Verification: APPROVE — predicted files and tests match REQ-431; no new layer, ownership model, dependency, PDF format or global state is planned.
+- REQ-432 is accepted and derives annotation/save behavior from REQ-388. Existing implementation confirms Qt currently creates annotations and saves synchronously but has no Select/grip editing, while the 0.7.4 viewer contains selection, move/resize/delete and the Length-line handle behavior. Qt coordinate conversion currently scales screen X/Y directly by page width/height, so page rotation needs an explicit shared mapping at the canvas boundary. Existing rendering already uses one-shot `std::async` work; changes must retain document lifetime, cancellation and stale-result protection. The Qt tests already provide generated PDF fixtures and window access. The work remains in the stated Qt/presentation and shared-service boundaries; no architecture decision or uncovered behavior ambiguity is identified at plan review.
+- Verification: APPROVE — predicted files and tests match REQ-432; no new layer, ownership model, dependency, PDF format or global state is planned.
 
 ## 7. Workflow-specific notes
 - Feature: issue scope answered; tests-first/characterization required for rotated coordinates and asynchronous lifetime behavior.
 
 ## 8. Implementation log
-- 2026-10-19 — User selected full Qt parity. Added accepted REQ-431 / D-2026-10-19-c and this implementation plan before code.
+- 2026-10-19 — User selected full Qt parity. Added accepted REQ-432 / D-2026-10-19-d and this implementation plan before code.
 - 2026-10-19 — Implemented Qt annotation selection/editing, style and text controls, Length dimension-line placement, rotated/high-DPI mapping, and asynchronous PDF open/Save As. User approved Option B (deep navy); final screenshot is `build/artifacts/Release/qt-910/qt-910-final-deep-navy.png`.
 - Verification: `.\build.bat qt` succeeded. Focused hidden Qt run passed (6 passed, 0 failed): selection/move/resize/undo, asynchronous Save As failure preservation, rotated-page persistence, and screenshot options. The full `ctest --preset ninja-release -R "^qt[.]editor$"` run fails in `approvedTopographyStaysInPanelBackgrounds` during `QWidget::grab`; see `build/artifacts/final-910.log`.
 
@@ -66,7 +66,9 @@
 - Findings: `approvedTopographyStaysInPanelBackgrounds` crashes during `QWidget::grab`; no focused issue #910 test failed.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-431 annotation, rotated-page, high-DPI and async file workflows
+- Requirements satisfied: REQ-432 annotation, rotated-page, high-DPI and async file workflows
 - Tests added: selection/edit/undo, failed async save preservation, rotated annotation persistence, visual screenshot coverage
 - Docs updated: Qt parity ledger and Qt migration status
 - Done: 2026-10-19; visual direction B approved by user
+
+- 2026-10-19 — PR follow-up: merged current beta (#954) into this branch to clear the conflict. Fixed CI clang-tidy findings by containing exceptions inside async open/save workers; CI rerun pending.

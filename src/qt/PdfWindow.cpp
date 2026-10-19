@@ -462,7 +462,19 @@ void PdfWindow::Open(const QString& path) {
   if (m_OpenWork.valid() || m_Work.valid()) { statusBar()->showMessage("Wait for the current PDF operation before opening another file."); return; }
   m_OpenPath = path;
   const auto nativePath = std::filesystem::path(path.toStdWString());
-  m_OpenWork = std::async(std::launch::async, [nativePath] { return pdfview::PdfDocument::Open(nativePath); });
+  m_OpenWork = std::async(std::launch::async, [nativePath]() noexcept {
+    try { return pdfview::PdfDocument::Open(nativePath); }
+    catch (const std::exception& error) {
+      pdfview::PdfDocument::OpenResult result;
+      result.error = error.what();
+      return result;
+    }
+    catch (...) {
+      pdfview::PdfDocument::OpenResult result;
+      result.error = "Unknown error while opening PDF.";
+      return result;
+    }
+  });
   statusBar()->showMessage("Opening PDF...");
   m_OpenPoll->start();
 }
@@ -941,8 +953,10 @@ void PdfWindow::StartSaveAs(const QString& path) {
   const auto destination = std::filesystem::path(path.toStdWString());
   m_SaveDestination = path;
   m_SaveRevision = m_Revision;
-  m_SaveWork = std::async(std::launch::async, [source, items, scales, inForce, destination] {
-    return pdfview::SaveAnnotated(source, items, destination, scales, inForce);
+  m_SaveWork = std::async(std::launch::async, [source, items, scales, inForce, destination]() noexcept {
+    try { return pdfview::SaveAnnotated(source, items, destination, scales, inForce); }
+    catch (const std::exception& error) { return std::string(error.what()); }
+    catch (...) { return std::string("Unknown error while saving PDF."); }
   });
   statusBar()->showMessage("Saving annotated PDF...");
   m_SavePoll->start();
