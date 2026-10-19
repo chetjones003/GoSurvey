@@ -72,3 +72,4 @@
 - Done: 2026-10-19; visual direction B approved by user
 
 - 2026-10-19 — PR follow-up: merged current beta (#954) into this branch to clear the conflict. Fixed CI clang-tidy findings by containing exceptions inside async open/save workers; CI rerun pending.
+- 2026-10-19 — Follow-up: changed async worker captures to shared immutable input holders so clang-tidy's exception-escape analysis no longer flags std::async's internal copy adapters. Focused clang-tidy check passed; focused hidden Qt workflow run passed (6/6).

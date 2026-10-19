@@ -29,6 +29,7 @@
 #include <QFileInfo>
 #include <QActionGroup>
 #include <QDebug>
+#include <tuple>
 #include <QAbstractListModel>
 #include <QApplication>
 #include <QCheckBox>
@@ -461,19 +462,10 @@ void PdfWindow::Open(const QString& path) {
   if (!ConfirmDiscard()) return;
   if (m_OpenWork.valid() || m_Work.valid()) { statusBar()->showMessage("Wait for the current PDF operation before opening another file."); return; }
   m_OpenPath = path;
-  const auto nativePath = std::filesystem::path(path.toStdWString());
+  const auto nativePath = std::make_shared<std::filesystem::path>(path.toStdWString());
   m_OpenWork = std::async(std::launch::async, [nativePath]() noexcept {
-    try { return pdfview::PdfDocument::Open(nativePath); }
-    catch (const std::exception& error) {
-      pdfview::PdfDocument::OpenResult result;
-      result.error = error.what();
-      return result;
-    }
-    catch (...) {
-      pdfview::PdfDocument::OpenResult result;
-      result.error = "Unknown error while opening PDF.";
-      return result;
-    }
+    try { return pdfview::PdfDocument::Open(*nativePath); }
+    catch (...) { return pdfview::PdfDocument::OpenResult{}; }
   });
   statusBar()->showMessage("Opening PDF...");
   m_OpenPoll->start();
@@ -497,7 +489,7 @@ void PdfWindow::PollOpen() {
   catch (const std::exception& error) { result.error = error.what(); }
   QString message;
   if (!result.doc || !AdoptDocument(std::move(result.doc), m_OpenPath, message)) {
-    if (message.isEmpty()) message = QString::fromUtf8(result.error.c_str());
+    if (message.isEmpty()) message = result.error.empty() ? "The PDF could not be opened." : QString::fromUtf8(result.error.c_str());
     QMessageBox::warning(this, "Open PDF", message);
     statusBar()->showMessage("Could not open PDF.");
   }
@@ -946,17 +938,22 @@ void PdfWindow::SaveAs() {
 void PdfWindow::StartSaveAs(const QString& path) {
   if (!m_Document || path.isEmpty()) return;
   if (m_SaveWork.valid()) { statusBar()->showMessage("A PDF save is already in progress."); return; }
-  const auto source = m_Document->Path();
-  const auto items = m_Annotations.Items();
-  const auto scales = m_Annotations.Scales();
-  const auto inForce = ScalesInForce();
-  const auto destination = std::filesystem::path(path.toStdWString());
+  auto source = m_Document->Path();
+  auto items = m_Annotations.Items();
+  auto scales = m_Annotations.Scales();
+  auto inForce = ScalesInForce();
+  auto destination = std::filesystem::path(path.toStdWString());
+  using SaveInput = std::tuple<std::filesystem::path, std::vector<pdfview::Annot>,
+      std::map<int, pdfview::PageScale>, std::map<int, pdfview::PageScale>, std::filesystem::path>;
+  auto input = std::make_shared<SaveInput>(std::move(source), std::move(items), std::move(scales), std::move(inForce), std::move(destination));
   m_SaveDestination = path;
   m_SaveRevision = m_Revision;
-  m_SaveWork = std::async(std::launch::async, [source, items, scales, inForce, destination]() noexcept {
-    try { return pdfview::SaveAnnotated(source, items, destination, scales, inForce); }
-    catch (const std::exception& error) { return std::string(error.what()); }
-    catch (...) { return std::string("Unknown error while saving PDF."); }
+  m_SaveWork = std::async(std::launch::async, [input]() noexcept {
+    try {
+      auto error = pdfview::SaveAnnotated(std::get<0>(*input), std::get<1>(*input), std::get<4>(*input), std::get<2>(*input), std::get<3>(*input));
+      return SaveResult{error.empty(), std::move(error)};
+    }
+    catch (...) { return SaveResult{}; }
   });
   statusBar()->showMessage("Saving annotated PDF...");
   m_SavePoll->start();
@@ -965,11 +962,12 @@ void PdfWindow::StartSaveAs(const QString& path) {
 void PdfWindow::PollSave() {
   if (!m_SaveWork.valid() || m_SaveWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
   m_SavePoll->stop();
-  std::string reason;
-  try { reason = m_SaveWork.get(); }
-  catch (const std::exception& error) { reason = error.what(); }
-  if (!reason.empty()) {
-    QMessageBox::warning(this, "Save PDF", QString::fromUtf8(reason.c_str()));
+  SaveResult result;
+  try { result = m_SaveWork.get(); }
+  catch (...) { result = SaveResult{}; }
+  if (!result.succeeded) {
+    const auto reason = result.error.empty() ? QString("The PDF could not be saved.") : QString::fromUtf8(result.error.c_str());
+    QMessageBox::warning(this, "Save PDF", reason);
     statusBar()->showMessage("Save failed; annotations are still available to retry.");
     return;
   }
