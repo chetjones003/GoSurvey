@@ -176,7 +176,7 @@ TEST_CASE("UpdatePointCloudImportProgress reports the real phase, weighted fract
   auto reading = UpdatePointCloudImportProgress(job);
   CHECK(std::string(reading.phase) == "Reading scan...");
   CHECK(reading.fraction == Approx(0.175f));
-  CHECK(reading.eta.rfind("~", 0) == 0);
+  CHECK(reading.eta.rfind('~', 0) == 0);
   CHECK(reading.eta.find("remaining") != std::string::npos);
 
   job.pointsStreamed = 100;

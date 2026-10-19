@@ -529,7 +529,7 @@ std::vector<double> Issue916Points(int count, double base = 0.0) {
   return xyz;
 }
 QString Issue916WriteScan(const QTemporaryDir& directory, const char* extension, int count, double base = 0.0) {
-  const QString path = directory.filePath(QString("scan-%1-%2-%3.%1").arg(extension).arg(count).arg(static_cast<int>(base)));
+  QString path = directory.filePath(QString("scan-%1-%2-%3.%1").arg(extension).arg(count).arg(static_cast<int>(base)));
   const std::string utf8 = path.toUtf8().toStdString();
   const std::vector<double> xyz = Issue916Points(count, base);
   const std::string ext = extension;
@@ -544,7 +544,7 @@ QString Issue916WriteScan(const QTemporaryDir& directory, const char* extension,
     header.pointCount = static_cast<std::size_t>(count);
     const std::int64_t scan = writer.NewData3D(header);
     e57::Data3DPointsData_t<double> buffers(header);
-    for (int i = 0; i < count; ++i) { buffers.cartesianX[i] = xyz[3 * i]; buffers.cartesianY[i] = xyz[3 * i + 1]; buffers.cartesianZ[i] = xyz[3 * i + 2]; }
+    for (std::size_t i = 0; i < static_cast<std::size_t>(count); ++i) { buffers.cartesianX[i] = xyz[3 * i]; buffers.cartesianY[i] = xyz[3 * i + 1]; buffers.cartesianZ[i] = xyz[3 * i + 2]; }
     e57::CompressedVectorWriter points = writer.SetUpData3DPointsData(scan, static_cast<std::size_t>(count), buffers);
     points.write(static_cast<std::size_t>(count));
     points.close();
