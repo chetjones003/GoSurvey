@@ -1,9 +1,10 @@
 # TASK-914 — Qt traverse adjustment and command-editor workflows
 
 - Type: feature
-- Status: implementation approved; PR verification in progress
+- Status: PR open; verification recorded
 - Opened: 2026-10-19
-- GitHub: #914, child of #878
+- GitHub issue: #914, child of #878
+- Pull request: https://github.com/chetjones003/GoSurvey/pull/960 (base: `beta`)
 
 ## 1. Authority
 
@@ -52,4 +53,4 @@
 - The post-sync editor screenshot `qt-914-command-highlighting-fuzzy-match.png` shows #912's gutter and inline error plus the #914 `STATION` fuzzy suggestion. `issue914OpenTraverseSolveAndCommandErrorRecovery`, `issue914StopDiscardsSolveAndPreservesInputs`, and the #912 `issue912HighlighterColoursEachTokenKindAndKeepsText` regression test pass in isolated hidden-desktop runs.
 - Full prescribed `ctest --preset ninja-release -R "^qt[.]editor$"` fails later in existing `approvedTopographyStaysInPanelBackgrounds` at `QWidget::grab` (access violation); focused #914/#912 tests pass separately before this crash.
 - `git diff --check`: passed.
-- User selected A (side-by-side workbench) and cooperative Stop, then approved the final screenshots and authorized a PR to `beta` (2026-10-19). Latest base synchronized from `origin/beta` at #954 / #912.
+- User selected A (side-by-side workbench) and cooperative Stop, then approved the final screenshots and authorized a PR to `beta` (2026-10-19). Latest base synchronized from `origin/beta` at #954 / #912. PR #960 is open against `beta`.
