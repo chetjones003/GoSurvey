@@ -46487,7 +46487,7 @@ void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
 
 void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
   using Ph = AppCommandState::PdfAttachPhase;
-  const std::string capturedPath = cmd.pdfAttachFilePath;
+  std::string capturedPath = cmd.pdfAttachFilePath;
   const int capturedPage = cmd.pdfAttachSelectedPage;
   const float capturedDpi = cmd.pdfAttachRasterDpi;
   const bool capturedLines = cmd.pdfAttachSnapLines;
@@ -46497,7 +46497,7 @@ void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
   auto build = std::make_unique<AppCommandState::AsyncBuild>();
   build->specifyInsert = capturedSpec;
   auto* buildPtr = build.get();
-  buildPtr->thread = std::thread([buildPtr, capturedPath, capturedPage, capturedDpi,
+  buildPtr->thread = std::thread([buildPtr, capturedPath = std::move(capturedPath), capturedPage, capturedDpi,
                                   capturedLines, capturedCirc, capturedText]() noexcept {
     try {
       PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
