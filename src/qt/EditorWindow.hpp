@@ -127,6 +127,7 @@ private:
   void ShowToolspaceContextMenu(const QPoint& position);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
+  void ShowPdfAttachDialog();
   void AddPdfToProjectFromDisk();
   void ShowSettings();
   void ShowSurveyPointDisplay();

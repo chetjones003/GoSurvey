@@ -46485,6 +46485,29 @@ void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("PDFATTACH — select PDF file and options in the dialog, then place the underlay.");
 }
 
+void StartPdfAttachBuild(AppCommandState& cmd, std::vector<std::string>& log) {
+  using Ph = AppCommandState::PdfAttachPhase;
+  const std::string capturedPath = cmd.pdfAttachFilePath;
+  const int capturedPage = cmd.pdfAttachSelectedPage;
+  const float capturedDpi = cmd.pdfAttachRasterDpi;
+  const bool capturedLines = cmd.pdfAttachSnapLines;
+  const bool capturedCirc = cmd.pdfAttachSnapCircles;
+  const bool capturedText = cmd.pdfAttachSnapText;
+  const bool capturedSpec = cmd.pdfAttachSpecifyInsert;
+  auto build = std::make_unique<AppCommandState::AsyncBuild>();
+  build->specifyInsert = capturedSpec;
+  auto* buildPtr = build.get();
+  buildPtr->thread = std::thread([buildPtr, capturedPath, capturedPage, capturedDpi,
+                                  capturedLines, capturedCirc, capturedText] {
+    PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
+                            capturedLines, capturedCirc, capturedText, buildPtr->result);
+    buildPtr->done.store(true, std::memory_order_release);
+  });
+  cmd.pdfAttachAsync = std::move(build);
+  cmd.pdfAttachPhase = Ph::Building;
+  log.push_back("PDFATTACH — rasterizing, please wait...");
+}
+
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::PdfAttach ||
       st.pdfAttachPhase != AppCommandState::PdfAttachPhase::WaitInsertPoint)

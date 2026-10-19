@@ -11,6 +11,7 @@
 #include <QIcon>
 #include <QLabel>
 #include <QPixmap>
+#include <QPalette>
 #include <QString>
 #include <QVBoxLayout>
 
@@ -89,16 +90,21 @@ inline QLabel* AddBanner(QVBoxLayout* root, QWidget* parent, const QString& titl
 /// The look of every surface dialog: an accent bar beside the title, flat underlined tabs, ruled group
 /// headings and a primary button, all in GoSurvey blue (#438fda, the same blue as the other Qt dialogs).
 inline void StyleDialog(QDialog* dialog) {
-  dialog->setStyleSheet(
-      "QLabel#surfaceBanner { border-left:5px solid #438fda; background:palette(alternate-base); padding:10px 14px; }"
-      "QTabWidget::pane { border-top:2px solid #438fda; }"
+  const bool dark = dialog->palette().color(QPalette::Window).lightness() < 128;
+  const char* accent = dark ? "#55d8d0" : "#438fda";
+  const char* accentFill = dark ? "#168e8a" : "#438fda";
+  const char* hover = dark ? "#1ca6a0" : "#347cc3";
+  dialog->setStyleSheet(QString(
+      "QLabel#surfaceBanner { border-left:5px solid %1; background:palette(alternate-base); padding:10px 14px; }"
+      "QTabWidget::pane { border-top:2px solid %1; }"
       "QTabBar::tab { padding:7px 14px; border:0; border-bottom:2px solid transparent; }"
-      "QTabBar::tab:selected { border-bottom:2px solid #438fda; font-weight:600; }"
+      "QTabBar::tab:selected { border-bottom:2px solid %1; font-weight:600; }"
       "QGroupBox { border:0; border-top:1px solid palette(mid); margin-top:12px; padding-top:10px; }"
-      "QGroupBox::title { subcontrol-origin:margin; left:0; font-weight:600; color:#438fda; }"
-      "QPushButton[primary=\"true\"] { background:#438fda; color:white; font-weight:600; padding:6px 18px; "
-      "border:0; border-radius:4px; } QPushButton[primary=\"true\"]:hover { background:#347cc3; } "
-      "QPushButton[primary=\"true\"]:disabled { background:#8aa6c4; }");
+      "QGroupBox::title { subcontrol-origin:margin; left:0; font-weight:600; color:%1; }"
+      "QPushButton[primary=\"true\"] { background:%2; color:white; font-weight:600; padding:6px 18px; "
+      "border:0; border-radius:4px; } QPushButton[primary=\"true\"]:hover { background:%3; } "
+      "QPushButton[primary=\"true\"]:disabled { background:palette(mid); }")
+                          .arg(accent, accentFill, hover));
 }
 
 }  // namespace surfaceui

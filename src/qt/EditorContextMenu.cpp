@@ -20,6 +20,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPalette>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -256,11 +257,13 @@ void EditorWindow::ShowRightClickCustomization() {
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Right-Click Customization");
   auto* layout = new QVBoxLayout(dialog);
-  {  // navy banner over bordered cards
+  {  // graphite banner over bordered cards
     layout->setContentsMargins(0, 0, 0, 12);
     auto* banner = new QLabel("<b style='font-size:15px'>Right-Click Customization</b><br>Choose what right-click does, and whether a quick click means ENTER.", dialog);
     banner->setObjectName("rightClickBanner");
-    banner->setStyleSheet("background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
+    banner->setStyleSheet(palette().color(QPalette::Window).lightness() < 128
+        ? "background:#30373c; color:#ffffff; border-bottom:2px solid #55d8d0; padding:12px 16px; font-size:13px;"
+        : "background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
     layout->addWidget(banner);
   }
   // Everything is staged in the widgets; nothing reaches the preferences until Apply & Close.

@@ -39,10 +39,10 @@ Alternatively configure with `-DGOSURVEY_BUILD_QT=ON` and
 `windeployqt` from that kit deploys runtime plugins beside the executable.
 The Qt option defaults to OFF, so existing build workflows do not require Qt.
 
-The current appearance uses Qt Fusion with a compact neutral-gray CAD treatment:
-flat grouped command tools, restrained borders, gray dock/header gradients, dense
-property rows, Segoe UI and a black drawing viewport. Logo menu > View > Appearance
-switches between Neutral gray and Classic light without reopening the drawing;
+The current Dark appearance uses Qt Fusion with graphite surfaces, aqua interaction
+states, restrained amber emphasis, dense property rows, Segoe UI and a black drawing viewport.
+Logo menu > View > Appearance
+switches between Graphite and Classic light without reopening the drawing;
 the choice is saved. `--light-style` starts with the light appearance. The title-bar/ribbon/dock/
 floating-command layout is retained. `--default-style` remains an accepted alias.
 The current comparison build is at `build/ribbon-v072/GoSurveyQt.exe`; configure

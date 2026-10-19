@@ -161,7 +161,9 @@ void EditorWindow::RefreshProperties() {
     auto* heading = new QLabel(title, box);
     heading->setObjectName("propertiesSectionHeading");
     QFont f = heading->font(); f.setBold(true); heading->setFont(f);
-    heading->setStyleSheet("background:#1f3a5f; color:#ffffff; padding:3px 8px;");
+    heading->setStyleSheet(qApp->property("cadLightTheme").toBool()
+        ? "background:#1f3a5f; color:#ffffff; padding:3px 8px;"
+        : "background:#30373c; color:#f4f7f8; border-left:3px solid #55d8d0; padding:3px 8px;");
     layout->addWidget(heading);
     auto* rows = new QWidget(box);
     auto* grid = new QVBoxLayout(rows);

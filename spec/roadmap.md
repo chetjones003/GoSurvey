@@ -68,6 +68,8 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
+- **Qt PDF underlay attachment (REQ-431, D-2026-10-19-c, issue #909).** Complete the Qt PDFATTACH placement dialog and project Copy / Link flow, preserving 0.7.4 behavior.
+- **Qt graphite appearance (REQ-432, D-2026-10-19-d).** Apply graphite surfaces with aqua interaction states and restrained amber emphasis throughout the Qt Dark appearance.
 - **REQ-336 — Start Screen Billboard (What's New)** (D-2026-09-10-d, ADR-056). Shipped
   `resources/whats-new.md`, vendored md4c, auto-open from Start + Help → About, dismiss-per-version,
   CI presence gate, authoring lock on the notes file.

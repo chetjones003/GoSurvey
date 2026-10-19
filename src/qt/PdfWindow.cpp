@@ -211,17 +211,17 @@ public:
 
 // The selected look for the PDF window (issue #905, option B): deep navy chrome, a bright blue frame on the current thumbnail.
 constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so the dialogs it opens keep the application theme
-    "QMainWindow{background:#10151f;} QToolBar{background:#1b2433;border:0;spacing:6px;padding:3px;}"
-    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#2c3b57;}"
-    "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#1b2433;padding:6px;}"
-    "#pdfThumbnailList{background:#141b28;color:#cfd8ea;border:0;selection-background-color:#3b82f6;selection-color:white;}"
-    "#pdfFindEdit{background:#0e131c;color:#fff;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;}"
-    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#0e131c;}";
+    "QMainWindow{background:#1c2024;} QToolBar{background:#242a2f;border:0;spacing:6px;padding:3px;}"
+    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;}"
+    "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#292f34;padding:6px;}"
+    "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:#244846;selection-color:white;}"
+    "#pdfFindEdit{background:#15191c;color:#fff;border:1px solid #424b51;border-radius:4px;padding:3px 6px;}"
+    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}";
 
 constexpr const char* kPdfExtractReviewStyle =
-    "QDialog{background:#111827;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
-    "QTableWidget{background:#1f2937;color:#eef2ff;gridline-color:#475569;}"
-    "QPushButton{background:#25334a;color:#eef2ff;border:1px solid #536b8b;border-radius:4px;padding:6px 12px;}";
+    "QDialog{background:#22272b;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
+    "QTableWidget{background:#202529;color:#eef2ff;gridline-color:#41494e;}"
+    "QPushButton{background:#2a3035;color:#eef2ff;border:1px solid #41494e;border-radius:4px;padding:6px 12px;}";
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");

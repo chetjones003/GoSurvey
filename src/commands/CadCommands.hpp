@@ -8366,6 +8366,8 @@ void RecalcAlignResult(AppCommandState& st);
 /// \p applyScale — false strips scale (rotation + translation only; re-derives tx/ty from centroids).
 void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool applyScale);
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Start PDF page rasterization on a worker while the Qt or ImGui dialog remains responsive.
+void StartPdfAttachBuild(AppCommandState& st, std::vector<std::string>& log);
 /// Called from the viewport when the user clicks to place the PDF attachment.
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
