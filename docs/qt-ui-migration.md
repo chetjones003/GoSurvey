@@ -132,11 +132,17 @@ Context destruction and viewport destruction release renderer resources while
 the context is current, following [Qt's QOpenGLWidget lifecycle](https://doc.qt.io/qt-6/qopenglwidget.html).
 
 Legacy font loading was moved from `CadCommands.cpp` into
-`src/ui/LegacyApplicationFonts.cpp`. The shared domain library **still links
-ImGui core**, because legacy font measurement, SHX draw-list paths and ribbon
-measurement still reference it. Those dependencies must be extracted before an
-ImGui-free binary can be claimed. The Qt target no longer compiles AppIcon.cpp or
-links GLFW; icons and windows are managed by Qt.
+`src/ui/LegacyApplicationFonts.cpp`. Issue #917 then moved every remaining
+ImGui-only shared API out of `gosurvey_domain`: the font registry and legacy font
+loading, the MTEXT wrapped layout (`MtextRichImGui`), the SHX draw-list emitter and
+the ribbon measure pass now live in the `gosurvey_imgui_text` library
+(`GOSURVEY_IMGUI_TEXT_SOURCES`), linked only by the ImGui app, the headless driver
+and the ImGui tests. `gosurvey_domain` no longer links ImGui core, and CMake fails
+the configure step if it ever does again. Survey-label boxes are measured through
+the `AppCommandState::measureAnnotationText` seam (ImGui font in the ImGui app and
+headless driver, `MeasureQtText` in Qt). The Qt target no longer compiles
+AppIcon.cpp or links GLFW; icons and windows are managed by Qt. Removing ImGui from
+the Qt link graph itself and verifying deployment remains issue #918.
 
 ## Latest verified iteration
 

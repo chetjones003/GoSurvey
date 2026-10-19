@@ -40,6 +40,7 @@
 #endif
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
+#include "MtextRichImGui.hpp"
 #include "UpdateService.hpp"
 #include "TelemetryService.hpp"
 #include "AuthService.hpp"
@@ -403,6 +404,7 @@ int main()
   // auto-load fired once, found nothing, and never looked again — the saved dock layout was
   // silently discarded every launch, which is what "my layout isn't respected" actually was.
   AppCommandState cmd;
+  cmd.measureAnnotationText = MtextRichMeasureAnnotationImGui;  // survey-label boxes measure through the ImGui font
 #ifdef GOSURVEY_DEVELOPER_SHELL
   if (devEngine)
     DevShell_RegisterTests(devEngine, &cmd);

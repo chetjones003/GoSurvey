@@ -26,6 +26,7 @@
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
+#include "MtextRichImGui.hpp"
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
 #include "TransformPreview.hpp"
@@ -407,6 +408,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
+    run.st.measureAnnotationText = MtextRichMeasureAnnotationImGui;
     LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
@@ -3054,6 +3056,7 @@ int RunTranscriptMain(int argc, char** argv) {
   InitHeadlessImGui();
 
   Run run;
+  run.st.measureAnnotationText = MtextRichMeasureAnnotationImGui;  // labels measure through the ImGui font
   run.checkEveryStep = checkEveryStep;
   run.outDir = outDir.empty()
                    ? (std::filesystem::temp_directory_path() / "gosurvey_headless")
