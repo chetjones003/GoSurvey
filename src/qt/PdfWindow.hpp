@@ -2,6 +2,7 @@
 #include <QMainWindow>
 #include "PdfDocument.hpp"
 #include "PdfAnnotate.hpp"
+#include "PdfCoordExtract.hpp"
 #include <QString>
 #include <atomic>
 #include <future>
@@ -17,6 +18,9 @@ class QToolBar;
 class QSpinBox;
 class QScrollArea;
 class QTimer;
+class QDialog;
+class QTableWidget;
+class EditorWindow;
 
 class PdfWindow final : public QMainWindow {
 public:
@@ -30,9 +34,11 @@ public:
   bool AddAnnotation(const pdfview::Annot& annotation, QString& error);
   bool IsSearching() const { return m_Search.valid(); }
   int ThumbnailsKept() const;
+  void SetEditor(EditorWindow* editor) { m_Editor = editor; }
 protected:
   void closeEvent(QCloseEvent* event) override;
 private:
+  friend class QtEditorTests;
   void RequestRender();
   void PollRender();
   std::unique_ptr<pdfview::PdfDocument> m_Document;
@@ -48,6 +54,13 @@ private:
   std::map<int, pdfview::PageScale> m_Scales;
   int m_Tool = -1;
   std::vector<std::pair<float, float>> m_Draft;
+  EditorWindow* m_Editor = nullptr;
+  bool m_ExtractMode = false;
+  bool m_ExtractDragging = false;
+  QPointF m_ExtractStart;
+  QPointF m_ExtractEnd;
+  std::optional<pdfview::ExtractResult> m_ExtractResult;
+  QDialog* m_ExtractReview = nullptr;
   // REQ-429: the find bar. Results are read-only: nothing here touches the annotation session.
   struct SearchOutcome {
     bool ok = false;
@@ -83,6 +96,13 @@ private:
   PdfThumbnails* m_Thumbs = nullptr;
   void PageClick(QPointF point, Qt::MouseButton button);
   void DrawAnnotations(QPainter& painter);
+  void DrawExtractOverlay(QPainter& painter);
+  void BeginExtract(QPointF point, Qt::MouseButton button);
+  void MoveExtract(QPointF point);
+  void EndExtract(QPointF point, Qt::MouseButton button);
+  void ExtractRegion();
+  void ShowExtractReview();
+  void DecideExtractCandidate(int row, bool accept);
   void EditScale();
   void SaveAs();
   void SplitPages();
