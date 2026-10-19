@@ -160,7 +160,7 @@ void AdjustmentWindow::ValidateNow() {
     int line = 0;
     QString detail = message;
     if (message.startsWith("line ")) {
-      const int colon = message.indexOf(':');
+      const int colon = static_cast<int>(message.indexOf(':'));
       line = message.mid(5, colon - 5).toInt();
       if (colon > 0) detail = message.mid(colon + 1).trimmed();
     }

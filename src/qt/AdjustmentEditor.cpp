@@ -134,13 +134,12 @@ AdjustmentCodeEdit::AdjustmentCodeEdit(QWidget* parent) : QPlainTextEdit(parent)
 void AdjustmentCodeEdit::SetPalette(const AdjustmentEditorPalette& palette) {
   m_Palette = palette;
   // The application stylesheet paints text boxes, so the editor's own colours go through one too.
-  auto mix = [](const QColor& from, const QColor& to, double amount) {
-    return QColor::fromRgbF(from.redF() + (to.redF() - from.redF()) * amount,
-                            from.greenF() + (to.greenF() - from.greenF()) * amount,
-                            from.blueF() + (to.blueF() - from.blueF()) * amount);
+  auto mix = [](const QColor& from, const QColor& to, float amount) {
+    auto blend = [amount](qreal a, qreal b) { return static_cast<float>(a + (b - a) * amount); };
+    return QColor::fromRgbF(blend(from.redF(), to.redF()), blend(from.greenF(), to.greenF()), blend(from.blueF(), to.blueF()));
   };
   setStyleSheet(QString("QPlainTextEdit { background: %1; color: %2; selection-background-color: %3; selection-color: %2; border: 1px solid %4; }")
-                    .arg(palette.background.name(), palette.text.name(), mix(palette.background, palette.keyword, 0.35).name(),
+                    .arg(palette.background.name(), palette.text.name(), mix(palette.background, palette.keyword, 0.35f).name(),
                          palette.gutterBackground.name()));
   static_cast<AdjustmentHighlighter*>(m_Highlighter)->SetColors(palette);
   m_Gutter->update();
@@ -156,7 +155,7 @@ void AdjustmentCodeEdit::SetError(int line, const QString& message) {
 }
 
 int AdjustmentCodeEdit::GutterWidth() const {
-  const int digits = QString::number(std::max(1, blockCount())).size();
+  const int digits = static_cast<int>(QString::number(std::max(1, blockCount())).size());
   return 14 + fontMetrics().horizontalAdvance(QLatin1Char('9')) * digits + 8;
 }
 
@@ -214,8 +213,10 @@ void AdjustmentCodeEdit::paintEvent(QPaintEvent* event) {
   const qreal textEnd = document()->documentMargin() + fontMetrics().horizontalAdvance(block.text());
   const qreal y = rect.top() + fontMetrics().height() - 1;
   painter.setPen(QPen(m_Palette.error, 1.5));
-  for (qreal x = document()->documentMargin(); x < textEnd; x += 4)  // wavy underline
-    painter.drawLine(QPointF(x, y), QPointF(std::min(x + 2, textEnd), y + (static_cast<int>(x / 2) % 2 ? 1.5 : -0.5)));
+  for (int step = 0; document()->documentMargin() + 4 * step < textEnd; ++step) {  // wavy underline
+    const qreal x = document()->documentMargin() + 4 * step;
+    painter.drawLine(QPointF(x, y), QPointF(std::min(x + 2, textEnd), y + (step % 2 ? 1.5 : -0.5)));
+  }
   const qreal messageX = textEnd + 20;
   const int room = viewport()->width() - static_cast<int>(messageX) - 6;
   if (room > 60) {

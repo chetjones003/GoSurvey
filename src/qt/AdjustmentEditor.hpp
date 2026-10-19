@@ -10,6 +10,7 @@
 #include <QString>
 #include <QVector>
 #include <QWidget>
+#include <cstdint>
 
 struct AdjustmentEditorPalette {
   QColor background, text, keyword, option, number, comment, fieldCode;
@@ -20,7 +21,7 @@ struct AdjustmentEditorPalette {
 /// Navy on the Dark appearance (REQ-081), white paper on the Light appearance.
 AdjustmentEditorPalette AdjustmentPalette(bool dark);
 
-enum class AdjustmentToken { Keyword, Option, Number, Comment, FieldCode };
+enum class AdjustmentToken : std::uint8_t { Keyword, Option, Number, Comment, FieldCode };
 struct AdjustmentSpan { int start = 0; int length = 0; AdjustmentToken kind = AdjustmentToken::Keyword; };
 
 /// Colour classes of one command line. Words that are none of these keep the normal text colour
@@ -98,7 +99,7 @@ private:
     bool hasEllipse = false;
     double semiMajor = 0, semiMinor = 0, azimuthDeg = 0;
   };
-  struct Segment { QPointF from, to; enum Kind { Leg, Closing, Side, Check } kind = Leg; QString label; };
+  struct Segment { QPointF from, to; enum Kind : std::uint8_t { Leg, Closing, Side, Check } kind = Leg; QString label; };
   QPolygonF EllipseOutline(const Station& station, double factor) const;
   const Station* StationAt(const QPoint& position) const;
   AdjustmentEditorPalette m_Palette;
