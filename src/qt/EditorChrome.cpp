@@ -38,9 +38,9 @@ protected:
       return;
     }
     QLinearGradient background(0, 0, width(), height());
-    background.setColorAt(0.0, QColor("#061421"));
-    background.setColorAt(0.65, QColor("#07192a"));
-    background.setColorAt(1.0, QColor("#0a2031"));
+    background.setColorAt(0.0, QColor("#171b1e"));
+    background.setColorAt(0.65, QColor("#1d2226"));
+    background.setColorAt(1.0, QColor("#282e33"));
     painter.fillRect(rect(), background);
     qtArtwork::DrawTerrainContours(painter, QRectF(width() - 600, -170, 500, 366), true, .80);
   }

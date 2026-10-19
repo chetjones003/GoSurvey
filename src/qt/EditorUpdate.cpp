@@ -14,6 +14,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QPalette>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QTextBrowser>
@@ -37,10 +38,12 @@ QPushButton* AddButton(QHBoxLayout* row, QWidget* parent, const char* name, cons
   button->setMinimumHeight(34);
   if (primary) {
     button->setDefault(true);
-    button->setStyleSheet(
-        "QPushButton { background:#438fda; color:white; font-weight:600; padding:6px 18px; "
-        "border:0; border-radius:4px; } QPushButton:hover { background:#347cc3; }"
-        "QPushButton:disabled { background:#8fb4dc; }");
+    const bool dark = parent->palette().color(QPalette::Window).lightness() < 128;
+    button->setStyleSheet(QString(
+        "QPushButton { background:%1; color:white; font-weight:600; padding:6px 18px; "
+        "border:0; border-radius:4px; } QPushButton:hover { background:%2; }"
+        "QPushButton:disabled { background:palette(mid); }")
+                              .arg(dark ? "#168e8a" : "#438fda", dark ? "#1ca6a0" : "#347cc3"));
   }
   row->addWidget(button);
   return button;
@@ -305,7 +308,10 @@ void EditorWindow::ShowUpdateDialog() {
   outer->setSpacing(0);
   auto* banner = new QWidget(dialog);
   banner->setFixedHeight(76);
-  banner->setStyleSheet("QWidget { background:#243a53; }");
+  const bool darkAppearance = palette().color(QPalette::Window).lightness() < 128;
+  banner->setStyleSheet(darkAppearance
+      ? "QWidget { background:#30373c; border-bottom:2px solid #55d8d0; }"
+      : "QWidget { background:#243a53; }");
   auto* bannerLayout = new QHBoxLayout(banner);
   bannerLayout->setContentsMargins(26, 10, 26, 10);
   auto* logo = new QLabel(banner);

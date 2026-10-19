@@ -155,13 +155,13 @@ void EditorViewport::paintGL() {
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
     if (!qApp->property("cadLightTheme").toBool()) {
-      tuning.bgR = 4.f / 255.f;
-      tuning.bgG = 18.f / 255.f;
-      tuning.bgB = 32.f / 255.f;
-      tuning.gridR = 0.055f;
-      tuning.gridG = 0.11f;
-      tuning.gridB = 0.16f;
-      tuning.gridA = 0.36f;
+      tuning.bgR = 32.f / 255.f;
+      tuning.bgG = 36.f / 255.f;
+      tuning.bgB = 40.f / 255.f;
+      tuning.gridR = 0.12f;
+      tuning.gridG = 0.20f;
+      tuning.gridB = 0.20f;
+      tuning.gridA = 0.40f;
     }
     if (m_State.viewportSectionClip) {
       tuning.sectionClip = CadSectionClipPlane(m_State);

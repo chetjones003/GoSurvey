@@ -39,9 +39,10 @@ void EditorWindow::BuildDraftingInput() {
   const auto mode = [this](const char* name, const char* label, int key, bool AppCommandState::*member) {
     auto* button = new QToolButton(this);
     button->setObjectName(name); button->setText(label); button->setCheckable(true);
-    button->setStyleSheet("QToolButton { color:#e6f2fb; background:#1b3f5a; border:1px solid #326486; "
-        "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#245878; border-color:#56a6c8; } "
-        "QToolButton:checked { color:#ffffff; background:#087f97; border-color:#35d5ef; }");
+    const bool dark = palette().color(QPalette::Window).lightness() < 128;
+    if (dark) button->setStyleSheet("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
+        "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:#4b7572; } "
+        "QToolButton:checked { color:#ffffff; background:#244846; border-color:#55d8d0; }");
     button->setToolTip(QString("%1 (F%2)").arg(label).arg(key - Qt::Key_F1 + 1));
     button->setProperty("draftingKey", key);
     statusBar()->addWidget(button);
@@ -65,11 +66,13 @@ void EditorWindow::BuildDraftingInput() {
 
   m_DynamicInput = new QFrame(m_Viewport);
   m_DynamicInput->setObjectName("dynamicInput");
-  m_DynamicInput->setStyleSheet("QFrame#dynamicInput { background:transparent; border:none; }"
-      "QLabel { color:#dce8f0; background:transparent; }"
-      "QLineEdit { color:#f4f9fd; background:#1d4a69; border:0; border-bottom:1px solid #3982a8; "
-      "border-radius:0; min-height:24px; padding:2px 4px; selection-background-color:#087f97; }"
-      "QLineEdit:focus { border:0; border-bottom:2px solid #00c5e0; }");
+  if (palette().color(QPalette::Window).lightness() < 128) {
+    m_DynamicInput->setStyleSheet("QFrame#dynamicInput { background:transparent; border:none; }"
+        "QLabel { color:#dce2e5; background:transparent; }"
+        "QLineEdit { color:#f1f4f5; background:#30373c; border:0; border-bottom:1px solid #4c575d; "
+        "border-radius:0; min-height:24px; padding:2px 4px; selection-background-color:#168e8a; }"
+        "QLineEdit:focus { border:0; border-bottom:2px solid #55d8d0; }");
+  }
   auto* layout = new QVBoxLayout(m_DynamicInput);
   layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(3);
   m_DynamicPrompt = new QLabel(m_DynamicInput);
@@ -289,9 +292,10 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
 
 void EditorWindow::ShowSnapOverride(const QPoint& position) {
   QMenu menu(this); menu.setObjectName("snapOverrideMenu");
-  menu.setStyleSheet("QMenu { background:#1b4564; color:#f4f9fd; border:1px solid #39769b; padding:2px; }"
-      "QMenu::item { padding:4px 24px; background:transparent; } QMenu::item:selected { background:#087f97; color:#ffffff; }"
-      "QMenu::separator { height:1px; background:#39769b; margin:4px 8px; }");
+  if (palette().color(QPalette::Window).lightness() < 128)
+    menu.setStyleSheet("QMenu { background:#252b2f; color:#edf1f3; border:1px solid #454e53; padding:2px; }"
+        "QMenu::item { padding:4px 24px; background:transparent; } QMenu::item:selected { background:#244846; color:#ffffff; }"
+        "QMenu::separator { height:1px; background:#454e53; margin:4px 8px; }");
   menu.addSection("Snap once — next pick");
   const std::pair<const char*, CadSnap::Kind> kinds[] = {
       {"Endpoint", CadSnap::Kind::Endpoint}, {"Midpoint", CadSnap::Kind::Midpoint},
@@ -313,14 +317,15 @@ void EditorWindow::ShowSnapOverride(const QPoint& position) {
 
 void EditorWindow::ShowPolarSettings() {
   QDialog dialog(this); dialog.setObjectName("polarSettingsDialog"); dialog.setWindowTitle("Polar tracking angles");
-  dialog.setStyleSheet("QDialog#polarSettingsDialog { background:#183c57; color:#f4f9fd; }"
-      "QLabel { color:#dce8f0; background:transparent; }"
-      "QComboBox, QLineEdit { background:#1d4a69; color:#f4f9fd; border:1px solid #3982a8; border-radius:5px; "
-      "padding:5px 8px; selection-background-color:#087f97; }"
-      "QComboBox:focus, QLineEdit:focus { border-color:#11c9e2; }"
-      "QPushButton { background:#10283a; color:#eaf4fa; border:1px solid #1b3c51; border-radius:5px; padding:6px 10px; }"
-      "QPushButton:hover { background:#245878; border-color:#56a6c8; }"
-      "QPushButton:pressed { background:#0d485b; border-color:#00c5e0; }");
+  if (palette().color(QPalette::Window).lightness() < 128)
+    dialog.setStyleSheet("QDialog#polarSettingsDialog { background:#22272b; color:#edf1f3; }"
+        "QLabel { color:#dce2e5; background:transparent; }"
+        "QComboBox, QLineEdit { background:#171b1e; color:#edf1f3; border:1px solid #424b51; border-radius:5px; "
+        "padding:5px 8px; selection-background-color:#168e8a; }"
+        "QComboBox:focus, QLineEdit:focus { border-color:#55d8d0; }"
+        "QPushButton { background:#2a3035; color:#eaf0f2; border:1px solid #41494e; border-radius:5px; padding:6px 10px; }"
+        "QPushButton:hover { background:#343c41; border-color:#4b7572; }"
+        "QPushButton:pressed { background:#244846; border-color:#55d8d0; }");
   auto* layout = new QVBoxLayout(&dialog);
   auto* summary = new QLabel("Angles follow the active UCS.\nThe pipe compass uses these same presets.", &dialog);
   summary->setObjectName("polarSettingsSummary"); layout->addWidget(summary);
@@ -368,7 +373,9 @@ void EditorWindow::ShowContextualHelp() {
   dialog.setWindowTitle("GoSurvey User Manual"); dialog.resize(1080, 720);
   auto* layout = new QVBoxLayout(&dialog);
   auto* title = new QLabel("User Manual", &dialog); title->setObjectName("manualTitle");
-  title->setStyleSheet("font-size:20px; font-weight:600; padding:10px; background:#263e53; color:#f1f6fa; border-radius:4px;");
+  const bool darkHelp = palette().color(QPalette::Window).lightness() < 128;
+  title->setStyleSheet(QString("font-size:20px; font-weight:600; padding:10px; background:%1; color:#f1f6fa; border-radius:4px;")
+                           .arg(darkHelp ? "#30373c" : "#263e53"));
   layout->addWidget(title);
   auto* splitter = new QSplitter(&dialog); splitter->setObjectName("manualSplitter"); layout->addWidget(splitter, 1);
   auto* pages = new QListWidget(splitter); pages->setObjectName("manualPages");

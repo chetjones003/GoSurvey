@@ -3670,6 +3670,11 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
       QSettings().remove("editor/lightTheme");
     });
+    {
+      EditorWindow startWindow;
+      auto* graphite = Action(startWindow, "Graphite"); QVERIFY(graphite); graphite->trigger();
+      QVERIFY(startWindow.grab().save(Issue886Shot("qt-432-graphite-start.png")));
+    }
     EditorWindow window; window.CreateDrawingFromTemplate();
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
@@ -3680,15 +3685,16 @@ private Q_SLOTS:
     drawings()->setExpanded(false); blocks()->setExpanded(true);
     QVERIFY(blocks()->childCount() > 0);
     const auto selected = blocks()->child(0)->text(0); tree->setCurrentItem(blocks()->child(0));
-    for (const auto& theme : {QString("Neutral gray"), QString("Classic light")}) {
+    for (const auto& theme : {QString("Graphite"), QString("Classic light")}) {
       auto* action = Action(window, theme); QVERIFY(action); action->trigger();
       QCOMPARE(window.State().userLinesFlat, geometry);
       QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
       QVERIFY(tree->currentItem()); QCOMPARE(tree->currentItem()->text(0), selected);
       QCOMPARE(qApp->property("cadLightTheme").toBool(), theme == "Classic light");
-      if (theme == "Neutral gray") {
-        QCOMPARE(qApp->palette().color(QPalette::Window), QColor("#222426"));
-        QCOMPARE(qApp->palette().color(QPalette::Button), QColor("#383a3c"));
+      if (theme == "Graphite") {
+        QCOMPARE(qApp->palette().color(QPalette::Window), QColor("#1c2024"));
+        QCOMPARE(qApp->palette().color(QPalette::Button), QColor("#2a3035"));
+        QVERIFY(window.grab().save(Issue886Shot("qt-432-graphite-drawing.png")));
       }
     }
     window.Submit("UNDO"); QVERIFY(window.State().userLinesFlat.empty());
@@ -5156,6 +5162,7 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(window.ThumbnailsKept() >= 3, 20000);
     QTest::qWait(600);
     QVERIFY2(window.ThumbnailsKept() < 60, qPrintable(QString::number(window.ThumbnailsKept())));
+    QVERIFY(window.grab().save(Issue905Shot("qt-432-graphite-pdf-viewer.png")));
     QVERIFY(list->grab().save(Issue905Shot("qt-905-thumbnails.png")));
 
     // Clicking a thumbnail opens that page.
@@ -5862,7 +5869,7 @@ private Q_SLOTS:
     QVERIFY2(reason.startsWith("Unscaled (") && reason.contains("scale"), qPrintable(reason));
   }
 
-  // Issue #906: final screenshots of the scale surfaces (deep navy, the user's selected design), saved under build/artifacts.
+  // Issue #906: final screenshots of the scale surfaces in the application graphite palette.
   void qtPdfScaleScreenshotEvidenceForIssue906() {
     const auto shot = [](const char* surface) { return Issue905Shot((QString("qt-906-final-") + surface + ".png").toLatin1().constData()); };
     QTemporaryDir directory;
@@ -7576,6 +7583,168 @@ private Q_SLOTS:
     QTest::qWait(900);  // let both surfaces finish their background rebuild
     manager->grab().save(Issue893Shot("qt-893-final-manager.png"));
     manager->close();
+  }
+  void issue909PdfUnderlayAttachPreviewCancelFailureAndUndo() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString pdf = Issue905WritePdf(directory, "underlay.pdf", Issue906Pdf());
+    QVERIFY(!pdf.isEmpty());
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.pdfAttachSpecifyInsert = false;
+    state.pdfAttachSpecifyScale = false;
+    state.pdfAttachSpecifyRot = false;
+    StartPdfAttachCommand(state, window.m_Log);
+    WhenDialogShows(window, [&window, &pdf] {
+      auto* dialog = window.findChild<QDialog*>("pdfAttachDialog");
+      QVERIFY(dialog);
+      auto* path = dialog->findChild<QLineEdit*>("pdfAttachPath");
+      path->setText(pdf);
+      QVERIFY(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection));
+      QCOMPARE(dialog->findChild<QSpinBox*>("pdfAttachPage")->maximum(), 1);
+      QVERIFY(!dialog->findChild<QLabel*>("pdfAttachPreview")->pixmap().isNull());
+      dialog->grab().save(Issue907Shot("qt-909-option-a-app-theme.png"));
+      dialog->setStyleSheet("QDialog#pdfAttachDialog { background:#203247; color:#f4f7fb; }"
+                            "QLabel,QCheckBox { color:#f4f7fb; }"
+                            "QLineEdit,QSpinBox,QDoubleSpinBox { background:#2c4058; color:#f4f7fb; border:1px solid #526b86; padding:4px; }"
+                            "QPushButton#pdfAttachConfirm { background:#35a9bd; color:#10232d; font-weight:700; padding:7px 16px; border:0; border-radius:4px; }");
+      dialog->grab().save(Issue907Shot("qt-909-option-b-deep-navy.png"));
+      dialog->setStyleSheet("QDialog#pdfAttachDialog { background:#303940; color:#f4f3ef; }"
+                            "QLineEdit,QSpinBox,QDoubleSpinBox { background:#3c464f; color:#f4f3ef; border:1px solid #64717b; padding:4px; }"
+                            "QPushButton#pdfAttachConfirm { background:#e6a64b; color:#202b35; font-weight:700; padding:7px 16px; border:0; border-radius:4px; }");
+      dialog->grab().save(Issue907Shot("qt-909-option-c-graphite-amber.png"));
+      dialog->setStyleSheet({});
+      QVERIFY(dialog->grab().save(Issue907Shot("qt-909-final-graphite-attach-dialog.png")));
+      dialog->findChild<QPushButton*>("pdfAttachConfirm")->click();
+    });
+    window.ShowPdfAttachDialog();
+    QCOMPARE(state.pdfAttachments.size(), std::size_t(1));
+    QCOMPARE(state.pdfAttachments.front().pageIndex, 0);
+    QVERIFY(state.pdfAttachments.front().glTexId != 0);
+    window.Submit("UNDO");
+    QVERIFY(state.pdfAttachments.empty());
+
+    state.pdfAttachSpecifyInsert = true;
+    StartPdfAttachCommand(state, window.m_Log);
+    WhenDialogShows(window, [&window, &pdf] {
+      auto* dialog = window.findChild<QDialog*>("pdfAttachDialog");
+      QVERIFY(dialog);
+      auto* path = dialog->findChild<QLineEdit*>("pdfAttachPath");
+      path->setText(pdf);
+      QVERIFY(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection));
+      dialog->findChild<QPushButton*>("pdfAttachConfirm")->click();
+    });
+    window.ShowPdfAttachDialog();
+    QCOMPARE(state.active, AppCommandState::Kind::PdfAttach);
+    QCOMPARE(state.pdfAttachPhase, AppCommandState::PdfAttachPhase::WaitInsertPoint);
+    QVERIFY(state.pdfAttachPreviewReady);
+    SubmitPdfAttachInsertPoint(state, 12.f, 34.f, window.m_Log);
+    QCOMPARE(state.pdfAttachments.size(), std::size_t(1));
+    QCOMPARE(state.pdfAttachments.front().insertX, 12.f);
+    QCOMPARE(state.pdfAttachments.front().insertY, 34.f);
+    window.Submit("UNDO");
+    QVERIFY(state.pdfAttachments.empty());
+
+    // Cancel leaves the drawing untouched and ends the command cleanly.
+    StartPdfAttachCommand(state, window.m_Log);
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("pdfAttachDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QPushButton*>("pdfAttachCancel")->click();
+    });
+    window.ShowPdfAttachDialog();
+    QVERIFY(state.pdfAttachments.empty());
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    // A corrupt file gives an actionable status and can be cancelled without mutation.
+    const QString corrupt = Issue905WritePdf(directory, "broken.pdf", "not a PDF");
+    StartPdfAttachCommand(state, window.m_Log);
+    WhenDialogShows(window, [&window, &corrupt] {
+      auto* dialog = window.findChild<QDialog*>("pdfAttachDialog");
+      QVERIFY(dialog);
+      auto* path = dialog->findChild<QLineEdit*>("pdfAttachPath");
+      path->setText(corrupt);
+      QVERIFY(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection));
+      QVERIFY(dialog->findChild<QLabel*>("pdfAttachStatus")->text().contains("Unable to open PDF"));
+      dialog->findChild<QPushButton*>("pdfAttachCancel")->click();
+    });
+    window.ShowPdfAttachDialog();
+    QVERIFY(state.pdfAttachments.empty());
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue909PdfUnderlayProjectCopyLinkAndCancelContinueCorrectly() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Underlay Job", &created, &error), error.c_str());
+    QDir().mkpath(directory.filePath("outside"));
+    const QString source = Issue905WritePdf(directory, "outside/plan.pdf", Issue906Pdf());
+    QVERIFY(!source.isEmpty());
+    EditorWindow window;
+    QVERIFY(window.OpenProject(QString::fromStdWString(created.file.wstring()), true) != 0);
+    auto& state = window.State();
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(),
+                                  [&](const auto& item) { return item.uid == state.drawingTabs[state.activeDrawingIdx].projectUid; });
+    const QString projectFolder = QString::fromStdWString(session.project.Folder().wstring());
+    state.pdfAttachSpecifyInsert = false;
+    state.pdfAttachSpecifyScale = false;
+    state.pdfAttachSpecifyRot = false;
+    const auto noPrompt = AppCommandState::ProjectAttachPrompt::Kind::None;
+
+    auto chooseAndContinue = [&](const char* projectButton, bool attachPdf) {
+      AnswerAttachQuestion(window, projectButton);
+      auto* poll = new QTimer(&window);
+      poll->setInterval(10);
+      QObject::connect(poll, &QTimer::timeout, poll, [&] {
+        if (auto* dialog = window.findChild<QDialog*>("pdfAttachDialog")) {
+          poll->stop(); poll->deleteLater();
+          if (attachPdf) dialog->findChild<QPushButton*>("pdfAttachConfirm")->click();
+          else dialog->findChild<QPushButton*>("pdfAttachCancel")->click();
+          return;
+        }
+        if (state.active == AppCommandState::Kind::None && !state.pdfAttachDialogOpen) {
+          poll->stop(); poll->deleteLater();
+        }
+      });
+      poll->start();
+    };
+    auto request = [&] {
+      StartPdfAttachCommand(state, window.m_Log);
+      QVERIFY(RequestProjectAttach(state, AppCommandState::ProjectAttachPrompt::Kind::Pdf,
+                                   source.toUtf8().toStdString().c_str(), window.m_Log));
+    };
+
+    request();
+    chooseAndContinue("projectAttachCopy", true);
+    window.ShowProjectAttachPrompt();
+    QCOMPARE(state.projectAttachPrompt.kind, noPrompt);
+    QCOMPARE(state.pdfAttachments.size(), std::size_t(1));
+    QVERIFY(QFileInfo::exists(projectFolder + "/PDFs/plan.pdf"));
+    window.Submit("UNDO");
+    QVERIFY(state.pdfAttachments.empty());
+
+    request();
+    chooseAndContinue("projectAttachLink", false);
+    window.ShowProjectAttachPrompt();
+    QCOMPARE(state.projectAttachPrompt.kind, noPrompt);
+    QVERIFY(state.pdfAttachments.empty());
+    QCOMPARE(QString::fromUtf8(state.pdfAttachFilePath), source);
+    QVERIFY(QFileInfo::exists(source));
+
+    request();
+    chooseAndContinue("projectAttachCancel", false);
+    window.ShowProjectAttachPrompt();
+    QCOMPARE(state.projectAttachPrompt.kind, noPrompt);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.pdfAttachments.empty());
+
+    session.readOnly = true;
+    StartPdfAttachCommand(state, window.m_Log);
+    AnswerNextDialog(QMessageBox::Ok);
+    window.ShowPdfAttachDialog();
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.pdfAttachments.empty());
+    session.readOnly = false;
   }
 };
 

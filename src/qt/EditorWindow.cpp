@@ -172,7 +172,7 @@ class TopographicStartBody final : public QWidget {
   void paintEvent(QPaintEvent*) override {
     QPainter painter(this);
     const bool dark = !qApp->property("cadLightTheme").toBool();
-    painter.fillRect(rect(), dark ? QColor("#081724") : QColor("#f5f6f7"));
+    painter.fillRect(rect(), dark ? QColor("#1c2024") : QColor("#f5f6f7"));
     if (!dark) return;
     const qreal cornerWidth = width() * .35;
     const qreal cornerHeight = cornerWidth * 220.0 / 300.0;
@@ -330,13 +330,13 @@ EditorWindow::EditorWindow() {
   startLayout->setContentsMargins(9, 8, 9, 8);
   startLayout->setSpacing(0);
   const bool darkStart = palette().color(QPalette::Window).lightness() < 128;
-  const QString panelColor = darkStart ? "#0c1e2c" : "#f0f1f2";
-  const QString cardColor = darkStart ? "#10283a" : "#ffffff";
-  const QString edgeColor = darkStart ? "#1c3b50" : "#c5c8cb";
+  const QString panelColor = darkStart ? "#242a2f" : "#f0f1f2";
+  const QString cardColor = darkStart ? "#2a3035" : "#ffffff";
+  const QString edgeColor = darkStart ? "#3c444a" : "#c5c8cb";
   const QString textColor = darkStart ? "#f0f5fa" : "#303234";
   const QString mutedColor = darkStart ? "#a5bac9" : "#66696c";
-  const QString aquaColor = darkStart ? "#29c9df" : "#0878c5";
-  const QString amberColor = darkStart ? "#d9a345" : "#a96e0e";
+  const QString aquaColor = darkStart ? "#55d8d0" : "#0878c5";
+  const QString amberColor = darkStart ? "#e5b35c" : "#a96e0e";
 
   auto* pageScroll = new QScrollArea(start);
   pageScroll->setObjectName("startPageScroll");
@@ -344,7 +344,7 @@ EditorWindow::EditorWindow() {
   pageScroll->setWidgetResizable(true);
   pageScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   pageScroll->setStyleSheet(QString("QScrollArea#startPageScroll { border:1px solid %1; border-radius:12px; background:%2; }")
-                                .arg(darkStart ? "#173a50" : "#c5c8cb", darkStart ? "#081724" : "#f5f6f7"));
+                                .arg(darkStart ? "#41494e" : "#c5c8cb", darkStart ? "#1c2024" : "#f5f6f7"));
   auto* body = new TopographicStartBody(pageScroll);
   body->setObjectName("startPageBody");
   auto* bodyLayout = new QVBoxLayout(body);
@@ -377,8 +377,8 @@ EditorWindow::EditorWindow() {
         "QPushButton#%1:hover { background:%5; border-color:%6; }"
         "QPushButton#%1:pressed { background:%7; }")
         .arg(name, cardColor, edgeColor, accent,
-             darkStart ? "#153247" : "#edf4fa", accent,
-             darkStart ? "#0b2233" : "#e4edf5"));
+             darkStart ? "#363d42" : "#edf4fa", accent,
+             darkStart ? "#22272b" : "#e4edf5"));
     auto* cardLayout = new QVBoxLayout(card);
     cardLayout->setContentsMargins(16, 10, 16, 10);
     cardLayout->setSpacing(3);
@@ -707,9 +707,9 @@ EditorWindow::EditorWindow() {
   BuildDraftingInput();
   auto* grid = new QToolButton(this);
   grid->setObjectName("draftGrid"); grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
-  grid->setStyleSheet("QToolButton { color:#e6f2fb; background:#1b3f5a; border:1px solid #326486; "
-      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#245878; border-color:#56a6c8; } "
-      "QToolButton:checked { color:#ffffff; background:#087f97; border-color:#35d5ef; }");
+  grid->setStyleSheet("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
+      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:#4b7572; } "
+      "QToolButton:checked { color:#ffffff; background:#244846; border-color:#55d8d0; }");
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
@@ -962,7 +962,7 @@ void EditorWindow::BuildRibbon() {
   auto* appearance = viewMenu->addMenu("Appearance");
   auto* themes = new QActionGroup(this); themes->setExclusive(true);
   for (bool light : {false, true}) {
-    auto* action = appearance->addAction(light ? "Classic light" : "Neutral gray");
+    auto* action = appearance->addAction(light ? "Classic light" : "Graphite");
     action->setCheckable(true); action->setChecked(qApp->property("cadLightTheme").toBool() == light); themes->addAction(action);
     connect(action, &QAction::triggered, this, [this, light] {
       ApplyQtAppearance(*qApp, light);
@@ -2070,9 +2070,9 @@ void EditorWindow::RefreshRecentDrawings() {
   const size_t visibleEntries = m_RecentShowAll ? entries.size() : std::min<size_t>(5, entries.size());
   const auto recentDrawingStore = std::make_shared<const std::filesystem::path>(dir / "gosurvey-recent.json");
   const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
-  const QString cardBg = dark ? "#091d2c" : "#ffffff";
-  const QString cardEdge = dark ? "#17384b" : "#c5c8cb";
-  const QString cardHover = dark ? "#102b3d" : "#f0f1f2";
+  const QString cardBg = dark ? "#242a2f" : "#ffffff";
+  const QString cardEdge = dark ? "#3c444a" : "#c5c8cb";
+  const QString cardHover = dark ? "#30373c" : "#f0f1f2";
   size_t index = 0;
   for (const auto& entry : entries) {
     if (index >= visibleEntries) break;
@@ -2089,7 +2089,7 @@ void EditorWindow::RefreshRecentDrawings() {
       thumbnail = QPixmap::fromImage(savedThumbnail);
     } else {
       thumbnail = QPixmap(320, 144);
-      thumbnail.fill(QColor(dark ? "#061725" : "#303234"));
+      thumbnail.fill(QColor(dark ? "#171b1e" : "#303234"));
       QPainter painter(&thumbnail);
       painter.setRenderHint(QPainter::Antialiasing);
       painter.setPen(QColor(dark ? "#20bfd6" : "#c8cbce"));
@@ -2196,7 +2196,7 @@ void EditorWindow::RefreshRecentDrawings() {
     preview->setFixedSize(120, 46);
     preview->setPixmap(thumbnail.scaled(preview->size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation));
     preview->setAlignment(Qt::AlignCenter);
-    preview->setStyleSheet(QString("background:%1; border:1px solid %2; border-radius:5px;").arg(dark ? "#061522" : "#edf1f4", cardEdge));
+    preview->setStyleSheet(QString("background:%1; border:1px solid %2; border-radius:5px;").arg(dark ? "#171b1e" : "#edf1f4", cardEdge));
     preview->setAttribute(Qt::WA_TransparentForMouseEvents);
     row->addWidget(preview, 1);
     auto* modified = new QLabel(lastOpened, tile);
@@ -2291,7 +2291,7 @@ void EditorWindow::RefreshRecentProjects() {
     tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
     tile->setStyleSheet(dark
-        ? "QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid #d8a241; border-bottom:1px solid #17384b; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:#20bfd6; background:#10283a; }"
+        ? "QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid #e5b35c; border-bottom:1px solid #3c444a; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:#55d8d0; background:#30373c; }"
         : "QToolButton { text-align:left; padding:6px 8px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
     tile->setToolTip(name + "\n" + projectFolder + "\n" + lastOpened);
     const auto openRecentProject = [this, path, recentProjectStore]() noexcept {

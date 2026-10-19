@@ -219,33 +219,33 @@ public:
   }
 };
 
-// The selected look for the PDF window (issue #905, option B): deep navy chrome, a bright blue frame on the current thumbnail.
+// PDF viewer chrome follows the app-wide graphite appearance; the current thumbnail keeps a blue frame.
 constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so the dialogs it opens keep the application theme
-    "QMainWindow{background:#10151f;} QToolBar{background:#1b2433;border:0;spacing:6px;padding:3px;}"
-    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#2c3b57;} QToolBar QToolButton:checked{background:#315b9b;}"
-    "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#1b2433;padding:6px;}"
-    "#pdfThumbnailList{background:#141b28;color:#cfd8ea;border:0;selection-background-color:#3b82f6;selection-color:white;}"
-    "#pdfFindEdit{background:#0e131c;color:#fff;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;}"
-    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#0e131c;}";
+    "QMainWindow{background:#1c2024;} QToolBar{background:#242a2f;border:0;spacing:6px;padding:3px;}"
+    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;} QToolBar QToolButton:checked{background:#164d4b;}"
+    "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#292f34;padding:6px;}"
+    "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:#244846;selection-color:white;}"
+    "#pdfFindEdit{background:#15191c;color:#fff;border:1px solid #424b51;border-radius:4px;padding:3px 6px;}"
+    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}";
 
 constexpr const char* kPdfExtractReviewStyle =
-    "QDialog{background:#111827;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
-    "QTableWidget{background:#1f2937;color:#eef2ff;gridline-color:#475569;}"
-    "QPushButton{background:#25334a;color:#eef2ff;border:1px solid #536b8b;border-radius:4px;padding:6px 12px;}";
+    "QDialog{background:#22272b;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
+    "QTableWidget{background:#202529;color:#eef2ff;gridline-color:#41494e;}"
+    "QPushButton{background:#2a3035;color:#eef2ff;border:1px solid #41494e;border-radius:4px;padding:6px 12px;}";
 
-// Issue #908 selected the PDF viewer's deep navy surfaces for both workflows.
+// PDF workflow dialogs follow the Qt Dark graphite appearance.
 constexpr const char* kPdfWorkflowDialogStyle =
-    "QDialog{background:#141b28;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#8795b0;}"
-    "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #6c7fa6;border-radius:3px;background:#0e131c;}"
-    "QCheckBox::indicator:checked{background:#3b82f6;border-color:#3b82f6;}"
-    "QPushButton{background:#25324a;border:1px solid #3b4a68;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
-    "QPushButton:hover{background:#2c3b57;} QPushButton:disabled{color:#6c7a94;background:#1b2433;}"
-    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#0e131c;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;color:#fff;}"
-    "QComboBox QAbstractItemView{background:#0e131c;color:#fff;selection-background-color:#3b82f6;}"
-    "QTableWidget{background:#141b28;alternate-background-color:#1b2433;border:1px solid #2f3d58;color:#cfd8ea;selection-background-color:#27406e;selection-color:white;}"
-    "QHeaderView::section{background:#25324a;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #3b4a68;font-weight:600;}"
-    "QProgressBar{background:#0e131c;border:1px solid #3b4a68;border-radius:4px;color:#e8eef9;text-align:center;}"
-    "QProgressBar::chunk{background:#3b82f6;border-radius:3px;}";
+    "QDialog{background:#1c2024;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#89979a;}"
+    "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #576469;border-radius:3px;background:#15191c;}"
+    "QCheckBox::indicator:checked{background:#168e8a;border-color:#168e8a;}"
+    "QPushButton{background:#2a3035;border:1px solid #41494e;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
+    "QPushButton:hover{background:#343c41;} QPushButton:disabled{color:#89979a;background:#242a2f;}"
+    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:3px 6px;color:#fff;}"
+    "QComboBox QAbstractItemView{background:#15191c;color:#fff;selection-background-color:#168e8a;}"
+    "QTableWidget{background:#202529;alternate-background-color:#242a2f;border:1px solid #41494e;color:#cfd8da;selection-background-color:#164d4b;selection-color:white;}"
+    "QHeaderView::section{background:#292f34;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
+    "QProgressBar{background:#15191c;border:1px solid #424b51;border-radius:4px;color:#e8eef9;text-align:center;}"
+    "QProgressBar::chunk{background:#168e8a;border-radius:3px;}";
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");

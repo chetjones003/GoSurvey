@@ -5100,6 +5100,7 @@ requirements is a planning failure, not a sign of rigor.
   drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
 
   The Start tab follows the supplied Qt GoSurvey Start reference:
+  Its original navy styling is superseded by REQ-436; the composition and actions below remain in force.
 
   1. In Start mode the application keeps the shared GoSurvey shell visible: brand title bar, ribbon,
      Start/drawing tab strip, and drawing status bar. The Properties/Toolspace/Map docks and command
@@ -12727,6 +12728,39 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) - D-2026-10-19-b, GitHub issue #906.
 - Revisions: 2026-10-19 - initial, D-2026-10-19-b, GitHub issue #906.
 
+### REQ-435 — Qt PDF underlay attachment (GitHub issue #909)
+
+- Purpose: complete the Qt drawing workflow for attaching a PDF page as a raster underlay, matching the existing 0.7.4 behavior.
+- Priority: must
+- Type: functional (Qt UI/commands)
+- Decision: D-2026-10-19-g; user approved recording this requirement on 2026-10-19. Its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs.
+- Depends on: REQ-201 (honest failure), REQ-300 (no new PDF dependency), existing PDF underlay and project-file behavior.
+- Statement:
+  1. **Complete Qt workflow.** A user can start PDFATTACH, choose a PDF and page/options, resolve Copy / Link / Cancel when a project requires it, and place the underlay in the drawing. The Qt workflow must be usable end to end; a command route or ribbon button without the dialog is insufficient.
+  2. **Parity.** Preserve the existing 0.7.4 behavior and validation, including page selection, raster options and snapping options, preview/failure reporting, project Copy / Link semantics, and placement. Cancel at any stage leaves no underlay and no partial drawing change. A successful placement is one undoable drawing edit. A read-only drawing refuses attachment without changing it.
+  3. **Failure handling.** Invalid or unreadable PDFs, invalid page/options and rasterization failures show a useful reason, leave the drawing unchanged, and let the user recover or cancel. No failure is silently treated as success.
+  4. **Boundaries.** Reuse the existing PDF attachment builder, command state, project attach flow and drawing undo path. Do not add a PDF dependency or alter ImGui behavior.
+- Acceptance:
+  - Qt workflow coverage verifies a successful attach (including page/options and placement), cancellation before placement, Copy / Link / Cancel project choices, invalid input or rasterization failure, read-only refusal, and undo removing the newly placed underlay.
+  - The Qt UI is presented as 2–3 integrated screenshot options for each major affected surface; the user's selected direction is applied before the issue is marked complete.
+  - Update `docs/qt-074-parity-ledger.md` with the verified behavior and evidence.
+- Owner-layer: Qt presentation and command routing over existing `PdfAttach` and project-file services.
+- Status: accepted (2026-10-19) — D-2026-10-19-g, GitHub issue #909.
+
+### REQ-436 — Qt Dark appearance uses graphite with aqua and amber accents
+- Purpose: keep the Qt application visually coherent while making its dark appearance easier to distinguish from the existing navy direction.
+- Priority: should
+- Type: non-functional (appearance)
+- Decision: D-2026-10-19-h; user selected graphite with aqua and amber accents for the whole app on 2026-10-19. Its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs.
+- Statement: The Qt **Dark** appearance uses graphite surfaces throughout the application, aqua for active and interactive states, and restrained amber for secondary emphasis. This applies to the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels. The Classic light appearance and ImGui frontend are unchanged. Drawing entities, entity colors, and persisted drawing data are unchanged.
+- Acceptance:
+  - Start, drawing workspace, menus, and representative Qt dialogs render the graphite palette with aqua active states and amber secondary emphasis.
+  - The Dark drawing canvas ground is graphite with a subtle aqua-tinted grid.
+  - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
+  - Switching between Dark and Classic light leaves neither palette behind in the other appearance.
+  - Drawing content and behavior remain unchanged when appearance changes.
+- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction.
+
 ### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
 
 - Purpose: bring the 0.7.4 least-squares adjustment (LSA) editor's reading aids to the Qt window, so a Qt user sees the command text coloured and numbered, sees exactly which line is wrong and why while typing, and sees a plan of the survey with each station's error ellipse once an adjustment has run.
@@ -13966,6 +14000,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-431 | Qt UI | `GoSurveyQtTests`: `issue912HighlighterColoursEachTokenKindAndKeepsText`, `issue912GutterNumbersLinesWidensScrollsAndMarksError`, `issue912InlineErrorShowsReasonWithoutChangingAnything`, `issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses`, `issue912FilesSummaryFollowSolveAndEditsAndRefusedCommitSaysWhy`, `issue912SaveInsideProjectTracksOnlyWhenWritable` | accepted |
 | REQ-432 | Qt UI | GoSurveyQtTests: issue913RawImportsMergeAndReportPerFileFailures, issue913JobXmlImportsThroughQtAndCancelKeepsTheSession | accepted |
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
+| REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
+| REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
