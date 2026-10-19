@@ -2895,10 +2895,10 @@ private Q_SLOTS:
     QVERIFY(state->traverseLsaResult.ok);
     QVERIFY(output->toPlainText().contains("survey-a.dat"));
     const auto text = output->toPlainText();
-    const int filesAt = text.indexOf("Data File List:");
-    const int optionsAt = text.indexOf("Project Option Settings");
-    const int errorsAt = text.indexOf("Instrument Standard Error Settings");
-    const int residualsAt = text.indexOf("Measurement Residuals");
+    const qsizetype filesAt = text.indexOf("Data File List:");
+    const qsizetype optionsAt = text.indexOf("Project Option Settings");
+    const qsizetype errorsAt = text.indexOf("Instrument Standard Error Settings");
+    const qsizetype residualsAt = text.indexOf("Measurement Residuals");
     QVERIFY(filesAt >= 0 && filesAt < optionsAt && optionsAt < errorsAt && errorsAt < residualsAt);
     QCOMPARE(plot->StationCount(), 4);
     QCOMPARE(plot->LegCount(), 4);
