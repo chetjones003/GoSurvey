@@ -129,6 +129,27 @@ std::unique_ptr<AppCommandState> StateWithTraverse() {
   }
   return state;
 }
+QString OpenTraverseCommands() {
+  return QStringLiteral(
+      "STATION 0 0 0 0\n"
+      "BEARING 0\n"
+      "ENDPOINT 0 100 0\n"
+      "LOOP OFF\n"
+      "STN 0 1\n"
+      "HANG REF 0 1 90\n"
+      "HDIST 0 1 100\n"
+      "STN 1 2\n"
+      "HANG 0 1 2 90\n"
+      "HDIST 1 2 100\n"
+      "STN 2 3\n"
+      "HANG 1 2 3 90\n"
+      "HDIST 2 3 100\n");
+}
+QString Issue914Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QAction* Action(QWidget& widget, const QString& text) {
   for (auto* action : widget.findChildren<QAction*>()) if (action->text() == text) return action;
   return nullptr;
@@ -917,6 +938,8 @@ private Q_SLOTS:
     state->traverseData.legs[0].rawSets.push_back(raw);
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QString error;
@@ -2422,6 +2445,82 @@ private Q_SLOTS:
     QVERIFY(state->surveyPoints.empty());
     QVERIFY(DoRedo(*state, log));
     QCOMPARE(state->surveyPoints.size(), std::size_t(4));
+  }
+
+  void issue914OpenTraverseSolveAndCommandErrorRecovery() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* run = Action(window, "Run adjustment");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(run);
+
+    editor->setPlainText("STAITON 0 0 0 0\n");
+    run->trigger();
+    QVERIFY(!window.IsBusy());
+    QVERIFY(output->toPlainText().contains("line 1"));
+    QVERIFY(output->toPlainText().contains("Did you mean STATION?"));
+    QVERIFY(run->isEnabled());
+    QVERIFY(!state->traverseLsaComputed);
+    window.ValidateNow();
+    QVERIFY(window.findChild<QLabel*>("adjustmentTextStatus")->text().contains("Did you mean STATION?"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-command-highlighting-fuzzy-match.png")));
+
+    QString missingEndpoint = OpenTraverseCommands();
+    missingEndpoint.remove("ENDPOINT 0 100 0\n");
+    editor->setPlainText(missingEndpoint);
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+    QVERIFY(!state->traverseLsaResult.ok);
+    QVERIFY(output->toPlainText().contains("known end-point"));
+    QVERIFY(run->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-open-traverse-failure.png")));
+
+    editor->setPlainText(OpenTraverseCommands());
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseLsaResult.redundancy, 2);
+    QVERIFY(state->traverseLsaResult.adjClosureLinear < 1e-3);
+    QVERIFY(output->toPlainText().contains("Adjusted"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-open-traverse-adjusted.png")));
+    QString error;
+    QVERIFY2(window.AcceptResult(error), qPrintable(error));
+  }
+
+  void issue914StopDiscardsSolveAndPreservesInputs() {
+    auto state = StateWithTraverse();
+    const double originalDistance = state->traverseData.legs.front().horizDist;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* run = Action(window, "Run adjustment");
+    auto* stop = Action(window, "Stop");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(run); QVERIFY(stop);
+    editor->setPlainText(OpenTraverseCommands());
+    const QString source = editor->toPlainText();
+
+    run->trigger();
+    QVERIFY(window.IsBusy());
+    QVERIFY(stop->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-adjustment-busy.png")));
+    stop->trigger();
+    QVERIFY(!stop->isEnabled());
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+
+    QVERIFY(output->toPlainText().contains("Adjustment cancelled"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-adjustment-cancelled.png")));
+    QCOMPARE(editor->toPlainText(), source);
+    QVERIFY(!state->traverseLsaComputed);
+    QVERIFY(!state->traverseLsaAccepted);
+    QCOMPARE(state->traverseData.legs.front().horizDist, originalDistance);
+    QVERIFY(window.findChild<QTableWidget*>("adjustmentCoordinates")->rowCount() == 0);
+    QVERIFY(window.findChild<QTableWidget*>("adjustmentResiduals")->rowCount() == 0);
+    QVERIFY(run->isEnabled());
   }
 
   void invalidAdjustmentDoesNotMutateDrawing() {
