@@ -8,7 +8,7 @@
 
 ## 1. Authority
 - Goal: Qt migration to 0.7.4 parity.
-- Requirements: REQ-433 (D-2026-10-19-e), REQ-434 (D-2026-10-19-f).
+- Requirements: REQ-435 (D-2026-10-19-g), REQ-436 (D-2026-10-19-h).
 - Constraints: REQ-201 (honest failure), REQ-300 (no new dependency), REQ-301 (no abstraction without two uses), existing command/domain ownership.
 - Issue acceptance: preserve cancellation, validation, failure, undo and read-only behavior; complete Qt usability; focused workflow coverage; update parity ledger; present 2–3 integrated screenshot options per affected surface and apply the user's selection.
 - Behavior reference: existing 0.7.4 ImGui `PDFATTACH` dialog/command and shared project Copy / Link flow.

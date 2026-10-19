@@ -47,7 +47,9 @@
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QRegularExpression>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace {
 // Index of the first `#SCALE` / `SCALE` directive line in the command text, or -1.
@@ -71,6 +73,40 @@ int ScaleInsertLine(const QStringList& lines) {
   return after + 1;
 }
 constexpr double kTypicalRefractionLimit = 2.0;  // 0.7.4 warns outside -2..+2.
+
+int DirectiveEditDistance(const QString& left, const QString& right) {
+  const QString a = left.toUpper();
+  const QString b = right.toUpper();
+  std::vector<int> previous(b.size() + 1), current(b.size() + 1);
+  for (int j = 0; j <= b.size(); ++j) previous[j] = j;
+  for (int i = 1; i <= a.size(); ++i) {
+    current[0] = i;
+    for (int j = 1; j <= b.size(); ++j)
+      current[j] = std::min({current[j - 1] + 1, previous[j] + 1,
+                             previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)});
+    std::swap(previous, current);
+  }
+  return previous[b.size()];
+}
+
+QString AddDirectiveSuggestion(const QString& error) {
+  static const QStringList commands = {"IMPORT", "STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS",
+      "STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR", "CTRL",
+      "ANGLE", "DIST", "AZIMUTH", "EDIF", "ZENITH", "DIR"};
+  static const QRegularExpression unknown(R"(unknown directive\s+[\"']([^\"']+)[\"'])",
+                                           QRegularExpression::CaseInsensitiveOption);
+  const auto match = unknown.match(error);
+  if (!match.hasMatch()) return error;
+  const QString typed = match.captured(1).toUpper();
+  QString best;
+  int bestDistance = std::numeric_limits<int>::max();
+  for (const auto& command : commands) {
+    const int distance = DirectiveEditDistance(typed, command);
+    if (distance < bestDistance) { bestDistance = distance; best = command; }
+  }
+  const int limit = typed.size() >= 6 ? 2 : 1;
+  return bestDistance <= limit ? error + "\nDid you mean " + best + "?" : error;
+}
 }
 
 AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
@@ -88,6 +124,13 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   toolbar->addSeparator();
   m_RunAction = toolbar->addAction(QIcon(QtAsset("icons/Adjust.png")), "Run adjustment", this, [this] { Calculate(); });
   m_RunAction->setShortcut(QKeySequence(Qt::Key_F5));
+  m_StopAction = toolbar->addAction("Stop", this, [this] {
+    if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
+    m_StopAction->setEnabled(false);
+    m_Output->setPlainText("Stopping adjustment...");
+    statusBar()->showMessage("Stopping adjustment...");
+  });
+  m_StopAction->setObjectName("stopAdjustmentAction");
   m_AcceptAction = toolbar->addAction("Accept result", this, [this] {
     QString error; if (!AcceptResult(error)) QMessageBox::warning(this, "Accept result", error);
   });
@@ -155,9 +198,11 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Output->setFont(QFont("Consolas", 10));
   m_Output->setPlainText("Import observations or enter GoSurvey traverse commands, then run adjustment.");
   m_Coordinates = new QTableWidget(results);
+  m_Coordinates->setObjectName("adjustmentCoordinates");
   m_Coordinates->setColumnCount(4);
   m_Coordinates->setHorizontalHeaderLabels({"Station", "Easting", "Northing", "Elevation"});
   m_Residuals = new QTableWidget(results);
+  m_Residuals->setObjectName("adjustmentResiduals");
   m_Residuals->setColumnCount(6);
   m_Residuals->setHorizontalHeaderLabels({"Measurement", "From", "To", "Residual", "Std. residual", "Flag"});
   for (auto* table : {m_Coordinates, m_Residuals}) {
@@ -228,7 +273,7 @@ void AdjustmentWindow::ValidateNow() {
     m_TextStatus->setText("Command text is valid");
     m_TextStatus->setStyleSheet({});
   } else {
-    const QString message = QString::fromUtf8(reason.c_str());
+    const QString message = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str()));
     int line = 0;
     QString detail = message;
     if (message.startsWith("line ")) {
@@ -582,12 +627,14 @@ void AdjustmentWindow::Calculate() {
   m_ScaleNote = ApplyResolvedScale();
   RefreshOptionsBar();
   m_ResultDrawingUid = m_State.activeDrawingIdx > 0 ? m_State.drawingTabs[m_State.activeDrawingIdx].uid : 0;
+  m_CancelRequested = std::make_shared<std::atomic<bool>>(false);
   SetBusy(true);
   m_State.traverseLsaComputed = false;
   m_State.traverseLsaAccepted = false;
-  m_Work = std::async(std::launch::async, [data = m_Data, weights = m_Weights]() mutable {
+  const auto cancelRequested = m_CancelRequested;
+  m_Work = std::async(std::launch::async, [data = m_Data, weights = m_Weights, cancelRequested]() mutable {
     ComputeTraverse(data);
-    auto result = ComputeTraverseLeastSquares(data, weights);
+    auto result = ComputeTraverseLeastSquares(data, weights, cancelRequested.get());
     return std::make_pair(std::move(data), std::move(result));
   });
   m_Output->setPlainText("Computing adjustment...");
@@ -599,6 +646,17 @@ void AdjustmentWindow::PollCalculation() {
   m_Poll->stop();
   try {
     auto completed = m_Work.get();
+    const bool cancelled = (m_CancelRequested && m_CancelRequested->load(std::memory_order_acquire)) || completed.second.cancelled;
+    m_CancelRequested.reset();
+    if (cancelled) {
+      m_State.traverseLsaComputed = false;
+      m_State.traverseLsaAccepted = false;
+      m_Output->setPlainText("Adjustment cancelled. No partial results were kept.");
+      m_Log.push_back("TRAVERSE: adjustment cancelled; no partial results were kept.");
+      SetBusy(false);
+      ValidateNow();
+      return;
+    }
     m_Data = std::move(completed.first);
     m_State.traverseLsaResult = std::move(completed.second);
     m_State.traverseData = m_Data;
@@ -606,8 +664,10 @@ void AdjustmentWindow::PollCalculation() {
     m_State.traverseLsaComputed = true;
     PresentResult();
   } catch (const std::exception& error) {
+    m_CancelRequested.reset();
     m_State.traverseLsaComputed = false;
-    m_Output->setPlainText(QString::fromUtf8(error.what()));
+    m_Output->setPlainText(QString("TRAVERSE: adjustment failed: ") + QString::fromUtf8(error.what()));
+    m_Log.push_back("TRAVERSE: adjustment failed: " + std::string(error.what()));
   }
   SetBusy(false);
   ValidateNow();  // the plan and summary take the finished result
@@ -665,7 +725,7 @@ bool AdjustmentWindow::ParseEditor(QString& error) {
   LsaWeights weights = m_Weights;
   std::string reason;
   if (!travcmd::Parse(m_Editor->toPlainText().toUtf8().toStdString(), data, weights, reason)) {
-    error = QString::fromUtf8(reason.c_str()); return false;
+    error = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str())); return false;
   }
   data.importedFiles = importedFiles;
   m_Data = std::move(data); m_Weights = weights;
@@ -731,7 +791,7 @@ bool AdjustmentWindow::ConfirmDiscard() {
 }
 
 void AdjustmentWindow::closeEvent(QCloseEvent* event) {
-  if (IsBusy()) { statusBar()->showMessage("Wait for the adjustment to finish before closing."); event->ignore(); return; }
+  if (IsBusy()) { statusBar()->showMessage("Stop the adjustment and wait for it to stop before closing."); event->ignore(); return; }
   if (!ConfirmDiscard()) { event->ignore(); return; }
   event->accept();
 }
@@ -739,6 +799,7 @@ void AdjustmentWindow::closeEvent(QCloseEvent* event) {
 void AdjustmentWindow::SetBusy(bool busy) {
   m_Editor->setReadOnly(busy);
   m_RunAction->setEnabled(!busy);
+  m_StopAction->setEnabled(busy && m_CancelRequested && !m_CancelRequested->load(std::memory_order_acquire));
   const bool solved = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
   m_AcceptAction->setEnabled(!busy && solved && !m_State.traverseLsaAccepted);
   m_CommitAction->setEnabled(!busy && solved);

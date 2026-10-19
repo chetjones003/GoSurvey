@@ -21,7 +21,10 @@
 #include <algorithm>
 #include <QPainter>
 #include <QMouseEvent>
+#include <QLineF>
 #include <QInputDialog>
+#include <QColorDialog>
+#include <QDoubleSpinBox>
 #include <QCloseEvent>
 #include <QDialogButtonBox>
 #include <QFormLayout>
@@ -30,6 +33,7 @@
 #include <QFileInfo>
 #include <QActionGroup>
 #include <QDebug>
+#include <tuple>
 #include <QAbstractListModel>
 #include <QApplication>
 #include <QCheckBox>
@@ -215,10 +219,10 @@ public:
   }
 };
 
-// The selected look for the PDF window (issue #905, option B): deep navy chrome, a bright blue frame on the current thumbnail.
+// PDF viewer chrome follows the app-wide graphite appearance; the current thumbnail keeps a blue frame.
 constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so the dialogs it opens keep the application theme
     "QMainWindow{background:#1c2024;} QToolBar{background:#242a2f;border:0;spacing:6px;padding:3px;}"
-    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;}"
+    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;} QToolBar QToolButton:checked{background:#164d4b;}"
     "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#292f34;padding:6px;}"
     "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:#244846;selection-color:white;}"
     "#pdfFindEdit{background:#15191c;color:#fff;border:1px solid #424b51;border-radius:4px;padding:3px 6px;}"
@@ -229,19 +233,19 @@ constexpr const char* kPdfExtractReviewStyle =
     "QTableWidget{background:#202529;color:#eef2ff;gridline-color:#41494e;}"
     "QPushButton{background:#2a3035;color:#eef2ff;border:1px solid #41494e;border-radius:4px;padding:6px 12px;}";
 
-// Issue #908 selected the PDF viewer's deep navy surfaces for both workflows.
+// PDF workflow dialogs follow the Qt Dark graphite appearance.
 constexpr const char* kPdfWorkflowDialogStyle =
-    "QDialog{background:#141b28;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#8795b0;}"
-    "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #6c7fa6;border-radius:3px;background:#0e131c;}"
-    "QCheckBox::indicator:checked{background:#3b82f6;border-color:#3b82f6;}"
-    "QPushButton{background:#25324a;border:1px solid #3b4a68;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
-    "QPushButton:hover{background:#2c3b57;} QPushButton:disabled{color:#6c7a94;background:#1b2433;}"
-    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#0e131c;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;color:#fff;}"
-    "QComboBox QAbstractItemView{background:#0e131c;color:#fff;selection-background-color:#3b82f6;}"
-    "QTableWidget{background:#141b28;alternate-background-color:#1b2433;border:1px solid #2f3d58;color:#cfd8ea;selection-background-color:#27406e;selection-color:white;}"
-    "QHeaderView::section{background:#25324a;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #3b4a68;font-weight:600;}"
-    "QProgressBar{background:#0e131c;border:1px solid #3b4a68;border-radius:4px;color:#e8eef9;text-align:center;}"
-    "QProgressBar::chunk{background:#3b82f6;border-radius:3px;}";
+    "QDialog{background:#1c2024;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#89979a;}"
+    "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #576469;border-radius:3px;background:#15191c;}"
+    "QCheckBox::indicator:checked{background:#168e8a;border-color:#168e8a;}"
+    "QPushButton{background:#2a3035;border:1px solid #41494e;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
+    "QPushButton:hover{background:#343c41;} QPushButton:disabled{color:#89979a;background:#242a2f;}"
+    "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:3px 6px;color:#fff;}"
+    "QComboBox QAbstractItemView{background:#15191c;color:#fff;selection-background-color:#168e8a;}"
+    "QTableWidget{background:#202529;alternate-background-color:#242a2f;border:1px solid #41494e;color:#cfd8da;selection-background-color:#164d4b;selection-color:white;}"
+    "QHeaderView::section{background:#292f34;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
+    "QProgressBar{background:#15191c;border:1px solid #424b51;border-radius:4px;color:#e8eef9;text-align:center;}"
+    "QProgressBar::chunk{background:#168e8a;border-radius:3px;}";
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
@@ -297,13 +301,13 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   auto* annotationTools = addToolBar("PDF annotations and measurements");
   annotationTools->setObjectName("pdfAnnotationTools");
   m_ToolGroup = new QActionGroup(this);
-  const std::pair<const char*, int> kinds[] = {{"Browse", -1}, {"Text", 0}, {"Line", 1}, {"Rectangle", 2},
+  const std::pair<const char*, int> kinds[] = {{"Select", -2}, {"Browse", -1}, {"Text", 0}, {"Line", 1}, {"Rectangle", 2},
       {"Ellipse", 3}, {"Length", 5}, {"Polyline length", 6}, {"Area", 7}, {"Angle", 8}, {"Check", kToolCheck}};
   for (const auto& kind : kinds) {
     auto* action = annotationTools->addAction(kind.first);
     action->setCheckable(true); m_ToolGroup->addAction(action);
     action->setData(kind.second);
-    if (kind.second == -1) action->setChecked(true);
+    if (kind.second == -2) action->setChecked(true);
     if (kind.second == kToolCheck) {
       action->setObjectName("pdfCheckTool");
       action->setToolTip("Check the page scale against a dimension the drawing states");
@@ -311,12 +315,49 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     connect(action, &QAction::triggered, this, [this, kind] {
       m_CheckTarget = 0;
       if (kind.second == kToolCheck) SetTool(kToolCheck, "Check: click the two ends of a dimension the drawing states.");
-      else SetTool(kind.second, kind.second < 0 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
+      else SetTool(kind.second, kind.second == -2 ? "Select an annotation; drag it or a grip to edit." :
+          kind.second == -1 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
     });
   }
   auto* calibrateTool = new QAction("Calibrate", m_ToolGroup); // started from Set scale...; not a toolbar button
   calibrateTool->setCheckable(true);
   calibrateTool->setData(kToolCalibrate);
+  auto* style = addToolBar("Annotation style");
+  style->setObjectName("pdfAnnotationStyle");
+  auto* color = style->addAction("Color...");
+  color->setObjectName("pdfAnnotationColor");
+  connect(color, &QAction::triggered, this, [this] {
+    const QColor chosen = QColorDialog::getColor(QColor::fromRgb(m_AnnotationColor), this, "Annotation color");
+    if (chosen.isValid()) m_AnnotationColor = chosen.rgb() & 0xFFFFFFu;
+  });
+  style->addWidget(new QLabel("Width", style));
+  auto* width = new QDoubleSpinBox(style); width->setObjectName("pdfAnnotationWidth");
+  width->setRange(0.1, 20.0); width->setSingleStep(0.25); width->setValue(m_AnnotationThickness); width->setSuffix(" pt");
+  style->addWidget(width);
+  connect(width, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) { m_AnnotationThickness = static_cast<float>(value); });
+  style->addWidget(new QLabel("Text size", style));
+  auto* fontSize = new QDoubleSpinBox(style); fontSize->setObjectName("pdfAnnotationFontSize");
+  fontSize->setRange(4.0, 144.0); fontSize->setValue(m_AnnotationFontSize); fontSize->setSuffix(" pt");
+  style->addWidget(fontSize);
+  connect(fontSize, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) { m_AnnotationFontSize = static_cast<float>(value); });
+  auto* font = new QComboBox(style); font->setObjectName("pdfAnnotationFont");
+  for (const char* family : {"Helvetica", "Times", "Courier"}) font->addItem(family);
+  style->addWidget(font);
+  connect(font, &QComboBox::currentTextChanged, this, [this](const QString& value) { m_AnnotationFont = value.toStdString(); });
+  auto* bold = new QCheckBox("Bold", style); bold->setObjectName("pdfAnnotationBold"); style->addWidget(bold);
+  auto* italic = new QCheckBox("Italic", style); italic->setObjectName("pdfAnnotationItalic"); style->addWidget(italic);
+  connect(bold, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationBold = value; });
+  connect(italic, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationItalic = value; });
+  auto* fill = new QCheckBox("Fill closed shapes", style); fill->setObjectName("pdfAnnotationFill"); style->addWidget(fill);
+  connect(fill, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationFill = value; });
+  auto* applyStyle = style->addAction("Apply style to selected");
+  applyStyle->setObjectName("pdfAnnotationApplyStyle");
+  connect(applyStyle, &QAction::triggered, this, [this] {
+    if (m_SelectedAnnotation < 0 || m_SelectedAnnotation >= static_cast<int>(m_Annotations.Items().size())) return;
+    auto annotation = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
+    ApplyAnnotationStyle(annotation);
+    if (m_Annotations.Replace(m_SelectedAnnotation, annotation)) SceneChanged();
+  });
   annotationTools->addAction("Undo", this, [this] { m_Annotations.Undo(); SceneChanged(); });
   annotationTools->addAction("Redo", this, [this] { m_Annotations.Redo(); SceneChanged(); });
   BuildScaleToolbar();
@@ -325,16 +366,23 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_Page = new PdfCanvas(m_Scroll);
   m_Page->setMouseTracking(true);
   m_Page->clicked = [this](QPointF point, Qt::MouseButton button) { PageClick(point, button); };
-  m_Page->moved = [this](QPointF point) { MoveExtract(point); UpdateSnap(point); };
+  m_Page->doubleClicked = [this] { EditSelectedAnnotation(); };
+  m_Page->moved = [this](QPointF point) { MoveExtract(point); MoveAnnotation(point); UpdateSnap(point); };
   m_Page->left = [this] { if (m_SnapHit) { m_SnapHit = false; m_SnapPrevValid = false; m_Page->update(); } };
   m_Page->overlay = [this](QPainter& painter) { DrawCompareOverlay(painter); DrawHighlights(painter); DrawAnnotations(painter); DrawScaleOverlay(painter); DrawAuditOverlay(painter); DrawExtractOverlay(painter); };
   m_Page->pressed = [this](QPointF point, Qt::MouseButton button) { BeginExtract(point, button); };
-  m_Page->released = [this](QPointF point, Qt::MouseButton button) { EndExtract(point, button); };
+  m_Page->released = [this](QPointF point, Qt::MouseButton button) { EndExtract(point, button); EndAnnotation(point, button); };
   m_Scroll->setWidget(m_Page);
   setCentralWidget(m_Scroll);
   m_Poll = new QTimer(this);
   m_Poll->setInterval(30);
   connect(m_Poll, &QTimer::timeout, this, [this] { PollRender(); });
+  m_OpenPoll = new QTimer(this);
+  m_OpenPoll->setInterval(30);
+  connect(m_OpenPoll, &QTimer::timeout, this, [this] { PollOpen(); });
+  m_SavePoll = new QTimer(this);
+  m_SavePoll->setInterval(30);
+  connect(m_SavePoll, &QTimer::timeout, this, [this] { PollSave(); });
 
   // REQ-387 clause 2: the thumbnail strip, a dock shown by default and toggled from the toolbar.
   m_Thumbs = new PdfThumbnails(this);
@@ -400,6 +448,20 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   connect(m_FindMatchCase, &QCheckBox::toggled, this, [this] { if (!m_FindEdit->text().isEmpty()) StartSearch(); });
   auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
   connect(escape, &QShortcut::activated, this, [this] { EscapePressed(); });
+  auto* removeAnnotation = new QShortcut(QKeySequence::Delete, this);
+  connect(removeAnnotation, &QShortcut::activated, this, [this] {
+    if (m_SelectedAnnotation >= 0 && m_Annotations.Remove(m_SelectedAnnotation)) {
+      m_SelectedAnnotation = -1; SceneChanged();
+    }
+  });
+  auto* undoAnnotation = new QShortcut(QKeySequence::Undo, this);
+  connect(undoAnnotation, &QShortcut::activated, this, [this] {
+    if (m_Annotations.Undo()) { m_SelectedAnnotation = -1; SceneChanged(); }
+  });
+  auto* redoAnnotation = new QShortcut(QKeySequence::Redo, this);
+  connect(redoAnnotation, &QShortcut::activated, this, [this] {
+    if (m_Annotations.Redo()) { m_SelectedAnnotation = -1; SceneChanged(); }
+  });
   m_SearchPoll = new QTimer(this);
   m_SearchPoll->setInterval(30);
   connect(m_SearchPoll, &QTimer::timeout, this, [this] { PollSearch(); });
@@ -606,12 +668,25 @@ PdfWindow::~PdfWindow() {
     try { m_Work.wait(); } // Document outlives every use on the worker.
     catch (const std::exception& error) { qWarning() << "PDF worker wait failed during shutdown:" << error.what(); }
   }
+  if (m_OpenWork.valid()) {
+    try { m_OpenWork.wait(); } catch (const std::exception& error) { qWarning() << "PDF open wait failed during shutdown:" << error.what(); }
+  }
+  if (m_SaveWork.valid()) {
+    try { m_SaveWork.wait(); } catch (const std::exception& error) { qWarning() << "PDF save wait failed during shutdown:" << error.what(); }
+  }
 }
 
 void PdfWindow::Open(const QString& path) {
   if (!ConfirmDiscard()) return;
-  QString error;
-  if (!LoadFile(path, error)) QMessageBox::warning(this, "Open PDF", error);
+  if (m_OpenWork.valid() || m_Work.valid()) { statusBar()->showMessage("Wait for the current PDF operation before opening another file."); return; }
+  m_OpenPath = path;
+  const auto nativePath = std::make_shared<std::filesystem::path>(path.toStdWString());
+  m_OpenWork = std::async(std::launch::async, [nativePath]() noexcept {
+    try { return pdfview::PdfDocument::Open(*nativePath); }
+    catch (...) { return pdfview::PdfDocument::OpenResult{}; }
+  });
+  statusBar()->showMessage("Opening PDF...");
+  m_OpenPoll->start();
 }
 
 bool PdfWindow::LoadFile(const QString& path, QString& error) {
@@ -627,14 +702,36 @@ bool PdfWindow::LoadFile(const QString& path, QString& error) {
   m_ComparePoll->stop(); m_Compare.reset(); m_ComparePicking = false; m_CompareClosePending = false;
   auto result = pdfview::PdfDocument::Open(std::filesystem::path(path.toStdWString()));
   if (!result.doc) { error = QString::fromUtf8(result.error.c_str()); return false; }
+  return AdoptDocument(std::move(result.doc), path, error);
+}
+
+void PdfWindow::PollOpen() {
+  if (!m_OpenWork.valid() || m_OpenWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+  m_OpenPoll->stop();
+  pdfview::PdfDocument::OpenResult result;
+  try { result = m_OpenWork.get(); }
+  catch (const std::exception& error) { result.error = error.what(); }
+  QString message;
+  if (!result.doc || !AdoptDocument(std::move(result.doc), m_OpenPath, message)) {
+    if (message.isEmpty()) message = result.error.empty() ? "The PDF could not be opened." : QString::fromUtf8(result.error.c_str());
+    QMessageBox::warning(this, "Open PDF", message);
+    statusBar()->showMessage("Could not open PDF.");
+  }
+}
+
+bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error) {
+  if (!document) { error = "The PDF could not be opened."; return false; }
+  if (m_Work.valid()) { error = "Wait for the current page to finish before opening another PDF."; return false; }
   CancelSearch(true); // the search, the snap readers and the thumbnail worker all hold the old document
   for (auto& page : m_SnapPages) *page.second.cancel = true;
   m_SnapPages.clear();
   m_Thumbs->SetDocument(nullptr);
-  m_Document = std::move(result.doc);
+  m_Document = std::move(document);
   m_Thumbs->SetDocument(m_Document.get());
   ClearSearch();
   m_Annotations = {}; m_Draft.clear();
+  m_SelectedAnnotation = -1; m_AnnotationDragging = false; m_DragPreview.reset();
+  ++m_Revision;
   m_ExtractMode = false; m_ExtractDragging = false; m_ExtractResult.reset();
   if (m_ExtractReview) m_ExtractReview->hide();
   m_RobustPicks.clear(); m_SelectedCheck = -1; m_SnapHit = false; m_SnapPrevValid = false;
@@ -708,16 +805,133 @@ bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) 
     error = "Complete the measurement and set a page scale first."; return false;
   }
   m_Annotations.Add(annotation);
-  setWindowModified(true); m_Page->update();
+  SceneChanged();
   return true;
+}
+
+QPointF PdfWindow::CanvasToPage(QPointF point) const {
+  if (!m_Document || m_Page->width() <= 0 || m_Page->height() <= 0) return {};
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
+  return {point.x() * size.wPt / m_Page->width(), (m_Page->height() - point.y()) * size.hPt / m_Page->height()};
+}
+
+int PdfWindow::HitAnnotation(QPointF p, float tolerance) const {
+  const int page = m_PageNumber->value() - 1;
+  const auto& items = m_Annotations.Items();
+  const auto segmentDistance = [](QPointF p, QPointF a, QPointF b) {
+    const QPointF d = b - a;
+    const double denom = d.x() * d.x() + d.y() * d.y();
+    const double t = denom > 1e-12 ? std::clamp(((p.x() - a.x()) * d.x() + (p.y() - a.y()) * d.y()) / denom, 0.0, 1.0) : 0.0;
+    return std::hypot(p.x() - (a.x() + t * d.x()), p.y() - (a.y() + t * d.y()));
+  };
+  for (int i = static_cast<int>(items.size()) - 1; i >= 0; --i) {
+    const auto& a = items[static_cast<std::size_t>(i)];
+    if (a.page != page) continue;
+    if (a.kind == pdfview::Annot::Kind::Line)
+      { if (segmentDistance(p, {a.x0,a.y0}, {a.x1,a.y1}) <= tolerance) return i; }
+    else if (a.IsDimension()) {
+      for (std::size_t j = 1; j < a.pts.size(); ++j)
+        if (segmentDistance(p, {a.pts[j-1].first,a.pts[j-1].second}, {a.pts[j].first,a.pts[j].second}) <= tolerance) return i;
+      if (a.kind == pdfview::Annot::Kind::Length && a.pts.size() == 2) {
+        const auto d = pdfview::LengthDimLine(a);
+        if (segmentDistance(p, {d.x0,d.y0}, {d.x1,d.y1}) <= tolerance) return i;
+      }
+    } else {
+      const QRectF box(QPointF(a.x0,a.y0), QPointF(a.x1,a.y1));
+      if (box.normalized().adjusted(-tolerance,-tolerance,tolerance,tolerance).contains(p)) return i;
+    }
+  }
+  return -1;
+}
+
+void PdfWindow::ApplyAnnotationStyle(pdfview::Annot& a) const {
+  a.color = m_AnnotationColor;
+  a.thickness = m_AnnotationThickness;
+  a.fontSize = m_AnnotationFontSize;
+  a.fill = m_AnnotationFill && (a.kind == pdfview::Annot::Kind::Rect || a.kind == pdfview::Annot::Kind::Ellipse);
+  if (a.kind == pdfview::Annot::Kind::Text) {
+    a.font = m_AnnotationFont; a.bold = m_AnnotationBold; a.italic = m_AnnotationItalic;
+  }
+}
+
+void PdfWindow::EditSelectedAnnotation() {
+  if (m_SelectedAnnotation < 0 || m_SelectedAnnotation >= static_cast<int>(m_Annotations.Items().size())) return;
+  const auto& current = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
+  if (current.kind != pdfview::Annot::Kind::Text) return;
+  bool accepted = false;
+  const QString value = QInputDialog::getMultiLineText(this, "Edit PDF text", "Text", QString::fromUtf8(current.text.c_str()), &accepted);
+  if (!accepted) return;
+  if (value.isEmpty()) { statusBar()->showMessage("Text annotation cannot be empty."); return; }
+  auto edited = current; edited.text = value.toUtf8().toStdString();
+  if (m_Annotations.Replace(m_SelectedAnnotation, edited)) SceneChanged();
+}
+
+void PdfWindow::MoveAnnotation(QPointF point) {
+  if (!m_AnnotationDragging || m_SelectedAnnotation < 0 || m_SelectedAnnotation >= static_cast<int>(m_Annotations.Items().size())) return;
+  const QPointF now = CanvasToPage(point), start = CanvasToPage(m_DragStart);
+  const float dx = static_cast<float>(now.x() - start.x()), dy = static_cast<float>(now.y() - start.y());
+  auto edited = m_DragOriginal;
+  if (m_AnnotationHandle < 0) {
+    edited.x0 += dx; edited.x1 += dx; edited.y0 += dy; edited.y1 += dy;
+    for (auto& p : edited.pts) { p.first += dx; p.second += dy; }
+  } else if (edited.IsDimension() && m_AnnotationHandle < static_cast<int>(edited.pts.size())) {
+    auto& p = edited.pts[static_cast<std::size_t>(m_AnnotationHandle)]; p.first += dx; p.second += dy;
+    if (m_AnnotationHandle == 0) { edited.x0 = p.first; edited.y0 = p.second; }
+    if (m_AnnotationHandle == static_cast<int>(edited.pts.size()) - 1) { edited.x1 = p.first; edited.y1 = p.second; }
+  } else if (edited.kind == pdfview::Annot::Kind::Length && m_AnnotationHandle == 2 && edited.pts.size() == 2) {
+    const auto line = pdfview::LengthDimLine(edited); edited.offset += dx * line.nx + dy * line.ny;
+  } else {
+    const int corner = m_AnnotationHandle;
+    if (corner == 0 || corner == 2) edited.x0 += dx; else edited.x1 += dx;
+    if (corner == 0 || corner == 3) edited.y0 += dy; else edited.y1 += dy;
+  }
+  m_DragPreview = std::move(edited);
+  m_Page->update();
+}
+
+void PdfWindow::EndAnnotation(QPointF point, Qt::MouseButton button) {
+  if (button != Qt::LeftButton || !m_AnnotationDragging) return;
+  MoveAnnotation(point);
+  if (m_DragPreview) {
+    if (m_Annotations.Replace(m_SelectedAnnotation, *m_DragPreview)) SceneChanged();
+    m_DragPreview.reset();
+  }
+  m_AnnotationDragging = false; m_AnnotationHandle = -1;
 }
 
 void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (m_ComparePicking) { ComparePick(point, button); return; }
   if (m_ExtractMode) return;
-  if (!m_Document || m_Tool < 0 || IsBusy() || m_Page->image.isNull()) return;
+  if (!m_Document || (m_Tool < 0 && m_Tool != -2) || IsBusy() || m_Page->image.isNull()) return;
   UpdateSnap(point); // the click's own position, so a click without a prior move still snaps
   const auto size = m_Document->Sizes()[m_PageNumber->value() - 1];
+  if (m_Tool == -2) {
+    if (button != Qt::LeftButton) return;
+    const QPointF pagePoint = CanvasToPage(point);
+    if (m_SelectedAnnotation >= 0 && m_SelectedAnnotation < static_cast<int>(m_Annotations.Items().size())) {
+      const auto& selected = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
+      std::vector<QPointF> grips;
+      if (selected.IsDimension()) {
+        for (const auto& p : selected.pts) grips.push_back({p.first,p.second});
+        if (selected.kind == pdfview::Annot::Kind::Length && selected.pts.size() == 2) {
+          const auto line = pdfview::LengthDimLine(selected); grips.push_back({(line.x0+line.x1)*.5,(line.y0+line.y1)*.5});
+        }
+      } else if (selected.kind == pdfview::Annot::Kind::Line) grips = {{selected.x0,selected.y0},{selected.x1,selected.y1}};
+      else grips = {{selected.x0,selected.y0},{selected.x1,selected.y1},{selected.x0,selected.y1},{selected.x1,selected.y0}};
+      const float tol = static_cast<float>(7.0 * size.wPt / std::max(1, m_Page->width()));
+      for (int i = 0; i < static_cast<int>(grips.size()); ++i) {
+        if (QLineF(pagePoint, grips[static_cast<std::size_t>(i)]).length() <= tol) {
+          m_AnnotationHandle = i; m_AnnotationDragging = true; m_DragStart = point; m_DragOriginal = selected; return;
+        }
+      }
+    }
+    m_SelectedAnnotation = HitAnnotation(pagePoint, static_cast<float>(5.0 * size.wPt / std::max(1, m_Page->width())));
+    if (m_SelectedAnnotation >= 0) {
+      m_AnnotationDragging = true; m_AnnotationHandle = -1; m_DragStart = point;
+      m_DragOriginal = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
+    }
+    m_Page->update(); return;
+  }
   if (m_Tool == kToolCalibrate || m_Tool == kToolCheck) {
     if (button != Qt::LeftButton) { m_Draft.clear(); m_Page->update(); return; }
     if (m_Tool == kToolCheck && m_Draft.empty() && m_CheckTarget == 0 && !EffectiveScale(m_PageNumber->value() - 1)) {
@@ -725,16 +939,29 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
       return;
     }
     const std::size_t index = m_Draft.size();
-    m_Draft.emplace_back(m_SnapHit ? m_SnapX : static_cast<float>(point.x() * size.wPt / m_Page->width()),
-        m_SnapHit ? m_SnapY : static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
+    const auto pagePoint = CanvasToPage(point);
+    m_Draft.emplace_back(m_SnapHit ? m_SnapX : static_cast<float>(pagePoint.x()), m_SnapHit ? m_SnapY : static_cast<float>(pagePoint.y()));
     if (m_Tool == kToolCalibrate && index < 2) m_CalSnapped[index] = m_SnapHit;
     if (m_Draft.size() < 2) { statusBar()->showMessage(m_Tool == kToolCalibrate ? "Click the other point of the known distance." : "Click the other end of the dimension."); m_Page->update(); return; }
     m_Page->update();
     if (m_Tool == kToolCalibrate) FinishCalibrationPicks(); else FinishCheckPicks();
     return;
   }
-  if (button == Qt::LeftButton) m_Draft.emplace_back(m_SnapHit ? m_SnapX : static_cast<float>(point.x() * size.wPt / m_Page->width()),
-      m_SnapHit ? m_SnapY : static_cast<float>((m_Page->height() - point.y()) * size.hPt / static_cast<double>(m_Page->height())));
+  float dimensionOffset = 0.f;
+  if (button == Qt::LeftButton) { const auto pagePoint = CanvasToPage(point);
+    const bool lengthOffsetPick = m_Tool == static_cast<int>(pdfview::Annot::Kind::Length) && m_Draft.size() == 2;
+    m_Draft.emplace_back(!lengthOffsetPick && m_SnapHit ? m_SnapX : static_cast<float>(pagePoint.x()),
+                         !lengthOffsetPick && m_SnapHit ? m_SnapY : static_cast<float>(pagePoint.y()));
+    if (m_Tool == static_cast<int>(pdfview::Annot::Kind::Length) && m_Draft.size() == 2) {
+      statusBar()->showMessage("Click where the dimension line should sit."); m_Page->update(); return;
+    }
+    if (m_Tool == static_cast<int>(pdfview::Annot::Kind::Length) && m_Draft.size() == 3) {
+      pdfview::Annot baseline; baseline.kind = pdfview::Annot::Kind::Length; baseline.pts = {m_Draft[0], m_Draft[1]};
+      const auto line = pdfview::LengthDimLine(baseline);
+      dimensionOffset = (m_Draft[2].first - m_Draft[0].first) * line.nx + (m_Draft[2].second - m_Draft[0].second) * line.ny;
+      m_Draft.resize(2);
+    }
+  }
   const auto kind = static_cast<pdfview::Annot::Kind>(m_Tool);
   const bool multi = kind == pdfview::Annot::Kind::PolyLength || kind == pdfview::Annot::Kind::Area;
   const std::size_t required = kind == pdfview::Annot::Kind::Angle || kind == pdfview::Annot::Kind::Area ? 3 : 2;
@@ -742,14 +969,17 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (m_Draft.size() < required || (multi && button != Qt::RightButton)) { m_Page->update(); return; }
   pdfview::Annot annotation;
   annotation.kind = kind; annotation.page = m_PageNumber->value() - 1;
+  ApplyAnnotationStyle(annotation);
   annotation.x0 = m_Draft.front().first; annotation.y0 = m_Draft.front().second;
   annotation.x1 = m_Draft.back().first; annotation.y1 = m_Draft.back().second;
   if (annotation.IsDimension()) annotation.pts = m_Draft;
+  annotation.offset = dimensionOffset;
   if (kind == pdfview::Annot::Kind::Text) {
     bool accepted = false;
     const auto text = QInputDialog::getMultiLineText(this, "PDF text", "Text", {}, &accepted);
     if (!accepted || text.isEmpty()) { m_Draft.clear(); return; }
     annotation.text = text.toUtf8().toStdString();
+    annotation.font = m_AnnotationFont; annotation.bold = m_AnnotationBold; annotation.italic = m_AnnotationItalic;
   }
   QString error;
   if (!AddAnnotation(annotation, error)) QMessageBox::warning(this, "PDF annotation", error);
@@ -864,11 +1094,15 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
   if (!m_Document || m_Page->image.isNull()) return;
   const int page = m_PageNumber->value() - 1;
   const auto size = m_Document->Sizes()[page];
-  const double factor = static_cast<double>(m_Page->width()) / size.wPt;
-  auto map = [&](float x, float y) { return QPointF(x * factor, (size.hPt - y) * factor); };
-  for (const auto& annotation : m_Annotations.Items()) {
+  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
+  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+  const double factor = std::sqrt(scaleX * scaleY);
+  auto map = [&](float x, float y) { return QPointF(x * scaleX, (size.hPt - y) * scaleY); };
+  for (std::size_t itemIndex = 0; itemIndex < m_Annotations.Items().size(); ++itemIndex) {
+    const auto& annotation = m_DragPreview && static_cast<int>(itemIndex) == m_SelectedAnnotation ? *m_DragPreview : m_Annotations.Items()[itemIndex];
     if (annotation.page != page) continue;
-    painter.setPen(QPen(QColor::fromRgb(annotation.color), std::max(1.0, annotation.thickness * factor)));
+    const bool selected = static_cast<int>(itemIndex) == m_SelectedAnnotation;
+    painter.setPen(QPen(selected ? QColor("#45a8df") : QColor::fromRgb(annotation.color), std::max(1.0, annotation.thickness * factor)));
     painter.setBrush(annotation.fill ? QBrush(QColor::fromRgb(annotation.color)) : Qt::NoBrush);
     const QPointF first = map(annotation.x0, annotation.y0), last = map(annotation.x1, annotation.y1);
     const QRectF rect = QRectF(first, last).normalized();
@@ -876,7 +1110,8 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     else if (annotation.kind == pdfview::Annot::Kind::Ellipse) painter.drawEllipse(rect);
     else if (annotation.kind == pdfview::Annot::Kind::Line) painter.drawLine(first, last);
     else if (annotation.kind == pdfview::Annot::Kind::Text) {
-      QFont font("Helvetica"); font.setPixelSize(std::max(1, qRound(annotation.fontSize * factor)));
+      QFont font(QString::fromStdString(annotation.font)); font.setBold(annotation.bold); font.setItalic(annotation.italic);
+      font.setPixelSize(std::max(1, qRound(annotation.fontSize * factor)));
       painter.setFont(font); painter.drawText(rect, Qt::TextWordWrap, QString::fromUtf8(annotation.text.c_str()));
     } else if (annotation.IsDimension()) {
       QPolygonF polygon;
@@ -885,6 +1120,18 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
       if (annotation.kind == pdfview::Annot::Kind::Area) painter.drawLine(polygon.first(), polygon.last());
       const auto anchor = pdfview::DimensionLabelAnchor(annotation);
       painter.drawText(map(anchor.first, anchor.second), QString::fromUtf8(pdfview::DimensionLabel(annotation, CurrentScale()).c_str()));
+    }
+    if (selected) {
+      std::vector<QPointF> grips;
+      if (annotation.IsDimension()) {
+        for (const auto& pt : annotation.pts) grips.push_back(map(pt.first, pt.second));
+        if (annotation.kind == pdfview::Annot::Kind::Length && annotation.pts.size() == 2) {
+          const auto dim = pdfview::LengthDimLine(annotation); grips.push_back(map((dim.x0+dim.x1)*.5f,(dim.y0+dim.y1)*.5f));
+        }
+      } else if (annotation.kind == pdfview::Annot::Kind::Line) grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1)};
+      else grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1),map(annotation.x0,annotation.y1),map(annotation.x1,annotation.y0)};
+      painter.setPen(QPen(QColor("#0d1521"), 1)); painter.setBrush(QColor("#8dd7ff"));
+      for (const auto& grip : grips) painter.drawRect(QRectF(grip.x()-4,grip.y()-4,8,8));
     }
   }
   painter.setPen(QPen(QColor("#45a8df"), 2));
@@ -910,8 +1157,49 @@ void PdfWindow::SaveAs() {
   QString path = QFileDialog::getSaveFileName(this, "Save annotated PDF as", {}, "PDF (*.pdf)");
   if (path.isEmpty()) return;
   if (!path.endsWith(".pdf", Qt::CaseInsensitive)) path += ".pdf";
-  QString error;
-  if (!SaveFile(path, error)) QMessageBox::warning(this, "Save PDF", error);
+  StartSaveAs(path);
+}
+
+void PdfWindow::StartSaveAs(const QString& path) {
+  if (!m_Document || path.isEmpty()) return;
+  if (m_SaveWork.valid()) { statusBar()->showMessage("A PDF save is already in progress."); return; }
+  auto source = m_Document->Path();
+  auto items = m_Annotations.Items();
+  auto scales = m_Annotations.Scales();
+  auto inForce = ScalesInForce();
+  auto destination = std::filesystem::path(path.toStdWString());
+  using SaveInput = std::tuple<std::filesystem::path, std::vector<pdfview::Annot>,
+      std::map<int, pdfview::PageScale>, std::map<int, pdfview::PageScale>, std::filesystem::path>;
+  auto input = std::make_shared<SaveInput>(std::move(source), std::move(items), std::move(scales), std::move(inForce), std::move(destination));
+  m_SaveDestination = path;
+  m_SaveRevision = m_Revision;
+  m_SaveWork = std::async(std::launch::async, [input]() noexcept {
+    try {
+      auto error = pdfview::SaveAnnotated(std::get<0>(*input), std::get<1>(*input), std::get<4>(*input), std::get<2>(*input), std::get<3>(*input));
+      return SaveResult{error.empty(), std::move(error)};
+    }
+    catch (...) { return SaveResult{}; }
+  });
+  statusBar()->showMessage("Saving annotated PDF...");
+  m_SavePoll->start();
+}
+
+void PdfWindow::PollSave() {
+  if (!m_SaveWork.valid() || m_SaveWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+  m_SavePoll->stop();
+  SaveResult result;
+  try { result = m_SaveWork.get(); }
+  catch (...) { result = SaveResult{}; }
+  if (!result.succeeded) {
+    const auto reason = result.error.empty() ? QString("The PDF could not be saved.") : QString::fromUtf8(result.error.c_str());
+    QMessageBox::warning(this, "Save PDF", reason);
+    statusBar()->showMessage("Save failed; annotations are still available to retry.");
+    return;
+  }
+  if (m_Revision == m_SaveRevision) {
+    m_Annotations.MarkSaved(); setWindowModified(false);
+  }
+  statusBar()->showMessage("Saved " + m_SaveDestination);
 }
 
 bool PdfWindow::ConfirmDiscard() {
@@ -923,6 +1211,8 @@ bool PdfWindow::ConfirmDiscard() {
 }
 
 void PdfWindow::closeEvent(QCloseEvent* event) {
+  if (m_OpenWork.valid()) { statusBar()->showMessage("Wait for the PDF to finish opening before closing."); event->ignore(); return; }
+  if (m_SaveWork.valid()) { statusBar()->showMessage("Wait for the PDF save to finish before closing."); event->ignore(); return; }
   if (!ConfirmDiscard()) { event->ignore(); return; }
   m_Cancel = true; m_SearchCancel = true; m_AuditCancel = true;
   if (m_Compare) m_Compare->cancel = true;
@@ -1054,15 +1344,16 @@ void PdfWindow::DrawHighlights(QPainter& painter) {
   if (!m_Document || m_Page->image.isNull() || m_Hits.empty()) return;
   const int page = m_PageNumber->value() - 1;
   const auto size = m_Document->Sizes()[page];
-  const double factor = static_cast<double>(m_Page->width()) / size.wPt;
+  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
+  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
   painter.setPen(Qt::NoPen);
   for (int i = 0; i < static_cast<int>(m_Hits.size()); ++i) {
     const auto& hit = m_Hits[static_cast<std::size_t>(i)];
     if (hit.page != page) continue;
     painter.setBrush(i == m_HitIndex ? QColor(255, 140, 0, 150) : QColor(255, 230, 0, 110));
     for (const auto& box : hit.boxes)
-      painter.drawRect(QRectF(QPointF(box.x0 * factor, (size.hPt - box.y1) * factor),
-                              QPointF(box.x1 * factor, (size.hPt - box.y0) * factor)));
+      painter.drawRect(QRectF(QPointF(box.x0 * scaleX, (size.hPt - box.y1) * scaleY),
+                              QPointF(box.x1 * scaleX, (size.hPt - box.y0) * scaleY)));
   }
 }
 

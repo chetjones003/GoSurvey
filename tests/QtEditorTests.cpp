@@ -14,6 +14,13 @@
 #include "traverse/TraverseCommandLang.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
+#include "PdfCanvas.hpp"
+#include <fpdf_edit.h>
+#include <fpdf_save.h>
+#include <fpdfview.h>
+#ifdef small
+#undef small
+#endif
 #include "PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "util/gizmooverlay.hpp"
@@ -113,6 +120,32 @@
 #include <limits>
 
 namespace {
+struct QtPdfFileWriter { FPDF_FILEWRITE api{}; QFile file; };
+int WriteQtPdf(FPDF_FILEWRITE* writer, const void* data, unsigned long size) {
+  auto* output = reinterpret_cast<QtPdfFileWriter*>(writer);
+  return output->file.write(static_cast<const char*>(data), static_cast<qint64>(size)) == static_cast<qint64>(size) ? 1 : 0;
+}
+
+bool WriteRotatedCopy(const QString& source, const QString& destination) {
+  FPDF_InitLibrary();
+  const QByteArray encoded = QFile::encodeName(source);
+  FPDF_DOCUMENT document = FPDF_LoadDocument(encoded.constData(), nullptr);
+  if (!document) return false;
+  FPDF_PAGE page = FPDF_LoadPage(document, 0);
+  if (!page) { FPDF_CloseDocument(document); return false; }
+  FPDFPage_SetRotation(page, 1);
+  FPDF_ClosePage(page);
+  QtPdfFileWriter writer;
+  writer.file.setFileName(destination);
+  if (!writer.file.open(QIODevice::WriteOnly)) { FPDF_CloseDocument(document); return false; }
+  writer.api.version = 1;
+  writer.api.WriteBlock = &WriteQtPdf;
+  const bool saved = FPDF_SaveAsCopy(document, &writer.api, 0) != 0;
+  FPDF_CloseDocument(document);
+  writer.file.close();
+  return saved;
+}
+
 std::unique_ptr<AppCommandState> StateWithTraverse() {
   auto state = std::make_unique<AppCommandState>();
   state->activeDrawingIdx = state->prevDrawingIdx = 1;
@@ -128,6 +161,27 @@ std::unique_ptr<AppCommandState> StateWithTraverse() {
     data.legs.push_back(leg);
   }
   return state;
+}
+QString OpenTraverseCommands() {
+  return QStringLiteral(
+      "STATION 0 0 0 0\n"
+      "BEARING 0\n"
+      "ENDPOINT 0 100 0\n"
+      "LOOP OFF\n"
+      "STN 0 1\n"
+      "HANG REF 0 1 90\n"
+      "HDIST 0 1 100\n"
+      "STN 1 2\n"
+      "HANG 0 1 2 90\n"
+      "HDIST 1 2 100\n"
+      "STN 2 3\n"
+      "HANG 1 2 3 90\n"
+      "HDIST 2 3 100\n");
+}
+QString Issue914Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QAction* Action(QWidget& widget, const QString& text) {
   for (auto* action : widget.findChildren<QAction*>()) if (action->text() == text) return action;
@@ -917,6 +971,8 @@ private Q_SLOTS:
     state->traverseData.legs[0].rawSets.push_back(raw);
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
     QString error;
@@ -2422,6 +2478,82 @@ private Q_SLOTS:
     QVERIFY(state->surveyPoints.empty());
     QVERIFY(DoRedo(*state, log));
     QCOMPARE(state->surveyPoints.size(), std::size_t(4));
+  }
+
+  void issue914OpenTraverseSolveAndCommandErrorRecovery() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* run = Action(window, "Run adjustment");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(run);
+
+    editor->setPlainText("STAITON 0 0 0 0\n");
+    run->trigger();
+    QVERIFY(!window.IsBusy());
+    QVERIFY(output->toPlainText().contains("line 1"));
+    QVERIFY(output->toPlainText().contains("Did you mean STATION?"));
+    QVERIFY(run->isEnabled());
+    QVERIFY(!state->traverseLsaComputed);
+    window.ValidateNow();
+    QVERIFY(window.findChild<QLabel*>("adjustmentTextStatus")->text().contains("Did you mean STATION?"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-command-highlighting-fuzzy-match.png")));
+
+    QString missingEndpoint = OpenTraverseCommands();
+    missingEndpoint.remove("ENDPOINT 0 100 0\n");
+    editor->setPlainText(missingEndpoint);
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+    QVERIFY(!state->traverseLsaResult.ok);
+    QVERIFY(output->toPlainText().contains("known end-point"));
+    QVERIFY(run->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-open-traverse-failure.png")));
+
+    editor->setPlainText(OpenTraverseCommands());
+    run->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseLsaResult.redundancy, 2);
+    QVERIFY(state->traverseLsaResult.adjClosureLinear < 1e-3);
+    QVERIFY(output->toPlainText().contains("Adjusted"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-open-traverse-adjusted.png")));
+    QString error;
+    QVERIFY2(window.AcceptResult(error), qPrintable(error));
+  }
+
+  void issue914StopDiscardsSolveAndPreservesInputs() {
+    auto state = StateWithTraverse();
+    const double originalDistance = state->traverseData.legs.front().horizDist;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    QTRY_VERIFY(window.isVisible());
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* run = Action(window, "Run adjustment");
+    auto* stop = Action(window, "Stop");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(run); QVERIFY(stop);
+    editor->setPlainText(OpenTraverseCommands());
+    const QString source = editor->toPlainText();
+
+    run->trigger();
+    QVERIFY(window.IsBusy());
+    QVERIFY(stop->isEnabled());
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-adjustment-busy.png")));
+    stop->trigger();
+    QVERIFY(!stop->isEnabled());
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+
+    QVERIFY(output->toPlainText().contains("Adjustment cancelled"));
+    QVERIFY(window.grab().save(Issue914Shot("qt-914-adjustment-cancelled.png")));
+    QCOMPARE(editor->toPlainText(), source);
+    QVERIFY(!state->traverseLsaComputed);
+    QVERIFY(!state->traverseLsaAccepted);
+    QCOMPARE(state->traverseData.legs.front().horizDist, originalDistance);
+    QVERIFY(window.findChild<QTableWidget*>("adjustmentCoordinates")->rowCount() == 0);
+    QVERIFY(window.findChild<QTableWidget*>("adjustmentResiduals")->rowCount() == 0);
+    QVERIFY(run->isEnabled());
   }
 
   void invalidAdjustmentDoesNotMutateDrawing() {
@@ -4744,6 +4876,160 @@ private Q_SLOTS:
     annotation.kind = pdfview::Annot::Kind::Rect;
     annotation.x0 = std::numeric_limits<float>::quiet_NaN();
     QVERIFY(!window.AddAnnotation(annotation, error));
+  }
+
+  void pdfAnnotationSelectMoveResizeAndUndoAsSingleEdit() {
+    QTemporaryDir directory;
+    const auto source = directory.filePath("edit.pdf");
+    { QPdfWriter writer(source); QPainter painter(&writer); painter.drawText(100, 100, "PDF annotation edit"); }
+    PdfWindow window(nullptr); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(source, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    pdfview::Annot rect;
+    rect.kind = pdfview::Annot::Kind::Rect;
+    rect.x0 = 20; rect.y0 = 30; rect.x1 = 80; rect.y1 = 100;
+    QVERIFY(window.AddAnnotation(rect, error));
+    QVERIFY(window.findChild<QToolBar*>("pdfAnnotationStyle"));
+    const QPointF centre = window.PageToCanvas(50, 65);
+    window.PageClick(centre, Qt::LeftButton);
+    QCOMPARE(window.m_SelectedAnnotation, 0);
+    window.MoveAnnotation(centre + QPointF(20, -10));
+    QCOMPARE(window.m_Annotations.Items()[0].x0, 20.f); // drag is still only a preview
+    window.EndAnnotation(centre + QPointF(20, -10), Qt::LeftButton);
+    const float movedX = 20.f + static_cast<float>(20.0 * window.m_Document->Sizes()[0].wPt / window.m_Page->width());
+    QVERIFY(std::abs(window.m_Annotations.Items()[0].x0 - movedX) < 1e-4f);
+    QVERIFY(window.m_Annotations.Undo());
+    QVERIFY(window.m_Annotations.Items()[0] == rect);
+    QVERIFY(window.m_Annotations.Redo());
+    QVERIFY(window.m_Annotations.Items()[0] != rect);
+    window.m_SelectedAnnotation = 0;
+    const auto beforeResize = window.m_Annotations.Items()[0];
+    const QPointF grip = window.PageToCanvas(beforeResize.x0, beforeResize.y0);
+    window.PageClick(grip, Qt::LeftButton);
+    QVERIFY(window.m_AnnotationDragging);
+    window.MoveAnnotation(grip + QPointF(12, 8));
+    window.EndAnnotation(grip + QPointF(12, 8), Qt::LeftButton);
+    QVERIFY(window.m_Annotations.Items()[0].x0 > beforeResize.x0);
+    QVERIFY(window.m_Annotations.Items()[0].y0 < beforeResize.y0);
+    QTest::keyClick(&window, Qt::Key_Delete);
+    QVERIFY(window.m_Annotations.Items().empty());
+    QVERIFY(window.m_Annotations.Undo());
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+  }
+
+  void pdfSaveAsRunsOffUiThreadAndKeepsEditsAfterFailure() {
+    QTemporaryDir directory;
+    const auto source = directory.filePath("async-source.pdf");
+    { QPdfWriter writer(source); QPainter painter(&writer); painter.drawText(100, 100, "Async save"); }
+    PdfWindow window(nullptr); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(source, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::Annot annotation;
+    annotation.kind = pdfview::Annot::Kind::Line;
+    annotation.x0 = 20; annotation.y0 = 30; annotation.x1 = 90; annotation.y1 = 120;
+    QVERIFY(window.AddAnnotation(annotation, error));
+    const auto destination = directory.filePath("async-result.pdf");
+    window.StartSaveAs(destination);
+    QVERIFY(window.IsSaving());
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSaving(), 10000);
+    QVERIFY(!window.HasUnsavedChanges());
+    QCOMPARE(pdfview::ReadAnnotations(std::filesystem::path(destination.toStdWString())).size(), std::size_t(1));
+
+    QVERIFY(window.AddAnnotation(annotation, error));
+    QTimer::singleShot(100, &window, [] {
+      if (auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) message->accept();
+    });
+    window.StartSaveAs(source); // saving over the source is refused by REQ-388
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSaving(), 10000);
+    QVERIFY(window.HasUnsavedChanges());
+
+    PdfWindow opening(nullptr); opening.show();
+    opening.Open(source);
+    QVERIFY(opening.IsBusy());
+    QTRY_VERIFY_WITH_TIMEOUT(!opening.IsBusy() && opening.m_Document, 10000);
+    QCOMPARE(QString::fromStdWString(opening.m_Document->Path().wstring()), source);
+  }
+
+  void pdfAnnotationsStayAlignedAndPersistOnRotatedPages() {
+    QTemporaryDir directory;
+    const auto base = directory.filePath("rotation-base.pdf");
+    const auto rotated = directory.filePath("rotation-90.pdf");
+    { QPdfWriter writer(base); QPainter painter(&writer); painter.drawText(100, 100, "Rotated page"); }
+    QVERIFY(WriteRotatedCopy(base, rotated));
+    PdfWindow window(nullptr); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(rotated, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    const QPointF first = window.PageToCanvas(100, 120);
+    const QPointF second = window.PageToCanvas(220, 260);
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::Rect), {});
+    window.PageClick(first, Qt::LeftButton);
+    window.PageClick(second, Qt::LeftButton);
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+    const auto created = window.m_Annotations.Items()[0];
+    QVERIFY(std::abs(created.x0 - 100.f) < 0.01f && std::abs(created.y0 - 120.f) < 0.01f);
+    QVERIFY(std::abs(created.x1 - 220.f) < 0.01f && std::abs(created.y1 - 260.f) < 0.01f);
+    const auto saved = directory.filePath("rotation-annotated.pdf");
+    QVERIFY2(window.SaveFile(saved, error), qPrintable(error));
+    const auto reopened = pdfview::ReadAnnotations(std::filesystem::path(saved.toStdWString()));
+    QCOMPARE(reopened.size(), std::size_t(1));
+    QVERIFY(std::abs(reopened[0].x0 - created.x0) < 0.01f && std::abs(reopened[0].y0 - created.y0) < 0.01f);
+    QVERIFY(std::abs(reopened[0].x1 - created.x1) < 0.01f && std::abs(reopened[0].y1 - created.y1) < 0.01f);
+    window.m_Annotations.SetScales({{0, pdfview::PageScale{1, pdfview::Unit::Inch, 20, pdfview::Unit::Foot}}});
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::Length), {});
+    window.PageClick(window.PageToCanvas(100, 150), Qt::LeftButton);
+    window.PageClick(window.PageToCanvas(300, 150), Qt::LeftButton);
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1)); // the third point is the dimension-line position
+    window.PageClick(window.PageToCanvas(200, 200), Qt::LeftButton);
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(2));
+    QCOMPARE(window.m_Annotations.Items()[1].kind, pdfview::Annot::Kind::Length);
+    QVERIFY(std::abs(window.m_Annotations.Items()[1].offset - 50.f) < 0.02f);
+  }
+
+  void qtPdfAnnotationScreenshotOptionsForIssue910() {
+    QTemporaryDir directory;
+    const auto source = directory.filePath("options.pdf");
+    { QPdfWriter writer(source); QPainter painter(&writer); painter.drawText(100, 100, "Annotation layout reference"); }
+    PdfWindow window(nullptr);
+    window.resize(1200, 900); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(source, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    pdfview::Annot rect;
+    rect.kind = pdfview::Annot::Kind::Rect; rect.x0 = 90; rect.y0 = 690; rect.x1 = 330; rect.y1 = 790;
+    rect.color = 0x29A9D6; rect.thickness = 2.0f;
+    QVERIFY(window.AddAnnotation(rect, error));
+    window.m_SelectedAnnotation = 0; window.m_Page->update();
+    QCoreApplication::processEvents();
+    const QImage surface = window.m_Page->grab().toImage();
+    const QPointF gripAt = window.PageToCanvas(rect.x0, rect.y0) * surface.devicePixelRatio();
+    bool visibleGrip = false;
+    for (int y = qRound(gripAt.y()) - 5; y <= qRound(gripAt.y()) + 5; ++y)
+      for (int x = qRound(gripAt.x()) - 5; x <= qRound(gripAt.x()) + 5; ++x)
+        if (surface.rect().contains(x, y) && surface.pixelColor(x, y) == QColor("#8dd7ff")) visibleGrip = true;
+    QVERIFY(visibleGrip);
+#ifdef GOSURVEY_TEST_ARTIFACT_DIR
+    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-910";
+#else
+    const QString dir = directory.path();
+#endif
+    QDir().mkpath(dir);
+    const auto capture = [&](const QString& name) {
+      QCoreApplication::processEvents();
+      QVERIFY2(window.grab().save(dir + "/" + name), qPrintable(name));
+    };
+    capture("qt-910-final-deep-navy.png");
+    window.setStyleSheet("QMainWindow{background:#f2f4f7;color:#202938;} QToolBar{background:#e4e9ef;border:0;spacing:5px;padding:3px;} QToolBar QToolButton{color:#202938;padding:4px 6px;} QMainWindow > QScrollArea{background:#cbd2db;}");
+    capture("qt-910-option-a-light.png");
+    window.setStyleSheet("QMainWindow{background:#10151f;} QToolBar{background:#1b2433;border:0;spacing:6px;padding:3px;} QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#2c3b57;} QToolBar QToolButton:checked{background:#315b9b;} QDockWidget{color:#e8eef9;} QDockWidget::title{background:#1b2433;padding:6px;} #pdfThumbnailList{background:#141b28;color:#cfd8ea;} QMainWindow > QScrollArea{background:#0e131c;}");
+    capture("qt-910-option-b-deep-navy.png");
+    window.setStyleSheet("QMainWindow{background:#18202b;color:#e5edf5;} QToolBar{background:#253343;border:0;border-bottom:2px solid #42c6b7;spacing:7px;padding:4px;} QToolBar QToolButton{color:#e5edf5;padding:5px 8px;border-radius:4px;} QToolBar QToolButton:checked{background:#176c69;} QDockWidget{color:#e5edf5;} QDockWidget::title{background:#253343;padding:6px;} #pdfThumbnailList{background:#1d2936;color:#d5e2ee;} QMainWindow > QScrollArea{background:#111820;}");
+    capture("qt-910-option-c-slate-teal.png");
+#ifdef GOSURVEY_TEST_ARTIFACT_DIR
+    qInfo() << "Issue 910 screenshot options:" << dir;
+#endif
   }
 
   // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----

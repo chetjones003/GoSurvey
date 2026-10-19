@@ -221,8 +221,9 @@ std::map<int, PageScale> PdfWindow::ScalesInForce() const {
 
 QPointF PdfWindow::PageToCanvas(float x, float y) const {
   const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
-  const double factor = static_cast<double>(m_Page->width()) / size.wPt;
-  return {x * factor, (size.hPt - y) * factor};
+  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
+  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+  return {x * scaleX, (size.hPt - y) * scaleY};
 }
 
 void PdfWindow::BuildScaleToolbar() {
@@ -283,10 +284,11 @@ void PdfWindow::EscapeTool() {
     m_Page->update();
     return;
   }
-  SetTool(-1, "Browse pages");
+  SetTool(-2, "Select annotations; drag to move or resize.");
 }
 
 void PdfWindow::SceneChanged() {
+  ++m_Revision;
   m_SelectedCheck = -1;
   setWindowModified(HasUnsavedChanges());
   UpdateScaleDisplay();

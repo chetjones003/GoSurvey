@@ -11,6 +11,7 @@ public:
   explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); setMouseTracking(true); }
   QImage image;
   std::function<void(QPointF, Qt::MouseButton)> clicked;
+  std::function<void()> doubleClicked;
   std::function<void(QPointF)> moved;   ///< REQ-430: the pointer moved (snap marker)
   std::function<void()> left;           ///< the pointer left the page
   std::function<void(QPointF, Qt::MouseButton)> pressed;  ///< coordinate extraction: drag start
@@ -29,6 +30,7 @@ protected:
     if (clicked) clicked(event->position(), event->button());
   }
   void mouseReleaseEvent(QMouseEvent* event) override { if (released) released(event->position(), event->button()); }
+  void mouseDoubleClickEvent(QMouseEvent*) override { if (doubleClicked) doubleClicked(); }
   void mouseMoveEvent(QMouseEvent* event) override { if (moved) moved(event->position()); }
   void leaveEvent(QEvent*) override { if (left) left(); }
 };
