@@ -5100,7 +5100,7 @@ requirements is a planning failure, not a sign of rigor.
   drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
 
   The Start tab follows the supplied Qt GoSurvey Start reference:
-  Its original navy styling is superseded by REQ-432; the composition and actions below remain in force.
+  Its original navy styling is superseded by REQ-434; the composition and actions below remain in force.
 
   1. In Start mode the application keeps the shared GoSurvey shell visible: brand title bar, ribbon,
      Start/drawing tab strip, and drawing status bar. The Properties/Toolspace/Map docks and command
@@ -12713,12 +12713,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) - D-2026-10-19-b, GitHub issue #906.
 - Revisions: 2026-10-19 - initial, D-2026-10-19-b, GitHub issue #906.
 
-### REQ-431 — Qt PDF underlay attachment (GitHub issue #909)
+### REQ-433 — Qt PDF underlay attachment (GitHub issue #909)
 
 - Purpose: complete the Qt drawing workflow for attaching a PDF page as a raster underlay, matching the existing 0.7.4 behavior.
 - Priority: must
 - Type: functional (Qt UI/commands)
-- Decision: D-2026-10-19-c; user approved recording this requirement on 2026-10-19.
+- Decision: D-2026-10-19-e; user approved recording this requirement on 2026-10-19. Its original ID, REQ-431 / D-2026-10-19-c, was reassigned during the #912 merge because those IDs were already in use.
 - Depends on: REQ-201 (honest failure), REQ-300 (no new PDF dependency), existing PDF underlay and project-file behavior.
 - Statement:
   1. **Complete Qt workflow.** A user can start PDFATTACH, choose a PDF and page/options, resolve Copy / Link / Cancel when a project requires it, and place the underlay in the drawing. The Qt workflow must be usable end to end; a command route or ribbon button without the dialog is insufficient.
@@ -12730,13 +12730,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - The Qt UI is presented as 2–3 integrated screenshot options for each major affected surface; the user's selected direction is applied before the issue is marked complete.
   - Update `docs/qt-074-parity-ledger.md` with the verified behavior and evidence.
 - Owner-layer: Qt presentation and command routing over existing `PdfAttach` and project-file services.
-- Status: accepted (2026-10-19) — D-2026-10-19-c, GitHub issue #909.
+- Status: accepted (2026-10-19) — D-2026-10-19-e, GitHub issue #909.
 
-### REQ-432 — Qt Dark appearance uses graphite with aqua and amber accents
+### REQ-434 — Qt Dark appearance uses graphite with aqua and amber accents
 - Purpose: keep the Qt application visually coherent while making its dark appearance easier to distinguish from the existing navy direction.
 - Priority: should
 - Type: non-functional (appearance)
-- Decision: D-2026-10-19-d; user selected graphite with aqua and amber accents for the whole app on 2026-10-19.
+- Decision: D-2026-10-19-f; user selected graphite with aqua and amber accents for the whole app on 2026-10-19. Its original ID, REQ-432 / D-2026-10-19-d, was reassigned during the #912 merge to keep the IDs unique.
 - Statement: The Qt **Dark** appearance uses graphite surfaces throughout the application, aqua for active and interactive states, and restrained amber for secondary emphasis. This applies to the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels. The Classic light appearance and ImGui frontend are unchanged. Drawing entities, entity colors, and persisted drawing data are unchanged.
 - Acceptance:
   - Start, drawing workspace, menus, and representative Qt dialogs render the graphite palette with aqua active states and amber secondary emphasis.
@@ -12744,7 +12744,35 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
   - Switching between Dark and Classic light leaves neither palette behind in the other appearance.
   - Drawing content and behavior remain unchanged when appearance changes.
-- Status: accepted (2026-10-19) — D-2026-10-19-d, user direction.
+- Status: accepted (2026-10-19) — D-2026-10-19-f, user direction.
+
+### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
+
+- Purpose: bring the 0.7.4 least-squares adjustment (LSA) editor's reading aids to the Qt window, so a Qt user sees the command text coloured and numbered, sees exactly which line is wrong and why while typing, and sees a plan of the survey with each station's error ellipse once an adjustment has run.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-19-c; the user approved "Yes, full REQ-431". This is a Qt parity port of what the ImGui Traverse editor does today: the command language (REQ-419..421), the solver (REQ-417..422) and the report (REQ-423) remain the behaviour authority, and nothing is added to them. The ImGui editor is unchanged. The ImGui editor's command-name autocomplete and its live-apply of every keystroke are not part of this REQ.
+- Depends on: REQ-201 (honest failure), REQ-403 (save and reload), REQ-417..423, REQ-081 (Qt appearance).
+- Statement:
+  1. **Colours.** In the Qt adjustment window's command editor, each line is coloured by what it holds: `#` options and the command keywords and their ON/OFF/ZENITH/ELEV/SIDE/CHECK/COMBINED/GRID words, numbers, whole-line `//` comments, and the field code or description that follows a `'` or a backtick each get their own colour; other words keep the normal text colour. Colours only change how the text looks: the text, its copy/paste, undo and the saved file are exactly what was typed, and every colour is readable on the editor's background in the Dark and Light appearances.
+  2. **Line numbers.** A gutter beside the text numbers every line. It scrolls with the text, widens when the line count gains a digit, and marks the line of an error (clause 3).
+  3. **Inline errors.** A short moment after the text stops changing, the editor checks it with the same reader that Run adjustment, Save and Settings use. A malformed line is underlined, its reason is shown on that line, its number is marked in the gutter, and the status line says the text has a problem. Fixing the line clears all of this. Checking never changes the working traverse, the results, the drawing or any file: Run adjustment, Save, Save As, Settings and Accept still refuse with the same "line N: reason" message, and Import still replaces nothing when the file is bad.
+  4. **Plan preview.** A left panel shows a plan (north up) of the traverse as the text now reads: stations with their numbers, the legs between them (a closing leg to the start for a closed loop), side shots and check shots as thin lines with their labels, and, for a network, its control and adjusted stations. The mouse wheel zooms about the cursor, a middle-button drag pans, and a middle double-click zooms to everything. It fits to the survey the first time and again when the survey moves somewhere the view does not cover. With fewer than two plottable stations it says so instead of drawing.
+  5. **Error ellipses.** After a successful adjustment that is still current for the text (any edit makes it stale), each adjusted station is drawn with its 1-sigma error ellipse (semi-major, semi-minor, azimuth from the result). An ellipse too small to see at the current zoom is drawn larger, by a factor the preview states, while hovering still gives the true values. Hovering a station, or the inside of its ellipse, shows its number and those three values, or says an adjustment must be run first. A failed adjustment shows no ellipses and its reason stays in the Output tab.
+  6. **Files and Summary.** The same left panel lists the saved `.gstrav` and `.gsdat` paths (or "unsaved") and a summary: stations, misclosure and precision (when the traverse closes), and, after an adjustment, the standard deviation of unit weight and the redundancy, or the reason it could not be adjusted.
+  7. **Existing semantics are preserved.** Cancel (a picker, a Save prompt, closing), validation, failure without mutation, undo of a commit, read-only projects (saving into one still writes the file but never changes the project's file list) and the unsaved-close prompt behave as before. A commit that places nothing (read-only project, no drawing, invalid result) now says why in a message instead of only the status bar saying "Committed 0 points".
+  8. **Out of scope** (their own issues): ground-to-grid scale and units (#911), merge import and JobXML (#913), the open-traverse and command-editor workflows (#914), adjustment project settings and report plotting (#915).
+- Acceptance:
+  - `GoSurveyQtTests` coverage: the highlighter gives each of keyword, option, number, comment and field-code a distinct colour and leaves other words and the document text unchanged; the colours differ from the background in both appearances.
+  - `GoSurveyQtTests` coverage: the gutter shows one number per line, follows scrolling, widens at 10/100 lines, and marks an error line.
+  - `GoSurveyQtTests` coverage: a malformed line shows its reason and line number after the pause without changing the traverse, results, session or files; fixing it clears the error; Run adjustment and Save refuse with the same message; a bad import file changes nothing.
+  - `GoSurveyQtTests` coverage: the plan preview builds stations, legs, closing leg and side shots from a traverse, shows ellipses only for a current successful adjustment, drops them on edit, reports too few stations, and zoom/pan/zoom-extents change the view.
+  - `GoSurveyQtTests` coverage: saving inside a writable project tracks the file, inside a read-only project does not; the Files and Summary panel follows save and adjustment; a commit refused for a read-only project says why and places no point; a normal commit still undoes.
+  - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md`.
+  - Present 2-3 integrated screenshot options for each major affected surface (the editor and the plan preview), apply the user's selected direction, and show the final screenshots before the issue is closed.
+- Owner-layer: Qt UI (`src/qt/AdjustmentWindow`, new `src/qt/AdjustmentEditor`) over the shared `src/traverse/` services (`TraverseCommandLang`, `TraverseCalc`, `TraverseLeastSquares`).
+- Status: accepted (2026-10-19) - D-2026-10-19-c, GitHub issue #912.
+- Revisions: 2026-10-19 - initial, D-2026-10-19-c, GitHub issue #912.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13930,8 +13958,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
 | REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |
 | REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
-| REQ-431 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
-| REQ-432 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
+| REQ-431 | Qt UI | `GoSurveyQtTests`: `issue912HighlighterColoursEachTokenKindAndKeepsText`, `issue912GutterNumbersLinesWidensScrollsAndMarksError`, `issue912InlineErrorShowsReasonWithoutChangingAnything`, `issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses`, `issue912FilesSummaryFollowSolveAndEditsAndRefusedCommitSaysWhy`, `issue912SaveInsideProjectTracksOnlyWhenWritable` | accepted |
+| REQ-433 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
+| REQ-434 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

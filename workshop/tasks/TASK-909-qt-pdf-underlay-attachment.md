@@ -1,14 +1,14 @@
 # TASK-909 — Qt PDF underlay attachment
 
 - Type: feature
-- Status: implementing
+- Status: implemented; visual approved; PR open
 - Opened: 2026-10-19
 - Owner: Workshop
 - GitHub: #909, child of #878
 
 ## 1. Authority
 - Goal: Qt migration to 0.7.4 parity.
-- Requirements: REQ-431 (D-2026-10-19-c), REQ-432 (D-2026-10-19-d).
+- Requirements: REQ-433 (D-2026-10-19-e), REQ-434 (D-2026-10-19-f).
 - Constraints: REQ-201 (honest failure), REQ-300 (no new dependency), REQ-301 (no abstraction without two uses), existing command/domain ownership.
 - Issue acceptance: preserve cancellation, validation, failure, undo and read-only behavior; complete Qt usability; focused workflow coverage; update parity ledger; present 2–3 integrated screenshot options per affected surface and apply the user's selection.
 - Behavior reference: existing 0.7.4 ImGui `PDFATTACH` dialog/command and shared project Copy / Link flow.

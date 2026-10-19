@@ -10,6 +10,7 @@
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/TraverseCommandLang.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "PdfViewerCore.hpp"
@@ -53,6 +54,10 @@
 #include <QMessageBox>
 #include <QDialog>
 #include <QPlainTextEdit>
+#include <QScrollBar>
+#include <QRegularExpression>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QTextBrowser>
 #include <QLineEdit>
 #include <QInputDialog>
@@ -236,6 +241,25 @@ void Issue893Fixture(AppCommandState& st, bool buildSurfaces = true) {
     CreateSurfaceFromPointGroups(st, "EG", {"Ground"}, log);
     CreateSurfaceFromPointGroups(st, "Proposed", {}, log);
   }
+}
+QString Issue912Shot(const QString& name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(name);
+}
+/// The default test traverse, solved for the plan, plus a side shot and a check shot off station 1.
+std::unique_ptr<AppCommandState> Issue912State(bool withShots) {
+  auto state = StateWithTraverse();
+  if (!withShots) return state;
+  std::string text = travcmd::Serialize(state->traverseData, state->traverseLsaWeights);
+  if (!text.empty() && text.back() != '\n') text += '\n';
+  text += "STN 1 9 SIDE\nHANG REF 1 9 45\nHDIST 1 9 25\nDESC 1 9 corner\n";
+  text += "STN 1 10 CHECK\nHANG REF 1 10 135\nHDIST 1 10 30\n";
+  std::string error;
+  LsaWeights weights = state->traverseLsaWeights;
+  TraverseData data;
+  if (travcmd::Parse(text, data, weights, error)) state->traverseData = data;
+  return state;
 }
 QString Issue893Shot(const char* name) {
   const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
@@ -2315,6 +2339,285 @@ private Q_SLOTS:
     AnswerNextDialog(QMessageBox::Discard);
     QVERIFY(window->close());
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+
+  void issue912HighlighterColoursEachTokenKindAndKeepsText() {
+    const auto spans = ClassifyAdjustmentLine("STN 1 2.5 #LOOP ON 'TH CN");
+    QCOMPARE(spans.size(), 6);
+    QCOMPARE(int(spans[0].kind), int(AdjustmentToken::Keyword));
+    QCOMPARE(int(spans[1].kind), int(AdjustmentToken::Number));
+    QCOMPARE(int(spans[2].kind), int(AdjustmentToken::Number));
+    QCOMPARE(int(spans[3].kind), int(AdjustmentToken::Option));
+    QCOMPARE(int(spans[4].kind), int(AdjustmentToken::Keyword));
+    QCOMPARE(int(spans[5].kind), int(AdjustmentToken::FieldCode));
+    QCOMPARE(ClassifyAdjustmentLine("  // a note").size(), 1);
+    QCOMPARE(int(ClassifyAdjustmentLine("  // a note")[0].kind), int(AdjustmentToken::Comment));
+    const auto field = ClassifyAdjustmentLine("HDIST 1 2 100 'TH CN 5");
+    QCOMPARE(int(field.last().kind), int(AdjustmentToken::FieldCode));
+    QCOMPARE(field.last().start, 14);
+    QCOMPARE(field.last().length, 8);
+    QVERIFY(ClassifyAdjustmentLine("somename").isEmpty());
+
+    for (const bool dark : {true, false}) {
+      AdjustmentCodeEdit editor;
+      editor.SetPalette(AdjustmentPalette(dark));
+      const QString text = "STN 1 2\n// note\n#LOOP ON\nHDIST 1 2 100.5 'TH";
+      editor.setPlainText(text);
+      QCOMPARE(editor.toPlainText(), text);  // colours never change the text
+      const auto& palette = editor.Palette();
+      const QColor colours[] = {palette.keyword, palette.option, palette.number, palette.comment, palette.fieldCode};
+      for (int i = 0; i < 5; ++i) {
+        QVERIFY(colours[i] != palette.background);
+        QVERIFY2(qAbs(colours[i].lightness() - palette.background.lightness()) > 60, "token colour is hard to read");
+        for (int j = i + 1; j < 5; ++j) QVERIFY(colours[i] != colours[j]);
+      }
+      auto formatColour = [&](int block, int position) {
+        const auto formats = editor.document()->findBlockByNumber(block).layout()->formats();
+        for (const auto& range : formats) if (position >= range.start && position < range.start + range.length)
+          return range.format.foreground().color();
+        return QColor();
+      };
+      QCOMPARE(formatColour(0, 0), palette.keyword);
+      QCOMPARE(formatColour(0, 4), palette.number);
+      QCOMPARE(formatColour(1, 3), palette.comment);
+      QCOMPARE(formatColour(2, 0), palette.option);
+      QCOMPARE(formatColour(3, 17), palette.fieldCode);
+      QVERIFY(!formatColour(0, 3).isValid());  // plain space keeps the text colour
+    }
+  }
+
+  void issue912GutterNumbersLinesWidensScrollsAndMarksError() {
+    AdjustmentCodeEdit editor;
+    editor.resize(480, 240);
+    editor.show();
+    auto lines = [](int count) { QStringList list; for (int i = 0; i < count; ++i) list << QString("STN %1 %2").arg(i).arg(i + 1); return list.join('\n'); };
+    editor.setPlainText(lines(9));
+    const int nine = editor.GutterWidth();
+    editor.setPlainText(lines(10));
+    const int ten = editor.GutterWidth();
+    QVERIFY(ten > nine);
+    editor.setPlainText(lines(99));
+    const int ninetyNine = editor.GutterWidth();
+    editor.setPlainText(lines(100));
+    QVERIFY(editor.GutterWidth() > ninetyNine);
+    editor.setPlainText(lines(300));
+    QTest::qWait(30);
+    QCOMPARE(editor.Gutter()->width(), editor.GutterWidth());
+    QCOMPARE(editor.FirstVisibleLine(), 1);
+    editor.verticalScrollBar()->setValue(60);  // the gutter follows the text
+    QCOMPARE(editor.FirstVisibleLine(), 61);
+
+    editor.verticalScrollBar()->setValue(0);
+    const auto palette = editor.Palette();
+    auto hasPixel = [&](const QColor& colour) {
+      const QImage image = editor.Gutter()->grab().toImage();
+      for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x)
+        if (QColor(image.pixel(x, y)) == colour) return true;
+      return false;
+    };
+    QVERIFY(!hasPixel(palette.error));
+    editor.SetError(2, "bad value");
+    QCOMPARE(editor.ErrorLine(), 2);
+    QVERIFY2(hasPixel(palette.error), "the gutter marks the error line");
+    editor.SetError(0, {});
+    QVERIFY(!hasPixel(palette.error));
+  }
+
+  void issue912InlineErrorShowsReasonWithoutChangingAnything() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    auto* editor = static_cast<AdjustmentCodeEdit*>(window.findChild<QPlainTextEdit*>("adjustmentCommands"));
+    auto* status = window.findChild<QLabel*>("adjustmentTextStatus");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    QVERIFY(editor); QVERIFY(status); QVERIFY(output);
+    QCOMPARE(editor->ErrorLine(), 0);
+    QCOMPARE(status->text(), QString("Command text is valid"));
+    const QString good = editor->toPlainText();
+    const TraverseData before = state->traverseData;
+    const LsaWeights weights = state->traverseLsaWeights;
+    const int lineCount = editor->blockCount();
+
+    editor->setPlainText(good + "\nBOGUS 1 2 3");
+    QTRY_VERIFY_WITH_TIMEOUT(editor->ErrorLine() > 0, 3000);  // after the typing pause
+    QVERIFY(editor->ErrorLine() >= lineCount);
+    QVERIFY(!editor->ErrorMessage().isEmpty());
+    QVERIFY(status->text().startsWith("Parse error"));
+    QVERIFY(status->text().contains(QString("line %1").arg(editor->ErrorLine())));
+    QCOMPARE(state->traverseData.legs.size(), before.legs.size());  // checking mutates nothing
+    QCOMPARE(state->traverseData.startEasting, before.startEasting);
+    QCOMPARE(state->traverseLsaWeights.sigmaAngleSec, weights.sigmaAngleSec);
+    QVERIFY(!state->traverseLsaComputed);
+
+    QTemporaryDir directory;
+    QString error;
+    QVERIFY(!window.SaveFile(directory.filePath("bad.gstrav"), error));
+    QVERIFY(!QFile::exists(directory.filePath("bad.gstrav")));
+    QVERIFY(status->text().endsWith(error));  // the same "line N: reason" as the status line
+    Action(window, "Run adjustment")->trigger();
+    QVERIFY(!window.IsBusy());
+    QCOMPARE(output->toPlainText(), error);
+    QVERIFY(!window.AcceptResult(error));
+
+    editor->setPlainText(good);  // fixing the line clears everything
+    QTRY_COMPARE_WITH_TIMEOUT(editor->ErrorLine(), 0, 3000);
+    QVERIFY(editor->ErrorMessage().isEmpty());
+    QCOMPARE(status->text(), QString("Command text is valid"));
+  }
+
+  void issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses() {
+    auto state = Issue912State(true);
+    ComputeTraverse(state->traverseData);
+    AdjustmentPlanView view;
+    view.resize(420, 320);
+    view.SetTraverse(state->traverseData, nullptr);
+    QCOMPARE(view.StationCount(), 4);
+    QCOMPARE(view.LegCount(), 4);
+    QCOMPARE(view.SideShotCount(), 2);
+    QVERIFY(!view.HasClosingLeg());  // the last course already ends on the start monument
+    QCOMPARE(view.EllipseCount(), 0);
+    QVERIFY(view.TooltipAt(QPoint(-50, -50)).isEmpty());
+
+    auto open = StateWithTraverse();
+    open->traverseData.legs.back().stationId = 4;  // loop whose last station is not the start
+    ComputeTraverse(open->traverseData);
+    AdjustmentPlanView loop;
+    loop.resize(420, 320);
+    loop.SetTraverse(open->traverseData, nullptr);
+    QVERIFY(loop.HasClosingLeg());
+
+    AdjustmentPlanView empty;
+    empty.SetTraverse(TraverseData{}, nullptr);
+    QVERIFY(!empty.HasEnoughStations());
+
+    auto result = ComputeTraverseLeastSquares(state->traverseData, state->traverseLsaWeights);
+    QVERIFY2(result.ok, result.message.c_str());
+    QVERIFY(!result.stationSemiMajorFt.empty());
+    view.SetTraverse(state->traverseData, &result);
+    QVERIFY(view.EllipseCount() > 0);
+    QVERIFY(view.EllipseFactor() >= 1.0);
+    bool hover = false;
+    for (int y = 0; y < view.height() && !hover; y += 3) for (int x = 0; x < view.width() && !hover; x += 3) {
+      const QString text = view.TooltipAt(QPoint(x, y));
+      if (text.contains("Semi-major") && text.contains("Semi-minor") && text.contains("Azimuth")) hover = true;
+    }
+    QVERIFY2(hover, "hovering a station shows its ellipse values");
+    view.SetTraverse(state->traverseData, nullptr);  // the text changed: the result is stale
+    QCOMPARE(view.EllipseCount(), 0);
+
+    const double fitted = view.Scale();
+    view.ZoomAt(QPointF(210, 160), 3);
+    QVERIFY(view.Scale() > fitted);
+    const QPointF centre = view.Center();
+    view.PanBy(QPointF(30, 0));
+    QVERIFY(view.Center() != centre);
+    QWheelEvent wheel(QPointF(210, 160), view.mapToGlobal(QPointF(210, 160)), {}, QPoint(0, -240), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    const double before = view.Scale();
+    QApplication::sendEvent(&view, &wheel);
+    QVERIFY(view.Scale() < before);
+    view.ZoomExtents();
+    QVERIFY(qAbs(view.Scale() - fitted) < fitted * 1e-9);
+  }
+
+  void issue912FilesSummaryFollowSolveAndEditsAndRefusedCommitSaysWhy() {
+    auto state = StateWithTraverse();
+    AppCommandState::ProjectSession readOnlyProject;
+    readOnlyProject.uid = 912; readOnlyProject.readOnly = true;
+    state->openProjects.push_back(readOnlyProject);
+    state->drawingTabs[1].projectUid = 912;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.show();
+    auto* files = window.findChild<QLabel*>("adjustmentFiles");
+    auto* summary = window.findChild<QLabel*>("adjustmentSummary");
+    auto* plan = static_cast<AdjustmentPlanView*>(window.findChild<QWidget*>("adjustmentPlan"));
+    auto* editor = static_cast<AdjustmentCodeEdit*>(window.findChild<QPlainTextEdit*>("adjustmentCommands"));
+    QVERIFY(files); QVERIFY(summary); QVERIFY(plan); QVERIFY(editor);
+    QVERIFY(files->text().contains(".gstrav: (unsaved)"));
+    QVERIFY(summary->text().contains("Stations: 4"));
+    QVERIFY(summary->text().contains("Run adjustment"));
+    QCOMPARE(plan->EllipseCount(), 0);
+
+    Action(window, "Run adjustment")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+    QVERIFY(summary->text().contains("Redundancy"));
+    QVERIFY(summary->text().contains("Std dev of unit weight"));
+    QVERIFY(plan->EllipseCount() > 0);
+
+    QTemporaryDir directory;
+    QString error;
+    QVERIFY2(window.SaveFile(directory.filePath("shown.gstrav"), error), qPrintable(error));
+    QVERIFY(files->text().contains("shown.gstrav"));
+
+    QVERIFY2(window.AcceptResult(error), qPrintable(error));
+    AnswerNextDialog(QMessageBox::Ok);
+    QCOMPARE(window.CommitToDrawing(), 0);  // read-only project: nothing placed, and the user is told why
+    QVERIFY(state->surveyPoints.empty());
+    QVERIFY(!CanUndo(*state));
+    QVERIFY(QString::fromStdString(log.back()).contains("read-only"));
+
+    editor->appendPlainText("// edit");  // the result no longer matches the text
+    QCOMPARE(plan->EllipseCount(), 0);
+    QVERIFY(summary->text().contains("Run adjustment"));
+  }
+
+  void issue912SaveInsideProjectTracksOnlyWhenWritable() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Traverse Job", &created, &error), error.c_str());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), true);
+    QVERIFY(uid != 0);
+    auto& state = window.State();
+    state.traverseData = StateWithTraverse()->traverseData;
+    state.drawingTabs[state.activeDrawingIdx].projectUid = uid;
+    auto& session = *std::find_if(state.openProjects.begin(), state.openProjects.end(), [uid](const auto& item) { return item.uid == uid; });
+    const QString folder = QString::fromStdWString(session.project.Folder().wstring());
+    auto tracked = [&](const char* name) {
+      for (const auto& item : session.project.items) if (QString::fromStdString(item.path).endsWith(name)) return true;
+      return false;
+    };
+    std::vector<std::string> log;
+    AdjustmentWindow adjustment(state, log, nullptr);
+    QString reason;
+    QVERIFY2(adjustment.SaveFile(folder + "/writable.gstrav", reason), qPrintable(reason));
+    QVERIFY(tracked("writable.gstrav"));
+    const auto itemCount = session.project.items.size();
+    session.readOnly = true;  // as 0.7.4: the file is still written, but the project's file list is not
+    QVERIFY2(adjustment.SaveFile(folder + "/readonly.gstrav", reason), qPrintable(reason));
+    QVERIFY(QFile::exists(folder + "/readonly.gstrav"));
+    QVERIFY(!tracked("readonly.gstrav"));
+    QCOMPARE(session.project.items.size(), itemCount);
+    session.readOnly = false;
+  }
+
+  void issue912FinalScreenshotsDarkAndLight() {
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      auto state = Issue912State(true);
+      std::vector<std::string> log;
+      AdjustmentWindow window(*state, log, nullptr);
+      window.resize(1280, 760);
+      window.show();
+      auto* editor = static_cast<AdjustmentCodeEdit*>(window.findChild<QPlainTextEdit*>("adjustmentCommands"));
+      QString text = editor->toPlainText();
+      text.replace(QRegularExpression("(HDIST\\s+0\\s+1\\s+[0-9.]+)"), "\\1 'TH CN");
+      editor->setPlainText("// Loop traverse - field notes\n" + text);
+      window.ValidateNow();
+      QCOMPARE(editor->ErrorLine(), 0);
+      Action(window, "Run adjustment")->trigger();
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
+      const QString mode = light ? "light" : "dark";
+      QVERIFY(window.grab().save(Issue912Shot(QString("qt-912-final-%1-solved.png").arg(mode))));
+      editor->appendPlainText("BOGUS 1 2 3");
+      editor->verticalScrollBar()->setValue(editor->verticalScrollBar()->maximum());
+      window.ValidateNow();
+      QVERIFY(editor->ErrorLine() > 0);
+      QVERIFY(window.grab().save(Issue912Shot(QString("qt-912-final-%1-error.png").arg(mode))));
+    }
+    ApplyQtAppearance(*qApp, false);
   }
 
   void typingHistoryAndEscapeWorkFromViewport() {
