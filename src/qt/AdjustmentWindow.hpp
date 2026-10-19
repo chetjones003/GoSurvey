@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <QStringList>
+#include <vector>
 class QPlainTextEdit;
 class QTableWidget;
 class QLabel;
@@ -16,7 +17,10 @@ class QListWidget;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QSpinBox;
 class QEvent;
+class QTabWidget;
+class AdjustmentPlanView;
 
 class AdjustmentWindow final : public QMainWindow {
 public:
@@ -26,6 +30,7 @@ public:
   bool LoadFile(const QString& path, QString& error);
   int ImportFiles(const QStringList& paths, QStringList& failures);
   bool SaveFile(const QString& path, QString& error);
+  bool ExportReportFile(const QString& path, QString& error);
   bool AcceptResult(QString& error);
   int CommitToDrawing();
   bool IsBusy() const { return m_Work.valid(); }
@@ -46,7 +51,10 @@ private:
   void PollCalculation();
   void PresentResult();
   void ExportReport();
-  void EditWeights();
+  void ExportReportAs(const QString& extension);
+  void ApplySettingsDraft();
+  void ResetSettingsDraft();
+  void ShowSettings();
   void SetBusy(bool busy);
   void RefreshImportedFiles();
   void RefreshPreview();
@@ -71,6 +79,12 @@ private:
   QPlainTextEdit* m_Output;
   QTableWidget* m_Coordinates;
   QTableWidget* m_Residuals;
+  AdjustmentPlanView* m_ResultPlan = nullptr;
+  QTabWidget* m_ContextTabs = nullptr;
+  std::vector<QDoubleSpinBox*> m_SettingsWeightEditors;
+  QComboBox* m_SettingsAdjustmentType = nullptr;
+  QSpinBox* m_SettingsMaxIterations = nullptr;
+  QLabel* m_SettingsStatus = nullptr;
   QListWidget* m_ImportedFiles;
   TraverseData m_Data;
   LsaWeights m_Weights;
