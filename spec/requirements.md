@@ -12684,6 +12684,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18) — D-2026-10-18-g, GitHub issue #905.
 - Revisions: 2026-10-18 — initial, D-2026-10-18-g, GitHub issue #905. 2026-10-19 — clause 2: F3 / Shift+F3 no longer step through matches (REQ-430 uses F3 for Snap; the user chose "F3 = Snap everywhere", D-2026-10-19-b).
 
+### REQ-432 — Qt traverse import merging and Trimble Access JobXML workflows (GitHub issue #913)
+
+- Status: accepted.
+- Decision: D-2026-10-19-d; the user chose “Full Qt parity” on 2026-10-19. The complete beta 0.7.4 workflows are the behavior baseline; this adds Qt presentation and interaction only.
+- Purpose: Complete the Qt Traverse Editor's raw-data import merging and Trimble Access JobXML workflows. A command route or ribbon button without a usable end-to-end workflow does not satisfy this requirement.
+- Depends on: REQ-015, REQ-016, REQ-403, REQ-417–REQ-423, REQ-201, REQ-300, REQ-301.
+- Acceptance:
+  1. **Raw-data import merge.** In Qt, a user can select multiple supported raw traverse files (FBK, STAR*NET DAT, RW5, and JobXML) and import them into the current traverse. As in beta 0.7.4, the first import into an empty traverse initializes it; subsequent imports append as one continuous traverse with station ids remapped to avoid collisions. Preserve selection order, per-file success/failure reporting, the existing merged observation types, and source-file records.
+  2. **Trimble Access JobXML.** In Qt, a user can select one or more `.jxl` / `.xml` files and import them through the existing JobXML importer. Preserve the observations the shared importer supports and report unsupported or invalid files as beta 0.7.4 does.
+  3. **Safety and parity.** Preserve beta 0.7.4 behavior for cancellation, validation, import failure, undo, and read-only projects wherever applicable. Failed or cancelled operations do not partially alter the traverse or drawing.
+  4. **Focused evidence.** Add Qt workflow coverage for the completed paths and relevant cancellation, validation, failure, undo, and read-only cases. Update `docs/qt-074-parity-ledger.md` with behavior, evidence, and remaining gaps.
+  5. **Visual review.** Present 2–3 integrated screenshot options for each major affected surface. Apply the user's selected direction, then capture the resulting affected surfaces and meaningful states for review before marking the issue complete.
+- Constraints: Keep parsing, merge semantics, and adjustment behavior in the existing shared services; do not duplicate the importer or change the ImGui frontend. No new dependency or abstraction without two current uses.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-d, GitHub issue #913.
+
 ### REQ-430 — Qt PDF viewer: calibration, scale checks and snapping (GitHub issue #906)
 
 - Purpose: bring the 0.7.4 PDF scale workflows to the Qt viewer, so a Qt user can set a sheet's scale by clicking two known points, test that scale against dimensions the drawing prints, correct it, and have clicks land exactly on the drawing's own line ends and corners.
@@ -13959,6 +13974,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |
 | REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
 | REQ-431 | Qt UI | `GoSurveyQtTests`: `issue912HighlighterColoursEachTokenKindAndKeepsText`, `issue912GutterNumbersLinesWidensScrollsAndMarksError`, `issue912InlineErrorShowsReasonWithoutChangingAnything`, `issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses`, `issue912FilesSummaryFollowSolveAndEditsAndRefusedCommitSaysWhy`, `issue912SaveInsideProjectTracksOnlyWhenWritable` | accepted |
+| REQ-432 | Qt UI | GoSurveyQtTests: issue913RawImportsMergeAndReportPerFileFailures, issue913JobXmlImportsThroughQtAndCancelKeepsTheSession | accepted |
 | REQ-433 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-434 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |

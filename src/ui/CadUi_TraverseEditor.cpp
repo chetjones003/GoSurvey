@@ -731,48 +731,10 @@ void DrawHighlightedLine(const std::string& line) {
 // block is renumbered to a fresh, unused id before it's appended; its own start
 // station (the point the imported side shots/GPS vectors may be anchored to) maps onto
 // wherever `into`'s chain currently ends, since the new legs continue from there.
-static void MergeImportedTraverse(TraverseData& into, TraverseData&& imported) {
-    if (into.legs.empty() && into.sideShots.empty() && into.gpsVectors.empty()) {
-        into = std::move(imported);
-        return;
-    }
-
-    int maxUsedId = into.startStationId;
-    for (const TraverseLeg& leg : into.legs) maxUsedId = std::max(maxUsedId, leg.stationId);
-    for (const TraverseSideShot& ss : into.sideShots)
-        maxUsedId = std::max({maxUsedId, ss.atStationId, ss.stationId});
-    for (const TraverseGpsVector& gv : into.gpsVectors)
-        maxUsedId = std::max({maxUsedId, gv.fromStationId, gv.toStationId});
-
-    const int chainEndId = into.legs.empty() ? into.startStationId : into.legs.back().stationId;
-    std::unordered_map<int, int> remap;
-    remap[imported.startStationId] = chainEndId;
-    int nextId = maxUsedId + 1;
-    auto mapId = [&](int oldId) -> int {
-        auto it = remap.find(oldId);
-        if (it != remap.end()) return it->second;
-        const int newId = nextId++;
-        remap[oldId] = newId;
-        return newId;
-    };
-
-    for (TraverseLeg& leg : imported.legs) leg.stationId = mapId(leg.stationId);
-    for (TraverseSideShot& ss : imported.sideShots) {
-        ss.atStationId = mapId(ss.atStationId);
-        ss.stationId = mapId(ss.stationId);
-    }
-    for (TraverseGpsVector& gv : imported.gpsVectors) {
-        gv.fromStationId = mapId(gv.fromStationId);
-        gv.toStationId = mapId(gv.toStationId);
-    }
-
-    for (auto& leg : imported.legs) into.legs.push_back(std::move(leg));
-    for (auto& ss : imported.sideShots) into.sideShots.push_back(std::move(ss));
-    for (auto& gv : imported.gpsVectors) into.gpsVectors.push_back(std::move(gv));
-}
+// The importer merge lives in TraverseCalc so ImGui and Qt append identical data.
 
 // Imports every path in `paths` with `importFn`, merging each into cmd.traverseData
-// (see MergeImportedTraverse), recording a `#IMPORT "path"` marker (surfaced in the
+// (see TraverseAppendImported), recording a `#IMPORT "path"` marker (surfaced in the
 // Command tab's text — DrawTraverseCommandTab) and logging per-file success/failure.
 template <typename ImportFn>
 static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
@@ -784,7 +746,7 @@ static void ImportRawFiles(AppCommandState& cmd, std::vector<std::string>& log,
         if (importFn(path.c_str(), imported, err)) {
             const size_t importedLegs = imported.legs.size();
             const int markerLegIndex = static_cast<int>(cmd.traverseData.legs.size());
-            MergeImportedTraverse(cmd.traverseData, std::move(imported));
+            TraverseAppendImported(cmd.traverseData, std::move(imported));
             cmd.traverseImportMarkers.emplace_back(markerLegIndex, "IMPORT \"" + path + "\"");
             cmd.traverseData.importedFiles.push_back(path);  // REQ-423.
             cmd.traverseDataDirty = true;

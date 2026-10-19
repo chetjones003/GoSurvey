@@ -10,6 +10,7 @@
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
 #include "traverse/TraverseIo.hpp"
+#include "traverse/FbkImport.hpp"
 #include "traverse/TraverseCommandLang.hpp"
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
@@ -72,13 +73,14 @@
 #include <QComboBox>
 #include <QCheckBox>
 #include <QTableWidget>
+#include <QGroupBox>
+#include <QRegularExpression>
 #include <QPushButton>
 #include <QListWidget>
 #include <QProgressBar>
 #include <QTextBrowser>
 #include <QToolButton>
 #include <QMenu>
-#include <QGroupBox>
 #include <QBoxLayout>
 #include <QStyledItemDelegate>
 #include <QRadioButton>
@@ -104,6 +106,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <cmath>
+#include <algorithm>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -129,6 +132,25 @@ std::unique_ptr<AppCommandState> StateWithTraverse() {
 QAction* Action(QWidget& widget, const QString& text) {
   for (auto* action : widget.findChildren<QAction*>()) if (action->text() == text) return action;
   return nullptr;
+}
+/// Issue #911: a Texas Central (US feet) drawing whose Transformation tab resolves a real scale
+/// factor, with sea-level reduction on so Combined and Grid only differ.
+void GiveDrawingTexasScale(AppCommandState& state) {
+  if (!geo::DictionariesLoaded())
+    geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string());
+  state.drawingInsUnits = 2;
+  state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+  auto& transform = state.drawingSettings.transform;
+  transform.refGridE = 3115243.14; transform.refGridN = 10077391.26;
+  transform.applySeaLevel = true; transform.elevation = 1000.0;
+  transform.spheroidRadiusM = 20906000.0 * 1200.0 / 3937.0;
+}
+/// Runs the adjustment and waits for the worker; the solved traverse is then in `state.traverseData`.
+void SolveAdjustment(AdjustmentWindow& window) {
+  auto* run = Action(window, "Run adjustment");
+  QVERIFY(run);
+  run->trigger();
+  QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
 }
 void AnswerNextDialog(QMessageBox::StandardButton answer) {
   QTimer::singleShot(0, [answer] {
@@ -281,12 +303,45 @@ QString Issue907Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Issue908Shot(const char* name) {
+  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QString Issue905WritePdf(QTemporaryDir& directory, const char* name, const std::string& bytes) {
   QString path = directory.filePath(QString::fromLatin1(name));
   QFile file(path);
   if (!file.open(QIODevice::WriteOnly)) return {};
   file.write(bytes.data(), static_cast<qint64>(bytes.size()));
   return path;
+}
+std::string Issue908AuditPdf() {
+  std::string content = "0.5 w\n";
+  for (int i = 0; i < 5; ++i) {
+    const int y = 100 + i * 60;
+    content += "50 " + std::to_string(y) + " m 250 " + std::to_string(y) + " l S\n";
+    content += "50 " + std::to_string(y - 5) + " m 50 " + std::to_string(y + 10) + " l S\n";
+    content += "250 " + std::to_string(y - 5) + " m 250 " + std::to_string(y + 10) + " l S\n";
+    content += "BT /F1 8 Tf 130 " + std::to_string(y + 12) + " Td (100'-0\") Tj ET\n";
+  }
+  std::vector<std::string> objects = {
+      "<</Type/Catalog/Pages 2 0 R>>", "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+      "<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+      "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "endstream",
+      "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"};
+  std::string pdf = "%PDF-1.4\n";
+  std::vector<size_t> offsets;
+  for (size_t i = 0; i < objects.size(); ++i) {
+    offsets.push_back(pdf.size());
+    pdf += std::to_string(i + 1) + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const size_t xref = pdf.size();
+  pdf += "xref\n0 " + std::to_string(objects.size() + 1) + "\n0000000000 65535 f \n";
+  for (size_t offset : offsets) {
+    char line[32]; std::snprintf(line, sizeof(line), "%010zu 00000 n \n", offset); pdf += line;
+  }
+  pdf += "trailer\n<</Size " + std::to_string(objects.size() + 1) + "/Root 1 0 R>>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return pdf;
 }
 // The current search match is orange over white (255, ~187, ~105); the other matches are yellow.
 bool Issue905HasHighlight(const QImage& image) {
@@ -2244,6 +2299,106 @@ private Q_SLOTS:
     QVERIFY(!window.AcceptResult(error));
   }
 
+  void issue913RawImportsMergeAndReportPerFileFailures() {
+    auto state = StateWithTraverse();
+    state->traverseData = {};
+    AppCommandState::ProjectSession readOnlyProject;
+    readOnlyProject.uid = 913;
+    readOnlyProject.readOnly = true;
+    state->openProjects.push_back(readOnlyProject);
+    state->drawingTabs[1].projectUid = readOnlyProject.uid;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    const QString fbk = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/traverse_sample.fbk";
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QFile bad(directory.filePath("bad.xml"));
+    QVERIFY(bad.open(QIODevice::WriteOnly));
+    bad.write("<not-jobxml>"); bad.close();
+
+    QStringList failures;
+    QCOMPARE(window.ImportFiles({fbk, fbk}, failures), 2);
+    QVERIFY(failures.empty());
+    auto* files = window.findChild<QListWidget*>("issue913ImportedFiles");
+    QVERIFY(files);
+    QCOMPARE(files->count(), 2);
+    QVERIFY(files->item(0)->text().startsWith("Imported"));
+    QVERIFY(files->item(1)->text().startsWith("Imported"));
+    window.resize(1220, 780);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* filesPanel = window.findChild<QWidget*>("adjustmentLeftPanel");
+    QVERIFY(filesPanel);
+    QVERIFY(filesPanel->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-success.png")));
+
+    QCOMPARE(window.ImportFiles({bad.fileName()}, failures), 0);
+    QCOMPARE(failures.size(), 1);
+    QVERIFY(!failures.front().isEmpty());
+    QCOMPARE(files->count(), 3);
+    QVERIFY(files->item(2)->text().startsWith("Failed"));
+
+    TraverseData oneImport;
+    std::string reason;
+    QVERIFY(FbkImport(fbk.toUtf8().constData(), oneImport, reason));
+    const auto expectedLegs = oneImport.legs.size();
+    const auto expectedPoints = state->surveyPoints.size();
+    QVERIFY(!CanUndo(*state));
+    QString saveError;
+    const QString saved = directory.filePath("merged.gstrav");
+    QVERIFY2(window.SaveFile(saved, saveError), qPrintable(saveError));
+    TraverseData loaded;
+    LsaWeights weights;
+    QVERIFY(traverseio::Load(saved.toUtf8().toStdString(), loaded, weights, reason));
+    QCOMPARE(loaded.legs.size(), expectedLegs * 2);
+    QCOMPARE(loaded.importedFiles.size(), std::size_t(2));
+    std::vector<int> stationIds;
+    stationIds.reserve(loaded.legs.size());
+    for (const auto& leg : loaded.legs) stationIds.push_back(leg.stationId);
+    std::sort(stationIds.begin(), stationIds.end());
+    QVERIFY(std::adjacent_find(stationIds.begin(), stationIds.end()) == stationIds.end());
+    QCOMPARE(state->surveyPoints.size(), expectedPoints);
+    QVERIFY(!CanUndo(*state));
+
+    QCoreApplication::processEvents();
+    QVERIFY(!files->item(2)->toolTip().isEmpty());
+    QVERIFY(filesPanel->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-error.png")));
+    window.hide();
+  }
+
+  void issue913JobXmlImportsThroughQtAndCancelKeepsTheSession() {
+    auto state = StateWithTraverse();
+    state->traverseData = {};
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    const QString jobXml = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/closed_loop_trav.jxl";
+    QStringList failures;
+    QCOMPARE(window.ImportFiles({jobXml}, failures), 1);
+    QVERIFY(failures.empty());
+    window.resize(1220, 780);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.findChild<QWidget*>("adjustmentLeftPanel")->grab().save(
+        QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-jobxml-import.png")));
+    const QString beforeCancel = window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText();
+    const int filesBeforeCancel = window.findChild<QListWidget*>("issue913ImportedFiles")->count();
+    QCOMPARE(window.ImportFiles({}, failures), 0);
+    QCOMPARE(window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText(), beforeCancel);
+    QCOMPARE(window.findChild<QListWidget*>("issue913ImportedFiles")->count(), filesBeforeCancel);
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    QString saveError;
+    const QString saved = directory.filePath("jobxml.gstrav");
+    QVERIFY2(window.SaveFile(saved, saveError), qPrintable(saveError));
+    TraverseData loaded;
+    LsaWeights weights;
+    std::string reason;
+    QVERIFY(traverseio::Load(saved.toUtf8().toStdString(), loaded, weights, reason));
+    QCOMPARE(loaded.importedFiles.size(), std::size_t(1));
+    QCOMPARE(QString::fromUtf8(loaded.importedFiles.front().c_str()), jobXml);
+    QVERIFY(!loaded.legs.empty());
+  }
+
   void asynchronousSolveAcceptanceCommitAndUndo() {
     auto state = StateWithTraverse();
     std::vector<std::string> log;
@@ -2339,6 +2494,211 @@ private Q_SLOTS:
     AnswerNextDialog(QMessageBox::Discard);
     QVERIFY(window->close());
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+  }
+
+  void issue911TraverseUnitLabelsFollowTheDrawingUnit() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 6;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* units = window.findChild<QLabel*>("adjustmentUnits");
+    QVERIFY(units);
+    QCOMPARE(units->text(), QString("Units: Meters"));
+    auto* coordinates = window.findChild<QTableWidget*>();
+    QVERIFY(coordinates);
+    QCOMPARE(coordinates->horizontalHeaderItem(1)->text(), QString("Easting (m)"));
+    QVERIFY(window.findChild<QLabel*>("adjustmentResidualNote")->text().contains(" m."));
+    state->drawingInsUnits = 2;
+    AdjustmentWindow feet(*state, log, nullptr);
+    QCOMPARE(feet.findChild<QLabel*>("adjustmentUnits")->text(), QString("Units: Feet"));
+    QCOMPARE(feet.findChild<QTableWidget*>()->horizontalHeaderItem(2)->text(), QString("Northing (ft)"));
+  }
+
+  void issue911ScaleFactorIsOffByDefaultAndLeavesTheTraverseUnchanged() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    QVERIFY(!window.findChild<QCheckBox*>("adjustmentScaleFactor")->isChecked());
+    QVERIFY(!window.findChild<QComboBox*>("adjustmentScaleKind")->isEnabled());
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    QVERIFY(!state->traverseData.applyScaleFactor);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    for (const auto& leg : state->traverseData.legs) QCOMPARE(leg.computedHorizDist, leg.computedGroundHorizDist);
+  }
+
+  void issue911ScaleFactorCombinedGridOnlyAndTextStayInStep() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    double grid = 0.0, combined = 0.0;
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::GridOnly, &grid).empty());
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::Combined, &combined).empty());
+    QVERIFY(grid != combined);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* check = window.findChild<QCheckBox*>("adjustmentScaleFactor");
+    auto* kind = window.findChild<QComboBox*>("adjustmentScaleKind");
+    auto* readout = window.findChild<QLabel*>("adjustmentScaleReadout");
+    // Bar -> text: the checkbox rewrites the #SCALE line and the readout shows the resolved factor.
+    check->setChecked(true);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON COMBINED"));
+    QVERIFY(kind->isEnabled());
+    QCOMPARE(readout->text(), QString("k = %1").arg(combined, 0, 'f', 6));
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseData.scaleFactor, combined);
+    for (const auto& leg : state->traverseData.legs)
+      QVERIFY(std::abs(leg.computedHorizDist - leg.computedGroundHorizDist * combined) < 1e-9);
+    const double combinedPerimeter = state->traverseData.legs[1].computedHorizDist;
+    // Grid only ignores the sea-level reduction and invalidates the previous solve.
+    kind->setCurrentIndex(1);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON GRID"));
+    QVERIFY(!state->traverseLsaComputed);
+    QCOMPARE(readout->text(), QString("k = %1").arg(grid, 0, 'f', 6));
+    SolveAdjustment(window);
+    QCOMPARE(state->traverseData.scaleFactor, grid);
+    QVERIFY(state->traverseData.legs[1].computedHorizDist != combinedPerimeter);
+    // Text -> bar: hand-editing the directive moves the controls.
+    editor->setPlainText(editor->toPlainText().replace("#SCALE ON GRID", "#SCALE OFF COMBINED"));
+    QVERIFY(!check->isChecked());
+    QCOMPARE(kind->currentIndex(), 0);
+    SolveAdjustment(window);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    // A hand-written file with no #SCALE line gets one added without disturbing the rest.
+    editor->setPlainText(editor->toPlainText().replace(QRegularExpression("#SCALE[^\n]*\n"), ""));
+    QVERIFY(!editor->toPlainText().contains("#SCALE"));
+    const int lines = editor->document()->blockCount();
+    check->setChecked(true);
+    QVERIFY(editor->toPlainText().contains("#SCALE ON COMBINED"));
+    QCOMPARE(editor->document()->blockCount(), lines + 1);
+  }
+
+  void issue911ScaleFactorReportsWhyItCannotBeApplied() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 2;   // no coordinate system: "No Datum, No Projection"
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    const QString readout = window.findChild<QLabel*>("adjustmentScaleReadout")->text();
+    QVERIFY(readout.startsWith("(") && readout.size() > 3);
+    SolveAdjustment(window);   // still solves, unscaled
+    QVERIFY(state->traverseLsaResult.ok);
+    QCOMPARE(state->traverseData.scaleFactor, 1.0);
+    for (const auto& leg : state->traverseData.legs) QCOMPARE(leg.computedHorizDist, leg.computedGroundHorizDist);
+    QVERIFY(window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText().contains("#SCALE ON"));
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    QVERIFY(output &&output->toPlainText().startsWith("Scale factor not applied"));
+  }
+
+  void issue911ScaleFactorSurvivesSaveAndLoad() {
+    auto state = StateWithTraverse();
+    GiveDrawingTexasScale(*state);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    window.findChild<QComboBox*>("adjustmentScaleKind")->setCurrentIndex(1);
+    QTemporaryDir directory;
+    QString error;
+    const QString path = directory.filePath("scaled.gstrav");
+    QVERIFY2(window.SaveFile(path, error), qPrintable(error));
+    TraverseData loaded; LsaWeights weights; std::string reason;
+    QVERIFY2(traverseio::Load(path.toUtf8().toStdString(), loaded, weights, reason), reason.c_str());
+    QVERIFY(loaded.applyScaleFactor);
+    QVERIFY(loaded.scaleFactorKind == TraverseData::ScaleFactorKind::GridOnly);
+    double grid = 0.0;
+    QVERIFY(ResolveTraverseScaleFactor(*state, TraverseData::ScaleFactorKind::GridOnly, &grid).empty());
+    QCOMPARE(loaded.scaleFactor, grid);
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(false);
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QVERIFY(window.findChild<QCheckBox*>("adjustmentScaleFactor")->isChecked());
+    QCOMPARE(window.findChild<QComboBox*>("adjustmentScaleKind")->currentIndex(), 1);
+  }
+
+  void issue911CurvatureRefractionControlsDriveElevations() {
+    auto state = StateWithTraverse();
+    for (auto& leg : state->traverseData.legs) { leg.hasVertAngle = true; leg.isZenithAngle = true; leg.vertAngleDeg = 89.5; }
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* check = window.findChild<QCheckBox*>("adjustmentCurvRefr");
+    auto* k = window.findChild<QDoubleSpinBox*>("adjustmentRefractionK");
+    auto* warning = window.findChild<QLabel*>("adjustmentRefractionWarning");
+    QVERIFY(check->isChecked());
+    QCOMPARE(k->value(), 0.14);
+    QVERIFY(k->isEnabled());
+    QVERIFY(warning->isHidden());
+    SolveAdjustment(window);
+    const double defaultDz = state->traverseData.legs[1].computedDeltaZ;
+    const double hd = state->traverseData.legs[1].computedHorizDist;
+    constexpr double earthRadius = 6371000.0;
+    // Off: plain trigonometry, and a previous solve is no longer committable.
+    check->setChecked(false);
+    QVERIFY(!k->isEnabled());
+    QVERIFY(!state->traverseLsaComputed);
+    SolveAdjustment(window);
+    const double plainDz = state->traverseData.legs[1].computedDeltaZ;
+    QVERIFY(std::abs((defaultDz - plainDz) - (1.0 - 0.14) * hd * hd / (2.0 * earthRadius)) < 1e-9);
+    // On with a different k.
+    check->setChecked(true);
+    k->setValue(0.5);
+    SolveAdjustment(window);
+    QVERIFY(std::abs((state->traverseData.legs[1].computedDeltaZ - plainDz) - 0.5 * hd * hd / (2.0 * earthRadius)) < 1e-9);
+    QVERIFY(warning->isHidden());
+    // A scale-directive edit re-reads the text; the curvature setting must survive it.
+    window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+    SolveAdjustment(window);
+    QVERIFY(state->traverseData.applyCurvRefCorr);
+    QCOMPARE(state->traverseData.refractionCoeff, 0.5);
+    // Out of the typical -2..+2 range warns, but still computes.
+    k->setValue(3.0);
+    QVERIFY(!warning->isHidden());
+    SolveAdjustment(window);
+    QVERIFY(state->traverseLsaResult.ok);
+    check->setChecked(false);
+    QVERIFY(warning->isHidden());
+  }
+
+  void issue911SettingsDialogLabelsDistancesInTheDrawingUnit() {
+    auto state = StateWithTraverse();
+    state->drawingInsUnits = 6;
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    QString labels;
+    QTimer::singleShot(100, [&] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (widget->windowTitle() == "Instrument / Adjustment Settings") {
+          for (auto* label : widget->findChildren<QLabel*>()) labels += label->text() + "\n";
+          static_cast<QDialog*>(widget)->reject();
+        }
+    });
+    Action(window, "Settings...")->trigger();
+    QVERIFY2(labels.contains("Distance sigma (m)"), qPrintable(labels));
+    QVERIFY(!labels.contains("drawing units"));
+  }
+
+  // Issue #911: screenshots of the chosen layout (options bar under the toolbar) for review; they are
+  // written to build/artifacts and never committed.
+  void issue911CaptureTraverseOptionsBarScreenshots() {
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    auto capture = [&](const QString& name, bool texas, bool solve, double refraction) {
+      auto state = StateWithTraverse();
+      for (auto& leg : state->traverseData.legs) { leg.hasVertAngle = true; leg.isZenithAngle = true; leg.vertAngleDeg = 89.5; }
+      if (texas) GiveDrawingTexasScale(*state);
+      std::vector<std::string> log;
+      AdjustmentWindow window(*state, log, nullptr);
+      window.resize(1200, 520);
+      window.show();
+      window.findChild<QCheckBox*>("adjustmentScaleFactor")->setChecked(true);
+      window.findChild<QDoubleSpinBox*>("adjustmentRefractionK")->setValue(refraction);
+      if (solve) SolveAdjustment(window);
+      QCoreApplication::processEvents();
+      QVERIFY(window.grab().save(artifacts + "qt-911-" + name + ".png"));
+    };
+    capture("solved", true, true, 0.14);
+    capture("no-coordinate-system", false, false, 0.14);
+    capture("refraction-warning", true, false, 3.0);
+    QVERIFY(QFileInfo(artifacts + "qt-911-solved.png").size() > 0);
   }
 
   void issue912HighlighterColoursEachTokenKindAndKeepsText() {
@@ -4596,6 +4956,161 @@ private Q_SLOTS:
     QTest::keyClick(edit, Qt::Key_Return);
     QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("No matches"), 10000);
     QVERIFY(window.grab().save(Issue905Shot("qt-905-final-no-matches.png")));
+  }
+
+  // ---- Issue #908 / REQ-392/393/395: Qt PDF comparison and automatic scale audit ----
+  void pdfScaleAuditShowsMatchesAndAppliesConsensusAsOneUndoableChange() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "audit-sheet.pdf", Issue908AuditPdf());
+    PdfWindow window(nullptr);
+    window.resize(1100, 850); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::PageScale originalScale;
+    originalScale.pageValue = 1; originalScale.pageUnit = pdfview::Unit::Inch;
+    originalScale.realValue = 20; originalScale.realUnit = pdfview::Unit::Foot;
+    QVERIFY(window.m_Annotations.SetScales({{0, originalScale}}));
+    window.findChild<QAction*>("pdfAuditScale")->trigger();
+    auto* dialog = window.findChild<QDialog*>("pdfScaleAuditDialog");
+    auto* table = window.findChild<QTableWidget*>("pdfAuditTable");
+    auto* summary = window.findChild<QLabel*>("pdfAuditSummary");
+    QVERIFY(dialog && table && summary);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_AuditReady, 10000);
+    QVERIFY(window.m_AuditResult.consensusValid);
+    QCOMPARE(window.m_AuditMatches.matches.size(), size_t(5));
+    QVERIFY(summary->text().contains("Current scale"));
+    window.findChild<QCheckBox*>("pdfAuditAllRows")->setChecked(true);
+    QCOMPARE(table->rowCount(), 5);
+    QVERIFY(window.grab().save(Issue908Shot("qt-908-audit-dialog.png")));
+
+    window.findChild<QPushButton*>("pdfAuditUseConsensus")->click();
+    QVERIFY(window.EffectiveScale(0));
+    QVERIFY(window.HasUnsavedChanges());
+    QVERIFY(std::abs(window.EffectiveScale(0)->realValue - originalScale.realValue) > 0.1);
+    QVERIFY(window.m_Annotations.Undo());
+    QVERIFY(window.EffectiveScale(0));
+    QCOMPARE(window.EffectiveScale(0)->realValue, originalScale.realValue);
+
+    // Cancellation while the worker waits on PDFium must discard its partial result.
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      window.StartScaleAudit();
+      QVERIFY(window.m_AuditWork.valid());
+      window.findChild<QPushButton*>("pdfAuditCancel")->click();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(summary->text().contains("cancelled. No partial result"), 10000);
+    QVERIFY(!window.m_AuditReady);
+  }
+
+  void pdfCompareRunsDiffAndSupportsManualAlignmentAndFailure() {
+    QTemporaryDir directory;
+    const QString basePath = Issue905WritePdf(directory, "base.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 0));
+    const QString revisionPath = Issue905WritePdf(directory, "revision.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 1));
+    PdfWindow window(nullptr);
+    window.resize(1200, 900); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(basePath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = revisionPath;
+    window.m_CompareDialog->show();
+    window.StartCompare(true);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Compare && !window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->revision);
+    QVERIFY(!window.m_Compare->overlay.isNull());
+    QVERIFY(window.m_Compare->haveChanges);
+    QVERIFY(!window.m_Compare->changes.empty());
+    QCOMPARE(window.findChild<QTableWidget*>("pdfCompareChanges")->rowCount(), static_cast<int>(window.m_Compare->changes.size()));
+    QVERIFY(window.grab().save(Issue908Shot("qt-908-compare-overlay.png")));
+    QVERIFY(window.findChild<QDialog*>("pdfCompareDialog")->grab().save(Issue908Shot("qt-908-compare-controls.png")));
+
+    // One matching point and two matching points both use Qt's Base / Revision page picking sequence.
+    window.findChild<QPushButton*>("pdfComparePickOne")->click();
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->manualAlignment);
+    QVERIFY(std::abs(window.m_Compare->transform.tx - window.m_Compare->automatic.tx) < 0.01);
+    window.findChild<QPushButton*>("pdfComparePickTwo")->click();
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(100, 100), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(2);
+    window.ComparePick(QPointF(220, 130), Qt::LeftButton);
+    window.m_CompareMode->setCurrentIndex(3);
+    window.ComparePick(QPointF(220, 130), Qt::LeftButton);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 30000);
+    QVERIFY(window.m_Compare->manualAlignment);
+
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = revisionPath;
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex());
+      window.StartCompare(true);
+      QVERIFY(window.m_Compare->busy);
+      window.findChild<QPushButton*>("pdfCompareCancel")->click();
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 10000);
+    QVERIFY(window.m_CompareStatus->text().contains("cancelled. No partial result"));
+    QVERIFY(window.m_Compare->changes.empty());
+
+    window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    window.m_Compare->source = directory.filePath("missing.pdf");
+    window.StartCompare(false);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 10000);
+    QVERIFY(window.m_CompareStatus->text().contains("Could not open the revision"));
+    QVERIFY(window.m_Compare->overlay.isNull());
+  }
+
+  void qtPdfCompareAndAuditDeepNavyScreenshotsForIssue908() {
+    const auto saveComposite = [](PdfWindow& window, QWidget* dialog, const QString& path) {
+      QTest::qWait(80);
+      const QImage viewer = window.grab().toImage();
+      const QImage panel = dialog->grab().toImage();
+      const QSize size(std::max(viewer.width(), panel.width()), std::max(viewer.height(), panel.height()));
+      QImage image(size, QImage::Format_ARGB32_Premultiplied);
+      image.fill(QColor("#10151f"));
+      QPainter painter(&image);
+      painter.drawImage(0, 0, viewer);
+      painter.drawImage((image.width() - panel.width()) / 2, (image.height() - panel.height()) / 2, panel);
+      painter.end();
+      return image.save(path);
+    };
+
+    QTemporaryDir directory;
+    const QString auditPath = Issue905WritePdf(directory, "audit-options.pdf", Issue908AuditPdf());
+    PdfWindow auditWindow(nullptr);
+    auditWindow.resize(1200, 900); auditWindow.show();
+    QString error;
+    QVERIFY2(auditWindow.LoadFile(auditPath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!auditWindow.IsBusy(), 10000);
+    pdfview::PageScale scale;
+    scale.pageValue = 1; scale.pageUnit = pdfview::Unit::Inch;
+    scale.realValue = 20; scale.realUnit = pdfview::Unit::Foot;
+    QVERIFY(auditWindow.m_Annotations.SetScales({{0, scale}}));
+    auditWindow.findChild<QAction*>("pdfAuditScale")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(auditWindow.m_AuditReady, 10000);
+    auditWindow.findChild<QCheckBox*>("pdfAuditAllRows")->setChecked(true);
+    auto* auditDialog = auditWindow.findChild<QDialog*>("pdfScaleAuditDialog");
+    QVERIFY(auditDialog);
+    QVERIFY(saveComposite(auditWindow, auditDialog, Issue908Shot("qt-908-audit-deep-navy.png")));
+
+    const QString basePath = Issue905WritePdf(directory, "compare-base.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 0));
+    const QString revisionPath = Issue905WritePdf(directory, "compare-revision.pdf", pdfview::MakeLineWorkPdf(612, 792, 80, 1, 1));
+    PdfWindow compareWindow(nullptr);
+    compareWindow.resize(1200, 900); compareWindow.show();
+    QVERIFY2(compareWindow.LoadFile(basePath, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!compareWindow.IsBusy(), 10000);
+    compareWindow.m_Compare = std::make_unique<PdfWindow::CompareSession>();
+    compareWindow.m_Compare->source = revisionPath;
+    compareWindow.m_CompareDialog->show();
+    compareWindow.StartCompare(true);
+    QTRY_VERIFY_WITH_TIMEOUT(compareWindow.m_Compare && !compareWindow.m_Compare->busy && compareWindow.m_Compare->haveChanges, 30000);
+    auto* compareDialog = compareWindow.findChild<QDialog*>("pdfCompareDialog");
+    QVERIFY(compareDialog);
+    QVERIFY(saveComposite(compareWindow, compareDialog, Issue908Shot("qt-908-compare-deep-navy.png")));
   }
 
   // ---- Issue #906 / REQ-430: PDF calibration, scale checks and snapping ----
