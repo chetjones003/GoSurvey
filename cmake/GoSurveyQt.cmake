@@ -33,6 +33,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfMeasure.cpp
   src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfCoordExtract.cpp
   src/pdf/PdfRaw.cpp
   src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp

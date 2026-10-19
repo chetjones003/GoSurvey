@@ -5,6 +5,7 @@
 #include "CadCommands.hpp"
 #include "CadDynInput.hpp"
 #include "WikiContent.hpp"
+#include "PdfCoordExtract.hpp"
 
 namespace auth { struct AuthTask; }
 namespace update { struct UpdateState; }
@@ -46,6 +47,7 @@ public:
   void InitializeStartup();
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
+  bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
