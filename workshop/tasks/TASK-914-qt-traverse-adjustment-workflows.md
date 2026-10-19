@@ -47,10 +47,11 @@
 ## 6. Verification result
 
 - Planning verified against REQ-017, REQ-201, REQ-419, REQ-420 and architecture §8. The open-chain acceptance case is explicitly defined by REQ-017: a known ENDPOINT supplies redundancy. Qt reuses the existing solver, parser, result acceptance, commit and undo services; cancellation follows the documented atomic cooperative-worker model. #912 provides the editor reading aids, while #913 and #915 retain their adjacent importer and settings/report scopes.
-- Release builds: `build.bat qt` passed after syncing to latest `origin/beta`; `build.bat imgui` passed before the beta sync (the sync added Qt editor changes only).
+- Beta conflict reconciliation: merged `origin/beta` at `bdce6483` (#958, Qt traverse options) into the PR branch. Preserved both the #911 options and #914 cooperative cancellation, and reapplied the #914 fuzzy directive suggestion on top of the updated `AdjustmentWindow`.
+- Release builds after reconciliation: `build.bat qt` and `build.bat imgui` passed.
 - Domain test `Least-squares cancellation returns no partial solution`: passed (1 case, 7 assertions).
-- Focused Qt tests `issue914OpenTraverseSolveAndCommandErrorRecovery` and `issue914StopDiscardsSolveAndPreservesInputs`: each passed (3 cases including Qt initialization/cleanup, 0 failed); screenshots captured below `build/artifacts/Release/qt-914-*.png`.
+- Focused Qt tests `issue914OpenTraverseSolveAndCommandErrorRecovery`, `issue914StopDiscardsSolveAndPreservesInputs`, all seven #911 traverse options tests, and `issue912HighlighterColoursEachTokenKindAndKeepsText`: passed in targeted hidden-desktop runs (10 test functions total; 0 failed); screenshots captured below `build/artifacts/Release/qt-914-*.png`.
 - The post-sync editor screenshot `qt-914-command-highlighting-fuzzy-match.png` shows #912's gutter and inline error plus the #914 `STATION` fuzzy suggestion. `issue914OpenTraverseSolveAndCommandErrorRecovery`, `issue914StopDiscardsSolveAndPreservesInputs`, and the #912 `issue912HighlighterColoursEachTokenKindAndKeepsText` regression test pass in isolated hidden-desktop runs.
 - Full prescribed `ctest --preset ninja-release -R "^qt[.]editor$"` fails later in existing `approvedTopographyStaysInPanelBackgrounds` at `QWidget::grab` (access violation); focused #914/#912 tests pass separately before this crash.
-- `git diff --check`: passed.
-- User selected A (side-by-side workbench) and cooperative Stop, then approved the final screenshots and authorized a PR to `beta` (2026-10-19). Latest base synchronized from `origin/beta` at #954 / #912. PR #960 is open against `beta`.
+- `git diff --cached --check`: passed after conflict resolution.
+- User selected A (side-by-side workbench) and cooperative Stop, then approved the final screenshots and authorized a PR to `beta` (2026-10-19). PR #960 is open against `beta`; CI must pass on the reconciled head before merge.

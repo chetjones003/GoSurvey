@@ -35,49 +35,76 @@
 #include <QDoubleSpinBox>
 #include <QDebug>
 #include <QDialogButtonBox>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QEvent>
+#include <QLabel>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QRegularExpression>
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 namespace {
+// Index of the first `#SCALE` / `SCALE` directive line in the command text, or -1.
+int FindScaleLine(const QStringList& lines) {
+  for (int i = 0; i < lines.size(); ++i) {
+    QString text = lines[i].trimmed();
+    if (text.startsWith('#')) text = text.mid(1).trimmed();
+    if (text.section(QRegularExpression("\\s+"), 0, 0).compare("SCALE", Qt::CaseInsensitive) == 0) return i;
+  }
+  return -1;
+}
+// Where a missing `#SCALE` line goes: after the last header directive, else at the top.
+int ScaleInsertLine(const QStringList& lines) {
+  int after = -1;
+  for (int i = 0; i < lines.size(); ++i) {
+    QString text = lines[i].trimmed();
+    if (text.startsWith('#')) text = text.mid(1).trimmed();
+    const QString word = text.section(QRegularExpression("\\s+"), 0, 0).toUpper();
+    if (word == "STATION" || word == "BEARING" || word == "ENDPOINT" || word == "LOOP" || word == "ERRORS") after = i;
+  }
+  return after + 1;
+}
+constexpr double kTypicalRefractionLimit = 2.0;  // 0.7.4 warns outside -2..+2.
+
 int DirectiveEditDistance(const QString& left, const QString& right) {
   const QString a = left.toUpper();
   const QString b = right.toUpper();
-  std::vector<int> previous(static_cast<size_t>(b.size()) + 1);
-  std::vector<int> current(static_cast<size_t>(b.size()) + 1);
+  std::vector<int> previous(b.size() + 1), current(b.size() + 1);
   for (int j = 0; j <= b.size(); ++j) previous[j] = j;
   for (int i = 1; i <= a.size(); ++i) {
     current[0] = i;
     for (int j = 1; j <= b.size(); ++j)
       current[j] = std::min({current[j - 1] + 1, previous[j] + 1,
                              previous[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1)});
-    previous.swap(current);
+    std::swap(previous, current);
   }
   return previous[b.size()];
 }
 
 QString AddDirectiveSuggestion(const QString& error) {
-  static const QStringList directives = {
-      "IMPORT", "STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS", "STN",
-      "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR", "CTRL",
+  static const QStringList commands = {"IMPORT", "STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS",
+      "STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR", "CTRL",
       "ANGLE", "DIST", "AZIMUTH", "EDIF", "ZENITH", "DIR"};
-  static const QRegularExpression unknown("unknown directive \\\"([^\\\"]+)\\\"",
-                                          QRegularExpression::CaseInsensitiveOption);
+  static const QRegularExpression unknown(R"(unknown directive\s+[\"']([^\"']+)[\"'])",
+                                           QRegularExpression::CaseInsensitiveOption);
   const auto match = unknown.match(error);
   if (!match.hasMatch()) return error;
-  QString typed = match.captured(1).trimmed().toUpper();
-  if (typed.startsWith('#')) typed.remove(0, 1);
-  if (typed.isEmpty()) return error;
+  const QString typed = match.captured(1).toUpper();
   QString best;
   int bestDistance = std::numeric_limits<int>::max();
-  for (const QString& directive : directives) {
-    const int distance = DirectiveEditDistance(typed, directive);
-    if (distance < bestDistance) { best = directive; bestDistance = distance; }
+  for (const auto& command : commands) {
+    const int distance = DirectiveEditDistance(typed, command);
+    if (distance < bestDistance) { bestDistance = distance; best = command; }
   }
-  const int threshold = typed.size() >= 6 ? 2 : 1;
-  return bestDistance <= threshold ? error + QString("\nDid you mean %1?").arg(best) : error;
+  const int limit = typed.size() >= 6 ? 2 : 1;
+  return bestDistance <= limit ? error + "\nDid you mean " + best + "?" : error;
 }
-}  // namespace
+}
 
 AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
     : QMainWindow(parent, Qt::Window), m_State(state), m_Log(log),
@@ -95,11 +122,10 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_RunAction = toolbar->addAction(QIcon(QtAsset("icons/Adjust.png")), "Run adjustment", this, [this] { Calculate(); });
   m_RunAction->setShortcut(QKeySequence(Qt::Key_F5));
   m_StopAction = toolbar->addAction("Stop", this, [this] {
-    if (!IsBusy() || !m_CancelRequested) return;
-    m_CancelRequested->store(true, std::memory_order_release);
+    if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
     m_StopAction->setEnabled(false);
-    m_Output->setPlainText("Stopping adjustment…");
-    statusBar()->showMessage("Stopping at the next safe checkpoint…");
+    m_Output->setPlainText("Stopping adjustment...");
+    statusBar()->showMessage("Stopping adjustment...");
   });
   m_StopAction->setObjectName("stopAdjustmentAction");
   m_AcceptAction = toolbar->addAction("Accept result", this, [this] {
@@ -162,11 +188,26 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   }
   results->addTab(m_Output, "Output");
   results->addTab(m_Coordinates, "Adjusted coordinates");
-  results->addTab(m_Residuals, "Residuals");
+  auto* residualsPage = new QWidget(results);
+  auto* residualsLayout = new QVBoxLayout(residualsPage);
+  residualsLayout->setContentsMargins(0, 0, 0, 0);
+  m_ResidualNote = new QLabel(residualsPage);
+  m_ResidualNote->setObjectName("adjustmentResidualNote");
+  m_ResidualNote->setWordWrap(true);
+  residualsLayout->addWidget(m_ResidualNote);
+  residualsLayout->addWidget(m_Residuals, 1);
+  results->addTab(residualsPage, "Residuals");
   splitter->insertWidget(0, left);
   splitter->setSizes({300, 520, 480});
   splitter->setStretchFactor(1, 1);
-  setCentralWidget(splitter);
+  auto* central = new QWidget(this);
+  auto* centralLayout = new QVBoxLayout(central);
+  centralLayout->setContentsMargins(0, 0, 0, 0);
+  centralLayout->setSpacing(0);
+  BuildOptionsBar(central);
+  centralLayout->addWidget(m_OptionsBar);
+  centralLayout->addWidget(splitter, 1);
+  setCentralWidget(central);
   m_TextStatus = new QLabel(this);
   m_TextStatus->setObjectName("adjustmentTextStatus");
   statusBar()->addPermanentWidget(m_TextStatus, 1);
@@ -185,13 +226,13 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Poll->setInterval(20);
   connect(m_Poll, &QTimer::timeout, this, [this] { PollCalculation(); });
   connect(m_Editor, &QPlainTextEdit::textChanged, this, [this] {
-    m_State.traverseLsaComputed = false;
-    m_State.traverseLsaAccepted = false;
-    m_AcceptAction->setEnabled(false); m_CommitAction->setEnabled(false);
+    SyncOptionsFromText();
+    InvalidateResult();
     setWindowModified(HasUnsavedChanges());
     m_ValidateTimer->start();  // REQ-431 clause 3: check once the typing pauses
     RefreshPreview();          // any earlier result no longer matches the text
   });
+  SyncOptionsFromText();
   SetBusy(false);
   ValidateNow();
 }
@@ -259,6 +300,184 @@ void AdjustmentWindow::RefreshFilesAndSummary() {
   m_Summary->setText(lines.join('\n'));
 }
 
+void AdjustmentWindow::InvalidateResult() {
+  m_State.traverseLsaComputed = false;
+  m_State.traverseLsaAccepted = false;
+  m_AcceptAction->setEnabled(false); m_CommitAction->setEnabled(false);
+}
+
+QString AdjustmentWindow::UnitSuffix() const {
+  const QString unit = QString::fromUtf8(CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits));
+  return unit.isEmpty() ? QString("drawing units") : unit;
+}
+
+// Units label, curvature + refraction, and the ground-to-grid scale factor (REQ-401). The scale
+// option IS the command text's `#SCALE` line, so the bar and the text are kept in step both ways;
+// curvature/refraction is a bar setting that survives re-reading the text.
+void AdjustmentWindow::BuildOptionsBar(QWidget* parent) {
+  m_OptionsBar = new QWidget(parent);
+  m_OptionsBar->setObjectName("adjustmentOptions");
+  auto* row = new QHBoxLayout(m_OptionsBar);
+  row->setContentsMargins(8, 4, 8, 4);
+  m_UnitsLabel = new QLabel(m_OptionsBar);
+  m_UnitsLabel->setObjectName("adjustmentUnits");
+  m_UnitsLabel->setToolTip("Distances entered and shown in this editor use the active drawing's linear unit,\n"
+                           "set in Drawing Settings or the UNITS command.");
+  row->addWidget(m_UnitsLabel);
+  row->addSpacing(16);
+  m_CurvRefr = new QCheckBox("Curvature + refraction", m_OptionsBar);
+  m_CurvRefr->setObjectName("adjustmentCurvRefr");
+  m_CurvRefr->setChecked(m_Data.applyCurvRefCorr);
+  m_CurvRefr->setToolTip("Apply the combined earth curvature + atmospheric refraction correction\n"
+                         "C = (1 - k) * D^2 / (2R) to each leg's elevation difference.\n"
+                         "Off = plain trigonometry.");
+  row->addWidget(m_CurvRefr);
+  row->addWidget(new QLabel("k", m_OptionsBar));
+  m_RefractionK = new QDoubleSpinBox(m_OptionsBar);
+  m_RefractionK->setObjectName("adjustmentRefractionK");
+  m_RefractionK->setDecimals(3);
+  m_RefractionK->setRange(-1000.0, 1000.0);
+  m_RefractionK->setSingleStep(0.01);
+  m_RefractionK->setValue(m_Data.refractionCoeff);
+  m_RefractionK->setToolTip("Refraction coefficient k (typical range -2 to +2).\n0.14 = average atmospheric conditions (default).");
+  row->addWidget(m_RefractionK);
+  m_RefractionWarning = new QLabel("k outside the typical -2..+2 range", m_OptionsBar);
+  m_RefractionWarning->setObjectName("adjustmentRefractionWarning");
+  m_RefractionWarning->setStyleSheet("color: #d98200;");
+  row->addWidget(m_RefractionWarning);
+  row->addSpacing(16);
+  m_ScaleCheck = new QCheckBox("Scale factor", m_OptionsBar);
+  m_ScaleCheck->setObjectName("adjustmentScaleFactor");
+  m_ScaleCheck->setToolTip("Reduce each leg's horizontal distance from ground to grid using the active\n"
+                           "drawing's coordinate system (Drawing Settings > Transformation tab).\n"
+                           "Off by default; existing traverses are unaffected unless turned on.");
+  row->addWidget(m_ScaleCheck);
+  m_ScaleKind = new QComboBox(m_OptionsBar);
+  m_ScaleKind->setObjectName("adjustmentScaleKind");
+  m_ScaleKind->addItems({"Combined", "Grid only"});
+  m_ScaleKind->setToolTip("Combined: grid scale factor x elevation/sea-level factor, as resolved by the\n"
+                          "Transformation tab's reference point.\n"
+                          "Grid only: the map-projection grid scale factor alone, ignoring elevation/sea-level\n"
+                          "reduction even if the Transformation tab has it enabled.");
+  row->addWidget(m_ScaleKind);
+  m_ScaleReadout = new QLabel(m_OptionsBar);
+  m_ScaleReadout->setObjectName("adjustmentScaleReadout");
+  row->addWidget(m_ScaleReadout);
+  row->addStretch(1);
+  auto curvChanged = [this] {
+    if (m_SyncingOptions) return;
+    ApplyOptionsToData();
+    InvalidateResult();
+    RefreshOptionsBar();
+  };
+  connect(m_CurvRefr, &QCheckBox::toggled, this, curvChanged);
+  connect(m_RefractionK, &QDoubleSpinBox::valueChanged, this, curvChanged);
+  connect(m_ScaleCheck, &QCheckBox::toggled, this, [this] { if (!m_SyncingOptions) WriteScaleDirective(); });
+  connect(m_ScaleKind, &QComboBox::currentIndexChanged, this, [this] { if (!m_SyncingOptions) WriteScaleDirective(); });
+}
+
+// The `#SCALE` line is the source of truth for the scale option; mirror it into the bar.
+void AdjustmentWindow::SyncOptionsFromText() {
+  const QStringList lines = m_Editor->toPlainText().split('\n');
+  const int at = FindScaleLine(lines);
+  bool on = false, grid = false;
+  if (at >= 0) {
+    QString text = lines[at].trimmed();
+    if (text.startsWith('#')) text = text.mid(1).trimmed();
+    const QStringList tokens = text.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    on = tokens.size() > 1 && tokens[1].compare("ON", Qt::CaseInsensitive) == 0;
+    grid = tokens.size() > 2 && tokens[2].compare("GRID", Qt::CaseInsensitive) == 0;
+  }
+  m_SyncingOptions = true;
+  m_ScaleCheck->setChecked(on);
+  m_ScaleKind->setCurrentIndex(grid ? 1 : 0);
+  m_SyncingOptions = false;
+  RefreshOptionsBar();
+}
+
+// Bar -> text: rewrite (or add) the `#SCALE` line in place so the rest of the text is untouched.
+void AdjustmentWindow::WriteScaleDirective() {
+  const QString directive = QString("#SCALE %1 %2").arg(m_ScaleCheck->isChecked() ? "ON" : "OFF",
+                                                       m_ScaleKind->currentIndex() == 1 ? "GRID" : "COMBINED");
+  const QStringList lines = m_Editor->toPlainText().split('\n');
+  const int at = FindScaleLine(lines);
+  QTextDocument* document = m_Editor->document();
+  QTextCursor cursor(document);
+  cursor.beginEditBlock();
+  if (at >= 0) {
+    cursor.setPosition(document->findBlockByNumber(at).position());
+    cursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+    cursor.insertText(directive);
+  } else {
+    const int insert = ScaleInsertLine(lines);
+    if (insert < document->blockCount()) {
+      cursor.setPosition(document->findBlockByNumber(insert).position());
+      cursor.insertText(directive + "\n");
+    } else {
+      cursor.movePosition(QTextCursor::End);
+      cursor.insertText((document->isEmpty() ? QString() : QString("\n")) + directive);
+    }
+  }
+  cursor.endEditBlock();
+}
+
+void AdjustmentWindow::ApplyOptionsToData() {
+  m_Data.applyCurvRefCorr = m_CurvRefr->isChecked();
+  m_Data.refractionCoeff = m_RefractionK->value();
+}
+
+// Refreshes everything the bar shows that depends on the drawing or on the other fields. A factor
+// that no longer matches the solved one makes that result stale.
+void AdjustmentWindow::RefreshOptionsBar() {
+  int unitIndex = 2;  // Feet, the fallback default (REQ-357).
+  for (int i = 0; i < kDrawingUnitCount; ++i)
+    if (kDrawingUnitCodes[i] == m_State.drawingInsUnits) unitIndex = i;
+  m_UnitsLabel->setText(QString("Units: ") + kDrawingUnitNames[unitIndex]);
+  const QString unit = UnitSuffix();
+  m_Coordinates->setHorizontalHeaderLabels({"Station", "Easting (" + unit + ")", "Northing (" + unit + ")", "Elevation (" + unit + ")"});
+  m_ResidualNote->setText("Angle residuals are in arc-seconds; distance, vertical and GPS residuals are in " + unit +
+                          ". A flag appears when the standardized residual exceeds 3.");
+  m_RefractionK->setEnabled(m_CurvRefr->isChecked());
+  m_RefractionWarning->setVisible(m_CurvRefr->isChecked() && std::fabs(m_RefractionK->value()) > kTypicalRefractionLimit);
+  const bool scaleOn = m_ScaleCheck->isChecked();
+  m_ScaleKind->setEnabled(scaleOn);
+  m_ScaleReadout->setVisible(scaleOn);
+  if (!scaleOn) return;
+  double factor = 1.0;
+  const std::string reason = ResolveTraverseScaleFactor(m_State,
+      m_ScaleKind->currentIndex() == 1 ? TraverseData::ScaleFactorKind::GridOnly : TraverseData::ScaleFactorKind::Combined, &factor);
+  if (reason.empty()) {
+    m_ScaleReadout->setStyleSheet({});
+    m_ScaleReadout->setText(QString("k = %1").arg(factor, 0, 'f', 6));
+  } else {
+    m_ScaleReadout->setStyleSheet("color: #d98200;");
+    m_ScaleReadout->setText("(" + QString::fromUtf8(reason.c_str()) + ")");
+    factor = 1.0;
+  }
+  if (m_State.traverseLsaComputed && factor != m_Data.scaleFactor && !IsBusy()) {
+    InvalidateResult();
+    SetBusy(false);
+  }
+}
+
+// Resolves the drawing's ground->grid factor into the traverse (REQ-401 sections 3 and 5). When
+// the drawing cannot supply one, the traverse stays unscaled and the reason is returned for display.
+QString AdjustmentWindow::ApplyResolvedScale() {
+  m_Data.scaleFactor = 1.0;
+  if (!m_Data.applyScaleFactor) return {};
+  double factor = 1.0;
+  const std::string reason = ResolveTraverseScaleFactor(m_State, m_Data.scaleFactorKind, &factor);
+  if (!reason.empty()) return QString::fromUtf8(reason.c_str());
+  m_Data.scaleFactor = factor;
+  return {};
+}
+
+void AdjustmentWindow::changeEvent(QEvent* event) {
+  QMainWindow::changeEvent(event);
+  // The drawing's units or coordinate system may have changed while another window was in front.
+  if (event->type() == QEvent::ActivationChange && isActiveWindow()) RefreshOptionsBar();
+}
+
 void AdjustmentWindow::Import() {
   if (IsBusy() || !ConfirmDiscard()) return;
   const QString path = QFileDialog::getOpenFileName(this, "Import observations", {},
@@ -288,6 +507,10 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   }
   if (!ok) { reason = QString::fromUtf8(error.c_str()); return false; }
   m_Data = data; m_Weights = weights;
+  m_SyncingOptions = true;
+  m_CurvRefr->setChecked(data.applyCurvRefCorr);
+  m_RefractionK->setValue(data.refractionCoeff);
+  m_SyncingOptions = false;
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(data, weights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   m_Path = suffix == "gstrav" || suffix == "gstc" || suffix == "gsdat" ? path : QString{};
@@ -305,14 +528,14 @@ void AdjustmentWindow::Calculate() {
   if (IsBusy()) return;
   QString error;
   if (!ParseEditor(error)) { m_Output->setPlainText(error); return; }
+  ApplyOptionsToData();
+  m_ScaleNote = ApplyResolvedScale();
+  RefreshOptionsBar();
   m_ResultDrawingUid = m_State.activeDrawingIdx > 0 ? m_State.drawingTabs[m_State.activeDrawingIdx].uid : 0;
   m_CancelRequested = std::make_shared<std::atomic<bool>>(false);
   SetBusy(true);
   m_State.traverseLsaComputed = false;
   m_State.traverseLsaAccepted = false;
-  m_State.traverseLsaResult = {};
-  m_Coordinates->setRowCount(0);
-  m_Residuals->setRowCount(0);
   const auto cancelRequested = m_CancelRequested;
   m_Work = std::async(std::launch::async, [data = m_Data, weights = m_Weights, cancelRequested]() mutable {
     ComputeTraverse(data);
@@ -328,16 +551,14 @@ void AdjustmentWindow::PollCalculation() {
   m_Poll->stop();
   try {
     auto completed = m_Work.get();
-    const bool stopWasRequested = m_CancelRequested &&
-        m_CancelRequested->load(std::memory_order_acquire);
+    const bool cancelled = (m_CancelRequested && m_CancelRequested->load(std::memory_order_acquire)) || completed.second.cancelled;
     m_CancelRequested.reset();
-    if (completed.second.cancelled || stopWasRequested) {
+    if (cancelled) {
       m_State.traverseLsaComputed = false;
       m_State.traverseLsaAccepted = false;
-      m_Output->setPlainText("Adjustment cancelled. No partial result was applied. The command text is unchanged; edit it or run the adjustment again.");
-      m_Log.push_back("TRAVERSE: adjustment cancelled; no result applied.");
+      m_Output->setPlainText("Adjustment cancelled. No partial results were kept.");
+      m_Log.push_back("TRAVERSE: adjustment cancelled; no partial results were kept.");
       SetBusy(false);
-      statusBar()->showMessage("Adjustment cancelled. Inputs are ready to edit or run again.");
       ValidateNow();
       return;
     }
@@ -350,8 +571,8 @@ void AdjustmentWindow::PollCalculation() {
   } catch (const std::exception& error) {
     m_CancelRequested.reset();
     m_State.traverseLsaComputed = false;
-    m_Output->setPlainText(QString::fromUtf8(error.what()));
-    m_Log.push_back(std::string("TRAVERSE: adjustment failed: ") + error.what());
+    m_Output->setPlainText(QString("TRAVERSE: adjustment failed: ") + QString::fromUtf8(error.what()));
+    m_Log.push_back("TRAVERSE: adjustment failed: " + std::string(error.what()));
   }
   SetBusy(false);
   ValidateNow();  // the plan and summary take the finished result
@@ -361,8 +582,10 @@ void AdjustmentWindow::PresentResult() {
   const auto& result = m_State.traverseLsaResult;
   m_State.traverseLsaAccepted = false;
   m_Log.push_back(result.message);
-  m_Output->setPlainText(QString::fromUtf8(traverserpt::BuildReportText(m_Data, m_Weights, result, "",
-      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits)).c_str()));
+  QString report = QString::fromUtf8(traverserpt::BuildReportText(m_Data, m_Weights, result, "",
+      CadDrawingInsUnitsAbbrev(m_State.drawingInsUnits)).c_str());
+  if (!m_ScaleNote.isEmpty()) report = "Scale factor not applied (computed unscaled): " + m_ScaleNote + "\n\n" + report;
+  m_Output->setPlainText(report);
   m_Coordinates->setRowCount(static_cast<int>(result.stationIds.size()));
   for (int row = 0; row < static_cast<int>(result.stationIds.size()); ++row) {
     const QStringList cells = {QString::number(result.stationIds[row]),
@@ -416,6 +639,8 @@ bool AdjustmentWindow::ParseEditor(QString& error) {
 bool AdjustmentWindow::SaveFile(const QString& path, QString& error) {
   if (IsBusy()) { error = "An adjustment is running."; return false; }
   if (!ParseEditor(error)) return false;
+  ApplyOptionsToData();
+  ApplyResolvedScale();  // keep the saved factor current; an unresolvable one is saved as 1.0
   if (QFileInfo(path).suffix().compare("gstrav", Qt::CaseInsensitive) == 0) {
     std::string reason;
     if (!traverseio::Save(path.toUtf8().toStdString(), m_Data, m_Weights, reason)) {
@@ -477,8 +702,7 @@ void AdjustmentWindow::closeEvent(QCloseEvent* event) {
 void AdjustmentWindow::SetBusy(bool busy) {
   m_Editor->setReadOnly(busy);
   m_RunAction->setEnabled(!busy);
-  m_StopAction->setEnabled(busy && m_CancelRequested &&
-                           !m_CancelRequested->load(std::memory_order_acquire));
+  m_StopAction->setEnabled(busy && m_CancelRequested && !m_CancelRequested->load(std::memory_order_acquire));
   const bool solved = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
   m_AcceptAction->setEnabled(!busy && solved && !m_State.traverseLsaAccepted);
   m_CommitAction->setEnabled(!busy && solved);
@@ -563,7 +787,7 @@ void AdjustmentWindow::EditWeights() {
   for (const auto& field : fields) {
     auto* editor = new QDoubleSpinBox(&dialog);
     editor->setDecimals(12); editor->setRange(field.minimum, field.maximum); editor->setValue(m_Weights.*field.member);
-    layout->addRow(field.label, editor); editors.push_back(editor);
+    layout->addRow(QString(field.label).replace("drawing units", UnitSuffix()), editor); editors.push_back(editor);
   }
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
   layout->addRow(buttons);
