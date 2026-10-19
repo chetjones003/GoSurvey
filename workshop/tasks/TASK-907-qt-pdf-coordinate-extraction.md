@@ -1,7 +1,7 @@
 # TASK-907 — Qt PDF coordinate extraction
 
 - Type: feature
-- Status: implemented; awaiting visual approval
+- Status: implemented; visual approved; PR #951 open
 - Opened: 2026-10-19
 - Owner: Workshop
 - GitHub: #907, child of #878
@@ -32,5 +32,5 @@
 - Added native Qt region selection and review UI. PDF text extraction and parsing reuse `PdfDocument::AuditPageData` and `ExtractCoordinates`; accepted candidates go to the editor for read-only checks, undoable point/circle creation, automatic point numbers, conflict choices, refresh and zoom.
 - Added `pdfCoordinateReviewAcceptsAndDeniesThroughDrawingWorkflow`, `pdfCoordinateRegionCancelAndNoTextAreSafe`, and `pdfCoordinateCommitHonorsReadOnlyAndPointConflicts` (read-only refusal, overwrite, and undo).
 - Qt Release build: PASS (`.\\build.bat qt`). All three focused issue tests passed in the hidden-desktop log. The full Qt test run crashes afterward in the existing `approvedTopographyStaysInPanelBackgrounds` screenshot test (`QWidget::grab`); overall Qt suite remains FAIL.
-- User selected deep navy. Applied it to the review dialog. Captures: `build/artifacts/Release/qt-907-review-deep-navy.png`, `qt-907-region-selection.png`, and `qt-907-no-text-message.png`. Awaiting user visual approval before closing this task.
+- User selected and approved deep navy. Applied it to the review dialog. Captures: `build/artifacts/Release/qt-907-review-deep-navy.png`, `qt-907-region-selection.png`, and `qt-907-no-text-message.png`.
 - Updated the 0.7.4 parity ledger and Qt migration inventory.
