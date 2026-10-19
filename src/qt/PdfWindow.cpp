@@ -1251,7 +1251,7 @@ void PdfWindow::StartCompare(bool findChanges) {
   const auto requestedTransform = m_Compare->transform;
   const auto diffSettings = m_Compare->settings;
   const bool hadAlignment = m_Compare->aligned;
-  m_CompareWork = std::async(std::launch::async, [base, existingRevision, path, cancel, bp, rp, requestedTransform, diffSettings, hadAlignment, findChanges] {
+  m_CompareWork = std::async(std::launch::async, [base, existingRevision, path, cancel, bp, rp, requestedTransform, diffSettings, hadAlignment, findChanges]() noexcept {
     CompareOutcome out;
     try {
     std::unique_ptr<pdfview::PdfDocument> opened;
