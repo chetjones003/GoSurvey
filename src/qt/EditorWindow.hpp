@@ -111,6 +111,7 @@ private:
   QLineEdit* m_Command = nullptr;
   FloatingCommandBar* m_CommandBar = nullptr;
   QLabel* m_WindowTitle = nullptr;
+  QLabel* m_MapStatus = nullptr;
   QTreeWidget* m_Toolspace = nullptr;
   QTreeWidget* m_Properties = nullptr;
   QComboBox* m_Layer = nullptr;
@@ -122,6 +123,8 @@ private:
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
   bool m_RecentListView = false;
+  bool m_RecentShowAll = false;
+  bool m_ShowAllProjects = false;
   std::unique_ptr<auth::AuthTask> m_AuthTask;
   std::unique_ptr<update::UpdateState> m_Update;
   /// Hands the verified installer to the OS; replaceable so tests never run one.

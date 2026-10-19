@@ -15,6 +15,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QOpenGLContext>
+#include <QApplication>
 #include <QPainter>
 #include <QPolygonF>
 #include <QWheelEvent>
@@ -100,6 +101,15 @@ void EditorViewport::paintGL() {
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
+    if (!qApp->property("cadLightTheme").toBool()) {
+      tuning.bgR = 4.f / 255.f;
+      tuning.bgG = 18.f / 255.f;
+      tuning.bgB = 32.f / 255.f;
+      tuning.gridR = 0.055f;
+      tuning.gridG = 0.11f;
+      tuning.gridB = 0.16f;
+      tuning.gridA = 0.36f;
+    }
     m_Renderer->SetSize(w, h);
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,
