@@ -962,6 +962,21 @@ struct ViewerToUser {
     for (auto& p : m.pts)
       Pt(p.first, p.second);
   }
+  void UnPt(float& x, float& y) const {
+    const double det = a * d - b * c;
+    if (std::fabs(det) < 1e-12) return;
+    const double ux = x - e, uy = y - f;
+    const double vx = (d * ux - c * uy) / det, vy = (-b * ux + a * uy) / det;
+    x = static_cast<float>(vx); y = static_cast<float>(vy);
+  }
+  void Unapply(Annot& m) const {
+    UnPt(m.x0, m.y0); UnPt(m.x1, m.y1);
+    for (auto& p : m.pts) UnPt(p.first, p.second);
+    if (m.kind == Annot::Kind::Rect || m.kind == Annot::Kind::Ellipse || m.kind == Annot::Kind::Text || m.kind == Annot::Kind::Leader) {
+      if (m.x0 > m.x1) std::swap(m.x0, m.x1);
+      if (m.y0 > m.y1) std::swap(m.y0, m.y1);
+    }
+  }
 };
 
 ViewerToUser MakeViewerToUser(FPDF_PAGE page) {
@@ -1217,6 +1232,7 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
     FPDF_PAGE page = FPDF_LoadPage(doc, pi);
     if (page == nullptr)
       continue;
+    const ViewerToUser viewerToUser = MakeViewerToUser(page);
     const int n = FPDFPage_GetAnnotCount(page);
     for (int i = 0; i < n; ++i) {
       FPDF_ANNOTATION an = FPDFPage_GetAnnot(page, i);
@@ -1310,8 +1326,10 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
       }
       (void)hasColor;
       FPDFPage_CloseAnnot(an);
-      if (known)
+      if (known) {
+        if (!viewerToUser.identity) viewerToUser.Unapply(a);
         out.push_back(a);
+      }
     }
     FPDF_ClosePage(page);
   }

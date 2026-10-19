@@ -12698,7 +12698,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. **Scale checks dialog.** A **Scale checks (n)** button, coloured by the worst verdict on the page, opens a dialog with the page's checks (kind, stated, reads, difference, %, verdict, Outlier flag, Delete), the two verdict limits (settings), the best fit and the outlier note, the honest-limits note (REQ-394 clause 6), the **Correct scale** choices (match a check, best fit, best fit without the outlier, a typed percentage, leave it) with a preview of every check's new difference, **Apply correction** (one undo step) and **Copy report** (REQ-394 clause 3).
   6. **Robust calibration.** The same dialog's second tab takes at least the minimum number of known dimensions (picked on the sheet; each can be unticked or removed), with the pick-error, drawing-error and minimum settings; it shows the adjusted scale with its uncertainty, per-dimension residuals, standardised residuals and **Suspect** flags, offers nothing to apply when there are too few, and **Apply** is one undo step (Close changes nothing).
   7. **Snap.** A **Snap** toggle (button and F3, off by default; F3 is Snap everywhere in the Qt PDF window, so it no longer steps through find matches, which Enter / Shift+Enter and the Next / Previous buttons still do) makes the points taken by the Qt viewer's click tools (text, line, rectangle, ellipse, the four measure tools, calibrate and check) land on the nearest end or corner, round-shape centre or quadrant point of the page's vector line work within about 10 screen pixels, marked on screen (REQ-391 clause 5 "calm snapping": points within about 6 screen pixels merge into the strongest, and the marker stays on its point unless another is clearly closer). The page is read in the background the first time; a scanned page says it has nothing to snap to. Snap points are in the viewer's page coordinates. Changing page discards points picked so far by the calibrate and check tools, so both points of a pick are always on one page.
-  8. **Out of scope** (left to their own issues): coordinate extraction (#907), compare and the automatic Audit scale (#908), selecting/dragging dimension handles and the Length dimension-line third click (#910), and any change to REQ-390/391/394.
+  8. **Out of scope** (left to their own issues): coordinate extraction (#907), compare and the automatic Audit scale (#908), and any change to REQ-390/391/394. Selecting/dragging dimension handles and the Length dimension-line third click are now in REQ-431 (#910).
 - Acceptance:
   - `GoSurveyQtTests` coverage: Set scale applies a preset and a typed ratio to this page, every page and a page list (undo restores each); a bad list or non-positive ratio changes nothing; Clear scale; Cancel changes nothing; the scale label follows the page and shows "Unscaled" / the unusable reason.
   - `GoSurveyQtTests` coverage: calibration by two clicks (including changing page mid-pick, Esc, Cancel, and a zero distance) gives the REQ-390 scale to within 0.01 %, counts as the first check, and the freehand/snapped message and nearest-standard-scale offer appear.
@@ -12711,6 +12711,30 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfScale*`) over the shared `src/pdf/` services (`PdfMeasure`, `PdfScaleCheck`, `PdfSnap`, `PdfAnnotate`).
 - Status: accepted (2026-10-19) - D-2026-10-19-b, GitHub issue #906.
 - Revisions: 2026-10-19 - initial, D-2026-10-19-b, GitHub issue #906.
+
+### REQ-431 — Qt PDF annotation and file workflow parity (GitHub issue #910)
+
+- Purpose: complete the Qt PDF annotation workflow and close the rotated-page, high-DPI, and asynchronous file-operation gaps while preserving the shipped 0.7.4 behavior.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-19-c; the user selected full Qt parity for issue #910.
+- Depends on: REQ-201 (honest failures), REQ-300 (no new dependencies), REQ-387 (PDF viewer), REQ-388 (annotation semantics and Save As), REQ-390/391/394 (scale and measurement behavior), REQ-429/430 (Qt PDF workflows).
+- Statement:
+  1. **Annotation parity.** The Qt PDF window provides the complete REQ-388 annotation workflow: text, line, rectangle, ellipse; style controls; selection, move, resize, delete; undo/redo; Save As; and an unsaved-changes prompt. It preserves the source PDF, stores interoperable PDF annotations, and uses the same validation and scale semantics as the existing PDF workflow. Incomplete or invalid operations report a reason and leave the annotation session unchanged.
+  2. **Rotated pages.** All PDF viewer tools use one consistent mapping between screen positions and the PDF page's coordinate space. On pages with any supported page rotation, rendering, annotation display, picking, placement, moving, resizing, snapping, measurement, and saving align with the visible page. Changing page or cancelling a multi-click operation does not commit partial work.
+  3. **High-DPI displays.** Pointer input, rendering, hit testing, annotation grips, text, and snap feedback remain aligned and usable at device pixel ratios other than 1. Coordinates persisted to PDF remain in page points and do not change with display scale.
+  4. **Asynchronous file work.** Opening/rendering pages and saving annotations do not block the Qt UI while file work is in progress. Completion and errors are shown; cancellation/window closure and switching documents cannot apply stale results to another document or lose confirmed edits. A failed save leaves the source and destination unchanged and preserves the unsaved session for retry.
+  5. **Compatibility and boundaries.** REQ-388 remains the authority for annotation content, serialization, Save As-only behavior, source preservation and undo. Existing shared PDF services remain authoritative for scale and measurement rules. No new PDF engine, sidecar format, or change to ImGui behavior is introduced.
+- Acceptance:
+  - `GoSurveyQtTests` covers creating, styling, selecting, moving, resizing, deleting, undoing and redoing each applicable annotation type; invalid input, cancel, undo and read-only/failure paths preserve the session as specified; Save As reopens with matching annotations and leaves source bytes unchanged.
+  - `GoSurveyQtTests` exercises rotated pages end to end: visible page corners map to the correct page coordinates; annotations and grips render and pick at their visible positions; multi-click tools cancel safely; saved annotations reopen in the same positions.
+  - `GoSurveyQtTests` exercises the same placement, selection and resize workflow with a non-1 device pixel ratio, proving screen alignment and unchanged page-point coordinates.
+  - `GoSurveyQtTests` verifies that open/render/save work remains responsive, reports failures, preserves edits after save failure, and discards stale completion after cancellation, document switching or window closure.
+  - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md` with the completed workflows and evidence.
+  - Present 2–3 integrated screenshot options for each major affected surface, apply the user's selected direction, and show final screenshots before closing the issue.
+- Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas`) over existing shared `src/pdf/` services; no new ownership or concurrency mechanism beyond the architecture's one-shot worker pattern.
+- Status: accepted (2026-10-19) — D-2026-10-19-c, GitHub issue #910.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-c, GitHub issue #910.
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
