@@ -268,6 +268,103 @@ bool Issue905HasHighlight(const QImage& image) {
     }
   return false;
 }
+// ---- Issue #906 / REQ-430: PDF calibration, scale checks and snapping ----
+// One page of 400 x 300 pt with a 200 pt line (50,100)-(250,100) and three 144 pt lines (50,150/200/250)-(194,...):
+// 144 pt = 2 in = 40 ft at 1" = 20'. Their ends are the snap points.
+std::string Issue906Pdf(const std::string& pageKeys = "/MediaBox[0 0 400 300]",
+                        const std::string& content = "50 100 m 250 100 l S 50 150 m 194 150 l S 50 200 m 194 200 l S 50 250 m 194 250 l S") {
+  std::vector<std::string> objs = {
+      "<</Type/Catalog/Pages 2 0 R>>",
+      "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+      "<</Type/Page/Parent 2 0 R/Contents 4 0 R" + pageKeys + ">>",
+      "<</Length " + std::to_string(content.size()) + ">>\nstream\n" + content + "\nendstream",
+  };
+  std::string out = "%PDF-1.4\n";
+  std::vector<size_t> offsets;
+  for (size_t i = 0; i < objs.size(); ++i) {
+    offsets.push_back(out.size());
+    out += std::to_string(i + 1) + " 0 obj\n" + objs[i] + "\nendobj\n";
+  }
+  const size_t xref = out.size();
+  out += "xref\n0 " + std::to_string(objs.size() + 1) + "\n0000000000 65535 f \n";
+  for (size_t offset : offsets) {
+    char line[32];
+    std::snprintf(line, sizeof(line), "%010zu 00000 n \n", offset);
+    out += line;
+  }
+  out += "trailer\n<</Size " + std::to_string(objs.size() + 1) + "/Root 1 0 R>>\nstartxref\n" + std::to_string(xref) + "\n%%EOF\n";
+  return out;
+}
+// Runs \p interact on the named dialog as soon as it is on screen (the call that opens it blocks in its own event loop).
+template <class F>
+void Issue906OnDialog(QWidget& parent, const char* name, const F& interact) {
+  auto* timer = new QTimer(&parent);
+  timer->setInterval(10);
+  QObject::connect(timer, &QTimer::timeout, &parent, [&parent, name, interact, timer] {
+    auto* dialog = parent.findChild<QDialog*>(name);
+    if (!dialog || !dialog->isVisible()) return;
+    timer->stop();
+    timer->deleteLater();
+    interact(dialog);
+  });
+  timer->start();
+  QTimer::singleShot(20000, &parent, [&parent] { for (auto* dialog : parent.findChildren<QDialog*>()) dialog->reject(); }); // a hung test cannot block the run
+}
+void Issue906Select(QComboBox* combo, const QString& text) {
+  const int index = combo->findText(text);
+  QVERIFY2(index >= 0, qPrintable(text));
+  combo->setCurrentIndex(index);
+}
+QPoint Issue906Px(QWidget* canvas, double x, double y, double wPt = 400, double hPt = 300) {
+  const double factor = canvas->width() / wPt;
+  return QPoint(qRound(x * factor), qRound((hPt - y) * factor));
+}
+// A pointer move over the page (sent straight to the canvas, so it does not depend on where the window sits on screen).
+void Issue906Move(QWidget* canvas, QPoint position) {
+  QMouseEvent move(QEvent::MouseMove, QPointF(position), QPointF(canvas->mapToGlobal(position)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+  QApplication::sendEvent(canvas, &move);
+}
+QAction* Issue906Action(PdfWindow& window, const QString& text) {
+  for (auto* bar : window.findChildren<QToolBar*>())
+    for (auto* action : bar->actions())
+      if (action->text() == text) return action;
+  return nullptr;
+}
+// Sets the preset \p label on the current page through the Set scale dialog.
+void Issue906Preset(PdfWindow& window, const char* label) {
+  Issue906OnDialog(window, "pdfSetScaleDialog", [label](QDialog* dialog) {
+    Issue906Select(dialog->findChild<QComboBox*>("pdfScalePreset"), QString::fromUtf8(label));
+    dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+  });
+  window.findChild<QAction*>("pdfSetScaleAction")->trigger();
+}
+bool Issue906HasPixelNear(const QImage& image, const QColor& colour, int tolerance) {
+  for (int y = 0; y < image.height(); ++y)
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor c = image.pixelColor(x, y);
+      if (qAbs(c.red() - colour.red()) <= tolerance && qAbs(c.green() - colour.green()) <= tolerance && qAbs(c.blue() - colour.blue()) <= tolerance) return true;
+    }
+  return false;
+}
+// The snap marker is a bright green square (60,255,90); anti-aliasing blends its edge, so match the colour closely.
+bool Issue906HasSnapMarker(const QImage& image) {
+  for (int y = 0; y < image.height(); ++y)
+    for (int x = 0; x < image.width(); ++x) {
+      const QColor c = image.pixelColor(x, y);
+      if (c.red() < 90 && c.green() > 235 && c.blue() < 130) return true;
+    }
+  return false;
+}
+// Opens \p bytes in a new shown window and waits until the page is drawn.
+bool Issue906Open(std::unique_ptr<PdfWindow>& holder, QTemporaryDir& directory, const std::string& bytes, const char* name = "sheet.pdf") {
+  holder = std::make_unique<PdfWindow>(nullptr);
+  holder->resize(1000, 800);
+  holder->show();
+  QString error;
+  if (!holder->LoadFile(Issue905WritePdf(directory, name, bytes), error)) { qWarning() << error; return false; }
+  for (int i = 0; i < 500 && holder->IsBusy(); ++i) QTest::qWait(20);
+  return !holder->IsBusy();
+}
 // Runs \p interact once the modal dialog a call is about to open is on screen; a watchdog rejects every
 // dialog if the interaction never closes it, so a failing test cannot hang the run.
 template <class F>
@@ -3819,7 +3916,7 @@ private Q_SLOTS:
   void qtPdfSearchAndThumbnailScreenshotEvidenceForIssue905() {
     QTemporaryDir directory;
     PdfWindow window(nullptr);
-    window.resize(1000, 700);
+    window.resize(1000, 860); // the PDF window has two more toolbar rows since #906, so it needs the height to show four thumbnails
     window.show();
     QString error;
     QVERIFY2(window.LoadFile(Issue905WritePdf(directory, "evidence.pdf", pdfview::MakeSyntheticPdf(24, 60, 6)), error), qPrintable(error));
@@ -3838,6 +3935,561 @@ private Q_SLOTS:
     QTest::keyClick(edit, Qt::Key_Return);
     QTRY_COMPARE_WITH_TIMEOUT(status->text(), QString("No matches"), 10000);
     QVERIFY(window.grab().save(Issue905Shot("qt-905-final-no-matches.png")));
+  }
+
+  // ---- Issue #906 / REQ-430: PDF calibration, scale checks and snapping ----
+
+  void pdfSetScaleAppliesPresetsTypedRatiosAndScopesAndUndoes() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, pdfview::MakeSyntheticPdf(5, 3, 0)));
+    PdfWindow& window = *holder;
+    auto* label = window.findChild<QLabel*>("pdfScaleLabel");
+    auto* setScale = window.findChild<QAction*>("pdfSetScaleAction");
+    auto* pageBox = window.findChild<QSpinBox*>();
+    QVERIFY(label && setScale && pageBox);
+    QCOMPARE(label->text(), QString("Unscaled"));
+    QVERIFY(!window.HasUnsavedChanges());
+
+    // Cancel changes nothing.
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
+      QVERIFY(dialog->findChild<QLabel*>("pdfSetScaleCurrent")->text().contains("unscaled"));
+      dialog->findChild<QPushButton*>("pdfScaleCancel")->click();
+    });
+    setScale->trigger();
+    QVERIFY(!window.EffectiveScale(0));
+    QVERIFY(!window.HasUnsavedChanges());
+
+    // A preset on this page only.
+    Issue906Preset(window, "1\" = 20'");
+    QVERIFY(window.EffectiveScale(0));
+    QCOMPARE(window.EffectiveScale(0)->realValue, 20.0);
+    QVERIFY(!window.EffectiveScale(1));
+    QCOMPARE(label->text(), QString("Scale: 1\" = 20'"));
+    QVERIFY(window.HasUnsavedChanges());
+
+    // A typed ratio on every page; a ratio that is not above zero is refused first and changes nothing.
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
+      dialog->findChild<QRadioButton*>("pdfScaleModeTyped")->setChecked(true);
+      dialog->findChild<QDoubleSpinBox*>("pdfScaleTypedPage")->setValue(1);
+      dialog->findChild<QDoubleSpinBox*>("pdfScaleTypedReal")->setValue(0);
+      dialog->findChild<QRadioButton*>("pdfScopeAll")->setChecked(true);
+      dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+      auto* error = dialog->findChild<QLabel*>("pdfScaleError");
+      QVERIFY(error->isVisible() && error->text().contains("bigger than zero"));
+      dialog->findChild<QDoubleSpinBox*>("pdfScaleTypedReal")->setValue(50);
+      dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+    });
+    setScale->trigger();
+    for (int page = 0; page < 5; ++page) {
+      QVERIFY(window.EffectiveScale(page));
+      QCOMPARE(window.EffectiveScale(page)->realValue, 50.0);
+    }
+
+    // A page list: a page past the end is refused with the reason, then "2-3" applies to those two only.
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
+      dialog->findChild<QRadioButton*>("pdfScaleModePreset")->setChecked(true);
+      Issue906Select(dialog->findChild<QComboBox*>("pdfScalePreset"), "1\" = 40'");
+      dialog->findChild<QRadioButton*>("pdfScopePages")->setChecked(true);
+      auto* text = dialog->findChild<QLineEdit*>("pdfScopeText");
+      text->setText("9");
+      dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+      QVERIFY(dialog->findChild<QLabel*>("pdfScaleError")->isVisible());
+      text->setText("2-3");
+      dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+    });
+    setScale->trigger();
+    QCOMPARE(window.EffectiveScale(0)->realValue, 50.0);
+    QCOMPARE(window.EffectiveScale(1)->realValue, 40.0);
+    QCOMPARE(window.EffectiveScale(2)->realValue, 40.0);
+    QCOMPARE(window.EffectiveScale(3)->realValue, 50.0);
+    pageBox->setValue(2);
+    QCOMPARE(label->text(), QString("Scale: 1\" = 40'"));
+    pageBox->setValue(1);
+
+    // One undo step per apply.
+    Issue906Action(window, "Undo")->trigger();
+    QCOMPARE(window.EffectiveScale(1)->realValue, 50.0);
+    QCOMPARE(window.EffectiveScale(2)->realValue, 50.0);
+
+    // Clear scale removes it from the chosen page only; undo brings it back.
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
+      dialog->findChild<QRadioButton*>("pdfScopeThis")->setChecked(true);
+      dialog->findChild<QPushButton*>("pdfScaleClear")->click();
+    });
+    setScale->trigger();
+    QVERIFY(!window.EffectiveScale(0));
+    QCOMPARE(label->text(), QString("Unscaled"));
+    QVERIFY(window.EffectiveScale(1));
+    Issue906Action(window, "Undo")->trigger();
+    QVERIFY(window.EffectiveScale(0));
+    QCOMPARE(window.EffectiveScale(0)->realValue, 50.0);
+
+    // Calibration points picked on one page are dropped by changing page, and Esc leaves the tool.
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) { dialog->findChild<QPushButton*>("pdfScaleCalibrate")->click(); });
+    setScale->trigger();
+    QVERIFY(window.statusBar()->currentMessage().contains("known distance"));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000); // the page was redrawn after the page changes above
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 60, 110, 612, 792));
+    QVERIFY(window.statusBar()->currentMessage().contains("other point"));
+    pageBox->setValue(2);
+    window.statusBar()->clearMessage();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 60, 110, 612, 792)); // the first point again, not a second
+    QVERIFY(window.statusBar()->currentMessage().contains("other point"));
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(Issue906Action(window, "Browse")->isChecked());
+  }
+
+  void pdfCalibrationByTwoClicksSnapsOffersStandardScaleAndCountsAsFirstCheck() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, Issue906Pdf()));
+    PdfWindow& window = *holder;
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    auto* setScale = window.findChild<QAction*>("pdfSetScaleAction");
+    auto* checksButton = window.findChild<QPushButton*>("pdfScaleChecksButton");
+    QVERIFY(canvas && setScale && checksButton);
+    auto startCalibrate = [&] {
+      Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) { dialog->findChild<QPushButton*>("pdfScaleCalibrate")->click(); });
+      setScale->trigger();
+    };
+
+    // Freehand clicks (Snap off): the box says so; a distance of zero is refused; Cancel changes nothing.
+    startCalibrate();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 60, 110));
+    Issue906OnDialog(window, "pdfKnownDistanceDialog", [](QDialog* dialog) {
+      QVERIFY(dialog->findChild<QLabel*>("pdfCalSnapState")->text().contains("freehand"));
+      QVERIFY(dialog->findChild<QLabel*>("pdfCalDistance")->text().contains("points"));
+      dialog->findChild<QDoubleSpinBox*>("pdfCalReal")->setValue(0);
+      dialog->findChild<QPushButton*>("pdfCalSetScale")->click();
+      QVERIFY(dialog->findChild<QLabel*>("pdfScaleError")->isVisible());
+      dialog->findChild<QPushButton*>("pdfCalCancel")->click();
+    });
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 240, 95));
+    QVERIFY(!window.EffectiveScale(0));
+    QVERIFY(Issue906Action(window, "Browse")->isChecked());
+
+    // Snap on: both points land exactly on the line's ends, the box says so, and 200 pt = 50 ft sets the scale.
+    window.findChild<QAction*>("pdfSnapAction")->trigger();
+    auto* snapStatus = window.findChild<QLabel*>("pdfSnapStatus");
+    QTRY_VERIFY_WITH_TIMEOUT(window.SnapEnabled() && snapStatus->text().isEmpty(), 10000);
+    startCalibrate();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 52, 103));
+    Issue906OnDialog(window, "pdfKnownDistanceDialog", [](QDialog* dialog) {
+      QVERIFY(dialog->findChild<QLabel*>("pdfCalSnapState")->text().contains("Both points snapped"));
+      QVERIFY(dialog->findChild<QLabel*>("pdfCalDistance")->text().contains("200.000 points"));
+      dialog->findChild<QDoubleSpinBox*>("pdfCalReal")->setValue(50);
+      QVERIFY(!dialog->findChild<QLabel*>("pdfCalNearest")->isVisible()); // 18 ft per inch is no standard scale
+      dialog->findChild<QPushButton*>("pdfCalSetScale")->click();
+    });
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 98));
+    QVERIFY(window.EffectiveScale(0));
+    QVERIFY(qAbs(window.EffectiveScale(0)->PointsToReal(200.0) - 50.0) < 50.0 * 1e-4); // within 0.01 %
+    QCOMPARE(checksButton->text(), QString("Scale checks (1)")); // the calibration is the first check
+    QVERIFY(window.HasUnsavedChanges());
+
+    // A calibration within 1 % of a standard scale offers it, and the preset replaces the computed one.
+    startCalibrate();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 52, 103));
+    Issue906OnDialog(window, "pdfKnownDistanceDialog", [](QDialog* dialog) {
+      dialog->findChild<QDoubleSpinBox*>("pdfCalReal")->setValue(55.5556);
+      auto* nearest = dialog->findChild<QLabel*>("pdfCalNearest");
+      QVERIFY(nearest->isVisible() && nearest->text().contains("1\" = 20'"));
+      dialog->findChild<QPushButton*>("pdfCalUseStandard")->click();
+    });
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 98));
+    QCOMPARE(window.EffectiveScale(0)->realValue, 20.0);
+    QCOMPARE(window.EffectiveScale(0)->label, std::string("1\" = 20'"));
+    QCOMPARE(checksButton->text(), QString("Scale checks (2)"));
+
+    // "Set scale and check..." sets the scale and goes straight to the Check tool.
+    startCalibrate();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 52, 103));
+    Issue906OnDialog(window, "pdfKnownDistanceDialog", [](QDialog* dialog) {
+      dialog->findChild<QDoubleSpinBox*>("pdfCalReal")->setValue(50);
+      dialog->findChild<QPushButton*>("pdfCalSetAndCheck")->click();
+    });
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 98));
+    QVERIFY(window.findChild<QAction*>("pdfCheckTool")->isChecked());
+    QVERIFY(window.statusBar()->currentMessage().contains("check"));
+    QCOMPARE(checksButton->text(), QString("Scale checks (3)"));
+
+    // Esc after one point leaves the tool and nothing is asked.
+    startCalibrate();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 52, 103));
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(Issue906Action(window, "Browse")->isChecked());
+    QCOMPARE(checksButton->text(), QString("Scale checks (3)"));
+  }
+
+  void pdfCheckToolGivesVerdictsListsCorrectsAndStaysOutOfTheSavedFile() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, Issue906Pdf()));
+    PdfWindow& window = *holder;
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    auto* checkTool = window.findChild<QAction*>("pdfCheckTool");
+    auto* checksButton = window.findChild<QPushButton*>("pdfScaleChecksButton");
+    QVERIFY(canvas && checkTool && checksButton);
+    QVERIFY(!checksButton->isEnabled()); // nothing to check on an unscaled page
+
+    // An unscaled page refuses the Check tool.
+    checkTool->trigger();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 50, 150));
+    QVERIFY(window.statusBar()->currentMessage().contains("no scale"));
+
+    Issue906Preset(window, "1\" = 20'");
+    QVERIFY(checksButton->isEnabled());
+    window.findChild<QAction*>("pdfSnapAction")->trigger();
+    auto* snapStatus = window.findChild<QLabel*>("pdfSnapStatus");
+    QTRY_VERIFY_WITH_TIMEOUT(window.SnapEnabled() && snapStatus->text().isEmpty(), 10000);
+
+    // A 144 pt span is 40 ft here. An unreadable value is refused; the verdict shows before OK.
+    auto pick = [&](double y, const char* tryText, const char* tryVerdict, const char* finalText) {
+      Issue906OnDialog(window, "pdfCheckDialog", [=](QDialog* dialog) {
+        auto* value = dialog->findChild<QLineEdit*>("pdfCheckValue");
+        auto* ok = dialog->findChild<QPushButton*>("pdfCheckOk");
+        auto* result = dialog->findChild<QLabel*>("pdfCheckResult");
+        value->setText("abc");
+        QVERIFY(!ok->isEnabled() && !result->text().isEmpty());
+        value->setText(tryText);
+        QVERIFY2(result->text().contains(tryVerdict), qPrintable(result->text()));
+        value->setText(finalText);
+        QVERIFY(ok->isEnabled());
+        ok->click();
+      });
+      checkTool->trigger();
+      QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 50, y));
+      QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 194, y));
+    };
+    pick(150, "40 ft", "Good", "40 ft");
+    QCOMPARE(checksButton->text(), QString("Scale checks (1)"));
+    pick(200, "40.1 ft", "Check", "40 ft"); // 0.25 % out: the Check band
+    pick(250, "40.4 ft", "Blunder", "40.4 ft"); // 1 % out
+    QCOMPARE(checksButton->text(), QString("Scale checks (3)"));
+
+    // The checks are drawn on the sheet in their verdict colour; "Show on sheet" hides them.
+    auto* showOnSheet = window.findChild<QCheckBox*>("pdfShowChecks");
+    QVERIFY(showOnSheet && showOnSheet->isChecked());
+    QTRY_VERIFY(Issue906HasPixelNear(canvas->grab().toImage(), QColor("#d23a32"), 6)); // the Blunder
+    showOnSheet->setChecked(false);
+    QTRY_VERIFY(!Issue906HasPixelNear(canvas->grab().toImage(), QColor("#d23a32"), 6));
+    showOnSheet->setChecked(true);
+
+    // Checks are working marks: saving writes the scale but no check, and adding one leaves the file saved.
+    QString error;
+    const QString saved = directory.filePath("saved.pdf");
+    QVERIFY2(window.SaveFile(saved, error), qPrintable(error));
+    QVERIFY(!window.HasUnsavedChanges());
+    pick(150, "40 ft", "Good", "40 ft");
+    QVERIFY(!window.HasUnsavedChanges());
+    QCOMPARE(checksButton->text(), QString("Scale checks (4)"));
+    QVERIFY(pdfview::ReadAnnotations(std::filesystem::path(saved.toStdWString())).empty());
+
+    // Cancel on the popup adds nothing.
+    Issue906OnDialog(window, "pdfCheckDialog", [](QDialog* dialog) { dialog->findChild<QPushButton*>("pdfCheckCancel")->click(); });
+    checkTool->trigger();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 50, 150));
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 194, 150));
+    QCOMPARE(checksButton->text(), QString("Scale checks (4)"));
+
+    // The Scale checks dialog: the wrong check is the Outlier; corrections preview and apply as one undo step each.
+    Issue906OnDialog(window, "pdfChecksDialog", [&](QDialog* dialog) {
+      auto* table = dialog->findChild<QTableWidget*>("pdfChecksTable");
+      QCOMPARE(table->rowCount(), 4);
+      QCOMPARE(table->item(2, 6)->text(), QString("Blunder"));
+      QCOMPARE(table->item(2, 7)->text(), QString("Outlier"));
+      QCOMPARE(table->item(0, 7)->text(), QString());
+      QVERIFY(dialog->findChild<QLabel*>("pdfChecksBestFit")->isVisible());
+      QVERIFY(dialog->findChild<QLabel*>("pdfChecksOutlierNote")->isVisible());
+      QVERIFY(dialog->findChild<QRadioButton*>("pdfCorrBestFitWithout")->isEnabled());
+
+      // Match the third check (reads 40, drawing says 40.4): every reading grows 1 %, and that check reads Good.
+      dialog->findChild<QComboBox*>("pdfCorrMatchIndex")->setCurrentIndex(2);
+      QVERIFY(dialog->findChild<QLabel*>("pdfCorrAfter")->text().contains("adjusted"));
+      auto* preview = dialog->findChild<QTableWidget*>("pdfCorrTable");
+      QCOMPARE(preview->rowCount(), 4);
+      QCOMPARE(preview->item(2, 4)->text(), QString("Good"));
+      QCOMPARE(preview->item(0, 4)->text(), QString("Blunder")); // the trade-off the user must see
+      dialog->findChild<QPushButton*>("pdfCorrApply")->click();
+      QTRY_COMPARE(table->item(2, 6)->text(), QString("Good"));
+
+      // A typed +0.20 %.
+      dialog->findChild<QDoubleSpinBox*>("pdfCorrPercentValue")->setValue(0.2);
+      dialog->findChild<QPushButton*>("pdfCorrApply")->click();
+
+      // The verdict limits are settings: widening them changes the verdicts, and they are put back.
+      dialog->findChild<QDoubleSpinBox*>("pdfLimitGood")->setValue(5);
+      dialog->findChild<QDoubleSpinBox*>("pdfLimitCheck")->setValue(10);
+      QTRY_COMPARE(table->item(0, 6)->text(), QString("Good"));
+      dialog->findChild<QDoubleSpinBox*>("pdfLimitGood")->setValue(0.1);
+      dialog->findChild<QDoubleSpinBox*>("pdfLimitCheck")->setValue(0.5);
+      QTRY_COMPARE(table->item(0, 6)->text(), QString("Blunder"));
+
+      // The report is copied and names the checks.
+      dialog->findChild<QPushButton*>("pdfChecksCopyReport")->click();
+      QVERIFY(QGuiApplication::clipboard()->text().contains("40"));
+
+      // Delete a check.
+      dialog->findChild<QPushButton*>("pdfCheckDelete0")->click();
+      QTRY_COMPARE(table->rowCount(), 3);
+      dialog->findChild<QPushButton*>("pdfChecksClose")->click();
+    });
+    checksButton->click();
+    QCOMPARE(checksButton->text(), QString("Scale checks (3)"));
+    QVERIFY(window.EffectiveScale(0)->note.find("adjusted") != std::string::npos);
+    QVERIFY(qAbs(window.EffectiveScale(0)->realValue - 20.0 * 1.01 * 1.002) < 1e-4);
+
+    // Each correction was one undo step (deleting a check is one too); undo restores the scale and its text exactly.
+    Issue906Action(window, "Undo")->trigger(); // the deleted check comes back
+    QCOMPARE(checksButton->text(), QString("Scale checks (4)"));
+    Issue906Action(window, "Undo")->trigger(); // the typed percentage
+    QVERIFY(qAbs(window.EffectiveScale(0)->realValue - 20.2) < 1e-4);
+    Issue906Action(window, "Undo")->trigger(); // matching the third check
+    QCOMPARE(window.EffectiveScale(0)->realValue, 20.0);
+    QVERIFY(window.EffectiveScale(0)->note.empty());
+  }
+
+  void pdfRobustCalibrationNeedsTheMinimumFlagsTheWrongDimensionAndAppliesOnce() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, Issue906Pdf()));
+    PdfWindow& window = *holder;
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    auto* checksButton = window.findChild<QPushButton*>("pdfScaleChecksButton");
+    QVERIFY(canvas && checksButton);
+    Issue906Preset(window, "1\" = 20'");
+    window.findChild<QAction*>("pdfSnapAction")->trigger();
+    auto* snapStatus = window.findChild<QLabel*>("pdfSnapStatus");
+    QTRY_VERIFY_WITH_TIMEOUT(window.SnapEnabled() && snapStatus->text().isEmpty(), 10000);
+
+    // Open the robust tab (nothing to apply yet) and ask to add a dimension.
+    Issue906OnDialog(window, "pdfChecksDialog", [](QDialog* dialog) {
+      dialog->findChild<QTabWidget*>("pdfChecksTabs")->setCurrentIndex(1);
+      QVERIFY(!dialog->findChild<QPushButton*>("pdfRobustApply")->isEnabled());
+      QVERIFY(!dialog->findChild<QLabel*>("pdfRobustResult")->text().isEmpty());
+      dialog->findChild<QPushButton*>("pdfRobustAdd")->click();
+    });
+    checksButton->click();
+
+    struct Dimension { double x0, x1, y; const char* text; };
+    const Dimension dimensions[] = {{50, 194, 150, "40 ft"}, {50, 194, 200, "40 ft"}, {50, 194, 250, "40 ft"},
+                                    {50, 250, 100, "55.5556 ft"}, {50, 194, 150, "400 ft"}}; // the last is a mistyped 40
+    for (int i = 0; i < 5; ++i) {
+      const Dimension d = dimensions[i];
+      Issue906OnDialog(window, "pdfCheckDialog", [d](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>("pdfCheckValue")->setText(d.text);
+        dialog->findChild<QPushButton*>("pdfCheckOk")->click();
+      });
+      if (i < 4) {
+        Issue906OnDialog(window, "pdfChecksDialog", [i](QDialog* dialog) {
+          QCOMPARE(dialog->findChild<QTabWidget*>("pdfChecksTabs")->currentIndex(), 1);
+          QCOMPARE(dialog->findChild<QTableWidget*>("pdfRobustTable")->rowCount(), i + 1);
+          QCOMPARE(dialog->findChild<QPushButton*>("pdfRobustApply")->isEnabled(), i + 1 >= 3); // the minimum is three
+          dialog->findChild<QPushButton*>("pdfRobustAdd")->click();
+        });
+      } else {
+        Issue906OnDialog(window, "pdfChecksDialog", [](QDialog* dialog) {
+          auto* table = dialog->findChild<QTableWidget*>("pdfRobustTable");
+          QCOMPARE(table->rowCount(), 5);
+          int suspects = 0, suspectRow = -1;
+          for (int row = 0; row < table->rowCount(); ++row)
+            if (table->item(row, 6)->text().contains("Suspect")) { ++suspects; suspectRow = row; }
+          QCOMPARE(suspects, 1);
+          QCOMPARE(suspectRow, 4);
+          // Removing it from the fit re-solves; the program never removed it by itself.
+          table->item(4, 0)->setCheckState(Qt::Unchecked);
+          QTRY_VERIFY(!table->item(4, 6)->text().contains("Suspect") && !table->item(0, 6)->text().contains("Suspect"));
+          auto* result = dialog->findChild<QLabel*>("pdfRobustResult");
+          QVERIFY2(result->text().contains("Adjusted scale"), qPrintable(result->text()));
+          QVERIFY(dialog->findChild<QPushButton*>("pdfRobustApply")->isEnabled());
+          dialog->findChild<QPushButton*>("pdfRobustApply")->click();
+        });
+      }
+      for (double x : {d.x0, d.x1}) QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, x, d.y));
+    }
+    QVERIFY(window.EffectiveScale(0)->note.find("robust") != std::string::npos);
+    QVERIFY(qAbs(window.EffectiveScale(0)->realValue / 20.0 - 1.0) < 1e-3);
+    QCOMPARE(checksButton->text(), QString("Scale checks (0)")); // robust dimensions are not scale checks
+
+    // Apply was one undo step.
+    Issue906Action(window, "Undo")->trigger();
+    QCOMPARE(window.EffectiveScale(0)->label, std::string("1\" = 20'"));
+    QVERIFY(window.EffectiveScale(0)->note.empty());
+  }
+
+  void pdfSnapIsOffByDefaultF3TogglesItAndLandsOnLineEnds() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, Issue906Pdf()));
+    PdfWindow& window = *holder;
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    auto* snapAction = window.findChild<QAction*>("pdfSnapAction");
+    auto* snapStatus = window.findChild<QLabel*>("pdfSnapStatus");
+    QVERIFY(canvas && snapAction && snapStatus);
+    QVERIFY(!window.SnapEnabled());
+    QCOMPARE(snapAction->text(), QString("Snap: off"));
+    QTest::keyClick(&window, Qt::Key_F3);
+    QVERIFY(window.SnapEnabled());
+    QCOMPARE(snapAction->text(), QString("Snap: on"));
+    QTRY_VERIFY_WITH_TIMEOUT(snapStatus->text().isEmpty(), 10000);
+
+    // The marker shows on the end the next click will take.
+    Issue906Action(window, "Line")->trigger();
+    Issue906Move(canvas, Issue906Px(canvas, 53, 103));
+    QTRY_VERIFY_WITH_TIMEOUT(Issue906HasSnapMarker(canvas->grab().toImage()), 10000);
+    // A snapped line, then (Snap off) a free one at the same distance from the ends.
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 53, 103));
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 97));
+    QTest::keyClick(&window, Qt::Key_F3);
+    QVERIFY(!window.SnapEnabled());
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 53, 53));
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 47));
+    QString error;
+    const QString saved = directory.filePath("lines.pdf");
+    QVERIFY2(window.SaveFile(saved, error), qPrintable(error));
+    const auto lines = pdfview::ReadAnnotations(std::filesystem::path(saved.toStdWString()));
+    QCOMPARE(lines.size(), std::size_t(2));
+    QVERIFY(qAbs(lines[0].x0 - 50.f) < 0.01f && qAbs(lines[0].y0 - 100.f) < 0.01f);
+    QVERIFY(qAbs(lines[0].x1 - 250.f) < 0.01f && qAbs(lines[0].y1 - 100.f) < 0.01f);
+    QVERIFY(qAbs(lines[1].x0 - 53.f) < 1.f && qAbs(lines[1].x0 - 50.f) > 1.f); // placed freehand, within a pixel of where it was clicked
+
+    // A page with no line work says it has nothing to snap to, and a click is not moved.
+    std::unique_ptr<PdfWindow> scanned;
+    QVERIFY(Issue906Open(scanned, directory, Issue906Pdf("/MediaBox[0 0 400 300]", ""), "scan.pdf"));
+    QTest::keyClick(scanned.get(), Qt::Key_F3);
+    QTRY_COMPARE_WITH_TIMEOUT(scanned->findChild<QLabel*>("pdfSnapStatus")->text(), QString("this page has nothing to snap to"), 10000);
+  }
+
+  void pdfScaleSetInQtIsSavedWithSaveAsAndReadBackAndUnusableScalesAreStated() {
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, pdfview::MakeSyntheticPdf(5, 3, 0)));
+    PdfWindow& window = *holder;
+    const QString source = directory.filePath("sheet.pdf");
+    QFile original(source);
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    const QByteArray originalBytes = original.readAll();
+    original.close();
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) {
+      Issue906Select(dialog->findChild<QComboBox*>("pdfScalePreset"), "1\" = 20'");
+      dialog->findChild<QRadioButton*>("pdfScopeAll")->setChecked(true);
+      dialog->findChild<QPushButton*>("pdfScaleApply")->click();
+    });
+    window.findChild<QAction*>("pdfSetScaleAction")->trigger();
+    QString error;
+    const QString saved = directory.filePath("scaled.pdf");
+    QVERIFY2(window.SaveFile(saved, error), qPrintable(error));
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), originalBytes); // the source is never changed
+    original.close();
+    const auto read = pdfview::ReadPageScales(std::filesystem::path(saved.toStdWString()));
+    QCOMPARE(read.scales.size(), std::size_t(5));
+    for (const auto& entry : read.scales) {
+      QCOMPARE(entry.second.realUnit, pdfview::Unit::Foot);
+      QVERIFY(qAbs(entry.second.RealPerPoint() * 72.0 - 20.0) < 1e-6);
+    }
+
+    // The saved file shows its scale in a new window.
+    PdfWindow reopened(nullptr);
+    QVERIFY2(reopened.LoadFile(saved, error), qPrintable(error));
+    const QString shown = reopened.findChild<QLabel*>("pdfScaleLabel")->text();
+    QVERIFY2(shown.startsWith("Scale:") && shown.contains("20"), qPrintable(shown));
+
+    // Measurement data that cannot be understood shows the page as unscaled with the reason.
+    std::unique_ptr<PdfWindow> broken;
+    QVERIFY(Issue906Open(broken, directory,
+        Issue906Pdf("/MediaBox[0 0 400 300]/VP[<</Type/Viewport/BBox[0 0 400 300]/Measure<</Type/Measure/Subtype/RL/R(broken)>>>>]"),
+        "broken.pdf"));
+    const QString reason = broken->findChild<QLabel*>("pdfScaleLabel")->text();
+    QVERIFY2(reason.startsWith("Unscaled (") && reason.contains("scale"), qPrintable(reason));
+  }
+
+  // Issue #906: final screenshots of the scale surfaces (deep navy, the user's selected design), saved under build/artifacts.
+  void qtPdfScaleScreenshotEvidenceForIssue906() {
+    const auto shot = [](const char* surface) { return Issue905Shot((QString("qt-906-final-") + surface + ".png").toLatin1().constData()); };
+    QTemporaryDir directory;
+    std::unique_ptr<PdfWindow> holder;
+    QVERIFY(Issue906Open(holder, directory, Issue906Pdf()));
+    PdfWindow& window = *holder;
+    window.resize(1200, 820);
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    auto* checkTool = window.findChild<QAction*>("pdfCheckTool");
+    auto* setScale = window.findChild<QAction*>("pdfSetScaleAction");
+    auto* checksButton = window.findChild<QPushButton*>("pdfScaleChecksButton");
+
+    Issue906OnDialog(window, "pdfSetScaleDialog", [&](QDialog* dialog) {
+      Issue906Select(dialog->findChild<QComboBox*>("pdfScalePreset"), "1\" = 20'");
+      QVERIFY(dialog->grab().save(shot("set-scale")));
+      dialog->findChild<QPushButton*>("pdfScaleCancel")->click();
+    });
+    setScale->trigger();
+    Issue906Preset(window, "1\" = 20'");
+    window.findChild<QAction*>("pdfSnapAction")->trigger();
+    auto* snapStatus = window.findChild<QLabel*>("pdfSnapStatus");
+    QTRY_VERIFY_WITH_TIMEOUT(window.SnapEnabled() && snapStatus->text().isEmpty(), 10000);
+
+    Issue906OnDialog(window, "pdfSetScaleDialog", [](QDialog* dialog) { dialog->findChild<QPushButton*>("pdfScaleCalibrate")->click(); });
+    setScale->trigger();
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 52, 103));
+    Issue906OnDialog(window, "pdfKnownDistanceDialog", [&](QDialog* dialog) {
+      dialog->findChild<QDoubleSpinBox*>("pdfCalReal")->setValue(55.5556);
+      QVERIFY(dialog->grab().save(shot("known-distance")));
+      dialog->findChild<QPushButton*>("pdfCalCancel")->click();
+    });
+    QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 247, 98));
+
+    auto pick = [&](double y, const char* text) {
+      Issue906OnDialog(window, "pdfCheckDialog", [=](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>("pdfCheckValue")->setText(text);
+        if (std::string(text) == "40.4 ft") QVERIFY(dialog->grab().save(shot("check-popup")));
+        dialog->findChild<QPushButton*>("pdfCheckOk")->click();
+      });
+      checkTool->trigger();
+      QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 50, y));
+      QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, 194, y));
+    };
+    pick(150, "40 ft");
+    pick(200, "40 ft");
+    pick(250, "40.4 ft");
+    Issue906Action(window, "Line")->trigger();
+    Issue906Move(canvas, Issue906Px(canvas, 253, 97));
+    QTest::qWait(150);
+    QVERIFY(window.grab().save(shot("window")));
+
+    Issue906OnDialog(window, "pdfChecksDialog", [&](QDialog* dialog) {
+      dialog->findChild<QTableWidget*>("pdfChecksTable")->selectRow(2);
+      dialog->findChild<QComboBox*>("pdfCorrMatchIndex")->setCurrentIndex(2);
+      QTest::qWait(100);
+      QVERIFY(dialog->grab().save(shot("checks")));
+      dialog->findChild<QPushButton*>("pdfChecksClose")->click();
+    });
+    checksButton->click();
+
+    Issue906OnDialog(window, "pdfChecksDialog", [](QDialog* dialog) {
+      dialog->findChild<QTabWidget*>("pdfChecksTabs")->setCurrentIndex(1);
+      dialog->findChild<QPushButton*>("pdfRobustAdd")->click();
+    });
+    checksButton->click();
+    struct Dimension { double x0, x1, y; const char* text; };
+    const Dimension dimensions[] = {{50, 194, 150, "40 ft"}, {50, 194, 200, "40 ft"}, {50, 194, 250, "40 ft"},
+                                    {50, 250, 100, "55.5556 ft"}, {50, 194, 150, "400 ft"}};
+    for (int i = 0; i < 5; ++i) {
+      const Dimension d = dimensions[i];
+      Issue906OnDialog(window, "pdfCheckDialog", [d](QDialog* dialog) {
+        dialog->findChild<QLineEdit*>("pdfCheckValue")->setText(d.text);
+        dialog->findChild<QPushButton*>("pdfCheckOk")->click();
+      });
+      Issue906OnDialog(window, "pdfChecksDialog", [&, i](QDialog* dialog) {
+        if (i < 4) { dialog->findChild<QPushButton*>("pdfRobustAdd")->click(); return; }
+        QTest::qWait(100);
+        QVERIFY(dialog->grab().save(shot("robust")));
+        dialog->findChild<QPushButton*>("pdfChecksClose")->click();
+      });
+      for (double x : {d.x0, d.x1}) QTest::mouseClick(canvas, Qt::LeftButton, {}, Issue906Px(canvas, x, d.y));
+    }
   }
 
   void dimensionStrokesRenderAndHonorLayerVisibility() {

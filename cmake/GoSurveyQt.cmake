@@ -24,6 +24,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorBlockAuthoring.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/PdfWindow.cpp
+  src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
@@ -32,6 +33,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfMeasure.cpp
   src/pdf/PdfScaleCheck.cpp
+  src/pdf/PdfSnap.cpp
   src/pdf/PdfRaw.cpp
   src/pdf/PdfSplit.cpp
   src/io/PdfPlot.cpp
