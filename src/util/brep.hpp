@@ -10,7 +10,7 @@
 
 /// The boundary-representation solid kernel (REQ-313 / ADR-045, GitHub issue #146 — Phase 3 of #120).
 ///
-/// Pure and dependency-free — no GL, no ImGui, no CAD session state, no `AppCommandState` — so every
+/// Pure and dependency-free — no GL, no UI, no CAD session state, no `AppCommandState` — so every
 /// primitive, every validity invariant and every mass property is unit-testable without a window.
 /// That is the same ADR-002 layering pressure that already governs `ray3d`, `ucs` and `Camera`, and
 /// issue #120 states it as an explicit architectural constraint: *"the geometry engine should be

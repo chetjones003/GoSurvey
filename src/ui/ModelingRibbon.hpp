@@ -4,12 +4,12 @@
 // data. Each button is the text a user would type: the tab submits `command` through the command
 // line, so a click and the typed command are one path, and tests/ModelingRibbonTests.cpp runs every
 // entry through that same path. Icons are names in resources/icons (the library set already has one
-// per command). No ImGui here, so the table is testable headless.
+// per command). The table has no UI dependencies, so it is testable headless.
 
 namespace modelingribbon {
 
 struct Button {
-  const char* id;       // ImGui id, unique across the tab
+  const char* id;       // unique identifier within the tab
   const char* label;    // text beside the icon
   const char* command;  // what the click submits, exactly as typed
   const char* iconName; // resources/icons/<iconName>.png

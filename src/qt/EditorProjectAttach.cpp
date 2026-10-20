@@ -3,10 +3,9 @@
 // When a point cloud or PDF from outside the project is attached in a writable project drawing, the
 // shared `RequestProjectAttach` queues `projectAttachPrompt`. This file asks the question and hands the
 // answer to `CompleteProjectAttach`, which copies or links the file and goes on with the attach that
-// asked. The file rules and the follow-up live in commands/ProjectFiles, shared with the ImGui build.
+// asked. The file rules and the follow-up live in commands/ProjectFiles, shared with the Qt application.
 #include "EditorWindow.hpp"
 #include "ProjectFiles.hpp"
-#include "PdfAttachDialog.hpp"
 #include "pdf/PdfAttach.hpp"
 #include "pdf/PdfDocument.hpp"
 

@@ -1,9 +1,9 @@
 // REQ-077 / REQ-078 — the Qt side of the software-update workflow.
 //
 // The decisions (is this newer? is it skipped? is the download intact?) live in
-// `update::` and are shared with the ImGui build. This file only presents the
-// phases that service reports, and carries the user's choices back to it. As in
-// the ImGui build, nothing downloads or installs without a click: the app holds
+// `update::` and are shared with headless callers. This file only presents the
+// phases that service reports, and carries the user's choices back to it. Nothing
+// downloads or installs without a click: the app holds
 // unsaved drawings, and an unannounced restart destroys work.
 #include "EditorWindow.hpp"
 #include "GsMigrate.hpp"  // kGsFormatVersion — what the offered build's format is compared against

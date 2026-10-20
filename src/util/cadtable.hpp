@@ -191,7 +191,7 @@ inline void CadTableLayoutWorldCells(const CadTable& t, std::vector<CadTableCell
   return std::max(best, n);
 }
 
-/// Glyph width as a fraction of text height (wider than average so ImGui/TTF text stays inside the cell).
+/// Glyph width as a fraction of text height (wider than average so TTF text stays inside the cell).
 inline constexpr float kCadTableEmPerHeight = 0.70f;
 /// Horizontal padding on each side of a cell, in text-heights.
 inline constexpr float kCadTableCellPadXEm = 0.45f;

@@ -12,20 +12,17 @@ Use the Windows MSVC/CMake/Ninja workflow in [CLAUDE.md §1](CLAUDE.md#1-environ
 From the repository root in PowerShell:
 
 - Build both frontends and all tests/helpers: `.\build.bat`.
-- ImGui: `.\build.bat imgui`, then `.\build\GoSurveyTestImGui.exe`.
-- Qt: `.\build.bat qt`, then `ctest --preset ninja-release -R "^qt[.]editor$"`.
+- Qt and domain tests: `.\build.bat`, then `ctest --preset ninja-release -R "^qt[.]editor$"` for GUI tests.
   This runs GUI tests on a hidden desktop. Set `$env:GOSURVEY_QT_ROOT` if the installed
   MSVC x64 Qt 6.8+ kit differs from `C:\Qt\6.8.3\msvc2022_64`.
 - Full suite: run `.\build.bat` first, then `ctest --preset ninja-release`.
   A frontend-only build does not build every headless helper. Report failures explicitly.
-- Debug: `.\build.bat imgui debug` or `.\build.bat qt debug`; run
-  `.\build\debug\GoSurveyTestImGui.exe` or `ctest --preset ninja-debug -R "^qt[.]editor$"`.
+- Debug: `.\build.bat debug`; run `ctest --preset ninja-debug -R "^qt[.]editor$"` for GUI tests.
   For the full Debug suite, run `.\build.bat debug`, then `ctest --preset ninja-debug`.
 - Check output after building both frontends:
   `ctest --preset ninja-release -R "^build[.]output-layout$"`.
 
-Keep only the four application executables (`GoSurvey.exe`, `GoSurveyTestImGui.exe`,
-`GoSurveyQt.exe`, `GoSurveyQtTests.exe`) and required runtime files beside them in `build/`.
+Keep only the two application executables (`GoSurvey.exe`, `GoSurveyQtTests.exe`) and required runtime files beside them in `build/`.
 Debug applications use `build/debug/`. Keep intermediates/helpers under `build/.cmake/`
 and screenshots/logs/reports under `build/artifacts/`. Retain runtime DLLs, `qt.conf`,
 `qt-plugins/`, `resources/` and runtime `.ini` files; resource images are required assets.

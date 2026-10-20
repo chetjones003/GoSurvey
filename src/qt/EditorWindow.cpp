@@ -870,7 +870,7 @@ void EditorWindow::ServiceAuth() {
 }
 
 void EditorWindow::EnableTelemetry() {
-  // The launch-time channel, as the ImGui build sends: a Settings change applies from next launch.
+  // The launch-time channel ensures a Settings change applies from the next launch.
   // A literal, not a std::string: the stored lambda is copied by std::function, and a capture
   // whose copy can allocate (and so throw) is what bugprone-exception-escape rejects.
   const char* channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
@@ -1214,6 +1214,7 @@ void EditorWindow::Submit(const QString& command) {
     std::vector<char> buffer(input.begin(), input.end());
     buffer.push_back('\0');
     ProcessCommandLineSubmit(buffer.data(), static_cast<int>(buffer.size()), m_State, m_Log);
+    if (m_State.blockEditPickerOpen) ShowBlockEditorPicker();
   }
   Refresh();
 }

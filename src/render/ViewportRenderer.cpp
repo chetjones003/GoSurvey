@@ -1229,7 +1229,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glClearStencil(0);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-  // Paper space: the ImGui overlay in CadUi::DrawDrawingViewport renders the sheet, viewport rects,
+  // Paper space: the Qt overlay renders the sheet, viewport rectangles,
   // and model geometry clipped+scaled inside each viewport, all pan/zoom-aware (via its w2s transform).
   // We leave the GL texture as the cleared background and let that overlay draw on top.
   //
@@ -1306,7 +1306,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float model[16];
   // Vertices arrive with XY relative to the view anchor but Z ABSOLUTE, so the camera's target
   // elevation has to be subtracted here — the anchoring only ever covered X and Y. Without it the
-  // GL geometry and the ImGui overlay (which projects through Camera::WorldToScreen, and that DOES
+  // GL geometry and the Qt overlay (which projects through Camera::WorldToScreen, and that DOES
   // subtract targetZ) drift apart vertically as soon as the view is panned while orbited, so the
   // crosshair and snap glyph stop landing on the lines they belong to.
   const float panZf = static_cast<float>(cam.targetZ);
@@ -2407,7 +2407,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
       if (!fr.isSolid())
-        continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
+        continue;  // line-pattern hatches are drawn as clipped lines in the viewport overlay (REQ-043)
       // REQ-084 (d): a fill isolated out is not drawn.
       if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
           CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
@@ -3015,7 +3015,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- Window selection preview (semi-transparent fill + outline) ---
   // The selection box used to be drawn here, as a world-space rectangle on the XY plane. It moved to
-  // a screen-space ImGui overlay in CadUi (TASK-047): world geometry projects to a parallelogram
+  // a screen-space viewport overlay (TASK-047): world geometry projects to a parallelogram
   // once the view is orbited, and the hit test forms an axis-aligned SCREEN rectangle from the two
   // drag corners — so the drawn box and the region that selects disagreed in every non-plan view.
 
@@ -3496,7 +3496,7 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
-  // REQ-341: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // REQ-341: the clip must not outlive this call. The UI draws immediately afterward with
   // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
   // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
   // arbitrary parts of the interface. Unconditional, and outside the geometry block so the

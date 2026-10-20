@@ -10,7 +10,6 @@
 //   * <Windows.h> — its min/max and other macros would leak into the pure
 //     geometry TUs in gosurvey_domain (geom2d, tinbuild, …).
 //   * project headers — they change often; a PCH edit then rebuilds the world.
-//   * imgui.h — not on GoSurveyTests' include path (ADR-002).
 //
 // nlohmann/json.hpp is the single most expensive header in the tree (~25k LOC,
 // re-parsed in dozens of TUs); it resolves on every target that includes this

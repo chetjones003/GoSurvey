@@ -3,7 +3,7 @@
 // point prompt shows, what each is labelled, what typing `@` / `<` / `,` does to them, and the one
 // command-line string they submit.
 //
-// It lives in the command layer, with no ImGui, for one reason: the UI and the headless driver must
+// It lives in the command layer, independent of the UI, so the UI and the headless driver must
 // drive the SAME code. The labels on screen and the text the command parses are both derived from
 // one `dyninput::Group`, so a transcript that types `@5,3` and checks both the labels and the point
 // that lands is checking what the user gets — the two cannot drift apart.

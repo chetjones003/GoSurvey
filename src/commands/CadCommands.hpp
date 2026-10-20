@@ -971,7 +971,7 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
 /// \c Kind::Scale, \c modifyPhase == NeedDestination — live scale from cursor (see \ref AppCommandState::scalePhase).
 bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale);
 
-/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for ImGui overlay.
+/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for the viewport overlay.
 /// New CAD entities: mirror this pattern — GL rubber (\p main.cpp) + \ref CadAnnotationCollectTransformPreviews / UI overlay (\p CadUi.cpp) + grips (\p CadUi.cpp).
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out);
@@ -2318,7 +2318,6 @@ struct AppCommandState {
   float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
   float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
   int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
-  double cmdLogLastChangeTime = 0.0;  ///< ImGui time of the last log append (drives the fade).
   size_t cmdLogLastSizeForFade = 0;   ///< log size seen at the last fade-timer reset.
   std::vector<std::string> cmdEnteredHistory;  ///< recently submitted command-line entries (newest last; capped). Runtime only.
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
@@ -2506,7 +2505,7 @@ struct AppCommandState {
   bool pendingZoomExtents = false;
   bool pendingZoomWindow = false;
   /// REQ-399: bring the main GoSurvey window to the foreground on the next frame (the main loop owns
-  /// the GLFW window handle, so this is a request rather than a direct call from the PDF viewer window).
+  /// the main window handle, so this is a request rather than a direct call from the PDF viewer window).
   bool requestMainWindowFocus = false;
   float pendingZoomMnX = 0.f;
   float pendingZoomMxX = 0.f;
@@ -2591,13 +2590,12 @@ struct AppCommandState {
   // must not become a dependency of the commands layer.
   int mtextEditCaret = 0;
   int mtextEditAnchor = 0;            ///< caret == anchor means no selection
-  /// The editor owns keyboard focus. Deliberately NOT ImGui's ActiveID: holding that persistently makes
-  /// ImGui refuse to hover any other item, which dead-locks every other control in the application. The
+  /// The editor owns keyboard focus. Keeping that ownership local prevents one input control from
+  /// blocking pointer interaction with the rest of the application. The
   /// widget only takes ActiveID for the duration of a drag-select, exactly as a stock widget does.
   bool mtextEditFocused = false;
   bool mtextEditMouseSelecting = false;
   float mtextEditScrollY = 0.f;       ///< px scrolled when the text outgrows the box's height cap
-  double mtextEditBlinkT = 0.0;       ///< ImGui time the caret last moved (restarts the blink)
   std::vector<std::string> mtextEditUndo;  ///< in-editor Ctrl+Z snapshots (drawing undo is separate)
   std::vector<std::string> mtextEditRedo;
   float mtextEditLastHeight = 0.f;    ///< height the wrapped layout used last frame (positions the box)
@@ -3293,7 +3291,7 @@ struct AppCommandState {
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
-  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// the same reasons: the window's POSITION persists in its settings, and which
   /// palette happened to be open is not worth a key in the settings file. Opened automatically by
   /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
   bool pipeFittingPaletteOpen = false;
@@ -3356,7 +3354,6 @@ struct AppCommandState {
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
   /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
@@ -3604,8 +3601,6 @@ struct AppCommandState {
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
   double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
   float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
-  /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
-  bool devShellVisible = false;
   std::vector<std::string> blockRecent;
   std::vector<std::string> blockFavorites;
   std::string blockLibraryFilter;
@@ -5011,7 +5006,6 @@ struct AppCommandState {
   // System → Graphics Performance sub-dialog.
   bool showGraphicsPerformanceDialog = false;
   bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
-  bool gfxAcceleratedFontDisplay = true;       ///< Placeholder (font rasterization through ImGui is already GPU).
   int gfxVideoMemoryCachingLevel = 5;          ///< Placeholder 1..5.
   bool gfx3dFastShadedMode = true;             ///< Placeholders (no 3D pipeline).
   bool gfx3dAdvancedMaterialEffects = true;
@@ -5076,7 +5070,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   struct DrawingTab {
     std::string  name;
-    uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     uid = 0;  ///< Stable per-tab ID used to prevent label collisions.
     uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
     /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
     /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
@@ -5118,7 +5112,7 @@ struct AppCommandState {
     std::string      message;      ///< why the marker is damaged
     gsproj::LockInfo holder;       ///< Locked: who holds it
     bool             stale = false;
-    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+    bool             openRequested = false;  ///< ask the UI to open the modal on its next update
   } projectPrompt;
   bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
   /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
@@ -5217,8 +5211,6 @@ struct AppCommandState {
   int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
   uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
   bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
-  bool pendingViewportFocus   = false; ///< Request ImGui focus on the Drawing1 window next frame.
-  bool pendingPropertiesFocus = false; ///< Request ImGui focus on the Properties tab on next Begin().
   bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
   int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
   int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
@@ -6580,7 +6572,7 @@ void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vec
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
-/// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
+/// the identical current/stale/rebuilding classification for a surface, and it has no UI
 /// dependency, so it lives here rather than in either panel.
 enum class SurfaceState : std::uint8_t { Current, Stale, Rebuilding };
 
@@ -6685,7 +6677,7 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
 /// flight or the in-flight one has not finished yet.
 void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
 
-/// What a progress display (ImGui modal or Qt dialog) shows for an in-flight import (REQ-172,
+/// What a progress display shows for an in-flight import (REQ-172,
 /// ADR-060): the build's three real phases weighted by rough cost, and an ETA recomputed at most
 /// once a second.
 struct PointCloudImportProgress {
@@ -8443,7 +8435,7 @@ void RecalcAlignResult(AppCommandState& st);
 /// \p applyScale — false strips scale (rotation + translation only; re-derives tx/ty from centroids).
 void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool applyScale);
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
-/// Start PDF page rasterization on a worker while the Qt or ImGui dialog remains responsive.
+/// Start PDF page rasterization on a worker while the dialog remains responsive.
 void StartPdfAttachBuild(AppCommandState& st, std::vector<std::string>& log);
 /// Called from the viewport when the user clicks to place the PDF attachment.
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
@@ -8545,28 +8537,3 @@ bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* o
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);
-
-bool LoadApplicationFont();
-
-/// DevShell Fonts tab (debug-only live font tuner): one TTF path (or, for the bundled Wiki roles, a
-/// filename under resources/fonts/) and a pixel size per role. Mirrors the roles LoadApplicationFont
-/// wires up at startup.
-struct FontTuningRole {
-  std::string path;
-  float       sizePx = 16.f;
-};
-struct FontTuning {
-  FontTuningRole defaultFont{"C:/Windows/Fonts/arial.ttf", 16.f};
-  FontTuningRole toolspace{"C:/Windows/Fonts/arial.ttf", 16.f};
-  FontTuningRole billboard{"C:/Windows/Fonts/arial.ttf", 20.f};
-  FontTuningRole wikiBody{"IBMPlexSans-Regular.ttf", 16.f};
-  FontTuningRole wikiHeading{"IBMPlexSansCondensed-SemiBold.ttf", 17.f};
-  FontTuningRole wikiMono{"IBMPlexMono-Regular.ttf", 15.f};
-};
-
-/// Rebuilds every FontReg role from \p tuning. Clears and repopulates io.Fonts, but does NOT touch
-/// the GL texture — the caller (DevShell) must follow a successful call with
-/// ImGui_ImplOpenGL3_DestroyFontsTexture + io.Fonts->Build + ImGui_ImplOpenGL3_CreateFontsTexture,
-/// since this file has no OpenGL dependency. False (default font missing) leaves io.Fonts empty;
-/// the caller should not proceed to the texture rebuild in that case.
-bool LoadApplicationFontWithTuning(const FontTuning& tuning);

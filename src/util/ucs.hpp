@@ -7,7 +7,7 @@
 
 /// The User Coordinate System: one authoritative WCS <-> UCS implementation (REQ-154, GitHub #126).
 ///
-/// Pure and dependency-free — no GL, no ImGui, no CAD session state — so every transform, every
+/// Pure and dependency-free — no GL, no UI, no CAD session state — so every transform, every
 /// construction rule and the PLAN camera derivation are unit-testable without a window (the same
 /// ADR-002 layering pressure that put `ray3d` here).
 ///

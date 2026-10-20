@@ -1,9 +1,8 @@
 // The drawing's right-click: shortcut menu, Right-click Customization and the Selection list
 // (issue #891; REQ-054, REQ-084).
 //
-// Which verdict a right-click gets is `CadClassifyRightClick`, shared with the ImGui frontend; this
-// file builds the Qt menu and dialogs that verdict opens. Every item runs the same Start*/Apply*
-// command the ImGui menu runs.
+// Which verdict a right-click gets is `CadClassifyRightClick`; this file builds the Qt menu and
+// dialogs that verdict opens. Every item runs the matching Start*/Apply* command.
 #include "EditorWindow.hpp"
 
 #include "EditorViewport.hpp"

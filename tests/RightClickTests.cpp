@@ -10,7 +10,7 @@
 //      boundary case is the one worth pinning: exactly at the threshold must belong to one verdict,
 //      not to neither.
 //
-// `CadCommands.cpp` — which owns the commands themselves — pulls in ImGui and the GUI stack and
+// `CadCommands.cpp` — which owns the commands themselves — pulls in PDFium and the GUI stack and
 // cannot be linked by this target, which is why both rules live inline in the header. The same
 // constraint shapes `EntityIdTests.cpp`; see its note.
 

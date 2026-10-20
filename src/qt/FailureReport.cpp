@@ -141,14 +141,14 @@ bool ProbeStartupGraphics(startupFailure::Stage& stage, std::string& detail) {
   QOpenGLContext context;
   context.setFormat(format);
   if (!context.create() || !surface.isValid() || !context.makeCurrent(&surface)) {
-    stage = startupFailure::Stage::GlfwCreateWindow;
+    stage = startupFailure::Stage::GraphicsContext;
     detail = "Qt could not create an OpenGL 3.3 core context.";
     return false;
   }
   const auto version = context.format().version();
   if (version < qMakePair(3, 3)) {
     context.doneCurrent();
-    stage = startupFailure::Stage::GlfwCreateWindow;
+    stage = startupFailure::Stage::GraphicsContext;
     detail = "The graphics driver offers OpenGL " + std::to_string(version.first) + "." +
              std::to_string(version.second) + "; GoSurvey needs 3.3.";
     return false;

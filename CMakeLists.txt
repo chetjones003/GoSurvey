@@ -55,8 +55,8 @@ endif()
 # tree poisoned once stays poisoned across every incremental build.
 #
 # Restore the two flags here whenever they are absent, no matter how
-# CMAKE_CXX_FLAGS was seeded. Our targets and the vendored ones (Catch2, Dear
-# ImGui) all depend on working exceptions and RTTI.
+# CMAKE_CXX_FLAGS was seeded. Our targets and vendored libraries depend on
+# working exceptions and RTTI.
 if(MSVC)
   if(NOT CMAKE_CXX_FLAGS MATCHES "/EH")
     string(APPEND CMAKE_CXX_FLAGS " /EHsc")
@@ -114,7 +114,7 @@ endfunction()
 #   4244/4305  double->float narrowing. Geometry is STORED in float on purpose;
 #              REQ-101's rule is that the world->local subtraction happens in
 #              double BEFORE the narrowing, which these sites already do.
-#   4267       size_t -> 32-bit at Win32 / ImGui / third-party API boundaries.
+#   4267       size_t -> 32-bit at Win32 / third-party API boundaries.
 #   4245       signed/unsigned mismatch on Win32 API constants.
 #   4456/4457/4458/4459  local/param/member/global shadowing — style, not a bug.
 # _CRT_SECURE_NO_WARNINGS silences C4996 for standard C functions (getenv, strncpy).
@@ -159,38 +159,10 @@ set(GOSURVEY_TP "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
 
 # The old FetchContent variable names are reused so the target definitions below
 # stay untouched — only the source of the bytes changed.
-set(imgui_SOURCE_DIR              "${GOSURVEY_TP}/imgui")
-set(imgui_test_engine_SOURCE_DIR  "${GOSURVEY_TP}/imgui_test_engine")
 set(pdfium_binaries_SOURCE_DIR    "${GOSURVEY_TP}/pdfium")
 set(GLEW_ROOT                     "${GOSURVEY_TP}/glew")
 set(NLOHMANN_JSON_INCLUDE         "${GOSURVEY_TP}")   # resolves <nlohmann/json.hpp>
 set(PUGIXML_INCLUDE               "${GOSURVEY_TP}/pugixml/src")   # resolves <pugixml.hpp>
-
-# REQ-161 / ADR-040: Developer Shell is compile-gated. Release cannot turn it on.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(_gosurvey_devshell_default ON)
-else()
-  set(_gosurvey_devshell_default OFF)
-endif()
-option(GOSURVEY_DEVELOPER_SHELL
-  "Debug-only Developer Shell + Dear ImGui Test Engine (REQ-161). Forced off for Release."
-  ${_gosurvey_devshell_default})
-if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GOSURVEY_DEVELOPER_SHELL)
-  message(WARNING "REQ-161: GOSURVEY_DEVELOPER_SHELL forced OFF for CMAKE_BUILD_TYPE=Release")
-  set(GOSURVEY_DEVELOPER_SHELL OFF CACHE BOOL "" FORCE)
-endif()
-if(GOSURVEY_DEVELOPER_SHELL AND NOT EXISTS "${imgui_test_engine_SOURCE_DIR}/imgui_test_engine/imgui_te_engine.cpp")
-  message(FATAL_ERROR
-    "GOSURVEY_DEVELOPER_SHELL is ON but third_party/imgui_test_engine/ is not populated. "
-    "See third_party/imgui_test_engine/VENDORED.md to vendor it (Debug-only dep).")
-endif()
-
-# --- GLFW: vendored 3.4 source, built in-tree (GLFW_BUILD_* off) ---
-set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(GLFW_INSTALL OFF CACHE BOOL "" FORCE)
-add_subdirectory("${GOSURVEY_TP}/glfw" "${CMAKE_BINARY_DIR}/glfw-build" EXCLUDE_FROM_ALL)
 
 # --- LibreDWG: GoSurvey's own copy, built from source (REQ-170 / ADR-041 (h), D-2026-09-30-d) ---
 # The library source of upstream tag 0.14 plus GoSurvey's changes (third_party/libredwg/VENDORED.md).
@@ -250,7 +222,7 @@ add_library(laszip STATIC
   # directory on the include path, not its parent — the PUBLIC "include" dir below only satisfies
   # the <laszip/laszip_common.h>-style angle include dll/laszip_api.h itself uses.
 target_include_directories(laszip PRIVATE "${_lasz}" "${laszip_SOURCE_DIR}/include/laszip")
-# PUBLIC: consumers (gosurvey_domain, GoSurveyTestImGui, ...) get laszip_api.h's "laszip/..." angle
+# PUBLIC: consumers (gosurvey_domain, GoSurveyTests, ...) get laszip_api.h's "laszip/..." angle
 # includes and the bare laszip_api.h/laszip_common.h/laszip_api_version.h names for free, the same
 # way LibreDWG::libredwg's PUBLIC include already covers its consumers below.
 target_include_directories(laszip PUBLIC
@@ -335,7 +307,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # md4c (REQ-336 / ADR-056) — CommonMark parser for the What's New billboard.
-# Vendored under third_party/md4c/; UI draw layer is in-tree (MarkdownImGui).
+# Vendored under third_party/md4c/; the Qt UI presents the parsed Markdown.
 # ---------------------------------------------------------------------------
 if(NOT EXISTS "${GOSURVEY_TP}/md4c/md4c.c")
   message(FATAL_ERROR "REQ-336: third_party/md4c/md4c.c is missing. See third_party/md4c/VENDORED.md.")
@@ -364,79 +336,7 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# ImGui, split into core and backends (ADR-031 (c′)).
-#
-# The split exists because the headless target (REQ-203) needs ImGui *core* and must not have a
-# window or a GPU. That sounds contradictory until you know why: loading a `.gs` measures survey
-# label text through the current font and stores the result as annotation geometry
-# (SurveyPoints.cpp, RepositionSurveyLabelMtextForPoint), so the domain layer genuinely needs a
-# font atlas. Building an atlas is CPU work — only *uploading* it needs a GPU, and headless never
-# uploads. The backends are the part that require GLFW and OpenGL, so they, and only they, are
-# what the headless target leaves behind.
-# ---------------------------------------------------------------------------
-add_library(imgui_core STATIC
-  ${imgui_SOURCE_DIR}/imgui.cpp
-  ${imgui_SOURCE_DIR}/imgui_draw.cpp
-  ${imgui_SOURCE_DIR}/imgui_tables.cpp
-  ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-  ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
-)
-target_include_directories(imgui_core PUBLIC
-  ${imgui_SOURCE_DIR}
-  ${imgui_SOURCE_DIR}/misc/cpp
-)
-target_compile_definitions(imgui_core PUBLIC
-  IMGUI_DEFINE_MATH_OPERATORS
-)
-
-if(GOSURVEY_DEVELOPER_SHELL)
-  set(_IMGUI_TE "${imgui_test_engine_SOURCE_DIR}/imgui_test_engine")
-  add_library(imgui_core_testengine STATIC
-    ${imgui_SOURCE_DIR}/imgui.cpp
-    ${imgui_SOURCE_DIR}/imgui_draw.cpp
-    ${imgui_SOURCE_DIR}/imgui_tables.cpp
-    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
-    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
-    ${_IMGUI_TE}/imgui_te_engine.cpp
-    ${_IMGUI_TE}/imgui_te_context.cpp
-    ${_IMGUI_TE}/imgui_te_coroutine.cpp
-    ${_IMGUI_TE}/imgui_te_exporters.cpp
-    ${_IMGUI_TE}/imgui_te_perftool.cpp
-    ${_IMGUI_TE}/imgui_te_ui.cpp
-    ${_IMGUI_TE}/imgui_te_utils.cpp
-    ${_IMGUI_TE}/imgui_capture_tool.cpp
-  )
-  target_include_directories(imgui_core_testengine PUBLIC
-    ${imgui_SOURCE_DIR}
-    ${imgui_SOURCE_DIR}/misc/cpp
-    ${_IMGUI_TE}
-    ${imgui_test_engine_SOURCE_DIR}
-    ${_IMGUI_TE}/thirdparty/Str
-  )
-  target_compile_definitions(imgui_core_testengine PUBLIC
-    IMGUI_DEFINE_MATH_OPERATORS
-    IMGUI_ENABLE_TEST_ENGINE
-    IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1
-  )
-  if(MSVC)
-    target_compile_options(imgui_core_testengine PRIVATE /W3)
-  endif()
-endif()
-
-# Backends need imgui headers; the executable links one imgui_core* implementation (ADR-040).
-add_library(imgui_backend STATIC
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
-)
-target_include_directories(imgui_backend PUBLIC
-  ${imgui_SOURCE_DIR}
-  ${imgui_SOURCE_DIR}/backends
-)
-target_compile_definitions(imgui_backend PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
-target_link_libraries(imgui_backend PUBLIC glfw)
-
-# ---------------------------------------------------------------------------
-# Domain sources — shared by GoSurvey, gosurvey_headless, and GoSurveyTestImGui
+# Domain sources — shared by the Qt app, gosurvey_headless, and GoSurveyTests
 # (ADR-031 (a), REQ-203).
 #
 # ONE list, deliberately: a source added to the application must not be silently absent from the
@@ -478,9 +378,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
   src/commands/CadColor.cpp
-  # Issue #891: property-panel edit services shared by the ImGui and Qt Properties panels
+  # Issue #891: property-panel edit services shared by the Qt Properties panels
   src/commands/CadPropertyEdit.cpp
-  # Issue #893: surface / surface-style edit services shared by the ImGui and Qt surface dialogs
+  # Issue #893: surface / surface-style edit services used by the Qt surface dialogs
   src/commands/CadSurfaceEdit.cpp
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
@@ -496,7 +396,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # headlessly (REQ-107, D-2026-08-29-i).
   src/viewport/CadRubberPreview.cpp
 
-  # MTEXT rich-wire normalisation (pure; the ImGui layout lives in GOSURVEY_IMGUI_TEXT_SOURCES)
+  # MTEXT rich-wire normalisation (pure; rendered by the Qt frontend)
   src/ui/MtextRichFormat.cpp
 
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
@@ -575,7 +475,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Platform (OS process launch for the DWG converter — no window)
   src/platform/ProcessRun.cpp
   # Executable / user-data / bundled-asset paths. Split out of AppIcon.cpp (TASK-056) so resolving
-  # %APPDATA% no longer transitively requires GLEW and GLFW.
+  # %APPDATA% no longer transitively requires GLEW.
   src/platform/AppPaths.cpp
 
   # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
@@ -600,7 +500,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/gridsurface.cpp
   src/util/daylight.cpp
   src/util/benchscene.cpp
-  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no ImGui, no
+  # REQ-313 B-rep solid kernel (ADR-045, GitHub issue #146). Pure by that ADR — no GL, no UI, no
   # document — so a wrong volume integral or an unclosed shell is caught against a closed-form
   # expectation rather than by looking at a shaded viewport.
   src/util/brep.cpp
@@ -660,21 +560,6 @@ set(GOSURVEY_DOMAIN_SOURCES
 
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
 # once per configuration rather than once per executable that needs it.
-# ImGui-only text support (issue #917): the font registry and legacy font loading, MTEXT layout /
-# measurement through ImFont, the SHX draw-list emitter and the ribbon measure pass. These need ImGui
-# *core* (never a backend) and are linked by the ImGui app, the headless driver (which measures labels
-# through the same font, ADR-031 (c')) and the ImGui test executable - NOT by gosurvey_domain, so the
-# Qt frontend, which links the domain library, carries no ImGui core.
-set(GOSURVEY_IMGUI_TEXT_SOURCES
-  src/ui/MtextRichImGui.cpp
-  src/ui/FontRegistry.cpp
-  src/ui/LegacyApplicationFonts.cpp
-  # REQ-302/ADR-053 (issue #323) - ribbon measure pass runtime (icon side override for tests + app).
-  src/ui/RibbonLayoutMeasure.cpp
-  # SHX stroke text emitter: takes an ImDrawList but issues no GL of its own.
-  src/ui/ShxDraw.cpp
-)
-
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -698,195 +583,20 @@ target_include_directories(gosurvey_domain PUBLIC
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
 if(WIN32)
   # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
-  # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
+  # ProcessRun's shell paths. No opengl32 — the windowed app adds it itself.
   target_link_libraries(gosurvey_domain PUBLIC comdlg32 ole32 shell32)
 endif()
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
 
-# Issue #917: the shared domain library (and so the Qt frontend) must stay free of ImGui core.
-get_target_property(_domain_links gosurvey_domain LINK_LIBRARIES)
-if("imgui_core" IN_LIST _domain_links OR "imgui_core_testengine" IN_LIST _domain_links)
-  message(FATAL_ERROR "gosurvey_domain must not link ImGui; put ImGui-only code in GOSURVEY_IMGUI_TEXT_SOURCES")
-endif()
-
-# ImGui-only text support, linked by the ImGui app (Release), the headless driver and the ImGui tests.
-# The Debug Developer Shell compiles the same sources straight into GoSurvey (Test Engine ImGui ABI).
-add_library(gosurvey_imgui_text STATIC ${GOSURVEY_IMGUI_TEXT_SOURCES})
-target_link_libraries(gosurvey_imgui_text PUBLIC gosurvey_domain imgui_core)
-gosurvey_target_warnings(gosurvey_imgui_text)
-gosurvey_enable_pch(gosurvey_imgui_text)
-
-# Native Qt/Win32 presentation. Opt in while feature parity is being verified.
-option(GOSURVEY_BUILD_QT "Build the Qt Widgets editor using an installed Qt 6 kit" OFF)
-if(GOSURVEY_BUILD_QT)
-  include(cmake/GoSurveyQt.cmake)
-endif()
-
-add_executable(GoSurvey
-  # Application entry
-  src/app/main.cpp
-
-  # Viewport system (CadRubberPreview.cpp / TransformPreview.cpp are in GOSURVEY_DOMAIN_SOURCES —
-  # no GL, headless-testable)
-
-  # Renderer
-  src/render/ViewportRenderer.cpp
-
-  # UI panels
-  src/ui/CadUi.cpp
-  # REQ-302/ADR-053 (issue #325) — RibbonLayout::DrawSection. Calls RibbonDrawButtonForLayout
-  # (CadUi.cpp), so it needs a live ImGui window like the rest of this list; no test target links
-  # CadUi.cpp (it pulls GLFW/OpenGL through the windowed app), so this is exercised manually.
-  src/ui/RibbonLayoutDraw.cpp
-  # Cohesive panels split out of the CadUi.cpp mega-TU (TASK-150 Phase 2, issue
-  # #142). Shared helpers go through src/ui/CadUiInternal.hpp.
-  src/ui/CadUi_Modals.cpp
-  src/ui/CadUiSettings.cpp
-  src/ui/CadUi_CopySurveyModal.cpp
-  src/ui/CadUi_DxfPointConflictModal.cpp
-  src/ui/CadUi_PageSetup.cpp
-  src/ui/CadUi_SurveyReports.cpp
-  src/ui/CadUi_ImportExportPoints.cpp
-  src/ui/CadUi_TraverseEditor.cpp
-  src/ui/CadUi_PointGroups.cpp
-  src/ui/CadUi_SurveyPointGrid.cpp
-  src/ui/CadUi_Surfaces.cpp
-  src/ui/CadUi_SurfaceStyles.cpp
-  src/ui/CadUi_Toolspace.cpp
-  src/ui/CadUi_SurfaceProperties.cpp
-  src/ui/CadUi_VolumeDashboard.cpp
-  src/ui/CadUi_QuickProfile.cpp
-  src/ui/CadUi_FeatureLineElev.cpp
-  src/ui/CadUi_UpdateDialog.cpp
-  src/ui/CadUi_SignInGate.cpp
-  src/ui/CadUi_StartScreen.cpp
-  src/ui/UiScale.cpp
-  src/ui/CadUi_Projects.cpp
-  src/ui/CadUi_WhatsNew.cpp
-  src/ui/CadUi_DrawingSettings.cpp
-  src/ui/CadUi_Wiki.cpp
-  src/ui/CadUi_ColorPicker.cpp
-  src/ui/MarkdownImGui.cpp
-  src/ui/SplashScreen.cpp
-  src/ui/ImGuiLayout.cpp
-  src/ui/RichTextEdit.cpp
-  src/ui/ViewCube.cpp
-  src/ui/UcsIcon.cpp
-  src/ui/PdfAttachDialog.cpp
-  src/ui/CadUi_InsertBlock.cpp
-  src/ui/CadUi_BlockAuthoring.cpp
-  src/ui/CadUi_PipeFittingPalette.cpp
-  src/ui/CadUi_ConnectionModes.cpp
-
-  # I/O (windowed application only)
-  src/io/PdfPlot.cpp
-  src/traverse/TraverseReport.cpp
-
-  # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
-  src/pdf/PdfAttach.cpp
-
-  # REQ-387 / ADR-067 — the built-in PDF viewer: pure core, PDFium wrapper, ImGui window
-  src/pdf/PdfViewerCore.cpp
-  src/pdf/PdfDocument.cpp
-  src/pdf/PdfSplit.cpp
-  src/pdf/PdfAnnotate.cpp
-  src/pdf/PdfRaw.cpp
-  src/pdf/PdfMeasure.cpp
-  src/pdf/PdfSnap.cpp
-  src/pdf/PdfScaleCheck.cpp
-  src/pdf/PdfDimAudit.cpp
-  src/pdf/PdfCoordExtract.cpp
-  src/pdf/PdfAlign.cpp
-  src/pdf/PdfDiff.cpp
-  src/ui/PdfViewerWindow.cpp
-  src/ui/PdfCompare.cpp
-
-  # Platform
-  src/platform/AppIcon.cpp
-  src/platform/WinFileDialogs.cpp
-  src/platform/GpuPreference.cpp
-  src/platform/MapTilePlatform.cpp
-  src/platform/HttpFetch.cpp
-  src/platform/OAuthListener.cpp
-  src/platform/CredentialStore.cpp
-  src/platform/StartupFailure.cpp
-  src/platform/FailureReportUi.cpp
-  src/platform/CrashReporter.cpp
-  src/platform/CrashReporterWireReason.cpp
-
-  # Telemetry (REQ-080, ADR-032)
-  src/telemetry/TelemetryPing.cpp
-  src/telemetry/TelemetryService.cpp
-
-  # Accounts sign-in (REQ-091, ADR-037)
-  src/auth/AuthPing.cpp
-  src/auth/AuthService.cpp
-
-  # Update check (REQ-077/078, ADR-029)
-  src/update/UpdateService.cpp
-)
-
-target_include_directories(GoSurvey PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/src
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/util
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/io
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/render
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/font
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/update
-  ${CMAKE_CURRENT_SOURCE_DIR}/third_party
-  ${NLOHMANN_JSON_INCLUDE}
-  ${PUGIXML_INCLUDE}
-  ${CMAKE_BINARY_DIR}/generated
-)
-target_link_libraries(GoSurvey PRIVATE
-  imgui_backend
-  glfw
-  OpenGL::GL
-  glew_static
-  pdfium
-  LibreDWG::libredwg
-  E57Format::E57Format
-  CsMap::csmap
-  md4c
-)
-target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
-if(GOSURVEY_DEVELOPER_SHELL)
-  # Domain objects must share the Test Engine ImGui ABI (ADR-040). Do not link gosurvey_domain
-  # (compiled against imgui_core without hooks) into the Debug windowed exe.
-  target_sources(GoSurvey PRIVATE ${GOSURVEY_DOMAIN_SOURCES} ${GOSURVEY_IMGUI_TEXT_SOURCES})
-  target_sources(GoSurvey PRIVATE
-    src/devshell/DevShell.cpp
-    src/devshell/DevShellTests.cpp
-    src/devshell/DevShellProjectTests.cpp
-  )
-  target_compile_definitions(GoSurvey PRIVATE GOSURVEY_DEVELOPER_SHELL)
-  target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
-  # The domain sources are compiled into this target, so what gosurvey_domain links PUBLIC (miniz,
-  # for ProjectPack / ProjectTurnover - REQ-380/381) has to be linked here too.
-  target_link_libraries(GoSurvey PRIVATE miniz Laszip::laszip)
-else()
-  target_link_libraries(GoSurvey PRIVATE gosurvey_imgui_text gosurvey_domain)
-endif()
-
-# ADR-063 (c): the only source that sees CS-MAP's headers. No PCH: cs_map.h is a C header with its
-# own platform macros, kept out of the shared precompiled header.
+# ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
+# platform macros and C header out of the shared precompiled header.
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
   APPEND PROPERTY INCLUDE_DIRECTORIES "${GOSURVEY_CSMAP_DIR}/include")
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
   PROPERTY SKIP_PRECOMPILE_HEADERS ON)
 set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/src/geo/CoordinateSystems.cpp"
   APPEND PROPERTY COMPILE_DEFINITIONS WIN32 _WINDOWS)
-
 if(TARGET libredwg)
   set_property(SOURCE
     "${CMAKE_CURRENT_SOURCE_DIR}/src/io/LibreDwgCad.cpp"
@@ -895,75 +605,9 @@ if(TARGET libredwg)
     "${libredwg_SOURCE_DIR}/src"
     "${libredwg_BINARY_DIR}/src")
 endif()
-if(WIN32)
-  # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
-  # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
-  # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
-  # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
-  # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32 shell32 dbghelp)
-  target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
-  # Embed the application icon so Windows shows it in Explorer, the taskbar,
-  # the Start Menu, and desktop shortcuts.
-  target_sources(GoSurvey PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc"
-  )
-
-  # Version resource, so the shipped .exe reports its version to Explorer's Properties
-  # dialog and to the installer (ADR-029 (a)). Separate from app.rc because app.rc
-  # resolves "app.ico" relative to itself and cannot be moved into the build tree.
-  configure_file(
-    "${CMAKE_CURRENT_SOURCE_DIR}/resources/version.rc.in"
-    "${CMAKE_BINARY_DIR}/generated/version.rc"
-    @ONLY)
-  target_sources(GoSurvey PRIVATE "${CMAKE_BINARY_DIR}/generated/version.rc")
-
-  # Windows.Data.Pdf via C++/WinRT (fast hardware-accelerated thumbnail path).
-  # Locate the cppwinrt headers in whichever Windows SDK version is installed.
-  file(GLOB _sdk_versions LIST_DIRECTORIES true
-       "C:/Program Files (x86)/Windows Kits/10/Include/10.*")
-  list(SORT _sdk_versions ORDER DESCENDING)
-  foreach(_sdk_ver ${_sdk_versions})
-    if(EXISTS "${_sdk_ver}/cppwinrt/winrt/windows.data.pdf.h")
-      target_include_directories(GoSurvey PRIVATE "${_sdk_ver}/cppwinrt")
-      target_link_libraries(GoSurvey PRIVATE runtimeobject Windowscodecs)
-      target_compile_definitions(GoSurvey PRIVATE PDF_WINRT_ENABLED)
-      # C++/WinRT requires C++20 <coroutine> (not available in the C++17
-      # experimental path used by older MSVC).  Compile only PdfAttach.cpp
-      # at /std:c++20 so the rest of the project stays on C++17.
-      if(MSVC)
-        set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES
-          COMPILE_OPTIONS "/std:c++20")
-      else()
-        set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES
-          COMPILE_OPTIONS "-std=c++20")
-      endif()
-      message(STATUS "Windows.Data.Pdf WinRT support enabled (SDK ${_sdk_ver})")
-      break()
-    endif()
-  endforeach()
-endif()
-target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
-
-if(WIN32)
-  # Stable, version-free filename (ADR-029 (b)). A version-stamped name changes the path
-  # of the installed program on every release, which breaks shortcuts and any form of
-  # self-replacement — both of which REQ-078 needs.
-  # Existing GoSurvey-<version>.exe files are swept by [InstallDelete] in installer/GoSurvey.iss.
-  set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey" WIN32_EXECUTABLE TRUE)
-  if(MSVC)
-    target_link_options(GoSurvey PRIVATE /ENTRY:mainCRTStartup)
-  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    target_link_options(GoSurvey PRIVATE "LINKER:/ENTRY:mainCRTStartup")
-  endif()
-endif()
-
-gosurvey_target_warnings(GoSurvey)
-gosurvey_enable_pch(GoSurvey)
-# PdfAttach.cpp is compiled at /std:c++20 (C++/WinRT); the PCH is built at the
-# project default (C++17), so it cannot consume it (D-2026-08-31-a).
-set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+# Qt/Win32 is the sole supported desktop frontend.
+include(cmake/GoSurveyQt.cmake)
 
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gst")
 set(GOSURVEY_WHATS_NEW_MD "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new.md")
@@ -1008,56 +652,58 @@ set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources-$<
 add_custom_command(
   OUTPUT "${_GOSURVEY_RESOURCE_STAMP}"
   DEPENDS ${GOSURVEY_BUNDLED_RESOURCE_FILES}
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
-  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurveyQt>/resources"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurveyQt>/resources/layouts"
   # `copy_directory` never removes files that were deleted or renamed in the source tree, so a
   # rebuild after dropping an old icon left the stale copy beside the exe (and in the installer
   # payload) forever. Wipe the mirrored dirs first so the deploy is an exact copy of source.
   COMMAND ${CMAKE_COMMAND} -E rm -rf
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/fonts"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/drawing-templates"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/wiki"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/fonts"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/drawing-templates"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/wiki"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gst"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/default-template.gst"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_MD}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new.md"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/whats-new.md"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_WHATS_NEW_BG}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new-bg.png"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/whats-new-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_SPLASH_BG}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/splash-bg.png"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/icons"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/hatches"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/blocks"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/blocks"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/blocks"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/fonts"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/fonts"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/fonts"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/drawing-templates"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/drawing-templates"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/drawing-templates"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/wiki"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/wiki"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${GOSURVEY_WHATS_NEW_IMG_DIR}"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/whats-new"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/whats-new"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_RESOURCE_STAMP}"
-  COMMENT "Stage bundled resources beside GoSurvey executable")
+  COMMENT "Stage bundled resources beside GoSurveyQt executable")
 add_custom_target(gosurvey_stage_resources DEPENDS "${_GOSURVEY_RESOURCE_STAMP}")
-add_dependencies(GoSurvey gosurvey_stage_resources)
+if(TARGET GoSurveyQt)
+  add_dependencies(GoSurveyQt gosurvey_stage_resources)
+endif()
 
 # CS-MAP dictionaries + US grid files (REQ-358, D-2026-09-29-d) → resources/csmap/. Their own stamp:
 # ~230 MB is copied only when one of them changes, not on every resource edit.
@@ -1066,35 +712,21 @@ set(_GOSURVEY_CSMAP_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_csmap-$<CONFIG>
 add_custom_command(
   OUTPUT "${_GOSURVEY_CSMAP_STAMP}"
   DEPENDS ${GOSURVEY_CSMAP_DICTIONARY_FILES}
-  COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:GoSurvey>/resources/csmap"
+  COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${GOSURVEY_CSMAP_DIR}/dictionaries"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/csmap"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap"
   COMMAND ${CMAKE_COMMAND} -E touch "${_GOSURVEY_CSMAP_STAMP}"
-  COMMENT "Stage CS-MAP dictionaries beside GoSurvey executable")
+  COMMENT "Stage CS-MAP dictionaries beside GoSurveyQt executable")
 add_custom_target(gosurvey_stage_csmap DEPENDS "${_GOSURVEY_CSMAP_STAMP}")
-add_dependencies(GoSurvey gosurvey_stage_csmap)
 if(TARGET GoSurveyQt)
   add_dependencies(GoSurveyQt gosurvey_stage_csmap)
 endif()
 
-# Copy pdfium.dll next to the executable so it can be found at runtime.
-if(WIN32)
-  add_custom_command(TARGET GoSurvey POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
-            "$<TARGET_FILE_DIR:GoSurvey>/pdfium.dll"
-    COMMENT "Copy pdfium.dll beside executable")
-endif()
 
-# ---------------------------------------------------------------------------
 # gosurvey_headless (REQ-203 / ADR-031): the Commands layer, drivable with no window.
 #
-# Links gosurvey_domain plus the two headless platform seams, and imgui_core (via the domain
-# library) WITHOUT imgui_backend — so there is no GLFW, no GLEW, no OpenGL, and no window, while
-# text still measures through the same font the application uses (ADR-031 (c′), which is what
-# makes REQ-203's "save a .gs and diff against the GUI" condition meaningful rather than unmeetable).
-#
+# Links the shared domain library and headless platform seams without creating a GUI window.
 # TEST-ONLY, like Catch2 (REQ-300): GoSurvey.exe neither links nor ships any of it.
 # ---------------------------------------------------------------------------
 option(GOSURVEY_BUILD_HEADLESS "Build the headless transcript driver (REQ-203)" ON)
@@ -1103,6 +735,7 @@ if(GOSURVEY_BUILD_HEADLESS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/headless/HeadlessDriver.cpp
+    src/qt/QtText.cpp
     tests/headless/FuzzGenerator.cpp
     tests/headless/Minimizer.cpp
     tests/headless/FuzzMain.cpp
@@ -1111,6 +744,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   target_include_directories(gosurvey_headless PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
@@ -1128,10 +762,9 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_BINARY_DIR}/generated
   )
 
-  # gosurvey_domain brings imgui_core. Adding imgui_backend here would drag in glfw and OpenGL
-  # and silently undo the property this target exists to hold. LibreDWG::libredwg is linked
-  # explicitly because gosurvey_domain compiles LibreDwgCad.cpp without exposing the lib.
-  target_link_libraries(gosurvey_headless PRIVATE gosurvey_imgui_text gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
+  # LibreDWG::libredwg is linked explicitly because gosurvey_domain compiles LibreDwgCad.cpp
+  # without exposing the lib.
+  target_link_libraries(gosurvey_headless PRIVATE gosurvey_domain Qt6::Gui LibreDWG::libredwg E57Format::E57Format)
 
   # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
   # rather than to whoever's checkout the transcript was written in.
@@ -1139,17 +772,28 @@ if(GOSURVEY_BUILD_HEADLESS)
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
 
   gosurvey_target_warnings(gosurvey_headless)
+  add_custom_command(TARGET gosurvey_headless POST_BUILD
+    COMMAND "${GOSURVEY_WINDEPLOYQT}" --no-translations --no-compiler-runtime
+      --plugindir "$<TARGET_FILE_DIR:gosurvey_headless>/qt-plugins" "$<TARGET_FILE:gosurvey_headless>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${_qt_root}/plugins/platforms/qoffscreen.dll"
+      "$<TARGET_FILE_DIR:gosurvey_headless>/qt-plugins/platforms/qoffscreen.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/qt.conf" "$<TARGET_FILE_DIR:gosurvey_headless>/qt.conf"
+    VERBATIM)
 
   # GsJsonDwgFixture (issue #264): converts between raw GoSurvey JSON (the .gst template shape,
   # REQ-175) and a .dwg carrying it as the ADR-044 trailer. Used by tools/Make-*.ps1 to author
   # samples/*.dwg test fixtures from readable JSON — not shipped, like gosurvey_headless.
   add_executable(GsJsonDwgFixture
     tools/GsJsonDwgFixture.cpp
+    src/qt/QtText.cpp
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
   )
   target_include_directories(GsJsonDwgFixture PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
@@ -1162,7 +806,16 @@ if(GOSURVEY_BUILD_HEADLESS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_imgui_text gosurvey_domain LibreDWG::libredwg E57Format::E57Format)
+  target_link_libraries(GsJsonDwgFixture PRIVATE gosurvey_domain Qt6::Gui LibreDWG::libredwg E57Format::E57Format)
+  add_custom_command(TARGET GsJsonDwgFixture POST_BUILD
+    COMMAND "${GOSURVEY_WINDEPLOYQT}" --no-translations --no-compiler-runtime
+      --plugindir "$<TARGET_FILE_DIR:GsJsonDwgFixture>/qt-plugins" "$<TARGET_FILE:GsJsonDwgFixture>"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${_qt_root}/plugins/platforms/qoffscreen.dll"
+      "$<TARGET_FILE_DIR:GsJsonDwgFixture>/qt-plugins/platforms/qoffscreen.dll"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/qt.conf" "$<TARGET_FILE_DIR:GsJsonDwgFixture>/qt.conf"
+    VERBATIM)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -1188,7 +841,7 @@ if(GOSURVEY_BUILD_TESTS)
   list(APPEND CMAKE_MODULE_PATH "${GOSURVEY_CATCH2_DIR}")
 
   enable_testing()
-  add_executable(GoSurveyTestImGui
+  add_executable(GoSurveyTests
     tests/TraverseTests.cpp
     tests/EcefTransformTests.cpp
     tests/NumFormatTests.cpp
@@ -1226,9 +879,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
     tests/CadFontNameTests.cpp
-    # REQ-302/ADR-053 (issue #322) — ribbon layout data model. Header-only and pure: plain
-    # structs with no ImGui calls, so it belongs with the other header-only pure tests above.
-    tests/RibbonLayoutTypesTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
@@ -1533,7 +1183,7 @@ if(GOSURVEY_BUILD_TESTS)
     # AuthService, not by this pure module or its tests.
     src/auth/AuthPing.cpp
   )
-  target_include_directories(GoSurveyTestImGui PRIVATE
+  target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
@@ -1561,11 +1211,11 @@ if(GOSURVEY_BUILD_TESTS)
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
-  target_compile_definitions(GoSurveyTestImGui PRIVATE
+  target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
-  target_sources(GoSurveyTestImGui PRIVATE
+  target_sources(GoSurveyTests PRIVATE
     tests/PdfViewerTests.cpp
     tests/PdfSplitTests.cpp
     tests/PdfAnnotateTests.cpp
@@ -1592,50 +1242,41 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
     src/pdf/PdfDiff.cpp)
-  target_link_libraries(GoSurveyTestImGui PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
-    add_custom_command(TARGET GoSurveyTestImGui POST_BUILD
+    add_custom_command(TARGET GoSurveyTests POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
-              "$<TARGET_FILE_DIR:GoSurveyTestImGui>/pdfium.dll"
-      COMMENT "Copy pdfium.dll beside GoSurveyTestImGui")
+              "$<TARGET_FILE_DIR:GoSurveyTests>/pdfium.dll"
+      COMMENT "Copy pdfium.dll beside GoSurveyTests")
   endif()
 
   include(Catch)
 
   # ---------------------------------------------------------------------------
   # Command-layer cases share the Catch2 executable and existing domain library.
-  # No GLFW/OpenGL/window dependency is added to these tests.
+  # These tests run without a GUI window.
   # ---------------------------------------------------------------------------
-  target_sources(GoSurveyTestImGui PRIVATE
+  target_sources(GoSurveyTests PRIVATE
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadFieldTests.cpp
     tests/CadSnapTests.cpp
     # DRAPE needs the surface stores and ProcessCommandLineSubmit, both in gosurvey_domain,
-    # so it rides with GoSurveyTestImGui like the other command tests above.
+    # so it rides with GoSurveyTests like the other command tests above.
     tests/DrapeCommandTests.cpp
-    # Issue #916: the shared point-cloud export + import-progress helpers (ImGui commands and Qt dialogs).
+    # Issue #916: shared point-cloud export and import-progress behavior.
     tests/PointCloudExportTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
-    # with GoSurveyTestImGui like the other command tests above.
+    # with GoSurveyTests like the other command tests above.
     tests/PadSolidCommandTests.cpp
     tests/GsIoDimAngularTests.cpp
     tests/GsIoPipeRunTests.cpp
     tests/GsIoViewportCameraTests.cpp
     tests/GsMigrateLegacyBreaklineTests.cpp
-    # REQ-302/ADR-053 (issue #323) — ribbon layout measure pass. Header-only, but needs a live
-    # ImGui frame for CalcTextSize (font metrics), same headless-font-atlas pattern
-    # GsMigrateLegacyBreaklineTests.cpp uses above — that's why it rides with GoSurveyTestImGui
-    # (links imgui_core) rather than the imgui-free GoSurveyTestImGui.
-    tests/RibbonLayoutMeasureTests.cpp
-    # REQ-302/ADR-053 (issue #324) — ribbon layout place pass. Pure layout math (no live ImGui
-    # frame needed), but includes RibbonLayoutMeasure.hpp for ImVec2/RibbonMeasuredButton, so it
-    # rides with GoSurveyTestImGui (has the imgui include path) rather than GoSurveyTestImGui.
-    tests/RibbonLayoutPlaceTests.cpp
     tests/ViewportUcsTests.cpp
     # REQ-154 / issue #371 — ORTHO squaring to a vertical (Front/Left/Right-style) UCS. Needs
-    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveyTestImGui like
+    # gosurvey_domain for ApplyOrthoConstrainFromAnchor, so it rides with GoSurveyTests like
     # ViewportUcsTests.cpp above.
     tests/OrthoUcsConstrainTests.cpp
     # REQ-318 increment 2 (issue #148) — the sub-object SELECTION: its store, the expiring
@@ -1681,7 +1322,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipeRunCommandTests.cpp
     # REQ-350 / TASK-275 — the Pipe Fittings palette's filtering and grouping rules. Pure functions,
     # but they live in CadBlocks.cpp beside the library scan they filter, so this rides with
-    # GoSurveyTestImGui (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
+    # GoSurveyTests (gosurvey_domain) for the same reason CadPipeRunCommandTests above does.
     tests/CadPipePaletteTests.cpp
     # Issue #891: property-panel edit services and the shared right-click classifier
     tests/CadPropertyEditTests.cpp
@@ -1744,9 +1385,10 @@ if(GOSURVEY_BUILD_TESTS)
     # Overlapping pick disambiguation — depth tie-break when SEL is off.
     tests/PickDisambiguationTests.cpp
   )
-  target_include_directories(GoSurveyTestImGui PRIVATE
+  target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
     ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
@@ -1763,26 +1405,19 @@ if(GOSURVEY_BUILD_TESTS)
   ${PUGIXML_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveyTestImGui PRIVATE gosurvey_imgui_text gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
-  target_compile_definitions(GoSurveyTestImGui PRIVATE
+  target_link_libraries(GoSurveyTests PRIVATE gosurvey_domain Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format)
+  target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
-    GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurvey>/resources/csmap")
-  add_dependencies(GoSurveyTestImGui gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
-  gosurvey_target_warnings(GoSurveyTestImGui)
-  gosurvey_enable_pch(GoSurveyTestImGui)
+    GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap")
+  add_dependencies(GoSurveyTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
+  gosurvey_target_warnings(GoSurveyTests)
+  gosurvey_enable_pch(GoSurveyTests)
   # Domain implementations are linked once via gosurvey_domain, not compiled again.
-  get_target_property(_test_sources GoSurveyTestImGui SOURCES)
+  get_target_property(_test_sources GoSurveyTests SOURCES)
   list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
   list(REMOVE_DUPLICATES _test_sources)
-  set_property(TARGET GoSurveyTestImGui PROPERTY SOURCES "${_test_sources}")
-  catch_discover_tests(GoSurveyTestImGui WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
-
-  if(NOT GOSURVEY_DEVELOPER_SHELL)
-    add_test(NAME req161-release-no-devshell
-      COMMAND ${CMAKE_COMMAND}
-              -DGOSURVEY_EXE=$<TARGET_FILE:GoSurvey>
-              -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Req161ReleaseNoDevShell.cmake")
-  endif()
+  set_property(TARGET GoSurveyTests PROPERTY SOURCES "${_test_sources}")
+  catch_discover_tests(GoSurveyTests WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
 
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
@@ -1851,7 +1486,7 @@ if(GOSURVEY_BUILD_TESTS)
   endif()
 endif()
 
-if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
+if(GOSURVEY_BUILD_TESTS)
   include(cmake/GoSurveyQtTests.cmake)
   add_test(NAME build.output-layout COMMAND "${CMAKE_COMMAND}"
     "-DRUNTIME_DIR=$<TARGET_FILE_DIR:GoSurveyQt>"
@@ -1870,7 +1505,7 @@ if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
 endif()
 
 # Developer-only helpers remain available to ctest/tools without adding app executables.
-foreach(_helper gosurvey_headless GsJsonDwgFixture)
+foreach(_helper gosurvey_headless GsJsonDwgFixture GoSurveyTests)
   if(TARGET ${_helper})
     set_target_properties(${_helper} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
     foreach(_config IN LISTS CMAKE_CONFIGURATION_TYPES)

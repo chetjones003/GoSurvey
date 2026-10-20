@@ -1,11 +1,13 @@
-# Qt / Win32 migration status
+# Qt migration history
+
+> Historical migration record. GitHub issue #966 completed the retirement of the ImGui frontend; Qt is now the only supported desktop frontend. This document records the migration path and prior verification, not current build instructions.
 
 Branch: `test/win32UI`. Authorized by the user on 2026-10-16.
 
 This is an executable migration baseline, **not a production replacement** for
 GoSurvey. The existing executable remains available during parity work.
 
-## Ongoing parity work
+## Historical parity work
 
 The user requested autonomous iteration to full production parity. Fetched and
 merged `origin/master` at `90aa196d34692562effa18502c9b8ad0197e9e80`.

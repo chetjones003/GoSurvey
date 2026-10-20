@@ -49,7 +49,7 @@
 #include <chrono>
 
 #include "StringUtil.hpp"
-#include "AppIcon.hpp"
+#include "AppPaths.hpp"
 
 #include "CadSnap.hpp"
 
@@ -3354,6 +3354,16 @@ bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::v
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   if (index >= st.cadSurfaces.size())
     return;
+  // Surface selections are index-based; remove the deleted reference and shift later surfaces down.
+  for (size_t i = st.selection.size(); i > 0; --i) {
+    SelectedEntity& selected = st.selection[i - 1];
+    if (selected.type != SelectedEntity::Type::Surface)
+      continue;
+    if (selected.index == static_cast<int>(index))
+      st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    else if (selected.index > static_cast<int>(index))
+      --selected.index;
+  }
   st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
@@ -4741,7 +4751,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
   }
 
   // --- REQ-072: the command form of the Analysis tab (TASK-086 §9) -----------------------------
-  // The Analysis tab is an ImGui window this headless driver cannot reach — the same limitation
+  // The Analysis panel is a Qt window this headless driver cannot reach — the same limitation
   // INTERVAL/SHOW/HIDE already work around — so these verbs call the exact same fields the tab
   // edits, and what a transcript proves is the real edit path rather than a test-only shortcut.
 
@@ -4993,7 +5003,7 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
 }
 
 /// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
-/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis tab: the panel is an ImGui
+/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis panel: the panel is a Qt
 /// window this headless driver cannot reach, so PICK/MAP/CLOSE call the exact fields the panel edits.
 ///
 /// **`RECOMPUTE` is the synchronous test surrogate for the real async live-recompute
@@ -44520,7 +44530,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     // REQ-073 amendment. `VOLDASH [<verb> …]` — bare opens the panel; the verbs are what a headless
-    // transcript drives, because the panel itself is an ImGui window this driver cannot reach.
+    // transcript drives, because the panel itself is a Qt window this driver cannot reach.
     if (plotTok == "voldash") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47057,7 +47067,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
 //
 // The move is a relocation, not a redesign: every input it reads already lives in
 // AppCommandState (qsApplyTo / qsObjectType / qsProperty / qsOperator / qsValueBuf / qsIncludeMode
-// / qsAppendToExisting) and it touches no ImGui at all. The panel stays exactly what the driver's
+// / qsAppendToExisting) and it touches no UI at all. The panel stays exactly what the driver's
 // own IMPORT POINTS comment praises — a form, not logic — and calls this unchanged.
 void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   using OT = AppCommandState::QsObjectType;
