@@ -7,11 +7,10 @@
 # log. Nothing here publishes anything — that stays in release.yml (REQ-202/ADR-029), which is
 # manual-dispatch only and untouched by this file.
 #
-# msvc-analyze is deliberately NON-blocking here (see CMakeLists.txt's GOSURVEY_ENABLE_ANALYZE
-# comment): the existing codebase has never been triaged against /analyze, so failing the whole
-# build on a pre-existing, untouched-file warning would block unrelated PRs. It stays
-# annotation-only until a separate triage pass (tracked as its own task) clears the backlog, at
-# which point GOSURVEY_ENABLE_ANALYZE can be paired with /WX here and this comment/job updated.
+# msvc-analyze is BLOCKING (issue #977, D-2026-10-20-a): the backlog was triaged, real findings were
+# fixed and the justified suppressions are recorded in CMakeLists.txt and spec/coding-standards.md
+# section 11. GOSURVEY_ENABLE_ANALYZE is paired with GOSURVEY_ANALYZE_WERROR (/WX), so any new
+# /analyze or /W4 warning fails the PR. release.yml keeps /analyze report-only (REQ-324).
 
 name: pr-checks
 
@@ -124,6 +123,13 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
 
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -312,11 +318,11 @@ jobs:
           }
 
   # ---------------------------------------------------------------------------
-  # lint / msvc-analyze — report-only (see header comment). Always "passes"; findings
-  # surface as build annotations via the existing problem matcher.
+  # lint / msvc-analyze — blocking (see header comment). Findings surface as build annotations via
+  # the existing problem matcher and fail the job through /WX.
   # ---------------------------------------------------------------------------
   lint-msvc-analyze:
-    name: lint / msvc-analyze (report-only)
+    name: lint / msvc-analyze
     needs: classify-docs-only
     if: >-
       always() &&
@@ -331,6 +337,13 @@ jobs:
 
       - name: Set up MSVC
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
 
       - name: Ensure Ninja
         shell: pwsh
@@ -352,12 +365,12 @@ jobs:
           cache: true
 
       - name: Configure
-        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON
+        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON -DGOSURVEY_ANALYZE_WERROR=ON
 
       - name: Register MSVC /analyze problem matcher
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
-      - name: Build (findings become annotations, build is not failed by them)
+      - name: Build (findings become annotations and fail the build)
         run: cmake --build --preset ninja-release
 
   # ---------------------------------------------------------------------------
