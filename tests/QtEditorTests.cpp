@@ -1215,6 +1215,34 @@ private Q_SLOTS:
     window.ShowLayoutManager();
   }
 
+  void paperTrimHighlightScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    state.viewportZoom = 4.f;
+    state.active = AppCommandState::Kind::Trim;
+    auto& layout = state.paperLayouts[0];
+    layout.paperLines = {2, 2, 0, 9, 2, 0, 5, 0, 0, 5, 4, 0};
+    state.paperTrimCutters = {{PaperEntityRef::Type::Line, 1}};
+    window.Refresh();
+    window.resize(1280, 820);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* viewportWidget = window.findChild<QWidget*>("modelViewport");
+    QVERIFY(viewportWidget);
+    auto* viewport = static_cast<EditorViewport*>(viewportWidget);
+    QTest::qWait(100);
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-cutter-highlight.png"));
+    state.paperHoverValid = true;
+    state.paperHover = {PaperEntityRef::Type::Line, 0};
+    viewport->update();
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-target-prehighlight.png"));
+  }
+
   void issue972PaperModifyCommandsRouteAndStayInPaperSpace() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
