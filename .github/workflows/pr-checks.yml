@@ -108,14 +108,9 @@ jobs:
           $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
             Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
           if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
-          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
-          Copy-Item -LiteralPath $mesaOpenGl.FullName -Destination (Join-Path $qtBin 'opengl32sw.dll') -Force
-          foreach ($dependency in 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
-            $source = Join-Path $mesaOpenGl.DirectoryName $dependency
-            if (Test-Path -LiteralPath $source) {
-              Copy-Item -LiteralPath $source -Destination $qtBin -Force
-            }
-          }
+          # GoSurvey/GLEW links directly to opengl32.dll. Deploy Mesa's normal opengl32.dll
+          # alongside the test executable so Qt and GLEW resolve the same implementation.
+          Add-Content -Path $env:GITHUB_ENV -Value "GOSURVEY_MESA_BIN=$($mesaOpenGl.DirectoryName)"
           Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
 
       - name: Ensure Ninja
@@ -147,20 +142,22 @@ jobs:
         run: |
           # Keep Mesa's test-only driver dependencies beside the app so qt.deployment's isolated
           # copy can exercise the same software OpenGL path with a minimal PATH.
-          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
-          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build/.cmake/release'
-          foreach ($dependency in 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
-            $source = Join-Path $qtBin $dependency
+          $mesaBin = $env:GOSURVEY_MESA_BIN
+          # CMake emits the app and its runtime DLLs under build/; .cmake/release only
+          # contains generator files and isolated helper executables.
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $mesaBin $dependency
             if (Test-Path -LiteralPath $source) {
               Copy-Item -LiteralPath $source -Destination $runtime -Force
             }
           }
 
       - name: Test (CTest)
-        # Use the pinned Mesa llvmpipe staged above; the hosted runner's system driver only exposes
-        # OpenGL 3.0, below the application's OpenGL 3.3 core requirement.
+        # Use Mesa's app-local opengl32.dll so Qt and GLEW share a driver; the hosted system driver
+        # only exposes OpenGL 3.0, below the application's OpenGL 3.3 core requirement.
         env:
-          QT_OPENGL: software
+          QT_OPENGL: desktop
           GALLIUM_DRIVER: llvmpipe
         run: ctest --preset ninja-release
 
