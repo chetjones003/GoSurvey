@@ -30258,7 +30258,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
         }
         paperJoin.selection.push_back({SelectedEntity::Type::LineSeg, ref.index});
       } else if (ref.type == PaperEntityRef::Type::Polyline) {
-        if (ref.index < 0 || static_cast<size_t>(ref.index + 1) >= paperJoin.userPolylineOffsets.size()) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) + 1 >= paperJoin.userPolylineOffsets.size()) {
           ++unsupported;
           continue;
         }
