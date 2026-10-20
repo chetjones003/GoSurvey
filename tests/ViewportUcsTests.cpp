@@ -7,9 +7,9 @@
 //   T1  a point typed while floating lands at the coordinates the VIEWPORT's frame implies;
 //   T2  UCSFOLLOW=1 re-plans only that viewport's camera, never a sibling or the model view;
 //   T3  a viewport's frame field is independent of its siblings and of the drawing UCS;
-//   T4  the per-viewport frame round-trips .gs; a legacy file loads every viewport in World;
+//   T4  the per-viewport frame round-trips document JSON payload; a legacy file loads every viewport in World;
 //   T5  the readout inside a floating viewport resolves in that viewport's frame;
-//   T6  saving .gs WHILE floating records the drawing's frame, not the viewport's.
+//   T6  saving document JSON payload WHILE floating records the drawing's frame, not the viewport's.
 //
 // Linked into GoSurveySnapTests (it needs gosurvey_domain + GsIo.cpp, like GsIoViewportCameraTests).
 
@@ -58,7 +58,7 @@ std::filesystem::path UniqueGsPath(const char* stem) {
   const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-req155";
   std::filesystem::create_directories(dir);
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gs");
+  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gst");
 }
 
 }  // namespace
@@ -128,7 +128,7 @@ TEST_CASE("A viewport's UCS field is independent of siblings and the drawing UCS
 }
 
 // T4 -------------------------------------------------------------------------------------------
-TEST_CASE("Per-viewport UCS round-trips .gs; a legacy file loads every viewport in World (REQ-155)", "[req155][gs]") {
+TEST_CASE("Per-viewport UCS round-trips document JSON payload; a legacy file loads every viewport in World (REQ-155)", "[req155][payload]") {
   AppCommandState st = MakeDrawing(2);
   const ucs::Ucs frame = RotatedAt(250.0, -75.0, 90.0);
   st.paperLayouts[0].viewports[0].activeUcs = frame;
@@ -193,7 +193,7 @@ TEST_CASE("The readout inside a floating viewport resolves in that viewport's fr
 }
 
 // T6 -------------------------------------------------------------------------------------------
-TEST_CASE("Saving .gs while floating records the drawing's UCS, not the viewport's (REQ-155)", "[req155][gs]") {
+TEST_CASE("Saving document JSON payload while floating records the drawing's UCS, not the viewport's (REQ-155)", "[req155][payload]") {
   AppCommandState st = MakeDrawing(2);
   const ucs::Ucs vpFrame = RotatedAt(10.0, 20.0, 90.0);
   st.paperLayouts[0].viewports[0].activeUcs = vpFrame;

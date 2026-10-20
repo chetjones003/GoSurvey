@@ -1215,6 +1215,142 @@ private Q_SLOTS:
     window.ShowLayoutManager();
   }
 
+  void paperTrimHighlightScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    state.viewportZoom = 4.f;
+    state.active = AppCommandState::Kind::Trim;
+    auto& layout = state.paperLayouts[0];
+    layout.paperLines = {2, 2, 0, 9, 2, 0, 5, 0, 0, 5, 4, 0};
+    state.paperTrimCutters = {{PaperEntityRef::Type::Line, 1}};
+    window.Refresh();
+    window.resize(1280, 820);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* viewportWidget = window.findChild<QWidget*>("modelViewport");
+    QVERIFY(viewportWidget);
+    auto* viewport = static_cast<EditorViewport*>(viewportWidget);
+    QTest::qWait(100);
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-cutter-highlight.png"));
+    state.paperHoverValid = true;
+    state.paperHover = {PaperEntityRef::Type::Line, 0};
+    viewport->update();
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-target-prehighlight.png"));
+  }
+
+  void issue972PaperModifyCommandsRouteAndStayInPaperSpace() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    window.resize(1100, 760);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* viewport = dynamic_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport")); QVERIFY(viewport);
+    QTRY_VERIFY(viewport->IsRendererReady());
+    AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    EntityAttributes attrs; attrs.layer = "0";
+    state.userLineAttrs = {attrs};
+    auto& layout = state.paperLayouts[0];
+    layout.paperLines = {0, 0, 0, 10, 0, 0};
+    layout.paperLineAttrs = {attrs};
+    const auto modelBefore = state.userLinesFlat;
+
+    state.lengthenMode = AppCommandState::LengthenMode::Total;
+    state.lengthenTotalValue = 20.f;
+    state.lengthenModeValueSet = true;
+    window.Submit("LENGTHEN");
+    QCOMPARE(state.paperLengthenPhase, 1);
+    const Camera paperCamera = CadViewCamera(state);
+    float pickX = 0.f, pickY = 0.f;
+    paperCamera.WorldToScreen(8, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()),
+        &pickX, &pickY);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(pickX), qRound(pickY)));
+    QCOMPARE(state.paperLengthenPhase, 1);
+    QVERIFY(std::abs(layout.paperLines[3] - 20.f) < 1e-4f);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QVERIFY(std::abs(state.paperLayouts[0].paperLines[3] - 10.f) < 1e-4f);
+
+    // BREAK's first pick latches the paper entity and point; Escape must discard that draft.
+    window.Submit("BREAK");
+    paperCamera.WorldToScreen(5, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()),
+        &pickX, &pickY);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(pickX), qRound(pickY)));
+    QCOMPARE(state.paperBreakPhase, 2);
+    const auto beforeCancel = state.paperLayouts[0].paperLines;
+    window.CancelDraftingInput();
+    QCOMPARE(state.paperBreakPhase, 0);
+    QCOMPARE(state.paperLayouts[0].paperLines, beforeCancel);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+
+    // A complete paper BREAK uses the same Qt command and pick entry points and is undoable.
+    window.Submit("BREAK");
+    SubmitViewportPick(state, 2, 0, window.m_Log);
+    SubmitViewportPick(state, 8, 0, window.m_Log);
+    QVERIFY(state.paperLayouts[0].paperLines.size() > beforeCancel.size());
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.paperLayouts[0].paperLines, beforeCancel);
+
+    // The other phase machines also start in paper space and consume their picks before idle
+    // paper selection. Exercise phase advancement and cancellation without changing geometry.
+    window.Submit("EXTEND");
+    state.paperLayouts[0].paperLines.insert(state.paperLayouts[0].paperLines.end(), {0, 30, 0, 10, 30, 0,
+                                                                                   15, 25, 0, 15, 35, 0});
+    state.paperLayouts[0].paperLineAttrs.insert(state.paperLayouts[0].paperLineAttrs.end(), {attrs, attrs});
+    const size_t beforeExtend = state.paperLayouts[0].paperLines.size();
+    SubmitViewportPick(state, 15, 30, window.m_Log);
+    QCOMPARE(state.paperExtendPhase, 1);
+    window.Submit(""); // finish the boundary-edge pick set
+    QCOMPARE(state.paperExtendPhase, 2);
+    SubmitViewportPick(state, 9, 30, window.m_Log);
+    QVERIFY(std::abs(state.paperLayouts[0].paperLines[beforeExtend - 12 + 3] - 15.f) < 1e-4f);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.paperLayouts[0].paperLines.size(), beforeExtend);
+
+    PaperEntityRef paperLine{PaperEntityRef::Type::Line, 0};
+    state.selectedPaperEntities = {paperLine};
+    window.Submit("STRETCH");
+    QCOMPARE(state.paperStretchPhase, 1);
+    window.Submit("1,1");
+    QCOMPARE(state.paperStretchPhase, 2);
+    window.CancelDraftingInput();
+    QCOMPARE(state.paperStretchPhase, 0);
+
+    state.paperLayouts[0].paperLines.insert(state.paperLayouts[0].paperLines.end(), {0, 10, 0, 10, 10, 0,
+                                                                                   10, 10, 0, 10, 0, 0});
+    state.paperLayouts[0].paperLineAttrs.insert(state.paperLayouts[0].paperLineAttrs.end(), {attrs, attrs});
+    window.Submit("FILLET");
+    window.Submit("R"); window.Submit("1");
+    SubmitViewportPick(state, 5, 10, window.m_Log);
+    QCOMPARE(state.paperFilletPhase, 2);
+    SubmitViewportPick(state, 10, 5, window.m_Log);
+    QCOMPARE(state.paperFilletPhase, 1);
+    QVERIFY(!state.paperLayouts[0].paperArcs.empty());
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+
+    window.Submit("CHAMFER");
+    window.Submit("D"); window.Submit("1"); window.Submit("1");
+    const size_t beforeChamfer = state.paperLayouts[0].paperLines.size();
+    SubmitViewportPick(state, 5, 10, window.m_Log);
+    QCOMPARE(state.paperChamferPhase, 2);
+    SubmitViewportPick(state, 10, 5, window.m_Log);
+    QCOMPARE(state.paperChamferPhase, 1);
+    QVERIFY(state.paperLayouts[0].paperLines.size() > beforeChamfer);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.userLinesFlat, modelBefore);
+  }
+
   void pageSetupManagerAndEditorPreserveCancelAndReadOnlyState() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
@@ -1288,6 +1424,7 @@ private Q_SLOTS:
     window.CreateDrawingFromTemplate(0);
     if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
     window.State().activeSpaceIndex = 0;
+    window.State().viewportZoom = 3.5f;
     window.State().userLinesFlat = {0, 0, 0, 100, 100, 0};
     EntityAttributes lineAttributes;
     lineAttributes.layer = "0";
@@ -1303,6 +1440,13 @@ private Q_SLOTS:
 
     auto& layout = window.State().paperLayouts[0];
     layout.paperLines = {1, 1, 0, 5, 5, 0};
+    CadArc paperArc;
+    paperArc.cx = 8.; paperArc.cy = 6.; paperArc.r = 1.5; paperArc.startRad = 0.f; paperArc.sweepRad = 1.57079632679f;
+    layout.paperArcs.push_back(paperArc);
+    CadEllipse paperEllipse;
+    paperEllipse.cx = 12.; paperEllipse.cy = 6.; paperEllipse.majVx = 1.2f; paperEllipse.majVy = 0.f;
+    paperEllipse.ratio = 0.5f;
+    layout.paperEllipses.push_back(paperEllipse);
     CadAnnotation table;
     table.kind = CadAnnotation::Kind::Table;
     table.boxMinX = 6; table.boxMinY = 2; table.boxMaxX = 10; table.boxMaxY = 4;
@@ -1334,9 +1478,25 @@ private Q_SLOTS:
     QTest::mouseDClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(screenX), qRound(screenY)));
     QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[0], std::string("Station"));
 
+    window.Submit("OFFSET");
+    QCOMPARE(window.State().active, AppCommandState::Kind::Offset);
+    window.Submit("1");
+    QCOMPARE(window.State().offsetPhase, AppCommandState::OffsetPhase::WaitSelectEntity);
+    QCOMPARE(window.State().activeSpaceIndex, 0);
+    SubmitViewportPick(window.State(), 3, 3, window.m_Log);
+    QVERIFY2(window.State().offsetPhase == AppCommandState::OffsetPhase::WaitSidePick,
+             window.m_Log.empty() ? "no OFFSET log" : window.m_Log.back().c_str());
+    QCOMPARE(window.State().offsetPhase, AppCommandState::OffsetPhase::WaitSidePick);
+    SubmitViewportPick(window.State(), 3, 5, window.m_Log);
+    QCOMPARE(window.State().paperLayouts[0].paperLines.size(), size_t(12));
+    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
+
     viewport->update();
     QTest::qWait(100);
     const QImage rendered = viewport->grabFramebuffer();
+    const QString evidenceDir = QCoreApplication::applicationDirPath() + "/artifacts";
+    QVERIFY(QDir().mkpath(evidenceDir));
+    QVERIFY(rendered.save(evidenceDir + "/req039-paper-offset-layout.png"));
     float viewportX = 0.f, viewportY = 0.f;
     paperCamera.WorldToScreen(layoutViewport.paperXIn + layoutViewport.paperWIn * 0.5,
         layoutViewport.paperYIn + layoutViewport.paperHIn * 0.5, 0.f, static_cast<float>(viewport->width()),
@@ -1350,6 +1510,75 @@ private Q_SLOTS:
     QVERIFY(litCenterPixels > 0);
     QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[3], std::string("24.5"));
     QVERIFY(spaces->count() >= 2);
+  }
+
+  void paperOffsetSupportsNativeGeometryAndThroughMode() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& st = window.State();
+    st.activeSpaceIndex = 0;
+    auto& layout = st.paperLayouts[0];
+    layout.paperLines = {2, 2, 0, 4, 2, 0};
+    layout.paperCircles = {7, 2, 1};
+    CadArc arc; arc.cx = 10; arc.cy = 2; arc.r = 1; arc.startRad = 0; arc.sweepRad = 3.14159265f;
+    layout.paperArcs.push_back(arc);
+    CadEllipse ellipse; ellipse.cx = 13; ellipse.cy = 2; ellipse.majVx = 1; ellipse.majVy = 0; ellipse.ratio = .5f;
+    layout.paperEllipses.push_back(ellipse);
+    layout.paperPolyOffsets = {0, 2};
+    layout.paperPolyVerts = {1, 6, 0, 5, 6, 0};
+    layout.paperPolyClosed = {0};
+
+    bool typedOffsetStarted = false;
+    auto offsetBySide = [&](double x, double y, double sideX, double sideY, SelectedEntity::Type expectedType) {
+      if (!typedOffsetStarted) {
+        window.Submit("OFFSET"); window.Submit("1");
+        typedOffsetStarted = true;
+      }
+      SubmitViewportPick(st, x, y, window.m_Log);
+      QVERIFY2(st.offsetEntityValid, window.m_Log.empty() ? "OFFSET did not latch a paper entity" : window.m_Log.back().c_str());
+      QCOMPARE(st.offsetEntity.type, expectedType);
+      SubmitViewportPick(st, sideX, sideY, window.m_Log);
+    };
+    offsetBySide(3, 2, 3, 4, SelectedEntity::Type::LineSeg);
+    QCOMPARE(layout.paperLines.size(), size_t(12));
+    QCOMPARE(st.userLinesFlat.size(), size_t(0));
+    offsetBySide(8, 2, 9, 2, SelectedEntity::Type::Circle);
+    QCOMPARE(layout.paperCircles.size(), size_t(6));
+    offsetBySide(11, 2, 12, 2, SelectedEntity::Type::Arc);
+    QVERIFY2(layout.paperArcs.size() == 2,
+             window.m_Log.empty() ? "paper arc OFFSET did not append a copy" : window.m_Log.back().c_str());
+    offsetBySide(14, 2, 15, 2, SelectedEntity::Type::Ellipse);
+    QCOMPARE(layout.paperEllipses.size(), size_t(2));
+    offsetBySide(3, 6, 3, 8, SelectedEntity::Type::Polyline);
+    QCOMPARE(layout.paperPolyOffsets.size(), size_t(3));
+    QCOMPARE(layout.paperPolyVerts.size(), size_t(12));
+
+    window.CancelDraftingInput();
+    CadAnnotation unsupportedText;
+    unsupportedText.kind = CadAnnotation::Kind::Text;
+    unsupportedText.insX = 18; unsupportedText.insY = 18;
+    unsupportedText.plottedHeightInches = 0.5f;
+    unsupportedText.text = "cannot offset";
+    layout.paperTexts.push_back(unsupportedText);
+    float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    PaperTextBoundsIn(unsupportedText, &bx0, &by0, &bx1, &by1);
+    window.Submit("OFFSET"); window.Submit("1");
+    SubmitViewportPick(st, (bx0 + bx1) * 0.5, (by0 + by1) * 0.5, window.m_Log);
+    QCOMPARE(st.offsetPhase, AppCommandState::OffsetPhase::WaitSelectEntity);
+    QVERIFY(!window.m_Log.empty());
+    QVERIFY(QString::fromStdString(window.m_Log.back()).contains("paper text cannot be offset"));
+    window.CancelDraftingInput();
+
+    layout.paperLines.insert(layout.paperLines.end(), {1, 10, 0, 5, 10, 0});
+    window.Submit("OFFSET"); window.Submit("T");
+    SubmitViewportPick(st, 3, 10, window.m_Log);
+    SubmitViewportPick(st, 3, 12, window.m_Log);
+    QCOMPARE(layout.paperLines.size(), size_t(24));
+    window.CancelDraftingInput();
+    QVERIFY(DoUndo(st, window.m_Log));
+    QCOMPARE(layout.paperLines.size(), size_t(18));
+    QCOMPARE(st.userLinesFlat.size(), size_t(0));
   }
 
   void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
@@ -2357,9 +2586,10 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(settings);
-    // As opened: tall enough for its wrapped text.
+    QTest::qWait(250);  // let the dialog polish and the account card refresh its status
+    settings->layout()->activate();
+    // As opened: tall enough for its wrapped text after Qt has applied the visible style metrics.
     QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
-    QTest::qWait(250);  // let the account card's refresh fill in its status
     QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
 
@@ -3687,7 +3917,7 @@ private Q_SLOTS:
   }
 
   void customTitleBarAndFloatingCommandLineWork() {
-    QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    QSettings settings; settings.setValue("editor/commandWidth", 400); settings.remove("editor/commandAnchor");
     const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
     const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
     const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
@@ -3696,7 +3926,8 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
@@ -3747,12 +3978,21 @@ private Q_SLOTS:
     auto drag = [&](const char* name, int dx) {
       auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
       const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
-      QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
-      QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), QPointF(global),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(grip, &press);
+      QMouseEvent move(QEvent::MouseMove, QPointF(local + QPoint(dx, 0)),
+                       QPointF(global + QPoint(dx, 0)), Qt::NoButton, Qt::LeftButton,
+                       Qt::NoModifier);
       QApplication::sendEvent(grip, &move);
-      QTest::mouseRelease(grip, Qt::LeftButton);
+      QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local + QPoint(dx, 0)),
+                          QPointF(global + QPoint(dx, 0)), Qt::LeftButton, Qt::NoButton,
+                          Qt::NoModifier);
+      QApplication::sendEvent(grip, &release);
     };
-    const int oldX = panel->x(); drag("commandDragGrip", 20); QVERIFY(panel->x() > oldX);
+    const int oldX = panel->x();
+    const int moveX = oldX + panel->width() + 20 < viewport->width() ? 20 : -20;
+    drag("commandDragGrip", moveX); QVERIFY(panel->x() != oldX);
     const int oldWidth = panel->width(); drag("commandResizeGrip", -40); QCOMPARE(panel->width(), oldWidth - 40);
     window.resize(950, 650); QTest::qWait(50);
     QVERIFY(viewport->rect().contains(panel->geometry()));

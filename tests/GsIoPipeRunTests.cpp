@@ -21,13 +21,13 @@ std::filesystem::path UniqueGsPath(const char* stem) {
   const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-issue486-gsio";
   std::filesystem::create_directories(dir);
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gs");
+  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gst");
 }
 
 } // namespace
 
 TEST_CASE("A named CadPipeRun survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile",
-          "[gs][piperun][issue486]") {
+          "[payload][piperun][issue486]") {
   AppCommandState st;
   CadPipeRun run;
   run.name = "Cooling Loop A";
@@ -57,7 +57,7 @@ TEST_CASE("A named CadPipeRun survives SaveGoSurveyTemplateFile then LoadGoSurve
 }
 
 TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing has none",
-          "[gs][piperun][issue486][wall]") {
+          "[payload][piperun][issue486][wall]") {
   // D-2026-09-23-a: `wallThicknessIn` is an additive key, written only when the run states one, so a
   // run left at the schedule-40 default writes no key at all — and a drawing saved before pipes were
   // hollow (which has no key either) loads to the same 0, meaning "build it at the standard wall".
@@ -99,7 +99,7 @@ TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing 
 }
 
 TEST_CASE("A drawing with no pipe runs omits the pipeRuns key and still loads cleanly",
-          "[gs][piperun][issue486]") {
+          "[payload][piperun][issue486]") {
   AppCommandState st;  // no pipe runs — ADR-020 (d) additive/omitted-when-empty
   const std::filesystem::path path = UniqueGsPath("no-piperun");
   std::vector<std::string> log;
@@ -115,7 +115,7 @@ TEST_CASE("A drawing with no pipe runs omits the pipeRuns key and still loads cl
 // --- Piping networks (issue #486 increment B3 / REQ-345) ---------------------------------------
 
 TEST_CASE("A named piping network with runs survives save/load with indices intact",
-          "[gs][pipesys][issue486]") {
+          "[payload][pipesys][issue486]") {
   AppCommandState st;
   CadPipeRun a; a.vertsXyz = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0}; a.nominalSize = "4in";
   CadPipeRun b; b.vertsXyz = {0.0, 0.0, 0.0, 0.0, 10.0, 0.0}; b.nominalSize = "2in";
@@ -140,7 +140,7 @@ TEST_CASE("A named piping network with runs survives save/load with indices inta
 }
 
 TEST_CASE("A drawing with no piping networks omits the pipingSystems key and loads cleanly",
-          "[gs][pipesys][issue486]") {
+          "[payload][pipesys][issue486]") {
   AppCommandState st;
   const std::filesystem::path path = UniqueGsPath("no-pipesys");
   std::vector<std::string> log;
@@ -154,7 +154,7 @@ TEST_CASE("A drawing with no piping networks omits the pipingSystems key and loa
 }
 
 TEST_CASE("An out-of-range pipeRunIndices entry is dropped rather than trusted",
-          "[gs][pipesys][issue486]") {
+          "[payload][pipesys][issue486]") {
   // A hand-edited or corrupted file could reference an index past the loaded pipeRuns array;
   // REQ-201 says nothing invalid is ever stored, so the read path must filter it, not crash or
   // carry a dangling index forward.

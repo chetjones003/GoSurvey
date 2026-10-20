@@ -47,7 +47,7 @@ CMD 0,200,abc
 EXPECT LOG "elevation must be a number"
 ESC
 
-# --- the elevations survive a .gs round trip -------------------------------------------------------
+# --- the elevations survive a document JSON payload round trip -------------------------------------------------------
 SAVEAS %OUT%/p3d-a.dwg
 OPEN %OUT%/p3d-a.dwg
 EXPECT POLYLINES 3

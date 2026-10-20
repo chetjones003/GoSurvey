@@ -592,7 +592,7 @@ ImportResult ImportGltfBytes(const std::vector<std::uint8_t>& bytes, bool isGlb,
     }
   }
 
-  // Final structural check with the same validator the `.gs` loader uses, so an importer bug cannot
+  // Final structural check with the same validator the `internal document payload` loader uses, so an importer bug cannot
   // put geometry on the GPU that a loaded file would have been refused for.
   std::vector<std::pair<int, int>> ranges;
   ranges.reserve(out.parts.size());

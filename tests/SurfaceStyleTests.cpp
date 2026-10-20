@@ -3,7 +3,7 @@
 // Three of REQ-070's five acceptance conditions are decided entirely in this header, before any
 // geometry is generated:
 //   * "a surface whose style was deleted falls back to a default style rather than failing to draw";
-//   * "a legacy `.gs` loads unchanged" — every surface in one carries an EMPTY styleName, which must
+//   * "a legacy `document JSON payload` loads unchanged" — every surface in one carries an EMPTY styleName, which must
 //     take the same fallback path as a deleted one;
 //   * "a major interval that is not a whole multiple of the minor interval is rejected with a
 //     specific message rather than producing mis-labelled contours".
@@ -123,7 +123,7 @@ TEST_CASE("A deleted style falls back to Standard rather than failing to draw",
 TEST_CASE("An empty style name resolves to Standard", "[surface][req070][style]") {
   // This is the legacy case, and it is the one that runs on EVERY surface in EVERY drawing written
   // before this field existed. If it returned nullptr, those surfaces would stop drawing on the day
-  // the feature shipped — the exact opposite of "a legacy `.gs` loads unchanged".
+  // the feature shipped — the exact opposite of "a legacy `document JSON payload` loads unchanged".
   const auto styles = SurfaceStyles::DefaultSurfaceStyles();
 
   const SurfaceStyle* got = SurfaceStyles::Resolve(styles, "");
@@ -324,7 +324,7 @@ TEST_CASE("Style equality notices a change in any component or interval",
 TEST_CASE("A style starts with analysis off, and that is the legacy state too",
           "[surface][req072][style]") {
   // REQ-072's "turning banding off restores the style's plain display unchanged" is satisfied by
-  // making OFF the state a style begins in. A `.gs` written before REQ-072 existed carries none of
+  // making OFF the state a style begins in. A `document JSON payload` written before REQ-072 existed carries none of
   // these keys, and the reader seeds each style from this same default — so an old drawing opens
   // displaying exactly what it displayed before, without the reader needing a legacy branch.
   const SurfaceStyle standard = SurfaceStyles::StandardSurfaceStyle();

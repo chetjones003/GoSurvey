@@ -158,7 +158,7 @@ int Usage() {
                "                              [--roundtrip | --no-roundtrip]\n"
                "                              [--undo-redo | --no-undo-redo]\n"
                "\n"
-               "  the gs-roundtrip oracle is ON by default since 2026-08-17; --roundtrip is still\n"
+               "  the DWG payload round-trip oracle is ON by default since 2026-08-17; --roundtrip is still\n"
                "  accepted as a no-op, --no-roundtrip skips it\n"
                "  the undo-redo-identity oracle is ON by default since 2026-08-18; --undo-redo is\n"
                "  accepted as a no-op, --no-undo-redo skips it\n");

@@ -39,7 +39,7 @@ struct Ucs {
 
 /// True when \p u is the World Coordinate System within \p tol.
 ///
-/// Used for the status readout and for the "is this worth saving to `.gs`?" test, so it compares
+/// Used for the status readout and for the "is this worth saving to `internal document payload`?" test, so it compares
 /// the whole frame rather than just the origin — a UCS rotated in place is emphatically not World.
 [[nodiscard]] inline bool IsWorld(const Ucs& u, double tol = 1e-9) {
   auto near = [tol](double a, double b) { return std::fabs(a - b) <= tol; };

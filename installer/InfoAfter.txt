@@ -103,7 +103,7 @@ OBJECT SNAPS
 
 FILES
 -------------------------------------------------------------------------------
-  Workspaces         Saved as .gs files (JSON format).
+  Drawings           Saved as .dwg files.
   Import / Export    DXF — compatible with AutoCAD and Civil 3D.
   Survey points      CSV import and export.
 

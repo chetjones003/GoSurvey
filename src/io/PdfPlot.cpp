@@ -703,6 +703,21 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                  L.paperPolyVerts[static_cast<size_t>(v0 * 3)], L.paperPolyVerts[static_cast<size_t>(v0 * 3 + 1)]);
       }
 
+      // Multileader leader paths (issue #768): arrow tip to landing, plus extra branches. The label plots
+      // with the sheet text below.
+      for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
+        const EntityAttributes* a = sheetAttr(L.paperMultileaderAttrs, mi);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        auto path = [&](const std::vector<float>& pts) {
+          for (size_t k = 0; k + 5 < pts.size(); k += 3)
+            addSeg(pts[k], pts[k + 1], pts[k + 3], pts[k + 4]);
+        };
+        path(L.paperMultileaders[mi].pathXyz);
+        for (const std::vector<float>& branch : L.paperMultileaders[mi].extraLeaderPaths)
+          path(branch);
+      }
+
       // Native sheet TEXT (REQ-049): SHX (stroke) fonts plot faithfully as their strokes via the shared
       // font module (ADR-022); TrueType families embed as real PDF text objects (or a logged base-14
       // substitute). Paper inches, +y up; single-line insertion = top-left (baseline one cap-height below);
@@ -767,11 +782,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         FPDFPageObj_Destroy(to);
         return w;
       };
-      for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
-        const CadAnnotation& a = L.paperTexts[ti];
+      // Sheet texts first, then each sheet multileader's label (issue #768): same plotting path.
+      const size_t nPaperTexts = L.paperTexts.size();
+      for (size_t ti = 0; ti < nPaperTexts + L.paperMultileaders.size(); ++ti) {
+        const bool isLeaderLabel = ti >= nPaperTexts;
+        const CadAnnotation& a = isLeaderLabel ? L.paperMultileaders[ti - nPaperTexts].label : L.paperTexts[ti];
         if (a.text.empty())
           continue;
-        const EntityAttributes* at = sheetAttr(L.paperTextAttrs, ti);
+        const EntityAttributes* at =
+            isLeaderLabel ? sheetAttr(L.paperMultileaderAttrs, ti - nPaperTexts) : sheetAttr(L.paperTextAttrs, ti);
         if (at && !plottable(at->layer))
           continue;
         const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;

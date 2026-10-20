@@ -1,7 +1,7 @@
 # REQ-309 (GitHub #144, Phase 1 of #120) - selectable view projection.
 #
 # What this transcript is FOR: proving that the projection can be SELECTED, is REFUSED safely on
-# bad input, and SURVIVES a .gs round trip - including on a named view, where an unpersisted
+# bad input, and SURVIVES a document JSON payload round trip - including on a named view, where an unpersisted
 # projection would silently restore a perspective view as orthographic.
 #
 # Almost every assertion here is `EXPECT PROJECTION` / `EXPECT FOV` - the LIVE state - and not
@@ -72,7 +72,7 @@ EXPECT LOG "saved as Ortho View"
 EXPECT PROJECTION ORTHOGRAPHIC
 EXPECT FOV 32
 
-# --- Both survive a .gs round trip ------------------------------------------------------------------
+# --- Both survive a document JSON payload round trip ------------------------------------------------------------------
 SAVEAS %OUT%/proj.dwg
 OPEN %OUT%/proj.dwg
 

@@ -6,7 +6,7 @@
 #
 # ## How two documents are compared
 #
-# By saving each to `.gs` and diffing the bytes, exactly as `gs-roundtrip` does. TASK-056 §11
+# By saving each to the DWG payload and diffing the bytes, exactly as the DWG round-trip oracle does. TASK-056 §11
 # recorded this oracle as blocked on "a document-equality predicate", treating float tolerance, id
 # renumbering and store ordering as open design questions. They are not questions here, and it is
 # worth writing down why the strictest possible answer is also the correct one:
@@ -19,8 +19,8 @@
 #   - store ordering — a reordered store is a real difference, and it is precisely what §11.9's
 #     selection-index invariant exists to worry about.
 #
-# So `EXPECT SAMEFILE` over two `.gs` writes IS the predicate, it needs no new code, and it forgives
-# nothing. `.gs` is the canonical serialization of an AppCommandState; if two states write the same
+# So `EXPECT SAMEFILE` over two `document JSON payload` writes IS the predicate, it needs no new code, and it forgives
+# nothing. `document JSON payload` is the canonical serialization of an AppCommandState; if two states write the same
 # bytes they are the same document by the only definition the format admits.
 #
 # ## Why the intermediate assertions are not decoration
