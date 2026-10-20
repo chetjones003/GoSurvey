@@ -391,6 +391,27 @@ void EditorViewport::paintGL() {
       const double radius = QLineF(center, edge).length();
       painter.drawEllipse(center, radius, radius);
     }
+    for (const CadArc& arc : layout.paperArcs) {
+      QPolygonF curve;
+      constexpr int segments = 64;
+      for (int i = 0; i <= segments; ++i) {
+        const double angle = arc.startRad + arc.sweepRad * static_cast<double>(i) / segments;
+        curve << project(arc.cx + arc.r * std::cos(angle), arc.cy + arc.r * std::sin(angle));
+      }
+      if (curve.size() > 1) painter.drawPolyline(curve);
+    }
+    for (const CadEllipse& ellipse : layout.paperEllipses) {
+      QPolygonF curve;
+      constexpr int segments = 96;
+      const double minorX = -ellipse.majVy * ellipse.ratio;
+      const double minorY = ellipse.majVx * ellipse.ratio;
+      for (int i = 0; i <= segments; ++i) {
+        const double angle = 6.283185307179586 * static_cast<double>(i) / segments;
+        curve << project(ellipse.cx + ellipse.majVx * std::cos(angle) + minorX * std::sin(angle),
+                        ellipse.cy + ellipse.majVy * std::cos(angle) + minorY * std::sin(angle));
+      }
+      if (curve.size() > 1) painter.drawPolyline(curve);
+    }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
       QPolygonF polyline;

@@ -1288,6 +1288,7 @@ private Q_SLOTS:
     window.CreateDrawingFromTemplate(0);
     if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
     window.State().activeSpaceIndex = 0;
+    window.State().viewportZoom = 3.5f;
     window.State().userLinesFlat = {0, 0, 0, 100, 100, 0};
     EntityAttributes lineAttributes;
     lineAttributes.layer = "0";
@@ -1303,6 +1304,13 @@ private Q_SLOTS:
 
     auto& layout = window.State().paperLayouts[0];
     layout.paperLines = {1, 1, 0, 5, 5, 0};
+    CadArc paperArc;
+    paperArc.cx = 8.; paperArc.cy = 6.; paperArc.r = 1.5; paperArc.startRad = 0.f; paperArc.sweepRad = 1.57079632679f;
+    layout.paperArcs.push_back(paperArc);
+    CadEllipse paperEllipse;
+    paperEllipse.cx = 12.; paperEllipse.cy = 6.; paperEllipse.majVx = 1.2f; paperEllipse.majVy = 0.f;
+    paperEllipse.ratio = 0.5f;
+    layout.paperEllipses.push_back(paperEllipse);
     CadAnnotation table;
     table.kind = CadAnnotation::Kind::Table;
     table.boxMinX = 6; table.boxMinY = 2; table.boxMaxX = 10; table.boxMaxY = 4;
@@ -1334,9 +1342,25 @@ private Q_SLOTS:
     QTest::mouseDClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(screenX), qRound(screenY)));
     QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[0], std::string("Station"));
 
+    window.Submit("OFFSET");
+    QCOMPARE(window.State().active, AppCommandState::Kind::Offset);
+    window.Submit("1");
+    QCOMPARE(window.State().offsetPhase, AppCommandState::OffsetPhase::WaitSelectEntity);
+    QCOMPARE(window.State().activeSpaceIndex, 0);
+    SubmitViewportPick(window.State(), 3, 3, window.m_Log);
+    QVERIFY2(window.State().offsetPhase == AppCommandState::OffsetPhase::WaitSidePick,
+             window.m_Log.empty() ? "no OFFSET log" : window.m_Log.back().c_str());
+    QCOMPARE(window.State().offsetPhase, AppCommandState::OffsetPhase::WaitSidePick);
+    SubmitViewportPick(window.State(), 3, 5, window.m_Log);
+    QCOMPARE(window.State().paperLayouts[0].paperLines.size(), size_t(12));
+    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
+
     viewport->update();
     QTest::qWait(100);
     const QImage rendered = viewport->grabFramebuffer();
+    const QString evidenceDir = QCoreApplication::applicationDirPath() + "/artifacts";
+    QVERIFY(QDir().mkpath(evidenceDir));
+    QVERIFY(rendered.save(evidenceDir + "/req039-paper-offset-layout.png"));
     float viewportX = 0.f, viewportY = 0.f;
     paperCamera.WorldToScreen(layoutViewport.paperXIn + layoutViewport.paperWIn * 0.5,
         layoutViewport.paperYIn + layoutViewport.paperHIn * 0.5, 0.f, static_cast<float>(viewport->width()),
@@ -1350,6 +1374,75 @@ private Q_SLOTS:
     QVERIFY(litCenterPixels > 0);
     QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[3], std::string("24.5"));
     QVERIFY(spaces->count() >= 2);
+  }
+
+  void paperOffsetSupportsNativeGeometryAndThroughMode() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    auto& st = window.State();
+    st.activeSpaceIndex = 0;
+    auto& layout = st.paperLayouts[0];
+    layout.paperLines = {2, 2, 0, 4, 2, 0};
+    layout.paperCircles = {7, 2, 1};
+    CadArc arc; arc.cx = 10; arc.cy = 2; arc.r = 1; arc.startRad = 0; arc.sweepRad = 3.14159265f;
+    layout.paperArcs.push_back(arc);
+    CadEllipse ellipse; ellipse.cx = 13; ellipse.cy = 2; ellipse.majVx = 1; ellipse.majVy = 0; ellipse.ratio = .5f;
+    layout.paperEllipses.push_back(ellipse);
+    layout.paperPolyOffsets = {0, 2};
+    layout.paperPolyVerts = {1, 6, 0, 5, 6, 0};
+    layout.paperPolyClosed = {0};
+
+    bool typedOffsetStarted = false;
+    auto offsetBySide = [&](double x, double y, double sideX, double sideY, SelectedEntity::Type expectedType) {
+      if (!typedOffsetStarted) {
+        window.Submit("OFFSET"); window.Submit("1");
+        typedOffsetStarted = true;
+      }
+      SubmitViewportPick(st, x, y, window.m_Log);
+      QVERIFY2(st.offsetEntityValid, window.m_Log.empty() ? "OFFSET did not latch a paper entity" : window.m_Log.back().c_str());
+      QCOMPARE(st.offsetEntity.type, expectedType);
+      SubmitViewportPick(st, sideX, sideY, window.m_Log);
+    };
+    offsetBySide(3, 2, 3, 4, SelectedEntity::Type::LineSeg);
+    QCOMPARE(layout.paperLines.size(), size_t(12));
+    QCOMPARE(st.userLinesFlat.size(), size_t(0));
+    offsetBySide(8, 2, 9, 2, SelectedEntity::Type::Circle);
+    QCOMPARE(layout.paperCircles.size(), size_t(6));
+    offsetBySide(11, 2, 12, 2, SelectedEntity::Type::Arc);
+    QVERIFY2(layout.paperArcs.size() == 2,
+             window.m_Log.empty() ? "paper arc OFFSET did not append a copy" : window.m_Log.back().c_str());
+    offsetBySide(14, 2, 15, 2, SelectedEntity::Type::Ellipse);
+    QCOMPARE(layout.paperEllipses.size(), size_t(2));
+    offsetBySide(3, 6, 3, 8, SelectedEntity::Type::Polyline);
+    QCOMPARE(layout.paperPolyOffsets.size(), size_t(3));
+    QCOMPARE(layout.paperPolyVerts.size(), size_t(12));
+
+    window.CancelDraftingInput();
+    CadAnnotation unsupportedText;
+    unsupportedText.kind = CadAnnotation::Kind::Text;
+    unsupportedText.insX = 18; unsupportedText.insY = 18;
+    unsupportedText.plottedHeightInches = 0.5f;
+    unsupportedText.text = "cannot offset";
+    layout.paperTexts.push_back(unsupportedText);
+    float bx0 = 0, by0 = 0, bx1 = 0, by1 = 0;
+    PaperTextBoundsIn(unsupportedText, &bx0, &by0, &bx1, &by1);
+    window.Submit("OFFSET"); window.Submit("1");
+    SubmitViewportPick(st, (bx0 + bx1) * 0.5, (by0 + by1) * 0.5, window.m_Log);
+    QCOMPARE(st.offsetPhase, AppCommandState::OffsetPhase::WaitSelectEntity);
+    QVERIFY(!window.m_Log.empty());
+    QVERIFY(QString::fromStdString(window.m_Log.back()).contains("paper text cannot be offset"));
+    window.CancelDraftingInput();
+
+    layout.paperLines.insert(layout.paperLines.end(), {1, 10, 0, 5, 10, 0});
+    window.Submit("OFFSET"); window.Submit("T");
+    SubmitViewportPick(st, 3, 10, window.m_Log);
+    SubmitViewportPick(st, 3, 12, window.m_Log);
+    QCOMPARE(layout.paperLines.size(), size_t(24));
+    window.CancelDraftingInput();
+    QVERIFY(DoUndo(st, window.m_Log));
+    QCOMPARE(layout.paperLines.size(), size_t(18));
+    QCOMPARE(st.userLinesFlat.size(), size_t(0));
   }
 
   void dwgExportWarningShowsLossAndOverwriteAndCancelPreservesFormat() {
