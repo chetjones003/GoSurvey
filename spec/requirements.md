@@ -13308,6 +13308,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
 
+  2026-10-20 — **the PR-time `/analyze` check is now blocking** (D-2026-10-20-a, GitHub #977). The backlog was triaged: real findings were fixed, and the justified suppressions are listed in `spec/coding-standards.md` section 11. `pr-checks.yml`'s `lint / msvc-analyze` job builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`), so any new `/W4` or `/analyze` warning in our own targets fails the PR. The `release.yml` build is unchanged and still not failed by findings. There are no accepted baseline findings: the baseline is zero.
+
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
   polyline with a tilted curved segment into flat runs plus one ARC each, because `LWPOLYLINE` carries
