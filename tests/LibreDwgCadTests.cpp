@@ -5661,7 +5661,7 @@ TEST_CASE("Paper-space table is written to DWG as grid lines and cell text (issu
   REQUIRE(in.paperLayouts.size() == 1);
   const PaperLayout& back = in.paperLayouts[0];
   // Outline (4) + one column divider + one row divider = 6 segments.
-  CHECK(back.paperLines.size() == 6 * 6);
+  CHECK(back.paperLines.size() == size_t{36});
   int found = 0;
   for (const CadAnnotation& a : back.paperTexts)
     for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
@@ -5698,7 +5698,7 @@ TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #76
   AppCommandState in;
   REQUIRE(ImportDxfFile(in, p.c_str(), log));
   REQUIRE(in.paperLayouts.size() == 1);
-  CHECK(in.paperLayouts[0].paperLines.size() == 6 * 6);
+  CHECK(in.paperLayouts[0].paperLines.size() == size_t{36});
   int found = 0;
   for (const CadAnnotation& a : in.paperLayouts[0].paperTexts)
     for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
