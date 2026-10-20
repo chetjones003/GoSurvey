@@ -2,7 +2,7 @@
 //
 // An explorer tree over each surface's definition -- Surfaces > <surface> > Definition > Point Groups /
 // Breaklines / Boundaries / Point Files -- with Add / Remove / Move on the nodes and a panel for the
-// selected surface. Every edit is a `surfedit::` service call, the same ones the ImGui window makes, and
+// selected surface. Every edit is a `surfedit::` service call, and
 // "Add Breakline / Boundary" starts the same DESIGNATE commands the command line does.
 //
 // Unlike the modal Create / Properties / Style dialogs this window stays open while a breakline or

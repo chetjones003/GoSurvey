@@ -1,5 +1,5 @@
 // GitHub issue #916 (REQ-172) — the shared point-cloud export and import-progress helpers both the
-// ImGui commands and the Qt dialogs call.
+// Qt dialogs call.
 //
 // Export is driven the way a user reaches it: the typed EXPORTPTS / EXPORTPTX / EXPORTLAS /
 // EXPORTLAZ commands (native save dialog answered through the headless queue) and the

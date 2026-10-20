@@ -7,7 +7,7 @@
 # which does not span the surface's full value range does not silently drop the part above it, and
 # that the whole thing survives `.gs`.
 #
-# **On SURFSTYLE rather than the Analysis tab.** The Surface Style editor is an ImGui window this
+# **On SURFSTYLE rather than the Analysis tab.** The Surface Style editor is a Qt window this
 # driver cannot reach — the same limitation req070-surface-styles-contours works around — so
 # ANALYSIS/BAND/ARROWS/CLEARBANDS/ARROWBAND/CLEARARROWBANDS call the exact fields the tab edits.
 #

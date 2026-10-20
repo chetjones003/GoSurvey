@@ -56,7 +56,7 @@ jobs:
         run: python .github/scripts/classify_docs_only.py
 
   # ---------------------------------------------------------------------------
-  # build — GoSurvey.exe. The test suite and headless driver are not in this tree.
+  # Build and test the supported Qt application and headless helpers.
   # ---------------------------------------------------------------------------
   build-and-test:
     name: build / test

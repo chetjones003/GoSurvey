@@ -2,7 +2,7 @@
 #
 # Two jobs, three publish outcomes, decided by which branch the run targets:
 #
-#   build             compile GoSurvey.exe only (no headless driver, no test suite — this
+#   build             compile GoSurvey.exe (Qt frontend) and supporting checks — this
 #                     pipeline ships the app, it does not verify it), run only on manual
 #                     dispatch (REQ-202 (d))
 #   package           Inno installer from the build artifacts; then:
@@ -65,6 +65,14 @@ jobs:
         # Visual Studio generator does — so without this, configure fails outright rather than
         # quietly picking up some other compiler. That loud failure is deliberate (see below).
         uses: ilammy/msvc-dev-cmd@v1
+
+      # Install the supported Qt frontend's pinned MSVC kit before configure.
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
 
       - name: Ensure Ninja
         # The repo's CMakePresets.json uses the Ninja generator. windows-latest already ships
@@ -176,7 +184,7 @@ jobs:
         # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
         # scoped to our own targets only. It does not fail the build unless paired with /WX,
         # which is deliberately NOT set — the existing codebase has never been triaged against it.
-        # This pipeline ships GoSurvey.exe only.
+        # This pipeline ships the Qt application only.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
@@ -219,7 +227,9 @@ jobs:
           name: gosurvey-bin
           path: |
             build/GoSurvey.exe
-            build/pdfium.dll
+            build/*.dll
+            build/qt.conf
+            build/qt-plugins/
             build/resources/
           if-no-files-found: error
           retention-days: 1
@@ -241,8 +251,8 @@ jobs:
 
       - name: Download binaries
         # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
-        # paths, so the archive contains GoSurvey.exe at its root. Unpack into
-        # build/ so installer/GoSurvey.iss still finds {#BuildDir}\GoSurvey.exe.
+        # paths, so the archive contains the app/runtime files at its root. Unpack into
+        # build/ so installer/GoSurvey.iss finds the Qt deployment tree.
         uses: actions/download-artifact@v4
         with:
           name: gosurvey-bin

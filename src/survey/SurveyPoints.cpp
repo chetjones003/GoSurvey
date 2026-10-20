@@ -777,8 +777,8 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   // box, overhanging west toward the very marker the box exists to stand clear of, and picking it
   // meant clicking somewhere other than the text. Nothing about the default-font case changes.
   //
-  // The frontend supplies the measurer (ImGui font, Qt text layout). Without one, this is the same
-  // no-font estimate the ImGui measurer returns before any font exists.
+  // The frontend supplies the measurer (Qt text layout). Without one, use the same
+  // no-font estimate returned before any font exists.
   float pw = 8.f;
   float ph = std::max(fontPx * 1.22f, 4.f);
   if (st.measureAnnotationText)

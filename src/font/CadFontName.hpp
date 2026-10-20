@@ -3,7 +3,7 @@
 #include <string>
 
 // Pure font-name classification shared by overlay, plot, and MTEXT layout. Header-only so the
-// SHX-vs-TTF decision is unit-testable without ImGui or the SHX file loader (PlotFont.hpp precedent).
+// SHX-vs-TTF decision is unit-testable without UI or the SHX file loader (PlotFont.hpp precedent).
 namespace cadfont {
 
 inline std::string LowerAscii(std::string s) {

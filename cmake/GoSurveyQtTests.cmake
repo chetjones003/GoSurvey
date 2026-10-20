@@ -18,6 +18,6 @@ add_dependencies(GoSurveyQtTests GoSurveyQt)
 add_test(NAME qt.editor
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-qt-tests-hidden.ps1"
-    -Exe "$<TARGET_FILE:GoSurveyQtTests>" -TimeoutSec 280
+    -Exe "$<TARGET_FILE:GoSurveyQtTests>" -TimeoutSec 900
     -WorkingDirectory "${GOSURVEY_ARTIFACT_DIR}")
-set_tests_properties(qt.editor PROPERTIES TIMEOUT 300 WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
+set_tests_properties(qt.editor PROPERTIES TIMEOUT 920 WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")

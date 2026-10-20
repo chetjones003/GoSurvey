@@ -16,6 +16,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QListWidget>
+#include <QInputDialog>
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -30,6 +31,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <string>
@@ -80,6 +82,33 @@ void AddUnavailableRow(QVBoxLayout* layout, const QString& title, const QString&
 }
 
 } // namespace
+
+
+void EditorWindow::ShowBlockEditorPicker() {
+  std::vector<std::string> names;
+  CadBlocksCollectEditPickerNames(m_State, &names);
+  if (names.size() <= 1) {
+    m_State.blockEditPickerOpen = false;
+    QMessageBox::information(this, "Edit Block Definition", "This drawing has no block definitions to edit.");
+    return;
+  }
+  QStringList options;
+  for (size_t i = 1; i < names.size(); ++i)
+    options.push_back(QString::fromUtf8(names[i].c_str()));
+  const QString suggested = QString::fromUtf8(m_State.blockEditPickerName);
+  const int selected = static_cast<int>(std::max<qsizetype>(0, options.indexOf(suggested)));
+  bool accepted = false;
+  const QString name = QInputDialog::getItem(this, "Edit Block Definition",
+                                              "Select a block definition:", options, selected, false,
+                                              &accepted);
+  if (!accepted) {
+    m_State.blockEditPickerOpen = false;
+    return;
+  }
+  const QByteArray utf8 = name.toUtf8();
+  std::snprintf(m_State.blockEditPickerName, sizeof(m_State.blockEditPickerName), "%s", utf8.constData());
+  CadBlocksCommitEditPicker(m_State, m_Log);
+}
 
 void EditorWindow::ShowBlockEditorClosePrompt() {
   if (!m_State.blockEditCloseAsked || m_State.blockEditorName.empty()) {

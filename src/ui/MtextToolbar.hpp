@@ -6,7 +6,7 @@
 #include <vector>
 
 // Pure geometry/string helpers behind the MTEXT "Text Formatting" panel (REQ-051). Kept header-only and
-// free of ImGui so the fiddly parts — keeping a dragged panel on screen, composing the rich-text run tags,
+// independent of the UI so the fiddly parts — keeping a dragged panel on screen, composing the rich-text run tags,
 // spacing the column ruler's ticks, and naming an attachment point — are unit-testable (the PlotFont.hpp /
 // OrthoConstrain / ColorContrast precedent). Everything that needs a draw list stays in CadUi.cpp.
 namespace mtexttoolbar {

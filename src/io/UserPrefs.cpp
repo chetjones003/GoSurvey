@@ -1,6 +1,6 @@
 #include "UserPrefs.hpp"
 
-#include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "CadCommands.hpp"
 
 #include <nlohmann/json.hpp>
@@ -89,8 +89,6 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     st.systemPreferIntegratedGpu = s["systemPreferIntegratedGpu"].get<bool>();
   if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
     st.gfxSmoothLineDisplay = s["gfxSmoothLineDisplay"].get<bool>();
-  if (s.contains("gfxAcceleratedFontDisplay") && s["gfxAcceleratedFontDisplay"].is_boolean())
-    st.gfxAcceleratedFontDisplay = s["gfxAcceleratedFontDisplay"].get<bool>();
   if (s.contains("gfxVideoMemoryCachingLevel") && s["gfxVideoMemoryCachingLevel"].is_number_integer())
     st.gfxVideoMemoryCachingLevel = std::clamp(s["gfxVideoMemoryCachingLevel"].get<int>(), 1, 5);
 
@@ -141,8 +139,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
 
   // --- Panel focus restoration ---
   if (s.contains("focusedSidePanel") && s["focusedSidePanel"].is_string()) {
-    if (s["focusedSidePanel"].get<std::string>() == "Properties")
-      st.pendingPropertiesFocus = true;
+    st.propertiesPanelActive = s["focusedSidePanel"].get<std::string>() == "Properties";
   }
 
   // --- Right-click behavior (Drafting tab legacy + User Preferences) ---
@@ -378,7 +375,6 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
   s["systemPreferIntegratedGpu"]   = st.systemPreferIntegratedGpu;
   s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
-  s["gfxAcceleratedFontDisplay"]   = st.gfxAcceleratedFontDisplay;
   s["gfxVideoMemoryCachingLevel"]  = st.gfxVideoMemoryCachingLevel;
 
   // Crosshair appearance

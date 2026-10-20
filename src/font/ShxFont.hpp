@@ -6,11 +6,11 @@
 // SHX stroke-font geometry (ADR-012 follow-up; relocated to a shared lower layer per ADR-022 so both UI
 // and IO/plot can use it). AutoCAD .shx fonts (romans, txt, simplex, …) are compiled vector "shape" fonts
 // with no TrueType equivalent; we parse the real .shx files and produce each glyph as line strokes, the
-// way AutoCAD renders them. This header is PURE geometry — no imgui, no rendering; the UI draw adapter
+// way AutoCAD renders them. This header is PURE geometry — no UI or rendering; the UI draw adapter
 // lives in ui/ShxDraw. Files are located in the installed Autodesk font folders.
 namespace Shx {
 
-/// Plain 2-D point in font units — no imgui dependency (this module sits below UI).
+/// Plain 2-D point in font units — no UI dependency (this module sits below UI).
 struct Vec2 {
   float x = 0.f;
   float y = 0.f;

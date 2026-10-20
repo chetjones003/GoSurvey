@@ -62,35 +62,29 @@ The authoritative build system is:
 * `build.bat`
 * `CMakePresets.json`
 
-### Build and test ImGui and Qt
+### Build and test Qt
 
 Run these commands from the repository root in PowerShell. Install MSVC C++ build tools,
-CMake and Ninja; `build.bat` loads the MSVC environment. Qt builds also require an installed
+CMake and Ninja; `build.bat` loads the MSVC environment. The Qt application requires an installed
 MSVC x64 Qt 6.8+ kit. Set `$env:GOSURVEY_QT_ROOT` to its root when it differs from
 `C:\Qt\6.8.3\msvc2022_64`.
 
 | Task | Command |
 | --- | --- |
-| Build both frontends and all test/helper targets (Release) | `.\build.bat` |
-| Build ImGui and its Catch2 tests (Release) | `.\build.bat imgui` |
-| Build Qt and its GUI tests (Release) | `.\build.bat qt` |
-| Run ImGui/domain Catch2 tests after the ImGui build | `.\build\GoSurveyTestImGui.exe` |
-| Run Qt tests on the hidden desktop after the Qt build | `ctest --preset ninja-release -R "^qt[.]editor$"` |
-| Run the complete suite, including headless transcripts, after building both frontends | `ctest --preset ninja-release` |
-| Check the four-executable output layout after building both frontends | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
-| Clean rebuild of both frontends | `.\build.bat release --clean-first` |
+| Build Qt and all test/helper targets (Release) | `.\build.bat` |
+| Run Qt tests on the hidden desktop | `ctest --preset ninja-release -R "^qt[.]editor$"` |
+| Run the complete suite, including headless transcripts | `ctest --preset ninja-release` |
+| Check the Qt output layout | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
+| Clean Release rebuild | `.\build.bat release --clean-first` |
 
-The frontend selectors reconfigure the same Release tree. Run `.\build.bat` before the full
-suite: the `imgui` and `qt` selectors build only their frontend and test executable, not all
-headless helpers. Report failing tests and their evidence; do not describe a partially passing
-suite as green.
+`build.bat` configures and builds the Qt application, domain test suite and headless helpers.
+Report failures explicitly; do not describe a partially passing suite as green.
 
-For Debug, use `.\build.bat imgui debug` or `.\build.bat qt debug`, then
-`.\build\debug\GoSurveyTestImGui.exe` or `ctest --preset ninja-debug -R "^qt[.]editor$"`.
-Build all Debug targets with `.\build.bat debug` before `ctest --preset ninja-debug`.
-The Debug ImGui Developer Shell requires the vendored `third_party/imgui_test_engine`.
+For Debug, use `.\build.bat debug`, then run
+`ctest --preset ninja-debug -R "^qt[.]editor$"`. Build all Debug targets before
+`ctest --preset ninja-debug`.
 
-`build-qt.bat` forwards to `build.bat qt`. For direct CMake builds, use
+`build-qt.bat` forwards to `build.bat`. For direct CMake builds, use
 `cmake --build --preset ninja-release` (or `ninja-debug`) from an MSVC developer shell;
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows
@@ -98,9 +92,8 @@ CMake/CTest and `gh` executables. Keep the Windows-native toolchain.
 
 ### Keep build output clean
 
-Release application output consists of `GoSurvey.exe` (ImGui), `GoSurveyTestImGui.exe`,
-`GoSurveyQt.exe` and `GoSurveyQtTests.exe` under `build/`. Debug applications use
-`build/debug/`; Visual Studio builds use `build/<Configuration>/`.
+Release application output consists of the Qt application `GoSurvey.exe` and `GoSurveyQtTests.exe` under `build/`.
+Debug applications use `build/debug/`; Visual Studio builds use `build/<Configuration>/`.
 
 - Keep CMake caches, generated headers, static libraries, symbols and helper executables under
   `build/.cmake/<preset>/`.

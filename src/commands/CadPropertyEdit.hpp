@@ -1,7 +1,7 @@
 #pragma once
 // Property-panel edits as services (issue #891, REQ-024 / REQ-057 / REQ-101).
 //
-// The 0.7.4 ImGui Properties panel edits LINE, CIRCLE and TEXT/MTEXT geometry inside its own draw
+// The Properties panel edits LINE, CIRCLE and TEXT/MTEXT geometry inside its own draw
 // code, one widget at a time. A second frontend cannot reuse widgets, so the rules those widgets
 // enforce live here instead: what a field means, which value is stored, what is refused, and what
 // one undo step covers.

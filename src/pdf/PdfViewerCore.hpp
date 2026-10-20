@@ -1,7 +1,7 @@
 #pragma once
 
 // REQ-387 / ADR-067 — the pure half of the PDF viewer: where each page sits, which pages are on
-// screen, what to render next, and what to keep. No PDFium, no ImGui, no OpenGL, so every rule that
+// screen, what to render next, and what to keep. No PDFium or OpenGL dependency, so every rule that
 // keeps a 500-page file smooth is unit-testable without a window.
 
 #include <cstddef>

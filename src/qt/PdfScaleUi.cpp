@@ -284,7 +284,7 @@ void PdfWindow::EscapeTool() {
     m_Page->update();
     return;
   }
-  SetTool(-2, "Select annotations; drag to move or resize.");
+  SetTool(-1, "Browse pages");
 }
 
 void PdfWindow::SceneChanged() {

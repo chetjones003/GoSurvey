@@ -53,11 +53,9 @@ PDFium
   BSD 3-Clause License.
   Source: https://pdfium.googlesource.com/pdfium/
 
-GLFW
   Copyright (c) 2002-2006 Marcus Geelnard
   Copyright (c) 2006-2019 Camilla Löwy
   zlib/libpng License.
-  Source: https://www.glfw.org/
 
 GLEW (OpenGL Extension Wrangler Library)
   Copyright (C) 2002-2007, Milan Ikits <milan ikits@ieee.org>
@@ -66,10 +64,8 @@ GLEW (OpenGL Extension Wrangler Library)
   Modified BSD License / MIT License.
   Source: https://glew.sourceforge.net/
 
-Dear ImGui
   Copyright (c) 2014-2024 Omar Cornut
   MIT License.
-  Source: https://github.com/ocornut/imgui
 
 CS-MAP (OSGeo MetaCRS) — coordinate systems (REQ-358)
   Copyright (c) 2008, Autodesk, Inc. All rights reserved.

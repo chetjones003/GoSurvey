@@ -353,7 +353,7 @@ struct CadAnnotation {
   /// fields above always hold the effective values, so renderers read them directly.
   std::string styleName;
   /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
-  /// shear faithfully; TTF approximates (ImGui has no glyph shear).
+  /// shear faithfully; TTF approximates (the UI font renderer has no glyph shear).
   float obliqueDeg = 0.f;
   /// Per-property override flags: when set, this annotation's own field wins over its style and a style
   /// edit does not re-bake that property (ADR-020).

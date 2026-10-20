@@ -46,7 +46,7 @@ bool HasAnyEffect(AppCommandState& before, AppCommandState& st, const std::vecto
     return true;
   // A handler that changes `st.active` (starts an interactive tool) without logging anything is
   // still a handler, not a no-op.
-  return st.active != before.active;
+  return st.active != before.active || st.blockEditPickerOpen != before.blockEditPickerOpen;
 }
 
 } // namespace
