@@ -764,6 +764,8 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
                              scratch.cadMultileaders.end());
   L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
                                  scratch.cadMultileaderAttrs.end());
+  L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
+  L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
   return bulged;
 }
 
@@ -782,6 +784,17 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
     if (hit) {
       out->type = PaperRef::Type::Block;
       out->index = bi;
+      return true;
+    }
+  }
+  for (int ti = static_cast<int>(L.paperTables.size()) - 1; ti >= 0; --ti) {
+    const CadTable& tb = L.paperTables[static_cast<size_t>(ti)];
+    float lx = 0.f, ly = 0.f;
+    CadTableWorldToLocal(tb, x, y, &lx, &ly);
+    if (lx >= -tolIn && lx <= std::max(tb.width, 1.e-3f) + tolIn && ly >= -tolIn &&
+        ly <= std::max(tb.height, 1.e-3f) + tolIn) {
+      out->type = PaperRef::Type::Table;
+      out->index = ti;
       return true;
     }
   }
@@ -903,7 +916,7 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   if (!L || st.selectedPaperEntities.empty())
     return;
   // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
-  std::vector<int> byType[8];
+  std::vector<int> byType[9];
   for (const PaperRef& r : st.selectedPaperEntities)
     byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
@@ -952,6 +965,8 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
     eraseElem(L->paperBlockRefs, L->paperBlockRefAttrs, bi);
   for (int mi : byType[static_cast<int>(PaperRef::Type::Leader)])
     eraseElem(L->paperMultileaders, L->paperMultileaderAttrs, mi);
+  for (int ti : byType[static_cast<int>(PaperRef::Type::Table)])
+    eraseElem(L->paperTables, L->paperTableAttrs, ti);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
@@ -1100,6 +1115,20 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
       }
       break;
     }
+    case PaperRef::Type::Table: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTables.size())
+        break;
+      if (copy) {
+        CadTable c = L->paperTables[static_cast<size_t>(r.index)];
+        CadTableTranslate(&c, dxIn, dyIn);
+        L->paperTables.push_back(std::move(c));
+        L->paperTableAttrs.push_back(attrAt(L->paperTableAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Table, static_cast<int>(L->paperTables.size()) - 1});
+      } else {
+        CadTableTranslate(&L->paperTables[static_cast<size_t>(r.index)], dxIn, dyIn);
+      }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -1177,6 +1206,11 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
     case PaperRef::Type::Block: {
       if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
         CadBlockRotateZ(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, angRad);
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTables.size())
+        CadTableRotateAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
@@ -1318,6 +1352,16 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
       L->paperBlockRefs.push_back(std::move(c));
       L->paperBlockRefAttrs.push_back(attrAt(L->paperBlockRefAttrs, r.index));
       newSel.push_back({PaperRef::Type::Block, static_cast<int>(L->paperBlockRefs.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTables.size())
+        break;
+      CadTable c = L->paperTables[static_cast<size_t>(r.index)];
+      CadTableReflectAcrossLine(&c, x0In, y0In, x1In, y1In);
+      L->paperTables.push_back(std::move(c));
+      L->paperTableAttrs.push_back(attrAt(L->paperTableAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Table, static_cast<int>(L->paperTables.size()) - 1});
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
@@ -11742,6 +11786,11 @@ void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, f
     case PaperRef::Type::Block: {
       if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
         CadBlockScaleAbout(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, factor);
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTables.size())
+        CadTableScaleAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, factor);
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above

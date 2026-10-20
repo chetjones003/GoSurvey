@@ -49,3 +49,10 @@ Mirrors the existing per-type paper stores (ADR-009); no new layer or abstractio
 - Import: layouts from the OBJECTS LAYOUT records (name, tab order, size, rotation); paper entities (group 67, or inside a `*Paper_Space` block) read by the model-space reader into a scratch state and moved onto the layout named by group 410 (`AppendScratchToPaperLayout`, shared with the DWG reader); VIEWPORT with its state.
 - Found on the way: an empty `*Paper_Space` skeleton block must not create a layout (it broke `headless.dxf-export-stable`).
 - Still open: paper TABLE <-> DWG/DXF TABLE; DXF pattern hatches (solid only, as in model space); honoring viewport `on`/`locked`.
+
+## 9. Increment 5 — first-class paper tables
+
+- `PaperLayout::paperTables` (`CadTable`, REQ-148) with `PaperEntityRef::Type::Table`: pick, box select, corner snap, MOVE/COPY/ROTATE/SCALE/MIRROR/ERASE, Qt display, PDF plot (outline, dividers, cell text).
+- DWG: grid LINEs + cell MTEXT (same fallback as model space, `WriteCadTable` now takes origin and scale explicitly); DXF: LINEs + text, logged. DWG TABLE import lands in `paperTables` via `AppendScratchToPaperLayout`.
+- Fixed on the way: sheet fills were never drawn by the Qt viewport (only plotted).
+- Debt: legacy sheet tables stored as `CadAnnotation::Kind::Table` in `paperTexts` keep the old path; a native AutoCAD TABLE read is untested (no sample).

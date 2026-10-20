@@ -3268,7 +3268,7 @@ namespace dwg_table_export {
 
 bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_BLOCK_HEADER* hdr,
                    TableWriter& tw, const EntityAttributes* attr, DwgExportFieldContext* fldCtx,
-                   std::uint64_t blockOwnerHandle) {
+                   std::uint64_t blockOwnerHandle, double ox, double oy, float modelUnitsPerPlottedInch) {
   if (hdr == nullptr || table.cols <= 0)
     return false;
   const int rows = CadTableRowCount(table);
@@ -3278,8 +3278,8 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
   auto worldLocal = [&](float lx, float ly, dwg_point_3d* p) {
     float wx = 0.f, wy = 0.f;
     CadTableLocalToWorld(table, lx, ly, &wx, &wy);
-    p->x = static_cast<double>(wx) + st.worldDocumentOriginX;
-    p->y = static_cast<double>(wy) + st.worldDocumentOriginY;
+    p->x = static_cast<double>(wx) + ox;
+    p->y = static_cast<double>(wy) + oy;
     p->z = z;
   };
   auto seg = [&](float lx0, float ly0, float lx1, float ly1) {
@@ -3301,12 +3301,12 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
   std::vector<CadTableCellRect> cells;
   CadTableLayoutWorldCells(table, &cells);
   const double textH =
-      std::max(static_cast<double>(CadTableHeightWorld(table, st.modelUnitsPerPlottedInch)), 1e-3);
+      std::max(static_cast<double>(CadTableHeightWorld(table, modelUnitsPerPlottedInch)), 1e-3);
   const double rotRad = static_cast<double>(table.rotationRad);
   for (size_t ci = 0; ci < cells.size() && ci < table.cells.size(); ++ci) {
     dwg_point_3d p{};
-    p.x = static_cast<double>(cells[ci].x0) + st.worldDocumentOriginX;
-    p.y = static_cast<double>(cells[ci].y1) - textH + st.worldDocumentOriginY;
+    p.x = static_cast<double>(cells[ci].x0) + ox;
+    p.y = static_cast<double>(cells[ci].y1) - textH + oy;
     p.z = z;
     const CadFieldContext fctx = CadFieldContextFromState(st);
     std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
@@ -4202,6 +4202,11 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   for (size_t i = 0; i < L.paperMultileaders.size(); ++i)
     WriteMultileaderEntity(tw.dwg, ps, tw, st, L.paperMultileaders[i], AttrAt(L.paperMultileaderAttrs, i), 0.0, 0.0,
                            false, nativeLeaders, 1.f, noAnnot);
+  // Tables: grid LINEs + cell MTEXT, the same fallback model space uses (LibreDWG has no dwg_add_TABLE).
+  const std::uint64_t psHandle = BlockHeaderObjectHandle(ps);
+  for (size_t i = 0; i < L.paperTables.size(); ++i)
+    dwg_table_export::WriteCadTable(st, L.paperTables[i], ps, tw, AttrAt(L.paperTableAttrs, i), fldCtx, psHandle,
+                                    0.0, 0.0, 1.f);
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
@@ -4212,7 +4217,8 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
   for (const PaperLayout& L : st.paperLayouts) {
     for (const EntityAttributes& a : L.paperLineAttrs)
       tw.EnsureLtype(a.linetype);
-    for (const std::vector<EntityAttributes>* v : {&L.paperFilledRegionAttrs, &L.paperMultileaderAttrs})
+    for (const std::vector<EntityAttributes>* v :
+         {&L.paperFilledRegionAttrs, &L.paperMultileaderAttrs, &L.paperTableAttrs})
       for (const EntityAttributes& a : *v)
         tw.EnsureLtype(a.linetype);
     for (const EntityAttributes& a : L.paperBlockRefAttrs)
@@ -4325,7 +4331,8 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   // already in paper inches, then move into the layout's own stores.
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
       ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
-      ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER) {
+      ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
+      ty == DWG_TYPE_TABLE) {
     AppCommandState scratch;
     scratch.worldDocumentOriginX = 0.0;
     scratch.worldDocumentOriginY = 0.0;
@@ -5304,7 +5311,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   size_t nTableOut = 0;
   for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
     const EntityAttributes* at = ti < st.cadTableAttrs.size() ? &st.cadTableAttrs[ti] : nullptr;
-    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle))
+    if (dwg_table_export::WriteCadTable(st, st.cadTables[ti], hdr, tw, at, &fldCtx, blockOwnerHandle,
+                                       st.worldDocumentOriginX, st.worldDocumentOriginY,
+                                       st.modelUnitsPerPlottedInch))
       ++nTableOut;
   }
   if (nTableOut > 0)

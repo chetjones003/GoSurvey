@@ -2811,6 +2811,10 @@ uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
     for (const std::vector<float>& branch : ml.extraLeaderPaths)
       nLeaderParts += branch.size() / 3;
   }
+  // A table is written as its outline and dividers (LINEs) plus one text per cell.
+  for (const CadTable& tb : L.paperTables)
+    nLeaderParts += 4 + static_cast<uint64_t>(std::max(tb.cols - 1, 0) + std::max(CadTableRowCount(tb) - 1, 0)) +
+                    tb.cells.size();
   return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
          nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts;
 }
@@ -3101,9 +3105,54 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
   }
   // Issue #768: DXF has no multileader writer, so each one is written as its leader LINEs plus its label
   // text. The content and position survive; the multileader identity does not (reported by the caller).
-  if (!L.paperMultileaders.empty()) {
+  if (!L.paperMultileaders.empty() || !L.paperTables.empty()) {
     PaperLayout parts;
     parts.name = L.name;
+    for (size_t ti = 0; ti < L.paperTables.size(); ++ti) {
+      const CadTable& tb = L.paperTables[ti];
+      const EntityAttributes at = attrAt(L.paperTableAttrs, ti);
+      auto seg = [&](float ax, float ay, float bx, float by) {
+        parts.paperLines.insert(parts.paperLines.end(), {ax, ay, 0.f, bx, by, 0.f});
+        parts.paperLineAttrs.push_back(at);
+      };
+      float cx[4], cy[4];
+      for (int c = 0; c < 4; ++c)
+        CadTableWorldCorner(tb, c, &cx[c], &cy[c]);
+      for (int c = 0; c < 4; ++c)
+        seg(cx[c], cy[c], cx[(c + 1) % 4], cy[(c + 1) % 4]);
+      const float tw = std::max(tb.width, 1.e-3f), th = std::max(tb.height, 1.e-3f);
+      const int rows = CadTableRowCount(tb);
+      for (int c = 1; c < tb.cols; ++c) {
+        float ax, ay, bx, by;
+        const float lx = tw * static_cast<float>(c) / static_cast<float>(tb.cols);
+        CadTableLocalToWorld(tb, lx, 0.f, &ax, &ay);
+        CadTableLocalToWorld(tb, lx, th, &bx, &by);
+        seg(ax, ay, bx, by);
+      }
+      for (int r = 1; r < rows; ++r) {
+        float ax, ay, bx, by;
+        const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
+        CadTableLocalToWorld(tb, 0.f, ly, &ax, &ay);
+        CadTableLocalToWorld(tb, tw, ly, &bx, &by);
+        seg(ax, ay, bx, by);
+      }
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(tb, &cells);
+      for (size_t ci = 0; ci < cells.size() && ci < tb.cells.size(); ++ci) {
+        if (tb.cells[ci].empty())
+          continue;
+        CadAnnotation cell;
+        cell.kind = CadAnnotation::Kind::Text;
+        cell.text = tb.cells[ci];
+        cell.fontFamily = tb.fontFamily;
+        cell.plottedHeightInches = tb.plottedHeightInches;
+        cell.rotationRad = tb.rotationRad;
+        cell.insX = cells[ci].x0 + 0.02f;
+        cell.insY = cells[ci].y1 - 0.02f;
+        parts.paperTexts.push_back(std::move(cell));
+        parts.paperTextAttrs.push_back(at);
+      }
+    }
     for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
       const CadMultileader& ml = L.paperMultileaders[mi];
       const EntityAttributes at = attrAt(L.paperMultileaderAttrs, mi);
@@ -3161,7 +3210,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   for (const PaperLayout& pl : st.paperLayouts) {
     for (const auto* attrs : {&pl.paperLineAttrs, &pl.paperCircleAttrs, &pl.paperArcAttrs, &pl.paperEllAttrs,
                               &pl.paperPolyAttrs, &pl.paperTextAttrs, &pl.paperFilledRegionAttrs,
-                              &pl.paperMultileaderAttrs})
+                              &pl.paperMultileaderAttrs, &pl.paperTableAttrs})
       for (const EntityAttributes& at : *attrs)
         addLayerName(at.layer);
     for (const Viewport& gv : pl.viewports) {
@@ -5333,6 +5382,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       size_t nLeaders = 0;
       for (const PaperLayout& pl : st.paperLayouts)
         nLeaders += pl.paperMultileaders.size();
+      size_t nTables = 0;
+      for (const PaperLayout& pl : st.paperLayouts)
+        nTables += pl.paperTables.size();
+      if (nTables > 0)
+        log.push_back("DXF export — " + std::to_string(nTables) +
+                      " paper-space table(s) written as LINE segments plus text: DXF has no table writer here (REQ-113).");
       if (nLeaders > 0)
         log.push_back("DXF export — " + std::to_string(nLeaders) +
                       " paper-space multileader(s) written as LINE segments plus text: DXF has no multileader here (REQ-113).");

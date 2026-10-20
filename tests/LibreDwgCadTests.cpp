@@ -5632,3 +5632,77 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   CHECK(in.userCirclesCxCyZR.empty());  // paper entities did not leak into model space
   CHECK(in.cadFilledRegions.empty());
 }
+
+// Issue #768 / REQ-113: a sheet table reaches the DWG the way a model-space table does (LibreDWG has no
+// dwg_add_TABLE): grid LINEs plus one MTEXT per cell. It reads back as that geometry and text on the same
+// sheet, in paper inches, not on the model.
+TEST_CASE("Paper-space table is written to DWG as grid lines and cell text (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  ScratchDir dir("dwg-paper-table");
+  const auto p = (dir.path / "paper-table.dwg").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  CadTable tb;
+  tb.insX = 1.f;
+  tb.insY = 5.f;
+  tb.width = 4.f;
+  tb.height = 2.f;
+  tb.cols = 2;
+  tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+  tb.plottedHeightInches = 0.1f;
+  sheet.paperTables.push_back(tb);
+  sheet.paperTableAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& back = in.paperLayouts[0];
+  // Outline (4) + one column divider + one row divider = 6 segments.
+  CHECK(back.paperLines.size() == 6 * 6);
+  int found = 0;
+  for (const CadAnnotation& a : back.paperTexts)
+    for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
+      if (a.text.find(w) != std::string::npos)
+        ++found;
+  CHECK(found == 4);
+  CHECK(in.userLinesFlat.empty());  // nothing leaked into model space
+}
+
+TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #768)",
+          "[dxf][req113][issue768]") {
+  ScratchDir dir("dxf-paper-table");
+  const auto p = (dir.path / "paper-table.dxf").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  CadTable tb;
+  tb.insX = 1.f;
+  tb.insY = 5.f;
+  tb.width = 4.f;
+  tb.height = 2.f;
+  tb.cols = 2;
+  tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+  tb.plottedHeightInches = 0.1f;
+  sheet.paperTables.push_back(tb);
+  sheet.paperTableAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  bool logged = false;
+  for (const std::string& l : log)
+    logged = logged || l.find("paper-space table") != std::string::npos;
+  CHECK(logged);  // the loss of the table identity is named (REQ-201)
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  CHECK(in.paperLayouts[0].paperLines.size() == 6 * 6);
+  int found = 0;
+  for (const CadAnnotation& a : in.paperLayouts[0].paperTexts)
+    for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
+      if (a.text.find(w) != std::string::npos)
+        ++found;
+  CHECK(found == 4);
+}

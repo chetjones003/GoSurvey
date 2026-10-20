@@ -381,6 +381,32 @@ void EditorViewport::paintGL() {
     painter.drawPath(sheetPath);
     painter.setClipRect(sheetRect.intersected(rect()));
     painter.setRenderHint(QPainter::Antialiasing);
+    // Sheet fills (issue #768): one even-odd path per region, under the linework like the plot does.
+    for (std::size_t fi = 0; fi < layout.paperFilledRegions.size(); ++fi) {
+      const CadFilledRegion& fill = layout.paperFilledRegions[fi];
+      QPainterPath path;
+      path.setFillRule(Qt::OddEvenFill);
+      for (std::size_t lp = 0; lp < fill.loopStart.size(); ++lp) {
+        const int begin = fill.loopStart[lp], count = fill.loopCount(lp);
+        if (count < 3) continue;
+        QPolygonF loop;
+        for (int k = 0; k < count; ++k) {
+          const std::size_t vi = static_cast<std::size_t>(begin + k) * 3;
+          if (vi + 1 < fill.vertsXyz.size()) loop << project(fill.vertsXyz[vi], fill.vertsXyz[vi + 1]);
+        }
+        path.addPolygon(loop);
+        path.closeSubpath();
+      }
+      QColor color("#d9d9d9");
+      if (fi < layout.paperFilledRegionAttrs.size()) {
+        const QColor entityColor(QString::fromUtf8(layout.paperFilledRegionAttrs[fi].color.c_str()));
+        if (entityColor.isValid()) color = entityColor;
+      }
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(color);
+      painter.drawPath(path);
+    }
+    painter.setBrush(Qt::NoBrush);
     painter.setPen(QPen(QColor("#252a30"), 1));
     for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6)
       painter.drawLine(project(layout.paperLines[i], layout.paperLines[i + 1]),
@@ -407,6 +433,42 @@ void EditorViewport::paintGL() {
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
+    for (const auto& table : layout.paperTables) {  // issue #768: first-class sheet tables
+      painter.setPen(QPen(QColor("#303941"), 1));
+      float cx[4], cy[4];
+      QPolygonF outline;
+      for (int c = 0; c < 4; ++c) {
+        CadTableWorldCorner(table, c, &cx[c], &cy[c]);
+        outline << project(cx[c], cy[c]);
+      }
+      painter.drawPolygon(outline);
+      const float tw = std::max(table.width, 1.e-3f), th = std::max(table.height, 1.e-3f);
+      const int rows = CadTableRowCount(table);
+      for (int c = 1; c < table.cols; ++c) {
+        float ax, ay, bx, by;
+        const float lx = tw * static_cast<float>(c) / static_cast<float>(table.cols);
+        CadTableLocalToWorld(table, lx, 0.f, &ax, &ay);
+        CadTableLocalToWorld(table, lx, th, &bx, &by);
+        painter.drawLine(project(ax, ay), project(bx, by));
+      }
+      for (int r = 1; r < rows; ++r) {
+        float ax, ay, bx, by;
+        const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
+        CadTableLocalToWorld(table, 0.f, ly, &ax, &ay);
+        CadTableLocalToWorld(table, tw, ly, &bx, &by);
+        painter.drawLine(project(ax, ay), project(bx, by));
+      }
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(table, &cells);
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(table.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(table.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      for (std::size_t i = 0; i < cells.size() && i < table.cells.size(); ++i) {
+        const QPointF a = project(cells[i].x0, cells[i].y1), b = project(cells[i].x1, cells[i].y0);
+        painter.drawText(QRectF(a, b).normalized().adjusted(2, 1, -1, -1), Qt::AlignLeft | Qt::AlignVCenter,
+                         QString::fromUtf8(table.cells[i].c_str()));
+      }
+    }
     for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
       auto drawPath = [&](const std::vector<float>& pts) {
         for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
