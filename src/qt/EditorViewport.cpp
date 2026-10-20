@@ -451,6 +451,21 @@ void EditorViewport::paintGL() {
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
+    for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      auto drawPath = [&](const std::vector<float>& pts) {
+        for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
+          painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+      };
+      painter.setPen(QPen(QColor("#252a30"), 1));
+      drawPath(leader.pathXyz);
+      for (const auto& branch : leader.extraLeaderPaths)
+        drawPath(branch);
+      const auto& label = leader.label;
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(label.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(label.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      painter.drawText(project(label.boxMinX, label.boxMaxY), QString::fromUtf8(label.text.c_str()));
+    }
     for (const auto& annotation : layout.paperTexts) {
       const QPointF origin = project(annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMinX : annotation.insX,
                                       annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMaxY : annotation.insY);
@@ -783,7 +798,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (m_State.entityGripMoveActive && m_State.entityGripEntityIndex >= 0) {
       exclude.valid = true; exclude.type = m_State.entityGripType; exclude.index = m_State.entityGripEntityIndex;
     }
-    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
@@ -805,6 +822,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
+    if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
+        m_State.activeSpaceIndex >= 0 && !InFloatingModelSpace(m_State)) {
+      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+          false, CadViewIsPlan(m_State) ? nullptr : &ray);
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     const auto route = ViewportClickRouteFor(m_State);
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
@@ -1142,7 +1168,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
     const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)

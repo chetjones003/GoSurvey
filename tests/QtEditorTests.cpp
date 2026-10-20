@@ -1243,6 +1243,114 @@ private Q_SLOTS:
     QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-target-prehighlight.png"));
   }
 
+  void issue972PaperModifyCommandsRouteAndStayInPaperSpace() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    window.resize(1100, 760);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* viewport = dynamic_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport")); QVERIFY(viewport);
+    QTRY_VERIFY(viewport->IsRendererReady());
+    AddPaperLayout(window.State());
+    auto& state = window.State();
+    state.activeSpaceIndex = 0;
+    state.userLinesFlat = {100, 100, 0, 110, 100, 0};
+    EntityAttributes attrs; attrs.layer = "0";
+    state.userLineAttrs = {attrs};
+    auto& layout = state.paperLayouts[0];
+    layout.paperLines = {0, 0, 0, 10, 0, 0};
+    layout.paperLineAttrs = {attrs};
+    const auto modelBefore = state.userLinesFlat;
+
+    state.lengthenMode = AppCommandState::LengthenMode::Total;
+    state.lengthenTotalValue = 20.f;
+    state.lengthenModeValueSet = true;
+    window.Submit("LENGTHEN");
+    QCOMPARE(state.paperLengthenPhase, 1);
+    const Camera paperCamera = CadViewCamera(state);
+    float pickX = 0.f, pickY = 0.f;
+    paperCamera.WorldToScreen(8, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()),
+        &pickX, &pickY);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(pickX), qRound(pickY)));
+    QCOMPARE(state.paperLengthenPhase, 1);
+    QVERIFY(std::abs(layout.paperLines[3] - 20.f) < 1e-4f);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QVERIFY(std::abs(state.paperLayouts[0].paperLines[3] - 10.f) < 1e-4f);
+
+    // BREAK's first pick latches the paper entity and point; Escape must discard that draft.
+    window.Submit("BREAK");
+    paperCamera.WorldToScreen(5, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()),
+        &pickX, &pickY);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(pickX), qRound(pickY)));
+    QCOMPARE(state.paperBreakPhase, 2);
+    const auto beforeCancel = state.paperLayouts[0].paperLines;
+    window.CancelDraftingInput();
+    QCOMPARE(state.paperBreakPhase, 0);
+    QCOMPARE(state.paperLayouts[0].paperLines, beforeCancel);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+
+    // A complete paper BREAK uses the same Qt command and pick entry points and is undoable.
+    window.Submit("BREAK");
+    SubmitViewportPick(state, 2, 0, window.m_Log);
+    SubmitViewportPick(state, 8, 0, window.m_Log);
+    QVERIFY(state.paperLayouts[0].paperLines.size() > beforeCancel.size());
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.paperLayouts[0].paperLines, beforeCancel);
+
+    // The other phase machines also start in paper space and consume their picks before idle
+    // paper selection. Exercise phase advancement and cancellation without changing geometry.
+    window.Submit("EXTEND");
+    state.paperLayouts[0].paperLines.insert(state.paperLayouts[0].paperLines.end(), {0, 30, 0, 10, 30, 0,
+                                                                                   15, 25, 0, 15, 35, 0});
+    state.paperLayouts[0].paperLineAttrs.insert(state.paperLayouts[0].paperLineAttrs.end(), {attrs, attrs});
+    const size_t beforeExtend = state.paperLayouts[0].paperLines.size();
+    SubmitViewportPick(state, 15, 30, window.m_Log);
+    QCOMPARE(state.paperExtendPhase, 1);
+    window.Submit(""); // finish the boundary-edge pick set
+    QCOMPARE(state.paperExtendPhase, 2);
+    SubmitViewportPick(state, 9, 30, window.m_Log);
+    QVERIFY(std::abs(state.paperLayouts[0].paperLines[beforeExtend - 12 + 3] - 15.f) < 1e-4f);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.paperLayouts[0].paperLines.size(), beforeExtend);
+
+    PaperEntityRef paperLine{PaperEntityRef::Type::Line, 0};
+    state.selectedPaperEntities = {paperLine};
+    window.Submit("STRETCH");
+    QCOMPARE(state.paperStretchPhase, 1);
+    window.Submit("1,1");
+    QCOMPARE(state.paperStretchPhase, 2);
+    window.CancelDraftingInput();
+    QCOMPARE(state.paperStretchPhase, 0);
+
+    state.paperLayouts[0].paperLines.insert(state.paperLayouts[0].paperLines.end(), {0, 10, 0, 10, 10, 0,
+                                                                                   10, 10, 0, 10, 0, 0});
+    state.paperLayouts[0].paperLineAttrs.insert(state.paperLayouts[0].paperLineAttrs.end(), {attrs, attrs});
+    window.Submit("FILLET");
+    window.Submit("R"); window.Submit("1");
+    SubmitViewportPick(state, 5, 10, window.m_Log);
+    QCOMPARE(state.paperFilletPhase, 2);
+    SubmitViewportPick(state, 10, 5, window.m_Log);
+    QCOMPARE(state.paperFilletPhase, 1);
+    QVERIFY(!state.paperLayouts[0].paperArcs.empty());
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+
+    window.Submit("CHAMFER");
+    window.Submit("D"); window.Submit("1"); window.Submit("1");
+    const size_t beforeChamfer = state.paperLayouts[0].paperLines.size();
+    SubmitViewportPick(state, 5, 10, window.m_Log);
+    QCOMPARE(state.paperChamferPhase, 2);
+    SubmitViewportPick(state, 10, 5, window.m_Log);
+    QCOMPARE(state.paperChamferPhase, 1);
+    QVERIFY(state.paperLayouts[0].paperLines.size() > beforeChamfer);
+    QCOMPARE(state.userLinesFlat, modelBefore);
+    QVERIFY(DoUndo(state, window.m_Log));
+    QCOMPARE(state.userLinesFlat, modelBefore);
+  }
+
   void pageSetupManagerAndEditorPreserveCancelAndReadOnlyState() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
@@ -2385,9 +2493,10 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(settings);
-    // As opened: tall enough for its wrapped text.
+    QTest::qWait(250);  // let the dialog polish and the account card refresh its status
+    settings->layout()->activate();
+    // As opened: tall enough for its wrapped text after Qt has applied the visible style metrics.
     QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
-    QTest::qWait(250);  // let the account card's refresh fill in its status
     QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
 
@@ -3715,7 +3824,7 @@ private Q_SLOTS:
   }
 
   void customTitleBarAndFloatingCommandLineWork() {
-    QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    QSettings settings; settings.setValue("editor/commandWidth", 400); settings.remove("editor/commandAnchor");
     const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
     const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
     const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
@@ -3724,7 +3833,8 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
@@ -3775,12 +3885,21 @@ private Q_SLOTS:
     auto drag = [&](const char* name, int dx) {
       auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
       const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
-      QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
-      QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), QPointF(global),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(grip, &press);
+      QMouseEvent move(QEvent::MouseMove, QPointF(local + QPoint(dx, 0)),
+                       QPointF(global + QPoint(dx, 0)), Qt::NoButton, Qt::LeftButton,
+                       Qt::NoModifier);
       QApplication::sendEvent(grip, &move);
-      QTest::mouseRelease(grip, Qt::LeftButton);
+      QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local + QPoint(dx, 0)),
+                          QPointF(global + QPoint(dx, 0)), Qt::LeftButton, Qt::NoButton,
+                          Qt::NoModifier);
+      QApplication::sendEvent(grip, &release);
     };
-    const int oldX = panel->x(); drag("commandDragGrip", 20); QVERIFY(panel->x() > oldX);
+    const int oldX = panel->x();
+    const int moveX = oldX + panel->width() + 20 < viewport->width() ? 20 : -20;
+    drag("commandDragGrip", moveX); QVERIFY(panel->x() != oldX);
     const int oldWidth = panel->width(); drag("commandResizeGrip", -40); QCOMPARE(panel->width(), oldWidth - 40);
     window.resize(950, 650); QTest::qWait(50);
     QVERIFY(viewport->rect().contains(panel->geometry()));

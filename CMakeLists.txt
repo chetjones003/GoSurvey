@@ -826,6 +826,9 @@ if(GOSURVEY_BUILD_HEADLESS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
   )
+  # Both helper executables deploy Qt into the shared tools directory after linking.
+  # Serialize them to prevent concurrent windeployqt copies from colliding.
+  add_dependencies(GsJsonDwgFixture gosurvey_headless)
   target_include_directories(GsJsonDwgFixture PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
@@ -882,6 +885,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/NumFormatTests.cpp
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
+    tests/PaperLeaderTests.cpp
     tests/DimViewportTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
@@ -1535,12 +1539,16 @@ if(GOSURVEY_BUILD_TESTS)
 endif()
 
 # Developer-only helpers remain available to ctest/tools without adding app executables.
+# Keep each helper's Qt deployment in its own directory: Ninja may link these targets in parallel,
+# and their POST_BUILD windeployqt steps otherwise race while copying the same plugins/DLLs.
 foreach(_helper gosurvey_headless GsJsonDwgFixture GoSurveyTests)
   if(TARGET ${_helper})
-    set_target_properties(${_helper} PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools")
+    set_target_properties(${_helper} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/tools/${_helper}")
     foreach(_config IN LISTS CMAKE_CONFIGURATION_TYPES)
       string(TOUPPER "${_config}" _upper)
-      set_target_properties(${_helper} PROPERTIES RUNTIME_OUTPUT_DIRECTORY_${_upper} "${CMAKE_BINARY_DIR}/tools/${_config}")
+      set_target_properties(${_helper} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY_${_upper} "${CMAKE_BINARY_DIR}/tools/${_config}/${_helper}")
     endforeach()
   endif()
 endforeach()
