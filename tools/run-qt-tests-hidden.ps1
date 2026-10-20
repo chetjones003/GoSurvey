@@ -16,12 +16,16 @@
 .EXAMPLE
   powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQtTests.exe
   powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQtTests.exe updateOfferShowsBothVersionsAndWaitsForAnExplicitChoice
+  powershell -File tools/run-qt-tests-hidden.ps1 -Exe build/GoSurveyQt.exe -PlainArguments --smoke-test
 #>
 param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [int]$TimeoutSec = 600,
   [string]$Log = "",
   [string]$WorkingDirectory = "",
+  # Run any Qt executable (e.g. GoSurveyQt.exe --smoke-test): pass the arguments through untouched,
+  # without the QtTest "-o <log>,txt" option the test executable takes.
+  [switch]$PlainArguments,
   # Anything left over is passed to the test executable, e.g. test function names.
   [Parameter(ValueFromRemainingArguments = $true)][string[]]$TestArgs = @()
 )
@@ -70,7 +74,7 @@ if ($desktop -eq [IntPtr]::Zero) {
 
 try {
   $quoted = ($TestArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
-  $cmd = "`"$exePath`" -o `"$Log,txt`" $quoted"
+  $cmd = if ($PlainArguments) { "`"$exePath`" $quoted" } else { "`"$exePath`" -o `"$Log,txt`" $quoted" }
   $si = New-Object HiddenDesktop+STARTUPINFO
   $si.cb = [Runtime.InteropServices.Marshal]::SizeOf($si)
   $si.lpDesktop = "winsta0\$desktopName"

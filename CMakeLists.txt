@@ -1849,6 +1849,13 @@ if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
   add_test(NAME build.output-layout COMMAND "${CMAKE_COMMAND}"
     "-DRUNTIME_DIR=$<TARGET_FILE_DIR:GoSurveyQt>"
     -P "${CMAKE_SOURCE_DIR}/tests/cmake/BuildOutputLayout.cmake")
+  # Issue #918: the deployed Qt set has no ImGui/GLFW and launches from a clean copy.
+  add_test(NAME qt.deployment
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify-qt-deployment.ps1"
+      -RuntimeDirectory "$<TARGET_FILE_DIR:GoSurveyQt>" -WorkDirectory "${GOSURVEY_ARTIFACT_DIR}"
+      -TimeoutSec 120)
+  set_tests_properties(qt.deployment PROPERTIES TIMEOUT 300)
 endif()
 
 # Developer-only helpers remain available to ctest/tools without adding app executables.
