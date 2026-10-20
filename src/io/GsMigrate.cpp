@@ -82,7 +82,7 @@ bool ApplyGsMigrations(nlohmann::json&           doc,
       // A gap in the chain is a programming error, not a user error, but it still has to be
       // reported rather than silently skipped — skipping would hand the typed loader a document
       // in a shape it does not expect.
-      err = "no migration available from .gs format version " + std::to_string(v) + " to " +
+      err = "no migration available from internal document payload format version " + std::to_string(v) + " to " +
             std::to_string(v + 1);
       return false;
     }
@@ -90,11 +90,11 @@ bool ApplyGsMigrations(nlohmann::json&           doc,
     std::string stepErr;
     if (!step->apply(doc, stepErr))
     {
-      err = "migrating .gs format version " + std::to_string(v) + " to " + std::to_string(v + 1) +
+      err = "migrating internal document payload format version " + std::to_string(v) + " to " + std::to_string(v + 1) +
             " failed: " + stepErr;
       return false;
     }
-    log.push_back(".gs: migrated format version " + std::to_string(v) + " to " +
+    log.push_back("internal document payload: migrated format version " + std::to_string(v) + " to " +
                   std::to_string(v + 1) +
                   (step->description ? std::string(" (") + step->description + ")" : ""));
   }

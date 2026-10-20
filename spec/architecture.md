@@ -1950,13 +1950,18 @@ amended 2026-10-01 D-2026-10-01-f)
       UTF-8 JSON). GoSurvey Open prefers the trailer when present; otherwise REQ-170 CAD import.
   (c) **No second schema and no new dictionary/EED mapping in this increment.** Per-field EED /
       XRECORD (dwg-plan P-01..P-05) remains a later option. DM-08 is still not claimed.
-  (d) **`.gs` APIs stay.** Workspace template and an explicit `.gs` path still use `GsIo`.
-      **Amended D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
+  (d) **The original GoSurvey JSON serializer stays for internal document payloads.**
+      The earlier decision to preserve standalone `.gs` APIs was superseded by
+      **D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
       document is retired outright — no explicit `.gs` path anywhere, including WBLOCK/BLOCKIMPORT
       (block-library replacement spun to issue #284). The workspace template moved to
       its own narrower format, `.gst`, with a dedicated reader/writer
       (`SaveGoSurveyTemplateFile`/`LoadGoSurveyTemplateFile`) — same JSON shape, no file
       association. `BuildRoot`/`LoadGoSurveyFromJsonUtf8` (clause (b)) are unaffected.
+      **Clarified D-2026-10-20-d:** all remaining `.gs` extension language in active requirements,
+      user documentation, and source comments must identify legacy compatibility or internal
+      serialization explicitly. Current GoSurvey drawings use `.dwg`; standalone `.gs` read,
+      write, and open behavior is not part of the product.
   (e) **Headless SAMEFILE** on two GoSurvey DWGs compares **trailer JSON**, not the synthesized CAD
       body, because LibreDWG encode is not the document-identity oracle (REQ-079 still applies to
       the JSON tree).

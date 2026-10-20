@@ -22,7 +22,7 @@ TEST_CASE("CadField evaluates GoSurvey polyline area", "[cadfield][req368]") {
   st = MakePolylineSquare(std::move(st), 42, 100.0);
   const std::string wire = CadFieldMakeGoSurveyWire(42, "Area", ".2f");
   CadFieldContext ctx;
-  ctx.drawingPath = "C:/jobs/lot17.gs";
+  ctx.drawingPath = "C:/jobs/lot17.dwg";
   ctx.activeLayoutTabName = "Model";
   const std::string out = CadFieldEvaluateWire(st, "Area: " + wire, ctx);
   REQUIRE(out.find("10000") != std::string::npos);
@@ -32,9 +32,9 @@ TEST_CASE("CadField evaluates document filename var", "[cadfield][req368]") {
   AppCommandState st;
   const std::string wire = CadFieldMakeAcVarWire("Filename", "tc1");
   CadFieldContext ctx;
-  ctx.drawingPath = "D:\\drawings\\sheet-A1.gs";
+  ctx.drawingPath = "D:\\drawings\\sheet-A1.dwg";
   const std::string out = CadFieldEvaluateWire(st, wire, ctx);
-  REQUIRE(out == "sheet-A1.gs");
+  REQUIRE(out == "sheet-A1.dwg");
 }
 
 TEST_CASE("CadField R2000 export substitutes evaluated text", "[cadfield][req368]") {

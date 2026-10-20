@@ -4540,7 +4540,7 @@ TEST_CASE("R2018 export/import round-trips MATERIAL diffuse on mesh (REQ-372, is
 }
 
 TEST_CASE("Mesh MATERIAL diffuse and name persist through GsIo (REQ-372 inc 3, issue #624)",
-          "[gs][gsio][issue624][req372]") {
+          "[payload][gsio][issue624][req372]") {
   AppCommandState src;
   src.cadMeshes.push_back(MakeUnitSquareMesh());
   EntityAttributes at;

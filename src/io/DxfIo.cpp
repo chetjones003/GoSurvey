@@ -2287,7 +2287,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       const bool headerSane = std::max(spanX, spanY) < 1e6;
       // Only rebase when the coordinates are actually large enough to need it (#94).
       //
-      // `.gs` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
+      // `internal document payload` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
       // `kLargeCoordinateRebaseThreshold`. DXF import was not, and rebased on EVERY import, so a
       // drawing spanning 150 units had its origin moved to the extents centre and every stored
       // float re-rounded — buying no precision whatsoever, since local storage only helps when the
@@ -2427,7 +2427,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   // #94: was an UNCONDITIONAL RebaseDrawingToLocalOrigin. `MaybeRebaseLargeCoordinates`
-  // is the same call behind `.gs` load's two guards — it no-ops when the origin is already set (the
+  // is the same call behind `internal document payload` load's two guards — it no-ops when the origin is already set (the
   // large-coordinate case, where the header block above just established it) and no-ops below
   // `kLargeCoordinateRebaseThreshold` (the small-drawing case, which is #94). So the composition is:
   //   small drawing            -> header skipped, this skips  -> origin stays (0,0), nothing re-rounds
@@ -3141,7 +3141,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // group 40 alone, by 1e-6, with every other byte identical. Deriving from the snapped extents
   // removes the amplifier — the view this file states is exactly the view a reader derives from
   // the extents the same file states — so the FIRST export is already a fixed point (REQ-204
-  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `internal document payload`.
   const auto snapToWritePrecision = [](double v) {
     return std::isfinite(v) ? std::stod(std::to_string(v)) : v;
   };

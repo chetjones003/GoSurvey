@@ -13,8 +13,8 @@ program does not:
 - **coordinate transformation** — ALIGN fits a 2D Helmert transformation from control pairs, so a
   local-coordinate drawing can be moved onto state-plane.
 
-Drawings are saved as `.gs`. Exchange with other CAD is through **DXF** (built in) and **DWG**
-(through an external converter). Survey points move through **CSV** in PNEZD/PENZD order.
+Drawings are saved as **DWG** files. Exchange with other CAD is also available through **DXF**.
+Survey points move through **CSV** in PNEZD/PENZD order.
 
 ---
 
@@ -79,11 +79,11 @@ document**: its own geometry, layers, survey points, paper layouts, plot scale, 
 Switching tabs switches all of it.
 
 There is no "new from template" dialog. New drawings start from the bundled template
-(`resources/default-template.gs`) if one is present — see **Settings → Files**.
+(`resources/default-template.gst`) if one is present — see **Settings → Files**.
 
 ## Opening an existing drawing
 
-**File → Open** → choose a `.gs` file.
+**File → Open** → choose a DWG drawing.
 
 The drawing opens **in a new tab**, named after the file. Opening does not replace what you are
 working on.
@@ -91,8 +91,8 @@ working on.
 GoSurvey opens drawings saved by any older version, converting them as it loads. The file on disk
 is not modified until you save.
 
-To bring in a drawing that is *not* a `.gs` file, use **File → Import DXF…** or
-**File → Import DWG…** instead — see [[Import and Export]].
+To bring in an external drawing, use **File → Import DXF…** or **File → Import DWG…** — see
+[[Import and Export]].
 
 ## Saving
 

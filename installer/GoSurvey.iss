@@ -167,7 +167,8 @@ Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Flags: 
 [UninstallRun]
 ; Clear Windows icon cache to ensure new icon is displayed on reinstall
 Filename: "cmd.exe"; Parameters: "/c ""del /f /q %LocalAppData%\IconCache.db"""; Flags: runhidden
-; issue #264: the .gs file association was removed. Clear the leftover Explorer registry cache
+; issue #264 retired standalone .gs drawings. This only clears the stale per-user Explorer cache;
+; the installer does not register or advertise that extension.
 ; entry on uninstall/upgrade so an older install's association doesn't linger.
 Filename: "reg.exe"; Parameters: "delete ""HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.gs"" /f"; Flags: runhidden
 ; Delete user application data (history, layout files, preferences).

@@ -1,4 +1,4 @@
-# Regression test for issue #60 — erasing the LAST polyline must leave a .gs that reopens.
+# Regression test for issue #60 — erasing the LAST polyline must leave a document JSON payload that reopens.
 #
 # REQ-079, first acceptance condition: "a file at the current version loads with
 # no migration and is byte-identical on resave." Here the file does not load at
@@ -21,9 +21,9 @@
 #
 # Fails before the fix at the CHECK ALL below with:
 #   polyline-offsets: userPolylineOffsets holds 1 entry (0 polylines is spelled
-#   as an EMPTY table; the .gs reader rejects a single entry)
+#   as an EMPTY table; the document JSON payload reader rejects a single entry)
 # and, with that check removed, at the OPEN with:
-#   io: OPEN failed  /  ".gs: polylineOffsets invalid (expected empty or at
+#   io: OPEN failed  /  "document JSON payload: polylineOffsets invalid (expected empty or at
 #   least two entries)."
 #
 # Why OVERKILL rather than DELETE: the erase has to be reachable from a

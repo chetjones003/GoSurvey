@@ -44,7 +44,7 @@ struct Options {
   /// generated actions alone.
   bool emitPrelude = true;
 
-  /// Append the `gs-roundtrip` differential oracle at the end: save -> load -> save -> load -> save,
+  /// Append the DWG-payload differential oracle at the end: save -> load -> save -> load -> save,
   /// comparing the LAST TWO saves (see FuzzGenerator.cpp for why it is the last two).
   ///
   /// **On by default since 2026-08-17**, and the history is worth keeping because it is the record of
@@ -66,7 +66,7 @@ struct Options {
   /// Append the `undo-redo-identity` differential oracle: save -> undo -> redo -> save, comparing
   /// the two saves byte for byte (REQ-204's first invariant, "the classic CAD defect class").
   ///
-  /// The comparison is `.gs` bytes for the same reason `emitRoundTrip`'s is: `.gs` is the canonical
+  /// The comparison uses document-payload bytes for the same reason `emitRoundTrip` does: the DWG trailer JSON is the canonical
   /// serialization of an AppCommandState, so two states that write identical bytes are the same
   /// document by the only definition the format admits. It needs no equality predicate, and it
   /// forgives nothing — which is correct here, because undo is a restore rather than a computation

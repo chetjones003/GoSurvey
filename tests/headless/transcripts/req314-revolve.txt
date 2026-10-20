@@ -3,7 +3,7 @@
 # BrepTests proves the kernel (brep::Revolve): volumes, topology, refusals, survey-magnitude
 # stability. This transcript tests the half the kernel cannot: that selecting a closed polyline,
 # picking a revolve axis and typing an angle puts the solid in the document, that it survives a
-# .gs save/reopen, and that one undo step removes it.
+# document JSON payload save/reopen, and that one undo step removes it.
 
 NEW
 EXPECT SOLIDS 0
@@ -69,7 +69,7 @@ CMD 360
 EXPECT LOG "must touch the revolve axis"
 EXPECT SOLIDS 2
 
-# --- Solids survive a .gs save and reopen with topology intact -------------------------------
+# --- Solids survive a document JSON payload save and reopen with topology intact -------------------------------
 SAVEAS %OUT%/req314-revolve.dwg
 OPEN %OUT%/req314-revolve.dwg
 EXPECT SOLIDS 2

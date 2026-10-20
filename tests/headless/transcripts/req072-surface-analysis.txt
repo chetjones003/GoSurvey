@@ -5,7 +5,7 @@
 # cannot reach is the command-and-cache layer this file exists for: that turning banding on
 # GENERATES geometry (and off releases it) without touching the triangulation, that a range table
 # which does not span the surface's full value range does not silently drop the part above it, and
-# that the whole thing survives `.gs`.
+# that the whole thing survives `document JSON payload`.
 #
 # **On SURFSTYLE rather than the Analysis tab.** The Surface Style editor is a Qt window this
 # driver cannot reach — the same limitation req070-surface-styles-contours works around — so
@@ -156,9 +156,9 @@ EXPECT SURFACEBANDTRIS 982
 EXPECT SURFACEBANDBATCHES 1
 CHECK ALL
 
-# --- styles round-trip .gs with analysis settings intact ---------------------------------------------
+# --- styles round-trip document JSON payload with analysis settings intact ---------------------------------------------
 # REQ-072's own acceptance conditions say nothing about persistence directly, but REQ-070's "styles
-# round-trip .gs" covers the table these fields live on, and TASK-086 §8 recorded the round-trip
+# round-trip document JSON payload" covers the table these fields live on, and TASK-086 §8 recorded the round-trip
 # assertion as owed here once a way to set these fields from a transcript existed.
 CMD SURFSTYLE BAND Standard, 120, Red
 CMD SURFSTYLE BAND Standard, 1000000, Blue

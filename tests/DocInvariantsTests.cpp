@@ -267,7 +267,7 @@ TEST_CASE("polyline-offsets fires when the array does not start at zero", "[doci
 }
 
 // Issue #60. This is the exact state ErasePolylineByIndex used to leave behind when the drawing's
-// only polyline was erased, and it is the state the .gs writer then serialised into a file its own
+// only polyline was erased, and it is the state the document JSON payload writer then serialised into a file its own
 // reader refuses. The three checks above all pass on it — {0} with zero vertices starts at 0, never
 // goes backwards, and ends at the vertex count — so it needs its own fixture to prove the new rule
 // fires rather than being covered by accident.

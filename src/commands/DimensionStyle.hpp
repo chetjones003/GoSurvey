@@ -89,7 +89,7 @@ struct DimensionStyle {
 
 namespace DimensionStyles {
 
-// Default style — the value a new drawing starts with and a missing/corrupt .gs falls back to.
+// Default style — the value a new drawing starts with and a missing/corrupt internal document payload falls back to.
 inline DimensionStyle Default() {
   DimensionStyle s;
   s.name = "Standard";
@@ -108,7 +108,7 @@ inline void BakeTextOntoDimension(CadAnnotation& a, const DimensionStyle& sty) {
 // Format a linear measurement according to the style's units (scale + precision + format).
 // Architectural/Engineering/Fractional fall back to Decimal for now — the format enum is stored
 // and the UI exposes it, but the formatter is decimal-only until the measurement system carries
-// feet-inch knowledge.  Keeping the enum now means .gs files already carry the choice.
+// feet-inch knowledge.  Keeping the enum now means internal document payload files already carry the choice.
 inline std::string FormatLinearDim(double measured, const DimensionStyle& sty) {
   double scaled = measured * sty.unitScale;
   int prec = sty.unitPrecision;

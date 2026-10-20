@@ -859,7 +859,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
     for (size_t t = 0; t < triCount; ++t) {
       const std::uint32_t a = indices[t * 3], b = indices[t * 3 + 1], c = indices[t * 3 + 2];
       if (a >= vertexCount || b >= vertexCount || c >= vertexCount)
-        continue;  // corrupt index (e.g. a hand-edited .gs) — leave it as it was, do not read past the array
+        continue;  // corrupt index (e.g. a hand-edited internal document payload) — leave it as it was, do not read past the array
       const double cx = (static_cast<double>(vertsXyz[a * 3]) + vertsXyz[b * 3] + vertsXyz[c * 3]) / 3.0;
       const double cy =
           (static_cast<double>(vertsXyz[a * 3 + 1]) + vertsXyz[b * 3 + 1] + vertsXyz[c * 3 + 1]) / 3.0;

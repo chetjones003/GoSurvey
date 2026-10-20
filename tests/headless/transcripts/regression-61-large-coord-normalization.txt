@@ -19,7 +19,7 @@
 # origin already established and does nothing, so B and C must be byte-identical. That is what this
 # transcript pins, and it is what the fuzzer's oracle now checks too.
 #
-# Before the decision, the `gs-roundtrip` oracle compared A to B and so failed here ~1/3 of all
+# Before the decision, the DWG payload round-trip oracle compared A to B and so failed here ~1/3 of all
 # seeds, which is why fuzzgen::Options::emitRoundTrip had to stay off and why every other round-trip
 # defect was being buried.
 

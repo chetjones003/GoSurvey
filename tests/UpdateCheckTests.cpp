@@ -227,7 +227,7 @@ TEST_CASE("Compatibility: a matching format version raises nothing", "[update]")
   CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::None);
 }
 
-TEST_CASE("Compatibility: a newer .gs format warns forward-only", "[update]")
+TEST_CASE("Compatibility: a newer document JSON payload format warns forward-only", "[update]")
 {
   // Old drawings still open in the new build (that is what migration is for); the loss is that
   // drawings saved afterwards will not open in the version installed today.
@@ -254,7 +254,7 @@ TEST_CASE("Compatibility: a manifest with no format version warns about nothing"
   CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::None);
 }
 
-TEST_CASE("Compatibility: an older .gs format on the offered build warns about nothing", "[update]")
+TEST_CASE("Compatibility: an older document JSON payload format on the offered build warns about nothing", "[update]")
 {
   Manifest m = ManifestForVersion("0.6.0");
   m.gsFormatVersion = 1;

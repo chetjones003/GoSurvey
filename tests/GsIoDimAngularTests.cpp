@@ -22,12 +22,12 @@ std::filesystem::path UniqueGsPath(const char* stem) {
   const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-issue125";
   std::filesystem::create_directories(dir);
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gs");
+  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gst");
 }
 
 }  // namespace
 
-TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile (issue #125)", "[gs][dimangular]") {
+TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile (issue #125)", "[payload][dimangular]") {
   AppCommandState st;
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::DimAngular;
@@ -79,7 +79,7 @@ TEST_CASE("DIMANGULAR survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplat
   std::filesystem::remove(path, ec);
 }
 
-TEST_CASE("kind text in a saved .gs reloads as TEXT, not DIMANGULAR (issue #125)", "[gs][dimangular]") {
+TEST_CASE("kind text in a saved document JSON payload reloads as TEXT, not DIMANGULAR (issue #125)", "[payload][dimangular]") {
   AppCommandState st;
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Text;

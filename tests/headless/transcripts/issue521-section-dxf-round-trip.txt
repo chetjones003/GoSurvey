@@ -99,7 +99,7 @@ EXPECT FILECONTAINS %OUT%/issue521-sphere2.dxf "LWPOLYLINE"
 EXPECT FILELACKS %OUT%/issue521-sphere2.dxf "AcDbCircularArc"
 
 # --- and the plane survives the drawing's OWN file, which is where it was lost ---------------------
-# Found reviewing this change: the per-vertex plane (REQ-325) lived only in memory — no .gs key
+# Found reviewing this change: the per-vertex plane (REQ-325) lived only in memory — no document JSON payload key
 # carried it — so a section saved and reopened came back flat and exported flat, with the DXF side
 # fixed. The key is additive and written only when something is tilted.
 NEW
@@ -110,8 +110,8 @@ CMD 0,0,0
 CMD 0,10,0
 CMD 0,0,10
 EXPECT POLYLINES 1
-SAVEAS %OUT%/issue521-sphere.gs
-OPEN %OUT%/issue521-sphere.gs
+SAVEAS %OUT%/issue521-sphere.dwg
+OPEN %OUT%/issue521-sphere.dwg
 EXPECT POLYLINES 1
 EXPECT POLYVERT 0 0 0 30 0
 EXPECT POLYVERT 0 1 0 -30 0
