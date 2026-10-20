@@ -13,7 +13,7 @@
 ## 2. Scope
 - In scope: `REVCLOUD` click path and Object mode (closed polyline, rectangle, circle), Arc length /
   Reverse / Delete-original options, live preview, both Qt ribbon buttons enabled.
-- Out of scope: Spline (REQ-440), Wipeout (REQ-442), freehand drag, ImGui ribbon, paper space.
+- Out of scope: Spline (REQ-443), Wipeout (REQ-442), freehand drag, legacy ImGui ribbon, paper space.
 
 ## 3. Architectural boundary check
 - [x] No new entity kind, store, dependency or file-format change: the cloud is a closed bulge

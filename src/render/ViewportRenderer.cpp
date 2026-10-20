@@ -488,6 +488,30 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
 }
 
+/// REQ-443: a spline as a chain of chords no further than \p chordTolerance from the curve, dashed to its
+/// linetype exactly as an ellipse is. A spline has an elevation per point, so every sample carries its own Z
+/// (the same per-vertex-Z chain a tilted arc uses) and the chain is never closed here: a periodic spline's
+/// tessellation already returns to its first point.
+void AppendSplineVcDashed(std::vector<float>& out, const CadSpline& sp, double chordTolerance, float dashPatScale,
+                          const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG,
+                          float defB, double viewAnchorX, double viewAnchorY) {
+  std::vector<ray3d::Vec3> pts;
+  spline::Tessellate(sp, chordTolerance, &pts);
+  if (pts.size() < 2)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  std::vector<float> xy(pts.size() * 2), zs(pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) {
+    xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+    xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+    zs[i] = static_cast<float>(pts[i].z);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba, &out,
+                               zs.data());
+}
+
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                           float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
                           float defG, float defB, double viewAnchorX, double viewAnchorY, float nx = kFlatNormalX,
@@ -717,6 +741,9 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     // A small filled-looking dot (REQ-348) — the snap answers with an actual scanned point, not a
     // computed feature, so the glyph reads as "a point" rather than borrowing another kind's shape.
     AppendSnapCircle(out, f, mh * 0.3f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Nearest:
+    AppendSnapCircle(out, f, mh * 0.42f, snapCircSegs);
     break;
   }
 }
@@ -2677,6 +2704,25 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                                    tuning.arcCircleSmoothnessCap));
             AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, e.z, dashPatScale, attr, lr,
                                    kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
+        // REQ-443 splines: sampled to a quarter of a pixel at this zoom (never coarser than the 0.002 ft
+        // REQ-101 holds the curve to), so a zoomed-in spline is smooth and a zoomed-out one is cheap.
+        if (extended->splines) {
+          const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
+          const double splineTol = std::min(kSplineSampleTolerance, std::max(1e-6, 0.25 * pixelWorld));
+          for (size_t i = 0; i < extended->splines->size(); ++i) {
+            EntityAttributes attr{};
+            if (extended->splineAttrs && i < extended->splineAttrs->size())
+              attr = (*extended->splineAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+            AppendSplineVcDashed(cpuVcLines_, (*extended->splines)[i], splineTol, dashPatScale, attr, lr,
+                                 kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }

@@ -320,7 +320,23 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           pyp = wy;
         }
       }
-      // Survey-point crosses (fixed 0.05" on the sheet).
+      // SPLINEs use adaptive tessellation, then each chord is projected through this viewport's
+      // camera and clipped to its paper rectangle.
+      for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+        const EntityAttributes* attr = si < st.cadSplineAttrs.size() ? &st.cadSplineAttrs[si] : nullptr;
+        const std::string layer = attr && !attr->layer.empty() ? attr->layer : "0";
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
+        std::vector<spline::Vec3> points;
+        spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &points);
+        for (size_t pi = 1; pi < points.size(); ++pi) {
+          const auto& a = points[pi - 1];
+          const auto& b = points[pi];
+          emitModelSeg(a.x + oX, a.y + oY, b.x + oX, b.y + oY, a.z, b.z);
+        }
+      }
+      // Survey-point crosses (fixed 0.05-inch size on the sheet).
       for (const SurveyPoint& sp : st.surveyPoints) {
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
           continue;

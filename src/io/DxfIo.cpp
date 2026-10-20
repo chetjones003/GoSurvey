@@ -1530,6 +1530,70 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       continue;
     }
 
+    if (typ == "SPLINE") {
+      EntityBase base;
+      int flags = 0, degree = 0;
+      int declaredKnots = -1, declaredCtrl = -1, declaredFit = -1;
+      std::vector<double> knots, cx, cy, cz, weights, fx, fy, fz;
+      for (size_t k = i + 1; k < j; ++k) {
+        const int c = t[k].code;
+        const std::string& v = t[k].value;
+        base.parse(c, v);
+        double d = 0.0;
+        if (c == 70) { ParseIntFlexible(v, &flags); }
+        else if (c == 71) { ParseIntFlexible(v, &degree); }
+        else if (c == 72) { ParseIntFlexible(v, &declaredKnots); }
+        else if (c == 73) { ParseIntFlexible(v, &declaredCtrl); }
+        else if (c == 74) { ParseIntFlexible(v, &declaredFit); }
+        else if (c == 40 && ParseDouble(v, &d)) knots.push_back(d);
+        else if (c == 10 && ParseDouble(v, &d)) cx.push_back(d);
+        else if (c == 20 && ParseDouble(v, &d)) cy.push_back(d);
+        else if (c == 30 && ParseDouble(v, &d)) cz.push_back(d);
+        else if (c == 41 && ParseDouble(v, &d)) weights.push_back(d);
+        else if (c == 11 && ParseDouble(v, &d)) fx.push_back(d);
+        else if (c == 21 && ParseDouble(v, &d)) fy.push_back(d);
+        else if (c == 31 && ParseDouble(v, &d)) fz.push_back(d);
+      }
+      bool accepted = false;
+      if (degree > 0 && static_cast<size_t>(degree) < cx.size() && cy.size() == cx.size() &&
+          (cz.empty() || cz.size() == cx.size()) && knots.size() == cx.size() + static_cast<size_t>(degree) + 1 &&
+          (((flags & 4) == 0 && weights.empty()) || weights.size() == cx.size()) &&
+          (declaredKnots < 0 || static_cast<size_t>(declaredKnots) == knots.size()) &&
+          (declaredCtrl < 0 || static_cast<size_t>(declaredCtrl) == cx.size()) &&
+          (declaredFit < 0 || static_cast<size_t>(declaredFit) == fx.size()) &&
+          fx.size() == fy.size() && (fz.empty() || fz.size() == fx.size())) {
+        CadSpline s;
+        s.degree = degree;
+        s.periodic = (flags & 3) != 0;
+        s.knots = std::move(knots);
+        for (size_t n = 0; n < cx.size(); ++n) {
+          double wx = 0.0, wy = 0.0;
+          xf.apply(cx[n], cy[n], &wx, &wy);
+          s.ctrl.push_back({wx - st.worldDocumentOriginX, wy - st.worldDocumentOriginY,
+                            cz.empty() ? 0.0 : cz[n]});
+        }
+        if (weights.size() == s.ctrl.size()) s.weights = std::move(weights);
+        for (size_t n = 0; n < fx.size(); ++n) {
+          double wx = 0.0, wy = 0.0;
+          xf.apply(fx[n], fy[n], &wx, &wy);
+          s.fit.push_back({wx - st.worldDocumentOriginX, wy - st.worldDocumentOriginY,
+                           fz.empty() ? 0.0 : fz[n]});
+        }
+        if (spline::Validate(s).empty()) {
+          st.cadSplines.push_back(std::move(s));
+          st.cadSplineAttrs.push_back(base.makeAttr(layerRgb));
+          accepted = true;
+        }
+      }
+      if (!accepted) {
+        ++*skippedUnknown;
+        if (skipCounts)
+          ++(*skipCounts)["SPLINE (malformed or unsupported)"];
+      }
+      i = j;
+      continue;
+    }
+
     if (typ == "ELLIPSE") {
       EntityBase base;
       double cx = 0, cy = 0, cz = 0, mx = 1, my = 0, mz = 0, ratio = 0.5, t0 = 0, t1 = 2.0 * kPi;
@@ -2365,7 +2429,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // arcs would otherwise be judged empty and read a SECOND time from the *MODEL_SPACE block —
   // duplicating every entity in it.
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
-                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty();
+                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty() &&
+                      st.cadSplines.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -2834,7 +2899,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                                static_cast<uint64_t>(nPoly) +
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
-                               static_cast<uint64_t>(st.userEllipses.size());
+                               static_cast<uint64_t>(st.userEllipses.size()) +
+                               static_cast<uint64_t>(st.cadSplines.size());
   // Dimension geometry comes from CadDimStroke.hpp - the same module the viewport (CadUi) and the
   // plot (PdfPlot) already use - rather than being rebuilt here. The block this replaces handled
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
@@ -3097,6 +3163,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
     accExtZ(static_cast<double>(el.z));
   }
+  // Match ComputeWorldExtents' adaptive sampling so importing the header does not trigger a lossy
+  // rebase of the spline or of neighboring geometry.
+  {
+    std::vector<spline::Vec3> points;
+    for (const CadSpline& sp : st.cadSplines) {
+      points.clear();
+      spline::Tessellate(sp, kSplineSampleTolerance, &points);
+      for (const auto& p : points) {
+        accExt(q6lx(p.x), q6ly(p.y));
+        accExtZ(p.z);
+      }
+    }
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -3168,6 +3247,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
 
   auto emitPair = [&](int code, const std::string& val) {
     out << code << "\r\n" << val << "\r\n";
+  };
+  auto emitDoublePair = [&](int code, double val) {
+    std::ostringstream formatted;
+    formatted << std::setprecision(16) << val;
+    emitPair(code, formatted.str());
   };
 
   auto dxfEmitTransparency440IfNeeded = [&](float transparency01) {
@@ -4065,6 +4149,40 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(100, "AcDbArc");
     emitPair(50, aw.startDeg);
     emitPair(51, aw.endDeg);
+  }
+
+  // Native SPLINE entities preserve the standard degree, knot, control, weight and fit arrays.
+  for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+    const CadSpline& s = st.cadSplines[si];
+    if (!spline::Validate(s).empty()) continue;
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    EntityAttributes at{};
+    if (si < st.cadSplineAttrs.size()) at = st.cadSplineAttrs[si];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+    emitPair(0, "SPLINE");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbSpline");
+    emitPair(70, std::to_string((s.periodic ? 3 : 0) | (!s.weights.empty() ? 4 : 0)));
+    emitPair(71, std::to_string(s.degree));
+    emitPair(72, std::to_string(s.knots.size()));
+    emitPair(73, std::to_string(s.ctrl.size()));
+    emitPair(74, std::to_string(s.fit.size()));
+    for (double knot : s.knots) emitDoublePair(40, knot);
+    for (size_t i = 0; i < s.ctrl.size(); ++i) {
+      emitDoublePair(10, worldX(s.ctrl[i].x));
+      emitDoublePair(20, worldY(s.ctrl[i].y));
+      emitDoublePair(30, s.ctrl[i].z);
+    }
+    if (!s.weights.empty()) for (double weight : s.weights) emitDoublePair(41, weight);
+    for (const auto& p : s.fit) {
+      emitDoublePair(11, worldX(p.x));
+      emitDoublePair(21, worldY(p.y));
+      emitDoublePair(31, p.z);
+    }
   }
 
   // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis

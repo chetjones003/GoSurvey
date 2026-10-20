@@ -4353,7 +4353,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-440, REQ-441 and REQ-442 (GitHub #803, D-2026-10-20-a); XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-441 and REQ-442 (GitHub #803, D-2026-10-20-a); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta. XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -12866,7 +12866,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-19 — initial, D-2026-10-19-k, GitHub issue #966.
 
 
-### REQ-440 — Spline command (GitHub issue #803)
+### REQ-443 — Spline command (GitHub issue #803)
 
 - Purpose: GoSurvey can draw straight, circular and elliptical curves but not a smooth free-form
   curve, and a SPLINE in an imported DXF/DWG drawing is lost. Surveyors and designers use splines
@@ -12911,7 +12911,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - The Qt ribbon button is enabled and runs `SPLINE`; the "not implemented yet" tooltip is gone.
 - Frontend: **Qt only.** The command, entity and file logic lives in the shared Commands / Domain /
   IO layers, but the ribbon button, prompts, preview and grips are built in the Qt editor
-  (`src/qt/`). The ImGui editor is not changed.
+  (`src/qt/`). Qt is the sole supported frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: accepted
@@ -12951,8 +12951,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     gone.
   - Esc cancels with nothing added.
 - Frontend: **Qt only.** The command logic lives in the shared Commands layer, but the ribbon
-  buttons, prompts and preview are built in the Qt editor (`src/qt/`). The ImGui editor is not
-  changed.
+  buttons, prompts and preview are built in the Qt editor (`src/qt/`). Qt is the sole supported
+  frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: accepted
@@ -12995,7 +12995,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Esc cancels with nothing added; one UNDO removes the wipeout.
 - Frontend: **Qt only.** The command, entity, file and PDF-plot logic lives in the shared layers,
   but the ribbon buttons, prompts, preview, masking in the viewport and grips are built in the Qt
-  editor (`src/qt/`). The ImGui editor is not changed.
+  editor (`src/qt/`). Qt is the sole supported frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Domain/IO/Render/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: accepted
@@ -14195,6 +14195,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

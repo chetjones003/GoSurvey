@@ -1,17 +1,20 @@
-// REQ-440 (GitHub issue #803) - the SPLINE mathematics: fit and control-vertex construction, evaluation,
+// REQ-443 (GitHub issue #803) - the SPLINE mathematics: fit and control-vertex construction, evaluation,
 // tessellation within REQ-101's tolerance, closest point, and the affine maps MOVE/ROTATE/SCALE/MIRROR
 // apply. Pure util/spline - no window, no GPU. The command-line and file halves live in
-// tests/headless/transcripts/req440-spline.txt and the DXF/DWG tests.
+// The command and file workflows are covered by the editor and file-format integration suites.
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
 
 #include "util/spline.hpp"
+#include "viewport/TransformPreview.hpp"
+#include "commands/CadCommands.hpp"
 
 using Catch::Approx;
 using spline::Spline;
@@ -44,7 +47,7 @@ const std::vector<Vec3> kFit4 = {{0, 0, 0}, {3, 4, 1}, {7, 3, 2}, {10, 8, 0}};
 
 }  // namespace
 
-TEST_CASE("an open fit spline passes through every point it was given", "[spline][req440]") {
+TEST_CASE("an open fit spline passes through every point it was given", "[spline][req443]") {
   Spline s;
   std::string why;
   REQUIRE(spline::MakeFit(kFit4, false, &s, &why));
@@ -63,7 +66,7 @@ TEST_CASE("an open fit spline passes through every point it was given", "[spline
   CHECK(Dist(spline::Evaluate(s, spline::DomainMax(s)), kFit4.back()) < 1e-9);
 }
 
-TEST_CASE("an open fit spline is a natural cubic: no curvature at either end", "[spline][req440]") {
+TEST_CASE("an open fit spline is a natural cubic: no curvature at either end", "[spline][req443]") {
   Spline s;
   REQUIRE(spline::MakeFit(kFit4, false, &s, nullptr));
   const double lo = spline::DomainMin(s), hi = spline::DomainMax(s);
@@ -85,7 +88,7 @@ TEST_CASE("an open fit spline is a natural cubic: no curvature at either end", "
   CHECK(ray3d::Length(ray3d::Sub(ray3d::Add(m0, m2), ray3d::Scale(m1, 2.0))) / (h * h) > 1.0);
 }
 
-TEST_CASE("two fit points make a straight line", "[spline][req440]") {
+TEST_CASE("two fit points make a straight line", "[spline][req443]") {
   Spline s;
   REQUIRE(spline::MakeFit({{0, 0, 0}, {10, 5, 0}}, false, &s, nullptr));
   std::vector<Vec3> pl;
@@ -95,7 +98,7 @@ TEST_CASE("two fit points make a straight line", "[spline][req440]") {
   CHECK(spline::Length(s) == Approx(std::sqrt(125.0)).margin(1e-6));
 }
 
-TEST_CASE("a closed fit spline passes through its points and is smooth at the join", "[spline][req440]") {
+TEST_CASE("a closed fit spline passes through its points and is smooth at the join", "[spline][req443]") {
   const std::vector<Vec3> pts = {{0, 0, 0}, {6, -1, 0}, {8, 5, 1}, {3, 8, 1}, {-2, 4, 0}};
   Spline s;
   REQUIRE(spline::MakeFit(pts, true, &s, nullptr));
@@ -119,7 +122,7 @@ TEST_CASE("a closed fit spline passes through its points and is smooth at the jo
   CHECK(ray3d::Dot(out, in) > 0.9999);
 }
 
-TEST_CASE("a control-vertex spline is pulled toward its interior vertices but does not touch them", "[spline][req440]") {
+TEST_CASE("a control-vertex spline is pulled toward its interior vertices but does not touch them", "[spline][req443]") {
   const std::vector<Vec3> cv = {{0, 0, 0}, {2, 8, 0}, {8, 8, 0}, {10, 0, 0}};
   Spline s;
   REQUIRE(spline::MakeControl(cv, false, &s, nullptr));
@@ -135,16 +138,19 @@ TEST_CASE("a control-vertex spline is pulled toward its interior vertices but do
   }
 }
 
-TEST_CASE("fewer than four control vertices lower the degree rather than refuse", "[spline][req440]") {
-  Spline three, two;
-  REQUIRE(spline::MakeControl({{0, 0, 0}, {5, 5, 0}, {10, 0, 0}}, false, &three, nullptr));
-  REQUIRE(spline::MakeControl({{0, 0, 0}, {10, 0, 0}}, false, &two, nullptr));
-  CHECK(three.degree == 2);
-  CHECK(two.degree == 1);
-  CHECK(spline::Length(two) == Approx(10.0));
+TEST_CASE("an open control-vertex spline requires enough points for degree three", "[spline][req443]") {
+  Spline s;
+  std::string why;
+  CHECK_FALSE(spline::MakeControl({{0, 0, 0}, {5, 5, 0}, {10, 0, 0}}, false, &s, &why));
+  CHECK(why.find("four") != std::string::npos);
+  CHECK_FALSE(spline::MakeControl({{0, 0, 0}, {10, 0, 0}}, false, &s, &why));
+  const std::vector<Vec3> controls = {{0, 0, 0}, {3, 0, 0}, {7, 0, 0}, {10, 0, 0}};
+  REQUIRE(spline::MakeControl(controls, false, &s, nullptr));
+  CHECK(s.degree == 3);
+  CHECK(spline::Length(s) == Approx(10.0));
 }
 
-TEST_CASE("a closed control-vertex spline is periodic and closes on itself", "[spline][req440]") {
+TEST_CASE("a closed control-vertex spline is periodic and closes on itself", "[spline][req443]") {
   const std::vector<Vec3> cv = {{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}};
   Spline s;
   REQUIRE(spline::MakeControl(cv, true, &s, nullptr));
@@ -161,7 +167,7 @@ TEST_CASE("a closed control-vertex spline is periodic and closes on itself", "[s
   CHECK(d > 0.5);
 }
 
-TEST_CASE("editing a fit point re-derives the curve through the new point", "[spline][req440]") {
+TEST_CASE("editing a fit point re-derives the curve through the new point", "[spline][req443]") {
   Spline s;
   REQUIRE(spline::MakeFit(kFit4, false, &s, nullptr));
   s.fit[1] = {3, 9, 1};
@@ -178,7 +184,7 @@ TEST_CASE("editing a fit point re-derives the curve through the new point", "[sp
   CHECK(why.find("coincide") != std::string::npos);
 }
 
-TEST_CASE("the tessellation never strays from the curve by more than REQ-101's tolerance", "[spline][req440]") {
+TEST_CASE("the tessellation never strays from the curve by more than REQ-101's tolerance", "[spline][req443]") {
   Spline fit;
   REQUIRE(spline::MakeFit(kFit4, false, &fit, nullptr));
   Spline cv;
@@ -195,7 +201,7 @@ TEST_CASE("the tessellation never strays from the curve by more than REQ-101's t
   }
 }
 
-TEST_CASE("a rational spline evaluates its weights: a quadratic arc is a true quarter circle", "[spline][req440]") {
+TEST_CASE("a rational spline evaluates its weights: a quadratic arc is a true quarter circle", "[spline][req443]") {
   Spline s;
   s.degree = 2;
   s.ctrl = {{1, 0, 0}, {1, 1, 0}, {0, 1, 0}};
@@ -209,7 +215,7 @@ TEST_CASE("a rational spline evaluates its weights: a quadratic arc is a true qu
   CHECK(spline::Length(s) == Approx(kPi / 2).margin(2e-5));
 }
 
-TEST_CASE("move, rotate, scale and mirror move the curve exactly as they move its points", "[spline][req440]") {
+TEST_CASE("move, rotate, scale and mirror move the curve exactly as they move its points", "[spline][req443]") {
   Spline s;
   REQUIRE(spline::MakeFit(kFit4, false, &s, nullptr));
   const double len = spline::Length(s);
@@ -238,9 +244,9 @@ TEST_CASE("move, rotate, scale and mirror move the curve exactly as they move it
   CHECK(Dist(spline::Evaluate(flipped, t0), {-before.x, before.y, before.z}) < 1e-9);
 }
 
-TEST_CASE("the closest point on a straight spline is its projection", "[spline][req440]") {
+TEST_CASE("the closest point on a straight spline is its projection", "[spline][req443]") {
   Spline s;
-  REQUIRE(spline::MakeControl({{0, 0, 0}, {10, 0, 0}}, false, &s, nullptr));
+  REQUIRE(spline::MakeControl({{0, 0, 0}, {3, 0, 0}, {7, 0, 0}, {10, 0, 0}}, false, &s, nullptr));
   double t = 0, d = 0;
   Vec3 q;
   spline::ClosestPoint(s, {4, 3, 0}, &t, &q, &d);
@@ -250,7 +256,7 @@ TEST_CASE("the closest point on a straight spline is its projection", "[spline][
   CHECK(q.x == Approx(0.0).margin(1e-6));
 }
 
-TEST_CASE("dragging one control point of a closed spline keeps its repeated tail in step", "[spline][req440]") {
+TEST_CASE("dragging one control point of a closed spline keeps its repeated tail in step", "[spline][req443]") {
   Spline s;
   REQUIRE(spline::MakeControl({{0, 0, 0}, {10, 0, 0}, {10, 10, 0}, {0, 10, 0}}, true, &s, nullptr));
   const std::size_t m = spline::UniqueControlCount(s);
@@ -262,7 +268,7 @@ TEST_CASE("dragging one control point of a closed spline keeps its repeated tail
   CHECK(s.ctrl[m].x == -3.0);
 }
 
-TEST_CASE("a spline that cannot be a curve is refused with a reason", "[spline][req440]") {
+TEST_CASE("a spline that cannot be a curve is refused with a reason", "[spline][req443]") {
   Spline s;
   std::string why;
   CHECK_FALSE(spline::MakeFit({{0, 0, 0}}, false, &s, &why));
@@ -272,6 +278,8 @@ TEST_CASE("a spline that cannot be a curve is refused with a reason", "[spline][
   CHECK_FALSE(spline::MakeFit({{0, 0, 0}, {0, 0, 0}, {5, 5, 0}}, false, &s, &why));
   CHECK(why.find("coincide") != std::string::npos);
   CHECK_FALSE(spline::MakeFit({{0, 0, 0}, {std::nan(""), 0, 0}}, false, &s, &why));
+  CHECK_FALSE(spline::MakeControl({{0, 0, 0}, {10, 0, 0}}, false, &s, &why));
+  CHECK(why.find("four") != std::string::npos);
 
   Spline ok;
   REQUIRE(spline::MakeControl({{0, 0, 0}, {5, 5, 0}, {10, 0, 0}, {15, 5, 0}}, false, &ok, nullptr));
@@ -295,4 +303,67 @@ TEST_CASE("a spline that cannot be a curve is refused with a reason", "[spline][
   std::vector<Vec3> pl{{1, 1, 1}};
   spline::Tessellate(bad, 1e-3, &pl);
   CHECK(pl.empty());
+}
+
+TEST_CASE("the live spline rubber matches the curve that the next pick commits", "[spline][req443]") {
+  AppCommandState state;
+  state.active = AppCommandState::Kind::Spline;
+  state.splineMethod = AppCommandState::SplineMethod::Fit;
+  state.splineDraftPoints.assign(kFit4.begin(), kFit4.end() - 1);
+
+  std::vector<float> rubber;
+  std::vector<float> circles;
+  BuildTransformPreview(state, static_cast<float>(kFit4.back().x), static_cast<float>(kFit4.back().y),
+                        &rubber, &circles, 100, 900);
+
+  Spline committed;
+  REQUIRE(spline::MakeFit(kFit4, false, &committed, nullptr));
+  std::vector<Vec3> curve;
+  spline::Tessellate(committed, kSplineSampleTolerance, &curve);
+  REQUIRE(curve.size() >= 2);
+  REQUIRE(rubber.size() >= 6);
+  std::vector<Vec3> preview;
+  preview.push_back({rubber[0], rubber[1], rubber[2]});
+  for (std::size_t i = 3; i + 2 < rubber.size(); i += 6)
+    preview.push_back({rubber[i], rubber[i + 1], rubber[i + 2]});
+  REQUIRE(preview.size() >= 2);
+  // Both paths adaptively subdivide the same cubic, so their vertex counts need not match at a
+  // floating-point tolerance boundary. Verify geometric agreement in both directions instead.
+  double maxPreviewToCurve = 0.0;
+  for (const Vec3& p : preview)
+    maxPreviewToCurve = std::max(maxPreviewToCurve, DistToPolyline(p, curve));
+  double maxCurveToPreview = 0.0;
+  for (const Vec3& p : curve)
+    maxCurveToPreview = std::max(maxCurveToPreview, DistToPolyline(p, preview));
+  CHECK(maxPreviewToCurve <= 2.0 * kSplineSampleTolerance);
+  CHECK(maxCurveToPreview <= 2.0 * kSplineSampleTolerance);
+}
+
+TEST_CASE("SPLINE typed workflow commits degree-three curves and preserves an invalid CV draft", "[commands][spline][req443]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  const auto submit = [&](const char* text) {
+    char buffer[128]{};
+    std::snprintf(buffer, sizeof(buffer), "%s", text);
+    ProcessCommandLineSubmit(buffer, static_cast<int>(sizeof(buffer)), state, log);
+  };
+
+  submit("SPLINE");
+  REQUIRE(state.active == AppCommandState::Kind::Spline);
+  submit("CV");
+  submit("0,0"); submit("5,5"); submit("10,0"); submit("END");
+  CHECK(state.cadSplines.empty());
+  REQUIRE(state.splineDraftPoints.size() == 3);
+  CHECK(std::any_of(log.begin(), log.end(), [](const std::string& line) { return line.find("four") != std::string::npos; }));
+  submit("15,5"); submit("END");
+  REQUIRE(state.active == AppCommandState::Kind::None);
+  REQUIRE(state.cadSplines.size() == 1);
+  CHECK(state.cadSplines.front().degree == 3);
+  CHECK_FALSE(state.cadSplines.front().isFit());
+
+  submit("UNDO");
+  CHECK(state.cadSplines.empty());
+  submit("REDO");
+  REQUIRE(state.cadSplines.size() == 1);
+  CHECK(state.cadSplines.front().degree == 3);
 }

@@ -483,7 +483,7 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Geometry math (util)
   src/util/geom2d.cpp
-  # REQ-440 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
+  # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
   src/util/spline.cpp
   src/util/curveintersect.cpp
   src/util/meshgeom.cpp
@@ -1035,7 +1035,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BulgeArcTests.cpp
     # REQ-441 (issue #803): the scallop geometry behind REVCLOUD. Pure geom2d, like BulgeArcTests.
     tests/RevisionCloudTests.cpp
-    # REQ-440 (issue #803): the SPLINE mathematics. Pure util/spline - needs spline.cpp, added below.
+    # REQ-443 (issue #803): the SPLINE mathematics. Pure util/spline - needs spline.cpp, added below.
     tests/SplineTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the

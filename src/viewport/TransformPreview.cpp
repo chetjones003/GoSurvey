@@ -142,6 +142,27 @@ void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllip
   }
 }
 
+// REQ-443: a ghost of spline \p index with every point mapped through \p f - the same map the command
+// will apply on commit (`spline::MapPoints`), so the ghost is the spline that will be left behind. Each
+// chord of the tessellation is a segment with its own Z, as a committed polyline's is.
+template <class F>
+void appendSplinePreview(std::vector<float>* out, const AppCommandState& cmd, int index, const F& f) {
+  if (index < 0 || static_cast<size_t>(index) >= cmd.cadSplines.size())
+    return;
+  CadSpline s = cmd.cadSplines[static_cast<size_t>(index)];
+  spline::MapPoints(&s, f);
+  std::vector<ray3d::Vec3> pts;
+  spline::Tessellate(s, kSplineSampleTolerance, &pts);
+  for (size_t i = 1; i < pts.size(); ++i) {
+    out->push_back(static_cast<float>(pts[i - 1].x));
+    out->push_back(static_cast<float>(pts[i - 1].y));
+    out->push_back(static_cast<float>(pts[i - 1].z));
+    out->push_back(static_cast<float>(pts[i].x));
+    out->push_back(static_cast<float>(pts[i].y));
+    out->push_back(static_cast<float>(pts[i].z));
+  }
+}
+
 // Draws a COMMITTED polyline, so it uses each vertex's own Z rather than a caller-supplied flat
 // depth (REQ-057/058). A highlight or hover stroke drawn at a fixed Z would sit on the datum while
 // the polyline itself sat at elevation, showing the object twice in an orbited view.
@@ -469,6 +490,31 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   using OP = AppCommandState::OffsetPhase;
   using MirP = AppCommandState::MirrorPhase;
 
+  if (cmd.active == K::Spline && !cmd.splineDraftPoints.empty()) {
+    std::vector<spline::Vec3> points = cmd.splineDraftPoints;
+    // The command commits a picked point at the active/snap-resolved work-plane elevation. Keep
+    // the ghost on that same plane instead of inheriting the previous pick's potentially different Z.
+    const double z = CadCommitElevation(cmd);
+    if (std::hypot(points.back().x - static_cast<double>(curX),
+                   points.back().y - static_cast<double>(curY)) > 1e-9)
+      points.push_back({static_cast<double>(curX), static_cast<double>(curY), z});
+    CadSpline draft;
+    const bool made = cmd.splineMethod == AppCommandState::SplineMethod::Fit
+                          ? spline::MakeFit(points, false, &draft, nullptr)
+                          : spline::MakeControl(points, false, &draft, nullptr);
+    if (made) {
+      std::vector<ray3d::Vec3> samples;
+      spline::Tessellate(draft, kSplineSampleTolerance, &samples);
+      for (std::size_t i = 1; i < samples.size(); ++i) {
+        prevLines->insert(prevLines->end(), {
+            static_cast<float>(samples[i - 1].x), static_cast<float>(samples[i - 1].y),
+            static_cast<float>(samples[i - 1].z), static_cast<float>(samples[i].x),
+            static_cast<float>(samples[i].y), static_cast<float>(samples[i].z)});
+      }
+    }
+    return;
+  }
+
   if (cmd.active == K::Offset && cmd.offsetEntityValid &&
       (cmd.offsetPhase == OP::WaitThroughPick || cmd.offsetPhase == OP::WaitSidePick)) {
     CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
@@ -514,6 +560,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         a.cx += dx;
         a.cy += dy;
         appendArcPolylineStrip(prevLines, a.z, a, 48);
+      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userEllipses.size())
@@ -600,6 +648,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           a.cy += dy;
           a.z += dz;
           appendArcPolylineStrip(prevLines, a.z, a, 48);
+        } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+          appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return spline::Vec3{v.x + dx, v.y + dy, v.z + dz}; });
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           const size_t k = static_cast<size_t>(e.index);
           if (k >= cmd.userEllipses.size())
@@ -709,6 +759,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           a.nz = static_cast<float>(n.z);
           CadReanchorArcStart(&a, startRot);
           appendArcPolylineStrip(prevLines, a.z, a, 48);
+        } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+          appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { return rp(static_cast<float>(v.x), static_cast<float>(v.y), static_cast<float>(v.z)); });
         } else if (e.type == SelectedEntity::Type::Ellipse) {
           if (!axisIsWorldZ)
             continue;  // refused at commit under a tilted axis — omit from the ghost too
@@ -1051,6 +1103,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         scalePreviewPt(bx, by, sc, &a.cx, &a.cy);
         a.r *= sc;
         appendArcPolylineStrip(prevLines, a.z, a, 48);
+      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; scalePreviewPt(bx, by, sc, &x, &y); return spline::Vec3{x, y, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userEllipses.size())
@@ -1169,6 +1223,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         ReflectNormalAcrossLine(x0, y0, x1, y1, &a.nx, &a.ny);  // REQ-312, as the commit does
         CadReanchorArcStart(&a, farEnd);
         appendArcPolylineStrip(prevLines, a.z, a, 48);
+      } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+        appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; mirrorPreviewPt(x0, y0, x1, y1, &x, &y); return spline::Vec3{x, y, v.z}; });
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userEllipses.size())
@@ -1352,6 +1408,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
       a.startRad += theta;
       appendArcPolylineStrip(prevLines, a.z, a, 48);
+    } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+      appendSplinePreview(prevLines, cmd, e.index, [&](const spline::Vec3& v) { double x = v.x, y = v.y; rotatePreviewPt(bx, by, theta, &x, &y); return spline::Vec3{x, y, v.z}; });
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userEllipses.size())
@@ -1440,6 +1498,8 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     if (k >= cmd.userArcs.size())
       return;
     appendArcPolylineStrip(hlLines, cmd.userArcs[k].z, cmd.userArcs[k], 48);  // arc plane, not a flat depth
+  } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+    appendSplinePreview(hlLines, cmd, e.index, [&](const spline::Vec3& v) { return v; });
   } else if (e.type == SelectedEntity::Type::Ellipse) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userEllipses.size())

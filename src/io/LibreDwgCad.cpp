@@ -493,33 +493,36 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   }
 }
 
-// REQ-170, issue #613: no native spline — tessellate into a polyline (fit points or control points).
-static bool ImportSplineAsPolyline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const Xf2& xf,
-                                   const EntityAttributes& at) {
+// REQ-443 / #803: preserve DWG SPLINE data as a native curve.
+static bool ImportSpline(AppCommandState& st, const Dwg_Entity_SPLINE* sp, const Xf2& xf,
+                         const EntityAttributes& at) {
   if (sp == nullptr)
     return false;
-  std::vector<double> xyz;
-  auto pushWorld = [&](double x, double y, double z) {
-    double wx = 0.0, wy = 0.0;
-    xf.apply(x, y, &wx, &wy);
-    xyz.push_back(wx);
-    xyz.push_back(wy);
-    xyz.push_back(z);
-  };
-  if (sp->num_fit_pts >= 2 && sp->fit_pts != nullptr) {
-    for (BITCODE_BS i = 0; i < sp->num_fit_pts; ++i)
-      pushWorld(sp->fit_pts[i].x, sp->fit_pts[i].y, sp->fit_pts[i].z);
-  } else if (sp->num_ctrl_pts >= 2 && sp->ctrl_pts != nullptr) {
-    for (BITCODE_BL i = 0; i < sp->num_ctrl_pts; ++i)
-      pushWorld(sp->ctrl_pts[i].x, sp->ctrl_pts[i].y, sp->ctrl_pts[i].z);
-  } else {
-    return false;
+  CadSpline s;
+  s.degree = sp->degree;
+  s.periodic = sp->periodic != 0 || (sp->splineflags & SPLINE_SPLINEFLAGS_CLOSED) != 0 || sp->closed_b != 0;
+  if (sp->num_knots > 0 && sp->knots != nullptr)
+    s.knots.assign(sp->knots, sp->knots + sp->num_knots);
+  if (sp->num_ctrl_pts > 0 && sp->ctrl_pts != nullptr) {
+    for (BITCODE_BL i = 0; i < sp->num_ctrl_pts; ++i) {
+      const auto& p = sp->ctrl_pts[i];
+      double x = 0.0, y = 0.0;
+      xf.apply(p.x, p.y, &x, &y);
+      s.ctrl.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+      if (sp->weighted || sp->rational) s.weights.push_back(p.w > 0.0 ? p.w : 1.0);
+    }
   }
-  if (xyz.size() < 6)
-    return false;
-  const bool closed =
-      sp->closed_b != 0 || (sp->splineflags & SPLINE_SPLINEFLAGS_CLOSED) != 0 || sp->periodic != 0;
-  LocalPolyline(st, xyz, closed, at);
+  if (sp->num_fit_pts > 0 && sp->fit_pts != nullptr) {
+    for (BITCODE_BS i = 0; i < sp->num_fit_pts; ++i) {
+      const auto& p = sp->fit_pts[i];
+      double x = 0.0, y = 0.0;
+      xf.apply(p.x, p.y, &x, &y);
+      s.fit.push_back({x - st.worldDocumentOriginX, y - st.worldDocumentOriginY, p.z});
+    }
+  }
+  if (!spline::Validate(s).empty()) return false;
+  st.cadSplines.push_back(std::move(s));
+  st.cadSplineAttrs.push_back(at);
   return true;
 }
 
@@ -2045,7 +2048,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     return;
   }
   if (ty == DWG_TYPE_SPLINE && ent->tio.SPLINE != nullptr) {
-    if (ImportSplineAsPolyline(st, ent->tio.SPLINE, xf, at))
+    if (ImportSpline(st, ent->tio.SPLINE, xf, at))
       return;
     NoteSkip(skipHist, "SPLINE(degenerate or unsupported)");
     return;
@@ -5068,6 +5071,70 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     e->start_angle = 0.0;
     e->end_angle = 2.0 * kPi;
   }
+  // REQ-443 / #803: dwg_add_SPLINE only creates fit-point curves, so use it to attach a correctly
+  // owned entity and then populate the standard SPLINE arrays used by LibreDWG's encoder.
+  for (size_t i = 0; i < st.cadSplines.size(); ++i) {
+    const CadSpline& s = st.cadSplines[i];
+    if (!spline::Validate(s).empty() || s.ctrl.empty()) continue;
+    std::vector<dwg_point_3d> seed;
+    const auto& source = s.fit.empty() ? s.ctrl : s.fit;
+    seed.reserve(source.size());
+    for (const auto& p : source) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(p.x), static_cast<float>(p.y), p.z, &wp);
+      seed.push_back(wp);
+    }
+    auto* knots = static_cast<BITCODE_BD*>(std::calloc(s.knots.size(), sizeof(BITCODE_BD)));
+    auto* ctrl = static_cast<Dwg_SPLINE_control_point*>(std::calloc(s.ctrl.size(), sizeof(Dwg_SPLINE_control_point)));
+    auto* fit = s.fit.empty() ? nullptr : static_cast<BITCODE_3DPOINT*>(std::calloc(s.fit.size(), sizeof(BITCODE_3DPOINT)));
+    if (knots == nullptr || ctrl == nullptr || (!s.fit.empty() && fit == nullptr)) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::copy(s.knots.begin(), s.knots.end(), knots);
+    for (size_t k = 0; k < s.fit.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.fit[k].x), static_cast<float>(s.fit[k].y), s.fit[k].z, &wp);
+      fit[k].x = wp.x;
+      fit[k].y = wp.y;
+      fit[k].z = wp.z;
+    }
+    dwg_point_3d tangent{};
+    Dwg_Entity_SPLINE* e = dwg_add_SPLINE(hdr, static_cast<int>(seed.size()), seed.data(), &tangent, &tangent);
+    if (e == nullptr) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::free(e->fit_pts);
+    e->fit_pts = fit;
+    e->num_fit_pts = static_cast<BITCODE_BS>(s.fit.size());
+    e->scenario = SPLINE_SCENARIO_SPLINE;
+    e->degree = static_cast<BITCODE_BS>(s.degree);
+    e->periodic = s.periodic ? 1 : 0;
+    e->closed_b = s.periodic ? 1 : 0;
+    e->rational = s.weights.empty() ? 0 : 1;
+    e->weighted = s.weights.empty() ? 0 : 1;
+    e->splineflags = s.periodic ? SPLINE_SPLINEFLAGS_CLOSED : 0;
+    e->knotparam = SPLINE_KNOTPARAM_CUSTOM;
+    e->num_knots = static_cast<BITCODE_BL>(s.knots.size());
+    e->knots = knots;
+    e->num_ctrl_pts = static_cast<BITCODE_BL>(s.ctrl.size());
+    e->ctrl_pts = ctrl;
+    for (size_t k = 0; k < s.ctrl.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.ctrl[k].x), static_cast<float>(s.ctrl[k].y), s.ctrl[k].z, &wp);
+      e->ctrl_pts[k].parent = e;
+      e->ctrl_pts[k].x = wp.x;
+      e->ctrl_pts[k].y = wp.y;
+      e->ctrl_pts[k].z = wp.z;
+      e->ctrl_pts[k].w = s.weights.empty() ? 1.0 : s.weights[k];
+    }
+    apply(e->parent, AttrAt(st.cadSplineAttrs, i));
+  }
   // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
   // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
   // the hatch path (non-associative).
@@ -5628,7 +5695,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
-                         st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty();
+                         st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
+                         st.cadSplines.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {

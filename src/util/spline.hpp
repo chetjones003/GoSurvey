@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-/// The SPLINE entity's mathematics (REQ-440, GitHub issue #803): a non-uniform rational B-spline
+/// The SPLINE entity's mathematics (REQ-443, GitHub issue #803): a non-uniform rational B-spline
 /// CURVE in 3D, with the two ways a user makes one and the DXF/DWG shape it round-trips through.
 ///
 /// Pure and dependency-free — only `ray3d` — the same ADR-002 layering the rest of `util/` keeps, so
@@ -17,7 +17,7 @@
 /// `degree`, a `knots` vector of length `ctrl.size() + degree + 1`, `ctrl` control points and an
 /// optional `weights`. The curve's parameter domain is `[knots[degree], knots[ctrl.size()]]`.
 ///
-/// **Two creation methods** (REQ-440 item 2), both degree 3:
+/// **Two creation methods** (REQ-443 item 2), both degree 3:
 ///  - *Fit*: the user's points are kept in \ref Spline::fit and the curve passes exactly through
 ///    every one. `ctrl` and `knots` are DERIVED from `fit` by \ref MakeFit / \ref Rebuild and are what
 ///    DXF stores; editing a fit point re-derives them.
@@ -38,18 +38,19 @@ struct Spline {
   std::vector<Vec3> ctrl;
   std::vector<double> weights;    ///< Empty = every weight 1; otherwise one positive weight per point.
   std::vector<Vec3> fit;          ///< Non-empty = a Fit spline (ctrl derived from these).
+  /// True when this spline stores fit points and derives its control polygon from them.
   [[nodiscard]] bool isFit() const { return !fit.empty(); }
 };
 
-/// The curve through \p points (at least two, no two consecutive ones coincident), open or closed.
+/// The degree-3 curve through \p points (at least two open, three closed; no neighbouring pair may
+/// coincide), open or closed.
 /// An open fit spline is a natural cubic (zero curvature at both ends) with chord-length
 /// parameters; a closed one is a periodic cubic with uniform parameters, so it is smooth at the join.
 /// False, with the reason in \p why, if the points cannot define a curve.
 [[nodiscard]] bool MakeFit(const std::vector<Vec3>& points, bool closed, Spline* out, std::string* why);
 
-/// The curve controlled by \p ctrl (at least two; at least three if \p closed), open or closed. An
-/// open one is a clamped uniform B-spline of degree `min(3, n - 1)` — three clicks give a quadratic,
-/// two a straight line — and a closed one is a periodic cubic.
+/// The degree-3 curve controlled by \p ctrl (at least four if open; at least three if closed). An
+/// open one is a clamped uniform B-spline and a closed one is a periodic cubic.
 [[nodiscard]] bool MakeControl(const std::vector<Vec3>& ctrl, bool closed, Spline* out, std::string* why);
 
 /// Re-derive \p s's control points and knots from its fit points, after a fit point was edited.
@@ -59,7 +60,9 @@ struct Spline {
 /// Why \p s is not a usable curve, or an empty string if it is. Nothing is repaired silently (REQ-201).
 [[nodiscard]] std::string Validate(const Spline& s);
 
+/// Lower end of the spline's parameter domain.
 [[nodiscard]] double DomainMin(const Spline& s);
+/// Upper end of the spline's parameter domain.
 [[nodiscard]] double DomainMax(const Spline& s);
 
 /// The point at parameter \p t (clamped to the domain).
@@ -81,6 +84,16 @@ void ClosestPoint(const Spline& s, const Vec3& p, double* tOut, Vec3* pointOut, 
 
 /// Move the \p i'th DISTINCT control point (keeping a periodic spline's repeated tail in step).
 void SetControlPoint(Spline* s, std::size_t i, const Vec3& p);
+
+/// The points a user edits with grips: the fit points of a Fit spline, the distinct control points of a CV
+/// one. Grip `i` is \ref EditablePoint `i`.
+[[nodiscard]] std::size_t EditablePointCount(const Spline& s);
+[[nodiscard]] Vec3 EditablePoint(const Spline& s, std::size_t i);
+
+/// Move editable point \p i to \p p. A Fit spline re-derives its curve from the edited fit points; if they
+/// no longer define one (two neighbours dragged onto each other) the spline is left exactly as it was and
+/// false is returned with the reason in \p why.
+[[nodiscard]] bool SetEditablePoint(Spline* s, std::size_t i, const Vec3& p, std::string* why);
 
 /// Replace every stored point (control and fit) with `f(point)`. Exact for any affine map — a move, a
 /// rotation, a uniform scale, a mirror — because a B-spline is an affine combination of its control

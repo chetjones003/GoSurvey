@@ -12,7 +12,18 @@
 #include <vector>
 
 #include "util/pointcloudoctree.hpp"
+#include "util/spline.hpp"
 #include "util/ucs.hpp"
+
+/// A SPLINE entity (REQ-443 / issue #803): a 3D NURBS curve - see util/spline.hpp. Kept as the
+/// util type itself, with no wrapper, because it already is the whole entity (points, knots,
+/// weights, fit points); layer/colour live in the parallel `cadSplineAttrs`.
+using CadSpline = spline::Spline;
+
+/// How closely a spline is sampled for hit-testing and extents (feet): far below the pick aperture
+/// and REQ-101 ("the chord never strays 0.002 ft from the curve"), yet coarse enough to be cheap
+/// per hover. The renderer samples finer.
+inline constexpr double kSplineSampleTolerance = 0.002;
 
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///

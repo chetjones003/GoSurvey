@@ -265,8 +265,9 @@ bool MakeControl(const std::vector<Vec3>& ctrl, bool closed, Spline* out, std::s
     return false;
   };
   const std::size_t n = ctrl.size();
-  if (n < (closed ? 3u : 2u))
-    return fail(closed ? "a closed spline needs at least three control vertices" : "a spline needs at least two control vertices");
+  if (n < (closed ? 3u : 4u))
+    return fail(closed ? "a closed spline needs at least three control vertices"
+                       : "an open control-vertex spline needs at least four points for degree 3");
   for (const Vec3& v : ctrl)
     if (!Finite(v))
       return fail("a control vertex is not a finite number");
@@ -276,7 +277,7 @@ bool MakeControl(const std::vector<Vec3>& ctrl, bool closed, Spline* out, std::s
     *out = std::move(s);
     return true;
   }
-  s.degree = static_cast<int>(std::min<std::size_t>(3, n - 1));
+  s.degree = 3;
   s.periodic = false;
   s.ctrl = ctrl;
   // Clamped uniform knots: p + 1 zeros, 1 .. n-p-1, p + 1 copies of n - p.
@@ -438,6 +439,32 @@ void SetControlPoint(Spline* s, std::size_t i, const Vec3& p) {
   s->ctrl[i] = p;
   if (s->periodic && i < static_cast<std::size_t>(s->degree))
     s->ctrl[i + m] = p;
+}
+
+std::size_t EditablePointCount(const Spline& s) { return s.isFit() ? s.fit.size() : UniqueControlCount(s); }
+
+Vec3 EditablePoint(const Spline& s, std::size_t i) {
+  if (i >= EditablePointCount(s))
+    return Vec3{};
+  return s.isFit() ? s.fit[i] : s.ctrl[i];
+}
+
+bool SetEditablePoint(Spline* s, std::size_t i, const Vec3& p, std::string* why) {
+  if (i >= EditablePointCount(*s)) {
+    if (why)
+      *why = "there is no such point";
+    return false;
+  }
+  if (s->isFit()) {
+    Spline t = *s;
+    t.fit[i] = p;
+    if (!Rebuild(&t, why))
+      return false;
+    *s = std::move(t);
+    return true;
+  }
+  SetControlPoint(s, i, p);
+  return true;
 }
 
 void MapPoints(Spline* s, const std::function<Vec3(const Vec3&)>& f) {

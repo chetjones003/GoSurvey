@@ -18,6 +18,7 @@
 #include "util/AcisSatParser.hpp"
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
+#include "util/spline.hpp"
 
 #include "SolidMeasure.hpp"
 
@@ -174,6 +175,53 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
+}
+
+TEST_CASE("DXF round-trips an open fit SPLINE", "[dxf][libredwg][req443]") {
+  ScratchDir dir("dxf-spline");
+  const auto p = (dir.path / "spline.dxf").string();
+  AppCommandState st;
+  spline::Spline spline;
+  REQUIRE(spline::MakeFit({{0, 0, 0}, {3, 4, 1}, {7, 2, 2}, {10, 0, 3}}, false, &spline, nullptr));
+  st.cadSplines.push_back(spline);
+  st.cadSplineAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.cadSplines.size() == 1);
+  const auto& loaded = in.cadSplines.front();
+  CHECK(loaded.degree == 3);
+  CHECK(loaded.isFit());
+  REQUIRE(loaded.fit.size() == spline.fit.size());
+  for (std::size_t i = 0; i < spline.fit.size(); ++i) {
+    CHECK(loaded.fit[i].x == Catch::Approx(spline.fit[i].x).margin(1e-6));
+    CHECK(loaded.fit[i].y == Catch::Approx(spline.fit[i].y).margin(1e-6));
+    CHECK(loaded.fit[i].z == Catch::Approx(spline.fit[i].z).margin(1e-6));
+  }
+  CHECK(spline::Length(loaded) == Catch::Approx(spline::Length(spline)).margin(1e-5));
+}
+
+TEST_CASE("DWG round-trips a closed CV SPLINE", "[dwg][libredwg][req443]") {
+  ScratchDir dir("dwg-spline");
+  const auto p = (dir.path / "spline.dwg").string();
+  AppCommandState st;
+  spline::Spline spline;
+  REQUIRE(spline::MakeControl({{0, 0, 0}, {8, 0, 1}, {10, 7, 2}, {2, 10, 1}}, true, &spline, nullptr));
+  st.cadSplines.push_back(spline);
+  st.cadSplineAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadSplines.size() == 1);
+  const auto& loaded = in.cadSplines.front();
+  CHECK(loaded.degree == 3);
+  CHECK(loaded.periodic);
+  CHECK_FALSE(loaded.isFit());
+  CHECK(loaded.ctrl.size() == spline.ctrl.size());
+  CHECK(spline::Length(loaded) == Catch::Approx(spline::Length(spline)).margin(1e-3));
 }
 
 // Issue #600: full export path respects dwgExportVersion (LibreDWG body only — no trailer).
