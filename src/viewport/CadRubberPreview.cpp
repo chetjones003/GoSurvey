@@ -699,6 +699,46 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       }
     }
   }
+  // REQ-441 REVCLOUD. The cloud the cursor currently proposes - the corners picked so far plus the
+  // cursor, closed - built by the SAME `BuildRevisionCloud` the next click or Enter commits, so what
+  // is on screen is the cloud that will be created. With too few corners for a cloud the corners
+  // picked so far are shown as plain rubber lines instead, so the first two clicks still show where
+  // the path is going.
+  if (cmd.active == AppCommandState::Kind::Revcloud &&
+      cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitNextPoint) {
+    const float rz = static_cast<float>(cmd.revcloudZ);
+    std::vector<float> bulge;
+    const std::vector<double> xy = CadRevcloudPreviewPolyline(cmd, curX, curY, &bulge);
+    if (xy.empty()) {
+      const auto& dr = cmd.revcloudDraft;
+      for (std::size_t i = 0; i + 3 < dr.size(); i += 2)
+        PushRubberSegViewRel(rubberLines, dr[i], dr[i + 1], dr[i + 2], dr[i + 3], 0., 0., rz, rz);
+      if (dr.size() >= 2)
+        PushRubberSegViewRel(rubberLines, dr[dr.size() - 2], dr.back(), curX, curY, 0., 0., rz, rz);
+    } else {
+      constexpr double kPi = 3.14159265358979323846;
+      const std::size_t nv = bulge.size();
+      for (std::size_t i = 0; i < nv; ++i) {
+        const std::size_t j = (i + 1) % nv;
+        const double x0 = xy[i * 2], y0 = xy[i * 2 + 1], x1 = xy[j * 2], y1 = xy[j * 2 + 1];
+        const BulgeArcSpan a = BulgeArc(x0, y0, x1, y1, static_cast<double>(bulge[i]));
+        if (!a.valid) {
+          PushRubberSegViewRel(rubberLines, x0, y0, x1, y1, 0., 0., rz, rz);
+          continue;
+        }
+        const int n = std::clamp(static_cast<int>(std::ceil(std::fabs(a.sweep) / (kPi / 12.0))), 2, 24);
+        double px = x0, py = y0;
+        for (int s = 1; s <= n; ++s) {
+          const double u = a.startAngle + a.sweep * (static_cast<double>(s) / n);
+          const double qx = a.cx + a.radius * std::cos(u);
+          const double qy = a.cy + a.radius * std::sin(u);
+          PushRubberSegViewRel(rubberLines, px, py, qx, qy, 0., 0., rz, rz);
+          px = qx;
+          py = qy;
+        }
+      }
+    }
+  }
   // PIPERUN (issue #486 increment B2 / REQ-345). The pipe the cursor is currently proposing, drawn
   // from the SAME `CadBuildPipeRunSolids` the next click commits and Enter finishes — POLYSOLID's
   // own reasoning above, applied to a pipe run: what is on screen is the run that will be created.

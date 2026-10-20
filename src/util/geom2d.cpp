@@ -272,3 +272,89 @@ void ExpandExtents(double x, double y, double* mnX, double* mxX, double* mnY, do
     *mxY = std::max(*mxY, y);
   }
 }
+
+double RevisionCloudArcPerChord() {
+  const double theta = 4.0 * std::atan(kRevisionCloudBulge);
+  return theta / (2.0 * std::sin(theta * 0.5));
+}
+
+bool BuildRevisionCloud(const std::vector<double>& xyIn, double arcLength, bool reverse,
+                        std::vector<double>* outXy, std::vector<float>* outBulge, std::string* why) {
+  auto fail = [&](const char* msg) {
+    if (why)
+      *why = msg;
+    return false;
+  };
+  if (!(arcLength > 0.0) || !std::isfinite(arcLength))
+    return fail("the arc length must be a positive number");
+
+  // The corners, with a repeated point (including the path closing back onto its start) dropped:
+  // a zero-length edge has no scallops and no direction.
+  std::vector<double> xy;
+  for (std::size_t i = 0; i + 1 < xyIn.size(); i += 2) {
+    if (!std::isfinite(xyIn[i]) || !std::isfinite(xyIn[i + 1]))
+      return fail("a corner is not a finite number");
+    if (!xy.empty() && std::hypot(xyIn[i] - xy[xy.size() - 2], xyIn[i + 1] - xy.back()) < 1e-9)
+      continue;
+    xy.push_back(xyIn[i]);
+    xy.push_back(xyIn[i + 1]);
+  }
+  if (xy.size() >= 6 && std::hypot(xy[0] - xy[xy.size() - 2], xy[1] - xy.back()) < 1e-9) {
+    xy.pop_back();
+    xy.pop_back();
+  }
+  const std::size_t n = xy.size() / 2;
+  if (n < 3)
+    return fail("a cloud needs at least three corners");
+
+  // Shoelace: the sign says which way round the path runs, which is what decides which side of
+  // the travel direction is OUTSIDE. A positive DXF bulge swings to the right of travel, and the
+  // outside of a counter-clockwise path is on its right.
+  double area2 = 0.0;
+  double extent = 0.0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::size_t j = (i + 1) % n;
+    area2 += xy[2 * i] * xy[2 * j + 1] - xy[2 * j] * xy[2 * i + 1];
+    extent = std::max(extent, std::hypot(xy[2 * j] - xy[2 * i], xy[2 * j + 1] - xy[2 * i + 1]));
+  }
+  if (std::fabs(area2) < 1e-9 * extent * extent)
+    return fail("the path encloses no area");
+  const double bulge = ((area2 > 0.0) != reverse ? 1.0 : -1.0) * kRevisionCloudBulge;
+
+  // A scallop is an arc, longer than the chord it spans by a fixed factor, so the chord is cut
+  // to fit the arc length rather than the other way round.
+  const double arcPerChord = RevisionCloudArcPerChord();
+
+  std::vector<int> counts(n);
+  long long total = 0;
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::size_t j = (i + 1) % n;
+    const double d = std::hypot(xy[2 * j] - xy[2 * i], xy[2 * j + 1] - xy[2 * i + 1]);
+    const double k = std::ceil(d * arcPerChord / arcLength - 1e-9);
+    if (k > static_cast<double>(kRevisionCloudMaxScallops))
+      return fail("that arc length is too small for this path; the cloud would be enormous");
+    counts[i] = std::max(1, static_cast<int>(k));
+    total += counts[i];
+    if (total > kRevisionCloudMaxScallops)
+      return fail("that arc length is too small for this path; the cloud would be enormous");
+  }
+
+  std::vector<double> oxy;
+  std::vector<float> ob;
+  oxy.reserve(static_cast<std::size_t>(total) * 2);
+  ob.reserve(static_cast<std::size_t>(total));
+  for (std::size_t i = 0; i < n; ++i) {
+    const std::size_t j = (i + 1) % n;
+    for (int s = 0; s < counts[i]; ++s) {
+      const double t = static_cast<double>(s) / counts[i];
+      oxy.push_back(xy[2 * i] + (xy[2 * j] - xy[2 * i]) * t);
+      oxy.push_back(xy[2 * i + 1] + (xy[2 * j + 1] - xy[2 * i + 1]) * t);
+      ob.push_back(static_cast<float>(bulge));
+    }
+  }
+  if (outXy)
+    *outXy = std::move(oxy);
+  if (outBulge)
+    *outBulge = std::move(ob);
+  return true;
+}

@@ -1,0 +1,211 @@
+# REQ-441 REVCLOUD — a scalloped closed outline (GitHub issue #803).
+#
+# The scallop arithmetic is asserted in RevisionCloudTests, where it can be checked in closed form.
+# What only this file can reach is the half between the command line / the viewport and the store:
+# that typed and clicked corners reach the builder unchanged, that the options set what they say, that
+# Enter and a click back on the start both close the cloud, that Object mode converts a shape and
+# keeps or deletes the original, that a refusal leaves the drawing alone, and that every route is ONE
+# undo step. The cloud is an ordinary closed polyline whose segments are all arcs (REQ-316), so the
+# polyline verbs below are the right way to look at it.
+#
+# A 10 x 6 area at arc length 1 needs 12 + 7 + 12 + 7 = 38 scallops (an arc is ~1.157x its chord).
+
+NEW
+
+# --- 1. Typed corners, Enter closes -----------------------------------------------------------------
+CMD REVCLOUD
+EXPECT LOG "first corner"
+CMD A 1
+EXPECT LOG "arc length = 1"
+CMD 0,0
+CMD 10,0
+CMD 10,6
+CMD 0,6
+EXPECT POLYLINES 0
+EXPECT ACTIVE REVCLOUD
+# Blank Enter CLOSES the cloud. It reaches the command through the blank-line block, which consumes
+# Enter before any Kind-keyed branch sees it.
+CMD
+EXPECT POLYLINES 1
+EXPECT ACTIVE NONE
+EXPECT POLYARCS 0 38
+# The first corner is the first vertex; a counter-clockwise path bulges outward, which is a positive
+# bulge (tan(106.26 deg / 4) = 0.5).
+EXPECT POLYVERT 0 0 0 0 0
+EXPECT POLYBULGE 0 0 0.5
+UNDO
+EXPECT POLYLINES 0
+REDO
+EXPECT POLYLINES 1
+UNDO
+
+# --- 2. Reverse direction flips every arc ------------------------------------------------------------
+CMD REVCLOUD
+CMD A 1
+CMD R
+EXPECT LOG "reverse direction on"
+CMD 0,0
+CMD 10,0
+CMD 10,6
+CMD 0,6
+CMD C
+EXPECT POLYLINES 1
+EXPECT POLYBULGE 0 0 -0.5
+UNDO
+EXPECT POLYLINES 0
+
+# --- 3. Clicked corners; a click back on the start closes ---------------------------------------------
+CMD REVCLOUD
+CMD A 1
+CLICK 0 0
+CLICK 10 0
+CLICK 10 6
+CLICK 0 6
+EXPECT POLYLINES 0
+# Within half an arc length of the start: this is the start, not a fifth corner.
+CLICK 0.2 0.2
+EXPECT POLYLINES 1
+EXPECT ACTIVE NONE
+EXPECT POLYARCS 0 38
+UNDO
+EXPECT POLYLINES 0
+
+# --- 4. U takes back the last corner ------------------------------------------------------------------
+CMD REVCLOUD
+CMD A 1
+CMD 0,0
+CMD 10,0
+CMD 10,6
+CMD 40,40
+CMD U
+CMD 0,6
+CMD
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 38
+UNDO
+
+# --- 5. Refusals leave the drawing alone and the command standing ---------------------------------------
+CMD REVCLOUD
+CMD A 0
+EXPECT LOG "greater than zero"
+CMD A -3
+EXPECT LOG "greater than zero"
+CMD 0,0
+CMD 10,0
+# Two corners are not an area.
+CMD C
+EXPECT LOG "at least three corners"
+EXPECT POLYLINES 0
+EXPECT ACTIVE REVCLOUD
+CMD 20,0
+# Corners in a straight line enclose nothing.
+CMD C
+EXPECT LOG "no area"
+EXPECT POLYLINES 0
+EXPECT ACTIVE REVCLOUD
+ESC
+EXPECT LOG "REVCLOUD canceled"
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 0
+
+# --- 6. Object mode keeps the original by default ---------------------------------------------------------
+CMD RECT
+CMD 0,0
+CMD 10,6
+EXPECT POLYLINES 1
+CMD REVCLOUD
+CMD A 1
+CMD O
+CMD 10,6
+EXPECT LOG "click the closed polyline"
+CLICK 5 0
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 2
+EXPECT POLYARCS 0 0
+EXPECT POLYARCS 1 38
+# One UNDO takes the cloud off and leaves the rectangle.
+UNDO
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 0
+
+# --- 7. D deletes the original, and the whole conversion is still one undo ------------------------------------
+CMD REVCLOUD
+CMD A 1
+CMD D
+EXPECT LOG "delete the original"
+CMD O
+CLICK 5 0
+EXPECT ACTIVE NONE
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 38
+UNDO
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 0
+REDO
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 38
+UNDO
+
+# --- 8. An open polyline is refused by name -----------------------------------------------------------------------
+NEW
+CMD POLYLINE
+CMD 0,0
+CMD 10,0
+CMD 10,6
+CMD
+EXPECT POLYLINES 1
+CMD REVCLOUD
+CMD O
+CLICK 5 0
+EXPECT LOG "not closed"
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 0
+ESC
+
+# --- 9. A circle becomes a cloud ------------------------------------------------------------------------------------
+NEW
+CMD CIRCLE
+CMD 0,0
+CMD 5
+ESC
+EXPECT CIRCLES 1
+CMD REVCLOUD
+CMD A 1
+CMD O
+CLICK 5 0
+EXPECT ACTIVE NONE
+# The circle is kept (default), and the cloud is a new closed polyline of arcs.
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+UNDO
+EXPECT POLYLINES 0
+EXPECT CIRCLES 1
+
+# --- 10. The cloud survives DXF and DWG as ONE closed polyline of arcs -----------------------------------------------
+NEW
+CMD REVCLOUD
+CMD A 1
+CMD 0,0
+CMD 10,0
+CMD 10,6
+CMD 0,6
+CMD
+EXPECT POLYARCS 0 38
+EXPORT DXF %OUT%/revcloud-a.dxf
+NEW
+IMPORT DXF %OUT%/revcloud-a.dxf
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+EXPECT POLYARCS 0 38
+EXPECT POLYBULGE 0 0 0.5
+# Re-export is byte-identical: vertices, order, closed flag and every bulge survived.
+EXPORT DXF %OUT%/revcloud-b.dxf
+EXPECT SAMEFILE %OUT%/revcloud-a.dxf %OUT%/revcloud-b.dxf
+SAVEAS %OUT%/revcloud.dwg
+NEW
+OPEN %OUT%/revcloud.dwg
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT POLYARCS 0 38
+EXPECT POLYBULGE 0 0 0.5

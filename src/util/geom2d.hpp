@@ -1,5 +1,6 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 /// Axis-aligned box tests and segment intersection (world/plot units, no CAD session state).
@@ -62,3 +63,20 @@ void AppendEllipseLineSegments(std::vector<float>& out, double cx, double cy, do
 
 /// Expand an axis-aligned bbox (double); \p any set true on first point.
 void ExpandExtents(double x, double y, double* mnX, double* mxX, double* mnY, double* mxY, bool* any);
+
+/// REQ-441 REVCLOUD. The closed outline of scalloped arcs round the corner list \p xy (x,y pairs, at
+/// least three). Each edge is cut into the fewest equal scallops whose ARC length is no more than
+/// \p arcLength; the arcs bulge away from the enclosed area, or into it when \p reverse. \p outXy and
+/// \p outBulge receive one entry per vertex of the closed polyline (the bulge of the segment that
+/// LEAVES that vertex, REQ-316), so they drop straight into the polyline store.
+/// False, with the reason in \p why, for fewer than three distinct corners, a non-positive or
+/// non-finite arc length, a path that encloses no area, or an arc length so small the cloud would
+/// need more than kRevisionCloudMaxScallops arcs.
+inline constexpr int kRevisionCloudMaxScallops = 20000;
+/// The bulge (`tan(theta/4)`) every scallop carries: about a 106 degree arc, the familiar cloud look.
+inline constexpr double kRevisionCloudBulge = 0.5;
+/// How much longer a scallop's ARC is than the chord it spans, for \ref kRevisionCloudBulge.
+[[nodiscard]] double RevisionCloudArcPerChord();
+[[nodiscard]] bool BuildRevisionCloud(const std::vector<double>& xy, double arcLength, bool reverse,
+                                      std::vector<double>* outXy, std::vector<float>* outBulge,
+                                      std::string* why);
