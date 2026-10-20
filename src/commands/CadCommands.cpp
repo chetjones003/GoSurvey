@@ -12818,6 +12818,7 @@ static void ResetOffsetDraft(AppCommandState& st) {
   st.offsetPhase = AppCommandState::OffsetPhase::WaitDistanceOrThrough;
   st.offsetHoverHighlightValid = false;
   st.offsetHoverEntity = {};
+  st.offsetPaperLayoutIndex = -1;
 }
 
 /// Loop-back reset used between offsets within one OFFSET invocation (REQ-103): clears only the
@@ -13221,7 +13222,8 @@ static void LoopOffsetBackToSelect(AppCommandState& st, std::vector<std::string>
   log.push_back("OFFSET — select next object to offset (same distance), or Enter/Esc to finish.");
 }
 
-static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
+                                    bool loopToSelect = true) {
   if (!st.offsetEntityValid)
     return;
   const SelectedEntity& e = st.offsetEntity;
@@ -13283,11 +13285,12 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
     log.push_back("OFFSET — through point on original; pick farther away.");
     return;
   }
-  if (CommitOffsetSigned(st, signedD, log))
+  if (CommitOffsetSigned(st, signedD, log) && loopToSelect)
     LoopOffsetBackToSelect(st, log);
 }
 
-static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
+                                 bool loopToSelect = true) {
   if (!st.offsetEntityValid || st.offsetTypedDistance <= 0.f)
     return;
   const float d = st.offsetTypedDistance;
@@ -13419,8 +13422,199 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     return;
   }
   const float signedD = d * sgn;
-  if (CommitOffsetSigned(st, signedD, log))
+  if (CommitOffsetSigned(st, signedD, log) && loopToSelect)
     LoopOffsetBackToSelect(st, log);
+}
+
+/// Run the existing model-space OFFSET solver against one paper object, then commit only its
+/// resulting copy to the owning layout. The temporary state keeps the geometric rules shared while
+/// the real document gets exactly one undo snapshot and no model-space mutation.
+static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+  const int li = st.offsetPaperLayoutIndex;
+  if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size() || !st.offsetEntityValid)
+    return false;
+  const PaperLayout& sourceLayout = st.paperLayouts[static_cast<size_t>(li)];
+  AppCommandState staged;
+  staged.activeSpaceIndex = kModelSpaceIndex;
+  staged.userLinesFlat.clear(); staged.userLineAttrs.clear();
+  staged.userCirclesCxCyZR.clear(); staged.userCircleAttrs.clear(); staged.userCircleNormals.clear();
+  staged.userArcs.clear(); staged.userArcAttrs.clear();
+  staged.userEllipses.clear(); staged.userEllAttrs.clear();
+  staged.userPolylineOffsets.clear(); staged.userPolylineVerts.clear(); staged.userPolylineVertsBulge.clear();
+  staged.userPolylineVertsNormal.clear(); staged.userPolylineClosed.clear(); staged.userPolylineAttrs.clear();
+  staged.offsetEntity = {st.offsetEntity.type, 0};
+  staged.offsetEntityValid = true;
+  staged.offsetTypedDistance = st.offsetTypedDistance;
+  staged.offsetThroughMode = st.offsetThroughMode;
+  staged.offsetPhase = st.offsetPhase;
+  const EntityAttributes fallback = MakeNewEntityAttrs(st);
+  EntityAttributes inherited = fallback;
+  using PT = PaperRef::Type;
+  const int index = st.offsetEntity.index;
+  switch (st.offsetEntity.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(index) * 6;
+    if (index < 0 || k + 5 >= sourceLayout.paperLines.size()) return false;
+    for (size_t i = 0; i < 6; ++i) staged.userLinesFlat.push_back(sourceLayout.paperLines[k + i]);
+    if (static_cast<size_t>(index) < sourceLayout.paperLineAttrs.size()) inherited = sourceLayout.paperLineAttrs[index];
+    staged.userLineAttrs.push_back(inherited);
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(index) * 3;
+    if (index < 0 || k + 2 >= sourceLayout.paperCircles.size()) return false;
+    staged.userCirclesCxCyZR = {sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
+                                sourceLayout.paperCircles[k + 2]};
+    staged.userCircleNormals = {0.f, 0.f, 1.f};
+    if (static_cast<size_t>(index) < sourceLayout.paperCircleAttrs.size()) inherited = sourceLayout.paperCircleAttrs[index];
+    staged.userCircleAttrs.push_back(inherited);
+    break;
+  }
+  case SelectedEntity::Type::Arc:
+    if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperArcs.size()) return false;
+    staged.userArcs.push_back(sourceLayout.paperArcs[index]);
+    if (static_cast<size_t>(index) < sourceLayout.paperArcAttrs.size()) inherited = sourceLayout.paperArcAttrs[index];
+    staged.userArcAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Ellipse:
+    if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperEllipses.size()) return false;
+    staged.userEllipses.push_back(sourceLayout.paperEllipses[index]);
+    if (static_cast<size_t>(index) < sourceLayout.paperEllAttrs.size()) inherited = sourceLayout.paperEllAttrs[index];
+    staged.userEllAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Polyline: {
+    if (index < 0 || static_cast<size_t>(index) + 1 >= sourceLayout.paperPolyOffsets.size()) return false;
+    const int v0 = sourceLayout.paperPolyOffsets[index], v1 = sourceLayout.paperPolyOffsets[index + 1];
+    if (v0 < 0 || v1 < v0 || static_cast<size_t>(v1) * 3 > sourceLayout.paperPolyVerts.size()) return false;
+    staged.userPolylineOffsets = {0, v1 - v0};
+    for (int v = v0; v < v1; ++v) {
+      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3]);
+      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
+      staged.userPolylineVerts.push_back(0.0);
+      staged.userPolylineVertsBulge.push_back(0.f);
+      staged.userPolylineVertsNormal.insert(staged.userPolylineVertsNormal.end(), {0.f, 0.f, 1.f});
+    }
+    staged.userPolylineClosed.push_back(static_cast<size_t>(index) < sourceLayout.paperPolyClosed.size() ? sourceLayout.paperPolyClosed[index] : 0);
+    if (static_cast<size_t>(index) < sourceLayout.paperPolyAttrs.size()) inherited = sourceLayout.paperPolyAttrs[index];
+    staged.userPolylineAttrs.push_back(inherited);
+    break;
+  }
+  default: return false;
+  }
+
+  std::vector<std::string> stagedLog;
+  if (st.offsetPhase == AppCommandState::OffsetPhase::WaitThroughPick)
+    HandleOffsetThroughPick(staged, px, py, stagedLog, false);
+  else
+    HandleOffsetSidePick(staged, px, py, stagedLog, false);
+  const bool produced = staged.userLinesFlat.size() > 6 || staged.userCirclesCxCyZR.size() > 4 ||
+                        staged.userArcs.size() > 1 || staged.userEllipses.size() > 1 ||
+                        staged.userPolylineOffsets.size() > 2;
+  if (!produced) {
+    log.insert(log.end(), stagedLog.begin(), stagedLog.end());
+    return false;
+  }
+
+  PaperLayout updated = sourceLayout;
+  switch (st.offsetEntity.type) {
+  case SelectedEntity::Type::LineSeg:
+    for (size_t i = 6; i < staged.userLinesFlat.size(); ++i) updated.paperLines.push_back(static_cast<float>(staged.userLinesFlat[i]));
+    updated.paperLineAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Circle:
+    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.userCirclesCxCyZR[4]),
+        static_cast<float>(staged.userCirclesCxCyZR[5]), static_cast<float>(staged.userCirclesCxCyZR[7])});
+    updated.paperCircleAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Arc:
+    updated.paperArcs.push_back(staged.userArcs.back()); updated.paperArcAttrs.push_back(inherited); break;
+  case SelectedEntity::Type::Ellipse:
+    updated.paperEllipses.push_back(staged.userEllipses.back()); updated.paperEllAttrs.push_back(inherited); break;
+  case SelectedEntity::Type::Polyline: {
+    const int oldEnd = updated.paperPolyOffsets.empty() ? 0 : updated.paperPolyOffsets.back();
+    const int start = staged.userPolylineOffsets[1];
+    const int end = staged.userPolylineOffsets[2];
+    for (int v = start; v < end; ++v) {
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3]));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3 + 1]));
+      updated.paperPolyVerts.push_back(0.f);
+    }
+    if (updated.paperPolyOffsets.empty()) updated.paperPolyOffsets.push_back(oldEnd);
+    updated.paperPolyOffsets.push_back(oldEnd + end - start);
+    updated.paperPolyClosed.push_back(staged.userPolylineClosed.back());
+    updated.paperPolyAttrs.push_back(inherited);
+    break;
+  }
+  default: return false;
+  }
+  PushUndoSnapshot(st, "Offset paper geometry");
+  st.paperLayouts[static_cast<size_t>(li)] = std::move(updated);
+  BumpCadGpuCache(st);
+  log.insert(log.end(), stagedLog.begin(), stagedLog.end());
+  LoopOffsetBackToSelect(st, log);
+  return true;
+}
+
+static void HandlePaperOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  using OP = AppCommandState::OffsetPhase;
+  if (st.offsetPaperLayoutIndex >= 0 && st.activeSpaceIndex != st.offsetPaperLayoutIndex) {
+    log.push_back("OFFSET — return to the paper layout where the object was picked, or cancel OFFSET.");
+    return;
+  }
+  if (st.offsetPhase == OP::WaitDistanceOrThrough) {
+    log.push_back("OFFSET — type a positive offset distance, or T for through-point mode.");
+    return;
+  }
+  if (st.offsetPhase == OP::WaitSelectEntity) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+      log.push_back("OFFSET — no active paper layout.");
+      return;
+    }
+    PaperRef hit{};
+    const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+    float tolerance = 0.05f;
+    if (st.viewportLastSurveyLayoutHeightPx > 1.f && st.viewportLastSurveyLayoutOrthoHalfH > 0.f)
+      tolerance = std::clamp(CadSnap::WorldToleranceFromPixels(
+          st.viewportLastSurveyLayoutHeightPx, st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx),
+          0.01f, 0.25f);
+    if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy), tolerance, &hit, nullptr)) {
+      log.push_back("OFFSET — nothing under cursor; try again.");
+      return;
+    }
+    SelectedEntity::Type type{};
+    switch (hit.type) {
+    case PaperRef::Type::Line: type = SelectedEntity::Type::LineSeg; break;
+    case PaperRef::Type::Circle: type = SelectedEntity::Type::Circle; break;
+    case PaperRef::Type::Arc: type = SelectedEntity::Type::Arc; break;
+    case PaperRef::Type::Ellipse: type = SelectedEntity::Type::Ellipse; break;
+    case PaperRef::Type::Polyline: type = SelectedEntity::Type::Polyline; break;
+    case PaperRef::Type::Text:
+      log.push_back("OFFSET — paper text cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    case PaperRef::Type::Block:
+      log.push_back("OFFSET — paper blocks cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    st.offsetEntity = {type, hit.index};
+    st.offsetEntityValid = true;
+    st.offsetPaperLayoutIndex = st.activeSpaceIndex;
+    if (st.offsetThroughMode) {
+      if (type == SelectedEntity::Type::Ellipse || type == SelectedEntity::Type::Polyline) {
+        log.push_back("OFFSET — through-point mode does not support paper ellipses or polylines. Pick a line, circle, or arc.");
+        st.offsetEntityValid = false;
+        st.offsetPaperLayoutIndex = -1;
+        return;
+      }
+      st.offsetPhase = OP::WaitThroughPick;
+      log.push_back("OFFSET — click the through point (line / circle / arc).");
+    } else {
+      st.offsetPhase = OP::WaitSidePick;
+      log.push_back("OFFSET — pick which side of the object to offset.");
+    }
+    return;
+  }
+  if (st.offsetPhase == OP::WaitThroughPick || st.offsetPhase == OP::WaitSidePick)
+    CommitPaperOffset(st, wx, wy, log);
 }
 
 static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
@@ -14119,7 +14313,10 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Offset) {
-    OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
+    if (st.offsetPaperLayoutIndex >= 0 || (st.activeSpaceIndex >= 0 && !InFloatingModelSpace(st)))
+      OffsetCmd::HandlePaperOffsetViewportPick(st, wx, wy, log);
+    else
+      OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
     return;
   }
 

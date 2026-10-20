@@ -3368,6 +3368,9 @@ struct AppCommandState {
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
+  /// Paper layout captured by OFFSET when its paper object is picked; guards the side-pick from
+  /// ever resolving the stored index against a different layout after a tab switch.
+  int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
 
