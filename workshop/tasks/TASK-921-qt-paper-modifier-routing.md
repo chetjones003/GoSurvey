@@ -46,6 +46,7 @@
 - 2026-10-20 — Plan reviewed against REQ-039/103 and current command/Qt seams. The phase fields were initialized by command starts but not consumed in the Qt-only tree.
 - 2026-10-20 — Routed paper modify picks ahead of idle selection in both the Qt viewport mouse path and shared command dispatcher. Escape and switching commands clear pending paper drafts.
 - 2026-10-20 — Added `issue972PaperModifyCommandsRouteAndStayInPaperSpace`: actual Qt clicks drive LENGTHEN and BREAK; typed input and picks exercise EXTEND, STRETCH, FILLET and CHAMFER; assertions cover paper changes, model isolation, undo, and cancellation.
+- 2026-10-20 — CI follow-up adds the required Qt kit setup to PR build and MSVC analysis jobs; their CMake configure steps previously failed before compiling because Qt6 was unavailable.
 
 ## 9. Self-verification
 - [x] build-project — Release build passed on final implementation.
