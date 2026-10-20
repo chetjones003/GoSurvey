@@ -888,6 +888,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/PaperLeaderTests.cpp
+    tests/PaperTableTests.cpp
     tests/DimViewportTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp

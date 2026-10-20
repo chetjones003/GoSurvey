@@ -1648,6 +1648,12 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
+/// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
+/// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
+/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
+/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
+bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);

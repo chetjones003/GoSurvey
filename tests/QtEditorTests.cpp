@@ -1211,6 +1211,42 @@ private Q_SLOTS:
     QCOMPARE(amberPixels, 0);
   }
 
+  void paperSheetShowsFillLeaderAndTable() {
+    // Issue #768 (REQ-113): a sheet's own fill, multileader and table are drawn on the Qt sheet.
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    PaperLayout& sheet = window.State().paperLayouts[0];
+    sheet.paperFilledRegions.push_back(CadFilledRegion{});
+    CadFilledRegion& fill = sheet.paperFilledRegions.back();
+    fill.loopStart = {0};
+    fill.vertsXyz = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f, 3.f, 2.f, 0.f, 1.f, 2.f, 0.f};
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+    CadMultileader leader;
+    leader.pathXyz = {4.f, 2.f, 0.f, 5.5f, 3.f, 0.f};
+    leader.label.kind = CadAnnotation::Kind::Mtext;
+    leader.label.text = "SEE NOTE 4";
+    leader.label.plottedHeightInches = 0.2f;
+    leader.label.insX = 5.5f; leader.label.insY = 3.f;
+    leader.label.boxMinX = 5.5f; leader.label.boxMinY = 2.8f;
+    leader.label.boxMaxX = 8.f; leader.label.boxMaxY = 3.2f;
+    sheet.paperMultileaders.push_back(leader);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+    CadTable table;
+    table.insX = 1.f; table.insY = 7.f; table.width = 4.f; table.height = 1.2f; table.cols = 2;
+    table.cells = {"POINT", "ELEV", "101", "512.40"};
+    table.plottedHeightInches = 0.18f;
+    sheet.paperTables.push_back(table);
+    sheet.paperTableAttrs.push_back(EntityAttributes{});
+    SetActiveSpace(window.State(), 0);  // fits the sheet on first entry
+    window.Refresh();
+    window.resize(1280, 820); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTest::qWait(250);
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
+    QVERIFY(viewport->grabFramebuffer().save(Issue907Shot("qt-768-paper-sheet.png")));
+  }
+
   void layoutManagerCreatesAndSwitchesLayoutAndHonorsReadOnly() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
