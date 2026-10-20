@@ -1,7 +1,9 @@
 #include "PdfAttach.hpp"
 #include "PdfDocument.hpp"  // pdfview::PdfiumMutex
 
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>   // OutputDebugStringA, QueryPerformanceCounter
 #include <ShlObj.h>    // SHCreateItemFromParsingName, IShellItemImageFactory
@@ -162,6 +164,7 @@ static bool GetShellThumbnailCached(const std::string& filePathUtf8, int maxPx,
       /*comInit=*/false, outBuf, outW, outH);
 }
 
+#ifdef PDF_WINRT_ENABLED  // its only caller is the WinRT path below
 // ---------------------------------------------------------------------------
 // WIC helper: decode a PNG/JPEG/BMP byte buffer to a top-down BGRA image.
 // COM must already be initialized on the calling thread.
@@ -228,6 +231,7 @@ static bool WicDecodeImageToBgra(const uint8_t* data, size_t dataSize,
   pStream->Release(); // also frees hMem (fDeleteOnRelease=TRUE)
   return ok;
 }
+#endif  // PDF_WINRT_ENABLED
 
 // ---------------------------------------------------------------------------
 // Try to extract the page's embedded thumbnail via pdfium.

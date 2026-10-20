@@ -117,6 +117,8 @@ endfunction()
 #   4267       size_t -> 32-bit at Win32 / third-party API boundaries.
 #   4245       signed/unsigned mismatch on Win32 API constants.
 #   4456/4457/4458/4459  local/param/member/global shadowing — style, not a bug.
+#   4200       zero-sized (flexible) array members in LibreDWG's public dwg.h, which is a C header
+#              we vendor unmodified; the extension is how that API is declared.
 # _CRT_SECURE_NO_WARNINGS silences C4996 for standard C functions (getenv, strncpy).
 #
 # GOSURVEY_ENABLE_ANALYZE (REQ-324, off by default) adds MSVC's /analyze as a per-target
@@ -127,17 +129,47 @@ endfunction()
 # crash the first time this was tried (CI run for REQ-324's own PR). Routing it through
 # this function keeps it scoped to our own targets (third_party/ vendored code is never
 # passed through gosurvey_target_warnings) and additive to whatever flags CMake already set.
+#
+# GOSURVEY_ANALYZE_WERROR (issue #977) adds /WX to the same targets, so any /W4 or /analyze warning
+# fails the build. It is meant for the pr-checks `lint / msvc-analyze` job; release.yml leaves it
+# OFF so REQ-324's "the release build is not failed by findings" still holds. It is only valid
+# together with GOSURVEY_ENABLE_ANALYZE, because the suppressions below are what keep the
+# backlog at zero.
+#
+# Triage of the full-codebase /analyze run (issue #977); each decision is recorded in
+# spec/coding-standards.md section 11 and workshop/tasks/TASK-977-analyze-triage.md:
+#   fixed       every real finding in our code (C28182, C6011, C28199, C6336, C4701, C6031/C4834,
+#               C4189, C4505, C4005, C4996, C6326) was fixed at the source.
+#   C6246       shadowing under another number -- same policy as 4456-4459, so same /wd.
+#   C6262       "function uses N bytes of stack". /analyze:stacksize raises the 16 KB default to
+#               64 KB for product code (the biggest frames are ~40 KB, non-recursive, on 1 MB+
+#               stacks). Test targets (TEST) drop the check: Catch2 test bodies and the headless
+#               transcript driver legitimately hold large fixtures on the stack, up to ~230 KB.
+#   third_party compiled into our targets (pugixml, stb_image) is excluded from /analyze below;
+#   <angle-bracket> headers (Windows SDK, Qt) are external: no warnings, no analysis.
 option(GOSURVEY_ENABLE_ANALYZE
-  "Add MSVC /analyze to our own targets (REQ-324). Report-only: not paired with /WX." OFF)
+  "Add MSVC /analyze to our own targets (REQ-324). Report-only unless GOSURVEY_ANALYZE_WERROR." OFF)
+option(GOSURVEY_ANALYZE_WERROR
+  "With GOSURVEY_ENABLE_ANALYZE, add /WX so any warning fails the build (issue #977)." OFF)
 function(gosurvey_target_warnings tgt)
+  cmake_parse_arguments(GSW "TEST" "" "" ${ARGN})
   if(MSVC)
     target_compile_options(${tgt} PRIVATE
       /W4 /permissive-
       /wd4244 /wd4305 /wd4267 /wd4245
-      /wd4456 /wd4457 /wd4458 /wd4459)
+      /wd4456 /wd4457 /wd4458 /wd4459
+      /wd4200)
     target_compile_definitions(${tgt} PRIVATE _CRT_SECURE_NO_WARNINGS)
     if(GOSURVEY_ENABLE_ANALYZE)
-      target_compile_options(${tgt} PRIVATE /analyze)
+      target_compile_options(${tgt} PRIVATE /analyze /wd6246 /external:anglebrackets /external:W0 /analyze:external-)
+      if(GSW_TEST)
+        target_compile_options(${tgt} PRIVATE /wd6262)
+      else()
+        target_compile_options(${tgt} PRIVATE "SHELL:/analyze:stacksize 65536")
+      endif()
+      if(GOSURVEY_ANALYZE_WERROR)
+        target_compile_options(${tgt} PRIVATE /WX)
+      endif()
     endif()
   else()
     target_compile_options(${tgt} PRIVATE
@@ -586,6 +618,11 @@ if(WIN32)
 endif()
 gosurvey_target_warnings(gosurvey_domain)
 gosurvey_enable_pch(gosurvey_domain)
+# Vendored sources compiled into our own target are not ours to triage (issue #977).
+set_source_files_properties(
+  "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/StbImage.cpp"
+  PROPERTIES COMPILE_OPTIONS "/analyze-")
 
 # ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
 # platform macros and C header out of the shared precompiled header.
@@ -769,7 +806,7 @@ if(GOSURVEY_BUILD_HEADLESS)
   target_compile_definitions(gosurvey_headless PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
 
-  gosurvey_target_warnings(gosurvey_headless)
+  gosurvey_target_warnings(gosurvey_headless TEST)
   add_custom_command(TARGET gosurvey_headless POST_BUILD
     COMMAND "${GOSURVEY_WINDEPLOYQT}" --no-translations --no-compiler-runtime
       --plugindir "$<TARGET_FILE_DIR:gosurvey_headless>/qt-plugins" "$<TARGET_FILE:gosurvey_headless>"
@@ -1403,7 +1440,7 @@ if(GOSURVEY_BUILD_TESTS)
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
     GOSURVEY_CSMAP_DICTIONARY_DIR="$<TARGET_FILE_DIR:GoSurveyQt>/resources/csmap")
   add_dependencies(GoSurveyTests gosurvey_stage_csmap)  # REQ-358 tests load the staged copy
-  gosurvey_target_warnings(GoSurveyTests)
+  gosurvey_target_warnings(GoSurveyTests TEST)
   gosurvey_enable_pch(GoSurveyTests)
   # Domain implementations are linked once via gosurvey_domain, not compiled again.
   get_target_property(_test_sources GoSurveyTests SOURCES)
