@@ -50,7 +50,7 @@
 - 2026-10-20 — Added `PAPERPOLYVERT` headless assertions and a transcript covering exact joined vertices, line+polyline input, a second unchanged paper layout, undo, disconnected lines, an unsupported circle, and unchanged model geometry.
 - 2026-10-20 — Release build passed. Full Release CTest passed 2666/2666 (626.87 seconds); after extending the transcript with the two-layout and existing-polyline cases, the focused `headless.issue973-paper-space-join` test passed.
 - 2026-10-20 — Standards review found no documented-standard violation; one localized duplicate-checking smell is advisory: `PAPERPOLYVERT` parallels `POLYVERT` with layout-specific access. Spec review's missing curved-segment metadata concern does not apply: `PaperLayout` has no polyline bulge/normal stores; paper polylines contain only vertices/closure, so there is no such metadata to preserve. The review's two-layout coverage gap was addressed by the updated transcript.
-- 2026-10-20 — CI follow-up fixes clang-tidy's `bugprone-misplaced-widening-cast`: convert the validated nonnegative paper reference index before adding one, avoiding signed overflow and the ineffective widening cast.
+- 2026-10-20 — CI follow-up fixes clang-tidy's `bugprone-misplaced-widening-cast`: convert the validated nonnegative paper reference index before adding one, avoiding signed overflow and the ineffective widening cast. Qt setup is added to the PR build, clang-tidy, and MSVC analysis jobs so their CMake configure steps can run.
 
 ## 8. Self-verification
 
