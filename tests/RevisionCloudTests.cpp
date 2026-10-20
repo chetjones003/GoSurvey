@@ -1,7 +1,7 @@
-// REQ-441 (GitHub issue #803) - BuildRevisionCloud: the scallop geometry behind REVCLOUD.
+// REQ-444 (GitHub issue #803) - BuildRevisionCloud: the scallop geometry behind REVCLOUD.
 //
 // Pure geom2d, <cmath> only. The command-line half (picks, options, Object mode, undo) is covered
-// by tests/headless/transcripts/req441-revcloud.txt and RevcloudCommandTests.
+// by tests/headless/transcripts/req444-revcloud.txt and RevcloudCommandTests.
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>

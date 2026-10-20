@@ -38059,7 +38059,7 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
 }
 
 // ---------------------------------------------------------------------------------------------
-// REVCLOUD (REQ-441, GitHub issue #803): a scalloped closed outline. Shaped after POLYSOLID above
+// REVCLOUD (REQ-444, GitHub issue #803): a scalloped closed outline. Shaped after POLYSOLID above
 // - a path-building command with its own Kind, its own draft state, and one prompt-text function
 // the status bar and the typed-line echo share - but it commits NO new entity kind: the result is
 // an ordinary closed polyline whose segments are all arcs (REQ-316), so selection, snapping, grips,
@@ -44174,7 +44174,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
-    // REQ-441 REVCLOUD: Enter closes the cloud, so it is handled here for the same reason.
+    // REQ-444 REVCLOUD: Enter closes the cloud, so it is handled here for the same reason.
     if (st.active == K::Revcloud) {
       (void)HandleRevcloudTextInput(line, st, log);
       return;
@@ -44768,7 +44768,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       StartPolysolidCommand(st, log);
       return;
     }
-    // REQ-441 REVCLOUD: prompted only - a path has no fixed argument count.
+    // REQ-444 REVCLOUD: prompted only - a path has no fixed argument count.
     if (plotTok == "revcloud") {
       StartRevcloudCommand(st, log);
       return;
@@ -46728,7 +46728,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
-  // REQ-441 REVCLOUD, beside it for the same reason: a corner, or a letter that sets an option.
+  // REQ-444 REVCLOUD, beside it for the same reason: a corner, or a letter that sets an option.
   if (st.active == AppCommandState::Kind::Revcloud) {
     if (HandleRevcloudTextInput(line, st, log))
       return;

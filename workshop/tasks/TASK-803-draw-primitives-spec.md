@@ -7,8 +7,8 @@
 
 ## 1. Authority
 - Goal:         drawing-command completeness (REQ-104).
-- Requirements: REQ-104 (proposed sketch), new REQ-440, REQ-441, REQ-442 (proposed).
-- Decision:     D-2026-10-20-a (proposed).
+- Requirements: REQ-104 (proposed sketch), new REQ-443, REQ-444, REQ-442 (accepted).
+- Decision:     D-2026-10-20-e (accepted).
 - Owning subsystem: Commands/Domain/IO/Render/UI.
 
 ## 2. Scope
@@ -32,8 +32,8 @@
 | 5 | Revision cloud creation | 2026-10-20 | Click path, or convert a closed shape |
 
 ## 5. Delivery plan (after the user accepts the proposals)
-1. REQ-441 Revision Cloud (no new entity kind; smallest, proves the ribbon wiring).
-2. REQ-440 Spline.
+1. REQ-444 Revision Cloud (no new entity kind; smallest, proves the ribbon wiring).
+2. REQ-443 Spline.
 3. REQ-442 Wipeout (touches render draw order and PDF plot).
 Each is its own branch, PR into `beta`, with its own task file.
 

@@ -195,7 +195,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
                                                                              : R::SnappedPointPick;
 
-  // REQ-441 REVCLOUD: corners, except at the `O`bject prompt, where the click names the closed
+  // REQ-444 REVCLOUD: corners, except at the `O`bject prompt, where the click names the closed
   // polyline, rectangle or circle to convert instead of a coordinate.
   case K::Revcloud:
     return cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject ? R::RawEntityPick

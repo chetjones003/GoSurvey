@@ -4363,7 +4363,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-440, REQ-441 and REQ-442 (GitHub #803, D-2026-10-20-a); XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -12897,7 +12897,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist; 2026-10-20 — narrowed to major-workflow coverage by D-2026-10-20-c after the initial command-by-command checklist proved too long for timely manual execution.
 
 
-### REQ-440 — Spline command (GitHub issue #803)
+### REQ-443 — Spline command (GitHub issue #803)
 
 - Purpose: GoSurvey can draw straight, circular and elliptical curves but not a smooth free-form
   curve, and a SPLINE in an imported DXF/DWG drawing is lost. Surveyors and designers use splines
@@ -12944,12 +12944,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   IO layers, but the ribbon button, prompts, preview and grips are built in the Qt editor
   (`src/qt/`). The ImGui editor is not changed.
 - Owner-layer: Commands/Domain/IO/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
-### REQ-441 — Revision Cloud command (GitHub issue #803)
+### REQ-444 — Revision Cloud command (GitHub issue #803)
 
 - Purpose: reviewers circle changed areas with a scalloped outline; GoSurvey has no tool for it.
 - Priority: should
@@ -12985,7 +12985,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   buttons, prompts and preview are built in the Qt editor (`src/qt/`). The ImGui editor is not
   changed.
 - Owner-layer: Commands/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
@@ -13028,7 +13028,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   but the ribbon buttons, prompts, preview, masking in the viewport and grips are built in the Qt
   editor (`src/qt/`). The ImGui editor is not changed.
 - Owner-layer: Commands/Domain/IO/Render/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
@@ -14229,6 +14229,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
+| REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

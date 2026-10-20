@@ -64,7 +64,7 @@ void AppendEllipseLineSegments(std::vector<float>& out, double cx, double cy, do
 /// Expand an axis-aligned bbox (double); \p any set true on first point.
 void ExpandExtents(double x, double y, double* mnX, double* mxX, double* mnY, double* mxY, bool* any);
 
-/// REQ-441 REVCLOUD. The closed outline of scalloped arcs round the corner list \p xy (x,y pairs, at
+/// REQ-444 REVCLOUD. The closed outline of scalloped arcs round the corner list \p xy (x,y pairs, at
 /// least three). Each edge is cut into the fewest equal scallops whose ARC length is no more than
 /// \p arcLength; the arcs bulge away from the enclosed area, or into it when \p reverse. \p outXy and
 /// \p outBulge receive one entry per vertex of the closed polyline (the bulge of the segment that

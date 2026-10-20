@@ -5385,7 +5385,7 @@ private Q_SLOTS:
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
   }
 
-  // REQ-441 / GitHub #803: both Revision Cloud buttons are live, run REVCLOUD, and the cloud they
+  // REQ-444 / GitHub #803: both Revision Cloud buttons are live, run REVCLOUD, and the cloud they
   // make is an ordinary closed polyline of arcs that one UNDO removes.
   void ribbonRevisionCloudButtonsDrawACloud() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
@@ -5422,7 +5422,7 @@ private Q_SLOTS:
     QCOMPARE(state.userPolylineClosed.size(), polylinesBefore);
   }
 
-  // REQ-441 / GitHub #803: screenshots of the Revision Cloud work for the user's review, written to
+  // REQ-444 / GitHub #803: screenshots of the Revision Cloud work for the user's review, written to
   // build/artifacts and never committed.
   void revisionCloudScreenshotsForReview() {
     const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";

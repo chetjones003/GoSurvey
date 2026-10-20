@@ -1977,7 +1977,7 @@ struct AppCommandState {
     /// named dimensions, so it has different state and a different state machine, and folding it
     /// into `Solid` would mean a table with a variable-length entry no other row uses.
     Polysolid,
-    /// REQ-441 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
+    /// REQ-444 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
     /// closed polyline / circle. Its own Kind because it has a path-building state machine like
     /// POLYSOLID, but it commits an ordinary closed bulge polyline (REQ-316), not a new entity.
     Revcloud,
@@ -2125,7 +2125,7 @@ struct AppCommandState {
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
-    case Kind::Revcloud:           return "REVCLOUD";   // REQ-441
+    case Kind::Revcloud:           return "REVCLOUD";   // REQ-444
     case Kind::PressPull:          return "PRESSPULL";
     case Kind::BConnectMode:       return "BCONNECTMODE";
     case Kind::BConnect:           return "BCONNECT";
@@ -3037,7 +3037,7 @@ struct AppCommandState {
   /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
   char polysolidPending = 0;
 
-  // --- REQ-441 REVCLOUD: a scalloped closed outline ----------------------------------------------
+  // --- REQ-444 REVCLOUD: a scalloped closed outline ----------------------------------------------
 
   enum class RevcloudPhase : std::uint8_t {
     WaitFirstPoint,  ///< the first corner, or `O` to convert a closed shape already drawn
@@ -3049,7 +3049,7 @@ struct AppCommandState {
   std::vector<double> revcloudDraft;
   /// Elevation the cloud commits at: the work plane's, read when the first corner is picked.
   double revcloudZ = 0.0;
-  /// Remembered between invocations (REQ-441 item 3): the size of each scallop, whether they bulge
+  /// Remembered between invocations (REQ-444 item 3): the size of each scallop, whether they bulge
   /// the other way, and whether Object mode erases the shape it converted.
   double revcloudArcLength = 0.5;
   bool revcloudReverse = false;
@@ -6306,7 +6306,7 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
 
-// --- REQ-441 REVCLOUD ----------------------------------------------------------------------------
+// --- REQ-444 REVCLOUD ----------------------------------------------------------------------------
 /// Open the command: pick a first corner, or `O` to convert a closed shape already drawn.
 void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, echoing the arc length and options in force.

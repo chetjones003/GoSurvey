@@ -1,4 +1,4 @@
-# REQ-441 REVCLOUD — a scalloped closed outline (GitHub issue #803).
+# REQ-444 REVCLOUD — a scalloped closed outline (GitHub issue #803).
 #
 # The scallop arithmetic is asserted in RevisionCloudTests, where it can be checked in closed form.
 # What only this file can reach is the half between the command line / the viewport and the store:
