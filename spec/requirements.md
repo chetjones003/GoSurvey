@@ -12940,8 +12940,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   (`src/qt/`). The ImGui editor is not changed.
 - Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-a.
-- Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
 ### REQ-441 — Revision Cloud command (GitHub issue #803)
@@ -12981,8 +12981,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   changed.
 - Owner-layer: Commands/Qt UI
 - Decision: D-2026-10-20-a.
-- Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
 ### REQ-442 — Wipeout command (GitHub issue #803)
@@ -13024,8 +13024,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   editor (`src/qt/`). The ImGui editor is not changed.
 - Owner-layer: Commands/Domain/IO/Render/Qt UI
 - Decision: D-2026-10-20-a.
-- Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
 ### REQ-100 — Frame budget

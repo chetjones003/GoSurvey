@@ -1,7 +1,7 @@
 # TASK-803 — Specify Spline, Revision Cloud and Wipeout (GitHub #803)
 
 - Type:    docs
-- Status:  submitted
+- Status:  done
 - Opened:  2026-10-20
 - Owner:   Claude
 
