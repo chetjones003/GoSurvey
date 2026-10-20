@@ -38,6 +38,12 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Issues and pull request labels
+
+All agents creating a GitHub issue or pull request must apply the appropriate repository labels as part of creation. Choose labels that match the work's type and status from the repository's existing label set. Add the labels during creation when the tool supports it; otherwise, apply them immediately afterward and confirm they are present. If no existing label fits, use the repository's established label conventions when creating a suitable label.
+
+Keep status labels current on the issue and its linked pull request as work progresses: apply `in progress` while implementation is underway, `needs review` when the work is ready for review, and `in review` while a review is underway. Remove the previous status label when moving to the next stage so each item reflects its current state. When work returns to implementation after review, change the status back to `in progress`.
+
 **Branch cleanup (after every merge into `beta`):**
 
 * Only `master` and `beta` should exist, locally and on `origin`.
