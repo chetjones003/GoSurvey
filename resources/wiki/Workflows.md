@@ -20,8 +20,8 @@ Start-to-finish tasks, using only what GoSurvey actually does.
 5. Set the **annotation scale** on the status bar to the scale you usually plot at.
 6. In **Properties → General** with nothing selected, set **Default text height (in)** — 0.10 is a
    common choice.
-7. **File → Save As…** and save it somewhere permanent, e.g. `Templates\project-template.gs`.
-8. **View → Settings… → Files → Startup template (.gs)**, browse to that file, and press
+7. **File → Save As…** and save it somewhere permanent, e.g. `Templates\project-template.gst`.
+8. **View → Settings… → Files → Startup template (.gst)**, browse to that file, and press
    **Save startup preferences**.
 
 **Result:** every new drawing starts with your layers, styles, and scale.

@@ -427,8 +427,9 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   } else if (ext == ".sat")
     ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
-    // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
-    // block-library container is tracked as issue #284, not part of this one.
+    // Legacy `.gs` block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
+    // block-library container is tracked as issue #284, not part of this one. This is historical
+    // compatibility context, not a supported drawing-file path.
     log.push_back("BLOCKIMPORT — expected a .dxf, .dwg or .sat file.");
     return -1;
   }

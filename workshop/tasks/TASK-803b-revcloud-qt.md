@@ -1,4 +1,4 @@
-# TASK-803b — REVCLOUD Revision Cloud command in Qt (GitHub #803, REQ-441)
+# TASK-803b — REVCLOUD Revision Cloud command in Qt (GitHub #803, REQ-444)
 
 - Type:    feature
 - Status:  submitted
@@ -6,7 +6,7 @@
 - Owner:   Claude
 
 ## 1. Authority
-- Requirements: REQ-441 (accepted 2026-10-20, D-2026-10-20-a). Qt only; ImGui unchanged.
+- Requirements: REQ-444 (accepted 2026-10-20, D-2026-10-20-a). Qt only; ImGui unchanged.
 - Owning subsystem: Commands (typed command + state), util/geom2d (scallop geometry), Viewport
   (pick route, rubber preview), Qt ribbon catalog.
 
@@ -20,7 +20,7 @@
       polyline (REQ-316).
 
 ## 4. Verification
-- `RevisionCloudTests` (geometry), `headless.req441-revcloud` (command line, clicks, undo),
+- `RevisionCloudTests` (geometry), `headless.req444-revcloud` (command line, clicks, undo),
   `QtEditorTests::ribbonRevisionCloudButtonsDrawACloud`, screenshots reviewed and approved by the user.
 - Full non-Qt ctest: 2688/2689; the one failure (`headless.regression-surfacedelete-selection`) is in
   surface deletion and untouched by this change. `qt.editor` crashes in

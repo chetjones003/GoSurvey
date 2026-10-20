@@ -4,7 +4,7 @@
 # `GizmoSubObjectMoveTests` owns the handle counts and the "no handle where the drag would refuse"
 # rule. What only this file can show is the whole chain in a drawing: Ctrl+click names the sub-object
 # (the SUBOBJECT verb), the gizmo hangs off it, a camera-driven GRAB and DROP decide the distance,
-# and the kernel rebuilds the solid — with one UNDO restoring it and a `.gs` round trip surviving it.
+# and the kernel rebuilds the solid — with one UNDO restoring it and a `document JSON payload` round trip surviving it.
 #
 # Handle geometry, as in the other gizmo transcripts: the default view puts the camera's ortho
 # half-height at 50 world units over a 1200 x 700 viewport, so the 70-pixel handle is 10 units long
@@ -60,7 +60,7 @@ EXPECT SUBOBJECTEDGES 1
 EXPECT GIZMOAXES 2
 CHECK ALL
 
-# --- A vertex drag survives .gs save/reopen (#148 acceptance 8) --------------------------------------
+# --- A vertex drag survives document JSON payload save/reopen (#148 acceptance 8) --------------------------------------
 NEW
 # The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
 CMD GIZMO MOVE
@@ -70,12 +70,12 @@ SUBOBJECT 10 5 8 0.5 0.5
 GIZMO GRAB 20 5 8
 GIZMO DROP 23 5 8
 EXPECT SOLIDPROPS 0 1840 988 8 12 6
-SAVEAS %OUT%/vertexgrip.gs
+SAVEAS %OUT%/vertexgrip.dwg
 NEW
 # The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
 CMD GIZMO MOVE
 EXPECT SOLIDS 0
-OPEN %OUT%/vertexgrip.gs
+OPEN %OUT%/vertexgrip.dwg
 EXPECT SOLIDS 1
 EXPECT SOLIDBOUNDS 0 -10 -5 0 13 5 8
 EXPECT SOLIDPROPS 0 1840 988 8 12 6

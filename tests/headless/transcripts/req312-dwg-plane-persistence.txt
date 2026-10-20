@@ -3,7 +3,7 @@
 #
 # Step 6 of TASK-159. Two acceptance conditions, and they pull in opposite directions:
 #
-#   1. "Arbitrary-plane arcs and circles survive `.gs` save/reopen with every stored coordinate
+#   1. "Arbitrary-plane arcs and circles survive `document JSON payload` save/reopen with every stored coordinate
 #      bit-identical."
 #   2. "A drawing of only XY-plane arcs and circles loads and re-saves byte-identically; no normal
 #      key appears and no existing test changes its expected output."

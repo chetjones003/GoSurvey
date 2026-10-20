@@ -1,6 +1,6 @@
 // REQ-061 — per-viewport camera in paper space. Pure projection: `ModelToPaperInThroughCamera`
 // must reproduce the historical `ModelToPaperIn` to the bit in plan view (the parity a legacy
-// .gs depends on) and give the axonometric projection for a rotated camera.
+// document JSON payload depends on) and give the axonometric projection for a rotated camera.
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
@@ -38,7 +38,7 @@ TEST_CASE("Viewport camera defaults to plan view (REQ-061)", "[paperspace][req06
 }
 
 // The load-bearing property: in plan view the camera projection IS ModelToPaperIn, bit for bit,
-// over a grid of model points. This is what "a legacy .gs renders identically" reduces to.
+// over a grid of model points. This is what "a legacy document JSON payload renders identically" reduces to.
 TEST_CASE("Plan-view camera projection equals ModelToPaperIn exactly (REQ-061)", "[paperspace][req061]") {
   Viewport vp = MakeVp();
   REQUIRE(vp.cameraIsPlan());

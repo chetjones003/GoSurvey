@@ -160,8 +160,8 @@ TEST_CASE("A pasted copy receives a new id, distinct from its source", "[entityi
   REQUIRE(FindEntityIndexById(d.lines, sourceIds[1]) == 1);
 }
 
-TEST_CASE("A legacy drawing loads with the same ids every time", "[entityid][gs]") {
-  // A pre-REQ-076 `.gs` has no ids at all, so they are assigned on load. Determinism comes from the
+TEST_CASE("A legacy drawing loads with the same ids every time", "[entityid][payload]") {
+  // A pre-REQ-076 `document JSON payload` has no ids at all, so they are assigned on load. Determinism comes from the
   // fixed array order — without it, the same file would produce different ids on different loads and
   // no stored reference could survive a save/load.
   auto loadLegacy = [] {
@@ -186,7 +186,7 @@ TEST_CASE("A legacy drawing loads with the same ids every time", "[entityid][gs]
   REQUIRE(IdsOf(first.annotations) == std::vector<std::uint64_t>{7, 8, 9});
 }
 
-TEST_CASE("An id survives .gs serialization exactly", "[entityid][gs]") {
+TEST_CASE("An id survives document JSON payload serialization exactly", "[entityid][payload]") {
   // GsIo.cpp cannot be linked here, so this exercises the serializer it writes ids with. A uint64
   // id is the one field where a float-ish or lossy round trip would be catastrophic rather than
   // merely imprecise: an id that changes value is an id that points at the wrong entity.
@@ -203,7 +203,7 @@ TEST_CASE("An id survives .gs serialization exactly", "[entityid][gs]") {
   REQUIRE(back["ids"].get<std::vector<std::uint64_t>>() == ids);
 }
 
-TEST_CASE("A legacy entity object with no id field loads as unassigned", "[entityid][gs]") {
+TEST_CASE("A legacy entity object with no id field loads as unassigned", "[entityid][payload]") {
   // Mirrors EntityAttributesFromJson's default. It must be 0 (→ swept) and never something that
   // could collide with a real id.
   const json legacy = json::parse(R"({"layer":"0","color":"ByLayer"})");

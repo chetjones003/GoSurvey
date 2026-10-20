@@ -1076,7 +1076,7 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
 // hand-edited file cannot present a skewed surface frame that would silently shear a solid.
 // ---------------------------------------------------------------------------------------------
 
-// The solid `.gs` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
+// The solid `internal document payload` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
 // command layer this file drags in. `gsio::SolidToJson` / `gsio::SolidFromJson` are used below.
 
 json BuildRoot(const AppCommandState& st) {
@@ -1094,7 +1094,7 @@ json BuildRoot(const AppCommandState& st) {
   //
   // Gated on `viewportSectionClipFrameValid`, NOT just `viewportSectionClip` — REQ-341's
   // `SECTIONCLIP` (aimed from the active UCS, no face) stays the view state it always was and is
-  // still NEVER written to `.gs`, exactly like it is never undo-tracked (see
+  // still NEVER written to `internal document payload`, exactly like it is never undo-tracked (see
   // `CaptureGeometrySnapshot`'s comment, ADR-059 (i)). Without this gate a plain `SECTIONCLIP ON`
   // with no `SECTIONPLANE` ever placed would start round-tripping through save/reopen, which REQ-341
   // explicitly rules out.
@@ -1313,7 +1313,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["camFovDeg"] = v.camFovDeg;
         {
           const ucs::Ucs& vUcs = liveViewportUcs(l, v);  // REQ-155: per-viewport active UCS
-          if (!ucs::IsWorld(vUcs))  // additive; absent on read = World (every legacy .gs)
+          if (!ucs::IsWorld(vUcs))  // additive; absent on read = World (every legacy internal document payload)
             vo["ucs"] = UcsFrameToJson(vUcs);
         }
         vo["layer"] = v.layer;
@@ -2301,9 +2301,9 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
-  settings["objectSnapSolid"] = st.objectSnap3dEnabled;  // REQ-325/#395: .gs is deprecated (retired
-                                                          // format); minimal one-field carry-forward
-                                                          // of the master toggle, not a full migration.
+  settings["objectSnapSolid"] = st.objectSnap3dEnabled;  // REQ-325/#395: standalone `.gs` was retired;
+                                                          // this key remains in DWG payload JSON and
+                                                          // `.gst` templates for compatibility.
   settings["viewportSolidIsolines"] = st.viewportSolidIsolines;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
@@ -2314,114 +2314,114 @@ json BuildRoot(const AppCommandState& st) {
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
   if (!doc.contains("lineVerts") || !doc["lineVerts"].is_array()) {
-    log.push_back(".gs: missing document.lineVerts array.");
+    log.push_back("internal document payload: missing document.lineVerts array.");
     return false;
   }
   const auto& lv = doc["lineVerts"];
   if (lv.size() % 6 != 0) {
-    log.push_back(".gs: lineVerts length must be a multiple of 6.");
+    log.push_back("internal document payload: lineVerts length must be a multiple of 6.");
     return false;
   }
   const size_t nLineSeg = lv.size() / 6;
   if (!doc.contains("lineAttrs") || !doc["lineAttrs"].is_array() || doc["lineAttrs"].size() != nLineSeg) {
-    log.push_back(".gs: lineAttrs count must match line segment count.");
+    log.push_back("internal document payload: lineAttrs count must match line segment count.");
     return false;
   }
   if (!doc.contains("circles") || !doc["circles"].is_array() || doc["circles"].size() % 3 != 0) {
-    log.push_back(".gs: circles array length must be a multiple of 3.");
+    log.push_back("internal document payload: circles array length must be a multiple of 3.");
     return false;
   }
   const size_t nCirc = doc["circles"].size() / 3;
   if (!doc.contains("circleAttrs") || !doc["circleAttrs"].is_array() || doc["circleAttrs"].size() != nCirc) {
-    log.push_back(".gs: circleAttrs count must match circles.");
+    log.push_back("internal document payload: circleAttrs count must match circles.");
     return false;
   }
   if (!doc.contains("arcs") || !doc["arcs"].is_array()) {
-    log.push_back(".gs: missing arcs array.");
+    log.push_back("internal document payload: missing arcs array.");
     return false;
   }
   const size_t nArc = doc["arcs"].size();
   if (!doc.contains("arcAttrs") || !doc["arcAttrs"].is_array() || doc["arcAttrs"].size() != nArc) {
-    log.push_back(".gs: arcAttrs count must match arcs.");
+    log.push_back("internal document payload: arcAttrs count must match arcs.");
     return false;
   }
   if (!doc.contains("ellipses") || !doc["ellipses"].is_array()) {
-    log.push_back(".gs: missing ellipses array.");
+    log.push_back("internal document payload: missing ellipses array.");
     return false;
   }
   const size_t nEll = doc["ellipses"].size();
   if (!doc.contains("ellAttrs") || !doc["ellAttrs"].is_array() || doc["ellAttrs"].size() != nEll) {
-    log.push_back(".gs: ellAttrs count must match ellipses.");
+    log.push_back("internal document payload: ellAttrs count must match ellipses.");
     return false;
   }
   if (!doc.contains("polylineOffsets") || !doc["polylineOffsets"].is_array()) {
-    log.push_back(".gs: missing polylineOffsets.");
+    log.push_back("internal document payload: missing polylineOffsets.");
     return false;
   }
   if (!doc.contains("polylineVerts") || !doc["polylineVerts"].is_array()) {
-    log.push_back(".gs: missing polylineVerts.");
+    log.push_back("internal document payload: missing polylineVerts.");
     return false;
   }
   const auto& po = doc["polylineOffsets"];
   const auto& pv = doc["polylineVerts"];
   if (pv.size() % 3 != 0) {
-    log.push_back(".gs: polylineVerts length must be a multiple of 3.");
+    log.push_back("internal document payload: polylineVerts length must be a multiple of 3.");
     return false;
   }
   // Zero polylines: empty offset table (matches save when there are no polylines).
   if (po.empty()) {
     if (!pv.empty()) {
-      log.push_back(".gs: polylineVerts must be empty when polylineOffsets is empty.");
+      log.push_back("internal document payload: polylineVerts must be empty when polylineOffsets is empty.");
       return false;
     }
   } else if (po.size() == 1) {
-    log.push_back(".gs: polylineOffsets invalid (expected empty or at least two entries).");
+    log.push_back("internal document payload: polylineOffsets invalid (expected empty or at least two entries).");
     return false;
   } else {
     for (size_t i = 0; i < po.size(); ++i) {
       if (!po[i].is_number_integer()) {
-        log.push_back(".gs: polylineOffsets must be integers.");
+        log.push_back("internal document payload: polylineOffsets must be integers.");
         return false;
       }
     }
     for (size_t i = 1; i < po.size(); ++i) {
       if (po[i].get<int>() < po[i - 1].get<int>()) {
-        log.push_back(".gs: polylineOffsets must be non-decreasing.");
+        log.push_back("internal document payload: polylineOffsets must be non-decreasing.");
         return false;
       }
     }
     const int lastOff = po.back().get<int>();
     if (lastOff < 0 || static_cast<size_t>(lastOff) * 3 > pv.size()) {
-      log.push_back(".gs: polylineVerts too short for polylineOffsets.");
+      log.push_back("internal document payload: polylineVerts too short for polylineOffsets.");
       return false;
     }
   }
   const size_t nPoly = po.size() >= 2 ? po.size() - 1 : 0;
   if (!doc.contains("polylineClosed") || !doc["polylineClosed"].is_array() ||
       doc["polylineClosed"].size() != nPoly) {
-    log.push_back(".gs: polylineClosed length must match polyline count.");
+    log.push_back("internal document payload: polylineClosed length must match polyline count.");
     return false;
   }
   if (!doc.contains("polylineAttrs") || !doc["polylineAttrs"].is_array() ||
       doc["polylineAttrs"].size() != nPoly) {
-    log.push_back(".gs: polylineAttrs length must match polyline count.");
+    log.push_back("internal document payload: polylineAttrs length must match polyline count.");
     return false;
   }
   // REQ-316 / ADR-047: optional; when present it is one bulge per vertex (pv.size() / 3).
   if (doc.contains("polylineVertsBulge")) {
     if (!doc["polylineVertsBulge"].is_array() || doc["polylineVertsBulge"].size() != pv.size() / 3) {
-      log.push_back(".gs: polylineVertsBulge length must be one entry per polyline vertex.");
+      log.push_back("internal document payload: polylineVertsBulge length must be one entry per polyline vertex.");
       return false;
     }
   }
   if (!doc.contains("annotations") || !doc["annotations"].is_array()) {
-    log.push_back(".gs: missing annotations array.");
+    log.push_back("internal document payload: missing annotations array.");
     return false;
   }
   const size_t nAnn = doc["annotations"].size();
   if (!doc.contains("annotationAttrs") || !doc["annotationAttrs"].is_array() ||
       doc["annotationAttrs"].size() != nAnn) {
-    log.push_back(".gs: annotationAttrs count must match annotations.");
+    log.push_back("internal document payload: annotationAttrs count must match annotations.");
     return false;
   }
   return true;
@@ -2556,7 +2556,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
 
   // Point groups (REQ-067). Absent in every file written before them → no groups, which is the
-  // "legacy `.gs` loads unchanged" acceptance condition.
+  // "legacy `internal document payload` loads unchanged" acceptance condition.
   st.pointGroups.clear();
   if (doc.contains("pointGroups") && doc["pointGroups"].is_array()) {
     for (const auto& o : doc["pointGroups"]) {
@@ -2624,14 +2624,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                                 ? static_cast<VisualStyle>(vsRaw)
                                 : VisualStyle::Wireframe2D;
           }
-          // REQ-061: per-viewport camera. Absent in a legacy .gs -> the defaults (plan view) stand,
+          // REQ-061: per-viewport camera. Absent in a legacy internal document payload -> the defaults (plan view) stand,
           // and ModelToPaperInThroughCamera then reproduces the pre-change projection exactly.
           v.camAzimuthDeg = vo.value("camAzimuthDeg", v.camAzimuthDeg);
           v.camElevationDeg = vo.value("camElevationDeg", v.camElevationDeg);
           v.camRollDeg = vo.value("camRollDeg", v.camRollDeg);
           v.camPerspective = vo.value("camPerspective", v.camPerspective);
           v.camFovDeg = vo.value("camFovDeg", v.camFovDeg);
-          // REQ-155: per-viewport active UCS. Absent (legacy .gs) or broken -> World, so every
+          // REQ-155: per-viewport active UCS. Absent (legacy internal document payload) or broken -> World, so every
           // pre-REQ-155 file loads with each viewport on the drawing frame, unchanged.
           {
             const auto vu = vo.find("ucs");
@@ -2817,7 +2817,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   else
     st.currentColor = "ByLayer";
 
-  // Named text styles (REQ-044). Read tolerantly: a missing table (older .gs) synthesizes "Standard",
+  // Named text styles (REQ-044). Read tolerantly: a missing table (older internal document payload) synthesizes "Standard",
   // so existing text — which carries no styleName — renders from its own fields, unchanged.
   const bool hadTextStyles =
       doc.contains("textStyles") && doc["textStyles"].is_array() && !doc["textStyles"].empty();
@@ -2850,7 +2850,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
 
   // Named surface styles (REQ-070 / ADR-036 (d)). Read tolerantly, every field with a default: a file
   // with no section synthesizes "Standard" and every surface in it — whose styleName is empty —
-  // resolves to it, which is REQ-070's "a legacy `.gs` loads unchanged".
+  // resolves to it, which is REQ-070's "a legacy `internal document payload` loads unchanged".
   st.surfaceStyles.clear();
   if (doc.contains("surfaceStyles") && doc["surfaceStyles"].is_array()) {
     const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
@@ -3230,7 +3230,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.blockRecent = doc["blockRecent"].get<std::vector<std::string>>();
 
   // Imported meshes (REQ-063). Guarded with contains(), so a pre-REQ-063 drawing simply has none —
-  // the "legacy .gs loads unchanged" acceptance condition.
+  // the "legacy internal document payload loads unchanged" acceptance condition.
   //
   // Every mesh is VALIDATED before it is stored. A malformed or truncated file must be refused with
   // a specific reason rather than partly loaded (REQ-201): an index that overruns the vertex array
@@ -3296,7 +3296,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
 
   // Point clouds (REQ-171 / ADR-042). Guarded with contains(), so a pre-REQ-171 drawing simply has
-  // none — the "legacy .gs loads unchanged" acceptance condition, same as meshes above.
+  // none — the "legacy internal document payload loads unchanged" acceptance condition, same as meshes above.
   //
   // A cloud whose points array is not a multiple of 3, or whose parallel colour/intensity array
   // does not match the point count, is refused (REQ-201) rather than loaded with a silently
@@ -3639,7 +3639,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
                   std::to_string(pts) + " points.");
   }
 
-  // Filled regions (ADR-011) — guarded with contains() so older .gs files load unchanged.
+  // Filled regions (ADR-011) — guarded with contains() so older internal document payload files load unchanged.
   st.cadFilledRegions.clear();
   if (doc.contains("filledRegions") && doc["filledRegions"].is_array()) {
     for (const auto& el : doc["filledRegions"]) {
@@ -4069,7 +4069,7 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
     return false;
   }
   if (!root.is_object() || !root.contains("format") || root["format"] != "gosurvey") {
-    log.push_back(".gs: not a GoSurvey file (missing format \"gosurvey\").");
+    log.push_back("internal document payload: not a GoSurvey file (missing format \"gosurvey\").");
     return false;
   }
   // REQ-079 / ADR-030: accept any version at or below this build's, migrating older documents
@@ -4077,11 +4077,11 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
   // made every existing drawing unopenable — the reason the field sat at 1 while eleven changes
   // were routed around it via the tolerant-key pattern.
   if (!root.contains("version") || !root["version"].is_number_integer()) {
-    log.push_back(".gs: missing or malformed format version.");
+    log.push_back("internal document payload: missing or malformed format version.");
     return false;
   }
   if (!root.contains("document") || !root["document"].is_object()) {
-    log.push_back(".gs: missing document object.");
+    log.push_back("internal document payload: missing document object.");
     return false;
   }
   {
@@ -4090,7 +4090,7 @@ bool LoadGoSurveyFromJsonUtf8(AppCommandState& st, std::string_view jsonUtf8, st
     // Migration happens in memory, on the parsed tree, BEFORE the typed loader runs. The file on
     // disk is untouched until the user saves (ADR-030 (3)).
     if (!MigrateGsDocument(root["document"], fileVersion, kGsFormatVersion, log, migrateErr)) {
-      log.push_back(".gs: " + migrateErr);
+      log.push_back("internal document payload: " + migrateErr);
       return false;
     }
   }

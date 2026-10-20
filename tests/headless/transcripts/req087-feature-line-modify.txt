@@ -1,6 +1,6 @@
 # REQ-087 stage 3 (TASK-079) — feature lines through the modify commands.
 #
-# REQ-087 says a feature line "selects, MOVES, snaps, hides by layer, persists to .gs, and is
+# REQ-087 says a feature line "selects, MOVES, snaps, hides by layer, persists to document JSON payload, and is
 # undoable in one step per operation, like every other entity". This transcript is that clause.
 #
 # Every assertion below was run against unpatched code first and FAILED there, except where a

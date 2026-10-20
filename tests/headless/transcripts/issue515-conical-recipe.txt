@@ -9,7 +9,7 @@
 #
 # BrepTests `[issue515]` proves the kernel half (slice piece volumes, section loops, orientation,
 # survey magnitude, the look-alikes that must NOT be described). This file proves the document half:
-# the kind the user sees, the cut through SECTION and SLICE, and that the description survives .gs.
+# the kind the user sees, the cut through SECTION and SLICE, and that the description survives document JSON payload.
 
 NEW
 
@@ -139,9 +139,9 @@ CMD UCS
 EXPECT LOG "SECTION — 1 section outline created. The solid is unchanged."
 ESC
 
-# --- the description survives .gs ---------------------------------------------------------------
-SAVEAS %OUT%/issue515.gs
-OPEN %OUT%/issue515.gs
+# --- the description survives document JSON payload ---------------------------------------------------------------
+SAVEAS %OUT%/issue515.dwg
+OPEN %OUT%/issue515.dwg
 EXPECT SOLIDKIND 0 Cylinder
 EXPECT SOLIDKIND 1 Cone
 

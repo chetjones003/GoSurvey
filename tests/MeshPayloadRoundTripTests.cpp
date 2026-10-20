@@ -1,6 +1,6 @@
-// `.gs` round-trip fidelity for mesh geometry (REQ-063).
+// `document JSON payload` round-trip fidelity for mesh geometry (REQ-063).
 //
-// The acceptance condition is that "a mesh of N triangles round-trips through `.gs` with vertex
+// The acceptance condition is that "a mesh of N triangles round-trips through `document JSON payload` with vertex
 // positions **bit-identical** on reload". `GsIo.cpp` cannot be linked by this target — it pulls in
 // the whole command layer — but the risk the condition is really about is not in that file. It is
 // in the float→text→float conversion underneath, which is where a "close enough" serializer would
@@ -35,7 +35,7 @@ std::vector<float> AwkwardFloats() {
 
 } // namespace
 
-TEST_CASE("Mesh vertex positions survive .gs serialization bit-identically", "[mesh][gs]") {
+TEST_CASE("Mesh vertex positions survive document JSON payload serialization bit-identically", "[mesh][payload]") {
   const std::vector<float> verts = AwkwardFloats();
   json m;
   m["verts"] = verts;  // exactly what SerializeGoSurveyJson writes
@@ -53,7 +53,7 @@ TEST_CASE("Mesh vertex positions survive .gs serialization bit-identically", "[m
   }
 }
 
-TEST_CASE("Mesh indices survive .gs serialization exactly", "[mesh][gs]") {
+TEST_CASE("Mesh indices survive document JSON payload serialization exactly", "[mesh][payload]") {
   // uint32 indices go past 2^24, where a serializer that round-tripped them through double would
   // still be exact — but one that used float would not. REQ-063's ceiling is 6M indices.
   const std::vector<std::uint32_t> indices = {0u,        1u,          2u,
@@ -65,7 +65,7 @@ TEST_CASE("Mesh indices survive .gs serialization exactly", "[mesh][gs]") {
   REQUIRE(back == indices);
 }
 
-TEST_CASE("An empty mesh section round-trips as empty, not as null", "[mesh][gs]") {
+TEST_CASE("An empty mesh section round-trips as empty, not as null", "[mesh][payload]") {
   // The saver omits the whole "meshes" key when there are none — this pins the other half: a mesh
   // that legitimately has no normals must reload with no normals rather than with a null that
   // would throw on get<std::vector<float>>().
@@ -79,7 +79,7 @@ TEST_CASE("An empty mesh section round-trips as empty, not as null", "[mesh][gs]
   CHECK(back["indices"].get<std::vector<std::uint32_t>>().empty());
 }
 
-TEST_CASE("Part colours and ranges round-trip", "[mesh][gs]") {
+TEST_CASE("Part colours and ranges round-trip", "[mesh][payload]") {
   json jp;
   jp["name"] = "ACPPPIPE 76";
   jp["begin"] = 123456;

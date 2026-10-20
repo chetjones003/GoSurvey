@@ -4,6 +4,12 @@
 > a reviewer can render a clear **pass/fail** judgment by pointing at an
 > artifact (output, log, test, profile, or code structure).
 
+> **Drawing-format terminology (D-2026-10-20-d):** DWG is the only standalone GoSurvey drawing
+> format. Older requirements may refer to `.gs` serialization when describing the legacy JSON
+> document tree; those references mean the internal payload embedded in DWG (or template JSON),
+> not a supported `.gs` file. Retain such references only where they define legacy-schema
+> compatibility or historical decisions, and make that purpose explicit.
+
 ---
 
 ## How to write a requirement
@@ -3792,19 +3798,20 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
 
 ### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
-- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
-  survey-specific data that today lives in `.gs`
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing while preserving
+  GoSurvey survey-specific data in the drawing file.
 - Priority: must
 - Type: functional
 - Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
   and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
-  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
-  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the GoSurvey document
+  JSON payload so survey points, traverse, layouts, text/surface
   styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
   A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
-  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
-  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
-  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  Standalone `.gs` drawings are retired: they are not a supported drawing format, are not listed
+  by drawing dialogs, and must not be opened through explicit paths or command-line routes. The
+  historical GoSurvey JSON serializer may remain as an internal payload implementation detail;
+  it does not define a user-facing file extension. Drawing templates use `.gst`.
   This does **not** claim unknown-object preservation (DM-08).
 - Acceptance:
   - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
@@ -3814,12 +3821,15 @@ requirements is a planning failure, not a sign of rigor.
   - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
   - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
   - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
-  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - a standalone `.gs` path is not accepted as a drawing by File Open or headless OPEN;
   - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
 - Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
 - Status: accepted
+- Decision: D-2026-10-20-d (clarifies retirement of standalone `.gs` drawing paths; DWG behavior
+  was established by D-2026-08-29-j / ADR-044).
 - Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
-  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision); 2026-10-20 —
+  standalone `.gs` drawing paths explicitly retired, D-2026-10-20-d.
 
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
@@ -4353,7 +4363,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-441 and REQ-442 (GitHub #803, D-2026-10-20-a); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta. XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta. XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -12866,6 +12876,26 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) — D-2026-10-19-k, GitHub issue #966.
 - Revisions: 2026-10-19 — initial, D-2026-10-19-k, GitHub issue #966.
 
+### REQ-441 — Maintain a human-facing major-release feature acceptance checklist
+
+- Purpose: give a release reviewer a repeatable way to exercise the supported GoSurvey product before a major version release.
+- Priority: should
+- Type: quality
+- Decision: D-2026-10-20-b, revised by D-2026-10-20-c.
+- Statement: The repository maintains a concise Markdown checklist for a human to run against the release candidate. It covers the supported product surfaces and their end-to-end workflows, including drawing/file lifecycle, drafting and editing, survey data and calculations, surfaces and 3D, settings, import/export, and release-critical failure/cancellation/data-preservation paths. Coverage is at the major-workflow level; individual commands are not separate checklist items. The source audit reconciles the Command Reference and manual navigation against those workflows and flags meaningful uncovered workflows. The checklist distinguishes supported behavior from known limitations and deferred or unavailable features, and gives the reviewer a place to record version, build, environment, results, and findings.
+- Acceptance:
+  - The checklist is written for a human operator, with actionable steps and observable pass/fail outcomes rather than implementation-only checks.
+  - Every checklist workflow gives prerequisites, numbered test steps, and an expected observable result; a title-only checkbox is insufficient.
+  - Its feature areas are cross-checked against the user manual navigation and the current supported Qt UI/command surfaces; each major area has an end-to-end check and applicable failure/cancel/data-preservation checks. Command Reference entries are reconciled against workflow coverage, but commands do not each require a standalone test item.
+  - Known limitations and deferred/unavailable features are identified as such, so their absence is not mistaken for a release regression or a shipped capability.
+  - The checklist includes release-candidate identification, environment/result fields, and a findings section, and instructs the reviewer to record failures rather than silently skip them.
+  - The major-release gate links to this checklist and requires a PASS for a major-version release.
+  - The document states its coverage sources and coverage limits; it does not claim automated validation.
+- Owner-layer: Documentation / product verification.
+- Constraints: REQ-200, REQ-201, REQ-440.
+- Status: accepted (2026-10-20) — D-2026-10-20-b.
+- Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist; 2026-10-20 — narrowed to major-workflow coverage by D-2026-10-20-c after the initial command-by-command checklist proved too long for timely manual execution.
+
 
 ### REQ-443 — Spline command (GitHub issue #803)
 
@@ -12914,12 +12944,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   IO layers, but the ribbon button, prompts, preview and grips are built in the Qt editor
   (`src/qt/`). Qt is the sole supported frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Domain/IO/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
-### REQ-441 — Revision Cloud command (GitHub issue #803)
+### REQ-444 — Revision Cloud command (GitHub issue #803)
 
 - Purpose: reviewers circle changed areas with a scalloped outline; GoSurvey has no tool for it.
 - Priority: should
@@ -12955,7 +12985,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   buttons, prompts and preview are built in the Qt editor (`src/qt/`). Qt is the sole supported
   frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
@@ -12998,7 +13028,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   but the ribbon buttons, prompts, preview, masking in the viewport and grips are built in the Qt
   editor (`src/qt/`). Qt is the sole supported frontend under REQ-440; this feature adds no ImGui path.
 - Owner-layer: Commands/Domain/IO/Render/Qt UI
-- Decision: D-2026-10-20-a.
+- Decision: D-2026-10-20-e.
 - Status: accepted
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
@@ -14199,6 +14229,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
+| REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

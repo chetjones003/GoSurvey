@@ -1,10 +1,8 @@
 // REQ-075 / issue #264 — a document written BEFORE REQ-075 must not lose its breaklines on load.
 //
-// Was tests/headless/transcripts/req075-legacy-breaklineids-migrate.txt, driven by `OPEN
-// samples/legacy-breaklineids.gs`. Issue #264 retired standalone `.gs` as an openable document
-// format, so this fixture can no longer be opened that way; the JSON schema and its migration
-// path (LoadGoSurveyFromJsonUtf8 / MigrateGsDocument) are unaffected and still load exactly as
-// before — this test now feeds the fixture's bytes to that entry point directly.
+// The legacy fixture was once opened as a standalone `.gs` drawing. Issue #264 retired that file
+// format; it remains here only as raw JSON input for schema-migration coverage, passed directly to
+// LoadGoSurveyFromJsonUtf8 / MigrateGsDocument. This test does not restore `.gs` file support.
 //
 // REQ-075's Add Breaklines dialog collects a description, so a breakline became an object
 // (`breaklines: [{entityId, description}]`) where REQ-069 had written a bare id array
@@ -47,7 +45,7 @@ int BreaklineCountFor(AppCommandState& st, const std::string& surfaceName) {
 
 }  // namespace
 
-TEST_CASE("A legacy breaklineIds array migrates to the current breaklines form (REQ-075)", "[gs][migrate][req075]") {
+TEST_CASE("A legacy breaklineIds array migrates to the current breaklines form (REQ-075)", "[payload][migrate][req075]") {
   const std::string legacyJson = ReadFile(FixturePath());
 
   AppCommandState st;

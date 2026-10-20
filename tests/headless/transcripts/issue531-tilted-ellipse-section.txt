@@ -37,8 +37,8 @@ EXPECT ELLIPSES 1
 CHECK ALL
 
 # --- it survives the drawing's own file ------------------------------------------------------------
-SAVEAS %OUT%/issue531-tilted.gs
-OPEN %OUT%/issue531-tilted.gs
+SAVEAS %OUT%/issue531-tilted.dwg
+OPEN %OUT%/issue531-tilted.dwg
 EXPECT ELLIPSES 1
 EXPECT SOLIDS 1
 CHECK ALL
@@ -80,8 +80,8 @@ PICK 0 0
 PICK 40 0
 CMD 0.5
 EXPECT ELLIPSES 1
-SAVEAS %OUT%/issue531-flat.gs
-OPEN %OUT%/issue531-flat.gs
+SAVEAS %OUT%/issue531-flat.dwg
+OPEN %OUT%/issue531-flat.dwg
 EXPECT ELLIPSES 1
 EXPORT DXF %OUT%/issue531-flat.dxf
 EXPECT FILECONTAINS %OUT%/issue531-flat.dxf "AcDbEllipse"

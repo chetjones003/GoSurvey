@@ -1777,7 +1777,7 @@ TEST_CASE("Curved B2b-1: an oblique plane slices a cylinder into two elliptical-
   RequireWindingMatchesNormals(t);
   REQUIRE(TessellatedVolume(t) == Approx(kPi * 16.0 * 4.0).epsilon(0.01));  // chorded ellipse + slant
 
-  // A .gs round-trip preserves the ellipse edge.
+  // A document JSON payload round-trip preserves the ellipse edge.
   Solid reopened = dn;  // Translate is the cheap in-kernel proxy for the store path
   reopened = brep::Translate(reopened, Vec3{0, 0, 0});
   bool sawEllipse = false;
@@ -1846,7 +1846,7 @@ TEST_CASE("Curved B2b-2 tail: an oblique plane slices a cone into two elliptical
   RequireWindingMatchesNormals(t);
   REQUIRE(TessellatedVolume(t) == Approx(vBelowRef).epsilon(0.01));
 
-  // .gs round trip preserves the ellipse edge (Translate is the cheap in-kernel proxy).
+  // document JSON payload round trip preserves the ellipse edge (Translate is the cheap in-kernel proxy).
   Solid reopened = brep::Translate(dn, Vec3{0, 0, 0});
   bool sawEllipse = false;
   for (const auto& e : reopened.edges)
@@ -6727,7 +6727,7 @@ TEST_CASE("Principal axes orthonormal and right-handed, and degenerate cases det
   CHECK(mp.principalAxis2.x == Approx(mpRepeat.principalAxis2.x).epsilon(1e-12));
   CHECK(mp.principalAxis3.x == Approx(mpRepeat.principalAxis3.x).epsilon(1e-12));
 
-  // Determinism across a `.gs` save/reload (REQ-349 acceptance): the tensor is derived, not
+  // Determinism across a `document JSON payload` save/reload (REQ-349 acceptance): the tensor is derived, not
   // persisted, so reloading rebuilds the solid from its serialized topology and geometry and
   // recomputes ComputeMassProperties from scratch — the same rebuilt-vertex-order sensitivity a
   // real save/reopen would exercise.
@@ -8279,7 +8279,7 @@ TEST_CASE("A recipe that does not describe its solid is not used to cut it", "[b
   Solid cyl;
   REQUIRE(brep::MakeCylinder(World(), 30.0, 50.0, &cyl, &why));
 
-  // What a damaged .gs frame looks like: the recipe says the cylinder stands 100 units away.
+  // What a damaged document JSON payload frame looks like: the recipe says the cylinder stands 100 units away.
   Solid moved = cyl;
   moved.recipe.frame.origin.x += 100.0;
 
@@ -8686,7 +8686,7 @@ TEST_CASE("A round recipe that does not describe its solid is not used to cut it
   Solid sphere;
   REQUIRE(brep::MakeSphere(World(), 30.0, &sphere, &why));
   Solid movedSphere = sphere;
-  movedSphere.recipe.frame.origin.x += 100.0;  // what a damaged .gs frame looks like
+  movedSphere.recipe.frame.origin.x += 100.0;  // what a damaged document JSON payload frame looks like
   REQUIRE_FALSE(brep::Slice(movedSphere, Vec3{0, 0, 0}, Vec3{0, 0, 1}, brep::SliceKeep::Both, &a, &b, &why));
   REQUIRE(why == Problem::SliceCutCrossesCurvedFace);  // refused, not cut 100 feet away
 

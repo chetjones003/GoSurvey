@@ -60,7 +60,7 @@ CMD W
 CMD VIEW S Site Overview
 EXPECT LOG "Site Overview updated to the current view"
 
-# --- Views survive a .gs round trip, frames included -------------------------------------------
+# --- Views survive a document JSON payload round trip, frames included -------------------------------------------
 SAVEAS %OUT%/nv.dwg
 OPEN %OUT%/nv.dwg
 CMD VIEW ?

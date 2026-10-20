@@ -37,7 +37,7 @@ enum class VisualStyle : std::uint8_t {
   Shaded = 2,       ///< Filled surfaces with diffuse headlight shading, edges still drawn.
 };
 
-/// Canonical name, for the command line, the ribbon and `.gs`.
+/// Canonical name, for the command line, the ribbon and `internal document payload`.
 [[nodiscard]] inline const char* VisualStyleName(VisualStyle s) {
   switch (s) {
   case VisualStyle::Wireframe2D: return "2D Wireframe";
@@ -82,7 +82,7 @@ enum class VisualStyle : std::uint8_t {
 /// Display / CAD metadata stored per entity (parallel index to line segments or circles).
 struct EntityAttributes {
   /// Stable per-drawing identity (REQ-076 / ADR-027). Assigned from \ref AppCommandState::nextEntityId
-  /// by \ref EnsureEntityIds, persisted in `.gs`, and **never reused within a drawing** — so a
+  /// by \ref EnsureEntityIds, persisted in `internal document payload`, and **never reused within a drawing** — so a
   /// reference to a deleted entity resolves to nothing rather than to whatever took its array slot.
   ///
   /// **0 means unassigned**, which is a transient state between an entity's creation and the next
@@ -582,7 +582,7 @@ struct CadPipeRun {
   /// **0 means "not stated", not "solid"**: the run is then built at the schedule-40 wall for its
   /// size (`CadPipeStandardWallThicknessInches`, cadpiperun.hpp). That is what makes a drawing
   /// saved before pipes were hollow — every run in it carrying 0 — open as real pipe rather than as
-  /// rod, with no migration step and no `.gs` version bump.
+  /// rod, with no migration step and no `internal document payload` version bump.
   double wallThicknessIn = 0.0;
   /// "CS150" / "CS300" (D-2026-09-12 decision 1) or empty for an unclassified run. Kept a string,
   /// not `CadPipePressureClass`, so this header stays free of cadblock.hpp's heavier includes;
@@ -628,7 +628,7 @@ inline constexpr float kFlatNormalZ = 1.f;
 
 /// True when a normal is world +Z exactly.
 ///
-/// Exact comparison, deliberately. This is the test that decides whether `.gs` writes a normal key
+/// Exact comparison, deliberately. This is the test that decides whether `internal document payload` writes a normal key
 /// at all, and a legacy drawing has to re-save byte-identically -- a tolerance here would let a
 /// normal that is 1e-9 off +Z re-save as flat, which is a silent edit to the user's file.
 [[nodiscard]] inline bool IsFlatNormal(float nx, float ny, float nz) {
@@ -676,7 +676,7 @@ inline void CircleNormalAt(const std::vector<float>& normals, size_t index, floa
 
 /// Grow or shrink the side-car to match \p circleCount circles, filling new entries with world +Z.
 ///
-/// The migration path for a `.gs` written before REQ-312, and the repair a loader applies before
+/// The migration path for a `internal document payload` written before REQ-312, and the repair a loader applies before
 /// the document is handed to anything that reads a normal.
 inline void EnsureCircleNormals(std::vector<float>& normals, size_t circleCount) {
   const size_t want = circleCount * 3;
@@ -934,7 +934,7 @@ struct CadEllipse {
 [[nodiscard]] inline bool EllipseIsFlat(const CadEllipse& e) { return IsFlatNormal(e.nx, e.ny, e.nz); }
 
 /// Whether \p e is a closed ellipse — every ellipse before the arc span existed, and the case the
-/// area, the closed-outline draw and the `.gs`/DXF byte-stability all key off.
+/// area, the closed-outline draw and the `internal document payload`/DXF byte-stability all key off.
 [[nodiscard]] inline bool EllipseIsFullTurn(const CadEllipse& e) {
   return std::fabs(std::fabs(static_cast<double>(e.sweepRad)) - 6.283185307179586) < 1e-6;
 }
@@ -1029,7 +1029,7 @@ struct CadMesh {
 /// (`src/util/pointcloudoctree.hpp`), not from this struct holding every point in memory.
 struct CadPointCloud {
   /// A bounded **preview** sample — architecture §11.8 interleaved x,y,z, local storage +
-  /// `worldDocumentOrigin` (REQ-101) — used for extents, selection depth, `.gs` persistence, and
+  /// `worldDocumentOrigin` (REQ-101) — used for extents, selection depth, `internal document payload` persistence, and
   /// the DXF/DWG exclusion count. **Not** the whole cloud: ADR-060's out-of-core cache
   /// (`cloudCachePath`/`octree` below) is what the LOD renderer actually pages full-density point
   /// data from. Kept bounded (see `ImportPointCloudE57`'s preview cap) so this immutable struct
@@ -1045,7 +1045,7 @@ struct CadPointCloud {
   std::string sourcePath;
   /// Absolute path to the `.gscloud` sidecar cache (ADR-060) this cloud was built from — empty for
   /// a cloud with no out-of-core cache (a future increment reading a small format directly, or a
-  /// `.gs`-persisted cloud from before this field existed). The renderer's LOD path is a no-op
+  /// `internal document payload`-persisted cloud from before this field existed). The renderer's LOD path is a no-op
   /// without one; the cloud still displays via \ref pointsXyz alone in that case.
   std::string cloudCachePath;
   /// The cache's octree structure (small — thousands of nodes, not the point data itself; ADR-060
@@ -1106,7 +1106,7 @@ struct CadSurfaceBoundary {
 /// A breakline referenced by stable entity id (REQ-076) — a Line or a Polyline in the drawing.
 ///
 /// A struct rather than a bare id so it can carry the description the Add Breaklines dialog collects
-/// (REQ-075), mirroring \ref CadSurfaceBoundary. `.gs` writes these as objects and still reads the
+/// (REQ-075), mirroring \ref CadSurfaceBoundary. `internal document payload` writes these as objects and still reads the
 /// original `breaklineIds` array of bare numbers, so a drawing saved before REQ-075 loads unchanged.
 struct CadSurfaceBreakline {
   std::uint64_t entityId = 0;
@@ -1223,7 +1223,7 @@ struct CadSurface {
   /// **By name, not by index**, like \ref sourcePointGroups above and for the same reason
   /// (architecture §11.9). Empty, or a name no longer in the table, resolves to "Standard" —
   /// REQ-070's "a surface whose style was deleted falls back to a default style rather than failing
-  /// to draw", and also what every surface in every `.gs` written before this field existed reads as.
+  /// to draw", and also what every surface in every `internal document payload` written before this field existed reads as.
   std::string styleName;
 
   /// REQ-136: when both names are set this surface is a TIN volume surface (comparison minus

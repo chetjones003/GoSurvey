@@ -90,7 +90,7 @@ TinSpatialIndex BuildTinSpatialIndex(const std::vector<double>& vertsXyz,
   for (size_t t = 0; t + 2 < indices.size(); t += 3) {
     const std::uint32_t ia = indices[t], ib = indices[t + 1], ic = indices[t + 2];
     if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount)
-      continue;  // corrupt index (e.g. a hand-edited .gs) — skip rather than read past the array
+      continue;  // corrupt index (e.g. a hand-edited internal document payload) — skip rather than read past the array
 
     const double x0 = vertsXyz[ia * 3], y0 = vertsXyz[ia * 3 + 1];
     const double x1 = vertsXyz[ib * 3], y1 = vertsXyz[ib * 3 + 1];
