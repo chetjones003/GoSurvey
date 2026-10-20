@@ -5476,3 +5476,67 @@ TEST_CASE("Paper-space HATCH and MULTILEADER round-trip through DWG (issue #768)
     CHECK(in.cadMultileaders.empty());
   }
 }
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): the sheet's size and orientation and each viewport's view
+// direction, frozen layers, lock and on/off survive DWG save then open.
+TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  ScratchDir dir("dwg-paper-setup");
+  const auto p = (dir.path / "paper-setup.dwg").string();
+  AppCommandState st;
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  PaperLayout sheet;
+  sheet.name = "Big";
+  sheet.portraitWidthIn = 60.f;  // a custom 60 x 80 in landscape sheet, not a preset
+  sheet.portraitHeightIn = 80.f;
+  sheet.landscape = true;
+  sheet.presetIdx = -1;
+  Viewport vp;
+  vp.paperXIn = 5.f;
+  vp.paperYIn = 5.f;
+  vp.paperWIn = 60.f;  // wider than 50 in: used to be dropped as "chrome"
+  vp.paperHIn = 40.f;
+  vp.scaleModelPerPaperIn = 20.f;
+  vp.camAzimuthDeg = 30.f;
+  vp.camElevationDeg = 40.f;
+  vp.camRollDeg = 10.f;
+  vp.frozenLayers = {"Walls"};
+  vp.locked = true;
+  vp.on = false;
+  sheet.viewports.push_back(vp);
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout portrait;
+  portrait.name = "Tall";
+  portrait.portraitWidthIn = 8.5f;
+  portrait.portraitHeightIn = 11.f;
+  portrait.landscape = false;
+  portrait.presetIdx = 0;
+  st.paperLayouts.push_back(std::move(portrait));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.paperLayouts.size() == 2);
+  const PaperLayout& big = in.paperLayouts[0];
+  CHECK(big.sheetWidthIn() == Catch::Approx(80.f).margin(0.01f));
+  CHECK(big.sheetHeightIn() == Catch::Approx(60.f).margin(0.01f));
+  CHECK(big.landscape);
+  UNSCOPED_INFO("VIEWPORT objs=" << CountDwgFixedType(p.c_str(), DWG_TYPE_VIEWPORT));
+  REQUIRE(big.viewports.size() == 1);
+  const Viewport& v = big.viewports[0];
+  CHECK(v.paperWIn == Catch::Approx(60.f).margin(0.01f));
+  CHECK(v.camAzimuthDeg == Catch::Approx(30.f).margin(0.01f));
+  CHECK(v.camElevationDeg == Catch::Approx(40.f).margin(0.01f));
+  CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.01f));
+  CHECK(v.locked);
+  CHECK_FALSE(v.on);
+  REQUIRE(v.frozenLayers.size() == 1);
+  CHECK(v.frozenLayers[0] == "Walls");
+  const PaperLayout& tall = in.paperLayouts[1];
+  CHECK_FALSE(tall.landscape);
+  CHECK(tall.sheetWidthIn() == Catch::Approx(8.5f).margin(0.01f));
+  CHECK(tall.sheetHeightIn() == Catch::Approx(11.f).margin(0.01f));
+  CHECK(tall.presetIdx == 0);
+}

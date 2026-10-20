@@ -3776,6 +3776,28 @@ static void SetDwgLayoutTabName(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bh, cons
   layObj->tio.object->tio.LAYOUT->layout_name = dwg_add_u8_input(dwg, tabName.c_str());
 }
 
+// Issue #768 / REQ-113: the sheet's own size and orientation, in the layout's plot settings (paper
+// width/height in mm as the unrotated media, plus the 90-degree rotation flag for landscape).
+static void SetDwgLayoutPaperSetup(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* bh, const PaperLayout& L) {
+  if (dwg == nullptr || bh == nullptr || bh->layout == nullptr)
+    return;
+  Dwg_Object* layObj = bh->layout->obj;
+  if (layObj == nullptr)
+    layObj = dwg_resolve_handle_silent(dwg, bh->layout->absolute_ref);
+  if (layObj == nullptr || layObj->tio.object == nullptr || layObj->tio.object->tio.LAYOUT == nullptr)
+    return;
+  Dwg_Object_PLOTSETTINGS& ps = layObj->tio.object->tio.LAYOUT->plotsettings;
+  const double wIn = static_cast<double>(L.portraitWidthIn);
+  const double hIn = static_cast<double>(L.portraitHeightIn);
+  ps.paper_width = wIn * 25.4;
+  ps.paper_height = hIn * 25.4;
+  ps.plot_paper_unit = 1;  // mm
+  ps.plot_rotation_mode = L.landscape ? 1 : 0;
+  char media[96];
+  std::snprintf(media, sizeof(media), "UserDefinedMetric (%.2f x %.2fMM)", ps.paper_width, ps.paper_height);
+  ps.canonical_media_name = dwg_add_u8_input(dwg, media);
+}
+
 static Dwg_Object_BLOCK_HEADER* EnsurePaperSpaceBlockHeader(Dwg_Data* dwg, size_t layoutIndex,
                                                               const char* layoutTabName) {
   if (dwg == nullptr || layoutTabName == nullptr || layoutTabName[0] == '\0')
@@ -4098,22 +4120,42 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     vp->center.z = 0.0;
     vp->width = static_cast<double>(gv.paperWIn);
     vp->height = static_cast<double>(gv.paperHIn);
-    vp->on_off = 1;
+    vp->on_off = gv.on ? 1 : 0;
     vp->id = static_cast<BITCODE_RS>(nextVpId++);
     const double ox = st.worldDocumentOriginX;
     const double oy = st.worldDocumentOriginY;
     vp->view_target.x = gv.modelCenterX + ox;
     vp->view_target.y = gv.modelCenterY + oy;
     vp->view_target.z = 0.0;
-    vp->VIEWDIR.x = 0.0;
-    vp->VIEWDIR.y = 0.0;
-    vp->VIEWDIR.z = 1.0;
+    {
+      // Issue #768: the camera as DWG's VIEWDIR (target -> camera) and twist. Plan view is (0,0,1).
+      const double az = static_cast<double>(gv.camAzimuthDeg) * (kPi / 180.0);
+      const double el = static_cast<double>(gv.camElevationDeg) * (kPi / 180.0);
+      vp->VIEWDIR.x = -std::sin(az) * std::cos(el);
+      vp->VIEWDIR.y = -std::cos(az) * std::cos(el);
+      vp->VIEWDIR.z = std::sin(el);
+      vp->VIEWTWIST = static_cast<double>(gv.camRollDeg) * (kPi / 180.0);
+    }
     vp->VIEWCTR.x = gv.modelCenterX + ox;
     vp->VIEWCTR.y = gv.modelCenterY + oy;
     const float sc = gv.safeScale();
     vp->VIEWSIZE = static_cast<double>(gv.paperHIn) * static_cast<double>(sc);
     vp->LENSLENGTH = 50.0;
-    vp->status_flag = 32800;
+    // 32768 = viewport on, 16384 = display locked, 32 = UCS icon visible (the DWG keeps on/off here too).
+    vp->status_flag = 32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0);
+    {
+      std::vector<BITCODE_H> frozen;
+      for (const std::string& name : gv.frozenLayers)
+        if (BITCODE_H h = dwg_find_tablehandle(tw.dwg, name.c_str(), "LAYER"))
+          frozen.push_back(dwg_add_handleref(tw.dwg, 4, h->absolute_ref, nullptr));
+      if (!frozen.empty()) {
+        vp->frozen_layers = static_cast<BITCODE_H*>(std::calloc(frozen.size(), sizeof(BITCODE_H)));
+        if (vp->frozen_layers != nullptr) {
+          std::copy(frozen.begin(), frozen.end(), vp->frozen_layers);
+          vp->num_frozen_layers = static_cast<BITCODE_BL>(frozen.size());
+        }
+      }
+    }
     vp->UCSVP = 1;
     vp->ucsxdir.x = 1.0;
     vp->ucsydir.y = 1.0;
@@ -4189,6 +4231,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
     if (ps == nullptr)
       continue;
     SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
+    SetDwgLayoutPaperSetup(dwg, ps, L);
     WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx);
     ++nWritten;
   }
@@ -4216,8 +4259,10 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   const Dwg_Object_Type ty = obj->fixedtype;
   if (ty == DWG_TYPE_VIEWPORT && ent->tio.VIEWPORT != nullptr) {
     const Dwg_Entity_VIEWPORT* e = ent->tio.VIEWPORT;
-    // AutoCAD's layout chrome viewport spans the sheet; user viewports are smaller rectangles.
-    if (e->width > 50.0 || e->height > 50.0)
+    // AutoCAD's layout chrome viewport spans the whole sheet and is not a user viewport; one that is
+    // merely wide (over 50 in on a large sheet) is a real one (issue #768, finding I6). The viewport id
+    // is not reliable after a save, so the sheet span is the test.
+    if (e->width >= L.sheetWidthIn() * 0.99 && e->height >= L.sheetHeightIn() * 0.99)
       return;
     Viewport vp;
     vp.paperWIn = static_cast<float>(e->width);
@@ -4231,6 +4276,29 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     if (!at.layer.empty() && at.layer != "0")
       vp.layer = at.layer;
     vp.visualStyle = DwgImportVisualStyleFromViewport(dwg, e);
+    // Issue #768: view direction, twist, on/off, lock and per-viewport frozen layers.
+    vp.on = e->on_off != 0 && (e->status_flag & 32768) != 0;
+    vp.locked = (e->status_flag & 16384) != 0;
+    {
+      const double len = std::sqrt(e->VIEWDIR.x * e->VIEWDIR.x + e->VIEWDIR.y * e->VIEWDIR.y +
+                                   e->VIEWDIR.z * e->VIEWDIR.z);
+      if (len > 1e-9) {
+        const double vx = e->VIEWDIR.x / len, vy = e->VIEWDIR.y / len, vz = e->VIEWDIR.z / len;
+        vp.camElevationDeg = static_cast<float>(std::asin(std::clamp(vz, -1.0, 1.0)) * (180.0 / kPi));
+        vp.camAzimuthDeg = (std::fabs(vx) + std::fabs(vy) < 1e-9)
+                               ? 0.f
+                               : static_cast<float>(std::atan2(-vx, -vy) * (180.0 / kPi));
+      }
+      vp.camRollDeg = static_cast<float>(e->VIEWTWIST * (180.0 / kPi));
+    }
+    for (BITCODE_BL fi = 0; fi < e->num_frozen_layers && e->frozen_layers != nullptr; ++fi) {
+      const Dwg_Object* lo = e->frozen_layers[fi] != nullptr ? e->frozen_layers[fi]->obj : nullptr;
+      if (lo == nullptr && e->frozen_layers[fi] != nullptr)
+        lo = dwg_resolve_handle_silent(dwg, e->frozen_layers[fi]->absolute_ref);
+      if (lo != nullptr && lo->fixedtype == DWG_TYPE_LAYER && lo->tio.object != nullptr &&
+          lo->tio.object->tio.LAYER != nullptr)
+        vp.frozenLayers.push_back(FromT(dwg, lo->tio.object->tio.LAYER->name));
+    }
     L.viewports.push_back(vp);
     return;
   }
@@ -4344,6 +4412,24 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
     Dwg_Object_LAYOUT* lo = row.layObj->tio.object->tio.LAYOUT;
     PaperLayout pl;
     pl.name = row.name.empty() ? "Layout" : row.name;
+    {
+      // Issue #768 / REQ-113: the sheet's own size and orientation (finding I5; it used to be ANSI B).
+      const Dwg_Object_PLOTSETTINGS& ps = lo->plotsettings;
+      const double unitToIn = ps.plot_paper_unit == 0 ? 1.0 : (ps.plot_paper_unit == 1 ? 1.0 / 25.4 : 0.0);
+      const double rw = ps.paper_width * unitToIn, rh = ps.paper_height * unitToIn;
+      if (rw > 1.0 && rh > 1.0) {
+        const bool rotated = (ps.plot_rotation_mode & 1) != 0;
+        const double sheetW = rotated ? rh : rw, sheetH = rotated ? rw : rh;
+        pl.portraitWidthIn = static_cast<float>(std::min(sheetW, sheetH));
+        pl.portraitHeightIn = static_cast<float>(std::max(sheetW, sheetH));
+        pl.landscape = sheetW > sheetH;
+        pl.presetIdx = -1;
+        for (int pi = 0; pi < kPaperSizePresetCount; ++pi)
+          if (std::fabs(kPaperSizePresets[pi].widthIn - pl.portraitWidthIn) < 0.02f &&
+              std::fabs(kPaperSizePresets[pi].heightIn - pl.portraitHeightIn) < 0.02f)
+            pl.presetIdx = pi;
+      }
+    }
     Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
     if (blk != nullptr) {
       for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr;

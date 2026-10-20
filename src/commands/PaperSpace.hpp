@@ -62,6 +62,8 @@ struct Viewport {
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
+  bool on = true;       // DWG VIEWPORT on/off (issue #768); carried through DWG, not yet enforced when drawing
+  bool locked = false;  // DWG 'display locked' flag (issue #768); carried through DWG, not yet enforced
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
   // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
   // viewport (on screen and in the plot). No entry = the layer's normal color.
