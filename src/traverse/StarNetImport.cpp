@@ -114,7 +114,7 @@ bool ParseStarNetAngle(const std::string& tok, double* degOut) {
     if (dashCount == 2) {
         const size_t d1 = body.find('-');
         const size_t d2 = body.find('-', d1 + 1);
-        double d, m, s;
+        double d = 0.0, m = 0.0, s = 0.0;
         if (!ParseDoubleTok(body.substr(0, d1), &d) ||
             !ParseDoubleTok(body.substr(d1 + 1, d2 - d1 - 1), &m) ||
             !ParseDoubleTok(body.substr(d2 + 1), &s))
