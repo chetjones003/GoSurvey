@@ -75,7 +75,7 @@ void AppendModuleForAddress(void* address, std::string& out) {
 
   wchar_t modulePath[MAX_PATH] = L"";
   const DWORD pathLen          = ::GetModuleFileNameW(module, modulePath, MAX_PATH);
-  char        moduleUtf8[MAX_PATH * 3] = "";
+  char        moduleUtf8[MAX_PATH * 3] = {};
   if (pathLen > 0) {
     ::WideCharToMultiByte(CP_UTF8, 0, modulePath, static_cast<int>(pathLen), moduleUtf8,
                           static_cast<int>(sizeof(moduleUtf8)), nullptr, nullptr);
