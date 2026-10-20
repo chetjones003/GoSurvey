@@ -4397,7 +4397,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-440, REQ-441 and REQ-442 (GitHub #803, D-2026-10-20-a); XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -12890,6 +12890,132 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decision: D-2026-10-18-i.
 - Status: accepted.
 - Revisions: 2026-10-18 — initial proposal; accepted by user.
+
+
+### REQ-440 — Spline command (GitHub issue #803)
+
+- Purpose: GoSurvey can draw straight, circular and elliptical curves but not a smooth free-form
+  curve, and a SPLINE in an imported DXF/DWG drawing is lost. Surveyors and designers use splines
+  for contours, road edges and creek banks.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-101, REQ-057, REQ-047.
+- Statement:
+  1. A typed `SPLINE` command and the Home → Draw → Spline ribbon button create one spline entity.
+  2. **Two creation methods**, chosen by an option on the command line: **Fit** (the default — the
+     curve passes exactly through every point the user clicks) and **CV** (control vertices — the
+     curve is pulled toward, but does not touch, the clicked points). Both methods are
+     degree 3 and open or closed (`Close` option; Enter ends an open spline).
+  3. The spline is a new entity kind stored in its own store in model space (3D points per
+     REQ-057), with layer, colour and linetype like every other entity. It is shown as a smooth
+     curve whose deviation from the true curve never exceeds REQ-101's tolerance.
+  4. Live preview while picking, committing on the snapped point (the preview-vs-commit invariant).
+  5. **Editing.** The spline can be selected, erased, moved, copied, rotated, scaled and mirrored;
+     it appears in the Properties panel (method, degree, closed, point count, length); its
+     points show as grips and dragging one reshapes the curve as one undoable change.
+  6. **Snapping.** Endpoint, fit/control point, nearest and perpendicular snaps work on a
+     spline; it takes part in extents and zoom-extents.
+  7. **Files.** A spline saves to and loads from DXF and DWG as a standard `SPLINE`
+     entity, including its degree, knots, control points, fit points and closed flag. Importing a
+     DXF/DWG `SPLINE` creates a real spline entity instead of dropping it.
+  8. Paper space, TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
+     requirement; a command that cannot act on a spline says so in the command log (REQ-201)
+     and changes nothing.
+- Acceptance:
+  - A Fit spline through four clicked points passes within REQ-101's tolerance of all four; a CV
+    spline does not pass through its interior control points; both can be closed.
+  - Preview matches the committed curve; Esc cancels with nothing added; one UNDO removes the
+    spline and one REDO restores it.
+  - Select, erase, move, copy, rotate, scale, mirror and a grip drag each act on the spline;
+    each is one undo step.
+  - Fit/control point, nearest and perpendicular snaps report the expected positions; the spline
+    is inside zoom-extents.
+  - Save to DXF and to DWG, reopen: the spline is a spline with the same points (within
+    REQ-101). A DXF `SPLINE` produced by another CAD tool imports as a spline.
+  - TRIM/EXTEND/OFFSET/FILLET/JOIN/EXPLODE on a spline log a refusal naming the command and
+    leave the drawing unchanged.
+  - The Qt and beta (ImGui) ribbon buttons are enabled and run `SPLINE`; the "not implemented
+    yet" tooltip is gone.
+- Owner-layer: Commands/Domain/IO/UI
+- Decision: D-2026-10-20-a.
+- Status: proposed
+- Revisions: 2026-10-20 — initial proposal (GitHub #803).
+
+
+### REQ-441 — Revision Cloud command (GitHub issue #803)
+
+- Purpose: reviewers circle changed areas with a scalloped outline; GoSurvey has no tool for it.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-316 (curved polyline segments), REQ-057.
+- Statement:
+  1. A typed `REVCLOUD` command and the Home → Draw → Revision Cloud and Annotate → Markup →
+     Revision Cloud ribbon buttons create a revision cloud.
+  2. **Two creation methods:** (a) **Click path** — the user clicks points around the area and
+     closes the cloud (click the start point, or Enter); (b) **Object** — the user picks an
+     existing closed polyline, rectangle or circle, which is converted, with an option to keep or
+     delete the original.
+  3. An **Arc length** option sets the size of each scallop (default 0.5 drawing unit, remembered
+     for the session; a value at or below zero is refused with a log message). A **Reverse
+     direction** option flips which way the scallops bulge.
+  4. **A revision cloud is stored as an ordinary closed polyline whose segments are all arcs**
+     (REQ-316). It introduces no new entity kind, so selection, snapping, grips, layer, undo,
+     DXF and DWG already apply to it unchanged. Its arcs are evenly spaced along the path; each
+     path edge is divided into whole scallops no longer than the Arc length.
+  5. Live preview while clicking, committing on the snapped point.
+- Acceptance:
+  - A cloud drawn around a 10 x 6 area with Arc length 1 closes on itself, every segment is an arc
+    no longer than 1, and the shape contains the clicked area.
+  - Object mode on a rectangle and on a circle each produce a closed cloud; "delete original"
+    removes the source, "keep" leaves it; one UNDO reverses either.
+  - Reverse direction flips the bulge side; an Arc length at or below zero is refused with a
+    logged reason and creates nothing.
+  - The result round-trips through DXF and DWG as a closed polyline with bulges.
+  - Both ribbon buttons are enabled and run `REVCLOUD`; the "not implemented yet" tooltips are gone.
+  - Esc cancels with nothing added.
+- Owner-layer: Commands/UI
+- Decision: D-2026-10-20-a.
+- Status: proposed
+- Revisions: 2026-10-20 — initial proposal (GitHub #803).
+
+
+### REQ-442 — Wipeout command (GitHub issue #803)
+
+- Purpose: a wipeout masks the linework beneath it so a note or title block stays readable.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-057, REQ-029 (PDF plot output).
+- Statement:
+  1. A typed `WIPEOUT` command and the Home → Draw → Wipeout and Annotate → Markup → Wipeout
+     ribbon buttons create a wipeout.
+  2. **Two creation methods:** (a) **Polygon** — click corner points (at least 3) and close; (b)
+     **Polyline** — pick an existing closed polyline whose segments are straight, with an option to
+     keep or delete it. A closed polyline with arcs is refused with a logged reason.
+  3. A wipeout is a new entity kind: a closed flat polygon filled with the drawing background,
+     with its own layer. It hides every entity drawn **before** it (earlier in draw order) that
+     lies beneath it, and does not hide anything drawn after it.
+  4. A `Frames` option (on/off, system setting) shows or hides the wipeout's outline; with frames
+     off the wipeout can still be selected by clicking its area.
+  5. The mask appears both in the viewport and in PDF plot output (REQ-029).
+  6. Wipeouts can be selected, erased, moved, copied, rotated, scaled, mirrored and corner-grip
+     edited; each is one undo step. Snapping uses the polygon corners.
+  7. **Files.** A wipeout saves to and loads from DXF and DWG as an AutoCAD `WIPEOUT` entity. If
+     the writer cannot produce a file AutoCAD itself accepts (checked with the AutoCAD oracle,
+     `accoreconsole`), this is a SPEC GAP to raise, never a silent drop.
+- Acceptance:
+  - A wipeout over a line hides the part beneath it; a line drawn after the wipeout stays
+    visible on top of it.
+  - The same drawing plotted to PDF shows the same mask.
+  - Frames off hides the outline but the area still picks; frames on shows it.
+  - A closed arc-containing polyline is refused with a log message and creates nothing.
+  - Save to DXF and DWG, reopen: the wipeout is a wipeout with the same corners (within REQ-101),
+    and AutoCAD opens the DWG without an error.
+  - Both ribbon buttons are enabled and run `WIPEOUT`; the "not implemented yet" tooltips are gone.
+  - Esc cancels with nothing added; one UNDO removes the wipeout.
+- Owner-layer: Commands/Domain/IO/Render/UI
+- Decision: D-2026-10-20-a.
+- Status: proposed
+- Revisions: 2026-10-20 — initial proposal (GitHub #803).
 
 
 ### REQ-100 — Frame budget
