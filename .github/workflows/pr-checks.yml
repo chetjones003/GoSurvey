@@ -109,6 +109,11 @@ jobs:
         run: cmake --build --preset ninja-release
 
       - name: Test (CTest)
+        # The hosted runner's system driver exposes OpenGL 3.0. Qt's installed package includes
+        # opengl32sw.dll (llvmpipe), so Qt can use a software OpenGL context with the 3.3 support
+        # required by the viewport and isolated deployment smoke tests.
+        env:
+          QT_OPENGL: software
         run: ctest --preset ninja-release
 
       - name: sccache stats
