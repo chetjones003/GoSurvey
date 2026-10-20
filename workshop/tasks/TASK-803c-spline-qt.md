@@ -58,7 +58,9 @@
   implementation mismatch, and called out areas without focused spline-specific tests: interactive
   Qt point picking, Escape cancellation, each transform/snap/refusal path, and importing a
   third-party DXF spline. The full suite passed; those paths should receive additional focused
-  coverage in review or follow-up work.
+  coverage in review or follow-up work. PR CI initially failed before compilation because the
+  build and MSVC analysis jobs did not install Qt after beta became Qt-only; both jobs now install
+  the same pinned Qt 6.8.3 MSVC kit as the existing clang-tidy job.
 - **Assumptions / technical debt:** UI remains Qt-only. The focused native round trips cover an open
   Fit spline in DXF and a closed CV spline in DWG; they do not cover every combination or a
   third-party fixture. Existing repository warnings from MSVC/LibreDWG headers and Qt deprecations
