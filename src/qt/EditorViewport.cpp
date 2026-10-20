@@ -381,38 +381,61 @@ void EditorViewport::paintGL() {
     painter.drawPath(sheetPath);
     painter.setClipRect(sheetRect.intersected(rect()));
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor("#252a30"), 1));
-    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6)
+    const auto isTrimHighlighted = [&](PaperEntityRef::Type type, int index) {
+      if (m_State.paperHoverValid && m_State.paperHover.type == type && m_State.paperHover.index == index)
+        return true;
+      return std::find_if(m_State.paperTrimCutters.begin(), m_State.paperTrimCutters.end(),
+          [&](const PaperEntityRef& cutter) { return cutter.type == type && cutter.index == index; }) !=
+          m_State.paperTrimCutters.end();
+    };
+    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6) {
+      const int index = static_cast<int>(i / 6);
+      painter.setPen(QPen(isTrimHighlighted(PaperEntityRef::Type::Line, index) ? QColor("#00a8ff") : QColor("#252a30"),
+                          isTrimHighlighted(PaperEntityRef::Type::Line, index) ? 2.5 : 1));
       painter.drawLine(project(layout.paperLines[i], layout.paperLines[i + 1]),
                        project(layout.paperLines[i + 3], layout.paperLines[i + 4]));
+    }
     for (std::size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
+      const int index = static_cast<int>(i / 3);
       const QPointF center = project(layout.paperCircles[i], layout.paperCircles[i + 1]);
       const QPointF edge = project(layout.paperCircles[i] + layout.paperCircles[i + 2], layout.paperCircles[i + 1]);
       const double radius = QLineF(center, edge).length();
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Circle, index);
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       painter.drawEllipse(center, radius, radius);
     }
-    for (const CadArc& arc : layout.paperArcs) {
+    for (std::size_t i = 0; i < layout.paperArcs.size(); ++i) {
+      const auto& arc = layout.paperArcs[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Arc, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       QPolygonF curve;
-      constexpr int segments = 64;
-      for (int i = 0; i <= segments; ++i) {
-        const double angle = arc.startRad + arc.sweepRad * static_cast<double>(i) / segments;
+      constexpr int samples = 48;
+      for (int step = 0; step <= samples; ++step) {
+        const double t = static_cast<double>(step) / samples;
+        const double angle = arc.startRad + arc.sweepRad * t;
         curve << project(arc.cx + arc.r * std::cos(angle), arc.cy + arc.r * std::sin(angle));
       }
-      if (curve.size() > 1) painter.drawPolyline(curve);
+      painter.drawPolyline(curve);
     }
-    for (const CadEllipse& ellipse : layout.paperEllipses) {
+    for (std::size_t i = 0; i < layout.paperEllipses.size(); ++i) {
+      const auto& ellipse = layout.paperEllipses[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Ellipse, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       QPolygonF curve;
-      constexpr int segments = 96;
-      const double minorX = -ellipse.majVy * ellipse.ratio;
-      const double minorY = ellipse.majVx * ellipse.ratio;
-      for (int i = 0; i <= segments; ++i) {
-        const double angle = 6.283185307179586 * static_cast<double>(i) / segments;
-        curve << project(ellipse.cx + ellipse.majVx * std::cos(angle) + minorX * std::sin(angle),
-                        ellipse.cy + ellipse.majVy * std::cos(angle) + minorY * std::sin(angle));
+      constexpr int samples = 64;
+      for (int step = 0; step <= samples; ++step) {
+        const double angle = 6.283185307179586 * static_cast<double>(step) / samples;
+        const double majorX = ellipse.majVx * std::cos(angle);
+        const double majorY = ellipse.majVy * std::cos(angle);
+        const double minorScale = ellipse.ratio * std::sin(angle);
+        curve << project(ellipse.cx + majorX - ellipse.majVy * minorScale,
+                         ellipse.cy + majorY + ellipse.majVx * minorScale);
       }
-      if (curve.size() > 1) painter.drawPolyline(curve);
+      painter.drawPolyline(curve);
     }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
       QPolygonF polyline;
       for (int v = begin; v < end; ++v) {
@@ -428,6 +451,21 @@ void EditorViewport::paintGL() {
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
+    for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      auto drawPath = [&](const std::vector<float>& pts) {
+        for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
+          painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+      };
+      painter.setPen(QPen(QColor("#252a30"), 1));
+      drawPath(leader.pathXyz);
+      for (const auto& branch : leader.extraLeaderPaths)
+        drawPath(branch);
+      const auto& label = leader.label;
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(label.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(label.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      painter.drawText(project(label.boxMinX, label.boxMaxY), QString::fromUtf8(label.text.c_str()));
+    }
     for (const auto& annotation : layout.paperTexts) {
       const QPointF origin = project(annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMinX : annotation.insX,
                                       annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMaxY : annotation.insY);
@@ -760,7 +798,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (m_State.entityGripMoveActive && m_State.entityGripEntityIndex >= 0) {
       exclude.valid = true; exclude.type = m_State.entityGripType; exclude.index = m_State.entityGripEntityIndex;
     }
-    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
@@ -782,6 +822,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
+    if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
+        m_State.activeSpaceIndex >= 0 && !InFloatingModelSpace(m_State)) {
+      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+          false, CadViewIsPlan(m_State) ? nullptr : &ray);
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     const auto route = ViewportClickRouteFor(m_State);
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
@@ -1102,12 +1151,26 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   ClearTransientInput();
   if (WorldPoint(m_Last, m_Cursor)) {
     const Camera camera = CadViewCamera(m_State);
+    const bool paperTrimHover = m_State.active == AppCommandState::Kind::Trim &&
+        m_State.activeSpaceIndex >= 0 &&
+        m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
+        !InFloatingModelSpace(m_State);
+    if (paperTrimHover) {
+      const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+      m_State.paperHoverValid = PickPaperEntityAt(layout, static_cast<float>(m_Cursor.x),
+          static_cast<float>(m_Cursor.y), camera.orthoHalfH * 8.f /
+              static_cast<float>(std::max(1, height())), &m_State.paperHover);
+    } else {
+      m_State.paperHoverValid = false;
+    }
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
     const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)
