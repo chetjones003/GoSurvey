@@ -1,7 +1,7 @@
 # TASK-968 — Paper-space TRIM (GitHub issue #974)
 
 - Type: feature
-- Status: in progress
+- Status: in review
 - Opened: 2026-10-20
 - GitHub issue: #974
 
@@ -61,8 +61,8 @@
 
 ## 9. Verification result
 
-- Verdict: partial pending visual approval. The full `qt.editor` test run reached 192 passes then failed at the unrelated `failureReportWindowSendsWithoutClosingAndCloseSendsNothing` clipboard/browser expectation (actual: neither clipboard nor browser available). Earlier full Release CTest passed before the viewport-highlight addition. The latest focused paper TRIM transcript and Qt screenshot test pass.
+- Verdict: partial, in review. The full `qt.editor` test run reached 192 passes then failed at the unrelated `failureReportWindowSendsWithoutClosingAndCloseSendsNothing` clipboard/browser expectation (actual: neither clipboard nor browser available). Earlier full Release CTest passed before the viewport-highlight addition. The latest focused paper TRIM transcript and Qt screenshot test pass. The user approved the required screenshots.
 
 ## 10. Outcome
 
-- Requirements satisfied: paper layout isolation, classic/smart line modes, line/polyline targets, explicit refusal cases, undo, `.gs` round trip, and paper-space hover/cutter feedback are implemented. Final completion and PR remain pending the required screenshot approval.
+- Requirements satisfied: paper layout isolation, classic/smart line modes, line/polyline targets, explicit refusal cases, undo, `.gs` round trip, and paper-space hover/cutter feedback are implemented. PR #982 is open against `beta`; final completion awaits review and merge.
