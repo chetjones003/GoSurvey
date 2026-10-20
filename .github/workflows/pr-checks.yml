@@ -89,6 +89,13 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
