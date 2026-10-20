@@ -1856,6 +1856,10 @@ if(GOSURVEY_BUILD_QT AND GOSURVEY_BUILD_TESTS)
       -RuntimeDirectory "$<TARGET_FILE_DIR:GoSurveyQt>" -WorkDirectory "${GOSURVEY_ARTIFACT_DIR}"
       -TimeoutSec 120)
   set_tests_properties(qt.deployment PROPERTIES TIMEOUT 300)
+  # Issue #919: keep sign-off claims tied to current workflow tests and tracker items.
+  add_test(NAME qt.parity-ledger
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+      -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/verify-qt-parity-ledger.ps1")
 endif()
 
 # Developer-only helpers remain available to ctest/tools without adding app executables.

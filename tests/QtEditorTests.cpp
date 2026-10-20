@@ -3775,6 +3775,55 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  void issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& state = window.State();
+    constexpr std::uint32_t projectUid = 919;
+    state.drawingTabs[static_cast<std::size_t>(state.activeDrawingIdx)].projectUid = projectUid;
+    AppCommandState::ProjectSession session;
+    session.uid = projectUid;
+    session.readOnly = true;
+    state.openProjects.push_back(session);
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0"); window.Submit("");
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+    QTimer::singleShot(0, &window, [&] {
+      auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(warning);
+      QVERIFY(warning->text().contains("read-only"));
+      warning->accept();
+    });
+    QVERIFY(!window.SaveDrawing());
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
+    QVERIFY(DoUndo(state, window.m_Log));
+    QVERIFY(state.userLinesFlat.empty());
+  }
+
+  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
+    QTemporaryFile blocker;
+    QVERIFY(blocker.open());
+    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
+    EditorWindow window;
+    auto& state = window.State();
+    window.m_AuthStarted = true;
+    state.authGateResolved = false;
+    state.authDeclineRequested = true;
+    window.ServiceAuth();
+    QVERIFY(!state.authOptedOut);
+    QVERIFY(!state.authGateResolved);
+    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
+
+    IsolatedUserData writable;
+    state.authError.clear();
+    state.authDeclineRequested = true;
+    window.ServiceAuth();
+    QVERIFY(state.authOptedOut);
+    QVERIFY(state.authGateResolved);
+    QVERIFY(state.authError.empty());
+    AppCommandState reloaded;
+    LoadUserStartupPrefSettings(reloaded);
+    QVERIFY(reloaded.authOptedOut);
+  }
+
   void issue903PolarSettingsAndOneShotSnap() {
     IsolatedUserData userData;
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();

@@ -94,7 +94,9 @@ try {
     } else {
       $code = [uint32]0
       [void][HiddenDesktop]::GetExitCodeProcess($pi.hProcess, [ref]$code)
-      $exitCode = [int]$code
+      # NTSTATUS crash codes such as 0xC0000005 are unsigned values above Int32::MaxValue.
+      # Preserve their low 32 bits as a signed process exit code instead of throwing during cast.
+      $exitCode = [BitConverter]::ToInt32([BitConverter]::GetBytes($code), 0)
     }
   } finally {
     [void][HiddenDesktop]::CloseHandle($pi.hProcess)
