@@ -5540,3 +5540,95 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
   CHECK(tall.sheetHeightIn() == Catch::Approx(11.f).margin(0.01f));
   CHECK(tall.presetIdx == 0);
 }
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): the DXF path (DxfIo, the app's own DXF reader and writer)
+// carries the whole paper-space set: fills, sheet size and orientation, viewport state, and layouts
+// beyond the first. A multileader has no DXF form here, so it comes back as its lines plus its label.
+TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (issue #768)",
+          "[dxf][req113][issue768]") {
+  ScratchDir dir("dxf-paper-768");
+  const auto p = (dir.path / "paper-768.dxf").string();
+  AppCommandState st;
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  PaperLayout sheet;
+  sheet.name = "Big";
+  sheet.portraitWidthIn = 24.f;
+  sheet.portraitHeightIn = 36.f;
+  sheet.landscape = true;
+  sheet.presetIdx = -1;
+  sheet.paperFilledRegions.push_back(SquareHatchRegion(1.f, 1.f, 2.f));
+  sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+  CadMultileader ml{};
+  ml.pathXyz = {1.f, 5.f, 0.f, 3.f, 5.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 3.f;
+  ml.label.insY = 5.f;
+  ml.label.text = "SEE NOTE 4";
+  ml.label.plottedHeightInches = 0.1f;
+  ml.label.boxMinX = 3.f;
+  ml.label.boxMinY = 4.9f;
+  ml.label.boxMaxX = 6.f;
+  ml.label.boxMaxY = 5.1f;
+  sheet.paperMultileaders.push_back(ml);
+  sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+  Viewport vp;
+  vp.paperXIn = 2.f;
+  vp.paperYIn = 2.f;
+  vp.paperWIn = 20.f;
+  vp.paperHIn = 12.f;
+  vp.scaleModelPerPaperIn = 20.f;
+  vp.camAzimuthDeg = 30.f;
+  vp.camElevationDeg = 40.f;
+  vp.camRollDeg = 10.f;
+  vp.frozenLayers = {"Walls"};
+  vp.locked = true;
+  vp.on = false;
+  sheet.viewports.push_back(vp);
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout second;
+  second.name = "Tall";
+  second.portraitWidthIn = 8.5f;
+  second.portraitHeightIn = 11.f;
+  second.landscape = false;
+  second.presetIdx = 0;
+  second.paperCircles = {2.f, 3.f, 1.f};
+  second.paperCircleAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(second));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 2);
+  const PaperLayout& big = in.paperLayouts[0];
+  CHECK(big.name == "Big");
+  CHECK(big.sheetWidthIn() == Catch::Approx(36.f).margin(0.01f));
+  CHECK(big.sheetHeightIn() == Catch::Approx(24.f).margin(0.01f));
+  CHECK(big.landscape);
+  REQUIRE(big.paperFilledRegions.size() == 1);
+  CHECK(big.paperFilledRegions[0].vertsXyz[0] == Catch::Approx(1.f).margin(0.001f));
+  CHECK(big.paperLines.size() == 6);  // the leader's one segment
+  bool hasLabel = false;
+  for (const CadAnnotation& a : big.paperTexts)
+    hasLabel = hasLabel || a.text.find("SEE NOTE") != std::string::npos;
+  CHECK(hasLabel);
+  REQUIRE(big.viewports.size() == 1);
+  const Viewport& v = big.viewports[0];
+  CHECK(v.paperWIn == Catch::Approx(20.f).margin(0.01f));
+  CHECK(v.camAzimuthDeg == Catch::Approx(30.f).margin(0.05f));
+  CHECK(v.camElevationDeg == Catch::Approx(40.f).margin(0.05f));
+  CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.05f));
+  CHECK(v.locked);
+  CHECK_FALSE(v.on);
+  REQUIRE(v.frozenLayers.size() == 1);
+  CHECK(v.frozenLayers[0] == "Walls");
+  const PaperLayout& tall = in.paperLayouts[1];
+  CHECK(tall.name == "Tall");
+  CHECK_FALSE(tall.landscape);
+  CHECK(tall.presetIdx == 0);
+  REQUIRE(tall.paperCircles.size() == 3);
+  CHECK(tall.paperCircles[0] == Catch::Approx(2.f).margin(0.001f));
+  CHECK(in.userCirclesCxCyZR.empty());  // paper entities did not leak into model space
+  CHECK(in.cadFilledRegions.empty());
+}

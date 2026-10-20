@@ -727,6 +727,46 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
 // header-only box-select + unit tests can share it.
 
+bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
+  for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 3]));
+  }
+  L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(), scratch.userCircleAttrs.end());
+  L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
+  L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
+  L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
+  L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
+  for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
+    if (L.paperPolyOffsets.empty())
+      L.paperPolyOffsets.push_back(0);
+    const int a = scratch.userPolylineOffsets[p];
+    const int b = scratch.userPolylineOffsets[p + 1];
+    for (int v = a * 3; v < b * 3; ++v)
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
+    L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
+    L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
+    L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
+  }
+  bool bulged = false;
+  for (const float bg : scratch.userPolylineVertsBulge)
+    bulged = bulged || bg != 0.f;
+  L.paperLines.insert(L.paperLines.end(), scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
+  L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.userLineAttrs.begin(), scratch.userLineAttrs.end());
+  L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
+  L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(), scratch.cadAnnotationAttrs.end());
+  L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.cadFilledRegions.begin(),
+                              scratch.cadFilledRegions.end());
+  L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.cadFilledRegionAttrs.begin(),
+                                  scratch.cadFilledRegionAttrs.end());
+  L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.cadMultileaders.begin(),
+                             scratch.cadMultileaders.end());
+  L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
+                                 scratch.cadMultileaderAttrs.end());
+  return bulged;
+}
+
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs) {
   assert(out != nullptr);

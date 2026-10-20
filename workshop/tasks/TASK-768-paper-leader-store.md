@@ -42,3 +42,10 @@ Mirrors the existing per-type paper stores (ADR-009); no new layer or abstractio
 - Viewport view direction/twist, frozen layers, lock and on/off are written and read. `Viewport` gains `on` and `locked`; the draw and plot code does not honor them yet (carried, not enforced).
 - Import no longer drops viewports wider than 50 in: the sheet-spanning "chrome" viewport is recognised by spanning the sheet (the viewport id does not survive a save).
 - Still open: paper TABLE <-> DWG TABLE, DXF, enforcing `on`/`locked`.
+
+## 8. Increment 4 — DXF (DxfIo, the app's own DXF reader and writer)
+
+- Export: paper fills as solid HATCH; viewport on/off, view direction, twist, lock flags and frozen layers (group 331, handles numbered from the same layer order the LAYER table uses); multileaders written as LINE segments plus text (DxfIo has no multileader writer in model space either) and reported.
+- Import: layouts from the OBJECTS LAYOUT records (name, tab order, size, rotation); paper entities (group 67, or inside a `*Paper_Space` block) read by the model-space reader into a scratch state and moved onto the layout named by group 410 (`AppendScratchToPaperLayout`, shared with the DWG reader); VIEWPORT with its state.
+- Found on the way: an empty `*Paper_Space` skeleton block must not create a layout (it broke `headless.dxf-export-stable`).
+- Still open: paper TABLE <-> DWG/DXF TABLE; DXF pattern hatches (solid only, as in model space); honoring viewport `on`/`locked`.

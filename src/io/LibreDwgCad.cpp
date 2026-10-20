@@ -4335,47 +4335,9 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
     ent->entmode = savedEntMode;
-    for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
-      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
-      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
-      L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 3]));
-    }
-    L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(),
-                              scratch.userCircleAttrs.end());
-    L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
-    L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
-    L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
-    L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
-    for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
-      if (L.paperPolyOffsets.empty())
-        L.paperPolyOffsets.push_back(0);
-      const int a = scratch.userPolylineOffsets[p];
-      const int b = scratch.userPolylineOffsets[p + 1];
-      for (int v = a * 3; v < b * 3; ++v)
-        L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
-      L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
-      L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
-      L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
-    }
     // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
-    for (const float bg : scratch.userPolylineVertsBulge) {
-      if (bg != 0.f) {
-        NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
-        break;
-      }
-    }
-    L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
-    L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(),
-                            scratch.cadAnnotationAttrs.end());
-    // Issue #768: fills (HATCH) and multileaders, read by the model-space reader, land on the sheet.
-    L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.cadFilledRegions.begin(),
-                                scratch.cadFilledRegions.end());
-    L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.cadFilledRegionAttrs.begin(),
-                                    scratch.cadFilledRegionAttrs.end());
-    L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.cadMultileaders.begin(),
-                               scratch.cadMultileaders.end());
-    L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
-                                   scratch.cadMultileaderAttrs.end());
+    if (AppendScratchToPaperLayout(L, scratch))
+      NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +
