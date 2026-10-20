@@ -24,6 +24,7 @@
 #include "PdfViewerCore.hpp"
 #include "QtAnnotations.hpp"
 #include "util/gizmooverlay.hpp"
+#include "GsIo.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectFiles.hpp"
 #include "ProjectPack.hpp"
@@ -32,13 +33,10 @@
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include "io/Project.hpp"
-#include "ProjectSettings.hpp"
 #include "GsMigrate.hpp"
-#include "GsIo.hpp"
 #include "AppPaths.hpp"
 #include "DwgIo.hpp"
 #include "ProjectAddFlow.hpp"
-#include "ProjectPoints.hpp"
 #include "UserPrefs.hpp"
 #include "platform/HttpFetch.hpp"
 #include "update/UpdateService.hpp"
@@ -85,29 +83,26 @@
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QComboBox>
-#include <QCheckBox>
 #include <QTableWidget>
 #include <QGroupBox>
-#include <QRegularExpression>
-#include <QPushButton>
 #include <QListWidget>
+#include <QPushButton>
 #include <QProgressBar>
-#include <QTextBrowser>
 #include <QToolButton>
+#include <QStatusBar>
 #include <QMenu>
 #include <QBoxLayout>
 #include <QStyledItemDelegate>
 #include <QRadioButton>
-#include <QDockWidget>
 #include <QFrame>
 #include <QSettings>
 #include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
-#include <QDockWidget>
 #include <QStackedWidget>
 #include <QStatusBar>
 #include <QScrollArea>
+#include <QStandardItemModel>
 #include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
@@ -119,8 +114,8 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
-#include <cmath>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <functional>
 #include <fstream>
@@ -3780,6 +3775,55 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  void issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
+    auto& state = window.State();
+    constexpr std::uint32_t projectUid = 919;
+    state.drawingTabs[static_cast<std::size_t>(state.activeDrawingIdx)].projectUid = projectUid;
+    AppCommandState::ProjectSession session;
+    session.uid = projectUid;
+    session.readOnly = true;
+    state.openProjects.push_back(session);
+    window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0"); window.Submit("");
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));
+    QTimer::singleShot(0, &window, [&] {
+      auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(warning);
+      QVERIFY(warning->text().contains("read-only"));
+      warning->accept();
+    });
+    QVERIFY(!window.SaveDrawing());
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
+    QVERIFY(DoUndo(state, window.m_Log));
+    QVERIFY(state.userLinesFlat.empty());
+  }
+
+  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
+    QTemporaryFile blocker;
+    QVERIFY(blocker.open());
+    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
+    EditorWindow window;
+    auto& state = window.State();
+    window.m_AuthStarted = true;
+    state.authGateResolved = false;
+    state.authDeclineRequested = true;
+    window.ServiceAuth();
+    QVERIFY(!state.authOptedOut);
+    QVERIFY(!state.authGateResolved);
+    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
+
+    IsolatedUserData writable;
+    state.authError.clear();
+    state.authDeclineRequested = true;
+    window.ServiceAuth();
+    QVERIFY(state.authOptedOut);
+    QVERIFY(state.authGateResolved);
+    QVERIFY(state.authError.empty());
+    AppCommandState reloaded;
+    LoadUserStartupPrefSettings(reloaded);
+    QVERIFY(reloaded.authOptedOut);
+  }
+
   void issue903PolarSettingsAndOneShotSnap() {
     IsolatedUserData userData;
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
@@ -4592,6 +4636,179 @@ private Q_SLOTS:
     QCOMPARE(window.State().qsObjectType, AppCommandState::QsObjectType::Line);
   }
 
+  void qtSelectionListSnapshotAndMultiSelectionToggle() {
+    EditorWindow window;
+    window.resize(1100, 760);
+    window.State().selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    QToolButton* multi = nullptr;
+    for (auto* button : window.statusBar()->findChildren<QToolButton*>())
+      if (button->text() == "Multi Selection") multi = button;
+    QVERIFY(multi);
+    multi->click();
+    QVERIFY(window.State().multiSelectionEnabled);
+
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    // The Selection list works from a snapshot taken when it is opened (the shortcut menu's "Selection...").
+    window.State().selectionCycleEntities = window.State().selection;
+    window.ShowSelectionList();
+    auto* dialog = window.findChild<QDialog*>("selectionList");
+    QVERIFY(dialog);
+    auto* list = dialog->findChild<QListWidget*>("selectionListItems");
+    QVERIFY(list);
+    QCOMPARE(list->count(), 1);
+    list->item(0)->setCheckState(Qt::Unchecked);
+    QVERIFY(window.State().selection.empty());
+    dialog->findChild<QPushButton*>("selectionListSelectAll")->click();
+    QCOMPARE(window.State().selection.size(), std::size_t(1));
+    QCOMPARE(window.State().selection.front().type, SelectedEntity::Type::LineSeg);
+    dialog->findChild<QPushButton*>("selectionListRefresh")->click();
+    QCOMPARE(list->count(), 1);
+  }
+
+  void qtViewportGripDragCommitsAndEscapeRestores() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(1);
+    state.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    QTest::qWait(150);
+    const Camera camera = CadViewCamera(state);
+    float sx = 0, sy = 0, dx = 0, dy = 0;
+    camera.WorldToScreen(0, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &sx, &sy);
+    camera.WorldToScreen(0, 5, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &dx, &dy);
+    const QPointF start(sx, sy), destination(dx, dy);
+    auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
+      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &event);
+    };
+    sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, destination, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, destination, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(std::abs(state.userLinesFlat[0]) < 0.02);
+    QVERIFY(std::abs(state.userLinesFlat[1] - 5.0) < 0.1);
+    window.Submit("UNDO");
+    QCOMPARE(state.userLinesFlat[1], 0.0);
+
+    camera.WorldToScreen(10, 0, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &sx, &sy);
+    camera.WorldToScreen(10, -5, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &dx, &dy);
+    sendMouse(QEvent::MouseButtonPress, QPointF(sx, sy), Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, QPointF(dx, dy), Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    QCOMPARE(state.userLinesFlat[3], 10.0);
+    QCOMPARE(state.userLinesFlat[4], 0.0);
+  }
+
+  void qtCtrlClickSelectsSolidSubObjectAndPlainClickSelectsWholeSolid() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    brep::Solid solid;
+    brep::Problem problem{};
+    QVERIFY(brep::MakeBox(ucs::Ucs{}, 20.0, 20.0, 10.0, &solid, &problem));
+    state.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(solid)));
+    state.cadSolidAttrs.emplace_back();
+    RefreshSolidDisplayGeometry(state);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    float x = 0, y = 0;
+    CadViewCamera(state).WorldToScreen(10, 10, 10, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &x, &y);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::ControlModifier, QPoint(qRound(x), qRound(y)));
+    QVERIFY(!state.subObjectSelection.empty());
+    QVERIFY(state.selection.empty());
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(x), qRound(y)));
+    QVERIFY(state.subObjectSelection.empty());
+    QCOMPARE(state.selection.size(), std::size_t(1));
+    QCOMPARE(state.selection.front().type, SelectedEntity::Type::Solid);
+    QCOMPARE(state.selection.front().index, 0);
+  }
+
+  void qtOverlappingPickMenuSelectsChosenVisibleEntity() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0, 0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(2);
+    state.multiSelectionEnabled = true;
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    float x = 0, y = 0;
+    CadViewCamera(state).WorldToScreen(5, 0, 0, static_cast<float>(viewport->width()),
+        static_cast<float>(viewport->height()), &x, &y);
+    auto* menuPoll = new QTimer(&window);
+    auto attempts = std::make_shared<int>(0);
+    connect(menuPoll, &QTimer::timeout, &window, [menuPoll, attempts, &window] {
+      for (QMenu* menu : window.findChildren<QMenu*>()) {
+        for (QAction* action : menu->actions())
+          if (action->text().startsWith("Line 2")) {
+            menuPoll->stop(); action->trigger(); return;
+          }
+      }
+      if (++*attempts > 300) {
+        menuPoll->stop();
+        for (QMenu* menu : window.findChildren<QMenu*>()) menu->close();
+      }
+    });
+    menuPoll->start(10);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(qRound(x), qRound(y)));
+    QTRY_COMPARE(state.selection.size(), std::size_t(1));
+    QCOMPARE(state.selection.front().type, SelectedEntity::Type::LineSeg);
+    QCOMPARE(state.selection.front().index, 1);
+  }
+
+  void qtCrossingSelectionDragAndEscapeCancellation() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1100, 760);
+    AppCommandState& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0};
+    state.userLineAttrs.resize(1);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    QTRY_VERIFY(viewport->width() > 200);
+    const Camera camera = CadViewCamera(state);
+    auto screenPoint = [&](double wx, double wy) {
+      float x = 0, y = 0;
+      camera.WorldToScreen(wx, wy, 0, static_cast<float>(viewport->width()),
+          static_cast<float>(viewport->height()), &x, &y);
+      return QPointF(x, y);
+    };
+    auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
+      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &event);
+    };
+    const QPointF from = screenPoint(12, 4), to = screenPoint(-2, -4);
+    sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(!state.selection.empty());
+    QVERIFY(!state.selBoxWaitingSecond);
+    const auto selected = state.selection;
+    const QPointF blank = screenPoint(30, 20);
+    sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
+    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(viewport, &escape);
+    QCOMPARE(state.selection.size(), selected.size());
+    QVERIFY(!state.selBoxWaitingSecond);
+  }
+
   void nativePointTransferImportsExportsAndUndoes() {
     QTemporaryDir directory;
     const auto input = directory.filePath(QString::fromUtf8("points-\xc3\xa9.csv"));
@@ -4806,6 +5023,21 @@ private Q_SLOTS:
     QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
     auto* fov = window.findChild<QSpinBox*>("ribbonFov"); QVERIFY(fov); QVERIFY(fov->isEnabled());
     fov->setValue(75); QCOMPARE(state.viewportFovDeg, 75.f);
+    window.Submit("PERSPECTIVE sideways"); QCOMPARE(state.viewportProjection, Camera::Projection::Perspective);
+    window.Submit("FOV 180"); QCOMPARE(state.viewportFovDeg, 75.f);
+    window.Submit("VIEW S Qt Perspective"); QCOMPARE(state.namedViews.size(), std::size_t(1));
+    QCOMPARE(state.namedViews[0].projection, Camera::Projection::Perspective);
+    AppCommandState reopened; std::vector<std::string> ioLog;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(reopened, SerializeGoSurveyJson(state), ioLog));
+    QCOMPARE(reopened.viewportProjection, Camera::Projection::Perspective);
+    QCOMPARE(reopened.viewportFovDeg, 75.f);
+    QCOMPARE(reopened.namedViews.size(), std::size_t(1));
+    QCOMPARE(reopened.namedViews[0].fovDeg, 75.f);
+    auto* annotationScale = window.findChild<QComboBox*>("statusAnnotationScale"); QVERIFY(annotationScale);
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    window.Refresh(); QCOMPARE(annotationScale->count(), 2); QCOMPARE(annotationScale->currentIndex(), -1);
+    annotationScale->setCurrentIndex(1); QMetaObject::invokeMethod(annotationScale, "activated", Q_ARG(int, 1));
+    QCOMPARE(state.currentAnnotationScaleIndex, 1);
     auto* ucs = window.findChild<QComboBox*>("ribbonUcs"); QVERIFY(ucs);
     ucs->setCurrentIndex(3); QMetaObject::invokeMethod(ucs, "activated", Q_ARG(int, 3));
     QVERIFY(ucs::FramesMatch(state.activeUcs, ucs::OrthographicPresets()[2].frame));
@@ -5038,6 +5270,74 @@ private Q_SLOTS:
     QVERIFY(state.namedViews.empty());
     QVERIFY(state.ucsNamed.empty());
     QVERIFY(ucs::FramesMatch(state.activeUcs, originalUcs));
+  }
+
+  void qtIsolationCommandsHideAndRestoreStableEntities() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
+    state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
+    state.userLineAttrs.resize(2);
+    state.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    window.Submit("ISOLATEOBJECTS");
+    QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
+    window.Submit("UNISOLATEOBJECTS");
+    QVERIFY(state.hiddenEntityIds.empty());
+    state.selection = {{SelectedEntity::Type::LineSeg, 1}};
+    window.Submit("HIDEOBJECTS");
+    QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
+    window.Submit("UNISOLATEOBJECTS");
+    QVERIFY(state.hiddenEntityIds.empty());
+  }
+
+  void qtAnnotationScaleControlsApplyVisibilityAndStableIsolation() {
+    AppCommandState state;
+    state.uiViewportWidthPx = 640.f; state.uiViewportHeightPx = 480.f;
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    state.currentAnnotationScaleIndex = 0;
+    CadAnnotation annotation; annotation.kind = CadAnnotation::Kind::Text; annotation.text = "Qt";
+    annotation.annotative = true; annotation.annotativeVisibleScaleNames = {"1:50"};
+    annotation.plottedHeightInches = 0.25f; state.cadAnnotations.push_back(annotation);
+    EntityAttributes attrs; attrs.id = 42; state.cadAnnotationAttrs.push_back(attrs);
+    auto render = [&] {
+      QImage image(640, 480, QImage::Format_ARGB32_Premultiplied); image.fill(Qt::transparent);
+      QPainter painter(&image); DrawQtModelAnnotations(painter, state, 640.f, 480.f); painter.end();
+      return image;
+    };
+    const QImage visible = render();
+    QVERIFY(std::any_of(visible.constBits(), visible.constBits() + visible.sizeInBytes(), [](uchar value) { return value != 0; }));
+    state.currentAnnotationScaleIndex = 1;
+    const QImage excludedScale = render();
+    QVERIFY(std::all_of(excludedScale.constBits(), excludedScale.constBits() + excludedScale.sizeInBytes(), [](uchar value) { return value == 0; }));
+    state.currentAnnotationScaleIndex = 0; state.hiddenEntityIds = {42};
+    const QImage hidden = render();
+    QVERIFY(std::all_of(hidden.constBits(), hidden.constBits() + hidden.sizeInBytes(), [](uchar value) { return value == 0; }));
+  }
+
+  void qtAnnotativePropertiesToggleAndUndoVisibleScales() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
+    state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    CadAnnotation annotation; annotation.kind = CadAnnotation::Kind::Text; annotation.text = "Qt";
+    state.cadAnnotations.push_back(annotation); state.cadAnnotationAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::Annotation, 0}}; window.Refresh();
+    auto* annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative);
+    annotative->setChecked(true); QVERIFY(state.cadAnnotations[0].annotative);
+    auto* scales = window.findChild<QComboBox*>("propertyAnnotationScales"); QVERIFY(scales);
+    auto* model = qobject_cast<QStandardItemModel*>(scales->model()); QVERIFY(model);
+    model->item(1)->setCheckState(Qt::Unchecked);
+    QCOMPARE(state.cadAnnotations[0].annotativeVisibleScaleNames, std::vector<std::string>{"1:50"});
+    window.Submit("UNDO");
+    QVERIFY(state.cadAnnotations[0].annotativeVisibleScaleNames.empty());
+    state.cadFilledRegions.emplace_back(); state.cadFilledRegionAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::FilledRegion, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadFilledRegions[0].annotative);
+    state.cadBlockRefs.emplace_back(); state.cadBlockRefAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::BlockRef, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadBlockRefs[0].annotative);
+    state.cadMultileaders.emplace_back(); state.cadMultileaderAttrs.emplace_back();
+    state.selection = {{SelectedEntity::Type::Multileader, 0}}; window.Refresh();
+    annotative = window.findChild<QCheckBox*>("propertyAnnotative"); QVERIFY(annotative); annotative->setChecked(true);
+    QVERIFY(state.cadMultileaders[0].annotative);
   }
 
   void releaseRibbonHatchDefaultsAndSelectionEditsAreSeparateAndUndoable() {

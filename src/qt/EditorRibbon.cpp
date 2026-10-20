@@ -263,7 +263,7 @@ void EditorWindow::BuildRibbonPages() {
         connect(projection, &QComboBox::activated, this, [this](int index) { Submit(index ? "PERSPECTIVE ON" : "PERSPECTIVE OFF"); });
         auto* fov = new QSpinBox(panel); fov->setObjectName("ribbonFov"); fov->setRange(1, 179); fov->setPrefix("FOV ");
         fov->setSuffix(" deg"); grid->addWidget(fov, 1, col - 1);
-        connect(fov, &QSpinBox::valueChanged, this, [this](int value) { m_State.viewportFovDeg = static_cast<float>(value); m_Viewport->update(); });
+        connect(fov, &QSpinBox::valueChanged, this, [this](int value) { Submit(QString("FOV %1").arg(value)); });
       }
       if (name == "View" && panelName == "Named Views") {
         auto* views = combo("ribbonNamedView", {"Top", "Bottom", "Left", "Right", "Front", "Back", "SW Isometric", "SE Isometric", "NE Isometric", "NW Isometric"});

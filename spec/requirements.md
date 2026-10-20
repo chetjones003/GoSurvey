@@ -12813,6 +12813,85 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) — D-2026-10-19-e, GitHub issue #910.
 - Revisions: 2026-10-19 — initial, D-2026-10-19-e, GitHub issue #910.
 
+### REQ-438 — Qt parity for annotation scale, object isolation, and perspective (GitHub issue #901)
+- Purpose: Qt migration issue #901. The existing 0.7.4 executable already defines these workflows in REQ-084 (object isolation), REQ-309 (perspective projection and FOV), and the annotation-scale requirements. A Qt ribbon action or shared command handler alone does not make a workflow usable: the user must be able to complete it through Qt and observe the same outcomes and safeguards.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-18-h (user confirmed full Qt parity scope for issue #901).
+- Depends on: REQ-084, REQ-309, REQ-201.
+- Statement: The Qt editor provides full workflow parity with the beta 0.7.4 executable for annotation-scale controls, object isolation, and perspective controls. For each feature, Qt exposes the complete user workflow and preserves the behavior already specified by the governing requirement or, for annotation-scale controls, the beta 0.7.4 executable, including validation, cancel, failure, undo, and read-only semantics wherever that behavior applies. Object isolation remains session-only and hidden objects remain unpickable as defined in REQ-084. Perspective and field of view retain REQ-309's model-view persistence and validation rules. Annotation-scale controls retain the beta 0.7.4 scale list, current-scale selection, annotative visibility, and entity/style editing behavior. No change to drawing data, command semantics, or the production executable's default is introduced by this parity port.
+- Acceptance:
+  - The Qt editor can select the current entry from the available annotation SCALE list and complete the beta 0.7.4 annotative visibility and property workflows for supported entities/styles; invalid input is refused without changing the prior value, and Cancel restores the pre-dialog state wherever a dialog offers Cancel.
+  - The Qt editor can isolate selected objects, hide selected objects, and end isolation. Hidden objects are not drawn, hovered, snapped, or selectable; isolation survives array compaction correctly, does not persist to `.gs`, and undo/redo and read-only behavior match the legacy workflow.
+  - The Qt editor can switch between orthographic and perspective, set and report field of view, reject invalid values without mutation, save/reopen the model view and named perspective views, and preserve coordinates and picking behavior as required by REQ-309.
+  - Each workflow's validation, cancellation, failure, undo, and read-only cases applicable in beta 0.7.4 have focused Qt workflow coverage. Tests exercise Qt-facing interaction and resulting document/view state, not merely command dispatch.
+  - The 0.7.4 Qt parity ledger records the implemented and tested behavior for all three areas; a shared command route or visible ribbon control by itself is not marked complete.
+- Owner-layer: Qt editor UI and interaction; existing command, document, renderer, and IO services remain authoritative for domain behavior.
+- Status: accepted (2026-10-18).
+- Revisions: 2026-10-18 — initial; user confirmed full Qt parity for issue #901.
+
+### REQ-439 — Qt selection cycling and model-space grips (GitHub issue #902)
+
+- Purpose: the Qt editor currently has basic picking, while the beta editor also lets users choose
+  among overlapping picks and edit selected geometry directly from its grips. Those workflows must
+  remain available during the additive Qt migration.
+- Priority: must
+- Type: functional
+- Depends on: REQ-039, REQ-047, REQ-054, REQ-060, REQ-121, REQ-318, REQ-370, and migration tracker #878.
+- Statement:
+  1. **Existing selection rules remain authoritative.** Qt selection gestures follow REQ-039,
+     REQ-121, REQ-318, and REQ-370 where applicable. Selection math and hit testing stay in the
+     existing Commands/Viewport services; Qt owns event routing and presentation.
+  2. **Multi Selection.** The existing Multi Selection toggle controls disambiguation of overlapping
+     linework picks. With it off, a click selects the resolver's nearest visible candidate. With it
+     on, an ambiguous hover shows the overlap marker and clicking opens a cursor-adjacent list of
+     candidates with their type labels and color swatches. Choosing a row applies the click's
+     existing Shift behavior; dismissing the list changes no selection.
+  3. **Selection list.** The existing right-click Selection… action remains available when a
+     selection exists. Its modeless list reflects a snapshot of the current entity and survey-point
+     selection; Refresh takes a new snapshot, row checkboxes add/remove listed items, and Select All /
+     Deselect All affect the listed snapshot only.
+  4. **Model-space grips.** Qt presents and routes every model-space grip family already supported by
+     the beta editor: line endpoints; circle center/radius; polyline vertices and arc-segment bulge
+     grips; arc and ellipse grips where the shared helpers permit them; dynamic-block grips; and the
+     existing dimension and MTEXT grip workflows. A drag previews the edit while held and commits on
+     release as one undoable change. Escape or the beta grip-cancel gesture restores the original
+     geometry. A refused or read-only edit leaves the drawing unchanged. ORTHO, direct-distance
+     entry, and object snaps retain REQ-047 and the existing grip behavior.
+  5. **Advanced 3D selection.** Qt routes whole-solid picks through the camera ray and sub-object
+     picks through REQ-318. Ctrl+click names a solid face, edge, or vertex without entering a sticky
+     mode; while Ctrl is held, the candidate under the cursor is pre-highlighted. Shift and the
+     mutually exclusive whole-object/sub-object selection stores follow REQ-318. A miss or an
+     occluded sub-object is not selected.
+  6. **Migration boundary.** This requirement does not change the existing beta editor, switch the
+     production default, remove ImGui, or add new geometry/edit operations. The 3D gizmo and
+     section-plane overlay work remains under issue #900.
+- Acceptance:
+  - Qt tests prove ordinary click/Shift selection and left-to-right window / right-to-left crossing
+    drags, including live preview and cancellation without a selection change, in line with
+    REQ-370.
+  - With Multi Selection off, an overlapping pick chooses the nearest visible candidate. With it
+    on, the overlap marker and candidate list appear; choosing each listed candidate selects that
+    entity, Shift behavior is preserved, and dismissing the list leaves selection unchanged.
+  - The Selection… panel refreshes its snapshot and its row, Select All, and Deselect All actions
+    produce the corresponding entity and survey-point selection without changing drawing geometry.
+  - Qt exercises every model-space grip family listed in item 4. Each supported drag previews and
+    commits the expected geometry; one undo restores the original; Escape and the grip-cancel gesture
+    restore the original without committing; a refused or read-only edit leaves geometry unchanged.
+  - In an orbited 3D view, Qt selects the nearest visible solid, Ctrl+click selects each supported
+    face/edge/vertex kind, and Shift toggles those sub-objects. A far-side occluded sub-object and a
+    miss are not selected; switching between whole-object and sub-object selection follows
+    REQ-318's exclusivity rule.
+  - The parity ledger records the completed selection workflows and their focused Qt coverage.
+  - Before issue #902 is marked complete, the user reviews 2–3 integrated screenshot options for
+    each major affected UI surface and the selected visual direction is applied.
+- Owner-layer: Qt UI (`src/qt/EditorViewport.*`, `src/qt/EditorWindow.*`) / existing Commands and
+  Viewport services.
+- Decision: D-2026-10-18-i.
+- Status: accepted.
+- Revisions: 2026-10-18 — initial proposal; accepted by user.
+
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -14003,6 +14082,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
 | REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
+| REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
+| REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14072,7 +14153,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
 | REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half was run and confirmed by the user in the application 2026-08-18**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
-| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step | accepted |
+| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step; Qt: `issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy` (decline remains unresolved if preference persistence fails, then resolves after a successful save) | accepted |
+| REQ-382 | IO/Domain/UI | Qt: `issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved` (typed geometry survives a refused save and the undo snapshot remains usable); existing `[req382]` project-lock tests | accepted |
 | REQ-092 | Platform/backend | `accounts-worker/test.mjs` **green 2026-08-23** (offline, real RSA keypair generated in-process: missing/malformed/tampered/expired/wrong-issuer/wrong-audience/alg-none/missing-subject tokens all rejected 401 before any D1 query; valid token for a new user returns the default tier and issues exactly one insert; valid token for an existing user returns their stored tier with no insert; D1 outage is 503; missing `AUTH0_DOMAIN` binding is 500, not misreported as unauthorized; email upsert/preserve-tier/malformed-dropped cases added when email wiring landed) + **live, 2026-08-23**: deployed Worker confirmed live (401/404 as expected), a real sign-in's `users` row confirmed via direct D1 query (`auth0_sub`, `tier: 'free'`, and — after the email wiring landed — a populated `email`) | accepted |
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |

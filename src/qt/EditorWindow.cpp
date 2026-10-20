@@ -41,6 +41,7 @@
 #include "Version.hpp"
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QCompleter>
@@ -89,6 +90,8 @@
 #include <QToolBar>
 #include <QToolButton>
 #include <QTreeWidget>
+#include <QStandardItemModel>
+#include <QStandardItem>
 #include <QVBoxLayout>
 #include <QBoxLayout>
 #include <QGridLayout>
@@ -713,6 +716,28 @@ EditorWindow::EditorWindow() {
       "QToolButton:checked { color:#ffffff; background:#244846; border-color:#55d8d0; }");
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
+  auto* annotationScale = new QComboBox(this);
+  annotationScale->setObjectName("statusAnnotationScale");
+  annotationScale->setMinimumWidth(110);
+  annotationScale->setAccessibleName("Annotation scale");
+  annotationScale->setToolTip("Current annotation scale");
+  statusBar()->addWidget(annotationScale);
+  connect(annotationScale, &QComboBox::activated, this, [this](int index) {
+    if (index < 0 || index >= static_cast<int>(m_State.annotationScales.size()) ||
+        index == m_State.currentAnnotationScaleIndex) return;
+    SetCurrentAnnotationScaleIndex(m_State, index);
+    Refresh();
+  });
+  auto* multiSelect = new QToolButton(this);
+  multiSelect->setText("Multi Selection"); multiSelect->setCheckable(true);
+  multiSelect->setChecked(m_State.multiSelectionEnabled);
+  multiSelect->setToolTip("Disambiguate overlapping linework picks.");
+  statusBar()->addWidget(multiSelect);
+  connect(multiSelect, &QToolButton::toggled, this, [this](bool on) {
+    m_State.multiSelectionEnabled = on;
+    if (!on) { m_State.viewportPickCandidates.clear(); m_State.viewportPickAmbiguous = false; }
+    m_Viewport->update();
+  });
   connect(new QShortcut(QKeySequence(Qt::Key_F7), this), &QShortcut::activated, grid, &QToolButton::toggle);
   auto* service = new QTimer(this);
   service->setInterval(33);
@@ -1810,6 +1835,14 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
+  if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
+    const QSignalBlocker block(annotationScale);
+    annotationScale->clear();
+    for (const auto& scale : m_State.annotationScales)
+      annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+    annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    annotationScale->setEnabled(!m_State.annotationScales.empty());
+  }
   RefreshProjects();
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);

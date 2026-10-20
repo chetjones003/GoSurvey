@@ -67,8 +67,12 @@ workflow evidence, and linked open gaps, is maintained in the
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close; successful opens/saves update the recent drawings list | Export-loss disclosures, full import/export UI, template workflow |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter; 3D gizmo axes/planes/hover/drag ghosts, section-plane clip indicator/hatch/grips/preview and Qt pointer routing (issue #900) | Exact graphics parity, paper-space rendering, tables, map tiles, annotation scale/isolation and perspective verification |
+| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
+| Viewport | Perspective/orthographic selector with validated FOV command; annotation-scale selector and selected-text annotation properties; model annotation scale visibility/rendering; stable-ID object isolation supplied to the renderer and annotation overlay; point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids; Surface Create / Properties / Surfaces manager / Surface Style dialogs, the Toolspace surface and style menus and the read-only Surface properties section (#893) | Complete geometry properties, context menus |
+| Input | Shared visibility-aware click/hover resolver; Shift removal; Multi Selection overlap marker and layer-aware candidate menu; click-drag and two-corner window/crossing selection with translucent preview and Escape/right-click cancel that restores the prior selection; line/circle/polyline/bulge/arc/ellipse/dynamic-block, aligned-dimension and MTEXT grips; live grip preview, commit, undo and cancel; Ctrl+click 3D sub-object hover/pick and whole-solid selection; modeless Selection… snapshot list for entities and survey points; object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Advanced selection edge cases and full keyboard focus/DPI parity |
+| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
 | Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
 | Projects | Native create/open, lock acquisition, stale-lock detection and the read-only / take-over / cancel choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, Copy / Link / Cancel attach question (point cloud import, Add PDF to project), cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; health/pack/turnover UI |
 | PDF viewer | Async page rendering, navigation/zoom, thumbnail strip, text search (new in Qt, REQ-429), text/line/rectangle/ellipse annotations, style and text editing, selection/move/resize/delete, Length dimension-line third click, undo/redo, Save As, close protection, asynchronous open/save, rotated-page and high-DPI alignment, scaled measurements, Set scale / calibrate / scale checks / robust calibration / Snap (REQ-430), revision compare/alignment, change detection and Save As markups, automatic scale audit (REQ-392/393/395, #908), page extraction, and coordinate extraction with selectable-text review and accept/deny (REQ-399, #907; user-approved deep navy style) | Underlay attachment |
@@ -79,11 +83,16 @@ Native Quick Select now exposes object/property filters, include/exclude, curren
 selection scope and append through the shared selection service. Numeric input
 is validated before applying; Cancel preserves the selection and saved filter.
 Native command typing routes from editor controls and floating docks to command
-entry while preserving editable fields and dialogs. Tabs reserve space before
+entry while preserving editable fields and dialogs. Selection/grip additions are
+tracked in REQ-439; focused Qt tests cover the selection snapshot, overlap chooser,
+grip commit/undo/cancel, and crossing-drag workflows. Tabs reserve space before
 the first viewport paint. Named orientations are under View rather than a toolbar
 row. History, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
-event loop. Exact annotation and all selection/gesture parity remain release gates.
+event loop. Qt selection cycling, gestures, grips, and the modeless Selection…
+list are implemented and recorded in REQ-439. The Qt test target builds, and
+the focused selection workflows pass on Qt 6.8.3. Exact annotation parity and
+advanced selection edge cases remain separate release gates.
 
 ## Version 0.7.2 ribbon inventory
 
@@ -204,6 +213,12 @@ flows, Unicode paths, undo/redo, full-file counts, invalid exports, failed final
 replacement cleanup, read-only rejection, report copy, blocked paste cancellation,
 and Copy/Paste menu routing plus clipboard unit conversion before placement. These checks do not establish all
 CSV dialect or project/clipboard parity.
+
+## Issue #901: annotation scale, object isolation, and perspective
+
+`REQ-438` is the parity gate for these three workflows. The status bar selects the current annotation scale; the View ribbon selects projection. Its FOV control submits the validated `FOV` command. The Properties dock exposes annotative flags and visible SCALE entries for selected text/dimensions, filled regions, block references, and multileaders; changes create one undo step and retain the empty-list-means-all rule. Qt passes the stable hidden-ID set and current annotation-scale state into the existing renderer, and the Qt annotation overlay applies hidden-ID and per-scale visibility filters. Qt isolate/hide/end-isolation actions use the shared command and picking paths.
+
+Focused `QtEditorTests [issue901]` coverage verifies the status-bar scale selector, ribbon projection/FOV controls, invalid projection/FOV refusal, named perspective view save/reopen, per-scale visibility and hidden annotation rendering, annotative-property undo, and isolate/hide/unisolate commands. The complete `GoSurveyQtTests.exe` run recorded 41 passed and one unrelated failure: `tabsAppearInitiallyAndTypingRoutesFromEditorChrome` failed its focus assertion at `tests/QtEditorTests.cpp:411`; the focused #901 cases pass. The chosen UI direction is status-bar scale selection, the existing Properties section, and the existing ribbon isolation menu.
 
 ## Initial baseline verification (superseded by the iteration above)
 
