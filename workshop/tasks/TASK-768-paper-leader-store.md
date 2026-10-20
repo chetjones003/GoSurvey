@@ -28,3 +28,10 @@ Mirrors the existing per-type paper stores (ADR-009); no new layer or abstractio
 ## 5. Assumptions / debt
 
 - Creation path is import (increment 2) until a paper MLEADER command is specified.
+
+## 6. Increment 2 — DWG paper fills and multileaders (this branch)
+
+- DWG export: paper fills -> HATCH and paper multileaders -> MULTILEADER (R2010+) or LEADER + MTEXT, through `WriteFilledRegionHatch` / `WriteMultileaderEntity`, extracted from `FillFromState` so model and paper space share one writer.
+- DWG import: HATCH, MULTILEADER and LEADER on a sheet land in `paperFilledRegions` / `paperMultileaders`.
+- Fix found on the way: the model-space reader dropped every entity flagged `entmode == 1` (paper space), so `duke-main-clean-r2018.dwg` lost its sheet text, curves and polylines (REQ-113 acceptance 2). `ImportPaperEntity` now reads them as sheet content.
+- Still open: paper TABLE <-> DWG TABLE, paper size/orientation, viewport view direction/frozen layers/lock/on-off, DXF.

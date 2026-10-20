@@ -3881,6 +3881,187 @@ static void WriteBlockRefInsertToHeader(Dwg_Object_BLOCK_HEADER* hdr, TableWrite
   apply(e0->parent, at);
 }
 
+// REQ-170 / issue #608: one filled region -> HATCH (solid or predefined pattern) in \p hdr. Shared by
+// model space (FillFromState) and paper space (issue #768); \p ox / \p oy shift local -> world (0 on a
+// sheet). False when the region is degenerate or LibreDWG refuses it.
+static bool WriteFilledRegionHatch(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                   const AppCommandState& st, const CadFilledRegion& fr,
+                                   const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                   DwgExportAnnotContext& annotCtx) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+    return false;
+  std::vector<Dwg_Object*> pathObjs;
+  pathObjs.reserve(fr.loopStart.size());
+  bool pathsOk = true;
+  for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+    const int begin = fr.loopStart[li];
+    const int cnt = fr.loopCount(li);
+    if (cnt < 3) {
+      pathsOk = false;
+      break;
+    }
+    std::vector<dwg_point_2d> pts(static_cast<size_t>(cnt));
+    for (int v = 0; v < cnt; ++v) {
+      const size_t k = static_cast<size_t>(begin + v) * 3;
+      dwg_point_3d wp{};
+      world(static_cast<float>(fr.vertsXyz[k]), static_cast<float>(fr.vertsXyz[k + 1]),
+            fr.vertsXyz[k + 2], &wp);
+      pts[static_cast<size_t>(v)].x = wp.x;
+      pts[static_cast<size_t>(v)].y = wp.y;
+    }
+    Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, cnt, pts.data());
+    if (lw == nullptr) {
+      pathsOk = false;
+      break;
+    }
+    lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);  // closed
+    lw->elevation = fr.vertsXyz[static_cast<size_t>(begin) * 3 + 2];
+    lw->parent->invisible = 1;
+    pathObjs.push_back(&dwg->object[lw->parent->objid]);
+  }
+  if (!pathsOk || pathObjs.size() != fr.loopStart.size())
+    return false;
+
+  const bool solid = fr.isSolid();
+  const char* patName = solid ? "SOLID" : fr.patternName.c_str();
+  if (!solid && (patName == nullptr || patName[0] == '\0'))
+    patName = "ANSI31";
+  Dwg_Entity_HATCH* hatch = dwg_add_HATCH(
+      hdr, 1, patName, false, static_cast<unsigned>(pathObjs.size()),
+      const_cast<const Dwg_Object**>(pathObjs.data()));
+  if (hatch == nullptr)
+    return false;
+  hatch->elevation = fr.vertsXyz.size() >= 3 ? fr.vertsXyz[2] : 0.0;
+  if (!solid) {
+    hatch->angle = static_cast<double>(fr.patternAngleDeg) * (kPi / 180.0);
+    hatch->scale_spacing = fr.patternScale > 0.f ? static_cast<double>(fr.patternScale) : 1.0;
+    hatch->is_solid_fill = 0;
+  }
+  if (r2018Write && fr.annotative && hatch->paths != nullptr) {
+    for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
+      hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
+    if (hatch->parent != nullptr)
+      WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
+  }
+  if (annotCtx.enabled && fr.annotative && hatch->parent != nullptr)
+    DwgExportAttachHatchAnnotationContext(&annotCtx, hatch->parent, hatch, fr, st);
+  apply(hatch->parent, at);
+  return true;
+}
+
+// REQ-367 / issue #619: one multileader -> native MULTILEADER (R2010+) or LEADER + MTEXT fallback.
+// Shared by model space (FillFromState) and paper space (issue #768); \p ox / \p oy shift local -> world.
+static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                   const AppCommandState& st, const CadMultileader& ml,
+                                   const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                   bool nativeMultileaderExport, float modelUnitsPerPlottedInch,
+                                   DwgExportAnnotContext& annotCtx) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  const CadAnnotation& an = ml.label;
+  dwg_point_3d tp{};
+  world(an.insX, an.insY, an.insZ, &tp);
+  std::string wire;
+  for (char ch : MtextRichFlattenToPlain(an.text)) {
+    if (ch == '\n')
+      wire += "\\P";
+    else if (ch != '\r')
+      wire += ch;
+  }
+  const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
+  const double textH =
+      static_cast<double>(CadAnnotationHeightWorld(an, modelUnitsPerPlottedInch));
+  const size_t nPt = ml.pathXyz.size() / 3;
+  if (nativeMultileaderExport && nPt >= 2) {
+    std::vector<std::vector<dwg_point_3d>> branchPtsStorage;
+    std::vector<dwg_mleader_branch> branches;
+    auto appendBranch = [&](const std::vector<float>& path) {
+      const size_t n = path.size() / 3;
+      if (n < 2)
+        return;
+      branchPtsStorage.emplace_back(n);
+      std::vector<dwg_point_3d>& pts = branchPtsStorage.back();
+      for (size_t j = 0; j < n; ++j)
+        world(path[j * 3], path[j * 3 + 1], path[j * 3 + 2], &pts[j]);
+      dwg_mleader_branch b{};
+      b.num_points = static_cast<unsigned>(n);
+      b.points = pts.data();
+      branches.push_back(b);
+    };
+    appendBranch(ml.pathXyz);
+    for (const std::vector<float>& extra : ml.extraLeaderPaths)
+      appendBranch(extra);
+    if (!branches.empty()) {
+      const std::vector<dwg_point_3d>& primary = branchPtsStorage.front();
+      dwg_point_3d dir{};
+      const size_t last = primary.size() - 1;
+      const size_t prev = primary.size() >= 2 ? last - 1 : 0;
+      dir.x = primary[last].x - primary[prev].x;
+      dir.y = primary[last].y - primary[prev].y;
+      dir.z = primary[last].z - primary[prev].z;
+      const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
+      if (len > 1e-9) {
+        dir.x /= len;
+        dir.y /= len;
+        dir.z /= len;
+      } else {
+        dir.x = 1.0;
+        dir.y = dir.z = 0.0;
+      }
+      if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
+              hdr, static_cast<unsigned>(branches.size()), branches.data(),
+              wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+        mld->is_annotative = ml.annotative ? 1 : 0;
+        if (r2018Write && ml.annotative && mld->parent != nullptr)
+          WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
+        if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
+          DwgExportAttachMleaderAnnotationContext(&annotCtx, mld->parent, mld, ml, st);
+        apply(mld->parent, at);
+        return;
+      }
+    }
+  }
+  Dwg_Entity_MTEXT* mt =
+      dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
+  if (mt != nullptr) {
+    mt->text_height = textH;
+    mt->attachment = 1;
+    apply(mt->parent, at);
+  }
+  if (nPt >= 2) {
+    std::vector<dwg_point_3d> pts(nPt);
+    for (size_t j = 0; j < nPt; ++j) {
+      world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
+    }
+    Dwg_Entity_LEADER* ld =
+        dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
+    if (ld != nullptr) {
+      apply(ld->parent, at);
+    } else {
+      for (size_t j = 0; j + 1 < nPt; ++j) {
+        if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &pts[j], &pts[j + 1]))
+          apply(e->parent, at);
+      }
+    }
+  }
+}
+
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
                                     const AppCommandState& st, DwgExportFieldContext* fldCtx,
                                     DwgExportVisualStyleContext* vsCtx) {
@@ -3968,6 +4149,17 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
                                 fldCtx);
+  // Issue #768 / REQ-113: fills -> HATCH and multileaders -> MULTILEADER (R2010+) or LEADER + MTEXT,
+  // through the same writers model space uses. Paper inches, so no origin shift and 1 unit per plotted inch.
+  DwgExportAnnotContext noAnnot;
+  DwgExportAnnotContextInit(&noAnnot, tw.dwg, false);
+  for (size_t i = 0; i < L.paperFilledRegions.size(); ++i)
+    WriteFilledRegionHatch(tw.dwg, ps, tw, st, L.paperFilledRegions[i], AttrAt(L.paperFilledRegionAttrs, i), 0.0,
+                           0.0, false, noAnnot);
+  const bool nativeLeaders = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
+  for (size_t i = 0; i < L.paperMultileaders.size(); ++i)
+    WriteMultileaderEntity(tw.dwg, ps, tw, st, L.paperMultileaders[i], AttrAt(L.paperMultileaderAttrs, i), 0.0, 0.0,
+                           false, nativeLeaders, 1.f, noAnnot);
 }
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
@@ -3978,6 +4170,9 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
   for (const PaperLayout& L : st.paperLayouts) {
     for (const EntityAttributes& a : L.paperLineAttrs)
       tw.EnsureLtype(a.linetype);
+    for (const std::vector<EntityAttributes>* v : {&L.paperFilledRegionAttrs, &L.paperMultileaderAttrs})
+      for (const EntityAttributes& a : *v)
+        tw.EnsureLtype(a.linetype);
     for (const EntityAttributes& a : L.paperBlockRefAttrs)
       tw.EnsureLtype(a.linetype);
     for (const std::vector<EntityAttributes>* v : {&L.paperCircleAttrs, &L.paperArcAttrs, &L.paperEllAttrs,
@@ -4061,12 +4256,17 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   // They land in a scratch state with origin 0 and 1 model unit per plotted inch, so every number is
   // already in paper inches, then move into the layout's own stores.
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
-      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D) {
+      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
+      ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER) {
     AppCommandState scratch;
     scratch.worldDocumentOriginX = 0.0;
     scratch.worldDocumentOriginY = 0.0;
     scratch.modelUnitsPerPlottedInch = 1.f;
+    // The model-space reader drops paper-space entities (entmode 1); this IS the sheet, so read it as model.
+    const auto savedEntMode = ent->entmode;
+    ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
+    ent->entmode = savedEntMode;
     for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
       L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
       L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
@@ -4099,6 +4299,15 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
     L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(),
                             scratch.cadAnnotationAttrs.end());
+    // Issue #768: fills (HATCH) and multileaders, read by the model-space reader, land on the sheet.
+    L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.cadFilledRegions.begin(),
+                                scratch.cadFilledRegions.end());
+    L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.cadFilledRegionAttrs.begin(),
+                                    scratch.cadFilledRegionAttrs.end());
+    L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.cadMultileaders.begin(),
+                               scratch.cadMultileaders.end());
+    L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
+                                   scratch.cadMultileaderAttrs.end());
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +
@@ -4823,96 +5032,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   // REQ-367 / issue #619: R2010+ native MULTILEADER; older saves use LEADER + MTEXT fallback.
   const bool nativeMultileaderExport = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
-  for (size_t i = 0; i < st.cadMultileaders.size(); ++i) {
-    const CadMultileader& ml = st.cadMultileaders[i];
-    const EntityAttributes* at = AttrAt(st.cadMultileaderAttrs, i);
-    const CadAnnotation& an = ml.label;
-    dwg_point_3d tp{};
-    world(an.insX, an.insY, an.insZ, &tp);
-    std::string wire;
-    for (char ch : MtextRichFlattenToPlain(an.text)) {
-      if (ch == '\n')
-        wire += "\\P";
-      else if (ch != '\r')
-        wire += ch;
-    }
-    const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
-    const double textH =
-        static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
-    const size_t nPt = ml.pathXyz.size() / 3;
-    if (nativeMultileaderExport && nPt >= 2) {
-      std::vector<std::vector<dwg_point_3d>> branchPtsStorage;
-      std::vector<dwg_mleader_branch> branches;
-      auto appendBranch = [&](const std::vector<float>& path) {
-        const size_t n = path.size() / 3;
-        if (n < 2)
-          return;
-        branchPtsStorage.emplace_back(n);
-        std::vector<dwg_point_3d>& pts = branchPtsStorage.back();
-        for (size_t j = 0; j < n; ++j)
-          world(path[j * 3], path[j * 3 + 1], path[j * 3 + 2], &pts[j]);
-        dwg_mleader_branch b{};
-        b.num_points = static_cast<unsigned>(n);
-        b.points = pts.data();
-        branches.push_back(b);
-      };
-      appendBranch(ml.pathXyz);
-      for (const std::vector<float>& extra : ml.extraLeaderPaths)
-        appendBranch(extra);
-      if (!branches.empty()) {
-        const std::vector<dwg_point_3d>& primary = branchPtsStorage.front();
-        dwg_point_3d dir{};
-        const size_t last = primary.size() - 1;
-        const size_t prev = primary.size() >= 2 ? last - 1 : 0;
-        dir.x = primary[last].x - primary[prev].x;
-        dir.y = primary[last].y - primary[prev].y;
-        dir.z = primary[last].z - primary[prev].z;
-        const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-        if (len > 1e-9) {
-          dir.x /= len;
-          dir.y /= len;
-          dir.z /= len;
-        } else {
-          dir.x = 1.0;
-          dir.y = dir.z = 0.0;
-        }
-        if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
-                hdr, static_cast<unsigned>(branches.size()), branches.data(),
-                wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
-          mld->is_annotative = ml.annotative ? 1 : 0;
-          if (r2018Write && ml.annotative && mld->parent != nullptr)
-            WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
-          if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
-            DwgExportAttachMleaderAnnotationContext(&annotCtx, mld->parent, mld, ml, st);
-          apply(mld->parent, at);
-          continue;
-        }
-      }
-    }
-    Dwg_Entity_MTEXT* mt =
-        dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
-    if (mt != nullptr) {
-      mt->text_height = textH;
-      mt->attachment = 1;
-      apply(mt->parent, at);
-    }
-    if (nPt >= 2) {
-      std::vector<dwg_point_3d> pts(nPt);
-      for (size_t j = 0; j < nPt; ++j) {
-        world(ml.pathXyz[j * 3], ml.pathXyz[j * 3 + 1], ml.pathXyz[j * 3 + 2], &pts[j]);
-      }
-      Dwg_Entity_LEADER* ld =
-          dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
-      if (ld != nullptr) {
-        apply(ld->parent, at);
-      } else {
-        for (size_t j = 0; j + 1 < nPt; ++j) {
-          if (Dwg_Entity_LINE* e = dwg_add_LINE(hdr, &pts[j], &pts[j + 1]))
-            apply(e->parent, at);
-        }
-      }
-    }
-  }
+  for (size_t i = 0; i < st.cadMultileaders.size(); ++i)
+    WriteMultileaderEntity(dwg, hdr, tw, st, st.cadMultileaders[i], AttrAt(st.cadMultileaderAttrs, i),
+                           st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
+                           st.modelUnitsPerPlottedInch, annotCtx);
   // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible
   // NUMBER/DESCRIPTION attributes so AutoCAD and Civil 3D show them, not just GoSurvey.
   // REQ-376: a project drawing's points live in the project database, not in the DWG.
@@ -5073,66 +5196,10 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // the hatch path (non-associative).
   size_t nHatchOut = 0;
   for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
-    const CadFilledRegion& fr = st.cadFilledRegions[fi];
-    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
-      continue;
-    std::vector<Dwg_Object*> pathObjs;
-    pathObjs.reserve(fr.loopStart.size());
-    bool pathsOk = true;
-    for (size_t li = 0; li < fr.loopStart.size(); ++li) {
-      const int begin = fr.loopStart[li];
-      const int cnt = fr.loopCount(li);
-      if (cnt < 3) {
-        pathsOk = false;
-        break;
-      }
-      std::vector<dwg_point_2d> pts(static_cast<size_t>(cnt));
-      for (int v = 0; v < cnt; ++v) {
-        const size_t k = static_cast<size_t>(begin + v) * 3;
-        dwg_point_3d wp{};
-        world(static_cast<float>(fr.vertsXyz[k]), static_cast<float>(fr.vertsXyz[k + 1]),
-              fr.vertsXyz[k + 2], &wp);
-        pts[static_cast<size_t>(v)].x = wp.x;
-        pts[static_cast<size_t>(v)].y = wp.y;
-      }
-      Dwg_Entity_LWPOLYLINE* lw = dwg_add_LWPOLYLINE(hdr, cnt, pts.data());
-      if (lw == nullptr) {
-        pathsOk = false;
-        break;
-      }
-      lw->flag = static_cast<BITCODE_BS>(lw->flag | 512);  // closed
-      lw->elevation = fr.vertsXyz[static_cast<size_t>(begin) * 3 + 2];
-      lw->parent->invisible = 1;
-      pathObjs.push_back(&dwg->object[lw->parent->objid]);
-    }
-    if (!pathsOk || pathObjs.size() != fr.loopStart.size())
-      continue;
-
-    const bool solid = fr.isSolid();
-    const char* patName = solid ? "SOLID" : fr.patternName.c_str();
-    if (!solid && (patName == nullptr || patName[0] == '\0'))
-      patName = "ANSI31";
-    Dwg_Entity_HATCH* hatch = dwg_add_HATCH(
-        hdr, 1, patName, false, static_cast<unsigned>(pathObjs.size()),
-        const_cast<const Dwg_Object**>(pathObjs.data()));
-    if (hatch == nullptr)
-      continue;
-    hatch->elevation = fr.vertsXyz.size() >= 3 ? fr.vertsXyz[2] : 0.0;
-    if (!solid) {
-      hatch->angle = static_cast<double>(fr.patternAngleDeg) * (kPi / 180.0);
-      hatch->scale_spacing = fr.patternScale > 0.f ? static_cast<double>(fr.patternScale) : 1.0;
-      hatch->is_solid_fill = 0;
-    }
-    if (r2018Write && fr.annotative && hatch->paths != nullptr) {
-      for (BITCODE_BL pi = 0; pi < hatch->num_paths; ++pi)
-        hatch->paths[pi].flag = static_cast<BITCODE_BL>(hatch->paths[pi].flag | 0x200);
-      if (hatch->parent != nullptr)
-        WriteAnnotativeEntityEed(dwg, hatch->parent, &fr.annotativeVisibleScaleNames);
-    }
-    if (annotCtx.enabled && fr.annotative && hatch->parent != nullptr)
-      DwgExportAttachHatchAnnotationContext(&annotCtx, hatch->parent, hatch, fr, st);
-    apply(hatch->parent, fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr);
-    ++nHatchOut;
+    if (WriteFilledRegionHatch(dwg, hdr, tw, st, st.cadFilledRegions[fi],
+                               fi < st.cadFilledRegionAttrs.size() ? &st.cadFilledRegionAttrs[fi] : nullptr,
+                               st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, annotCtx))
+      ++nHatchOut;
   }
   if (nHatchOut > 0)
     log.push_back("CAD export — wrote " + std::to_string(nHatchOut) + " HATCH(es) (REQ-170, issue #608).");

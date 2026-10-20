@@ -5338,16 +5338,18 @@ TEST_CASE("DWG import names each skipped paper-space type on a real sheet (issue
     CHECK(L.paperPolyAttrs.size() == (L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1));
   }
   INFO("lines=" << lines << " texts=" << texts << " curves=" << curves << " polys=" << polys);
-  // This sheet's remaining objects are outside the paper-space set (fills, points, a table) and its
-  // text/curves were never in paper space; the point here is the existing import is intact and every
-  // skip is named by type (REQ-201), not lumped under "unsupported type".
+  // Issue #768: the sheet's fills now import as paper fills (they used to be skipped by name);
+  // whatever is still outside the set (points, a table) stays named by type (REQ-201).
+  size_t fills = 0;
+  for (const PaperLayout& L : in.paperLayouts)
+    fills += L.paperFilledRegions.size();
   CHECK(lines > 0);
-  CHECK(texts + curves + polys == 0);
-  bool named = false;
+  CHECK(fills > 0);
+  // REQ-113 acceptance 2: the sheet's own text, curves and polylines now arrive (the reader used to
+  // drop every paper-space entity it flagged as sheet content).
+  CHECK(texts + curves + polys > 0);
   for (const std::string& l : log)
-    if (l.find("unsupported type HATCH") != std::string::npos)
-      named = true;
-  CHECK(named);
+    CHECK(l.find("unsupported type HATCH") == std::string::npos);
 }
 
 // The Duke sheet has only LINE/VIEWPORT/INSERT plus HATCH/POINT/table on its paper space, so it cannot
@@ -5426,4 +5428,51 @@ TEST_CASE("A DXF with paper space still re-imports (issue #765)", "[dxf][libredw
     UNSCOPED_INFO(l);
   REQUIRE(ok);
   CHECK(in.userLinesFlat.size() == 6);
+}
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): paper-space fills and multileaders reach the DWG's own
+// paper-space entities and read back onto the same layout.
+TEST_CASE("Paper-space HATCH and MULTILEADER round-trip through DWG (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  for (const DwgSaveVersion ver : {DwgSaveVersion::R2018, DwgSaveVersion::R2000}) {
+    ScratchDir dir("dwg-paper-fill-leader");
+    const auto p = (dir.path / "paper-fill-leader.dwg").string();
+    AppCommandState st;
+    st.dwgExportVersion = ver;
+    PaperLayout sheet;
+    sheet.name = "Sheet1";
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(1.f, 1.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+    CadMultileader ml{};
+    ml.pathXyz = {1.f, 5.f, 0.f, 3.f, 5.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 3.f;
+    ml.label.insY = 5.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.1f;
+    ml.label.boxMinX = 3.f;
+    ml.label.boxMinY = 4.9f;
+    ml.label.boxMaxX = 6.f;
+    ml.label.boxMaxY = 5.1f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+    st.paperLayouts.push_back(std::move(sheet));
+    std::vector<std::string> log;
+    REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+    AppCommandState in;
+    REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+    REQUIRE(in.paperLayouts.size() == 1);
+    const PaperLayout& back = in.paperLayouts[0];
+    for (const std::string& l : log) UNSCOPED_INFO(l);
+    UNSCOPED_INFO("hatch objs=" << CountDwgFixedType(p.c_str(), DWG_TYPE_HATCH));
+    REQUIRE(back.paperFilledRegions.size() == 1);
+    CHECK(back.paperFilledRegions[0].vertsXyz.size() >= 12);
+    CHECK(back.paperFilledRegions[0].vertsXyz[0] == Catch::Approx(1.0).margin(0.001));
+    REQUIRE(back.paperMultileaders.size() == 1);
+    CHECK(back.paperMultileaders[0].pathXyz[0] == Catch::Approx(1.f).margin(0.001f));
+    CHECK(back.paperMultileaders[0].pathXyz[1] == Catch::Approx(5.f).margin(0.001f));
+    CHECK(back.paperMultileaders[0].label.text.find("SEE NOTE") != std::string::npos);
+    CHECK(in.cadFilledRegions.empty());
+    CHECK(in.cadMultileaders.empty());
+  }
 }
