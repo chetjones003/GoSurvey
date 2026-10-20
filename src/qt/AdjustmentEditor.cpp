@@ -215,7 +215,7 @@ void AdjustmentCodeEdit::paintEvent(QPaintEvent* event) {
   painter.setPen(QPen(m_Palette.error, 1.5));
   for (int step = 0; document()->documentMargin() + 4 * step < textEnd; ++step) {  // wavy underline
     const qreal x = document()->documentMargin() + 4 * step;
-    painter.drawLine(QPointF(x, y), QPointF(std::min(x + 2, textEnd), y + (step % 2 ? 1.5 : -0.5)));
+    painter.drawLine(QPointF(x, y), QPointF(std::min(x + 2, textEnd), y + ((step % 2) ? 1.5 : -0.5)));
   }
   const qreal messageX = textEnd + 20;
   const int room = viewport()->width() - static_cast<int>(messageX) - 6;
