@@ -13559,6 +13559,43 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   const Camera boxSelCamValue = CadViewCamera(st);
   const Camera* const boxSelCam = CadViewIsPlan(st) ? nullptr : &boxSelCamValue;
   auto finishBox = [&]() {
+    if (PaperLayout* paper = ActivePaperGeometryTarget(st)) {
+      const float mnX = std::min(st.selBoxAnchorX, static_cast<float>(wx));
+      const float mxX = std::max(st.selBoxAnchorX, static_cast<float>(wx));
+      const float mnY = std::min(st.selBoxAnchorY, static_cast<float>(wy));
+      const float mxY = std::max(st.selBoxAnchorY, static_cast<float>(wy));
+      std::vector<PaperEntityRef> hits;
+      SelectPaperEntitiesInBox(*paper, mnX, mnY, mxX, mxY, fenceLeftToRightWindowMode, hits, &st.blockDefs);
+      if (windowSelectionSubtract) {
+        st.selectedPaperEntities.erase(
+            std::remove_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
+                           [&](const PaperEntityRef& selected) {
+                             return std::find_if(hits.begin(), hits.end(), [&](const PaperEntityRef& hit) {
+                                      return hit.type == selected.type && hit.index == selected.index;
+                                    }) != hits.end();
+                           }),
+            st.selectedPaperEntities.end());
+      } else {
+        for (const PaperEntityRef& hit : hits) {
+          const bool alreadySelected = std::any_of(
+              st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(), [&](const PaperEntityRef& selected) {
+                return selected.type == hit.type && selected.index == hit.index;
+              });
+          if (!alreadySelected)
+            st.selectedPaperEntities.push_back(hit);
+        }
+      }
+      st.paperSelBoxLastValid = true;
+      st.paperSelBoxLastMnXIn = mnX;
+      st.paperSelBoxLastMxXIn = mxX;
+      st.paperSelBoxLastMnYIn = mnY;
+      st.paperSelBoxLastMxYIn = mxY;
+      st.selBoxWaitingSecond = false;
+      log.push_back(std::string(fenceLeftToRightWindowMode ? "Window" : "Fence") + " — CAD " +
+                    std::to_string(hits.size()) + ", survey 0 (" +
+                    (fenceLeftToRightWindowMode ? "window" : "crossing") + ").");
+      return;
+    }
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
                              st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch ||
@@ -30250,6 +30287,68 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 }
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
+  if (PaperLayout* paper = ActivePaperGeometryTarget(st)) {
+    // Keep the established JOIN edge walk as the single source of connectivity and path rules.
+    // Its input is a small, isolated command state populated only from this layout's paper stores;
+    // no model-space geometry is read or modified by this branch.
+    AppCommandState paperJoin;
+    paperJoin.activeSpaceIndex = kModelSpaceIndex;
+    paperJoin.currentLayer = st.currentLayer;
+    paperJoin.currentColor = st.currentColor;
+    paperJoin.userLinesFlat.assign(paper->paperLines.begin(), paper->paperLines.end());
+    paperJoin.userLineAttrs = paper->paperLineAttrs;
+    paperJoin.userPolylineOffsets = paper->paperPolyOffsets;
+    paperJoin.userPolylineVerts.assign(paper->paperPolyVerts.begin(), paper->paperPolyVerts.end());
+    paperJoin.userPolylineClosed = paper->paperPolyClosed;
+    paperJoin.userPolylineAttrs = paper->paperPolyAttrs;
+
+    int unsupported = 0;
+    for (const PaperEntityRef& ref : st.selectedPaperEntities) {
+      if (ref.type == PaperEntityRef::Type::Line) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) * 6 + 5 >= paperJoin.userLinesFlat.size()) {
+          ++unsupported;
+          continue;
+        }
+        paperJoin.selection.push_back({SelectedEntity::Type::LineSeg, ref.index});
+      } else if (ref.type == PaperEntityRef::Type::Polyline) {
+        if (ref.index < 0 || static_cast<size_t>(ref.index) + 1 >= paperJoin.userPolylineOffsets.size()) {
+          ++unsupported;
+          continue;
+        }
+        paperJoin.selection.push_back({SelectedEntity::Type::Polyline, ref.index});
+      } else {
+        ++unsupported;
+      }
+    }
+    if (unsupported > 0)
+      log.push_back("JOIN — " + std::to_string(unsupported) + " selected paper object" +
+                    (unsupported == 1 ? " ignored" : "s ignored") +
+                    ": paper JOIN supports lines and polylines.");
+
+    std::vector<std::string> paperLog;
+    ExecuteJoinSelection(paperJoin, paperLog);
+    const bool joined = std::any_of(paperLog.begin(), paperLog.end(), [](const std::string& entry) {
+      return entry.rfind("JOIN — created ", 0) == 0;
+    });
+    if (!joined) {
+      log.insert(log.end(), paperLog.begin(), paperLog.end());
+      st.selectedPaperEntities.clear();
+      return;
+    }
+
+    PushUndoSnapshot(st, "Join paper geometry");
+    paper->paperLines.assign(paperJoin.userLinesFlat.begin(), paperJoin.userLinesFlat.end());
+    paper->paperLineAttrs = std::move(paperJoin.userLineAttrs);
+    paper->paperPolyOffsets = std::move(paperJoin.userPolylineOffsets);
+    paper->paperPolyVerts.assign(paperJoin.userPolylineVerts.begin(), paperJoin.userPolylineVerts.end());
+    paper->paperPolyClosed = std::move(paperJoin.userPolylineClosed);
+    paper->paperPolyAttrs = std::move(paperJoin.userPolylineAttrs);
+    st.selectedPaperEntities.clear();
+    BumpCadGpuCache(st);
+    log.insert(log.end(), paperLog.begin(), paperLog.end());
+    return;
+  }
+
   // Same space guard as OVERKILL (issue 02). JOIN reaches model geometry from a sheet because a
   // MODEL selection survives the switch to paper space, so "JOIN - created 1 polyline(s)" could
   // consume two model lines the user could not see. That the selection persists is arguably right;
@@ -31282,6 +31381,17 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.selectedSurveyPointIndices.clear();
+  if (ActivePaperGeometryTarget(st)) {
+    if (!st.selectedPaperEntities.empty()) {
+      ExecuteJoinSelection(st, log);
+      return;
+    }
+    st.active = AppCommandState::Kind::Join;
+    st.selBoxWaitingSecond = false;
+    log.push_back("JOIN — click paper objects or drag a selection window (Enter when done) to join "
+                  "connected lines/polylines. ESC cancels.");
+    return;
+  }
   if (!st.selection.empty()) {
     ExecuteJoinSelection(st, log);
     return;
@@ -43330,7 +43440,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Survey points are not joinable and are deliberately not consulted here, so an Enter with
       // survey points alone is still "nothing selected" — the honest answer (REQ-201) rather than
       // a silent no-op. JOIN's own report says what it merged.
-      if (st.selection.empty()) {
+      const bool paperActive = ActivePaperGeometryTarget(st) != nullptr;
+      if (paperActive ? st.selectedPaperEntities.empty() : st.selection.empty()) {
         log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
       } else {
         ExecuteJoinSelection(st, log);

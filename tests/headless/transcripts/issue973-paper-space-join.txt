@@ -1,0 +1,95 @@
+# Issue #973 — JOIN consumes the active layout's paper selection and leaves model geometry alone.
+# Connected paper lines become one paper polyline, one undo restores the exact paper inputs, and
+# disconnected/unsupported paper selections are reported without losing their objects.
+
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+
+SPACE PAPER
+CMD LINE
+CMD 20,7
+CMD 22,7
+ESC
+
+# A second layout is active; JOIN must only read and write this layout.
+LAYOUT NEW
+CMD LINE
+CMD 1,1
+CMD 5,1
+ESC
+CMD LINE
+CMD 5,1
+CMD 5,4
+ESC
+
+EXPECT LINES 1
+EXPECT PAPERLINES 3
+EXPECT PAPERPOLYLINES 0
+CMD JOIN
+CLICK 0 0
+CLICK 6 5
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+EXPECT LINES 1
+EXPECT PAPERLINES 1
+EXPECT PAPERPOLYLINES 1
+EXPECT PAPERPOLYVERT 1 0 0 1 1 0
+EXPECT PAPERPOLYVERT 1 0 1 5 1 0
+EXPECT PAPERPOLYVERT 1 0 2 5 4 0
+
+UNDO
+EXPECT LINES 1
+EXPECT PAPERLINES 3
+EXPECT PAPERPOLYLINES 0
+
+# Existing paper polylines are eligible inputs too, not just loose lines.
+CMD POLYLINE
+CMD 5,4
+CMD 8,4
+CMD END
+CMD JOIN
+CLICK 0 0
+CLICK 8 5
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+EXPECT LINES 1
+EXPECT PAPERLINES 1
+EXPECT PAPERPOLYLINES 1
+EXPECT PAPERPOLYVERT 1 0 0 1 1 0
+EXPECT PAPERPOLYVERT 1 0 1 5 1 0
+EXPECT PAPERPOLYVERT 1 0 2 5 4 0
+EXPECT PAPERPOLYVERT 1 0 3 8 4 0
+
+UNDO
+EXPECT PAPERLINES 3
+EXPECT PAPERPOLYLINES 1
+
+# Disconnected lines and a selected circle are disclosed; every input remains on the layout.
+CMD LINE
+CMD 9,1
+CMD 10,1
+ESC
+CMD LINE
+CMD 9,6
+CMD 10,6
+ESC
+CMD CIRCLE
+CMD 9.5,4
+CMD 0.4
+ESC
+
+CMD JOIN
+CLICK 8.5 0
+CLICK 10.5 7
+CMD
+EXPECT LOG paper object ignored
+EXPECT LOG endpoints do not connect
+EXPECT LINES 1
+EXPECT PAPERLINES 5
+EXPECT PAPERCIRCLES 1
+EXPECT PAPERPOLYLINES 1
+CHECK ALL
+
