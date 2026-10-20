@@ -12866,6 +12866,26 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-19) — D-2026-10-19-k, GitHub issue #966.
 - Revisions: 2026-10-19 — initial, D-2026-10-19-k, GitHub issue #966.
 
+### REQ-441 — Maintain a human-facing major-release feature acceptance checklist
+
+- Purpose: give a release reviewer a repeatable way to exercise the supported GoSurvey product before a major version release.
+- Priority: should
+- Type: quality
+- Decision: D-2026-10-20-b.
+- Statement: The repository maintains a Markdown checklist for a human to run against the release candidate. It covers the supported product surfaces and their user-visible workflows, including drawing/file lifecycle, drafting and editing, survey data and calculations, surfaces and 3D, settings, import/export, and release-critical failure/cancellation/data-preservation paths. Every canonical command in the current Command Reference has an individual test item (aliases are included in that item); UI-only workflows are tested separately. It distinguishes supported behavior from known limitations and deferred or unavailable features, and gives the reviewer a place to record version, build, environment, results, and findings.
+- Acceptance:
+  - The checklist is written for a human operator, with actionable steps and observable pass/fail outcomes rather than implementation-only checks.
+  - Every checklist item gives its own prerequisites, numbered test steps, and expected observable result; a title-only checkbox is insufficient.
+  - Its feature areas are cross-checked against the user manual navigation and the current supported Qt UI/command surfaces; each major area has an end-to-end check and applicable failure/cancel/data-preservation checks. Every canonical command listed in the Command Reference has its own item with the primary name, listed aliases, test steps, expected behavior, and a link to its detailed command instructions where available.
+  - Known limitations and deferred/unavailable features are identified as such, so their absence is not mistaken for a release regression or a shipped capability.
+  - The checklist includes release-candidate identification, environment/result fields, and a findings section, and instructs the reviewer to record failures rather than silently skip them.
+  - The major-release gate links to this checklist and requires a PASS for a major-version release.
+  - The document states its coverage sources and coverage limits; it does not claim automated validation.
+- Owner-layer: Documentation / product verification.
+- Constraints: REQ-200, REQ-201, REQ-440.
+- Status: accepted (2026-10-20) — D-2026-10-20-b.
+- Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist.
+
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -14062,6 +14082,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
+| REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
