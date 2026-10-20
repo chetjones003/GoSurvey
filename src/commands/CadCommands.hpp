@@ -6313,7 +6313,7 @@ void CancelPolysolidCommand(AppCommandState& st);
 void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The prompt line, echoing the arc length and options in force.
 [[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
-/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. eturn false if not consumed.
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
 bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
 /// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
 void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
