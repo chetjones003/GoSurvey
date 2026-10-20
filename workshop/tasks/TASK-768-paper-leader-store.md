@@ -56,3 +56,13 @@ Mirrors the existing per-type paper stores (ADR-009); no new layer or abstractio
 - DWG: grid LINEs + cell MTEXT (same fallback as model space, `WriteCadTable` now takes origin and scale explicitly); DXF: LINEs + text, logged. DWG TABLE import lands in `paperTables` via `AppendScratchToPaperLayout`.
 - Fixed on the way: sheet fills were never drawn by the Qt viewport (only plotted).
 - Debt: legacy sheet tables stored as `CadAnnotation::Kind::Table` in `paperTexts` keep the old path; a native AutoCAD TABLE read is untested (no sample).
+
+## 10. AutoCAD oracle check (REQ-113 acceptance 7)
+
+Fixture writer: `GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.oracle768]"` (hidden test). It writes five feature levels (0 none, 1 sheet geometry, 2 + viewport, 3 + viewport state, 4 + fill/leader/table) at R2000, R2010 and R2018, plus a DXF. Opened with `accoreconsole.exe /i <file> /s <script>` (AutoCAD 2026); the script counts entities per layout with `ssget "_X"` filtered on group 410. `SECURELOAD` must be 0 and the lisp goes inline in the script: `(load ...)` is refused.
+
+Result 2026-10-20:
+- R2000 DWG opens at every level. Layout "Plan" at level 4 holds VIEWPORT 1, CIRCLE 1, ARC 1, TEXT 1, LWPOLYLINE 2, HATCH 1, LEADER 1, LINE 7 (1 + 6 table), MTEXT 5 (leader label + 4 table cells); layout "Tall" holds its CIRCLE.
+- DXF opens: HATCH 1, LINE 8, TEXT 5, MTEXT 1, circle/arc/polyline, VIEWPORT 2 (ours plus the sheet's own).
+- The second LWPOLYLINE on "Plan" is the invisible boundary scaffold `dwg_add_HATCH` leaves behind (same as model space).
+- R2010 and R2018 DWGs are rejected ("Drawing file is not valid", status 434) **at level 0**, a drawing with no paper space at all, so the cause is not issue #768. Not re-checked against `beta`.

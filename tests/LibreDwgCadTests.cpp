@@ -5706,3 +5706,103 @@ TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #76
         ++found;
   CHECK(found == 4);
 }
+
+// Issue #768 / REQ-113 acceptance 7 - hidden fixture writer for the AutoCAD oracle (accoreconsole).
+// Run with GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.oracle768]"; it writes <dir>/L<n>_<version>.dwg and
+// sheet.dxf. Levels add one feature at a time so a file AutoCAD rejects points at the feature:
+// 0 no paper layouts, 1 sheet lines/circle/arc/polyline/text, 2 + plain viewport, 3 + viewport state,
+// 4 + fill, leader and table.
+static void BuildOracleState(AppCommandState& st, int level) {
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  st.userLineAttrs.push_back(EntityAttributes{});
+  if (level < 1)
+    return;
+  PaperLayout sheet;
+  sheet.name = "Plan";
+  sheet.portraitWidthIn = 24.f;
+  sheet.portraitHeightIn = 36.f;
+  sheet.landscape = true;
+  sheet.paperLines = {1.f, 1.f, 0.f, 20.f, 1.f, 0.f};
+  sheet.paperLineAttrs.push_back(EntityAttributes{});
+  sheet.paperCircles = {5.f, 5.f, 1.f};
+  sheet.paperCircleAttrs.push_back(EntityAttributes{});
+  CadArc arc{};
+  arc.cx = 9.f; arc.cy = 5.f; arc.r = 1.f; arc.startRad = 0.f; arc.sweepRad = 3.14159f;
+  sheet.paperArcs.push_back(arc);
+  sheet.paperArcAttrs.push_back(EntityAttributes{});
+  sheet.paperPolyOffsets = {0, 3};
+  sheet.paperPolyVerts = {12.f, 3.f, 0.f, 14.f, 3.f, 0.f, 14.f, 5.f, 0.f};
+  sheet.paperPolyClosed = {0};
+  sheet.paperPolyAttrs.push_back(EntityAttributes{});
+  CadAnnotation text;
+  text.kind = CadAnnotation::Kind::Text;
+  text.text = "PLAN SHEET";
+  text.insX = 2.f; text.insY = 9.f;
+  text.plottedHeightInches = 0.3f;
+  sheet.paperTexts.push_back(text);
+  sheet.paperTextAttrs.push_back(EntityAttributes{});
+  if (level >= 2) {
+    Viewport vp;
+    vp.paperXIn = 8.f; vp.paperYIn = 10.f; vp.paperWIn = 12.f; vp.paperHIn = 8.f;
+    vp.scaleModelPerPaperIn = 20.f;
+    if (level >= 3) {
+      vp.camAzimuthDeg = 30.f; vp.camElevationDeg = 40.f;
+      vp.locked = true;
+      vp.frozenLayers = {"Walls"};
+    }
+    sheet.viewports.push_back(vp);
+  }
+  if (level >= 4) {
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(16.f, 3.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+    CadTable tb;
+    tb.insX = 2.f; tb.insY = 14.f; tb.width = 4.f; tb.height = 2.f; tb.cols = 2;
+    tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+    tb.plottedHeightInches = 0.15f;
+    sheet.paperTables.push_back(tb);
+    sheet.paperTableAttrs.push_back(EntityAttributes{});
+  }
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout tall;
+  tall.name = "Tall";
+  tall.portraitWidthIn = 8.5f;
+  tall.portraitHeightIn = 11.f;
+  tall.landscape = false;
+  tall.paperCircles = {2.f, 3.f, 1.f};
+  tall.paperCircleAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(tall));
+}
+
+TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]") {
+  const char* outDir = std::getenv("GOSURVEY_ORACLE_DIR");  // required: where to write the fixtures
+  REQUIRE(outDir != nullptr);
+  const std::filesystem::path dir = std::filesystem::path(outDir);
+  std::filesystem::create_directories(dir);
+  const std::pair<const char*, DwgSaveVersion> versions[] = {{"R2000", DwgSaveVersion::R2000},
+                                                               {"R2010", DwgSaveVersion::R2010},
+                                                               {"R2018", DwgSaveVersion::R2018}};
+  std::vector<std::string> log;
+  for (int level = 0; level <= 4; ++level)
+    for (const auto& v : versions) {
+      AppCommandState st;
+      BuildOracleState(st, level);
+      st.dwgExportVersion = v.second;
+      const std::string name = "L" + std::to_string(level) + "_" + v.first + ".dwg";
+      REQUIRE(ExportLibreCadFile(st, (dir / name).string().c_str(), log, /*asDxf=*/false));
+    }
+  AppCommandState st;
+  BuildOracleState(st, 4);
+  REQUIRE(ExportDxfFile(st, (dir / "sheet.dxf").string().c_str(), log));
+}
