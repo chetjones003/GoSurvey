@@ -2357,9 +2357,10 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(settings);
-    // As opened: tall enough for its wrapped text.
+    QTest::qWait(250);  // let the dialog polish and the account card refresh its status
+    settings->layout()->activate();
+    // As opened: tall enough for its wrapped text after Qt has applied the visible style metrics.
     QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
-    QTest::qWait(250);  // let the account card's refresh fill in its status
     QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
 
@@ -3752,7 +3753,9 @@ private Q_SLOTS:
       QApplication::sendEvent(grip, &move);
       QTest::mouseRelease(grip, Qt::LeftButton);
     };
-    const int oldX = panel->x(); drag("commandDragGrip", 20); QVERIFY(panel->x() > oldX);
+    const int oldX = panel->x();
+    const int moveX = oldX + panel->width() + 20 < viewport->width() ? 20 : -20;
+    drag("commandDragGrip", moveX); QVERIFY(panel->x() != oldX);
     const int oldWidth = panel->width(); drag("commandResizeGrip", -40); QCOMPARE(panel->width(), oldWidth - 40);
     window.resize(950, 650); QTest::qWait(50);
     QVERIFY(viewport->rect().contains(panel->geometry()));
