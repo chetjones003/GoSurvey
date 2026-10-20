@@ -4620,6 +4620,7 @@ private Q_SLOTS:
 
   void qtViewportGripDragCommitsAndEscapeRestores() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.resize(1100, 760);
     AppCommandState& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0};
@@ -4659,6 +4660,7 @@ private Q_SLOTS:
 
   void qtCtrlClickSelectsSolidSubObjectAndPlainClickSelectsWholeSolid() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.resize(1100, 760);
     AppCommandState& state = window.State();
     brep::Solid solid;
@@ -4686,6 +4688,7 @@ private Q_SLOTS:
 
   void qtOverlappingPickMenuSelectsChosenVisibleEntity() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.resize(1100, 760);
     AppCommandState& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 0, 0, 0, 10, 0, 0};
@@ -4721,6 +4724,7 @@ private Q_SLOTS:
 
   void qtCrossingSelectionDragAndEscapeCancellation() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();
     window.resize(1100, 760);
     AppCommandState& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0};
@@ -5220,7 +5224,7 @@ private Q_SLOTS:
   }
 
   void qtIsolationCommandsHideAndRestoreStableEntities() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
     state.userLineAttrs.resize(2);
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
@@ -5260,7 +5264,7 @@ private Q_SLOTS:
   }
 
   void qtAnnotativePropertiesToggleAndUndoVisibleScales() {
-    EditorWindow window; window.show(); auto& state = window.State();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     state.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
     CadAnnotation annotation; annotation.kind = CadAnnotation::Kind::Text; annotation.text = "Qt";
     state.cadAnnotations.push_back(annotation); state.cadAnnotationAttrs.emplace_back();
