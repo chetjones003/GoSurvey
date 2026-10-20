@@ -51,6 +51,7 @@
 - 2026-10-20 — Read the accepted REQ-039/REQ-056, ADR-014, #974 acceptance, and existing model TRIM code. Confirmed paper objects have separate line/polyline stores and current TRIM directly addresses model arrays. Verified Qt-only branch context after ImGui removal.
 - 2026-10-20 — Added a paper-space TRIM path that stages only active-layout geometry through the existing intersection solver, keeps paper cutters in `PaperEntityRef` storage, commits line/polyline edits back to that layout, and records undo only after a successful edit. Routed Qt viewport TRIM clicks through `SubmitTrimViewportPick`; model space remains on its existing solver.
 - 2026-10-20 — Connected paper TRIM hover to `PickPaperEntityAt` and rendered cyan prehighlight for the hovered paper entity and staged cutters, including circles, arcs, ellipses, and polylines. Added Qt framebuffer captures for staged cutters and hovered targets. Added paper polyline target coverage to the REQ-039 transcript.
+- 2026-10-20 — CI follow-up reserves space for staged paper cutters before filling the vector, resolving clang-tidy's `performance-inefficient-vector-operation` finding without changing trim behavior.
 
 ## 8. Self-verification
 

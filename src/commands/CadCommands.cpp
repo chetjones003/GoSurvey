@@ -30203,6 +30203,7 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
     return false;
   }
   std::vector<SelectedEntity> cutters;
+  cutters.reserve(st.paperTrimCutters.size());
   for (const auto& c : st.paperTrimCutters) cutters.push_back(PaperTrimEntity(c));
   std::vector<std::array<double, 4>> cuts;
   BuildTrimCutSegments(staged, cutters, &target, &cuts);
