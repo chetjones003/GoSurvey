@@ -2721,6 +2721,76 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              sourceLine);
         return false;
       }
+    } else if (what == "PAPERLINE") {
+      // EXPECT PAPERLINE <layout> <line> <x0> <y0> <x1> <y1> — paper-inch endpoints in one
+      // specific layout. Counts alone cannot prove TRIM shortened a paper line or stayed out of
+      // another layout, so this reads the same layout-owned line store the renderer and .gs writer use.
+      std::istringstream is(arg);
+      long layoutIx = -1, lineIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> lineIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERLINE needs <layout> <line> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || lineIx < 0) {
+        Fail(run, "expect", "PAPERLINE: layout or line index is out of range", sourceLine);
+        return false;
+      }
+      const auto& lines = run.st.paperLayouts[static_cast<size_t>(layoutIx)].paperLines;
+      const size_t base = static_cast<size_t>(lineIx) * 6;
+      if (base + 4 >= lines.size()) {
+        Fail(run, "expect", "PAPERLINE: line index is out of range", sourceLine);
+        return false;
+      }
+      const double got[4] = {lines[base], lines[base + 1], lines[base + 3], lines[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        lineIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "PAPERPOLYLINE") {
+      // EXPECT PAPERPOLYLINE <layout> <polyline> <x0> <y0> <x1> <y1> — assert the two
+      // endpoints of a trimmed open paper polyline, including which side the pick retained.
+      std::istringstream is(arg);
+      long layoutIx = -1, polyIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> polyIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERPOLYLINE needs <layout> <polyline> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || polyIx < 0) {
+        Fail(run, "expect", "PAPERPOLYLINE: layout or polyline index is out of range", sourceLine);
+        return false;
+      }
+      const auto& layout = run.st.paperLayouts[static_cast<size_t>(layoutIx)];
+      const size_t index = static_cast<size_t>(polyIx);
+      if (index + 1 >= layout.paperPolyOffsets.size()) {
+        Fail(run, "expect", "PAPERPOLYLINE: polyline index is out of range", sourceLine);
+        return false;
+      }
+      const int begin = layout.paperPolyOffsets[index], end = layout.paperPolyOffsets[index + 1];
+      if (end - begin != 2) {
+        Fail(run, "expect", "PAPERPOLYLINE: expected exactly two vertices after trimming", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(begin) * 3;
+      const double got[4] = {layout.paperPolyVerts[base], layout.paperPolyVerts[base + 1],
+                             layout.paperPolyVerts[base + 3], layout.paperPolyVerts[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERPOLYLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        polyIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
     } else {
       long want = 0;
       std::istringstream is(arg);

@@ -13501,6 +13501,14 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       return;
   }
 
+  // TRIM has a dedicated picker because its click semantics differ from coordinate commands.
+  // Keep the Qt-only frontend on that same tested entry point in both spaces.
+  if (st.active == K::Trim) {
+    (void)SubmitTrimViewportPick(st, static_cast<float>(wx), static_cast<float>(wy),
+                                 CadOffsetEntityPickTolWorld(st), log, pickRay);
+    return;
+  }
+
   // Box-selection projects to screen space only when the view is actually orbited; in plan view a
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
   const Camera boxSelCamValue = CadViewCamera(st);
@@ -26384,6 +26392,7 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
@@ -30058,6 +30067,159 @@ void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d
   previewLinesOut->push_back(static_cast<float>(b.z));
 }
 
+namespace {
+
+// The model trim solver already owns the project's intersection and pick-side rules. A paper
+// layout uses the same value types but different stores, so stage its native geometry in a temporary
+// command state, run that solver there, then copy only changed line/polyline stores back.
+static bool StagePaperTrimGeometry(const PaperLayout& layout, AppCommandState* staged) {
+  if (!staged)
+    return false;
+  staged->userLinesFlat.assign(layout.paperLines.begin(), layout.paperLines.end());
+  staged->userLineAttrs = layout.paperLineAttrs;
+  staged->userArcs = layout.paperArcs;
+  staged->userArcAttrs = layout.paperArcAttrs;
+  staged->userEllipses = layout.paperEllipses;
+  staged->userEllAttrs = layout.paperEllAttrs;
+  staged->userPolylineOffsets = layout.paperPolyOffsets;
+  staged->userPolylineVerts.assign(layout.paperPolyVerts.begin(), layout.paperPolyVerts.end());
+  staged->userPolylineClosed = layout.paperPolyClosed;
+  staged->userPolylineAttrs = layout.paperPolyAttrs;
+  staged->userCirclesCxCyZR.clear();
+  for (size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i]);
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 1]);
+    staged->userCirclesCxCyZR.push_back(0.f);
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 2]);
+  }
+  return true;
+}
+
+static SelectedEntity PaperTrimEntity(const PaperEntityRef& ref) {
+  SelectedEntity e{};
+  e.index = ref.index;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: e.type = SelectedEntity::Type::LineSeg; break;
+  case PaperEntityRef::Type::Circle: e.type = SelectedEntity::Type::Circle; break;
+  case PaperEntityRef::Type::Arc: e.type = SelectedEntity::Type::Arc; break;
+  case PaperEntityRef::Type::Ellipse: e.type = SelectedEntity::Type::Ellipse; break;
+  case PaperEntityRef::Type::Polyline: e.type = SelectedEntity::Type::Polyline; break;
+  default: e.type = SelectedEntity::Type::Annotation; break;
+  }
+  return e;
+}
+
+static bool CommitPaperTrimGeometry(AppCommandState& st, const AppCommandState& staged) {
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout)
+    return false;
+  layout->paperLines.assign(staged.userLinesFlat.begin(), staged.userLinesFlat.end());
+  layout->paperLineAttrs = staged.userLineAttrs;
+  layout->paperPolyOffsets = staged.userPolylineOffsets;
+  layout->paperPolyVerts.assign(staged.userPolylineVerts.begin(), staged.userPolylineVerts.end());
+  layout->paperPolyClosed = staged.userPolylineClosed;
+  layout->paperPolyAttrs = staged.userPolylineAttrs;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol,
+                                std::vector<std::string>& log) {
+  using TP = AppCommandState::TrimPhase;
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout) {
+    log.push_back("TRIM — active paper layout is unavailable; nothing changed.");
+    return false;
+  }
+  AppCommandState staged;
+  StagePaperTrimGeometry(*layout, &staged);
+  staged.trimState = st.trimState;
+  staged.trimCutters.clear();
+
+  if (st.trimPhase == TP::CuttingLine_WaitP1) {
+    st.trimCutInfP1x = x; st.trimCutInfP1y = y; st.trimCutInfP1z = 0.f;
+    st.trimPhase = TP::CuttingLine_WaitP2;
+    log.push_back("TRIM — second point: finishes trim on nearest paper edge along your line.");
+    return true;
+  }
+  if (st.trimPhase == TP::CuttingLine_WaitP2) {
+    float x2 = x, y2 = y;
+    if (st.orthoMode) {
+      if (std::fabs(x2 - st.trimCutInfP1x) >= std::fabs(y2 - st.trimCutInfP1y)) y2 = st.trimCutInfP1y;
+      else x2 = st.trimCutInfP1x;
+    }
+    if (std::hypot(x2 - st.trimCutInfP1x, y2 - st.trimCutInfP1y) < 1e-9f) {
+      log.push_back("TRIM — line too short.");
+      return false;
+    }
+    const auto oldLines = staged.userLinesFlat;
+    const auto oldVerts = staged.userPolylineVerts;
+    const auto oldOffsets = staged.userPolylineOffsets;
+    ExecuteDrawnSegmentTrimOnce(staged, st.trimCutInfP1x, st.trimCutInfP1y, x2, y2, tol, log);
+    st.trimPhase = TP::SelectCuttingEdges;
+    st.active = AppCommandState::Kind::None;
+    if (oldLines != staged.userLinesFlat || oldVerts != staged.userPolylineVerts || oldOffsets != staged.userPolylineOffsets) {
+      PushUndoSnapshot(st, "Trim paper geometry");
+      CommitPaperTrimGeometry(st, staged);
+    }
+    return true;
+  }
+
+  PaperEntityRef hit{};
+  if (!PickPaperEntityAt(*layout, x, y, tol, &hit)) {
+    log.push_back("TRIM — no object at pick.");
+    return false;
+  }
+  const auto isCuttable = [](PaperEntityRef::Type t) {
+    return t == PaperEntityRef::Type::Line || t == PaperEntityRef::Type::Circle ||
+           t == PaperEntityRef::Type::Arc || t == PaperEntityRef::Type::Ellipse ||
+           t == PaperEntityRef::Type::Polyline;
+  };
+  if (st.trimPhase == TP::SelectCuttingEdges) {
+    if (!isCuttable(hit.type)) {
+      log.push_back("TRIM — text or block cannot be a cutting edge; pick a line, circle, arc, ellipse, or polyline.");
+      return false;
+    }
+    if (std::find_if(st.paperTrimCutters.begin(), st.paperTrimCutters.end(), [&](const auto& c) {
+          return c.type == hit.type && c.index == hit.index;
+        }) != st.paperTrimCutters.end()) {
+      log.push_back("TRIM — already a cutting edge.");
+      return true;
+    }
+    st.paperTrimCutters.push_back(hit);
+    log.push_back("TRIM — paper cutting edge added.");
+    return true;
+  }
+
+  if (hit.type != PaperEntityRef::Type::Line && hit.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("TRIM — only a paper line or polyline segment can be trimmed.");
+    return false;
+  }
+
+  TrimTargetEdge target{};
+  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  if (!PickClosestTrimTarget(staged, x, y, tol, &target, &ax, &ay, &bx, &by, &d2)) {
+    log.push_back("TRIM — nothing to trim at paper-space pick.");
+    return false;
+  }
+  std::vector<SelectedEntity> cutters;
+  for (const auto& c : st.paperTrimCutters) cutters.push_back(PaperTrimEntity(c));
+  std::vector<std::array<double, 4>> cuts;
+  BuildTrimCutSegments(staged, cutters, &target, &cuts);
+  if (cuts.empty()) {
+    log.push_back("TRIM — no cutting segments (check paper cutting edges).");
+    return false;
+  }
+  if (TrimSegmentToCuttingEdges(staged, target, ax, ay, bx, by, x, y, cuts, false,
+                                0.f, 0.f, 0.f, 0.f, log)) {
+    PushUndoSnapshot(st, "Trim paper geometry");
+    CommitPaperTrimGeometry(st, staged);
+  }
+  return true;
+}
+
+}  // namespace
+
 bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld,
                             std::vector<std::string>& log, const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
@@ -30065,6 +30227,9 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   using TP = AppCommandState::TrimPhase;
   if (st.active != K::Trim)
     return false;
+
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st))
+    return SubmitPaperTrimPick(st, wx, wy, tolWorld, log);
 
   // issue #399 increment 4: an orbited camera / non-world UCS carries a valid pick ray. The drawn
   // trim line's two points then keep their real elevation (the committed cursor or snap Z), and the
@@ -30116,6 +30281,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       ExecuteDrawnSegmentTrimOnce(st, st.trimCutInfP1x, st.trimCutInfP1y, p2x, p2y, tolWorld, log);
     }
     st.trimCutters.clear();
+    st.paperTrimCutters.clear();
     st.trimPhase = TP::SelectCuttingEdges;
     st.active = K::None;
     return true;
@@ -31244,6 +31410,7 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Trim;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   st.selBoxWaitingSecond = false;
   // TRIMSTATE picks the starting mode (REQ-056). 0 is smart trim: no cutting edges to pick, just draw a
   // line across what should go.
@@ -42272,6 +42439,7 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
@@ -43169,8 +43337,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (st.active == K::Trim) {
       using TP = AppCommandState::TrimPhase;
+      const bool paperTrim = st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st);
       if (st.trimPhase == TP::SelectCuttingEdges) {
-        if (st.trimCutters.empty())
+        if (paperTrim ? st.paperTrimCutters.empty() : st.trimCutters.empty())
           log.push_back("TRIM — pick at least one cutting edge before pressing Enter.");
         else {
           st.trimPhase = TP::SelectTrimTargets;
@@ -43182,6 +43351,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.active = K::None;
         st.trimPhase = TP::SelectCuttingEdges;
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         log.push_back("TRIM — finished.");
       }
     } else if (st.active == K::Extend) {
@@ -44547,6 +44717,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("TRIM — already drawing the trim line; pick its points in the viewport.");
       else {
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         st.trimPhase = TP::CuttingLine_WaitP1;
         log.push_back("TRIM — draw along the segment to trim: first point (rubber band shows dashed preview).");
       }
@@ -44557,6 +44728,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("TRIM — already picking cutting edges.");
       else {
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         st.trimPhase = TP::SelectCuttingEdges;
         log.push_back("TRIM — pick cutting edges (hover highlights), Enter when done, then click pieces to trim.");
       }
