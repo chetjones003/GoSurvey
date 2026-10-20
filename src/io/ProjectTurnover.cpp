@@ -153,6 +153,8 @@ bool Create(gsproj::Project* p, const std::string& recipient, const std::vector<
     for (const gsproj::TrackedItem& it : p->items)
       if (it.path == path)
         item = &it;
+    if (item == nullptr)
+      return Fail(err, "'" + path + "' is not a tracked file of this project.");
     Entry e;
     e.path = item->path;
     e.kind = item->kind;
