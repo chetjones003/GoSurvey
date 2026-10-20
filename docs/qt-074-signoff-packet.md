@@ -7,8 +7,8 @@ removing the ImGui executable. Both remain gated on the user's sign-off under tr
 [#878](https://github.com/chetjones003/GoSurvey/issues/878).
 
 **Evidence date:** 2026-10-19. The GitHub issue states below are the live issue states
-read for this packet. The parity ledger contains the route-by-route feature audit and
-focused evidence; this packet summarizes its coverage and remaining limits.
+read while preparing this packet. The parity ledger contains the route-by-route feature
+audit and focused evidence; this packet summarizes its coverage and remaining limits.
 
 ## Visual review decision
 
@@ -73,8 +73,8 @@ not promoted to verified by this packet.
   worktree. Issues #914 and #918 are closed in GitHub, while their checkboxes in the
   parent #878 description remain unchecked. The parent description is stale in those
   two places and has not been edited as part of this packet.
-- Issue #919 and parent tracker #878 remain open pending review. No issue has been
-  closed by this task.
+- Issue #919 was closed at the user's request after opening PR #967 against `beta`;
+  the PR remains open and unmerged. Parent tracker #878 remains open.
 
 ## Selected visual directions
 
@@ -139,7 +139,7 @@ Every #878 work item is listed below. GitHub currently reports #879 and #919 as 
 | #916 | Complete Qt point-cloud format workflows for 0.7.4 | Closed |
 | #917 | Extract remaining ImGui-only APIs from shared code | Closed |
 | #918 | Remove ImGui from the Qt link graph and verify deployment | Closed — parent checkbox is stale |
-| #919 | Prepare the 0.7.4 Qt parity sign-off packet | Open — awaiting review |
+| #919 | Prepare the 0.7.4 Qt parity sign-off packet | Closed — PR #967 is open against `beta`, not yet merged |
 
 ## Scope boundary
 

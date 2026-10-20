@@ -1,7 +1,7 @@
 # TASK-919 — Prepare the 0.7.4 Qt parity sign-off packet
 
 - Type: docs and testing
-- Status: submitted; visual review approved; full-suite verification has known failures
+- Status: submitted; issue closed at user request; PR #967 open and unmerged; full-suite verification has known failures
 - Opened: 2026-10-19
 - GitHub issue: #919, child of #878
 
@@ -83,4 +83,4 @@ ASSUMPTION-1: Earlier user selections for the Qt visual directions remain the ap
 - Tests added: `issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved`, `issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy`; CTest `qt.parity-ledger`.
 - Refactors: none
 - Docs updated: parity ledger, sign-off packet, REQ-091/REQ-382 traceability rows.
-- Done: visual review approved; PR and issue closure are being prepared at the user's direction.
+- Done: visual review approved; PR #967 opened against `beta`, and issue #919 closed at the user's direction. The PR remains unmerged while checks run.
