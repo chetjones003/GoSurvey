@@ -826,6 +826,9 @@ if(GOSURVEY_BUILD_HEADLESS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
   )
+  # Both helper executables deploy Qt into the shared tools directory after linking.
+  # Serialize them to prevent concurrent windeployqt copies from colliding.
+  add_dependencies(GsJsonDwgFixture gosurvey_headless)
   target_include_directories(GsJsonDwgFixture PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/qt
