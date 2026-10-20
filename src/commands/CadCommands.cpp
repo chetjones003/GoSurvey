@@ -701,6 +701,18 @@ void ClearPaperEntitySelection(AppCommandState& st) {
   st.paperSelBoxLastValid = false;
 }
 
+static void ResetPaperModifyDrafts(AppCommandState& st) {
+  st.paperLengthenPhase = st.paperExtendPhase = st.paperBreakPhase = st.paperStretchPhase = 0;
+  st.paperExtendBoundaries.clear();
+  st.paperBreakEntity = PaperEntityRef{};
+  st.paperFilletPhase = st.paperChamferPhase = 0;
+  st.paperFilletFirstEntity = PaperEntityRef{}; st.paperFilletFirstPolySeg = -1;
+  st.paperChamferFirstEntity = PaperEntityRef{}; st.paperChamferFirstPolySeg = -1;
+  st.filletTextAwaitingRadius = st.filletTextAwaitingTrim = false;
+  st.chamferTextAwaitingFirstValue = st.chamferTextAwaitingSecondDist = false;
+  st.chamferTextAwaitingAngle = st.chamferTextAwaitingTrim = false;
+}
+
 static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx, float by) {
   const float vx = bx - ax, vy = by - ay;
   const float len2 = vx * vx + vy * vy;
@@ -13477,6 +13489,7 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, double& wx,
 /// REQ-398. Defined with the rest of GRADING, far below; declared here because this is the routing
 /// site that must reach it.
 void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+static bool HandlePaperModifyPick(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
 void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vector<std::string>& log,
                              bool windowSelectionSubtract, bool fenceLeftToRightWindowMode,
@@ -13500,6 +13513,10 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     if (ProcessUcsViewportPick(st, {ucsWx, ucsWy, static_cast<double>(CadCommitElevation(st))}, log, pickRay))
       return;
   }
+
+  if (st.active == K::None && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st) &&
+      HandlePaperModifyPick(st, static_cast<float>(wx), static_cast<float>(wy), log))
+    return;
 
   // Box-selection projects to screen space only when the view is actually orbited; in plan view a
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
@@ -16629,6 +16646,7 @@ static const char* LengthenModeName(AppCommandState::LengthenMode m) {
 }
 
 void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037-style paper routing
     st.active = K::None;
@@ -17828,6 +17846,7 @@ static void ApplyBreakToEntity(AppCommandState& st, const SelectedEntity& e, con
 }
 
 void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 4)
     st.active = K::None;
@@ -18611,6 +18630,7 @@ void ApplyStretchToPaperSelection(AppCommandState& st, float dxIn, float dyIn, s
 }
 
 void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
@@ -19339,6 +19359,7 @@ static std::string FilletPromptSuffix(const AppCommandState& st) {
 }
 
 void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   using FP = AppCommandState::FilletPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
@@ -20400,6 +20421,7 @@ static std::string ChamferPromptSuffix(const AppCommandState& st) {
 }
 
 void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   using CP = AppCommandState::ChamferPhase;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
@@ -31259,6 +31281,7 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ResetPaperModifyDrafts(st);
   using K = AppCommandState::Kind;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 3)
     st.active = K::None;
@@ -42054,7 +42077,19 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
         "[P]olar. ESC cancels.");
 }
 
+static bool HasPaperModifyPhase(const AppCommandState& st);
+
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (HasPaperModifyPhase(st)) {
+    if (st.paperLengthenPhase) log.push_back("LENGTHEN canceled.");
+    else if (st.paperExtendPhase) log.push_back("EXTEND canceled.");
+    else if (st.paperBreakPhase) log.push_back("BREAK canceled.");
+    else if (st.paperStretchPhase) log.push_back("STRETCH canceled.");
+    else if (st.paperFilletPhase) log.push_back("FILLET canceled.");
+    else if (st.paperChamferPhase) log.push_back("CHAMFER canceled.");
+    ResetPaperModifyDrafts(st);
+    return;
+  }
   if (st.bconnectAwaitingFace) {
     st.bconnectAwaitingFace = false;
     st.bconnectNameBuf[0] = '\0';
@@ -42729,6 +42764,50 @@ static bool ParsePaperPoint(const std::string& line, bool allowRelative, float b
 }
 
 static bool HandlePaperPhaseText(AppCommandState& st, const std::string& line, std::vector<std::string>& log) {
+  const bool paperModify = HasPaperModifyPhase(st);
+  if (paperModify && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    if (st.paperFilletPhase) {
+      st.filletPhase = AppCommandState::FilletPhase::WaitFirstEntity;
+      if (line.empty() && st.paperFilletPhase == 1) { st.paperFilletPhase = 0; return true; }
+      if (line.empty()) { log.push_back("FILLET — pick the second object, or ESC to cancel."); return true; }
+      return HandleFilletText(st, line, log);
+    }
+    if (st.paperChamferPhase) {
+      st.chamferPhase = AppCommandState::ChamferPhase::WaitFirstEntity;
+      if (line.empty() && st.paperChamferPhase == 1) { st.paperChamferPhase = 0; return true; }
+      if (line.empty()) { log.push_back("CHAMFER — pick the second object, or ESC to cancel."); return true; }
+      return HandleChamferText(st, line, log);
+    }
+    if (line.empty()) {
+      if (st.paperExtendPhase == 1 && !st.paperExtendBoundaries.empty()) {
+        st.paperExtendPhase = 2;
+        log.push_back("EXTEND — select object to extend, or Enter to finish.");
+        return true;
+      }
+      if (st.paperExtendPhase == 2) {
+        st.paperExtendPhase = 0; st.paperExtendBoundaries.clear(); return true;
+      }
+      if (st.paperBreakPhase == 1) { st.paperBreakPhase = 0; return true; }
+      if (st.paperBreakPhase == 2) { log.push_back("BREAK — specify the second break point in the viewport."); return true; }
+      if (st.paperLengthenPhase) { st.paperLengthenPhase = 0; return true; }
+      if (st.paperStretchPhase) { log.push_back("STRETCH — specify a point, or ESC to cancel."); return true; }
+      return false;
+    }
+    if (st.paperStretchPhase) {
+      float x = 0.f, y = 0.f;
+      const float bx = st.paperStretchPhase == 2 ? st.paperStretchBaseXIn : 0.f;
+      const float by = st.paperStretchPhase == 2 ? st.paperStretchBaseYIn : 0.f;
+      if (!ParsePaperPoint(line, st.paperStretchPhase == 2, bx, by, &x, &y)) return false;
+      if (st.paperStretchPhase == 1) {
+        st.paperStretchBaseXIn = x; st.paperStretchBaseYIn = y; st.paperStretchPhase = 2;
+        log.push_back("STRETCH — specify destination point:");
+      } else {
+        ApplyStretchToPaperSelection(st, x - bx, y - by, log); st.paperStretchPhase = 0;
+      }
+      return true;
+    }
+    return false;
+  }
   const bool move = st.paperMovePhase != 0, rot = st.paperRotatePhase != 0, mir = st.paperMirrorPhase != 0,
              scl = st.paperScalePhase != 0;
   if (line.empty() || !(move || rot || mir || scl))
@@ -42823,6 +42902,110 @@ static bool HandlePaperPhaseText(AppCommandState& st, const std::string& line, s
   st.paperScalePhase = 0;
   return true;
 }
+
+static bool HasPaperModifyPhase(const AppCommandState& st) {
+  return st.paperLengthenPhase || st.paperExtendPhase || st.paperBreakPhase || st.paperStretchPhase ||
+         st.paperFilletPhase || st.paperChamferPhase;
+}
+
+// REQ-972: paper modify commands keep their phases in AppCommandState while active is None, so
+// consume their clicks before ordinary paper selection can intercept them.
+namespace {
+static bool HandlePaperModifyPick(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+  if (!HasPaperModifyPhase(st) || st.activeSpaceIndex < 0 ||
+      static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size() || InFloatingModelSpace(st))
+    return false;
+  PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  PaperEntityRef hit{};
+  const bool picked = PickPaperEntityAt(layout, x, y, std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit);
+  auto isCurve = [](const PaperEntityRef& ref) {
+    return ref.type == PaperEntityRef::Type::Line || ref.type == PaperEntityRef::Type::Circle ||
+           ref.type == PaperEntityRef::Type::Arc || ref.type == PaperEntityRef::Type::Ellipse ||
+           ref.type == PaperEntityRef::Type::Polyline;
+  };
+
+  if (st.paperLengthenPhase) {
+    if (!picked) { log.push_back("LENGTHEN — nothing under cursor; try again."); return true; }
+    (void)ApplyLengthenToPaperEntity(st, hit, x, y, log);
+    return true;
+  }
+  if (st.paperExtendPhase) {
+    if (!picked || !isCurve(hit)) { log.push_back("EXTEND — pick a line, circle, arc, ellipse, or polyline."); return true; }
+    if (st.paperExtendPhase == 1) {
+      if (std::find_if(st.paperExtendBoundaries.begin(), st.paperExtendBoundaries.end(), [&](const PaperEntityRef& item) {
+            return item.type == hit.type && item.index == hit.index;
+          }) != st.paperExtendBoundaries.end()) {
+        log.push_back("EXTEND — already a boundary edge.");
+        return true;
+      }
+      st.paperExtendBoundaries.push_back(hit);
+      log.push_back("EXTEND — boundary edge added. Pick more edges, or Enter when done.");
+    } else {
+      (void)ApplyExtendToPaperEntity(st, hit, x, y, log);
+    }
+    return true;
+  }
+  if (st.paperBreakPhase) {
+    if (st.paperBreakPhase == 1) {
+      if (!picked || (hit.type != PaperEntityRef::Type::Line && hit.type != PaperEntityRef::Type::Circle &&
+                      hit.type != PaperEntityRef::Type::Arc && hit.type != PaperEntityRef::Type::Polyline)) {
+        log.push_back("BREAK — pick a line, circle, arc, or polyline."); return true;
+      }
+      BreakPoint first{};
+      if (!ClosestPointOnPaperEntity(layout, hit, x, y, &first)) {
+        log.push_back("BREAK — could not resolve a point on that object; try again."); return true;
+      }
+      st.paperBreakEntity = hit;
+      st.paperBreakP1 = first;
+      st.paperBreakPhase = 2;
+      log.push_back("BREAK — specify second break point:");
+    } else {
+      if (ApplyBreakToPaperEntity(st, st.paperBreakEntity, st.paperBreakP1, x, y, log)) {
+        st.paperBreakPhase = 1;
+        st.paperBreakEntity = PaperEntityRef{};
+        log.push_back("BREAK — select object (the pick is break point 1), or Enter to finish.");
+      }
+    }
+    return true;
+  }
+  if (st.paperStretchPhase) {
+    if (st.paperStretchPhase == 1) {
+      st.paperStretchBaseXIn = x; st.paperStretchBaseYIn = y; st.paperStretchPhase = 2;
+      log.push_back("STRETCH — specify destination point:");
+    } else {
+      ApplyStretchToPaperSelection(st, x - st.paperStretchBaseXIn, y - st.paperStretchBaseYIn, log);
+      st.paperStretchPhase = 0;
+    }
+    return true;
+  }
+  if (st.paperFilletPhase || st.paperChamferPhase) {
+    const bool fillet = st.paperFilletPhase != 0;
+    int segment = -1;
+    const bool eligible = picked && (fillet ? PaperFilletEligibility(layout, hit, x, y, &segment, log)
+                                             : PaperChamferEligibility(layout, hit, x, y, &segment, log));
+    if (!eligible) {
+      if (!picked) log.push_back(fillet ? "FILLET — no object at pick." : "CHAMFER — no object at pick.");
+      return true;
+    }
+    int& phase = fillet ? st.paperFilletPhase : st.paperChamferPhase;
+    PaperEntityRef& first = fillet ? st.paperFilletFirstEntity : st.paperChamferFirstEntity;
+    int& firstSegment = fillet ? st.paperFilletFirstPolySeg : st.paperChamferFirstPolySeg;
+    float& firstX = fillet ? st.paperFilletFirstPickX : st.paperChamferFirstPickX;
+    float& firstY = fillet ? st.paperFilletFirstPickY : st.paperChamferFirstPickY;
+    if (phase == 1) {
+      first = hit; firstSegment = segment; firstX = x; firstY = y; phase = 2;
+      log.push_back(fillet ? "FILLET — select second object:" : "CHAMFER — select second object:");
+    } else {
+      if (fillet) (void)ApplyFilletToPaperEntities(st, first, firstSegment, firstX, firstY, hit, segment, x, y, log);
+      else (void)ApplyChamferToPaperEntities(st, first, firstSegment, firstX, firstY, hit, segment, x, y, log);
+      phase = 1;
+      log.push_back(fillet ? "FILLET — select first object or Enter to finish." : "CHAMFER — select first object or Enter to finish.");
+    }
+    return true;
+  }
+  return false;
+}
+} // namespace
 
 static void MaybeEstablishDocumentOriginFromTypedPoint(AppCommandState& st, const std::string& line,
                                                        std::vector<std::string>& log) {
