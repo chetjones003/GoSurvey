@@ -1,7 +1,7 @@
 // Qt Create Surface and Surface Properties dialogs, and the Toolspace surface menus (issue #893).
 //
 // The edit rules (what is refused, the exact messages, what one undo step covers) are the shared
-// `surfedit::` services in commands/CadSurfaceEdit — the ImGui windows call the same functions — so
+// `surfedit::` services in commands/CadSurfaceEdit — so
 // this file only supplies widgets. Create Surface and Surface Properties are modal; the Surfaces
 // manager (EditorSurfaceManager.cpp) and the Surface Style editor (EditorSurfaceStyles.cpp) follow.
 #include "EditorWindow.hpp"

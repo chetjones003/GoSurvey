@@ -25,6 +25,6 @@ QDialog* CreateFailureReportDialog(const QString& title, const QString& report,
 void ExecFailureReportDialog(const std::string& titleUtf8, const std::string& reportUtf8);
 
 /// REQ-425 §4: the Qt build's launch-time graphics check — an OpenGL 3.3 core context and the
-/// viewport renderer, the same things the ImGui launch fails on. False with the failing stage and
+/// viewport renderer, the same things that can prevent application startup. False with the failing stage and
 /// a technical detail line when GoSurvey cannot draw on this machine.
 bool ProbeStartupGraphics(startupFailure::Stage& stage, std::string& detail);

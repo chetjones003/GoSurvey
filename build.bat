@@ -1,18 +1,12 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem Unified MSVC build. build.bat [all|imgui|qt] [release|debug|vs] [cmake build arguments]
-rem Default: both frontends and tests, Release. Qt kit: GOSURVEY_QT_ROOT.
+rem Unified MSVC build. build.bat [release|debug|vs] [cmake build arguments]
+rem Builds the Qt frontend and supported tests. Qt kit: GOSURVEY_QT_ROOT.
 rem Applications: build\ (Release), build\debug\ (Debug), build\Release\ (VS).
 rem Intermediates: build\.cmake\. Screenshots/reports: build\artifacts\.
 
 cd /d "%~dp0"
-
-rem Frontend selector: all (default), imgui, or qt, followed by release/debug/vs.
-set "FRONTEND=all"
-if /i "%~1"=="imgui" (set "FRONTEND=imgui" & shift)
-if /i "%~1"=="qt" (set "FRONTEND=qt" & shift)
-if /i "%~1"=="all" shift
 
 rem --- configuration selector ---------------------------------------------
 rem Consume the first arg if it names a configuration; forward the rest to
@@ -96,19 +90,14 @@ if errorlevel 1 (
 )
 
 rem Reconfigure on every invocation so frontend and Qt-kit selection are honored.
-set "QTARGS=-DGOSURVEY_BUILD_QT=OFF -DGOSURVEY_BUILD_TESTS=ON"
-if /i not "%FRONTEND%"=="imgui" (
-  if not defined GOSURVEY_QT_ROOT set "GOSURVEY_QT_ROOT=C:\Qt\6.8.3\msvc2022_64"
-  if not exist "!GOSURVEY_QT_ROOT!\lib\cmake\Qt6\Qt6Config.cmake" (
-    echo ERROR: Qt kit not found at "!GOSURVEY_QT_ROOT!". Set GOSURVEY_QT_ROOT to an installed MSVC x64 Qt kit.
-    exit /b 1
-  )
-  set "QTARGS=-DGOSURVEY_BUILD_TESTS=ON -DGOSURVEY_BUILD_QT=ON "-DCMAKE_PREFIX_PATH=!GOSURVEY_QT_ROOT!" -UQt6*_DIR -UGOSURVEY_WINDEPLOYQT"
+if not defined GOSURVEY_QT_ROOT set "GOSURVEY_QT_ROOT=C:\Qt\6.8.3\msvc2022_64"
+if not exist "!GOSURVEY_QT_ROOT!\lib\cmake\Qt6\Qt6Config.cmake" (
+  echo ERROR: Qt kit not found at "!GOSURVEY_QT_ROOT!". Set GOSURVEY_QT_ROOT to an installed MSVC x64 Qt kit.
+  exit /b 1
 )
+set "QTARGS=-DGOSURVEY_BUILD_TESTS=ON "-DCMAKE_PREFIX_PATH=!GOSURVEY_QT_ROOT!" -UQt6*_DIR -UGOSURVEY_WINDEPLOYQT"
 cmake --preset %PRESET% %QTARGS%
 if errorlevel 1 exit /b 1
-if /i "%FRONTEND%"=="imgui" set "FWDARGS= --target GoSurvey GoSurveyTestImGui %FWDARGS%"
-if /i "%FRONTEND%"=="qt" set "FWDARGS= --target GoSurveyQt GoSurveyQtTests %FWDARGS%"
 
 rem --- fixup VS CMake path quoting for Ninja POST_BUILD (space in Program Files) ---
 if exist "%BUILDDIR%\build.ninja" (

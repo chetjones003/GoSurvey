@@ -118,7 +118,5 @@ SUPPORT
   Third-Party Notices
 ================================================================================
   PDFium      BSD 3-Clause  —  https://pdfium.googlesource.com/pdfium/
-  GLFW        zlib License  —  https://www.glfw.org/
   GLEW        BSD/MIT       —  https://glew.sourceforge.net/
-  Dear ImGui  MIT License   —  https://github.com/ocornut/imgui
 ================================================================================

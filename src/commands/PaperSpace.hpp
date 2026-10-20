@@ -93,7 +93,7 @@ struct Viewport {
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 
   // REQ-061: true when the camera is the historical straight-down orthographic plan view. Callers
-  // keep the exact pre-change 2D path (ModelToPaperIn, ImGui AddCircle, uniform px/model) on this.
+  // keep the exact pre-change 2D path (ModelToPaperIn, circle marker, uniform px/model) on this.
   [[nodiscard]] bool cameraIsPlan() const {
     return !camPerspective && std::fabs(camAzimuthDeg) < 1.e-4f &&
            std::fabs(camElevationDeg - 90.f) < 1.e-4f && std::fabs(camRollDeg) < 1.e-4f;
@@ -287,7 +287,7 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
 
 /// Everything the layout-viewport TEXT/MTEXT overlay needs from one annotation: isolation skip,
 /// the scale REQ-050 picks, and the font family the draw call must pass to SHX/TTF resolve.
-/// CadUi uses this struct's fields rather than inlining the drawing scale or ImGui::GetFont().
+/// The Qt viewport uses these fields rather than inlining the drawing scale or font resolution.
 struct ViewportTextOverlayPlan {
   bool skipHidden = false;
   float modelUnitsPerPlottedInch = 50.f;
