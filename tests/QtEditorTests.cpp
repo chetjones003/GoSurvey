@@ -3688,7 +3688,7 @@ private Q_SLOTS:
   }
 
   void customTitleBarAndFloatingCommandLineWork() {
-    QSettings settings; settings.setValue("editor/commandWidth", 500); settings.remove("editor/commandAnchor");
+    QSettings settings; settings.setValue("editor/commandWidth", 400); settings.remove("editor/commandAnchor");
     const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
     const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
     const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
@@ -3697,7 +3697,8 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
