@@ -37,12 +37,12 @@ EXPECT ELLIPSES 1
 EXPECT LINES 1
 EXPECT SOLIDS 1
 CHECK ALL
-SAVEAS %OUT%/ell-sel.gs
+SAVEAS %OUT%/ell-sel.dwg
 
 # --- a drag over the curve that is DRAWN catches it --------------------------------------------
 # (0, -30) is on the arc: the pipe AND the arc. Before the fix this was 1 — the pipe alone, with the
 # arc hunted for 12.4 units further out.
-OPEN %OUT%/ell-sel.gs
+OPEN %OUT%/ell-sel.dwg
 EXPECT SELECTED 0
 BOX -2 -32 2 -28
 EXPECT SELECTED 2
@@ -50,12 +50,12 @@ EXPECT SELECTED 2
 # --- and nothing where a flat, whole ellipse would have been -----------------------------------
 # 42.4 out along Y is where the flat reading put the curve, outside the pipe's own footprint, so
 # nothing at all is there. Before the fix this box caught the section from empty space.
-OPEN %OUT%/ell-sel.gs
+OPEN %OUT%/ell-sel.dwg
 BOX -2 -44 2 -41
 EXPECT SELECTED 0
 
 # (0, +30) is the far side of the oval — the 141 degrees the cut removed. Only the pipe is there.
-OPEN %OUT%/ell-sel.gs
+OPEN %OUT%/ell-sel.dwg
 BOX -2 28 2 32
 EXPECT SELECTED 1
 CHECK ALL
@@ -67,19 +67,19 @@ PICK 0 0
 PICK 10 0
 CMD 0.5
 EXPECT ELLIPSES 1
-SAVEAS %OUT%/ell-flat.gs
+SAVEAS %OUT%/ell-flat.dwg
 
 # The major end, then the minor end: both on the curve.
-OPEN %OUT%/ell-flat.gs
+OPEN %OUT%/ell-flat.dwg
 EXPECT SELECTED 0
 BOX 9 -1 11 1
 EXPECT SELECTED 1
-OPEN %OUT%/ell-flat.gs
+OPEN %OUT%/ell-flat.dwg
 BOX -1 4 1 6
 EXPECT SELECTED 1
 
 # The empty middle is still empty — an ellipse fills none of it.
-OPEN %OUT%/ell-flat.gs
+OPEN %OUT%/ell-flat.dwg
 BOX -1 -1 1 1
 EXPECT SELECTED 0
 CHECK ALL

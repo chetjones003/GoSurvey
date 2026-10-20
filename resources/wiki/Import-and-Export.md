@@ -2,9 +2,9 @@
 
 | Format | Import | Export | Where |
 |---|---|---|---|
-| **`.gs`** — GoSurvey drawing | ✔ | ✔ | File → Open / Save |
+| **DWG** — GoSurvey drawing | ✔ | ✔ | File → Open / Save |
 | **DXF** (ASCII) | ✔ | ✔ | File → Import DXF… / Export DXF… |
-| **DWG** | ✔ *(converter)* | ✔ *(converter)* | File → Import DWG… / Export DWG… |
+| **DWG** | ✔ | ✔ | File → Import DWG… / Export DWG… |
 | **CSV** — survey points | ✔ | ✔ | `IMPORTPOINTS` / `EXPORTPOINTS` |
 | **JSON** — survey point database | ✔ | ✔ | Viewpoints / Create points panel |
 | **FBK** — Autodesk Field Book | ✔ | — | Traverse Editor → Import .fbk… |

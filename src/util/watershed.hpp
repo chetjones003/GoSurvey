@@ -3,7 +3,7 @@
 /// Watershed / water-drop / catchment on a TIN (REQ-132…134 / ADR-039 (j)).
 ///
 /// Pure — triangulation arrays only — so Catch2 links it without GL, beside tinbuild / surfacestats.
-/// Display geometry is derived here as GL_LINES buffers; it is never stored in `.gs`.
+/// Display geometry is derived here as GL_LINES buffers; it is never stored in `internal document payload`.
 
 #include <cstdint>
 #include <string>

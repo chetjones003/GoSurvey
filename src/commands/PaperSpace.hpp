@@ -73,10 +73,10 @@ struct Viewport {
 
   // REQ-061: the camera this viewport views model space through. The defaults — azimuth 0,
   // elevation 90 (straight down), no roll, orthographic — reproduce the historical flat plan
-  // projection (ModelToPaperIn) to the last bit, so every legacy drawing and every legacy .gs
+  // projection (ModelToPaperIn) to the last bit, so every legacy drawing and every legacy internal document payload
   // is unchanged. Orientation is measured exactly as the model-viewport Camera measures it
   // (azimuth about world +Z, 0 = looking north; elevation above the horizon, +90 = plan).
-  // Persisted additively in .gs (GsIo). Named UCS/view definitions stay per-drawing (issue #155):
+  // Persisted additively in internal document payload (GsIo). Named UCS/view definitions stay per-drawing (issue #155):
   // only this active orientation is per-viewport.
   float camAzimuthDeg = 0.f;
   float camElevationDeg = 90.f;
@@ -88,9 +88,9 @@ struct Viewport {
   // coordinate entry / grid / ORTHO / the readout / UCSFOLLOW against while the user is in
   // FLOATING MODEL SPACE (REQ-036) inside it. A `ucs::Ucs` VALUE, not a name — so an ad-hoc UCS
   // built while floating (3-point / ZAxis / rotate) persists to the viewport, matching AutoCAD's
-  // UCSVP. The default is World, under which every pre-REQ-155 drawing and .gs is unchanged.
+  // UCSVP. The default is World, under which every pre-REQ-155 drawing and internal document payload is unchanged.
   // Named UCS *definitions* stay per-drawing on AppCommandState::ucsNamed (single owner); this is
-  // only the per-viewport *active frame*. Persisted additively in .gs (GsIo).
+  // only the per-viewport *active frame*. Persisted additively in internal document payload (GsIo).
   ucs::Ucs activeUcs;
 
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }

@@ -1,0 +1,34 @@
+# REQ-039 / GitHub #975: OFFSET in a layout reads and writes paper-inch geometry only.
+
+NEW
+CMD LINE
+CMD 20,20
+CMD 25,20
+ESC
+LAYOUT NEW
+CMD LINE
+CMD 2,2
+CMD 4,2
+ESC
+EXPECT LINES 1
+EXPECT PAPERLINES 1
+
+# Positive distance, pick the line, then choose the upper side. The result stays in this layout.
+CMD OFFSET
+CMD 1
+PICK 3 2
+PICK 3 4
+EXPECT LINES 1
+EXPECT PAPERLINES 2
+EXPECT LOG "created parallel / concentric geometry."
+
+# Empty-space and unsupported text picks are refusals; they leave the command available.
+PICK 9 9
+EXPECT LOG "nothing under cursor; try again."
+CMD ESC
+
+# Switching to model space proves the original model entity was not modified by paper OFFSET.
+LAYOUT MODEL
+EXPECT LINES 1
+EXPECT PAPERLINES 2
+CHECK ALL

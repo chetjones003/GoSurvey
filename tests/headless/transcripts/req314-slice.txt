@@ -74,7 +74,7 @@ CMD B
 EXPECT LOG "A tilted cut that crosses the end of a cylinder or cone is not supported yet."
 EXPECT SOLIDS 7
 
-# --- Solids survive a .gs save and reopen ------------------------------------------------
+# --- Solids survive a document JSON payload save and reopen ------------------------------------------------
 SAVEAS %OUT%/req314-slice.dwg
 OPEN %OUT%/req314-slice.dwg
 EXPECT SOLIDS 7

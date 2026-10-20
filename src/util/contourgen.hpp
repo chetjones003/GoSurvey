@@ -6,7 +6,7 @@
 /// a GL context or the GUI stack, for the same reason `tinbuild` beside it does (ADR-028 (c)).
 ///
 /// **Contours are display geometry, not entities.** What comes out of here is regenerated from a
-/// triangulation and a style, is never written to `.gs`, never enters selection, and never counts as
+/// triangulation and a style, is never written to `internal document payload`, never enters selection, and never counts as
 /// an entity in the drawing (REQ-070). The output is shaped like `userPolylineVerts` /
 /// `userPolylineOffsets` / `userPolylineClosed` anyway, because that is what the line renderer
 /// already consumes — and because REQ-071's later EXTRACT is then a copy rather than a conversion.

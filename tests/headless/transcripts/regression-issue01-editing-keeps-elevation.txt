@@ -113,7 +113,7 @@ EXPECT ELEVATION LINE 2 286.715
 
 # --- FILLET on two lines: the new ARC carries an elevation too ---------------------------------
 # CadArc has a z field (REQ-057 / ADR-025) that the fillet left at its 0.f default. CadArcToJson
-# writes z only when non-zero, so an arc born at datum was indistinguishable in the .gs from a
+# writes z only when non-zero, so an arc born at datum was indistinguishable in the document JSON payload from a
 # legacy flat one.
 NEW
 CMD ELEV 286.715

@@ -93,17 +93,17 @@ EXPECT SOLIDPROPS 0 1520 825.1370849898 12 18 8
 UNDO
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# --- A chamfered solid survives a .gs round-trip ------------------------------------------------------
+# --- A chamfered solid survives a document JSON payload round-trip ------------------------------------------------------
 
 NEW
 VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 SUBOBJECT 0 5 8 0.5 0.5
 CMD CHAMFER 2
-SAVEAS %OUT%/chamfer-solid.gs
+SAVEAS %OUT%/chamfer-solid.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/chamfer-solid.gs
+OPEN %OUT%/chamfer-solid.dwg
 EXPECT SOLIDS 1
 EXPECT SOLIDPROPS 0 1560 852.5685424949 10 15 7
 

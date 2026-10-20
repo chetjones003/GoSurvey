@@ -14,6 +14,9 @@ The heading must be the plain three-part version (`## 0.5.0`). Every beta in tha
 same section, because a beta is a preview of that release. A version with no section here shows a
 short fallback message instead — which is a missed opportunity, not a failure.
 
+Older release sections below are historical; format names in them describe the builds of that
+time. Current GoSurvey drawings use DWG.
+
 ---
 
 ## 0.7.4

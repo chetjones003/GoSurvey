@@ -407,17 +407,61 @@ void EditorViewport::paintGL() {
       painter.drawPath(path);
     }
     painter.setBrush(Qt::NoBrush);
-    painter.setPen(QPen(QColor("#252a30"), 1));
-    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6)
+    const auto isTrimHighlighted = [&](PaperEntityRef::Type type, int index) {
+      if (m_State.paperHoverValid && m_State.paperHover.type == type && m_State.paperHover.index == index)
+        return true;
+      return std::find_if(m_State.paperTrimCutters.begin(), m_State.paperTrimCutters.end(),
+          [&](const PaperEntityRef& cutter) { return cutter.type == type && cutter.index == index; }) !=
+          m_State.paperTrimCutters.end();
+    };
+    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6) {
+      const int index = static_cast<int>(i / 6);
+      painter.setPen(QPen(isTrimHighlighted(PaperEntityRef::Type::Line, index) ? QColor("#00a8ff") : QColor("#252a30"),
+                          isTrimHighlighted(PaperEntityRef::Type::Line, index) ? 2.5 : 1));
       painter.drawLine(project(layout.paperLines[i], layout.paperLines[i + 1]),
                        project(layout.paperLines[i + 3], layout.paperLines[i + 4]));
+    }
     for (std::size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
+      const int index = static_cast<int>(i / 3);
       const QPointF center = project(layout.paperCircles[i], layout.paperCircles[i + 1]);
       const QPointF edge = project(layout.paperCircles[i] + layout.paperCircles[i + 2], layout.paperCircles[i + 1]);
       const double radius = QLineF(center, edge).length();
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Circle, index);
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       painter.drawEllipse(center, radius, radius);
     }
+    for (std::size_t i = 0; i < layout.paperArcs.size(); ++i) {
+      const auto& arc = layout.paperArcs[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Arc, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      QPolygonF curve;
+      constexpr int samples = 48;
+      for (int step = 0; step <= samples; ++step) {
+        const double t = static_cast<double>(step) / samples;
+        const double angle = arc.startRad + arc.sweepRad * t;
+        curve << project(arc.cx + arc.r * std::cos(angle), arc.cy + arc.r * std::sin(angle));
+      }
+      painter.drawPolyline(curve);
+    }
+    for (std::size_t i = 0; i < layout.paperEllipses.size(); ++i) {
+      const auto& ellipse = layout.paperEllipses[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Ellipse, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      QPolygonF curve;
+      constexpr int samples = 64;
+      for (int step = 0; step <= samples; ++step) {
+        const double angle = 6.283185307179586 * static_cast<double>(step) / samples;
+        const double majorX = ellipse.majVx * std::cos(angle);
+        const double majorY = ellipse.majVy * std::cos(angle);
+        const double minorScale = ellipse.ratio * std::sin(angle);
+        curve << project(ellipse.cx + majorX - ellipse.majVy * minorScale,
+                         ellipse.cy + majorY + ellipse.majVx * minorScale);
+      }
+      painter.drawPolyline(curve);
+    }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
       QPolygonF polyline;
       for (int v = begin; v < end; ++v) {
@@ -1169,6 +1213,18 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   ClearTransientInput();
   if (WorldPoint(m_Last, m_Cursor)) {
     const Camera camera = CadViewCamera(m_State);
+    const bool paperTrimHover = m_State.active == AppCommandState::Kind::Trim &&
+        m_State.activeSpaceIndex >= 0 &&
+        m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
+        !InFloatingModelSpace(m_State);
+    if (paperTrimHover) {
+      const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+      m_State.paperHoverValid = PickPaperEntityAt(layout, static_cast<float>(m_Cursor.x),
+          static_cast<float>(m_Cursor.y), camera.orthoHalfH * 8.f /
+              static_cast<float>(std::max(1, height())), &m_State.paperHover);
+    } else {
+      m_State.paperHoverValid = false;
+    }
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;

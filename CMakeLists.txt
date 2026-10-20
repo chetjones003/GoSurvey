@@ -963,7 +963,7 @@ if(GOSURVEY_BUILD_TESTS)
     # differences are all decided here, with no window — the same reason BrepTests exists.
     tests/NurbsTests.cpp
     src/util/nurbs.cpp
-    # REQ-315 acceptance: a solid survives `.gs` save/reopen with topology counts identical and
+    # REQ-315 acceptance: a solid survives document-payload JSON save/reopen with topology counts identical and
     # volume/area stable. BrepJson.hpp is header-only and pulls in only nlohmann/json + brep.hpp, so
     # the serializer the saver actually runs is exercised directly here (GsIo.cpp is not linkable).
     tests/BrepJsonTests.cpp
@@ -1009,7 +1009,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-347 — least-squares cylinder-axis fit. Pinned directly, same as the octree above.
     tests/CylinderFitTests.cpp
     src/util/cylinderfit.cpp
-    tests/MeshGsRoundTripTests.cpp
+    tests/MeshPayloadRoundTripTests.cpp
     tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
@@ -1206,7 +1206,7 @@ if(GOSURVEY_BUILD_TESTS)
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
     src/update/UpdateCheck.cpp
-    # REQ-079 .gs forward migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
+    # REQ-079 document-payload schema migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
     # logic is testable without the command layer that GsIo.cpp drags in.
     src/io/GsMigrate.cpp
     # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
@@ -1222,7 +1222,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
-    # For the REQ-063 `.gs` round-trip test: GsIo.cpp itself is not linkable here (it pulls the
+    # For the REQ-063 payload round-trip test: GsIo.cpp itself is not linkable here (it pulls the
     # whole command layer), but the serializer it relies on is, and that is where the precision
     # risk actually lives.
     ${NLOHMANN_JSON_INCLUDE}
@@ -1475,7 +1475,7 @@ if(GOSURVEY_BUILD_TESTS)
     #
     # ***** THE LIST IS EMPTY. *****  Keep the mechanism and this note: it is the record of what the
     # convention is for, and the next oracle to find a real defect goes here rather than being
-    # deleted to get a green suite. TASK-056 made this call for `headless.gs-roundtrip.compare`
+    # deleted to get a green suite. TASK-056 made this call for the separate payload comparison test
     # while #56/#57 were open, and it is why those defects stayed visible. WILL_FAIL is worse than
     # either option — it goes green the moment the failure turns into a DIFFERENT failure, which is
     # the one outcome nobody wants to miss.
@@ -1512,7 +1512,7 @@ if(GOSURVEY_BUILD_TESTS)
     set_tests_properties(headless.fuzz-smoke PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-    # The `gs-roundtrip` comparison was briefly a separate, DISABLED ctest case here while issues
+    # The document-payload comparison was briefly a separate, DISABLED ctest case here while issues
     # #56 and #57 were open. Both are fixed, so the check is live again and now lives inside the
     # transcript itself as `EXPECT SAMEFILE` — one artifact instead of two, and it needs no
     # knowledge of the build layout. Disabling it was the right call at the time (deleting would

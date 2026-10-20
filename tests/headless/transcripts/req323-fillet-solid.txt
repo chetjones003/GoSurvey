@@ -110,7 +110,7 @@ EXPECT SOLIDPROPS 0 1565.6637061436 842.2300767580 12 18 8
 UNDO
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# --- A filleted solid survives a .gs round-trip ------------------------------------------------------
+# --- A filleted solid survives a document JSON payload round-trip ------------------------------------------------------
 
 NEW
 # Orbited, and this is not cosmetic: in PLAN view a ray aimed at a top edge also passes through
@@ -122,10 +122,10 @@ VIEWANGLES 135 20
 CMD BOX 0,0 20 10 8
 SUBOBJECT 0 5 8 0.5 0.5
 CMD FILLET 2
-SAVEAS %OUT%/fillet-solid.gs
+SAVEAS %OUT%/fillet-solid.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/fillet-solid.gs
+OPEN %OUT%/fillet-solid.dwg
 EXPECT SOLIDS 1
 EXPECT SOLIDPROPS 0 1582.8318530718 861.1150383794 10 15 7
 

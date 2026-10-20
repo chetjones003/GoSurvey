@@ -440,7 +440,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     }
   } else if (verb == "EXPORT" || verb == "IMPORT") {
     // EXPORT <FORMAT> <path> / IMPORT <FORMAT> <path> — the interchange formats, as distinct from
-    // OPEN/SAVEAS which are the drawing's own `.gs`. Two words rather than an `EXPORTDXF` verb so
+    // OPEN/SAVEAS which are the drawing's own DWG file with embedded GoSurvey payload. Two words rather than an `EXPORTDXF` verb so
     // the parser-fuzzing stage can add GLTF and STL without inventing a verb each
     // (docs/fuzz-harness.md §8 stage 6).
     //
@@ -799,7 +799,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
       // HatchPick case does — same two calls, same order, same miss message. Until this existed no
       // filled region could be created headless, so nothing about hatches had a transcript at all:
-      // not their rendering, not their Z, not their round trip through `.gs` or DXF.
+      // not their rendering, not their Z, not their round trip through `document JSON payload` or DXF.
       //
       // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
       // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
@@ -1338,7 +1338,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
     //
     // Not an assertion. Label PLACEMENT is a relationship between two rectangles, and no
-    // `EXPECT <count>` can express it while a `.gs` diff shows it only as eight bare floats. This
+    // `EXPECT <count>` can express it while a `document JSON payload` diff shows it only as eight bare floats. This
     // prints the two numbers that decide whether the placement rule holds — the box's offset from
     // its point, and the box's size — so that a rule like "the anchor does not move when the text
     // gets longer" can be read straight off the log.
@@ -1659,7 +1659,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     } else if (what == "SAMEFILE" || what == "DIFFERENTFILE") {
       const bool wantSame = (what == "SAMEFILE");
-      // EXPECT SAMEFILE <a> <b> — byte comparison. This is what makes the `gs-roundtrip` oracle
+      // EXPECT SAMEFILE <a> <b> — compares embedded GoSurvey payload JSON. This is what makes the document-payload oracle
       // expressible in a transcript rather than needing a separate build-system step, which in turn
       // is what lets the fuzzer generate it.
       //
@@ -1712,7 +1712,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     } else if (what == "FILECONTAINS" || what == "FILELACKS") {
       // EXPECT FILECONTAINS <path> "<text>"   /   EXPECT FILELACKS <path> "<text>"
       //
-      // A literal substring test over a saved document, reading the `.gs` JSON out of a DWG trailer
+      // A literal substring test over a saved document, reading the `document JSON payload` JSON out of a DWG trailer
       // exactly as SAMEFILE above does, so it works on either extension.
       //
       // It exists for a shape of acceptance condition no count and no byte comparison can state:
@@ -2764,6 +2764,76 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "the fixture must vary the description text",
              sourceLine);
         return false;
+      }
+    } else if (what == "PAPERLINE") {
+      // EXPECT PAPERLINE <layout> <line> <x0> <y0> <x1> <y1> — paper-inch endpoints in one
+      // specific layout. Counts alone cannot prove TRIM shortened a paper line or stayed out of
+      // another layout, so this reads the same layout-owned line store the renderer and document JSON payload writer use.
+      std::istringstream is(arg);
+      long layoutIx = -1, lineIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> lineIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERLINE needs <layout> <line> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || lineIx < 0) {
+        Fail(run, "expect", "PAPERLINE: layout or line index is out of range", sourceLine);
+        return false;
+      }
+      const auto& lines = run.st.paperLayouts[static_cast<size_t>(layoutIx)].paperLines;
+      const size_t base = static_cast<size_t>(lineIx) * 6;
+      if (base + 4 >= lines.size()) {
+        Fail(run, "expect", "PAPERLINE: line index is out of range", sourceLine);
+        return false;
+      }
+      const double got[4] = {lines[base], lines[base + 1], lines[base + 3], lines[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        lineIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "PAPERPOLYLINE") {
+      // EXPECT PAPERPOLYLINE <layout> <polyline> <x0> <y0> <x1> <y1> — assert the two
+      // endpoints of a trimmed open paper polyline, including which side the pick retained.
+      std::istringstream is(arg);
+      long layoutIx = -1, polyIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> polyIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERPOLYLINE needs <layout> <polyline> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || polyIx < 0) {
+        Fail(run, "expect", "PAPERPOLYLINE: layout or polyline index is out of range", sourceLine);
+        return false;
+      }
+      const auto& layout = run.st.paperLayouts[static_cast<size_t>(layoutIx)];
+      const size_t index = static_cast<size_t>(polyIx);
+      if (index + 1 >= layout.paperPolyOffsets.size()) {
+        Fail(run, "expect", "PAPERPOLYLINE: polyline index is out of range", sourceLine);
+        return false;
+      }
+      const int begin = layout.paperPolyOffsets[index], end = layout.paperPolyOffsets[index + 1];
+      if (end - begin != 2) {
+        Fail(run, "expect", "PAPERPOLYLINE: expected exactly two vertices after trimming", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(begin) * 3;
+      const double got[4] = {layout.paperPolyVerts[base], layout.paperPolyVerts[base + 1],
+                             layout.paperPolyVerts[base + 3], layout.paperPolyVerts[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERPOLYLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        polyIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
       }
     } else {
       long want = 0;

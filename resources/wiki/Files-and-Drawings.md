@@ -2,12 +2,12 @@
 
 ---
 
-## The `.gs` drawing file
+## DWG drawing files
 
-GoSurvey's native format. A `.gs` file is a **single UTF-8 text file containing one JSON object** —
-no binary wrapper, no compression, no encryption. Saved files are pretty-printed.
+GoSurvey drawings are saved as **DWG** files. GoSurvey stores its survey-specific document data
+inside the DWG alongside the CAD entities, so a GoSurvey drawing remains one file.
 
-One `.gs` file holds a complete workspace:
+One DWG drawing holds:
 
 - CAD geometry — lines, polylines, circles, arcs, ellipses, hatches, meshes
 - Annotations — text, MTEXT, dimensions
@@ -18,8 +18,7 @@ One `.gs` file holds a complete workspace:
 - Text styles, plot scale, and insertion units
 - PDF underlay references
 
-Because it is plain JSON, a `.gs` file is diffable and greppable, which is useful when something
-goes wrong.
+Use **File → Export DXF…** when you need a text-based, diffable interchange file.
 
 ---
 
@@ -39,7 +38,7 @@ Tabs can be hidden with **Settings → Display → Display File Tabs**.
 | Action | How | Behaviour |
 |---|---|---|
 | **New** | File → New | Opens an empty drawing **in a new tab**, named `Drawing N` |
-| **Open** | File → Open | Opens a `.gs` **in a new tab**, named after the file. Does not replace what you are working on |
+| **Open** | File → Open | Opens a DWG drawing **in a new tab**, named after the file. Does not replace what you are working on |
 | **Save** | `Ctrl+S`, File → Save | Writes to the current path. With no path yet, the Save-As dialog opens first |
 | **Save As** | File → Save As… | New name and location; the tab is renamed to the file stem and later saves go to the new path |
 
@@ -75,21 +74,21 @@ New drawings start from a **startup template**.
 
 **Settings → Files:**
 
-> *Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup;
-> an empty Custom path uses the bundled `resources/default-template.gs` next to the executable.
+> *Search paths, file locations, and startup template. GoSurvey loads a `.gst` template at startup;
+> an empty Custom path uses the bundled `resources/default-template.gst` next to the executable.
 > Preferences are saved in `gosurvey-user.json` beside the executable.*
 
 | Control | What it does |
 |---|---|
-| **Startup template (.gs)** — Custom .gs path | Point at your own template |
+| **Startup template (.gst)** — Custom template path | Point at your own template |
 | **Browse** | File dialog (Windows only in this build) |
-| **Clear path (use bundled)** | Fall back to `resources/default-template.gs` |
+| **Clear path (use bundled)** | Fall back to `resources/default-template.gst` |
 | **Save startup preferences** | Writes `gosurvey-user.json` |
 
 The dialog reports where the bundled template resolved to, or says it could not be found.
 
 **To make your own template:** set up a drawing with your standard layers, text styles, layouts,
-and page setups, save it as a `.gs`, and point the startup template at it.
+and page setups, save it as a `.gst` template, and point the startup template at it.
 
 ---
 
@@ -99,7 +98,7 @@ and page setups, save it as a `.gs`, and point the startup template at it.
 |---|---|
 | `%ProgramFiles%\GoSurvey` | The installed program |
 | Beside the executable | `gosurvey-user.json` — user preferences (display precision, angle format, startup template, update settings) |
-| Beside the executable — `resources/` | `default-template.gs`, `fonts/`, `hatches/`, `icons/`, `layouts/`, `linetypes/` |
+| Beside the executable — `resources/` | `default-template.gst`, `fonts/`, `hatches/`, `icons/`, `layouts/`, `linetypes/` |
 | `%APPDATA%\GoSurvey` | `history.log` — the undo history log |
 
 Resources are resolved **relative to the executable**.
@@ -156,8 +155,8 @@ arrangement.
 |---|---|---|
 | Opening a drawing did not replace the current one | Open always uses a new tab, by design | Close the tab you no longer want |
 | Work was lost after a crash | There is no autosave or recovery | Save often; `Ctrl+S` is cheap |
-| A `.gs` will not open | It may be truncated or hand-edited into invalid JSON | Check the log for the parse error; `.gs` is plain JSON, so a text editor can show you where |
-| New drawings do not have my layers | No startup template is configured | Settings → Files → **Startup template (.gs)** |
+| A DWG will not open | The file may be damaged or use unsupported DWG content | Check the message and log; try opening a copy or importing through DXF |
+| New drawings do not have my layers | No startup template is configured | Settings → Files → **Startup template (.gst)** |
 | Preferences do not stick | `gosurvey-user.json` could not be written | *"Error: failed to write gosurvey-user.json (check directory permissions)"* — the folder beside the executable needs to be writable |
 | An update prompt appeared mid-work | The startup check found a newer version | **Remind Me Later**, or turn the check off in Settings → System |
 

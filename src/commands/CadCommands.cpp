@@ -94,7 +94,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
   doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
   doc.viewportFovDeg         = cmd.viewportFovDeg;
-  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to .gs (REQ-341)
+  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to internal document payload (REQ-341)
   doc.viewportSectionClipOffset = cmd.viewportSectionClipOffset;
   doc.viewportSectionClipFlip   = cmd.viewportSectionClipFlip;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
@@ -702,7 +702,7 @@ static void DropPaperLeadersFromSelection(AppCommandState& st, const char* verb,
       st.selectedPaperEntities.end());
   const size_t dropped = before - st.selectedPaperEntities.size();
   if (dropped > 0)
-    log.push_back(std::string(verb) + " � " + std::to_string(dropped) +
+    log.push_back(std::string(verb) + " � " + std::to_string(dropped) +
                   " Multileader(s) left unchanged: a Multileader can only be moved, copied or erased.");
 }
 
@@ -1795,7 +1795,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
     att.glTexId = 0;
   snap.worldDocumentOriginX = st.worldDocumentOriginX;
   snap.worldDocumentOriginY = st.worldDocumentOriginY;
-  // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and .gs-persisted, but
+  // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and internal document payload-persisted, but
   // ONLY the face-derived plane SECTIONPLANE creates (`viewportSectionClipFrameValid`). REQ-341's
   // `SECTIONCLIP`, aimed from the active UCS, stays the view state it always was: its own offset/
   // flip/on-off edits still make no undo entry, and this gate is what keeps them from being swept
@@ -1968,7 +1968,7 @@ namespace {
 /// The fixed order the id sweep walks, and the order \ref FindEntityById searches.
 ///
 /// **Order is load-bearing**: it is what makes assignment deterministic, and therefore what makes a
-/// legacy `.gs` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
+/// legacy `internal document payload` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
 /// reordering the existing entries would renumber every legacy drawing on its next load.
 /// The order ids are handed out in. **Append only** — see \ref EntityKind. Reordering, or inserting
 /// anywhere but the end, renumbers every entity in every existing drawing on its next load, and
@@ -2053,7 +2053,7 @@ namespace {
 /// loop only visits levels lying inside each triangle's own Z range — so a small interval on a flat
 /// surface is cheap and cannot run away on its own. This cap is not for that; it is for the value
 /// nobody typed. The style editor refuses an out-of-range interval where the user enters it, but a
-/// hand-edited `.gs` or a future importer can still present 0.0001 ft, and the display path must
+/// hand-edited `internal document payload` or a future importer can still present 0.0001 ft, and the display path must
 /// degrade instead of locking the UI up. 20,000 is far past any plan sheet — a 1,000 ft relief at a
 /// 0.05 ft interval — and well short of a hang.
 constexpr size_t kMaxContourLevels = 20000;
@@ -12907,6 +12907,7 @@ static void ResetOffsetDraft(AppCommandState& st) {
   st.offsetPhase = AppCommandState::OffsetPhase::WaitDistanceOrThrough;
   st.offsetHoverHighlightValid = false;
   st.offsetHoverEntity = {};
+  st.offsetPaperLayoutIndex = -1;
 }
 
 /// Loop-back reset used between offsets within one OFFSET invocation (REQ-103): clears only the
@@ -13004,7 +13005,7 @@ static double SignedSideCircle(double cx, double cy, double r, double px, double
 /// Ids are unique and never reused within a drawing (REQ-076), and architecture §11.9 builds on
 /// that: a reference from one object to another *is* an id, so an id naming two entities makes
 /// every such reference ambiguous. \ref EnsureEntityIds only fills ids that are 0, so a copied
-/// non-zero id is never repaired — it persists to `.gs` and is permanent. Clearing it here hands
+/// non-zero id is never repaired — it persists to `internal document payload` and is permanent. Clearing it here hands
 /// assignment back to the sweep, exactly as the clipboard does via \ref ClearEntityIdsFrom
 /// (see CopySelectionToClipboard). Every caller bumps the GPU revision the sweep is gated on, so
 /// the fresh id is assigned before anything can observe or save the entity.
@@ -13310,7 +13311,8 @@ static void LoopOffsetBackToSelect(AppCommandState& st, std::vector<std::string>
   log.push_back("OFFSET — select next object to offset (same distance), or Enter/Esc to finish.");
 }
 
-static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
+                                    bool loopToSelect = true) {
   if (!st.offsetEntityValid)
     return;
   const SelectedEntity& e = st.offsetEntity;
@@ -13372,11 +13374,12 @@ static void HandleOffsetThroughPick(AppCommandState& st, double px, double py, s
     log.push_back("OFFSET — through point on original; pick farther away.");
     return;
   }
-  if (CommitOffsetSigned(st, signedD, log))
+  if (CommitOffsetSigned(st, signedD, log) && loopToSelect)
     LoopOffsetBackToSelect(st, log);
 }
 
-static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std::vector<std::string>& log,
+                                 bool loopToSelect = true) {
   if (!st.offsetEntityValid || st.offsetTypedDistance <= 0.f)
     return;
   const float d = st.offsetTypedDistance;
@@ -13508,8 +13511,199 @@ static void HandleOffsetSidePick(AppCommandState& st, double px, double py, std:
     return;
   }
   const float signedD = d * sgn;
-  if (CommitOffsetSigned(st, signedD, log))
+  if (CommitOffsetSigned(st, signedD, log) && loopToSelect)
     LoopOffsetBackToSelect(st, log);
+}
+
+/// Run the existing model-space OFFSET solver against one paper object, then commit only its
+/// resulting copy to the owning layout. The temporary state keeps the geometric rules shared while
+/// the real document gets exactly one undo snapshot and no model-space mutation.
+static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::vector<std::string>& log) {
+  const int li = st.offsetPaperLayoutIndex;
+  if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size() || !st.offsetEntityValid)
+    return false;
+  const PaperLayout& sourceLayout = st.paperLayouts[static_cast<size_t>(li)];
+  AppCommandState staged;
+  staged.activeSpaceIndex = kModelSpaceIndex;
+  staged.userLinesFlat.clear(); staged.userLineAttrs.clear();
+  staged.userCirclesCxCyZR.clear(); staged.userCircleAttrs.clear(); staged.userCircleNormals.clear();
+  staged.userArcs.clear(); staged.userArcAttrs.clear();
+  staged.userEllipses.clear(); staged.userEllAttrs.clear();
+  staged.userPolylineOffsets.clear(); staged.userPolylineVerts.clear(); staged.userPolylineVertsBulge.clear();
+  staged.userPolylineVertsNormal.clear(); staged.userPolylineClosed.clear(); staged.userPolylineAttrs.clear();
+  staged.offsetEntity = {st.offsetEntity.type, 0};
+  staged.offsetEntityValid = true;
+  staged.offsetTypedDistance = st.offsetTypedDistance;
+  staged.offsetThroughMode = st.offsetThroughMode;
+  staged.offsetPhase = st.offsetPhase;
+  const EntityAttributes fallback = MakeNewEntityAttrs(st);
+  EntityAttributes inherited = fallback;
+  using PT = PaperRef::Type;
+  const int index = st.offsetEntity.index;
+  switch (st.offsetEntity.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(index) * 6;
+    if (index < 0 || k + 5 >= sourceLayout.paperLines.size()) return false;
+    for (size_t i = 0; i < 6; ++i) staged.userLinesFlat.push_back(sourceLayout.paperLines[k + i]);
+    if (static_cast<size_t>(index) < sourceLayout.paperLineAttrs.size()) inherited = sourceLayout.paperLineAttrs[index];
+    staged.userLineAttrs.push_back(inherited);
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(index) * 3;
+    if (index < 0 || k + 2 >= sourceLayout.paperCircles.size()) return false;
+    staged.userCirclesCxCyZR = {sourceLayout.paperCircles[k], sourceLayout.paperCircles[k + 1], 0.0,
+                                sourceLayout.paperCircles[k + 2]};
+    staged.userCircleNormals = {0.f, 0.f, 1.f};
+    if (static_cast<size_t>(index) < sourceLayout.paperCircleAttrs.size()) inherited = sourceLayout.paperCircleAttrs[index];
+    staged.userCircleAttrs.push_back(inherited);
+    break;
+  }
+  case SelectedEntity::Type::Arc:
+    if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperArcs.size()) return false;
+    staged.userArcs.push_back(sourceLayout.paperArcs[index]);
+    if (static_cast<size_t>(index) < sourceLayout.paperArcAttrs.size()) inherited = sourceLayout.paperArcAttrs[index];
+    staged.userArcAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Ellipse:
+    if (index < 0 || static_cast<size_t>(index) >= sourceLayout.paperEllipses.size()) return false;
+    staged.userEllipses.push_back(sourceLayout.paperEllipses[index]);
+    if (static_cast<size_t>(index) < sourceLayout.paperEllAttrs.size()) inherited = sourceLayout.paperEllAttrs[index];
+    staged.userEllAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Polyline: {
+    if (index < 0 || static_cast<size_t>(index) + 1 >= sourceLayout.paperPolyOffsets.size()) return false;
+    const int v0 = sourceLayout.paperPolyOffsets[index], v1 = sourceLayout.paperPolyOffsets[index + 1];
+    if (v0 < 0 || v1 < v0 || static_cast<size_t>(v1) * 3 > sourceLayout.paperPolyVerts.size()) return false;
+    staged.userPolylineOffsets = {0, v1 - v0};
+    for (int v = v0; v < v1; ++v) {
+      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3]);
+      staged.userPolylineVerts.push_back(sourceLayout.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
+      staged.userPolylineVerts.push_back(0.0);
+      staged.userPolylineVertsBulge.push_back(0.f);
+      staged.userPolylineVertsNormal.insert(staged.userPolylineVertsNormal.end(), {0.f, 0.f, 1.f});
+    }
+    staged.userPolylineClosed.push_back(static_cast<size_t>(index) < sourceLayout.paperPolyClosed.size() ? sourceLayout.paperPolyClosed[index] : 0);
+    if (static_cast<size_t>(index) < sourceLayout.paperPolyAttrs.size()) inherited = sourceLayout.paperPolyAttrs[index];
+    staged.userPolylineAttrs.push_back(inherited);
+    break;
+  }
+  default: return false;
+  }
+
+  std::vector<std::string> stagedLog;
+  if (st.offsetPhase == AppCommandState::OffsetPhase::WaitThroughPick)
+    HandleOffsetThroughPick(staged, px, py, stagedLog, false);
+  else
+    HandleOffsetSidePick(staged, px, py, stagedLog, false);
+  const bool produced = staged.userLinesFlat.size() > 6 || staged.userCirclesCxCyZR.size() > 4 ||
+                        staged.userArcs.size() > 1 || staged.userEllipses.size() > 1 ||
+                        staged.userPolylineOffsets.size() > 2;
+  if (!produced) {
+    log.insert(log.end(), stagedLog.begin(), stagedLog.end());
+    return false;
+  }
+
+  PaperLayout updated = sourceLayout;
+  switch (st.offsetEntity.type) {
+  case SelectedEntity::Type::LineSeg:
+    for (size_t i = 6; i < staged.userLinesFlat.size(); ++i) updated.paperLines.push_back(static_cast<float>(staged.userLinesFlat[i]));
+    updated.paperLineAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Circle:
+    updated.paperCircles.insert(updated.paperCircles.end(), {static_cast<float>(staged.userCirclesCxCyZR[4]),
+        static_cast<float>(staged.userCirclesCxCyZR[5]), static_cast<float>(staged.userCirclesCxCyZR[7])});
+    updated.paperCircleAttrs.push_back(inherited);
+    break;
+  case SelectedEntity::Type::Arc:
+    updated.paperArcs.push_back(staged.userArcs.back()); updated.paperArcAttrs.push_back(inherited); break;
+  case SelectedEntity::Type::Ellipse:
+    updated.paperEllipses.push_back(staged.userEllipses.back()); updated.paperEllAttrs.push_back(inherited); break;
+  case SelectedEntity::Type::Polyline: {
+    const int oldEnd = updated.paperPolyOffsets.empty() ? 0 : updated.paperPolyOffsets.back();
+    const int start = staged.userPolylineOffsets[1];
+    const int end = staged.userPolylineOffsets[2];
+    for (int v = start; v < end; ++v) {
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3]));
+      updated.paperPolyVerts.push_back(static_cast<float>(staged.userPolylineVerts[static_cast<size_t>(v) * 3 + 1]));
+      updated.paperPolyVerts.push_back(0.f);
+    }
+    if (updated.paperPolyOffsets.empty()) updated.paperPolyOffsets.push_back(oldEnd);
+    updated.paperPolyOffsets.push_back(oldEnd + end - start);
+    updated.paperPolyClosed.push_back(staged.userPolylineClosed.back());
+    updated.paperPolyAttrs.push_back(inherited);
+    break;
+  }
+  default: return false;
+  }
+  PushUndoSnapshot(st, "Offset paper geometry");
+  st.paperLayouts[static_cast<size_t>(li)] = std::move(updated);
+  BumpCadGpuCache(st);
+  log.insert(log.end(), stagedLog.begin(), stagedLog.end());
+  LoopOffsetBackToSelect(st, log);
+  return true;
+}
+
+static void HandlePaperOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  using OP = AppCommandState::OffsetPhase;
+  if (st.offsetPaperLayoutIndex >= 0 && st.activeSpaceIndex != st.offsetPaperLayoutIndex) {
+    log.push_back("OFFSET — return to the paper layout where the object was picked, or cancel OFFSET.");
+    return;
+  }
+  if (st.offsetPhase == OP::WaitDistanceOrThrough) {
+    log.push_back("OFFSET — type a positive offset distance, or T for through-point mode.");
+    return;
+  }
+  if (st.offsetPhase == OP::WaitSelectEntity) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+      log.push_back("OFFSET — no active paper layout.");
+      return;
+    }
+    PaperRef hit{};
+    const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+    float tolerance = 0.05f;
+    if (st.viewportLastSurveyLayoutHeightPx > 1.f && st.viewportLastSurveyLayoutOrthoHalfH > 0.f)
+      tolerance = std::clamp(CadSnap::WorldToleranceFromPixels(
+          st.viewportLastSurveyLayoutHeightPx, st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx),
+          0.01f, 0.25f);
+    if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy), tolerance, &hit, nullptr)) {
+      log.push_back("OFFSET — nothing under cursor; try again.");
+      return;
+    }
+    SelectedEntity::Type type{};
+    switch (hit.type) {
+    case PaperRef::Type::Line: type = SelectedEntity::Type::LineSeg; break;
+    case PaperRef::Type::Circle: type = SelectedEntity::Type::Circle; break;
+    case PaperRef::Type::Arc: type = SelectedEntity::Type::Arc; break;
+    case PaperRef::Type::Ellipse: type = SelectedEntity::Type::Ellipse; break;
+    case PaperRef::Type::Polyline: type = SelectedEntity::Type::Polyline; break;
+    case PaperRef::Type::Text:
+      log.push_back("OFFSET — paper text cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    case PaperRef::Type::Block:
+      log.push_back("OFFSET — paper blocks cannot be offset. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    st.offsetEntity = {type, hit.index};
+    st.offsetEntityValid = true;
+    st.offsetPaperLayoutIndex = st.activeSpaceIndex;
+    if (st.offsetThroughMode) {
+      if (type == SelectedEntity::Type::Ellipse || type == SelectedEntity::Type::Polyline) {
+        log.push_back("OFFSET — through-point mode does not support paper ellipses or polylines. Pick a line, circle, or arc.");
+        st.offsetEntityValid = false;
+        st.offsetPaperLayoutIndex = -1;
+        return;
+      }
+      st.offsetPhase = OP::WaitThroughPick;
+      log.push_back("OFFSET — click the through point (line / circle / arc).");
+    } else {
+      st.offsetPhase = OP::WaitSidePick;
+      log.push_back("OFFSET — pick which side of the object to offset.");
+    }
+    return;
+  }
+  if (st.offsetPhase == OP::WaitThroughPick || st.offsetPhase == OP::WaitSidePick)
+    CommitPaperOffset(st, wx, wy, log);
 }
 
 static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
@@ -13656,6 +13850,13 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
       return;
   }
 
+  // TRIM has a dedicated picker because its click semantics differ from coordinate commands.
+  // Keep the Qt-only frontend on that same tested entry point in both spaces.
+  if (st.active == K::Trim) {
+    (void)SubmitTrimViewportPick(st, static_cast<float>(wx), static_cast<float>(wy),
+                                 CadOffsetEntityPickTolWorld(st), log, pickRay);
+    return;
+  }
   if (st.active == K::None && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st) &&
       HandlePaperModifyPick(st, static_cast<float>(wx), static_cast<float>(wy), log))
     return;
@@ -14201,7 +14402,10 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Offset) {
-    OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
+    if (st.offsetPaperLayoutIndex >= 0 || (st.activeSpaceIndex >= 0 && !InFloatingModelSpace(st)))
+      OffsetCmd::HandlePaperOffsetViewportPick(st, wx, wy, log);
+    else
+      OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
     return;
   }
 
@@ -23720,7 +23924,7 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
 // --- REQ-088 — feature line elevation editing ---------------------------------------------------
 //
 // ADR-035 (e): the elevation editor is a VIEW, not a store. Station, length, grade back and grade
-// ahead are all derived here on demand; nothing below adds a field to any store, and `.gs` is
+// ahead are all derived here on demand; nothing below adds a field to any store, and `internal document payload` is
 // untouched. The edits write elevations back into the existing stride-3 vertex array.
 
 namespace {
@@ -24982,10 +25186,10 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
   TextStyles::EnsureStandard(st.textStyles);
   if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
     st.activeTextStyleName = TextStyles::kStandardName;
-  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `.gs` relies on — a file
+  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `internal document payload` relies on — a file
   // written before this table existed has no styles section at all, and every surface in it carries
   // an empty styleName that must resolve to something drawable (ADR-036 (d)). Left to the loader
-  // alone it would hold for `.gs` and not for DXF import or a fresh document, so it lives in the one
+  // alone it would hold for `internal document payload` and not for DXF import or a fresh document, so it lives in the one
   // normalisation pass every route to a drawing already goes through.
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 }
@@ -26479,7 +26683,7 @@ void ClearCadGeometry(AppCommandState& st) {
   // A cleared drawing starts in the WCS with no saved frames (REQ-154), for the same reason the id
   // space restarts below: the UCS belongs to the drawing, and carrying the previous drawing's
   // coordinate frame into a new one would read every coordinate typed next in a frame that has
-  // nothing to do with it. A `.gs` load overwrites all four of these from the file immediately
+  // nothing to do with it. A `internal document payload` load overwrites all four of these from the file immediately
   // after clearing.
   st.activeUcs = ucs::Ucs{};
   st.ucsPrevious.clear();
@@ -26489,7 +26693,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.activeViewName.clear();
   // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
   // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
-  // `.gs` load overwrites this from the file immediately after clearing.
+  // `internal document payload` load overwrites this from the file immediately after clearing.
   st.nextEntityId = 1;
   st.entityIdSweepRevision = kEntityIdSweepNever;  // whatever is loaded next must be swept
   st.userLinesFlat.clear();
@@ -26585,6 +26789,7 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
@@ -26658,7 +26863,7 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   // Erasing the ONLY polyline leaves the seeded 0 with nothing appended after it, and `{0}` is not
   // how this store spells "no polylines" — an EMPTY table is (CommitPolylineDraft seeds the 0 only
   // when it has a polyline to describe, and GsIo's reader rejects a single entry outright). Writing
-  // `{0}` produced a .gs that saved successfully and could never be reopened: issue #60, REQ-079.
+  // `{0}` produced a internal document payload that saved successfully and could never be reopened: issue #60, REQ-079.
   // The paper-space sibling ErasePaperPolyline has always done this; this store was the outlier.
   if (newOff.size() == 1)
     newOff.clear();
@@ -30259,6 +30464,160 @@ void CadTrimAppendCutLineRemovedPreview3D(const AppCommandState& st, const ray3d
   previewLinesOut->push_back(static_cast<float>(b.z));
 }
 
+namespace {
+
+// The model trim solver already owns the project's intersection and pick-side rules. A paper
+// layout uses the same value types but different stores, so stage its native geometry in a temporary
+// command state, run that solver there, then copy only changed line/polyline stores back.
+static bool StagePaperTrimGeometry(const PaperLayout& layout, AppCommandState* staged) {
+  if (!staged)
+    return false;
+  staged->userLinesFlat.assign(layout.paperLines.begin(), layout.paperLines.end());
+  staged->userLineAttrs = layout.paperLineAttrs;
+  staged->userArcs = layout.paperArcs;
+  staged->userArcAttrs = layout.paperArcAttrs;
+  staged->userEllipses = layout.paperEllipses;
+  staged->userEllAttrs = layout.paperEllAttrs;
+  staged->userPolylineOffsets = layout.paperPolyOffsets;
+  staged->userPolylineVerts.assign(layout.paperPolyVerts.begin(), layout.paperPolyVerts.end());
+  staged->userPolylineClosed = layout.paperPolyClosed;
+  staged->userPolylineAttrs = layout.paperPolyAttrs;
+  staged->userCirclesCxCyZR.clear();
+  for (size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i]);
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 1]);
+    staged->userCirclesCxCyZR.push_back(0.f);
+    staged->userCirclesCxCyZR.push_back(layout.paperCircles[i + 2]);
+  }
+  return true;
+}
+
+static SelectedEntity PaperTrimEntity(const PaperEntityRef& ref) {
+  SelectedEntity e{};
+  e.index = ref.index;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: e.type = SelectedEntity::Type::LineSeg; break;
+  case PaperEntityRef::Type::Circle: e.type = SelectedEntity::Type::Circle; break;
+  case PaperEntityRef::Type::Arc: e.type = SelectedEntity::Type::Arc; break;
+  case PaperEntityRef::Type::Ellipse: e.type = SelectedEntity::Type::Ellipse; break;
+  case PaperEntityRef::Type::Polyline: e.type = SelectedEntity::Type::Polyline; break;
+  default: e.type = SelectedEntity::Type::Annotation; break;
+  }
+  return e;
+}
+
+static bool CommitPaperTrimGeometry(AppCommandState& st, const AppCommandState& staged) {
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout)
+    return false;
+  layout->paperLines.assign(staged.userLinesFlat.begin(), staged.userLinesFlat.end());
+  layout->paperLineAttrs = staged.userLineAttrs;
+  layout->paperPolyOffsets = staged.userPolylineOffsets;
+  layout->paperPolyVerts.assign(staged.userPolylineVerts.begin(), staged.userPolylineVerts.end());
+  layout->paperPolyClosed = staged.userPolylineClosed;
+  layout->paperPolyAttrs = staged.userPolylineAttrs;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol,
+                                std::vector<std::string>& log) {
+  using TP = AppCommandState::TrimPhase;
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout) {
+    log.push_back("TRIM — active paper layout is unavailable; nothing changed.");
+    return false;
+  }
+  AppCommandState staged;
+  StagePaperTrimGeometry(*layout, &staged);
+  staged.trimState = st.trimState;
+  staged.trimCutters.clear();
+
+  if (st.trimPhase == TP::CuttingLine_WaitP1) {
+    st.trimCutInfP1x = x; st.trimCutInfP1y = y; st.trimCutInfP1z = 0.f;
+    st.trimPhase = TP::CuttingLine_WaitP2;
+    log.push_back("TRIM — second point: finishes trim on nearest paper edge along your line.");
+    return true;
+  }
+  if (st.trimPhase == TP::CuttingLine_WaitP2) {
+    float x2 = x, y2 = y;
+    if (st.orthoMode) {
+      if (std::fabs(x2 - st.trimCutInfP1x) >= std::fabs(y2 - st.trimCutInfP1y)) y2 = st.trimCutInfP1y;
+      else x2 = st.trimCutInfP1x;
+    }
+    if (std::hypot(x2 - st.trimCutInfP1x, y2 - st.trimCutInfP1y) < 1e-9f) {
+      log.push_back("TRIM — line too short.");
+      return false;
+    }
+    const auto oldLines = staged.userLinesFlat;
+    const auto oldVerts = staged.userPolylineVerts;
+    const auto oldOffsets = staged.userPolylineOffsets;
+    ExecuteDrawnSegmentTrimOnce(staged, st.trimCutInfP1x, st.trimCutInfP1y, x2, y2, tol, log);
+    st.trimPhase = TP::SelectCuttingEdges;
+    st.active = AppCommandState::Kind::None;
+    if (oldLines != staged.userLinesFlat || oldVerts != staged.userPolylineVerts || oldOffsets != staged.userPolylineOffsets) {
+      PushUndoSnapshot(st, "Trim paper geometry");
+      CommitPaperTrimGeometry(st, staged);
+    }
+    return true;
+  }
+
+  PaperEntityRef hit{};
+  if (!PickPaperEntityAt(*layout, x, y, tol, &hit)) {
+    log.push_back("TRIM — no object at pick.");
+    return false;
+  }
+  const auto isCuttable = [](PaperEntityRef::Type t) {
+    return t == PaperEntityRef::Type::Line || t == PaperEntityRef::Type::Circle ||
+           t == PaperEntityRef::Type::Arc || t == PaperEntityRef::Type::Ellipse ||
+           t == PaperEntityRef::Type::Polyline;
+  };
+  if (st.trimPhase == TP::SelectCuttingEdges) {
+    if (!isCuttable(hit.type)) {
+      log.push_back("TRIM — text or block cannot be a cutting edge; pick a line, circle, arc, ellipse, or polyline.");
+      return false;
+    }
+    if (std::find_if(st.paperTrimCutters.begin(), st.paperTrimCutters.end(), [&](const auto& c) {
+          return c.type == hit.type && c.index == hit.index;
+        }) != st.paperTrimCutters.end()) {
+      log.push_back("TRIM — already a cutting edge.");
+      return true;
+    }
+    st.paperTrimCutters.push_back(hit);
+    log.push_back("TRIM — paper cutting edge added.");
+    return true;
+  }
+
+  if (hit.type != PaperEntityRef::Type::Line && hit.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("TRIM — only a paper line or polyline segment can be trimmed.");
+    return false;
+  }
+
+  TrimTargetEdge target{};
+  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  if (!PickClosestTrimTarget(staged, x, y, tol, &target, &ax, &ay, &bx, &by, &d2)) {
+    log.push_back("TRIM — nothing to trim at paper-space pick.");
+    return false;
+  }
+  std::vector<SelectedEntity> cutters;
+  cutters.reserve(st.paperTrimCutters.size());
+  for (const auto& c : st.paperTrimCutters) cutters.push_back(PaperTrimEntity(c));
+  std::vector<std::array<double, 4>> cuts;
+  BuildTrimCutSegments(staged, cutters, &target, &cuts);
+  if (cuts.empty()) {
+    log.push_back("TRIM — no cutting segments (check paper cutting edges).");
+    return false;
+  }
+  if (TrimSegmentToCuttingEdges(staged, target, ax, ay, bx, by, x, y, cuts, false,
+                                0.f, 0.f, 0.f, 0.f, log)) {
+    PushUndoSnapshot(st, "Trim paper geometry");
+    CommitPaperTrimGeometry(st, staged);
+  }
+  return true;
+}
+
+}  // namespace
+
 bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld,
                             std::vector<std::string>& log, const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
@@ -30266,6 +30625,9 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   using TP = AppCommandState::TrimPhase;
   if (st.active != K::Trim)
     return false;
+
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st))
+    return SubmitPaperTrimPick(st, wx, wy, tolWorld, log);
 
   // issue #399 increment 4: an orbited camera / non-world UCS carries a valid pick ray. The drawn
   // trim line's two points then keep their real elevation (the committed cursor or snap Z), and the
@@ -30317,6 +30679,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       ExecuteDrawnSegmentTrimOnce(st, st.trimCutInfP1x, st.trimCutInfP1y, p2x, p2y, tolWorld, log);
     }
     st.trimCutters.clear();
+    st.paperTrimCutters.clear();
     st.trimPhase = TP::SelectCuttingEdges;
     st.active = K::None;
     return true;
@@ -31518,6 +31881,7 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Trim;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   st.selBoxWaitingSecond = false;
   // TRIMSTATE picks the starting mode (REQ-056). 0 is smart trim: no cutting edges to pick, just draw a
   // line across what should go.
@@ -31693,7 +32057,7 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
 }
 
 /// Bounded preview point budget (used by RunPointCloudImportWorker below): `CadPointCloud::pointsXyz` exists for
-/// extents/selection-depth/`.gs` persistence/DXF-exclusion-count, not for rendering full detail —
+/// extents/selection-depth/`internal document payload` persistence/DXF-exclusion-count, not for rendering full detail —
 /// the LOD renderer pages real detail from the `.gscloud` cache directly. Keeping this bounded is
 /// what keeps the *entity itself* (and every undo snapshot sharing its pointer) cheap regardless of
 /// source scan size.
@@ -39985,7 +40349,7 @@ bool ApplyCrosshair3dValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
-/// Canonical name of a projection, for the command line, the ribbon and `.gs` (REQ-309).
+/// Canonical name of a projection, for the command line, the ribbon and `internal document payload` (REQ-309).
 const char* ProjectionName(Camera::Projection p) {
   return p == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
 }
@@ -42559,6 +42923,7 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.paperTrimCutters.clear();
   // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
@@ -42732,7 +43097,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the draft's per-vertex bulges into the store. Only materialise the
     // parallel array once a curved segment actually exists (a straight-only drawing keeps it empty
-    // so its .gs re-saves byte-identically).
+    // so its internal document payload re-saves byte-identically).
     bool draftHasArc = false;
     for (float b : st.polylineDraftBulge)
       if (b != 0.f) { draftHasArc = true; break; }
@@ -43604,8 +43969,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (st.active == K::Trim) {
       using TP = AppCommandState::TrimPhase;
+      const bool paperTrim = st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st);
       if (st.trimPhase == TP::SelectCuttingEdges) {
-        if (st.trimCutters.empty())
+        if (paperTrim ? st.paperTrimCutters.empty() : st.trimCutters.empty())
           log.push_back("TRIM — pick at least one cutting edge before pressing Enter.");
         else {
           st.trimPhase = TP::SelectTrimTargets;
@@ -43617,6 +43983,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.active = K::None;
         st.trimPhase = TP::SelectCuttingEdges;
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         log.push_back("TRIM — finished.");
       }
     } else if (st.active == K::Extend) {
@@ -44983,6 +45350,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("TRIM — already drawing the trim line; pick its points in the viewport.");
       else {
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         st.trimPhase = TP::CuttingLine_WaitP1;
         log.push_back("TRIM — draw along the segment to trim: first point (rubber band shows dashed preview).");
       }
@@ -44993,6 +45361,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("TRIM — already picking cutting edges.");
       else {
         st.trimCutters.clear();
+        st.paperTrimCutters.clear();
         st.trimPhase = TP::SelectCuttingEdges;
         log.push_back("TRIM — pick cutting edges (hover highlights), Enter when done, then click pieces to trim.");
       }
@@ -45865,7 +46234,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         // early-outs on `entityIdSweepRevision == cadGpuRevision` with the reasoning "geometry has
         // not changed since the last sweep, so nothing can be missing an id". Committing an entity
         // without bumping the revision makes that premise false, so the sweep skipped this
-        // annotation and it was saved to `.gs` with id 0 (REQ-076), which also broke REQ-079 resave
+        // annotation and it was saved to `internal document payload` with id 0 (REQ-076), which also broke REQ-079 resave
         // idempotence. Every other commit path bumps here; TEXT was the one that did not.
         BumpCadGpuCache(st);
         log.push_back("TEXT placed.");
