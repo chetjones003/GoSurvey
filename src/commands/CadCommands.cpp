@@ -739,6 +739,48 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
 // header-only box-select + unit tests can share it.
 
+bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
+  for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
+    L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 3]));
+  }
+  L.paperCircleAttrs.insert(L.paperCircleAttrs.end(), scratch.userCircleAttrs.begin(), scratch.userCircleAttrs.end());
+  L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
+  L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
+  L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
+  L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
+  for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
+    if (L.paperPolyOffsets.empty())
+      L.paperPolyOffsets.push_back(0);
+    const int a = scratch.userPolylineOffsets[p];
+    const int b = scratch.userPolylineOffsets[p + 1];
+    for (int v = a * 3; v < b * 3; ++v)
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
+    L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
+    L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
+    L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
+  }
+  bool bulged = false;
+  for (const float bg : scratch.userPolylineVertsBulge)
+    bulged = bulged || bg != 0.f;
+  L.paperLines.insert(L.paperLines.end(), scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
+  L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.userLineAttrs.begin(), scratch.userLineAttrs.end());
+  L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
+  L.paperTextAttrs.insert(L.paperTextAttrs.end(), scratch.cadAnnotationAttrs.begin(), scratch.cadAnnotationAttrs.end());
+  L.paperFilledRegions.insert(L.paperFilledRegions.end(), scratch.cadFilledRegions.begin(),
+                              scratch.cadFilledRegions.end());
+  L.paperFilledRegionAttrs.insert(L.paperFilledRegionAttrs.end(), scratch.cadFilledRegionAttrs.begin(),
+                                  scratch.cadFilledRegionAttrs.end());
+  L.paperMultileaders.insert(L.paperMultileaders.end(), scratch.cadMultileaders.begin(),
+                             scratch.cadMultileaders.end());
+  L.paperMultileaderAttrs.insert(L.paperMultileaderAttrs.end(), scratch.cadMultileaderAttrs.begin(),
+                                 scratch.cadMultileaderAttrs.end());
+  L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
+  L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
+  return bulged;
+}
+
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs) {
   assert(out != nullptr);
@@ -754,6 +796,17 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
     if (hit) {
       out->type = PaperRef::Type::Block;
       out->index = bi;
+      return true;
+    }
+  }
+  for (int ti = static_cast<int>(L.paperTables.size()) - 1; ti >= 0; --ti) {
+    const CadTable& tb = L.paperTables[static_cast<size_t>(ti)];
+    float lx = 0.f, ly = 0.f;
+    CadTableWorldToLocal(tb, x, y, &lx, &ly);
+    if (lx >= -tolIn && lx <= std::max(tb.width, 1.e-3f) + tolIn && ly >= -tolIn &&
+        ly <= std::max(tb.height, 1.e-3f) + tolIn) {
+      out->type = PaperRef::Type::Table;
+      out->index = ti;
       return true;
     }
   }
@@ -875,7 +928,7 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   if (!L || st.selectedPaperEntities.empty())
     return;
   // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
-  std::vector<int> byType[8];
+  std::vector<int> byType[9];
   for (const PaperRef& r : st.selectedPaperEntities)
     byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
@@ -924,6 +977,8 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
     eraseElem(L->paperBlockRefs, L->paperBlockRefAttrs, bi);
   for (int mi : byType[static_cast<int>(PaperRef::Type::Leader)])
     eraseElem(L->paperMultileaders, L->paperMultileaderAttrs, mi);
+  for (int ti : byType[static_cast<int>(PaperRef::Type::Table)])
+    eraseElem(L->paperTables, L->paperTableAttrs, ti);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
@@ -1072,6 +1127,20 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
       }
       break;
     }
+    case PaperRef::Type::Table: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTables.size())
+        break;
+      if (copy) {
+        CadTable c = L->paperTables[static_cast<size_t>(r.index)];
+        CadTableTranslate(&c, dxIn, dyIn);
+        L->paperTables.push_back(std::move(c));
+        L->paperTableAttrs.push_back(attrAt(L->paperTableAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Table, static_cast<int>(L->paperTables.size()) - 1});
+      } else {
+        CadTableTranslate(&L->paperTables[static_cast<size_t>(r.index)], dxIn, dyIn);
+      }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -1149,6 +1218,11 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
     case PaperRef::Type::Block: {
       if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
         CadBlockRotateZ(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, angRad);
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTables.size())
+        CadTableRotateAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
@@ -1290,6 +1364,16 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
       L->paperBlockRefs.push_back(std::move(c));
       L->paperBlockRefAttrs.push_back(attrAt(L->paperBlockRefAttrs, r.index));
       newSel.push_back({PaperRef::Type::Block, static_cast<int>(L->paperBlockRefs.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTables.size())
+        break;
+      CadTable c = L->paperTables[static_cast<size_t>(r.index)];
+      CadTableReflectAcrossLine(&c, x0In, y0In, x1In, y1In);
+      L->paperTables.push_back(std::move(c));
+      L->paperTableAttrs.push_back(attrAt(L->paperTableAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Table, static_cast<int>(L->paperTables.size()) - 1});
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above
@@ -11715,6 +11799,11 @@ void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, f
     case PaperRef::Type::Block: {
       if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperBlockRefs.size())
         CadBlockScaleAbout(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, factor);
+      break;
+    }
+    case PaperRef::Type::Table: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTables.size())
+        CadTableScaleAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, factor);
       break;
     }
     case PaperRef::Type::Leader:  // dropped from the selection above

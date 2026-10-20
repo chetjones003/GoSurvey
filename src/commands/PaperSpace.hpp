@@ -2,6 +2,7 @@
 
 #include "CadEntities.hpp"
 #include "util/cadblock.hpp"
+#include "util/cadtable.hpp"
 #include "util/geom2d.hpp"  // the shared segment/circle-vs-box tests the model-space fence uses
 #include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
@@ -16,7 +17,7 @@
 // selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
 // paper* vector.
 struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7 };
+  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7, Table = 8 };
   Type type = Type::Line;
   int  index = 0;
 };
@@ -62,6 +63,8 @@ struct Viewport {
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
+  bool on = true;       // DWG VIEWPORT on/off (issue #768); carried through DWG, not yet enforced when drawing
+  bool locked = false;  // DWG 'display locked' flag (issue #768); carried through DWG, not yet enforced
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
   // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
   // viewport (on screen and in the plot). No entry = the layer's normal color.
@@ -421,6 +424,9 @@ struct PaperLayout {
   /// Multileaders on the sheet, in paper inches (path + label as one object, like model space; issue #768).
   std::vector<CadMultileader>   paperMultileaders;
   std::vector<EntityAttributes> paperMultileaderAttrs;
+  /// First-class tables on the sheet (REQ-148), in paper inches like model-space tables are in model units.
+  std::vector<CadTable>         paperTables;
+  std::vector<EntityAttributes> paperTableAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -489,6 +495,12 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
       if (branch.size() >= 3)
         consider(branch[0], branch[1]);                                            // extra arrow tip
   }
+  for (const CadTable& tb : L.paperTables)
+    for (int c = 0; c < 4; ++c) {
+      float x = 0.f, y = 0.f;
+      CadTableWorldCorner(tb, c, &x, &y);
+      consider(x, y);                                                              // table corners
+    }
   return found;
 }
 
@@ -709,5 +721,11 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
       allIn = false;
     if (any && (windowMode ? allIn : touch))
       out.push_back({PaperEntityRef::Type::Leader, mi});
+  }
+  for (int ti = 0; ti < static_cast<int>(L.paperTables.size()); ++ti) {
+    float tx0, ty0, tx1, ty1;
+    CadTableWorldAabb(L.paperTables[static_cast<size_t>(ti)], &tx0, &ty0, &tx1, &ty1);
+    if (boxSel(tx0, ty0, tx1, ty1))
+      out.push_back({PaperEntityRef::Type::Table, ti});
   }
 }
