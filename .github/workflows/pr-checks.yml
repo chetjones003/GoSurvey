@@ -1,5 +1,5 @@
-# PR gating checks (REQ-402) — build/test, lint, and security, run on every pull request into
-# master or beta, with the SAME check set on both branches.
+# PR gating checks (REQ-437) — build/test, lint, and security run on pull requests into master or
+# beta. A validated `docs-only` PR skips those CI jobs; approval remains governed by branch rules.
 #
 # Deliberately split into separate, independently-named jobs rather than one monolithic job: the
 # PR checks list in GitHub's UI shows one line per job, so a failure is attributable at a glance
@@ -18,6 +18,7 @@ name: pr-checks
 on:
   pull_request:
     branches: [master, beta]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
 
 concurrency:
   group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -25,14 +26,45 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
+  # ---------------------------------------------------------------------------
+# docs-only classification — fail closed: an API/classification error leaves the output empty,
+# causing every CI job below to run. Shared with CodeQL via a repository script. Only the
+# `docs-only` label plus documentation-only paths can skip CI. Branch review rules are unchanged.
+  # ---------------------------------------------------------------------------
+  classify-docs-only:
+    name: policy / docs-only classification
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Check out classifier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate docs-only label against changed paths
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/classify_docs_only.py
+
   # ---------------------------------------------------------------------------
   # build — GoSurvey.exe. The test suite and headless driver are not in this tree.
   # ---------------------------------------------------------------------------
   build-and-test:
     name: build / test
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: windows-latest
     env:
       SCCACHE_GHA_ENABLED: "true"
@@ -98,6 +130,11 @@ jobs:
   # ---------------------------------------------------------------------------
   lint-clang-tidy:
     name: lint / clang-tidy
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: windows-latest
     steps:
       - name: Check out
@@ -220,6 +257,11 @@ jobs:
   # ---------------------------------------------------------------------------
   lint-msvc-analyze:
     name: lint / msvc-analyze (report-only)
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: windows-latest
     steps:
       - name: Check out
@@ -256,6 +298,11 @@ jobs:
   # ---------------------------------------------------------------------------
   security-gitleaks:
     name: security / gitleaks
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -275,6 +322,11 @@ jobs:
   # ---------------------------------------------------------------------------
   security-dependency-scan:
     name: security / dependency-scan
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Check out

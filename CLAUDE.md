@@ -201,7 +201,7 @@ The result must be:
 
 **PASS**, **FAIL**, or **SPEC GAP**.
 
-**Qt UI changes: show screenshots in chat.**
+**Qt UI changes: present screenshots in the T3 visualizer.**
 When the work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
 tweak, a restyle), running the tests is not enough. Before calling the work done:
 
@@ -209,10 +209,9 @@ tweak, a restyle), running the tests is not enough. Before calling the work done
   busy, error, empty, disabled). Use the Qt test run on the hidden desktop
   (`tools/run-qt-tests-hidden.ps1`, used by `ctest --preset ninja-release -R qt.editor`) with
   `widget->grab()` or, for the 3D viewport, `grabFramebuffer()`. Save the PNGs under `build/artifacts/`; never commit them.
-* Paste them **inline in the chat reply** as Markdown images with absolute forward-slash paths, for
-  example `![Settings](C:/Users/<user>/source/repos/GoSurvey/build/artifacts/qt-shot.png)`. Do **not** publish
-  them as an HTML page, and do not put them inside a question popup or other tool call: the user could
-  not see images shown that way. Crop or split wide captures so text is readable at chat width.
+* Present them together in one labeled, clickable T3 visualizer. Use a self-contained HTML page
+  when needed, check it with `html_preview`, then publish it with `html_render`. Embed the screenshot
+  captures in the visualizer and make wide captures readable at chat width.
 * Label each image, say what changed, then **stop and wait** for the user to approve or ask for tweaks.
   Apply the requested changes and show new screenshots until they approve. Only then commit and open
   the PR.
