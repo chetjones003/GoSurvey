@@ -409,6 +409,21 @@ void EditorViewport::paintGL() {
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
+    for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      auto drawPath = [&](const std::vector<float>& pts) {
+        for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
+          painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+      };
+      painter.setPen(QPen(QColor("#252a30"), 1));
+      drawPath(leader.pathXyz);
+      for (const auto& branch : leader.extraLeaderPaths)
+        drawPath(branch);
+      const auto& label = leader.label;
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(label.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(label.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      painter.drawText(project(label.boxMinX, label.boxMaxY), QString::fromUtf8(label.text.c_str()));
+    }
     for (const auto& annotation : layout.paperTexts) {
       const QPointF origin = project(annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMinX : annotation.insX,
                                       annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMaxY : annotation.insY);
