@@ -13418,7 +13418,7 @@ static bool CommitPaperOffset(AppCommandState& st, double px, double py, std::ve
     staged.userEllAttrs.push_back(inherited);
     break;
   case SelectedEntity::Type::Polyline: {
-    if (index < 0 || static_cast<size_t>(index + 1) >= sourceLayout.paperPolyOffsets.size()) return false;
+    if (index < 0 || static_cast<size_t>(index) + 1 >= sourceLayout.paperPolyOffsets.size()) return false;
     const int v0 = sourceLayout.paperPolyOffsets[index], v1 = sourceLayout.paperPolyOffsets[index + 1];
     if (v0 < 0 || v1 < v0 || static_cast<size_t>(v1) * 3 > sourceLayout.paperPolyVerts.size()) return false;
     staged.userPolylineOffsets = {0, v1 - v0};
