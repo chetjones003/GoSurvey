@@ -84,6 +84,40 @@ jobs:
           arch: win64_msvc2022_64
           cache: true
 
+      - name: Set up Mesa OpenGL for hosted tests
+        shell: pwsh
+        run: |
+          # Qt 6.8.3 ships an llvmpipe opengl32sw.dll that only reports OpenGL 3.0. The
+          # application needs 3.3 core, so use a pinned Mesa build with a modern llvmpipe.
+          $version = '26.2.4'
+          $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$version-release-msvc.7z"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/mesa3d-$version-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $expectedHash = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Mesa archive SHA256 mismatch: $actualHash" }
+
+          $sevenZipPath = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZipPath) { $sevenZipPath = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path -LiteralPath $sevenZipPath)) { throw '7-Zip was not found on this Windows runner' }
+          $extractDir = Join-Path $env:RUNNER_TEMP "mesa3d-$version"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          & $sevenZipPath x $archive "-o$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract Mesa (exit $LASTEXITCODE)" }
+
+          $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          Copy-Item -LiteralPath $mesaOpenGl.FullName -Destination (Join-Path $qtBin 'opengl32sw.dll') -Force
+          foreach ($dependency in 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $mesaOpenGl.DirectoryName $dependency
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination $qtBin -Force
+            }
+          }
+          Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
+
       - name: Ensure Ninja
         shell: pwsh
         run: |
@@ -108,12 +142,26 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Stage Mesa runtime dependencies for test deployment
+        shell: pwsh
+        run: |
+          # Keep Mesa's test-only driver dependencies beside the app so qt.deployment's isolated
+          # copy can exercise the same software OpenGL path with a minimal PATH.
+          $qtBin = Join-Path $env:QT_ROOT_DIR 'bin'
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build/.cmake/release'
+          foreach ($dependency in 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $qtBin $dependency
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination $runtime -Force
+            }
+          }
+
       - name: Test (CTest)
-        # The hosted runner's system driver exposes OpenGL 3.0. Qt's installed package includes
-        # opengl32sw.dll (llvmpipe), so Qt can use a software OpenGL context with the 3.3 support
-        # required by the viewport and isolated deployment smoke tests.
+        # Use the pinned Mesa llvmpipe staged above; the hosted runner's system driver only exposes
+        # OpenGL 3.0, below the application's OpenGL 3.3 core requirement.
         env:
           QT_OPENGL: software
+          GALLIUM_DRIVER: llvmpipe
         run: ctest --preset ninja-release
 
       - name: sccache stats
