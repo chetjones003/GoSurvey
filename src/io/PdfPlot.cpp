@@ -718,6 +718,33 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           path(branch);
       }
 
+      // Table outlines and grid lines (issue #768). The cell texts plot with the sheet text below.
+      for (size_t tbi = 0; tbi < L.paperTables.size(); ++tbi) {
+        const CadTable& tb = L.paperTables[tbi];
+        const EntityAttributes* ta = sheetAttr(L.paperTableAttrs, tbi);
+        if (ta && !plottable(ta->layer)) continue;
+        curColor = ta ? sheetRgb(ta->layer, ta->color) : 0x000000u;
+        float cx[4], cy[4];
+        for (int c = 0; c < 4; ++c) CadTableWorldCorner(tb, c, &cx[c], &cy[c]);
+        for (int c = 0; c < 4; ++c) addSeg(cx[c], cy[c], cx[(c + 1) % 4], cy[(c + 1) % 4]);
+        const float tw = std::max(tb.width, 1.e-3f), th = std::max(tb.height, 1.e-3f);
+        for (int c = 1; c < tb.cols; ++c) {
+          float ax, ay, bx, by;
+          const float lx = tw * static_cast<float>(c) / static_cast<float>(tb.cols);
+          CadTableLocalToWorld(tb, lx, 0.f, &ax, &ay);
+          CadTableLocalToWorld(tb, lx, th, &bx, &by);
+          addSeg(ax, ay, bx, by);
+        }
+        const int rows = CadTableRowCount(tb);
+        for (int r = 1; r < rows; ++r) {
+          float ax, ay, bx, by;
+          const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
+          CadTableLocalToWorld(tb, 0.f, ly, &ax, &ay);
+          CadTableLocalToWorld(tb, tw, ly, &bx, &by);
+          addSeg(ax, ay, bx, by);
+        }
+      }
+
       // Native sheet TEXT (REQ-049): SHX (stroke) fonts plot faithfully as their strokes via the shared
       // font module (ADR-022); TrueType families embed as real PDF text objects (or a logged base-14
       // substitute). Paper inches, +y up; single-line insertion = top-left (baseline one cap-height below);
@@ -782,15 +809,42 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         FPDFPageObj_Destroy(to);
         return w;
       };
-      // Sheet texts first, then each sheet multileader's label (issue #768): same plotting path.
+      // Sheet texts first, then each sheet multileader's label, then each sheet table's cell texts
+      // (issue #768): all take the same plotting path.
+      std::vector<CadAnnotation> tableCellTexts;
+      std::vector<const EntityAttributes*> tableCellAttrs;
+      for (size_t tbi = 0; tbi < L.paperTables.size(); ++tbi) {
+        const CadTable& tb = L.paperTables[tbi];
+        const EntityAttributes* ta = sheetAttr(L.paperTableAttrs, tbi);
+        std::vector<CadTableCellRect> cells;
+        CadTableLayoutWorldCells(tb, &cells);
+        for (size_t ci = 0; ci < cells.size() && ci < tb.cells.size(); ++ci) {
+          CadAnnotation cell;
+          cell.kind = CadAnnotation::Kind::Text;
+          cell.text = tb.cells[ci];
+          cell.fontFamily = tb.fontFamily;
+          cell.plottedHeightInches = tb.plottedHeightInches;
+          cell.rotationRad = tb.rotationRad;
+          cell.insX = cells[ci].x0 + 0.02f;  // a small inset keeps the glyphs off the cell border
+          cell.insY = cells[ci].y1 - 0.02f;
+          tableCellTexts.push_back(std::move(cell));
+          tableCellAttrs.push_back(ta);
+        }
+      }
       const size_t nPaperTexts = L.paperTexts.size();
-      for (size_t ti = 0; ti < nPaperTexts + L.paperMultileaders.size(); ++ti) {
-        const bool isLeaderLabel = ti >= nPaperTexts;
-        const CadAnnotation& a = isLeaderLabel ? L.paperMultileaders[ti - nPaperTexts].label : L.paperTexts[ti];
+      const size_t nLeaderLabels = L.paperMultileaders.size();
+      for (size_t ti = 0; ti < nPaperTexts + nLeaderLabels + tableCellTexts.size(); ++ti) {
+        const bool isLeaderLabel = ti >= nPaperTexts && ti < nPaperTexts + nLeaderLabels;
+        const bool isCellText = ti >= nPaperTexts + nLeaderLabels;
+        const CadAnnotation& a = isCellText ? tableCellTexts[ti - nPaperTexts - nLeaderLabels]
+                                 : isLeaderLabel ? L.paperMultileaders[ti - nPaperTexts].label
+                                                 : L.paperTexts[ti];
         if (a.text.empty())
           continue;
         const EntityAttributes* at =
-            isLeaderLabel ? sheetAttr(L.paperMultileaderAttrs, ti - nPaperTexts) : sheetAttr(L.paperTextAttrs, ti);
+            isCellText ? tableCellAttrs[ti - nPaperTexts - nLeaderLabels]
+            : isLeaderLabel ? sheetAttr(L.paperMultileaderAttrs, ti - nPaperTexts)
+                            : sheetAttr(L.paperTextAttrs, ti);
         if (at && !plottable(at->layer))
           continue;
         const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
