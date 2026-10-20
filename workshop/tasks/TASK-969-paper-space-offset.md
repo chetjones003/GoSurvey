@@ -51,7 +51,7 @@
 - 2026-10-20 — Paper arcs and ellipses now render in the Qt layout viewport so the OFFSET results are visible. Added Qt capture coverage and a headless transcript for side/distance handling, empty-space refusal, and model-space isolation.
 - 2026-10-20 — `build.bat` PASS; all 177 headless CTest cases PASS after the final paper-pick tolerance change. Focused Qt `paperSpaceRendersSheetTablesAndViewportModelContent` and `paperOffsetSupportsNativeGeometryAndThroughMode` PASS (4 passed, 0 failed); the latter covers line, circle, arc, ellipse, polyline, through-point line offset, text refusal, one-step undo, and model-space isolation.
 - 2026-10-20 — Final full `qt.editor` run PASS (CTest 1/1, 341.08 seconds); this exact final run supersedes the earlier flaky failures recorded during development. `git diff --check` PASS.
-- 2026-10-20 — CI follow-up fixes clang-tidy's `bugprone-misplaced-widening-cast` in paper polyline staging by converting the validated nonnegative index before adding one.
+- 2026-10-20 — CI follow-up fixes clang-tidy's `bugprone-misplaced-widening-cast` in paper polyline staging by converting the validated nonnegative index before adding one. Qt setup is added to the PR build, clang-tidy, and MSVC analysis jobs so their CMake configure steps can run.
 
 ## 8. Self-verification
 
