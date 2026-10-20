@@ -3688,7 +3688,7 @@ private Q_SLOTS:
   }
 
   void customTitleBarAndFloatingCommandLineWork() {
-    QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    QSettings settings; settings.setValue("editor/commandWidth", 500); settings.remove("editor/commandAnchor");
     const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
     const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
     const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
