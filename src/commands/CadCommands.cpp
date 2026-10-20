@@ -37979,7 +37979,8 @@ void AppendRevcloudPolyline(AppCommandState& st, const std::vector<double>& xy,
   st.userPolylineOffsets.push_back(baseVert + n);
   SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
   for (int i = 0; i < n; ++i)
-    st.userPolylineVertsBulge[static_cast<std::size_t>(baseVert + i)] = bulge[static_cast<std::size_t>(i)];
+    st.userPolylineVertsBulge[static_cast<std::size_t>(baseVert) + static_cast<std::size_t>(i)] =
+        bulge[static_cast<std::size_t>(i)];
   SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   st.userPolylineClosed.push_back(1u);
   st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));

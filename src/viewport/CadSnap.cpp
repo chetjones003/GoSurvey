@@ -471,6 +471,11 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
   ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
 }
 
+/// Convert a double spline coordinate to the float precision used by snap accumulation.
+[[nodiscard]] float SnapFloatCoordinate(double value) {
+  return static_cast<float>(value); // NOLINT(bugprone-narrowing-conversions): snap accumulator is float-backed.
+}
+
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
 ///
 /// A centroid has no single Z once the loop is non-planar, so it gets the same averaging the
@@ -1325,16 +1330,19 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     if (wantEndpoint) {
       for (size_t p = 0; p < spline::EditablePointCount(sp); ++p) {
         const auto v = spline::EditablePoint(sp, p);
-        Consider(&acc, wx, wy, static_cast<float>(v.x), static_cast<float>(v.y), Kind::Endpoint,
-                 tolWorld, static_cast<float>(v.z));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(v.x), SnapFloatCoordinate(v.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(v.z));
       }
       if (!sp.periodic) {
         const auto a = spline::Evaluate(sp, spline::DomainMin(sp));
         const auto b = spline::Evaluate(sp, spline::DomainMax(sp));
-        Consider(&acc, wx, wy, static_cast<float>(a.x), static_cast<float>(a.y), Kind::Endpoint,
-                 tolWorld, static_cast<float>(a.z));
-        Consider(&acc, wx, wy, static_cast<float>(b.x), static_cast<float>(b.y), Kind::Endpoint,
-                 tolWorld, static_cast<float>(b.z));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(a.x), SnapFloatCoordinate(a.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(a.z));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(b.x), SnapFloatCoordinate(b.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(b.z));
       }
     }
     if (havePerpRef || wantNearest) {
@@ -1342,15 +1350,16 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       spline::Tessellate(sp, kSplineSampleTolerance, &points);
       if (wantNearest && !points.empty()) {
         const spline::Vec3 nearest = ClosestOnSplineChords(points, wx, wy);
-        Consider(&acc, wx, wy, static_cast<float>(nearest.x), static_cast<float>(nearest.y), Kind::Nearest,
-                 tolWorld, static_cast<float>(nearest.z));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(nearest.x), SnapFloatCoordinate(nearest.y), Kind::Nearest,
+                 tolWorld, SnapFloatCoordinate(nearest.z));
       }
       if (!havePerpRef) continue;
       for (size_t p = 1; p < points.size(); ++p)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(points[p - 1].x),
-                                   static_cast<float>(points[p - 1].y), static_cast<float>(points[p].x),
-                                   static_cast<float>(points[p].y), tolWorld, &acc,
-                                   static_cast<float>(points[p - 1].z), static_cast<float>(points[p].z));
+        AppendPerpendicularFromRef(refPx, refPy, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                                   SnapFloatCoordinate(points[p - 1].x), SnapFloatCoordinate(points[p - 1].y),
+                                   SnapFloatCoordinate(points[p].x), SnapFloatCoordinate(points[p].y), tolWorld, &acc,
+                                   SnapFloatCoordinate(points[p - 1].z), SnapFloatCoordinate(points[p].z));
     }
   }
 

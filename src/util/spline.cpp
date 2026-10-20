@@ -70,8 +70,9 @@ void BasisDerivs(int span, double u, int p, int nd, const std::vector<double>& U
       for (int j = j1; j <= j2; ++j) {
         a[static_cast<std::size_t>(s2)][static_cast<std::size_t>(j)] =
             (a[static_cast<std::size_t>(s1)][static_cast<std::size_t>(j)] - a[static_cast<std::size_t>(s1)][static_cast<std::size_t>(j) - 1]) /
-            ndu[static_cast<std::size_t>(pk) + 1][static_cast<std::size_t>(rk + j)];
-        d += a[static_cast<std::size_t>(s2)][static_cast<std::size_t>(j)] * ndu[static_cast<std::size_t>(rk + j)][static_cast<std::size_t>(pk)];
+            ndu[static_cast<std::size_t>(pk) + 1][static_cast<std::size_t>(rk) + static_cast<std::size_t>(j)];
+        d += a[static_cast<std::size_t>(s2)][static_cast<std::size_t>(j)] *
+             ndu[static_cast<std::size_t>(rk) + static_cast<std::size_t>(j)][static_cast<std::size_t>(pk)];
       }
       if (r <= pk) {
         a[static_cast<std::size_t>(s2)][static_cast<std::size_t>(k)] = -a[static_cast<std::size_t>(s1)][static_cast<std::size_t>(k) - 1] / ndu[static_cast<std::size_t>(pk) + 1][static_cast<std::size_t>(r)];
@@ -344,7 +345,7 @@ Vec3 Evaluate(const Spline& s, double t) {
   N[0] = 1.0;
   for (int j = 1; j <= p; ++j) {
     left[static_cast<std::size_t>(j)] = t - s.knots[static_cast<std::size_t>(span + 1 - j)];
-    right[static_cast<std::size_t>(j)] = s.knots[static_cast<std::size_t>(span + j)] - t;
+    right[static_cast<std::size_t>(j)] = s.knots[static_cast<std::size_t>(span) + static_cast<std::size_t>(j)] - t;
     double saved = 0.0;
     for (int r = 0; r < j; ++r) {
       const double temp = N[static_cast<std::size_t>(r)] / (right[static_cast<std::size_t>(r) + 1] + left[static_cast<std::size_t>(j - r)]);
@@ -356,7 +357,8 @@ Vec3 Evaluate(const Spline& s, double t) {
   Vec3 acc{};
   double wsum = 0.0;
   for (int j = 0; j <= p; ++j) {
-    const std::size_t idx = static_cast<std::size_t>(span - p + j);
+    const std::size_t idx = static_cast<std::size_t>(span) - static_cast<std::size_t>(p) +
+                            static_cast<std::size_t>(j);
     const double w = s.weights.empty() ? 1.0 : s.weights[idx];
     const double f = N[static_cast<std::size_t>(j)] * w;
     acc = ray3d::Add(acc, ray3d::Scale(s.ctrl[idx], f));
