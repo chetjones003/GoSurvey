@@ -3748,11 +3748,17 @@ private Q_SLOTS:
     auto drag = [&](const char* name, int dx) {
       auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
       const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
-      QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
-      QCoreApplication::processEvents();
-      QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), QPointF(global),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(grip, &press);
+      QMouseEvent move(QEvent::MouseMove, QPointF(local + QPoint(dx, 0)),
+                       QPointF(global + QPoint(dx, 0)), Qt::NoButton, Qt::LeftButton,
+                       Qt::NoModifier);
       QApplication::sendEvent(grip, &move);
-      QTest::mouseRelease(grip, Qt::LeftButton);
+      QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local + QPoint(dx, 0)),
+                          QPointF(global + QPoint(dx, 0)), Qt::LeftButton, Qt::NoButton,
+                          Qt::NoModifier);
+      QApplication::sendEvent(grip, &release);
     };
     const int oldX = panel->x();
     const int moveX = oldX + panel->width() + 20 < viewport->width() ? 20 : -20;
