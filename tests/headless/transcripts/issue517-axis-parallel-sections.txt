@@ -91,9 +91,9 @@ EXPECT SOLIDPROPS 0 141371.669412 15079.6447372 4 6 4
 CMD REDO
 EXPECT SOLIDS 2
 
-# The pieces survive .gs: the partial side face keeps its span.
-SAVEAS %OUT%/issue517.gs
-OPEN %OUT%/issue517.gs
+# The pieces survive document JSON payload: the partial side face keeps its span.
+SAVEAS %OUT%/issue517.dwg
+OPEN %OUT%/issue517.dwg
 EXPECT SOLIDS 2
 EXPECT SOLIDPROPS 0 70685.834706 10539.8163398 4 6 4
 EXPECT SOLIDPROPS 1 70685.834706 10539.8163398 4 6 4

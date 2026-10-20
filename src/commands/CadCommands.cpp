@@ -94,7 +94,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportRollDeg        = cmd.viewportRollDeg;       // screen roll under a tilted-UCS PLAN (#153)
   doc.viewportProjection     = cmd.viewportProjection;    // projection likewise (REQ-309)
   doc.viewportFovDeg         = cmd.viewportFovDeg;
-  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to .gs (REQ-341)
+  doc.viewportSectionClip       = cmd.viewportSectionClip;  // per tab, never to internal document payload (REQ-341)
   doc.viewportSectionClipOffset = cmd.viewportSectionClipOffset;
   doc.viewportSectionClipFlip   = cmd.viewportSectionClipFlip;
   // The coordinate system is per-drawing (REQ-154). Without this, switching tabs would carry one
@@ -702,7 +702,7 @@ static void DropPaperLeadersFromSelection(AppCommandState& st, const char* verb,
       st.selectedPaperEntities.end());
   const size_t dropped = before - st.selectedPaperEntities.size();
   if (dropped > 0)
-    log.push_back(std::string(verb) + " � " + std::to_string(dropped) +
+    log.push_back(std::string(verb) + " � " + std::to_string(dropped) +
                   " Multileader(s) left unchanged: a Multileader can only be moved, copied or erased.");
 }
 
@@ -1711,7 +1711,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
     att.glTexId = 0;
   snap.worldDocumentOriginX = st.worldDocumentOriginX;
   snap.worldDocumentOriginY = st.worldDocumentOriginY;
-  // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and .gs-persisted, but
+  // Section plane (REQ-343 amended, issue #479 acceptance 8) — undoable and internal document payload-persisted, but
   // ONLY the face-derived plane SECTIONPLANE creates (`viewportSectionClipFrameValid`). REQ-341's
   // `SECTIONCLIP`, aimed from the active UCS, stays the view state it always was: its own offset/
   // flip/on-off edits still make no undo entry, and this gate is what keeps them from being swept
@@ -1884,7 +1884,7 @@ namespace {
 /// The fixed order the id sweep walks, and the order \ref FindEntityById searches.
 ///
 /// **Order is load-bearing**: it is what makes assignment deterministic, and therefore what makes a
-/// legacy `.gs` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
+/// legacy `internal document payload` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
 /// reordering the existing entries would renumber every legacy drawing on its next load.
 /// The order ids are handed out in. **Append only** — see \ref EntityKind. Reordering, or inserting
 /// anywhere but the end, renumbers every entity in every existing drawing on its next load, and
@@ -1969,7 +1969,7 @@ namespace {
 /// loop only visits levels lying inside each triangle's own Z range — so a small interval on a flat
 /// surface is cheap and cannot run away on its own. This cap is not for that; it is for the value
 /// nobody typed. The style editor refuses an out-of-range interval where the user enters it, but a
-/// hand-edited `.gs` or a future importer can still present 0.0001 ft, and the display path must
+/// hand-edited `internal document payload` or a future importer can still present 0.0001 ft, and the display path must
 /// degrade instead of locking the UI up. 20,000 is far past any plan sheet — a 1,000 ft relief at a
 /// 0.05 ft interval — and well short of a hang.
 constexpr size_t kMaxContourLevels = 20000;
@@ -12915,7 +12915,7 @@ static double SignedSideCircle(double cx, double cy, double r, double px, double
 /// Ids are unique and never reused within a drawing (REQ-076), and architecture §11.9 builds on
 /// that: a reference from one object to another *is* an id, so an id naming two entities makes
 /// every such reference ambiguous. \ref EnsureEntityIds only fills ids that are 0, so a copied
-/// non-zero id is never repaired — it persists to `.gs` and is permanent. Clearing it here hands
+/// non-zero id is never repaired — it persists to `internal document payload` and is permanent. Clearing it here hands
 /// assignment back to the sweep, exactly as the clipboard does via \ref ClearEntityIdsFrom
 /// (see CopySelectionToClipboard). Every caller bumps the GPU revision the sweep is gated on, so
 /// the fresh id is assigned before anything can observe or save the entity.
@@ -23638,7 +23638,7 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
 // --- REQ-088 — feature line elevation editing ---------------------------------------------------
 //
 // ADR-035 (e): the elevation editor is a VIEW, not a store. Station, length, grade back and grade
-// ahead are all derived here on demand; nothing below adds a field to any store, and `.gs` is
+// ahead are all derived here on demand; nothing below adds a field to any store, and `internal document payload` is
 // untouched. The edits write elevations back into the existing stride-3 vertex array.
 
 namespace {
@@ -24900,10 +24900,10 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
   TextStyles::EnsureStandard(st.textStyles);
   if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
     st.activeTextStyleName = TextStyles::kStandardName;
-  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `.gs` relies on — a file
+  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `internal document payload` relies on — a file
   // written before this table existed has no styles section at all, and every surface in it carries
   // an empty styleName that must resolve to something drawable (ADR-036 (d)). Left to the loader
-  // alone it would hold for `.gs` and not for DXF import or a fresh document, so it lives in the one
+  // alone it would hold for `internal document payload` and not for DXF import or a fresh document, so it lives in the one
   // normalisation pass every route to a drawing already goes through.
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 }
@@ -26397,7 +26397,7 @@ void ClearCadGeometry(AppCommandState& st) {
   // A cleared drawing starts in the WCS with no saved frames (REQ-154), for the same reason the id
   // space restarts below: the UCS belongs to the drawing, and carrying the previous drawing's
   // coordinate frame into a new one would read every coordinate typed next in a frame that has
-  // nothing to do with it. A `.gs` load overwrites all four of these from the file immediately
+  // nothing to do with it. A `internal document payload` load overwrites all four of these from the file immediately
   // after clearing.
   st.activeUcs = ucs::Ucs{};
   st.ucsPrevious.clear();
@@ -26407,7 +26407,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.activeViewName.clear();
   // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
   // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
-  // `.gs` load overwrites this from the file immediately after clearing.
+  // `internal document payload` load overwrites this from the file immediately after clearing.
   st.nextEntityId = 1;
   st.entityIdSweepRevision = kEntityIdSweepNever;  // whatever is loaded next must be swept
   st.userLinesFlat.clear();
@@ -26577,7 +26577,7 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
   // Erasing the ONLY polyline leaves the seeded 0 with nothing appended after it, and `{0}` is not
   // how this store spells "no polylines" — an EMPTY table is (CommitPolylineDraft seeds the 0 only
   // when it has a polyline to describe, and GsIo's reader rejects a single entry outright). Writing
-  // `{0}` produced a .gs that saved successfully and could never be reopened: issue #60, REQ-079.
+  // `{0}` produced a internal document payload that saved successfully and could never be reopened: issue #60, REQ-079.
   // The paper-space sibling ErasePaperPolyline has always done this; this store was the outlier.
   if (newOff.size() == 1)
     newOff.clear();
@@ -31771,7 +31771,7 @@ bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitSc
 }
 
 /// Bounded preview point budget (used by RunPointCloudImportWorker below): `CadPointCloud::pointsXyz` exists for
-/// extents/selection-depth/`.gs` persistence/DXF-exclusion-count, not for rendering full detail —
+/// extents/selection-depth/`internal document payload` persistence/DXF-exclusion-count, not for rendering full detail —
 /// the LOD renderer pages real detail from the `.gscloud` cache directly. Keeping this bounded is
 /// what keeps the *entity itself* (and every undo snapshot sharing its pointer) cheap regardless of
 /// source scan size.
@@ -40063,7 +40063,7 @@ bool ApplyCrosshair3dValue(AppCommandState& st, const std::string& raw, std::vec
   return true;
 }
 
-/// Canonical name of a projection, for the command line, the ribbon and `.gs` (REQ-309).
+/// Canonical name of a projection, for the command line, the ribbon and `internal document payload` (REQ-309).
 const char* ProjectionName(Camera::Projection p) {
   return p == Camera::Projection::Perspective ? "Perspective" : "Orthographic";
 }
@@ -42811,7 +42811,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     // REQ-316 / ADR-047: carry the draft's per-vertex bulges into the store. Only materialise the
     // parallel array once a curved segment actually exists (a straight-only drawing keeps it empty
-    // so its .gs re-saves byte-identically).
+    // so its internal document payload re-saves byte-identically).
     bool draftHasArc = false;
     for (float b : st.polylineDraftBulge)
       if (b != 0.f) { draftHasArc = true; break; }
@@ -45948,7 +45948,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         // early-outs on `entityIdSweepRevision == cadGpuRevision` with the reasoning "geometry has
         // not changed since the last sweep, so nothing can be missing an id". Committing an entity
         // without bumping the revision makes that premise false, so the sweep skipped this
-        // annotation and it was saved to `.gs` with id 0 (REQ-076), which also broke REQ-079 resave
+        // annotation and it was saved to `internal document payload` with id 0 (REQ-076), which also broke REQ-079 resave
         // idempotence. Every other commit path bumps here; TEXT was the one that did not.
         BumpCadGpuCache(st);
         log.push_back("TEXT placed.");

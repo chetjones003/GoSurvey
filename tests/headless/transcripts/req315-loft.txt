@@ -1,9 +1,9 @@
 # REQ-315 / ADR-048 (GitHub #241, Phase 4 of #120) — LOFT, end to end.
 #
-# BrepTests / BrepJsonTests prove the kernel (brep::Loft, the SurfaceKind::Nurbs faces, the .gs
+# BrepTests / BrepJsonTests prove the kernel (brep::Loft, the SurfaceKind::Nurbs faces, the document JSON payload
 # round-trip). This transcript tests the half the kernel cannot: that selecting two or more closed
 # profiles at different elevations and running LOFT puts the skinned solid in the document, that its
-# volume and topology are what the kernel computed, that it survives a .gs save/reopen, that one
+# volume and topology are what the kernel computed, that it survives a document JSON payload save/reopen, that one
 # undo step removes it, and that a bad selection is reported rather than silently swallowed.
 
 NEW
@@ -106,7 +106,7 @@ EXPECT LOG "Cone created"
 
 # --- Three circles keep the freeform loft: NURBS side faces, no recipe ------------------------
 # Since #515 a TWO-circle coaxial loft is built as an analytic cylinder, so this is the block that
-# keeps an arc-sided NURBS loft covered through the command and its .gs round-trip below. r = 5 at
+# keeps an arc-sided NURBS loft covered through the command and its document JSON payload round-trip below. r = 5 at
 # z = 0, 4 and 8: the same cylinder's volume and area, as two NURBS bands (6 v, 10 e, 6 f).
 CMD CIRCLE
 CMD 700,0
@@ -152,7 +152,7 @@ EXPECT LOG "select at least two"
 EXPECT SOLIDS 4
 ESC
 
-# --- Solids survive a .gs save and reopen with topology intact ------------------------------
+# --- Solids survive a document JSON payload save and reopen with topology intact ------------------------------
 SAVEAS %OUT%/req315-loft.dwg
 OPEN %OUT%/req315-loft.dwg
 EXPECT SOLIDS 4

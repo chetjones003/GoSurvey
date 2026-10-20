@@ -1,13 +1,13 @@
 # REQ-343 amended (D-2026-09-21, GitHub issue #479 acceptance 8) — the section plane persists.
 #
 # Slice 2 (PR #513) made the plane selectable and grip-editable but explicitly left it out of
-# `.gs` and out of UNDO (ADR-059 (h)): "the plane has no layer, attributes or .gs presence ...
+# `document JSON payload` and out of UNDO (ADR-059 (h)): "the plane has no layer, attributes or document JSON payload presence ...
 # selection is a bool, not a SelectedEntity". This is the transcript for what changed: creating,
 # flipping and resizing the plane now all push undo entries, and the plane round-trips through a
 # save/reopen — including at survey magnitude, to REQ-101's +/-0.002 ft.
 #
 # UNDO/REDO of creation is already covered end to end by req342-section-plane.txt; this file adds
-# the two things that file cannot: FLIP/resize undo, and .gs persistence.
+# the two things that file cannot: FLIP/resize undo, and document JSON payload persistence.
 
 NEW
 
@@ -45,11 +45,11 @@ EXPECT SECTIONCLIPOFFSET 4.5
 
 # --- it survives a save/reopen, offset included, at REQ-101's tolerance ---------------------------
 
-SAVEAS %OUT%/sectionplane-persist.gs
+SAVEAS %OUT%/sectionplane-persist.dwg
 NEW
 EXPECT SECTIONCLIP OFF
 
-OPEN %OUT%/sectionplane-persist.gs
+OPEN %OUT%/sectionplane-persist.dwg
 EXPECT SOLIDS 1
 EXPECT SECTIONCLIP ON
 EXPECT SECTIONCLIPFRAME FACE
@@ -61,9 +61,9 @@ EXPECT SECTIONCLIPFLIP OFF
 
 NEW
 CMD BOX 0,0 10 10 10
-SAVEAS %OUT%/sectionplane-legacy.gs
+SAVEAS %OUT%/sectionplane-legacy.dwg
 NEW
-OPEN %OUT%/sectionplane-legacy.gs
+OPEN %OUT%/sectionplane-legacy.dwg
 EXPECT SOLIDS 1
 EXPECT SECTIONCLIP OFF
 EXPECT SECTIONCLIPFRAME UCS
@@ -73,15 +73,15 @@ EXPECT SECTIONCLIPFRAME UCS
 # A plain SECTIONCLIP with no SECTIONPLANE ever placed is exactly the view state REQ-341 describes;
 # ADR-059 (i) only promotes the FACE-derived plane. Saving with a bare SECTIONCLIP on must reopen
 # with the clip off, not silently start round-tripping a view state REQ-341 explicitly says never
-# reaches .gs.
+# reaches document JSON payload.
 
 NEW
 CMD BOX 0,0 10 10 10
 CMD SECTIONCLIP 3
 EXPECT SECTIONCLIP ON
 EXPECT SECTIONCLIPFRAME UCS
-SAVEAS %OUT%/sectionclip-only.gs
+SAVEAS %OUT%/sectionclip-only.dwg
 NEW
-OPEN %OUT%/sectionclip-only.gs
+OPEN %OUT%/sectionclip-only.dwg
 EXPECT SOLIDS 1
 EXPECT SECTIONCLIP OFF

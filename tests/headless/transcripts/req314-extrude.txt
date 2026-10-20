@@ -3,7 +3,7 @@
 # BrepTests proves the kernel (brep::Extrude): volumes, topology, refusals, survey-magnitude
 # stability. This transcript tests the half the kernel cannot: that selecting a closed polyline or
 # a circle and typing EXTRUDE <height> puts the swept solid in the document, that it survives a
-# .gs save/reopen with topology intact, that one undo step removes it, and that a non-profile in
+# document JSON payload save/reopen with topology intact, that one undo step removes it, and that a non-profile in
 # the selection is reported rather than silently swallowed.
 
 NEW
@@ -79,7 +79,7 @@ EXPECT SOLIDS 3
 # 30 x 20 x 7 = 4200. Area 2*600 + perimeter 100 * 7 = 1200 + 700 = 1900.
 EXPECT SOLIDPROPS 2 4200 1900 8 12 6
 
-# --- Solids survive a .gs save and reopen with topology intact --------------------------------
+# --- Solids survive a document JSON payload save and reopen with topology intact --------------------------------
 SAVEAS %OUT%/req314-extrude.dwg
 OPEN %OUT%/req314-extrude.dwg
 EXPECT SOLIDS 3

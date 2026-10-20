@@ -2,7 +2,7 @@
 #
 # ADR-035 (e) decided the shape of this before any code: the elevation editor is a VIEW, not a
 # store. Station, length, grade back and grade ahead are recomputed from the vertex chain every
-# time, so nothing here adds a field to any store and `.gs` is untouched.
+# time, so nothing here adds a field to any store and `document JSON payload` is untouched.
 #
 # Every assertion was run against unpatched code first and failed there.
 

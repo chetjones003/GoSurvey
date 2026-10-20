@@ -53,7 +53,7 @@ EXPECT LOG "enter a whole number between 0 and 256"
 CMD ISOLINES
 EXPECT LOG "ISOLINES = 16"
 
-# --- It survives a .gs round trip -----------------------------------------------------------------------
+# --- It survives a document JSON payload round trip -----------------------------------------------------------------------
 SAVEAS %OUT%/iso.dwg
 OPEN %OUT%/iso.dwg
 CMD ISOLINES

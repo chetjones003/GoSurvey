@@ -38,7 +38,7 @@ using ray3d::Vec3;
 /// The surface a face lies on. `Nurbs` (REQ-315 / ADR-048, D-2026-09-03-b) is the one **freeform**
 /// kind — a rational tensor-product B-spline patch carried in \ref Surface::patch — that sweep and
 /// loft raise over their profiles. Its volume and area are computed by numerical quadrature rather
-/// than a closed form (ADR-045 (b) as widened), and it is the first surface kind an older `.gs`
+/// than a closed form (ADR-045 (b) as widened), and it is the first surface kind an older `internal document payload`
 /// reader cannot tolerate, so it bumps `kGsFormatVersion` to 4.
 enum class SurfaceKind : std::uint8_t { Plane, Cylinder, Cone, Sphere, Torus, Nurbs };
 
@@ -64,7 +64,7 @@ struct Surface {
 
   /// **Freeform** surface for \ref SurfaceKind::Nurbs (REQ-315 / ADR-048) — a rational tensor-product
   /// B-spline patch, in the solid's own storage coordinates like every vertex (so \ref Translate
-  /// moves its control points and `.gs` stores them directly). Empty and unused for every analytic
+  /// moves its control points and `internal document payload` stores them directly). Empty and unused for every analytic
   /// kind. \ref Face::uStart / uEnd / vStart / vEnd carry the patch **parameter** rectangle the face
   /// occupies, in place of the angular spans the analytic kinds put there.
   nurbs::Patch patch;
@@ -111,7 +111,7 @@ struct Edge {
   double sweep = 0.0;    ///< Arc / Ellipse: signed parameter sweep about `frame.zAxis`, CCW positive.
 
   /// Intersection only: **exactly two** surfaces whose crossing this edge lies on (copies, so the
-  /// edge survives `Translate` and `.gs` on its own). Empty for every other `CurveKind`.
+  /// edge survives `Translate` and `internal document payload` on its own). Empty for every other `CurveKind`.
   std::vector<Surface> isectSurfaces;
 };
 
@@ -180,7 +180,7 @@ struct Vertex {
 
 enum class PrimitiveKind : std::uint8_t {
   None, Box, Wedge, Pyramid, Cylinder, Cone, Sphere, Torus,
-  /// REQ-317. Appended, never inserted: the value is written into `.gs`.
+  /// REQ-317. Appended, never inserted: the value is written into `internal document payload`.
   Polysolid
 };
 
@@ -230,7 +230,7 @@ enum class Justify : std::uint8_t { Left, Center, Right };
 /// edge, and a two-circle coaxial loft carry the `Cylinder` / `Cone` recipe (GitHub #515, ADR-046
 /// amendment (o)), because `Slice` recognises curved solids by their recipe. `Slice` trusts such a
 /// recipe only when the primitive it describes has the solid's measured shape, and recognises a
-/// recipe-less cylinder or cone from its geometry (ADR-046 amendment (p)); a `.gs` recipe whose frame
+/// recipe-less cylinder or cone from its geometry (ADR-046 amendment (p)); a `internal document payload` recipe whose frame
 /// cannot be read is dropped on load.
 struct Recipe {
   PrimitiveKind kind = PrimitiveKind::None;
@@ -1125,7 +1125,7 @@ struct SectionEllipseArc {
 /// surface encloses part of space twice. \ref ComputeMassProperties therefore reports it as
 /// unavailable rather than returning a plausible wrong number (REQ-201).
 ///
-/// Read off the FACE's surface, not off the recipe, so a solid that arrived from a `.gs` or from a
+/// Read off the FACE's surface, not off the recipe, so a solid that arrived from a `internal document payload` or from a
 /// future operation is judged on the geometry it actually has (ADR-045 (c)).
 [[nodiscard]] bool SelfIntersects(const Solid& s);
 
@@ -1201,7 +1201,7 @@ struct MassProperties {
 /// in world axes, over the exact analytic surfaces — and reported through `inertiaValid`. The
 /// centroidal tensor is `Ixx = ∫(y'^2+z'^2) dV` etc. with `r' = p - centroid`, `Ixy = -∫ x' y' dV`,
 /// unit density so mass == volume. Principal axes are the eigenvectors of that tensor, orthonormal
-/// and right-handed, deterministic across runs and `.gs` save/reload.
+/// and right-handed, deterministic across runs and `internal document payload` save/reload.
 [[nodiscard]] MassProperties ComputeMassProperties(const Solid& s);
 
 /// Inertia tensor about an arbitrary world point `p`, derived from the centroidal one by the

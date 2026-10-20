@@ -4,6 +4,12 @@
 > a reviewer can render a clear **pass/fail** judgment by pointing at an
 > artifact (output, log, test, profile, or code structure).
 
+> **Drawing-format terminology (D-2026-10-20-d):** DWG is the only standalone GoSurvey drawing
+> format. Older requirements may refer to `.gs` serialization when describing the legacy JSON
+> document tree; those references mean the internal payload embedded in DWG (or template JSON),
+> not a supported `.gs` file. Retain such references only where they define legacy-schema
+> compatibility or historical decisions, and make that purpose explicit.
+
 ---
 
 ## How to write a requirement
@@ -3792,19 +3798,20 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
 
 ### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
-- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
-  survey-specific data that today lives in `.gs`
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing while preserving
+  GoSurvey survey-specific data in the drawing file.
 - Priority: must
 - Type: functional
 - Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
   and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
-  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
-  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the GoSurvey document
+  JSON payload so survey points, traverse, layouts, text/surface
   styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
   A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
-  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
-  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
-  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  Standalone `.gs` drawings are retired: they are not a supported drawing format, are not listed
+  by drawing dialogs, and must not be opened through explicit paths or command-line routes. The
+  historical GoSurvey JSON serializer may remain as an internal payload implementation detail;
+  it does not define a user-facing file extension. Drawing templates use `.gst`.
   This does **not** claim unknown-object preservation (DM-08).
 - Acceptance:
   - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
@@ -3814,12 +3821,15 @@ requirements is a planning failure, not a sign of rigor.
   - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
   - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
   - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
-  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - a standalone `.gs` path is not accepted as a drawing by File Open or headless OPEN;
   - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
 - Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
 - Status: accepted
+- Decision: D-2026-10-20-d (clarifies retirement of standalone `.gs` drawing paths; DWG behavior
+  was established by D-2026-08-29-j / ADR-044).
 - Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
-  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision); 2026-10-20 —
+  standalone `.gs` drawing paths explicitly retired, D-2026-10-20-d.
 
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
@@ -12871,12 +12881,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Purpose: give a release reviewer a repeatable way to exercise the supported GoSurvey product before a major version release.
 - Priority: should
 - Type: quality
-- Decision: D-2026-10-20-b.
-- Statement: The repository maintains a Markdown checklist for a human to run against the release candidate. It covers the supported product surfaces and their user-visible workflows, including drawing/file lifecycle, drafting and editing, survey data and calculations, surfaces and 3D, settings, import/export, and release-critical failure/cancellation/data-preservation paths. Every canonical command in the current Command Reference has an individual test item (aliases are included in that item); UI-only workflows are tested separately. It distinguishes supported behavior from known limitations and deferred or unavailable features, and gives the reviewer a place to record version, build, environment, results, and findings.
+- Decision: D-2026-10-20-b, revised by D-2026-10-20-c.
+- Statement: The repository maintains a concise Markdown checklist for a human to run against the release candidate. It covers the supported product surfaces and their end-to-end workflows, including drawing/file lifecycle, drafting and editing, survey data and calculations, surfaces and 3D, settings, import/export, and release-critical failure/cancellation/data-preservation paths. Coverage is at the major-workflow level; individual commands are not separate checklist items. The source audit reconciles the Command Reference and manual navigation against those workflows and flags meaningful uncovered workflows. The checklist distinguishes supported behavior from known limitations and deferred or unavailable features, and gives the reviewer a place to record version, build, environment, results, and findings.
 - Acceptance:
   - The checklist is written for a human operator, with actionable steps and observable pass/fail outcomes rather than implementation-only checks.
-  - Every checklist item gives its own prerequisites, numbered test steps, and expected observable result; a title-only checkbox is insufficient.
-  - Its feature areas are cross-checked against the user manual navigation and the current supported Qt UI/command surfaces; each major area has an end-to-end check and applicable failure/cancel/data-preservation checks. Every canonical command listed in the Command Reference has its own item with the primary name, listed aliases, test steps, expected behavior, and a link to its detailed command instructions where available.
+  - Every checklist workflow gives prerequisites, numbered test steps, and an expected observable result; a title-only checkbox is insufficient.
+  - Its feature areas are cross-checked against the user manual navigation and the current supported Qt UI/command surfaces; each major area has an end-to-end check and applicable failure/cancel/data-preservation checks. Command Reference entries are reconciled against workflow coverage, but commands do not each require a standalone test item.
   - Known limitations and deferred/unavailable features are identified as such, so their absence is not mistaken for a release regression or a shipped capability.
   - The checklist includes release-candidate identification, environment/result fields, and a findings section, and instructs the reviewer to record failures rather than silently skip them.
   - The major-release gate links to this checklist and requires a PASS for a major-version release.
@@ -12884,7 +12894,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Documentation / product verification.
 - Constraints: REQ-200, REQ-201, REQ-440.
 - Status: accepted (2026-10-20) — D-2026-10-20-b.
-- Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist.
+- Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist; 2026-10-20 — narrowed to major-workflow coverage by D-2026-10-20-c after the initial command-by-command checklist proved too long for timely manual execution.
 
 
 ### REQ-100 — Frame budget

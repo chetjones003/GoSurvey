@@ -12,7 +12,7 @@
 # The kernel operation's own arithmetic — volumes, the moved plane, every refusal — is PushPullTests'
 # subject and is not repeated here. What this file owns is what a transcript can see and a unit test
 # cannot: that the COMMAND finds its face, refuses without one, leaves the document untouched when
-# the kernel declines, undoes in one step, and survives a .gs round-trip.
+# the kernel declines, undoes in one step, and survives a document JSON payload round-trip.
 
 # --- Criterion 3: the selected face moves -----------------------------------------------------------
 
@@ -215,7 +215,7 @@ EXPECT SOLIDPROPS 0 520 408.3286 8 12 6
 CMD PRESSPULL 1
 EXPECT LOG "volume now 533.72"
 
-# --- Criterion 8: a pushed solid survives a .gs round-trip ------------------------------------------
+# --- Criterion 8: a pushed solid survives a document JSON payload round-trip ------------------------------------------
 # Nearly free by construction — GsIo stores TOPOLOGY, not the recipe, precisely so a recipe-less
 # result can be saved (the Booleans and SLICE already rely on it). Asserted anyway, because "it
 # should follow" is how a format gap goes unnoticed until a user's drawing will not reopen.
@@ -226,10 +226,10 @@ VIEWANGLES -45 35
 SUBOBJECT 0 0 8 0.5 0.5
 CMD PRESSPULL 3
 EXPECT SOLIDPROPS 0 2200 1060 8 12 6
-SAVEAS %OUT%/presspull.gs
+SAVEAS %OUT%/presspull.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/presspull.gs
+OPEN %OUT%/presspull.dwg
 EXPECT SOLIDS 1
 # The pushed geometry, not the box it was built as.
 EXPECT SOLIDPROPS 0 2200 1060 8 12 6

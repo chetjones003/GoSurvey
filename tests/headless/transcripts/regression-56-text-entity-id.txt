@@ -14,8 +14,8 @@
 # that, an empty drawing already fails for an unrelated reason. Both landed
 # together in the same change for exactly that reason.
 #
-# Fails before the fix because annotationAttrs[0].id is 0 in rt-a.gs and non-zero
-# in rt-b.gs.
+# Fails before the fix because annotationAttrs[0].id is 0 in rt-adocument JSON payload and non-zero
+# in rt-bdocument JSON payload.
 
 NEW
 

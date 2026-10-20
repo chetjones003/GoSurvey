@@ -8,7 +8,7 @@
 # ## Why this is a ratchet and not a one-time normalization
 #
 # That distinction is the whole reason this is a defect rather than a spec question, and it was
-# measured rather than assumed. `.gs` load has the same mechanism and it CONVERGES — issue #61 /
+# measured rather than assumed. `document JSON payload` load has the same mechanism and it CONVERGES — issue #61 /
 # BUG-019 established that the rebase is legitimate normalization, bounded and non-lossy, and
 # REQ-079 was amended (D-2026-08-17-a) to compare the SECOND and THIRD saves with an idempotence
 # condition. The obvious move was to amend REQ-204 the same way.
@@ -42,7 +42,7 @@
 #
 # ## The fix this pins
 #
-# `.gs` load only normalizes above `kLargeCoordinateRebaseThreshold` (100000.0). DXF import had no
+# `document JSON payload` load only normalizes above `kLargeCoordinateRebaseThreshold` (100000.0). DXF import had no
 # such gate and rebased on EVERY import, re-rounding every float even for a drawing spanning 150
 # units where local storage buys no precision whatsoever. Two loaders, one mechanism, one gated and
 # one not. DXF is now gated the same way, so a small drawing keeps origin (0,0) and nothing is
@@ -94,7 +94,7 @@ EXPECT POLYLINES 1
 EXPECT ARCS 1
 EXPORT DXF %OUT%/r94-b.dxf
 
-# The first cycle must already be a fixed point. This is stronger than REQ-079's `.gs` rule, and it
+# The first cycle must already be a fixed point. This is stronger than REQ-079's `document JSON payload` rule, and it
 # holds because a small drawing now never normalizes at all rather than normalizing once.
 EXPECT SAMEFILE %OUT%/r94-a.dxf %OUT%/r94-b.dxf
 

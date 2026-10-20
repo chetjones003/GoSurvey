@@ -108,7 +108,7 @@ EXPECT POLYLINES 0
 #     acceptance 8) ---------------------------------------------------------------------------------
 #
 # Before this, the clip was a pure view state and UNDO reached straight past a placed plane to the
-# BOX beneath it. Promoting the plane to an entity (Properties report + `.gs` persistence) means a
+# BOX beneath it. Promoting the plane to an entity (Properties report + `document JSON payload` persistence) means a
 # placement a user cannot undo would be the odd one out among every other creating command in this
 # file, so it now pushes its own step: one UNDO backs out the PLANE only, a second backs out the BOX.
 

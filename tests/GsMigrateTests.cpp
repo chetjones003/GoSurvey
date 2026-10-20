@@ -1,4 +1,4 @@
-// REQ-079 / ADR-030 — .gs format version handling and forward migration.
+// REQ-079 / ADR-030 — document JSON payload format version handling and forward migration.
 //
 // The chaining logic is tested with SYNTHETIC step tables rather than only through whichever
 // migrations happen to exist. Today there are none, so testing only the production table would

@@ -48,7 +48,7 @@ the places where a feature is present but not finished.
 - **[[Plotting]]** — Page Setup Manager, Plot, Batch Plot
 - **[[PDF Underlays]]** — attaching a PDF and snapping to it
 - **[[Import and Export]]** — DXF, DWG, CSV, FBK, glTF/GLB, STL, JSON
-- **[[Files and Drawings]]** — the `.gs` file, drawing tabs, templates, updates
+- **[[Files and Drawings]]** — DWG drawings, drawing tabs, templates, updates
 
 ## Reference
 

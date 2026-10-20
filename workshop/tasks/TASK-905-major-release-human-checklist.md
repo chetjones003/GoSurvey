@@ -15,7 +15,7 @@
 ## 2. Scope
 - In scope: a human-run, step-by-step checklist that exercises current supported GoSurvey product areas before a major release, calls out known limitations, and records run information and findings.
 - Out of scope: replacing automated build/test/release gates; asserting all individual commands are tested unless listed; testing deferred or unsupported features as if shipped.
-- Smallest change: one Markdown checklist under `docs/`, with source/coverage notes, detailed runnable product checks, individual tests for every command in the catalog, and a major-release gate link.
+- Smallest change: one Markdown checklist under `docs/`, with source/coverage notes, detailed runnable product-workflow checks, a workflow gap reconciliation, and a major-release gate link.
 
 ## 3. Architectural boundary check
 - No new abstraction, dependency, API, ownership, global state, or data format. Documentation only.
@@ -42,11 +42,11 @@
   - [x] Record documentation verification and outcome.
 
 ## 7. Workflow-specific notes
-- Docs: every behavior statement must be cross-checked against current documentation or supported UI/command surfaces. The command test section matches all 170 unique canonical command names in the current Command Reference category tables, with no duplicates or missing names; aliases are tested within the matching item. All linked command detail pages exist.
+- Docs: every behavior statement must be cross-checked against current documentation or supported UI/command surfaces. The revised scope tests major workflows rather than individual commands. The Command Reference and manual navigation are retained as gap-check sources; standalone command enumeration is explicitly out of scope.
 
 ## 8. Implementation log
 - 2026-10-20 — Accepted REQ-441 and D-2026-10-20-b after the user authorized the documentation requirement. User clarified every checklist item must contain detailed test steps.
-- 2026-10-20 — Added 170 command-specific cases plus product-area and UI-only workflows. Linked the checklist as a required PASS for major-version releases.
+- 2026-10-20 — Initially added command-by-command cases; user later directed workflow scope because the 170-case manual script was too long for timely completion. Removed the command catalog and kept major product workflows with detailed steps. Linked the checklist as a required PASS for major-version releases.
 - 2026-10-20 — Documentation source audit passed: every unique command catalog name is represented once, all command detail links resolve, `git diff --check` is clean. No application tests run; this is a Markdown-only change.
 
 ## 9. Self-verification
@@ -68,3 +68,9 @@
 - Refactors: none
 - Docs updated: `docs/major-release-feature-checklist.md`, `verification/release-checklist.md`, `spec/requirements.md`, `spec/project.md`
 - Done: 2026-10-20
+
+## 12. Retired drawing-extension audit (D-2026-10-20-d)
+- Reconciled REQ-175, ADR-044 and the decision log: standalone `.gs` read/write/open is retired; DWG is the drawing format and `.gst` is the template format.
+- Removed current-facing `.gs` claims from the release checklist and user wiki, corrected installer messaging, and changed headless drawing fixtures/transcripts to `.dwg`.
+- Kept source references only where they explain a concrete compatibility reason: rejecting retired paths, naming the historical serializer/migrator, retaining a legacy manifest key, clearing stale Explorer association state, and identifying raw legacy migration fixtures. Kept release-note and roadmap mentions only as historical records.
+- Regenerated the PDF from the workflow-scoped Markdown checklist. Validation: source inventory and documentation review; no application tests are applicable.
