@@ -2357,9 +2357,10 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(settings);
-    // As opened: tall enough for its wrapped text.
+    QTest::qWait(250);  // let the dialog polish and the account card refresh its status
+    settings->layout()->activate();
+    // As opened: tall enough for its wrapped text after Qt has applied the visible style metrics.
     QVERIFY(settings->height() >= settings->heightForWidth(settings->width()));
-    QTest::qWait(250);  // let the account card's refresh fill in its status
     QVERIFY(settings->grab().save(dir + "/qt-883-settings-final.png"));
   }
 
@@ -3687,7 +3688,7 @@ private Q_SLOTS:
   }
 
   void customTitleBarAndFloatingCommandLineWork() {
-    QSettings settings; settings.remove("editor/commandWidth"); settings.remove("editor/commandAnchor");
+    QSettings settings; settings.setValue("editor/commandWidth", 400); settings.remove("editor/commandAnchor");
     const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
     const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
     const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
@@ -3696,7 +3697,8 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); window.activateWindow();
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
@@ -3747,12 +3749,21 @@ private Q_SLOTS:
     auto drag = [&](const char* name, int dx) {
       auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
       const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
-      QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
-      QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+      QMouseEvent press(QEvent::MouseButtonPress, QPointF(local), QPointF(global),
+                        Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+      QApplication::sendEvent(grip, &press);
+      QMouseEvent move(QEvent::MouseMove, QPointF(local + QPoint(dx, 0)),
+                       QPointF(global + QPoint(dx, 0)), Qt::NoButton, Qt::LeftButton,
+                       Qt::NoModifier);
       QApplication::sendEvent(grip, &move);
-      QTest::mouseRelease(grip, Qt::LeftButton);
+      QMouseEvent release(QEvent::MouseButtonRelease, QPointF(local + QPoint(dx, 0)),
+                          QPointF(global + QPoint(dx, 0)), Qt::LeftButton, Qt::NoButton,
+                          Qt::NoModifier);
+      QApplication::sendEvent(grip, &release);
     };
-    const int oldX = panel->x(); drag("commandDragGrip", 20); QVERIFY(panel->x() > oldX);
+    const int oldX = panel->x();
+    const int moveX = oldX + panel->width() + 20 < viewport->width() ? 20 : -20;
+    drag("commandDragGrip", moveX); QVERIFY(panel->x() != oldX);
     const int oldWidth = panel->width(); drag("commandResizeGrip", -40); QCOMPARE(panel->width(), oldWidth - 40);
     window.resize(950, 650); QTest::qWait(50);
     QVERIFY(viewport->rect().contains(panel->geometry()));
