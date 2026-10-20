@@ -1,4 +1,4 @@
-// Issue #125 — DIMANGULAR must round-trip through .gs (kind + angle vertex).
+// Issue #125 — DIMANGULAR must round-trip through document JSON payload (kind + angle vertex).
 //
 // GsIo.cpp is not linked here. These tests exercise the same JSON helpers SerializeGoSurveyJson/LoadGoSurveyFromJsonUtf8
 // call (`GsAnnotationJson.hpp`), which is where the defect lived: Kind::DimAngular fell through
@@ -16,7 +16,7 @@
 
 using nlohmann::json;
 
-TEST_CASE("DIMANGULAR kind and vertex survive annotation JSON (issue #125)", "[gs][dimangular]") {
+TEST_CASE("DIMANGULAR kind and vertex survive annotation JSON (issue #125)", "[payload][dimangular]") {
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::DimAngular;
   a.insX = 12.5f;
@@ -49,7 +49,7 @@ TEST_CASE("DIMANGULAR kind and vertex survive annotation JSON (issue #125)", "[g
   REQUIRE(b.dimSignedOffset == Catch::Approx(15.f));
 }
 
-TEST_CASE("kind text stays TEXT and is not promoted to DIMANGULAR (issue #125)", "[gs][dimangular]") {
+TEST_CASE("kind text stays TEXT and is not promoted to DIMANGULAR (issue #125)", "[payload][dimangular]") {
   json o;
   o["kind"] = "text";
   o["text"] = "just a label";
@@ -64,14 +64,14 @@ TEST_CASE("kind text stays TEXT and is not promoted to DIMANGULAR (issue #125)",
   REQUIRE(AnnotationKindTag(a.kind) == std::string("text"));
 }
 
-TEST_CASE("unknown annotation kind tag loads as TEXT without crashing (issue #125)", "[gs][dimangular]") {
+TEST_CASE("unknown annotation kind tag loads as TEXT without crashing (issue #125)", "[payload][dimangular]") {
   json o;
   o["kind"] = "not-a-real-kind";
   const CadAnnotation a = CadAnnotationFromJson(o);
   REQUIRE(a.kind == CadAnnotation::Kind::Text);
 }
 
-TEST_CASE("annotation annotative flag persists through JSON (issue #622)", "[gs][issue622]") {
+TEST_CASE("annotation annotative flag persists through JSON (issue #622)", "[payload][issue622]") {
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Mtext;
   a.annotative = true;
@@ -83,7 +83,7 @@ TEST_CASE("annotation annotative flag persists through JSON (issue #622)", "[gs]
   REQUIRE(b.annotative);
 }
 
-TEST_CASE("annotation visible scale names persist through JSON (issue #622)", "[gs][issue622]") {
+TEST_CASE("annotation visible scale names persist through JSON (issue #622)", "[payload][issue622]") {
   CadAnnotation a;
   a.annotative = true;
   a.annotativeVisibleScaleNames = {"1:10", "1:50"};

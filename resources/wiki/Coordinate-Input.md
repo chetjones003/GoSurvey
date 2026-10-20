@@ -160,7 +160,7 @@ you have chosen, before you accept them.*
 | **Angle → Type** | Decimal Degrees · Deg/Min/Sec · Surveyor's Units |
 | **Angle → Precision** | Decimals on the smallest unit shown |
 | **Angle → Base (0°)** and **Clockwise** | The direction base and sense used for **display** |
-| **Insertion scale** | Feet · Meters · Unitless. A **relabel only** — written to the `.gs` file and to DXF `$INSUNITS`; **coordinates are never scaled** |
+| **Insertion scale** | Feet · Meters · Unitless. A **relabel only** — written to the DWG and DXF `$INSUNITS`; **coordinates are never scaled** |
 
 Length **Type** is fixed at `Decimal` — GoSurvey works in decimal units, the survey and civil norm.
 The other length formats are reserved.

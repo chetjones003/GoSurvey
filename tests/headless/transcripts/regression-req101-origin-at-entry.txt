@@ -17,7 +17,7 @@
 #
 # What this transcript can and cannot assert, stated plainly rather than implied: the driver has no
 # verb that reads a stored coordinate back as a number, and ADR-002 keeps command translation units
-# out of the Catch2 target, so the arithmetic above is verified by inspecting the saved `.gs` (recorded
+# out of the Catch2 target, so the arithmetic above is verified by inspecting the saved `document JSON payload` (recorded
 # in TASK-067 with the before/after figures) rather than here. What this file pins is the mechanism
 # that produces it — that the frame is established, from the typed value, on the first large
 # coordinate, and that the result is stable across a round trip. If the establishment stops happening,

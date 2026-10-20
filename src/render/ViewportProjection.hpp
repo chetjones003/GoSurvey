@@ -37,7 +37,7 @@
 /// through \p vp's camera. The sheet origin is (0,0) at the lower-left; the viewport rect is
 /// `[paperXIn, paperXIn+paperWIn] x [paperYIn, paperYIn+paperHIn]`.
 ///
-/// **Plan view is delegated to `ModelToPaperIn` unchanged** — the parity a legacy `.gs` depends on.
+/// **Plan view is delegated to `ModelToPaperIn` unchanged** — the parity a legacy `internal document payload` depends on.
 /// For a rotated camera the viewport rect's aspect (`paperWIn/paperHIn`) is the camera aspect, so a
 /// square model feature stays square on the sheet.
 inline void ModelToPaperInThroughCamera(const Viewport& vp, double mx, double my, double mz,

@@ -158,7 +158,7 @@ TEST_CASE("REQ-050: a degenerate viewport scale cannot produce a zero or negativ
   m.kind = CadAnnotation::Kind::Mtext;
   m.plottedHeightInches = 0.25f;
   Viewport bad;
-  bad.scaleModelPerPaperIn = 0.f;  // a hand-edited .gs can carry this
+  bad.scaleModelPerPaperIn = 0.f;  // a hand-edited document JSON payload can carry this
   REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);
   bad.scaleModelPerPaperIn = -25.f;
   REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);

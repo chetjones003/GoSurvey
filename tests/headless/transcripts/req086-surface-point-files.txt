@@ -50,7 +50,7 @@ CMD SURFACEREBUILD Pad
 CMD SURFACELIST
 EXPECT LOG "Surface "Pad": 510 points"
 
-# --- the link survives a .gs round trip -------------------------------------------------------------
+# --- the link survives a document JSON payload round trip -------------------------------------------------------------
 CMD SURFACEADDFILE Pad, samples/pad-points.csv
 SAVEAS %OUT%/pf-a.dwg
 OPEN %OUT%/pf-a.dwg

@@ -110,9 +110,9 @@ EXPECT SOLIDS 1
 CMD REDO
 EXPECT SOLIDS 2
 
-# The pieces survive .gs: the carried fillet face keeps its surface.
-SAVEAS %OUT%/issue518.gs
-OPEN %OUT%/issue518.gs
+# The pieces survive document JSON payload: the carried fillet face keeps its surface.
+SAVEAS %OUT%/issue518.dwg
+OPEN %OUT%/issue518.dwg
 EXPECT SOLIDS 2
 EXPECT SOLIDPROPS 0 172853.981634 22027.8759594 10 15 7
 EXPECT SOLIDPROPS 1 175000 22500 8 12 6

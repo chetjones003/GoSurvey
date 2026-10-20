@@ -4,7 +4,7 @@
 #
 # This transcript FAILS today, on purpose, and is registered with `DISABLED TRUE` in CMakeLists.txt
 # rather than deleted or wrapped in WILL_FAIL. That is the same call TASK-056 made for
-# `headless.gs-roundtrip.compare` while issues #56 and #57 were open: an oracle that has found a
+# The document-payload round-trip comparison while issues #56 and #57 were open: an oracle that has found a
 # real defect is evidence, and deleting it to get a green suite would throw the evidence away.
 # WILL_FAIL would be worse still — it would go green the moment the failure changed into a
 # DIFFERENT failure. Re-enable it when #63 (ARC/ELLIPSE dropped) is closed — #64 (LWPOLYLINE

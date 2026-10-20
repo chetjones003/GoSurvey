@@ -68,7 +68,7 @@ EXPECT LOG "Renamed surface"
 CMD SURFACELIST
 EXPECT LOG "Surface "Renamed EG""
 
-# --- a surface survives a .gs round trip ----------------------------------------------------------
+# --- a surface survives a document JSON payload round trip ----------------------------------------------------------
 SAVEAS %OUT%/surf-a.dwg
 OPEN %OUT%/surf-a.dwg
 CMD SURFACELIST

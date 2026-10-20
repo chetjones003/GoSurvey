@@ -1135,7 +1135,7 @@ TEST_CASE("BLOCKFITTING refuses without an open block editor", "[issue486][block
   CHECK(log.back().find("BEDIT") != std::string::npos);
 }
 
-TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip through .gs JSON",
+TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip through document JSON payload JSON",
           "[issue486][block][fitting][connector][gsio]") {
   AppCommandState st;
   CadBlockDefinition def;

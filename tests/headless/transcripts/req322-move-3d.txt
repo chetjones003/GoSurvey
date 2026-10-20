@@ -105,7 +105,7 @@ BOX -20 -20 20 20
 EXPECT SELECTED 1
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 
-# --- A moved solid survives a .gs round-trip at its new position ----------------------------------
+# --- A moved solid survives a document JSON payload round-trip at its new position ----------------------------------
 
 NEW
 CMD BOX 0,0 20 10 8
@@ -114,10 +114,10 @@ CMD MOVE
 CMD 0,0
 CMD @100,50,25
 ESC
-SAVEAS %OUT%/move3d.gs
+SAVEAS %OUT%/move3d.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/move3d.gs
+OPEN %OUT%/move3d.dwg
 EXPECT SOLIDS 1
 EXPECT SOLIDPROPS 0 1600 880 8 12 6
 # A freshly opened drawing has nothing selected, so this is where the pair can be stated: nothing

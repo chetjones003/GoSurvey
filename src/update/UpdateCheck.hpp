@@ -66,8 +66,9 @@ struct Manifest {
   /// than a protocol change. Parsed and carried; nothing acts on it yet.
   bool        mandatory = false;
 
-  /// The `.gs` format version the offered build writes (0 when the manifest predates this field).
-  /// Compared against this build's `kGsFormatVersion` to tell the user, before they accept,
+  /// The document-payload schema version the offered build writes (0 when the manifest predates this field).
+  /// JSON uses the legacy key `gsFormatVersion` for compatibility; it describes internal document payload data,
+  /// not a standalone drawing extension. Compared against this build's `kGsFormatVersion` to tell the user,
   /// whether drawings they save afterwards will still open in the version they have today.
   int gsFormatVersion = 0;
 
@@ -81,7 +82,7 @@ struct Manifest {
 /// What the update dialog should warn about before the user accepts (REQ-078).
 enum class CompatibilityRisk {
   None,          ///< same format version, nothing declared
-  ForwardOnly,   ///< the new build writes a NEWER .gs format: old drawings still open in it, but
+  ForwardOnly,   ///< the new build writes a newer payload schema: old drawings still open in it, but
                  ///< drawings saved afterwards will not open in the currently-installed version
   Breaking,      ///< the author declared that existing drawings will not open
 };

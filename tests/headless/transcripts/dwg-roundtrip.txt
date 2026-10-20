@@ -1,4 +1,4 @@
-# REQ-204 `gs-roundtrip` oracle: save -> load -> save -> load -> save, and the LAST TWO saves must
+# REQ-204 DWG document-payload oracle: save -> load -> save -> load -> save, and the LAST TWO saves must
 # be byte-identical. See the note above the comparison at the bottom for why it is the last two
 # rather than the first two.
 #

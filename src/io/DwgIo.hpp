@@ -65,8 +65,9 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
 bool AppendGoSurveyPayloadToDwgFile(const char* pathUtf8, const AppCommandState& st,
                                     std::vector<std::string>& log);
 
-/// REQ-175: Open/Save a drawing path. `.dwg` (payload when present) — `.gs` is no longer an
-/// openable document format (issue #264).
+/// REQ-175: Open/Save a drawing path. `.dwg` carries the payload when present. Legacy standalone
+/// `.gs` paths are rejected because issue #264 retired that file format. The payload JSON remains
+/// internal to the DWG trailer and template serializer.
 bool OpenDrawingDocument(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool SaveDrawingDocument(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 

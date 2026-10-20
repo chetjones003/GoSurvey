@@ -104,11 +104,11 @@ EXPECT SOLIDPROPS 0 12800 3520 8 12 6
 EXPECT LINEXYZ 0 20 0 5 40 0 5
 CHECK ALL
 
-# --- A scaled and rotated solid survives .gs save/reopen (#148 acceptance 8) ----------------------
-SAVEAS %OUT%/rotscale.gs
+# --- A scaled and rotated solid survives document JSON payload save/reopen (#148 acceptance 8) ----------------------
+SAVEAS %OUT%/rotscale.dwg
 NEW
 EXPECT SOLIDS 0
-OPEN %OUT%/rotscale.gs
+OPEN %OUT%/rotscale.dwg
 EXPECT SOLIDS 1
 EXPECT SOLIDBOUNDS 0 -20 -10 0 20 10 16
 EXPECT SOLIDPROPS 0 12800 3520 8 12 6

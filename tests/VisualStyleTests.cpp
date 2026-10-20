@@ -44,7 +44,7 @@ TEST_CASE("A null destination is refused rather than dereferenced", "[visualstyl
 }
 
 TEST_CASE("Style names round-trip through parsing", "[visualstyle]") {
-  // The canonical name the UI and `.gs` show must be one the command accepts — otherwise a user
+  // The canonical name the UI and `document JSON payload` show must be one the command accepts — otherwise a user
   // reading "2D Wireframe" off the ribbon and typing it back gets an error.
   for (VisualStyle s : {VisualStyle::Wireframe2D, VisualStyle::Hidden, VisualStyle::Shaded}) {
     VisualStyle back = VisualStyle::Hidden;
@@ -55,7 +55,7 @@ TEST_CASE("Style names round-trip through parsing", "[visualstyle]") {
 }
 
 TEST_CASE("Wireframe2D is the zero value", "[visualstyle]") {
-  // Load-bearing for persistence and for RenderTuning's default: a `.gs` or prefs file written
+  // Load-bearing for persistence and for RenderTuning's default: a `document JSON payload` or prefs file written
   // before REQ-064 has no style key at all, and a zero-initialised field must mean "the classic
   // view", not "Shaded".
   CHECK(static_cast<int>(VisualStyle::Wireframe2D) == 0);

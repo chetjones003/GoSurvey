@@ -361,7 +361,8 @@ jobs:
           # correct at the moment it is written rather than depending on a later redirect.
           $url = "https://github.com/$repo/releases/download/$tag/$($installer.Name)"
 
-          # The .gs format version this build writes, read from the one place that defines it.
+          # This schema version belongs to the JSON payload embedded in DWG. The manifest key
+          # remains gsFormatVersion for compatibility with already deployed updater clients.
           # The CLIENT compares it against its own compiled-in value, so no release history has to
           # be consulted here and the comparison happens where the truth is actually known.
           $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
@@ -373,7 +374,8 @@ jobs:
           # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
           # are written for developers and are full of things an end user should never be shown --
           # file paths, requirement numbers, compiler behaviour. Piping them straight through put
-          # "the installer registers .gs with shell\open\command..." in front of users, which is
+          # "the installer registers .gs with shell\open\command..." is a historical phrase
+          # denied from release notes; it is not current file-association guidance.
           # how this was caught.
           #
           # The section key is the plain three-part version, so every beta in a cycle shows the

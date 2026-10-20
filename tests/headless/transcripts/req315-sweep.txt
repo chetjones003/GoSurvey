@@ -1,9 +1,9 @@
 # REQ-315 / ADR-048 (GitHub #241, Phase 4 of #120) — SWEEP, end to end.
 #
-# BrepTests / BrepJsonTests prove the kernel (brep::Sweep, the SurfaceKind::Nurbs faces, the .gs
+# BrepTests / BrepJsonTests prove the kernel (brep::Sweep, the SurfaceKind::Nurbs faces, the document JSON payload
 # round-trip). This transcript tests the half the kernel cannot: that selecting a closed profile and
 # a line-or-arc path and running SWEEP puts the swept solid in the document, that its volume and
-# topology are what the kernel computed, that it survives a .gs save/reopen, that one undo step
+# topology are what the kernel computed, that it survives a document JSON payload save/reopen, that one undo step
 # removes it, and that a bad selection is reported rather than silently swallowed.
 
 NEW
@@ -114,7 +114,7 @@ EXPECT LOG "sharp corner"
 EXPECT SOLIDS 3
 ESC
 
-# --- Solids survive a .gs save and reopen with topology intact -----------------------------
+# --- Solids survive a document JSON payload save and reopen with topology intact -----------------------------
 SAVEAS %OUT%/req315-sweep.dwg
 OPEN %OUT%/req315-sweep.dwg
 EXPECT SOLIDS 3

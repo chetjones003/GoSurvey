@@ -91,7 +91,7 @@ inline std::vector<SurfaceStyle> DefaultSurfaceStyles() {
 ///
 /// This is the whole of "resolution is on read". An empty name and a name whose style was deleted
 /// take the same path deliberately: REQ-070 states the deleted case, and the empty case is what every
-/// surface in every `.gs` written before this field existed will present on first load.
+/// surface in every `internal document payload` written before this field existed will present on first load.
 inline const SurfaceStyle* Resolve(const std::vector<SurfaceStyle>& styles, const std::string& name) {
   if (!name.empty())
     if (const SurfaceStyle* s = Find(styles, name)) return s;

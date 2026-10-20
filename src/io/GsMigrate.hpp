@@ -6,14 +6,16 @@
 #include <string>
 #include <vector>
 
-/// REQ-079 / ADR-030 — carrying an older `.gs` document forward to the current format version.
+/// REQ-079 / ADR-030 — carrying an older GoSurvey document JSON payload forward to the current schema.
+/// The GsMigrate name is historical; this migrates JSON embedded in DWG/template data, never a
+/// standalone `.gs` file (retired by issue #264).
 ///
 /// Pure: no window, no GL, no command layer, no filesystem. Steps operate on the parsed JSON
 /// document tree *before* the typed loader sees it, which is what keeps a migration correct
 /// forever — it is frozen against the shape it was written for, and cannot rot when the structs
 /// it once matched are changed (ADR-030 (b)).
 
-/// The `.gs` format version this build writes, and the target every migration chain climbs to.
+/// The document-payload schema version this build writes, and the target every migration chain climbs to.
 ///
 /// Declared here rather than inside GsIo.cpp so it is reachable without dragging in the command
 /// layer. The updater needs it: the release manifest carries the format version of the build
@@ -33,7 +35,7 @@ struct GsMigrationStep {
 };
 
 /// The migrations this build knows about, in ascending `fromVersion` order.
-/// Empty today: `.gs` is still at version 1 and every change so far has been additive, handled by
+/// Empty today: the payload is still at version 1 and every change so far has been additive, handled by
 /// the tolerant-key pattern that ADR-030 (f) deliberately keeps.
 const GsMigrationStep* GsMigrationTable(size_t& countOut);
 

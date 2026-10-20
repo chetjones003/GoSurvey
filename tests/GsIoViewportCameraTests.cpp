@@ -1,5 +1,5 @@
 // REQ-061 — the per-viewport camera must survive SaveGoSurveyTemplateFile / LoadGoSurveyTemplateFile, and a
-// legacy .gs (no camera keys) must load with every viewport in plan view. Linked here
+// legacy document JSON payload (no camera keys) must load with every viewport in plan view. Linked here
 // (GoSurveySnapTests) because GoSurveyTests cannot link GsIo.cpp.
 
 #include <catch2/catch_approx.hpp>
@@ -21,11 +21,11 @@ std::filesystem::path UniqueGsPath(const char* stem) {
   const std::filesystem::path dir = std::filesystem::temp_directory_path() / "gosurvey-req061";
   std::filesystem::create_directories(dir);
   const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gs");
+  return dir / (std::string(stem) + "-" + std::to_string(stamp) + ".gst");
 }
 }  // namespace
 
-TEST_CASE("Per-viewport camera round-trips through .gs (REQ-061)", "[gs][req061]") {
+TEST_CASE("Per-viewport camera round-trips through document JSON payload (REQ-061)", "[payload][req061]") {
   AppCommandState st;
   PaperLayout L;
   L.name = "Sheet";
@@ -59,7 +59,7 @@ TEST_CASE("Per-viewport camera round-trips through .gs (REQ-061)", "[gs][req061]
   REQUIRE_FALSE(li.cameraIsPlan());
 }
 
-TEST_CASE("Per-viewport visual style round-trips through .gs (REQ-371)", "[gs][req371][issue624]") {
+TEST_CASE("Per-viewport visual style round-trips through document JSON payload (REQ-371)", "[payload][req371][issue624]") {
   AppCommandState st;
   PaperLayout L;
   Viewport wire;
@@ -85,7 +85,7 @@ TEST_CASE("Per-viewport visual style round-trips through .gs (REQ-371)", "[gs][r
   CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
 }
 
-TEST_CASE("A legacy .gs with no camera keys loads every viewport in plan view (REQ-061)", "[gs][req061]") {
+TEST_CASE("A legacy document JSON payload with no camera keys loads every viewport in plan view (REQ-061)", "[payload][req061]") {
   AppCommandState st;
   PaperLayout L;
   Viewport vp;
