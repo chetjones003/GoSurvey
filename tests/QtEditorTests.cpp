@@ -5217,6 +5217,8 @@ private Q_SLOTS:
     QVERIFY(state.namedViews.empty());
     QVERIFY(state.ucsNamed.empty());
     QVERIFY(ucs::FramesMatch(state.activeUcs, originalUcs));
+  }
+
   void qtIsolationCommandsHideAndRestoreStableEntities() {
     EditorWindow window; window.show(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};

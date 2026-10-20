@@ -795,6 +795,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       update();
       event->accept();
       return;
+    }
     if (m_State.active == AppCommandState::Kind::None && m_State.selection.size() == 1 &&
         m_State.selection.front().type == SelectedEntity::Type::Annotation &&
         !(event->modifiers() & Qt::ShiftModifier) && !projectReadOnly()) {
@@ -1134,6 +1135,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       previewTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
       previewTol.edge = previewTol.vertex;
       UpdateSectionPlanePreview(m_State, ray, previewTol);
+    }
     if (m_State.active == AppCommandState::Kind::None && !m_State.entityGripMoveActive &&
         (event->modifiers() & Qt::ControlModifier) && m_State.activeSpaceIndex == kModelSpaceIndex) {
       m_State.viewportHoverEntityValid = false;
