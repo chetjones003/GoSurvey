@@ -1,7 +1,7 @@
 #pragma once
 
 // Pure helpers for the floating command bar (REQ-040) and the clickable command
-// variants it renders (REQ-119). Kept free of ImGui so the fade/tail logic and the
+// variants it renders (REQ-119). Kept UI-independent so the fade/tail logic and the
 // prompt→variants rule are unit-testable (CommandLineTests) without a UI harness.
 
 #include <cctype>

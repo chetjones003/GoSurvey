@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// The MTEXT rich-wire parser (ADR-023), split out of MtextRichFormat so it is **pure** — no ImGui, no
+// The MTEXT rich-wire parser (ADR-023), split out of MtextRichFormat so it is **pure** — no UI, no
 // fonts — and can be unit-tested and shared. Everything that needs a draw list or font metrics stays in
 // MtextRichFormat.cpp / RichTextEdit.cpp.
 //

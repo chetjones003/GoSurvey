@@ -3605,55 +3605,11 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
-### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
-- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
-           drive the **real** ImGui UI from code — without shipping any of that in Release
-- Priority: must
-- Type: functional
-- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
-  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
-  for Release (and for any configuration that builds the shipped installer). It is a compile-time
-  gate, not a runtime hide.
-
-  When ON, the windowed `GoSurvey` binary:
-
-  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
-    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
-    colours change **this frame** with no rebuild;
-  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
-    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
-    output / log lines;
-  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
-    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
-    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
-    the live UI (full GUI driver).
-
-  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
-  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
-  that executable links; there is no Developer Shell menu/window.
-
-  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
-  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
-  fonts through ImGui **core without** Test Engine hooks.
-
-  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
-  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
-- Acceptance:
-  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
-    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
-    proven by a ctest that fails if those symbols are present;
-  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
-    changes on-screen chrome the same session;
-  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
-    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
-  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
-    done by hand (entity counts / command log), without requiring a human at the mouse;
-  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
-- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
-- Status: accepted (2026-08-29)
-- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
-  anti-requirement for **Debug only**.
-
+### REQ-161 — Retired: Dear ImGui Developer Shell
+- Status: retired on 2026-10-19 by D-2026-10-19-k / REQ-440 (GitHub issue #966).
+- Rationale: the ImGui frontend and its Debug-only Test Engine shell were removed when Qt became the sole supported frontend.
+- Replacement: Qt is the supported desktop frontend; its UI tests run through `GoSurveyQtTests.exe` and the hidden-desktop Qt test workflow.
+- Historical acceptance details are retained in D-2026-08-29-f and ADR-040; they no longer impose implementation or build requirements.
 ### REQ-170 — LibreDWG is the DXF and DWG codec
 - Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
   the customer machine; write DWG through R2018 where LibreDWG encode is verified (D-2026-10-01-f)
@@ -4584,10 +4540,11 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
 - Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
-- Not in this requirement: hatch/fill, leader, table, spline, image and point in paper space; paper size and orientation; viewport view direction, frozen layers, lock and on/off; DWG export of the full set (issue #753 I3). Each needs its own decision.
+- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image and point, each with its own paper store in paper inches (REQ-037, ADR-009). DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
+- Acceptance (additional): (5) each of hatch, leader, table, spline, image and point drawn on a sheet survives DWG save then open on the same layout; (6) paper size, orientation and each viewport's view direction, frozen layers, lock and on/off survive DWG save then open; (7) AutoCAD opens our DWG sheet showing the paper text, arcs, polylines and fills (checked with the local AutoCAD oracle); (8) the same holds for DXF in a later increment.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768).
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -12891,6 +12848,24 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-18 — initial proposal; accepted by user.
 
+### REQ-440 — Qt is the sole supported frontend; remove ImGui (GitHub issue #966)
+
+- Purpose: maintain one supported desktop frontend and remove the maintenance and build cost of the retired ImGui application.
+- Priority: must
+- Type: quality (architecture/build)
+- Decision: D-2026-10-19-k; the user requested complete ImGui removal in GitHub issue #966.
+- Statement: GoSurvey supports the Qt desktop application as its sole frontend. Remove the ImGui application, UI code, tests and helpers, vendored ImGui/Test Engine/GLFW dependencies used only by that frontend, and frontend-specific build, packaging, CI, resource and documentation references. Preserve shared domain behavior and any code or dependency still used by Qt, headless tools or other supported targets. Rework ImGui-only functionality that remains required by supported workflows into the appropriate existing shared or Qt layer; do not silently drop supported user workflows.
+- Acceptance:
+  - The repository contains no ImGui application/UI implementation, ImGui Test Engine, or ImGui-only GLFW/GLEW dependency.
+  - The standard configure/build/test/packaging/CI workflows produce and validate the Qt app and required headless tools without configuring or linking ImGui components.
+  - Every removed ImGui-only code path is either deleted as unsupported UI behavior or its required behavior is retained through an existing supported Qt/shared workflow, with focused coverage.
+  - Dependency and source searches confirm no stale ImGui target, source, package, resource, artifact, or workflow references remain, except historical decision records that explain the migration.
+  - The complete supported Release build and CTest suite pass; the Qt app launches and output-layout checks match the Qt-only product.
+- Owner-layer: Qt UI and build/packaging; shared domain APIs remain frontend-independent.
+- Constraints: REQ-200, REQ-201, REQ-300, CON-06.
+- Status: accepted (2026-10-19) — D-2026-10-19-k, GitHub issue #966.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-k, GitHub issue #966.
+
 
 ### REQ-440 — Spline command (GitHub issue #803)
 
@@ -13469,6 +13444,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
+
+  2026-10-20 — **the PR-time `/analyze` check is now blocking** (D-2026-10-20-a, GitHub #977). The backlog was triaged: real findings were fixed, and the justified suppressions are listed in `spec/coding-standards.md` section 11. `pr-checks.yml`'s `lint / msvc-analyze` job builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`), so any new `/W4` or `/analyze` warning in our own targets fails the PR. The `release.yml` build is unchanged and still not failed by findings. There are no accepted baseline findings: the baseline is zero.
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
@@ -14220,6 +14197,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
+| REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14362,7 +14340,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126). 2026-09-10 (TASK-243, D-2026-09-10-a, GitHub #156): `Object` now aligns to a planar face of a B-rep solid — deferred item 4 partially lifted, thin consumer of the REQ-318 sub-object pick; `headless.issue156-ucs-object-solid-face` | accepted |
 | REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
-| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
+| REQ-161 | Application/UI/Build | retired 2026-10-19 by REQ-440; historical record only | retired |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2000 default write (D-2026-09-30-c); no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |

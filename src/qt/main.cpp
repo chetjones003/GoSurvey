@@ -22,7 +22,7 @@
 
 int main(int argc, char** argv) {
   // REQ-425 §2: a process relaunched by the crash handler only shows the report. It is read (and
-  // sent) before the handler is installed, as in the ImGui build, so a fault here cannot recurse.
+  // sent) before the handler is installed, so a fault here cannot recurse.
   std::string crashTitle;
   std::string crashReport;
   const bool crashReportMode = crashReporter::TakeCrashReportFromCommandLine(crashTitle, crashReport);
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   const bool smoke = app.arguments().contains("--smoke-test");
-  // REQ-425 §4: the same launch-time graphics check the ImGui build makes. Skipped for the smoke
+  // REQ-425 §4: perform a launch-time graphics check. Skipped for the smoke
   // run, where a modal report window would hang an unattended check.
   if (!smoke) {
     startupFailure::Stage stage{};

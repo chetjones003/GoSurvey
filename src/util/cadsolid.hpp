@@ -4,7 +4,7 @@
 ///
 /// The kernel in `brep.hpp` knows nothing about documents, layers or the GPU. This header is the
 /// seam where a kernel solid becomes a drawing entity: the store's coordinate convention, the
-/// tessellation cache, and the batches the renderer is handed. It is still pure — no GL, no ImGui,
+/// tessellation cache, and the batches the renderer is handed. It is still pure — no GL or UI,
 /// no `AppCommandState` — so the cache's staleness rule stays testable without a window.
 
 #include "brep.hpp"

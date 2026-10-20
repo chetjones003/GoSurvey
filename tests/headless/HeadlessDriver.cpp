@@ -1,21 +1,11 @@
 // gosurvey_headless — the REQ-203 transcript driver.
 //
-// Executes a transcript (a text file of command-line submissions and viewport picks) against a real
-// AppCommandState, with no window, no GPU and no display, and reports what the drawing became.
+// Executes transcripts through the same command entry points as the Qt editor. It creates no
+// editor window; Qt's offscreen text layout supplies the annotation measurements used by the app.
 // The grammar is documented in docs/fuzz-harness.md §2.
-//
-// Two things about this program are deliberate and easy to undo by accident:
-//
-//  1. **It drives the SAME entry points the GUI drives** — ProcessCommandLineSubmit and
-//     SubmitViewportPick — rather than calling command internals. A driver that reached past the
-//     command line would test a path no user can take, and would keep passing after the real one
-//     broke.
-//  2. **It creates an ImGui context and loads the application's font** (ADR-031 (c′)). Loading a
-//     `.gs` measures survey label text and stores the result as geometry, so a driver without a
-//     font would silently produce different geometry from the GUI — which is exactly the class of
-//     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "QtText.hpp"
 #include "viewport/CadRubberPreview.hpp"
 #include "CadBlocks.hpp"
 // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154) and EXPECT VERTEX / EXPECT ELEVATION
@@ -26,7 +16,6 @@
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
-#include "MtextRichImGui.hpp"
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
 #include "TransformPreview.hpp"
@@ -34,7 +23,6 @@
 #include "ViewportPickPolicy.hpp"
 #include "docinvariants.hpp"
 
-#include <imgui.h>
 
 #include <cstdio>
 #include <cmath>
@@ -43,6 +31,8 @@
 #include <exception>
 #include <filesystem>
 #include <algorithm>
+#include <QGuiApplication>
+#include <QCoreApplication>
 #include <array>
 #include <tuple>
 #include <fstream>
@@ -408,7 +398,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
-    run.st.measureAnnotationText = MtextRichMeasureAnnotationImGui;
+    run.st.measureAnnotationText = MeasureQtText;
     LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
@@ -2962,35 +2952,6 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   return run.failures.empty();
 }
 
-// ---------------------------------------------------------------------------
-// ImGui, headless (ADR-031 (c′)) — a font atlas, no window, no GPU.
-// ---------------------------------------------------------------------------
-
-void InitHeadlessImGui() {
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(1920.f, 1080.f);  // no real display; NewFrame only needs it non-zero
-  io.DeltaTime = 1.0f / 60.0f;
-  io.IniFilename = nullptr;  // never write imgui.ini from a test run (CON-07)
-
-  if (!LoadApplicationFont())
-    io.Fonts->AddFontDefault();
-  io.FontGlobalScale = 1.35f;  // matches main.cpp, so text measures the same as it does in the GUI
-
-  unsigned char* pixels = nullptr;
-  int w = 0;
-  int h = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);  // builds the atlas on the CPU; nothing is uploaded
-
-  ImGui::NewFrame();  // makes ImGui::GetFont() valid — SurveyPoints.cpp measures through it
-}
-
-void ShutdownHeadlessImGui() {
-  ImGui::EndFrame();
-  ImGui::DestroyContext();
-}
-
 int Usage() {
   std::fprintf(stderr,
                "usage: gosurvey_headless run  <transcript> [--json <path>] [--out <dir>]\n"
@@ -3009,6 +2970,9 @@ int RunTranscriptMain(int argc, char** argv);
 int FuzzMain(int argc, char** argv, const char* exePath);
 
 int main(int argc, char** argv) {
+  qputenv("QT_QPA_PLATFORM", "offscreen");
+  qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", QCoreApplication::applicationDirPath().toLocal8Bit() + "/qt-plugins/platforms");
+  QGuiApplication qtApp(argc, argv);
   try {
     if (argc >= 2 && std::string(argv[1]) == "fuzz")
       return FuzzMain(argc, argv, argv[0]);
@@ -3053,10 +3017,9 @@ int RunTranscriptMain(int argc, char** argv) {
     return 2;
   }
 
-  InitHeadlessImGui();
 
   Run run;
-  run.st.measureAnnotationText = MtextRichMeasureAnnotationImGui;  // labels measure through the ImGui font
+  run.st.measureAnnotationText = MeasureQtText;
   run.checkEveryStep = checkEveryStep;
   run.outDir = outDir.empty()
                    ? (std::filesystem::temp_directory_path() / "gosurvey_headless")
@@ -3084,7 +3047,6 @@ int RunTranscriptMain(int argc, char** argv) {
     CheckInvariants(run, sourceLine);
 
   const size_t pending = headless::PendingDialogAnswers();
-  ShutdownHeadlessImGui();
 
   // --- Report ---------------------------------------------------------------------------------
   const bool passed = run.failures.empty();

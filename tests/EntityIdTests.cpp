@@ -6,7 +6,7 @@
 // "resolves to nothing, not to its index successor" — that is the bug the whole feature prevents,
 // and it would pass trivially against an index-based build only if you never erased anything.
 //
-// `CadCommands.cpp` cannot be linked by this target (it pulls in ImGui and the GUI stack), which is
+// `CadCommands.cpp` cannot be linked by this target (it pulls in PDFium and the GUI stack), which is
 // exactly why the rules live in the dependency-free `EntityId.cpp` and the state-facing wrappers
 // there are only plumbing.
 

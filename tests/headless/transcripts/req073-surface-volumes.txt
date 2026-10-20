@@ -7,7 +7,7 @@
 # test), refusing a missing name or a bad argument count with a specific message, and the exact log
 # format a user actually reads.
 #
-# **On VOLUMES rather than a panel.** The Volume Dashboard is an ImGui window this driver cannot
+# **On VOLUMES rather than a panel.** The Volume Dashboard is a Qt window this driver cannot
 # reach — the same limitation `req070-surface-styles-contours` and `req072-surface-analysis` work
 # around — so `VOLUMES <base>, <comparison>` calls the same `ComputeSurfaceVolume` the eventual
 # dashboard will, against the SAME live surfaces (not synthetic fixtures fed straight to the
@@ -71,7 +71,7 @@ CHECK ALL
 # ======================================================================================================
 # VOLDASH — the Volume Dashboard panel's command form (TASK-095 §6 step 3/4).
 #
-# The panel itself is an ImGui window this driver cannot reach. What follows proves the panel's OWN
+# The panel itself is a Qt window this driver cannot reach. What follows proves the panel's OWN
 # state machine — open/close, the surface pickers, the map toggle, and RECOMPUTE's readiness gate and
 # its refusal messages — deterministically.
 #

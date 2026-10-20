@@ -14,12 +14,10 @@ if (-not (Test-Path -LiteralPath $runtimeRoot)) { return }
 $keepDirectories = @('.cmake', 'artifacts', 'resources', 'qt-plugins',
   'debug', 'release', 'relwithdebinfo', 'minsizerel')
 if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot 'qt.conf'))) {
-  # An ImGui-only build may coexist with a Qt executable from the old layout.
   $keepDirectories += @('generic', 'iconengines', 'imageformats', 'networkinformation',
     'platforms', 'styles', 'tls')
 }
-$keepFiles = @('GoSurvey.exe', 'GoSurveyTestImGui.exe', 'GoSurveyQt.exe',
-  'GoSurveyQtTests.exe', 'vc_redist.x64.exe', 'qt.conf')
+$keepFiles = @('GoSurvey.exe', 'GoSurveyQtTests.exe', 'vc_redist.x64.exe', 'qt.conf')
 $archiveRoot = Join-Path $buildRoot ('artifacts/legacy-output/' + [DateTime]::Now.ToString('yyyyMMdd-HHmmss-fff'))
 foreach ($item in Get-ChildItem -LiteralPath $runtimeRoot -Force) {
   if ($item.PSIsContainer -and $item.Name -in $keepDirectories) { continue }

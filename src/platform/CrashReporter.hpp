@@ -25,7 +25,7 @@ bool ReadCrashBundle(const std::filesystem::path& bundlePath, CrashReport& out);
 /// then shows its own report window.
 bool TakeCrashReportFromCommandLine(std::string& titleUtf8, std::string& reportUtf8);
 
-/// The ImGui build's crash-report mode: TakeCrashReportFromCommandLine + the Win32 window.
+/// Crash-report mode: TakeCrashReportFromCommandLine + the Win32 window.
 bool TryRunCrashReportUiMode();
 void InstallHandler();
 void SetReportChannel(std::string_view channel);

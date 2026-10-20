@@ -49,7 +49,7 @@
 #include <chrono>
 
 #include "StringUtil.hpp"
-#include "AppIcon.hpp"
+#include "AppPaths.hpp"
 
 #include "CadSnap.hpp"
 
@@ -692,6 +692,20 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
 
 using PaperRef = PaperEntityRef;
 
+// ROTATE / SCALE / MIRROR refuse a paper multileader by name, exactly as model space does
+// (DropMultileadersFromSelection): it can only be moved, copied or erased.
+static void DropPaperLeadersFromSelection(AppCommandState& st, const char* verb, std::vector<std::string>& log) {
+  const size_t before = st.selectedPaperEntities.size();
+  st.selectedPaperEntities.erase(
+      std::remove_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
+                     [](const PaperRef& r) { return r.type == PaperRef::Type::Leader; }),
+      st.selectedPaperEntities.end());
+  const size_t dropped = before - st.selectedPaperEntities.size();
+  if (dropped > 0)
+    log.push_back(std::string(verb) + " � " + std::to_string(dropped) +
+                  " Multileader(s) left unchanged: a Multileader can only be moved, copied or erased.");
+}
+
 // A plain click-select carries no crossing/window box (REQ-103 STRETCH), unlike closePaperSelBox's
 // own selection, which sets paperSelBoxLastValid true right after populating selectedPaperEntities
 // (CadUi.cpp). Invalidating here — the shared funnel every non-box selection change goes through —
@@ -728,6 +742,14 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
     if (hit) {
       out->type = PaperRef::Type::Block;
       out->index = bi;
+      return true;
+    }
+  }
+  for (int mi = static_cast<int>(L.paperMultileaders.size()) - 1; mi >= 0; --mi) {
+    double d2 = 0.0;
+    if (CadMultileaderHit(L.paperMultileaders[static_cast<size_t>(mi)], x, y, tolIn, &d2)) {
+      out->type = PaperRef::Type::Leader;
+      out->index = mi;
       return true;
     }
   }
@@ -841,7 +863,7 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
   if (!L || st.selectedPaperEntities.empty())
     return;
   // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
-  std::vector<int> byType[7];
+  std::vector<int> byType[8];
   for (const PaperRef& r : st.selectedPaperEntities)
     byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
@@ -888,6 +910,8 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
     eraseElem(L->paperTexts, L->paperTextAttrs, ti);
   for (int bi : byType[static_cast<int>(PaperRef::Type::Block)])
     eraseElem(L->paperBlockRefs, L->paperBlockRefAttrs, bi);
+  for (int mi : byType[static_cast<int>(PaperRef::Type::Leader)])
+    eraseElem(L->paperMultileaders, L->paperMultileaderAttrs, mi);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
@@ -1022,6 +1046,20 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
       }
       break;
     }
+    case PaperRef::Type::Leader: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperMultileaders.size())
+        break;
+      if (copy) {
+        CadMultileader c = L->paperMultileaders[static_cast<size_t>(r.index)];
+        CadMultileaderTranslate(&c, dxIn, dyIn, 0.0);
+        L->paperMultileaders.push_back(std::move(c));
+        L->paperMultileaderAttrs.push_back(attrAt(L->paperMultileaderAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Leader, static_cast<int>(L->paperMultileaders.size()) - 1});
+      } else {
+        CadMultileaderTranslate(&L->paperMultileaders[static_cast<size_t>(r.index)], dxIn, dyIn, 0.0);
+      }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -1041,6 +1079,9 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
     x = baseX + dx * c - dy * s;
     y = baseY + dx * s + dy * c;
   };
+  DropPaperLeadersFromSelection(st, "ROTATE", log);
+  if (st.selectedPaperEntities.empty())
+    return;
   PushUndoSnapshot(st, "Rotate paper geometry");
   for (const PaperRef& r : st.selectedPaperEntities) {
     switch (r.type) {
@@ -1098,6 +1139,8 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
         CadBlockRotateZ(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
+    case PaperRef::Type::Leader:  // dropped from the selection above
+      break;
     }
   }
   BumpCadGpuCache(st);
@@ -1130,6 +1173,9 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
   };
   const float mphi = std::atan2(mdy, mdx);
   auto reflAngle = [&](float ang) { return 2.f * mphi - ang; };
+  DropPaperLeadersFromSelection(st, "MIRROR", log);
+  if (st.selectedPaperEntities.empty())
+    return;
   PushUndoSnapshot(st, "Mirror paper geometry");
   std::vector<PaperRef> newSel;
   auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
@@ -1234,6 +1280,8 @@ void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, fl
       newSel.push_back({PaperRef::Type::Block, static_cast<int>(L->paperBlockRefs.size()) - 1});
       break;
     }
+    case PaperRef::Type::Leader:  // dropped from the selection above
+      break;
     }
   }
   if (!newSel.empty())
@@ -3354,6 +3402,16 @@ bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::v
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   if (index >= st.cadSurfaces.size())
     return;
+  // Surface selections are index-based; remove the deleted reference and shift later surfaces down.
+  for (size_t i = st.selection.size(); i > 0; --i) {
+    SelectedEntity& selected = st.selection[i - 1];
+    if (selected.type != SelectedEntity::Type::Surface)
+      continue;
+    if (selected.index == static_cast<int>(index))
+      st.selection.erase(st.selection.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    else if (selected.index > static_cast<int>(index))
+      --selected.index;
+  }
   st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
@@ -4741,7 +4799,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
   }
 
   // --- REQ-072: the command form of the Analysis tab (TASK-086 §9) -----------------------------
-  // The Analysis tab is an ImGui window this headless driver cannot reach — the same limitation
+  // The Analysis panel is a Qt window this headless driver cannot reach — the same limitation
   // INTERVAL/SHOW/HIDE already work around — so these verbs call the exact same fields the tab
   // edits, and what a transcript proves is the real edit path rather than a test-only shortcut.
 
@@ -4993,7 +5051,7 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
 }
 
 /// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
-/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis tab: the panel is an ImGui
+/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis panel: the panel is a Qt
 /// window this headless driver cannot reach, so PICK/MAP/CLOSE call the exact fields the panel edits.
 ///
 /// **`RECOMPUTE` is the synchronous test surrogate for the real async live-recompute
@@ -11586,6 +11644,9 @@ void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, f
     log.push_back("SCALE — scale factor must be a positive finite number.");
     return;
   }
+  DropPaperLeadersFromSelection(st, "SCALE", log);
+  if (st.selectedPaperEntities.empty())
+    return;
   PushUndoSnapshot(st, "Scale paper geometry");
   for (const PaperRef& r : st.selectedPaperEntities) {
     switch (r.type) {
@@ -11643,6 +11704,8 @@ void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, f
         CadBlockScaleAbout(&L->paperBlockRefs[static_cast<size_t>(r.index)], baseX, baseY, factor);
       break;
     }
+    case PaperRef::Type::Leader:  // dropped from the selection above
+      break;
     }
   }
   BumpCadGpuCache(st);
@@ -44139,7 +44202,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     // REQ-073 amendment. `VOLDASH [<verb> …]` — bare opens the panel; the verbs are what a headless
-    // transcript drives, because the panel itself is an ImGui window this driver cannot reach.
+    // transcript drives, because the panel itself is a Qt window this driver cannot reach.
     if (plotTok == "voldash") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -46668,7 +46731,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
 //
 // The move is a relocation, not a redesign: every input it reads already lives in
 // AppCommandState (qsApplyTo / qsObjectType / qsProperty / qsOperator / qsValueBuf / qsIncludeMode
-// / qsAppendToExisting) and it touches no ImGui at all. The panel stays exactly what the driver's
+// / qsAppendToExisting) and it touches no UI at all. The panel stays exactly what the driver's
 // own IMPORT POINTS comment praises — a form, not logic — and calls this unchanged.
 void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
   using OT = AppCommandState::QsObjectType;

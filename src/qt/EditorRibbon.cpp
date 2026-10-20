@@ -490,7 +490,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   const int surface = SelectedSurface(m_State);
   const std::string surfaceName = surface >= 0 ? m_State.cadSurfaces[surface].name : std::string{};
   if (id == "##ModPipeRun") { CancelActiveCommand(m_State, m_Log); StartPipeRunAtCurrentSize(m_State, m_Log); }
-  else if (id == "##RibbonInsEdit" || id == "##BeEdit") CadBlocksOpenEditPicker(m_State, m_Log);
+  else if (id == "##RibbonInsEdit" || id == "##BeEdit") { CadBlocksOpenEditPicker(m_State, m_Log); ShowBlockEditorPicker(); }
   else if (command == "TOOLSPACE" || command == "@properties") {
     auto* dock = findChild<QDockWidget*>(command == "TOOLSPACE" ? "toolspaceDock" : "propertiesDock");
     if (dock) { dock->show(); dock->raise(); dock->widget()->setFocus(); }

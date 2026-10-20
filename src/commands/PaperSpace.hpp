@@ -16,7 +16,7 @@
 // selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
 // paper* vector.
 struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6 };
+  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7 };
   Type type = Type::Line;
   int  index = 0;
 };
@@ -93,7 +93,7 @@ struct Viewport {
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 
   // REQ-061: true when the camera is the historical straight-down orthographic plan view. Callers
-  // keep the exact pre-change 2D path (ModelToPaperIn, ImGui AddCircle, uniform px/model) on this.
+  // keep the exact pre-change 2D path (ModelToPaperIn, circle marker, uniform px/model) on this.
   [[nodiscard]] bool cameraIsPlan() const {
     return !camPerspective && std::fabs(camAzimuthDeg) < 1.e-4f &&
            std::fabs(camElevationDeg - 90.f) < 1.e-4f && std::fabs(camRollDeg) < 1.e-4f;
@@ -287,7 +287,7 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
 
 /// Everything the layout-viewport TEXT/MTEXT overlay needs from one annotation: isolation skip,
 /// the scale REQ-050 picks, and the font family the draw call must pass to SHX/TTF resolve.
-/// CadUi uses this struct's fields rather than inlining the drawing scale or ImGui::GetFont().
+/// The Qt viewport uses these fields rather than inlining the drawing scale or font resolution.
 struct ViewportTextOverlayPlan {
   bool skipHidden = false;
   float modelUnitsPerPlottedInch = 50.f;
@@ -418,6 +418,9 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperFilledRegionAttrs;
   std::vector<CadBlockRef>      paperBlockRefs;
   std::vector<EntityAttributes> paperBlockRefAttrs;
+  /// Multileaders on the sheet, in paper inches (path + label as one object, like model space; issue #768).
+  std::vector<CadMultileader>   paperMultileaders;
+  std::vector<EntityAttributes> paperMultileaderAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -477,6 +480,15 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
     consider(L.paperPolyVerts[v], L.paperPolyVerts[v + 1]);  // polyline vertices
   for (const CadBlockRef& br : L.paperBlockRefs)
     consider(br.xf.x, br.xf.y);
+  for (const CadMultileader& ml : L.paperMultileaders) {
+    if (ml.pathXyz.size() >= 3) {
+      consider(ml.pathXyz[0], ml.pathXyz[1]);                                      // arrow tip
+      consider(ml.pathXyz[ml.pathXyz.size() - 3], ml.pathXyz[ml.pathXyz.size() - 2]);  // landing
+    }
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      if (branch.size() >= 3)
+        consider(branch[0], branch[1]);                                            // extra arrow tip
+  }
   return found;
 }
 
@@ -666,5 +678,36 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
       CadBlockWorldAabb(*blockDefs, br, &mnX, &mnY, &mxX, &mxY);
     if (boxSel(mnX, mnY, mxX, mxY))
       out.push_back({PaperEntityRef::Type::Block, bi});
+  }
+  for (int mi = 0; mi < static_cast<int>(L.paperMultileaders.size()); ++mi) {
+    const CadMultileader& ml = L.paperMultileaders[static_cast<size_t>(mi)];
+    // A multileader is its leader paths plus its label box: touching any part selects it (crossing);
+    // window needs every part inside.
+    bool any = false, allIn = true, touch = false;
+    auto chain = [&](const std::vector<float>& path) {
+      xy.clear();
+      for (size_t k = 0; k + 2 < path.size(); k += 3) {
+        xy.push_back(path[k]);
+        xy.push_back(path[k + 1]);
+      }
+      if (xy.size() < 4)
+        return;
+      any = true;
+      if (PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, /*windowMode=*/false))
+        touch = true;
+      if (!PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, /*windowMode=*/true))
+        allIn = false;
+    };
+    chain(ml.pathXyz);
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      chain(branch);
+    const CadAnnotation& a = ml.label;
+    any = true;
+    if (a.boxMinX <= bx1 && a.boxMaxX >= bx0 && a.boxMinY <= by1 && a.boxMaxY >= by0)
+      touch = true;
+    if (!(a.boxMinX >= bx0 && a.boxMaxX <= bx1 && a.boxMinY >= by0 && a.boxMaxY <= by1))
+      allIn = false;
+    if (any && (windowMode ? allIn : touch))
+      out.push_back({PaperEntityRef::Type::Leader, mi});
   }
 }

@@ -15,7 +15,6 @@
 
 #include <catch2/catch_test_macros.hpp>
 
-#include <imgui.h>
 
 #include <filesystem>
 #include <fstream>
@@ -28,28 +27,6 @@
 
 namespace {
 
-// Survey-point labels are measured through ImGui::GetFont() while loading (EnsureSurveyPointLabelMtext),
-// so this fixture — unlike the label-free DIMANGULAR/viewport-camera fixtures beside it — needs a
-// headless font atlas, same as tests/headless/HeadlessDriver.cpp's InitHeadlessImGui (ADR-031 (c')).
-struct HeadlessImGuiScope {
-  HeadlessImGuiScope() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(1920.f, 1080.f);
-    io.DeltaTime = 1.0f / 60.0f;
-    io.IniFilename = nullptr;
-    io.Fonts->AddFontDefault();
-    unsigned char* pixels = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    ImGui::NewFrame();
-  }
-  ~HeadlessImGuiScope() {
-    ImGui::EndFrame();
-    ImGui::DestroyContext();
-  }
-};
 
 std::filesystem::path FixturePath() {
   return std::filesystem::path(GOSURVEY_SAMPLES_DIR) / "legacy-breaklineids.json";
@@ -71,7 +48,6 @@ int BreaklineCountFor(AppCommandState& st, const std::string& surfaceName) {
 }  // namespace
 
 TEST_CASE("A legacy breaklineIds array migrates to the current breaklines form (REQ-075)", "[gs][migrate][req075]") {
-  const HeadlessImGuiScope imguiScope;
   const std::string legacyJson = ReadFile(FixturePath());
 
   AppCommandState st;

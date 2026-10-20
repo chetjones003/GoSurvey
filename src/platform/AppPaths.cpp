@@ -15,8 +15,7 @@
 #include <cstdlib>
 #endif
 
-// Moved verbatim from AppIcon.cpp by TASK-056 — see AppPaths.hpp for why. No behaviour change:
-// the bodies below are the originals, and AppIcon.cpp no longer defines them.
+// Shared application path helpers.
 
 std::filesystem::path AppExecutableDirectory() {
 #ifdef _WIN32

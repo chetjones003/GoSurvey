@@ -112,6 +112,7 @@ target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_
 target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
 gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
+set_target_properties(GoSurveyQt PROPERTIES OUTPUT_NAME GoSurvey)
 target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
 gosurvey_assert_no_imgui_in_link_graph(GoSurveyQt)
 gosurvey_target_warnings(GoSurveyQt)
@@ -123,6 +124,7 @@ endif()
 # Use the same installed kit for runtime deployment; no downloads or guessed DLL paths.
 get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(_qt_bin "${_qt_qmake}" DIRECTORY)
+get_filename_component(_qt_root "${_qt_bin}/.." ABSOLUTE)
 find_program(GOSURVEY_WINDEPLOYQT windeployqt HINTS "${_qt_bin}" REQUIRED NO_DEFAULT_PATH)
 add_custom_command(TARGET GoSurveyQt POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different

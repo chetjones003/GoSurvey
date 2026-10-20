@@ -56,7 +56,7 @@
 
 // REQ-387 clause 2: the thumbnail strip's model. Rows are pages; only the rows the view asks to paint are ever
 // rendered, one at a time on a worker, nearest the top of the strip first. A draft (time-budgeted) render shows
-// at once and a full one replaces it later, as in the ImGui viewer. A page that cannot be drawn keeps its blank sheet.
+// at once and a full one replaces it later. A page that cannot be drawn keeps its blank sheet.
 class PdfThumbnails final : public QAbstractListModel {
 public:
   static constexpr int kBox = 150;             ///< the longer side of a thumbnail, in pixels

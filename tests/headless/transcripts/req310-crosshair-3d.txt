@@ -3,7 +3,7 @@
 # What this transcript is FOR: the COMMAND and the SETTING - that CROSSHAIR3D can be turned on and
 # off, refuses bad input safely, and survives a .gs round trip. The projected axis geometry is
 # covered by Crosshair3dTests [req310], which pins the screen-space sign conventions; the drawing
-# itself is ImGui and has no headless path.
+# itself is a Qt view and has no headless path.
 #
 # Assertions use EXPECT CROSSHAIR3D (live state), not EXPECT LOG, for the same reason REQ-309's
 # transcript does: EXPECT LOG substring-matches the whole accumulated log, so it cannot assert a

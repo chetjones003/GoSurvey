@@ -99,7 +99,7 @@ public:
                    const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{},
                    const std::vector<PdfAttachment>* pdfAttachments = nullptr,
                    // When >= 0, the view is in paper space; GL geometry is skipped and the paper-space
-                   // sheet/viewports are drawn by the ImGui overlay (CadUi::DrawDrawingViewport).
+                   // sheet/viewports are drawn by the Qt paper-space overlay.
                    int activeSpaceIndex = -1,
                    // Solid-filled regions (ADR-011) drawn under the linework via stencil even-odd fill.
                    const std::vector<CadFilledRegion>* filledRegions = nullptr,
@@ -238,7 +238,7 @@ public:
   bool EnsurePartThumbnail(const std::string& key, const PartThumbnailInput& in, int px);
 
   /// The cached texture for \p key, or 0 when nothing is cached — which is the palette's cue to draw
-  /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to ImGui.
+  /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to the UI.
   [[nodiscard]] unsigned int PartThumbnailTexture(const std::string& key) const;
 
   /// Drop \p key's cached thumbnail, so the next request re-renders it. Called when a block
@@ -255,10 +255,8 @@ private:
   static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
                     float* outColMajor);
 
-  /// ADR-062 — one cached part thumbnail. Each owns its OWN framebuffer and colour texture, rather
-  /// than sharing one small FBO and copying out: `ImGui::Image` records a texture id and samples it
-  /// after every UI call has run, so a shared target would make every row in the palette display
-  /// whichever part was rendered last.
+  /// ADR-062 — one cached part thumbnail. Each owns its own framebuffer and colour texture so palette
+  /// rows keep their rendered part image while the viewport renderer prepares later thumbnails.
   struct PartThumbnailEntry {
     std::string key;
     unsigned int fbo = 0;
