@@ -816,7 +816,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (m_State.entityGripMoveActive && m_State.entityGripEntityIndex >= 0) {
       exclude.valid = true; exclude.type = m_State.entityGripType; exclude.index = m_State.entityGripEntityIndex;
     }
-    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
@@ -838,6 +840,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
+    if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
+        m_State.activeSpaceIndex >= 0 && !InFloatingModelSpace(m_State)) {
+      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+          false, CadViewIsPlan(m_State) ? nullptr : &ray);
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     const auto route = ViewportClickRouteFor(m_State);
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
@@ -1163,7 +1174,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
     const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)

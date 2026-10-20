@@ -5510,6 +5510,8 @@ static bool ReadDwgGeoData(Dwg_Data* dwg, DwgGeoData* out) {
     if (o->fixedtype != DWG_TYPE_GEODATA || o->tio.object == nullptr || o->tio.object->tio.GEODATA == nullptr)
       continue;
     const Dwg_Object_GEODATA* g = o->tio.object->tio.GEODATA;
+    if (g == nullptr)
+      continue;
     if (found == nullptr)
       found = g;
     if (g->host_block != nullptr && g->host_block->absolute_ref == msHandle) {

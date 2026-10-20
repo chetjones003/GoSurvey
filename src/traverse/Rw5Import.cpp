@@ -245,7 +245,7 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
                 }
             }
 
-            double ar, al;
+            double ar = 0.0, al = 0.0;
             const bool haveAr = FindFieldNum(fields, "AR", &ar);
             const bool haveAl = (!haveAr) && FindFieldNum(fields, "AL", &al);
             if (!haveAr && !haveAl) {
@@ -256,7 +256,7 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
                 return fail("expected a TR angle field (AR or AL)");
             }
 
-            double ze, va;
+            double ze = 0.0, va = 0.0;
             const bool haveZe = FindFieldNum(fields, "ZE", &ze);
             const bool haveVa = (!haveZe) && FindFieldNum(fields, "VA", &va);
             if (!haveZe && !haveVa) {
@@ -266,7 +266,7 @@ bool Rw5Import(const char* path, TraverseData& td, std::string& errorMsg) {
                 return fail("expected a TR vertical field (ZE or VA)");
             }
 
-            double sd, hd;
+            double sd = 0.0, hd = 0.0;
             const bool haveSd = FindFieldNum(fields, "SD", &sd);
             const bool haveHd = (!haveSd) && FindFieldNum(fields, "HD", &hd);
             if (!haveSd && !haveHd) return fail("expected a TR distance field (SD or HD)");
