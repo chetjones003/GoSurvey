@@ -3749,6 +3749,7 @@ private Q_SLOTS:
       auto* grip = panel->findChild<QWidget*>(name); QVERIFY(grip);
       const QPoint local = grip->rect().center(); const QPoint global = grip->mapToGlobal(local);
       QTest::mousePress(grip, Qt::LeftButton, Qt::NoModifier, local);
+      QCoreApplication::processEvents();
       QMouseEvent move(QEvent::MouseMove, local + QPoint(dx, 0), global + QPoint(dx, 0), Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
       QApplication::sendEvent(grip, &move);
       QTest::mouseRelease(grip, Qt::LeftButton);
