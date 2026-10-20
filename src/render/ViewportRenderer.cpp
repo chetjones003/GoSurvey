@@ -459,7 +459,6 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   const double py = ux;
   const double dma = static_cast<double>(ma);
   const double dmb = dma * static_cast<double>(el.ratio);
-  constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
   // A tilted ellipse (GitHub #531) leaves the XY plane, so no single elevation describes it: each
   // sample carries its own Z, exactly as the tilted-arc branch above does, and is taken through

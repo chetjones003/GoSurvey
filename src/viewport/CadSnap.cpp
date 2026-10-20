@@ -1196,7 +1196,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
     const CadArc& a = cmd.userArcs[arcIdx];
-    if (a.r <= 1e-6f || kArcSnapSeg < 1)
+    if (a.r <= 1e-6f)
       continue;
     ucs::Ucs arcPlane;
     const bool arcFlat = ArcSnapPlane(a, &arcPlane);
@@ -1257,7 +1257,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
         exclude.index == static_cast<int>(ellIdx)) continue;
     const CadEllipse& el = cmd.userEllipses[ellIdx];
     const float ma = std::hypot(el.majVx, el.majVy);
-    if (ma < 1e-8f || kEllSnapSeg < 3)
+    if (ma < 1e-8f)
       continue;
     // A TILTED ellipse (GitHub #531) is walked in the plane it actually lies in, the way a tilted arc
     // is: a snap has to offer points that are ON the drawn curve, and the XY projection of this one
@@ -2070,7 +2070,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.userArcs) {
-      if (a.r <= 1e-6f || kArcSnapSeg < 1)
+      if (a.r <= 1e-6f)
         continue;
       ucs::Ucs arcPlane;
       const bool arcFlat = ArcSnapPlane(a, &arcPlane);
@@ -2095,7 +2095,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     constexpr double kTwoPi = 6.283185307179586;
     for (const CadEllipse& el : cmd.userEllipses) {
       const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
-      if (ma < 1e-12 || kEllSnapSeg < 3)
+      if (ma < 1e-12)
         continue;
       if (!EllipseIsFlat(el))
         continue;  // tilted: not this plan-space path (GitHub #531)
@@ -2219,7 +2219,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.userArcs) {
-      if (a.r <= 1e-6f || kArcSnapSeg < 1)
+      if (a.r <= 1e-6f)
         continue;
       ucs::Ucs arcPlane;
       const bool arcFlat = ArcSnapPlane(a, &arcPlane);
@@ -2243,7 +2243,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     constexpr float kTwoPi = 6.28318530718f;
     for (const CadEllipse& el : cmd.userEllipses) {
       const float ma = std::hypot(el.majVx, el.majVy);
-      if (ma < 1e-8f || kEllSnapSeg < 3)
+      if (ma < 1e-8f)
         continue;
       if (!EllipseIsFlat(el))
         continue;  // tilted: not this plan-space path (GitHub #531)

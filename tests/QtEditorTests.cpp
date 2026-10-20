@@ -4752,7 +4752,7 @@ private Q_SLOTS:
     camera.WorldToScreen(0, 5, 0, static_cast<float>(viewport->width()), static_cast<float>(viewport->height()), &dx, &dy);
     const QPointF start(sx, sy), destination(dx, dy);
     auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
-      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QMouseEvent event(type, local, local, button, buttons, Qt::NoModifier);
       QApplication::sendEvent(viewport, &event);
     };
     sendMouse(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
@@ -4856,7 +4856,7 @@ private Q_SLOTS:
       return QPointF(x, y);
     };
     auto sendMouse = [viewport](QEvent::Type type, QPointF local, Qt::MouseButton button, Qt::MouseButtons buttons) {
-      QMouseEvent event(type, local, button, buttons, Qt::NoModifier);
+      QMouseEvent event(type, local, local, button, buttons, Qt::NoModifier);
       QApplication::sendEvent(viewport, &event);
     };
     const QPointF from = screenPoint(12, 4), to = screenPoint(-2, -4);
