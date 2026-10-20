@@ -101,6 +101,9 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Test (CTest)
+        run: ctest --preset ninja-release
+
       - name: sccache stats
         if: always()
         shell: pwsh
