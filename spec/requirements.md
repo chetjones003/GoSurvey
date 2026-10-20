@@ -12934,12 +12934,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
     REQ-101). A DXF `SPLINE` produced by another CAD tool imports as a spline.
   - TRIM/EXTEND/OFFSET/FILLET/JOIN/EXPLODE on a spline log a refusal naming the command and
     leave the drawing unchanged.
-  - The Qt and beta (ImGui) ribbon buttons are enabled and run `SPLINE`; the "not implemented
-    yet" tooltip is gone.
-- Owner-layer: Commands/Domain/IO/UI
+  - The Qt ribbon button is enabled and runs `SPLINE`; the "not implemented yet" tooltip is gone.
+- Frontend: **Qt only.** The command, entity and file logic lives in the shared Commands / Domain /
+  IO layers, but the ribbon button, prompts, preview and grips are built in the Qt editor
+  (`src/qt/`). The ImGui editor is not changed.
+- Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803).
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
 
 
 ### REQ-441 — Revision Cloud command (GitHub issue #803)
@@ -12971,12 +12973,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Reverse direction flips the bulge side; an Arc length at or below zero is refused with a
     logged reason and creates nothing.
   - The result round-trips through DXF and DWG as a closed polyline with bulges.
-  - Both ribbon buttons are enabled and run `REVCLOUD`; the "not implemented yet" tooltips are gone.
+  - Both Qt ribbon buttons are enabled and run `REVCLOUD`; the "not implemented yet" tooltips are
+    gone.
   - Esc cancels with nothing added.
-- Owner-layer: Commands/UI
+- Frontend: **Qt only.** The command logic lives in the shared Commands layer, but the ribbon
+  buttons, prompts and preview are built in the Qt editor (`src/qt/`). The ImGui editor is not
+  changed.
+- Owner-layer: Commands/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803).
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
 
 
 ### REQ-442 — Wipeout command (GitHub issue #803)
@@ -13010,12 +13016,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - A closed arc-containing polyline is refused with a log message and creates nothing.
   - Save to DXF and DWG, reopen: the wipeout is a wipeout with the same corners (within REQ-101),
     and AutoCAD opens the DWG without an error.
-  - Both ribbon buttons are enabled and run `WIPEOUT`; the "not implemented yet" tooltips are gone.
+  - Both Qt ribbon buttons are enabled and run `WIPEOUT`; the "not implemented yet" tooltips are
+    gone.
   - Esc cancels with nothing added; one UNDO removes the wipeout.
-- Owner-layer: Commands/Domain/IO/Render/UI
+- Frontend: **Qt only.** The command, entity, file and PDF-plot logic lives in the shared layers,
+  but the ribbon buttons, prompts, preview, masking in the viewport and grips are built in the Qt
+  editor (`src/qt/`). The ImGui editor is not changed.
+- Owner-layer: Commands/Domain/IO/Render/Qt UI
 - Decision: D-2026-10-20-a.
 - Status: proposed
-- Revisions: 2026-10-20 — initial proposal (GitHub #803).
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user.
 
 
 ### REQ-100 — Frame budget
