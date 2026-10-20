@@ -845,6 +845,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/NumFormatTests.cpp
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
+    tests/PaperLeaderTests.cpp
     tests/DimViewportTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
