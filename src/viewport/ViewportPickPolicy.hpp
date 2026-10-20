@@ -447,7 +447,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
             cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitConnectorTarget)
                ? R::InsertBlockPick
-               : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
+               : R::Ignore;  // dialog / attribute prompt owns the interaction
   }
 
   // --- Deliberately click-less in model space. ---

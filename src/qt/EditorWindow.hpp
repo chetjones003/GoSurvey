@@ -139,6 +139,7 @@ private:
   void ShowRightClickCustomization();
   void ShowSelectionList();
   void ShowBlockAuthoringPalette();
+  void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();
   void ShowSignInGate();

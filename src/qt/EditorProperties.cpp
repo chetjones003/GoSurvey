@@ -2,7 +2,7 @@
 //
 // What each field means, what is refused and what one undo step covers live in the shared
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
-// the ImGui panel also uses. This file is only the Qt widgets around them.
+// This file contains the Qt widgets around those shared services.
 #include "EditorWindow.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>

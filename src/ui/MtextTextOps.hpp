@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// Text operations behind the MTEXT editor's Options menu (REQ-051). Pure — no ImGui, no fonts — so the
+// Text operations behind the MTEXT editor's Options menu (REQ-051). Pure — no UI or font dependency — so the
 // part that matters can be tested: **every one of these rewrites span text only and never the bytes of a
 // `[[…]]` tag**, which is what keeps the wire format well-formed through a case change, a find-and-replace,
 // or an autocorrect.

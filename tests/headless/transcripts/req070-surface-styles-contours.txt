@@ -7,7 +7,7 @@
 # statement about the command layer, the display cache and the undo stack acting together. That is
 # what this file is for.
 #
-# **On SURFSTYLE rather than the dialog.** The Surface Style editor is an ImGui window this driver
+# **On SURFSTYLE rather than the dialog.** The Surface Style editor is a Qt window this driver
 # cannot reach, the same limitation req068-surface-selection works around. SURFSTYLE is the command
 # form of the same operations and calls the same helpers, so what is asserted here is the real edit
 # path and not a test-only shortcut.

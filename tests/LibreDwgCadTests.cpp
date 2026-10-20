@@ -24,7 +24,6 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <imgui.h>
 
 #include <algorithm>
 #include <chrono>
@@ -147,27 +146,6 @@ bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
   return false;
 }
 
-// Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
-// (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
-struct HeadlessImGuiScope {
-  HeadlessImGuiScope() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(1920.f, 1080.f);
-    io.DeltaTime = 1.0f / 60.0f;
-    io.IniFilename = nullptr;
-    io.Fonts->AddFontDefault();
-    unsigned char* pixels = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    ImGui::NewFrame();
-  }
-  ~HeadlessImGuiScope() {
-    ImGui::EndFrame();
-    ImGui::DestroyContext();
-  }
-};
 
 }  // namespace
 
@@ -363,7 +341,6 @@ TEST_CASE("ExportDwgFile writes a built TIN surface as POLYLINE_PFACE (issue #61
 
 TEST_CASE("ExportDwgFile survives repeated save with two TIN surfaces (issue #663)",
           "[dwg][libredwg][issue663]") {
-  HeadlessImGuiScope imgui;
   ScratchDir dir("dwg-two-tin-stress");
   const auto p = (dir.path / "two.dwg").string();
   const std::filesystem::path demo =
@@ -1945,7 +1922,6 @@ TEST_CASE("DXF survey point XDATA round-trips a state-plane coordinate within RE
 // ~0.008-0.025 ft, outside +/-0.002 ft) — proven by reverting the field to `float` locally and
 // re-running, then restored.
 TEST_CASE("CSV import stores a state-plane survey point within REQ-101 tolerance", "[csv][survey][req101]") {
-  HeadlessImGuiScope imguiScope;
   ScratchDir dir("csv-survey-req101");
   const auto p = (dir.path / "points.csv").string();
   {
@@ -3699,8 +3675,8 @@ TEST_CASE("DWG export writes an INSERT with five attributes without corruption (
     if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
       continue;
     const Dwg_Entity_ATTRIB* a = o->tio.entity->tio.ATTRIB;
-    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, dwg->header.version >= R_2007),
-                       libredwgcad_detail::DecodeDwgString(a->text_value, dwg->header.version >= R_2007));
+    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, rd.header.version >= R_2007),
+                       libredwgcad_detail::DecodeDwgString(a->text_value, rd.header.version >= R_2007));
   }
   REQUIRE(attrs.size() == 5);
   for (int i = 0; i < 5; ++i) {

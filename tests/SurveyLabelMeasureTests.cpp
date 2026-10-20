@@ -1,5 +1,5 @@
 // Issue #917: survey-point label boxes are measured by a callback the frontend installs on
-// AppCommandState (ImGui font, Qt text layout), so the shared survey code needs no ImGui. This pins
+// AppCommandState (Qt text layout), so the shared survey code stays UI-independent. This pins
 // the two sides of that seam: the callback is what sizes the box, and with no callback the label
 // still gets a sane no-font estimate instead of a crash or a zero-size pick target.
 

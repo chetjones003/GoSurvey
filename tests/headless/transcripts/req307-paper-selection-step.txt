@@ -9,7 +9,7 @@
 # What IS exercised here, through the real command dispatch (`CMD DELETE`/`CMD MOVE`/`CMD COPY` —
 # the same `primary == "delete"` etc. text dispatch the GUI's typed command line uses) and the real
 # blank-Enter dispatch (`CMD` — ProcessCommandLineSubmit's own blank-line branch, not the raw
-# viewport ImGui::IsKeyPressed(Enter) check CadUi.cpp also has for mouse-only entry):
+# Qt viewport key handling used for mouse-only entry):
 #
 #   1. Starting DELETE/MOVE/COPY in paper space with nothing selected no longer answers the OLD
 #      refusal ("select paper object(s) or viewport(s) first." / "select object(s) first.") — it

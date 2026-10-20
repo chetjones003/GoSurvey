@@ -3,7 +3,7 @@
 /// Sub-object picking for B-rep solids — which FACE, EDGE or VERTEX is the cursor over?
 /// (REQ-318 / ADR-049, GitHub issue #148 — Phase 5 of #120.)
 ///
-/// Pure and dependency-free, for the reason `brep.hpp` and `meshgeom.*` are: no GL, no ImGui, no
+/// Pure and dependency-free, for the reason `brep.hpp` and `meshgeom.*` are: no GL, no UI, no
 /// `AppCommandState`, so the pick's precedence rules and its refusals are testable without a window
 /// (the ADR-002 layering pressure, and #120's "the geometry engine should be usable without a
 /// graphics context").

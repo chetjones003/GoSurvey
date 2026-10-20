@@ -2,7 +2,7 @@
 
 // REQ-403 (GitHub issue #834) — save/reload a Traverse Editor session to its own `.gstrav` file.
 // Pure JSON in/out: a path, a TraverseData, and the a-priori LSA weights. No filesystem dialog, no
-// AppCommandState, no ImGui (ADR-002 precedent) — the UI layer owns the file picker and project
+// AppCommandState (ADR-002 precedent) — the UI layer owns the file picker and project
 // tracking; this module only knows how to read and write the format.
 //
 // Computed/derived fields (per-leg computed coordinates, closure results, the LSA adjustment) are

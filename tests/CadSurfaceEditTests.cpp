@@ -1,5 +1,5 @@
 // Surface and surface-style edit services (issue #893; REQ-068, REQ-069, REQ-070, REQ-072, REQ-075,
-// REQ-361). Both the ImGui and the Qt surface dialogs call these, so the rules are asserted once here.
+// REQ-361). The Qt surface dialogs call these, so the rules are asserted once here.
 #include "CadCommands.hpp"
 #include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
