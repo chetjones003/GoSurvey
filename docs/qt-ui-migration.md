@@ -141,8 +141,15 @@ and the ImGui tests. `gosurvey_domain` no longer links ImGui core, and CMake fai
 the configure step if it ever does again. Survey-label boxes are measured through
 the `AppCommandState::measureAnnotationText` seam (ImGui font in the ImGui app and
 headless driver, `MeasureQtText` in Qt). The Qt target no longer compiles
-AppIcon.cpp or links GLFW; icons and windows are managed by Qt. Removing ImGui from
-the Qt link graph itself and verifying deployment remains issue #918.
+AppIcon.cpp or links GLFW; icons and windows are managed by Qt.
+
+Issue #918 guards the whole Qt link graph: `gosurvey_assert_no_imgui_in_link_graph`
+(`cmake/GoSurveyQt.cmake`) fails the configure step if `GoSurveyQt` or `GoSurveyQtTests`
+reaches ImGui, GLFW, `gosurvey_imgui_text` or the ImGui executable through any library.
+The ctest `qt.deployment` check (`tools/verify-qt-deployment.ps1`) confirms the deployed
+Qt set has no ImGui/GLFW file or library code and that a copy holding only that set starts
+and passes `GoSurveyQt.exe --smoke-test` on the hidden desktop. Both frontends still build
+side by side into `build/`; the ImGui executable is not part of the Qt set.
 
 ## Latest verified iteration
 

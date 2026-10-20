@@ -11,6 +11,7 @@
 #include <QButtonGroup>
 #include <QAbstractSpinBox>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
@@ -2404,6 +2405,12 @@ void EditorWindow::ShowAdjustment() {
 }
 
 bool EditorWindow::RunSmokeChecks(QString& error) {
+  // The window opens on the Start tab, whose viewport is never shown, so its renderer cannot start.
+  // Work in the first drawing, and give the renderer the event loop it needs to initialize.
+  SwitchDrawing(1);
+  QElapsedTimer renderWait; renderWait.start();
+  while (!m_Viewport->IsRendererReady() && renderWait.elapsed() < 5000)
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
   if (!m_Viewport->IsRendererReady()) { error = "OpenGL renderer failed to initialize"; return false; }
   Submit("LINE"); Submit("0,0"); Submit("10,0");
   CancelActiveCommand(m_State, m_Log);
@@ -2412,7 +2419,7 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
   if (!m_State.userLinesFlat.empty()) { error = "UNDO did not remove segment"; return false; }
   Submit("REDO");
   if (m_State.userLinesFlat.size() != 6) { error = "REDO did not restore segment"; return false; }
-  NewDrawing();
+  CreateDrawingFromTemplate();  // NewDrawing() opens the template chooser, a modal dialog
   if (!m_State.userLinesFlat.empty()) { error = "New document inherited geometry"; return false; }
   SwitchDrawing(1);
   if (m_State.userLinesFlat.size() != 6) { error = "Document switch lost geometry"; return false; }
