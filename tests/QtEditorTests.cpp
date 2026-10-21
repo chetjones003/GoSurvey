@@ -1729,7 +1729,7 @@ private Q_SLOTS:
     QVERIFY(heading);
     QCOMPARE(heading->text(), QString("Account"));
     QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
-    QVERIFY(dialog->findChildren<QLineEdit *>().isEmpty());
+    QVERIFY(dialog->findChild<QWidget *>("settingsPageAccount")->findChildren<QLineEdit *>().isEmpty());
     auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
     auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
     QVERIFY(action);
@@ -2945,7 +2945,7 @@ private Q_SLOTS:
     if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
   }
 
-  void settingsUpdatesPersistRevertOnFailureAndClearSkip() {
+  void settingsUpdatesAreStagedUntilApply() {
     IsolatedUserData userData;
     EditorWindow window;
     window.State().updatePrefs.skippedVersion = "99.0.0";
@@ -2961,37 +2961,135 @@ private Q_SLOTS:
     auto* beta = dialog->findChild<QCheckBox*>("updateUseBeta");
     auto* skipped = dialog->findChild<QLabel*>("updateSkippedLabel");
     auto* clear = dialog->findChild<QPushButton*>("updateClearSkip");
-    QVERIFY(check && beta && skipped && clear);
+    auto* apply = dialog->findChild<QPushButton*>("settingsApply");
+    QVERIFY(check && beta && skipped && clear && apply);
     QVERIFY(dialog->findChild<QLabel*>("updateVersionLabel")->text().startsWith("Version "));
     QVERIFY(check->isChecked());
     QVERIFY(!beta->isChecked());
     QCOMPARE(skipped->text(), QString("Skipping 99.0.0"));
 
+    // Edits are staged: nothing reaches the preferences until Apply.
     beta->setChecked(true);
+    check->setChecked(false);
+    clear->click();
+    QVERIFY(!beta->isEnabled());   // the channel is moot while checking is off
+    QVERIFY(window.State().updatePrefs.enabled);
+    QVERIFY(!window.State().updatePrefs.useBetaChannel);
+    QCOMPARE(window.State().updatePrefs.skippedVersion, std::string("99.0.0"));
+    AppCommandState untouched;
+    LoadUserStartupPrefSettings(untouched);
+    QVERIFY(untouched.updatePrefs.enabled);
+
+    // Apply saves and keeps the window open.
+    apply->click();
+    QVERIFY(window.findChild<QDialog*>("applicationSettings"));
+    QVERIFY(!window.State().updatePrefs.enabled);
+    QVERIFY(window.State().updatePrefs.useBetaChannel);
+    QVERIFY(window.State().updatePrefs.skippedVersion.empty());
     AppCommandState reloaded;
     LoadUserStartupPrefSettings(reloaded);
+    QVERIFY(!reloaded.updatePrefs.enabled);
     QVERIFY(reloaded.updatePrefs.useBetaChannel);
-    check->setChecked(false);
-    QVERIFY(!window.State().updatePrefs.enabled);
-    QVERIFY(!beta->isEnabled());   // the channel is moot while checking is off
-    AppCommandState reloadedOff;
-    LoadUserStartupPrefSettings(reloadedOff);
-    QVERIFY(!reloadedOff.updatePrefs.enabled);
-    clear->click();
-    QVERIFY(window.State().updatePrefs.skippedVersion.empty());
-    QVERIFY(!clear->isVisibleTo(dialog));
-    AppCommandState reloadedClear;
-    LoadUserStartupPrefSettings(reloadedClear);
-    QVERIFY(reloadedClear.updatePrefs.skippedVersion.empty());
+    QVERIFY(reloaded.updatePrefs.skippedVersion.empty());
 
-    // A preferences file that cannot be written leaves the control showing what is really stored.
+    // A preferences file that cannot be written is reported, and the window stays open.
     QTemporaryFile blocker;
     QVERIFY(blocker.open());
     IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so the folder cannot exist
     check->setChecked(true);
-    QVERIFY(!window.State().updatePrefs.enabled);
-    QVERIFY(!check->isChecked());
-    QVERIFY(!dialog->findChild<QLabel*>("updateSettingsError")->text().isEmpty());
+    dialog->findChild<QPushButton*>("settingsOk")->click();
+    QVERIFY(!dialog->findChild<QLabel*>("settingsSaveStatus")->text().isEmpty());
+    QVERIFY(window.findChild<QDialog*>("applicationSettings"));
+  }
+
+  // REQ-449 / issue #1032.
+  void issue1032SettingsWindowStagesAndPersists() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    window.ShowSettings();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    auto* categories = dialog->findChild<QListWidget*>("settingsCategories");
+    QVERIFY(categories);
+    QStringList names;
+    for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
+    QCOMPARE(names, (QStringList{"Account", "Updates and Privacy", "Display", "Drafting", "Survey Points"}));
+    auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
+    auto* undo = dialog->findChild<QSpinBox*>("settingsUndoHistory");
+    auto* angle = dialog->findChild<QComboBox*>("settingsAngleType");
+    auto* trim = dialog->findChild<QComboBox*>("settingsTrimState");
+    auto* fillet = dialog->findChild<QDoubleSpinBox*>("settingsFilletRadius");
+    QVERIFY(wheel && undo && angle && trim && fillet);
+    QVERIFY(dialog->findChild<QSpinBox*>("settingsArcSmoothness"));
+    QVERIFY(dialog->findChild<QSpinBox*>("settingsLinearPrecision"));
+    QVERIFY(dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture"));
+    QVERIFY(dialog->findChild<QPushButton*>("settingsPolarTracking"));
+    QVERIFY(dialog->findChild<QPushButton*>("surveyPointDisplaySettings"));
+    // Screenshot evidence for the visualizer (written under build/artifacts, never committed).
+    {
+      const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+      auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
+      ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
+      window.State().authSignedIn = false;
+      dialog->resize(780, 600);
+      for (int i = 0; i < categories->count(); ++i) {
+        categories->setCurrentRow(i);
+        QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(artifacts + QString("qt-1032-settings-%1.png").arg(i)));
+      }
+      QVERIFY(stack);
+      categories->setCurrentRow(0);
+    }
+    const float wheelBefore = window.State().displayWheelZoomFactor;
+    wheel->setValue(1.5);
+    undo->setValue(12);
+    angle->setCurrentIndex(2);
+    trim->setCurrentIndex(1);
+    fillet->setValue(2.25);
+
+    // Staged: nothing changed yet.
+    QCOMPARE(window.State().displayWheelZoomFactor, wheelBefore);
+    // Apply persists and keeps the window open.
+    dialog->findChild<QPushButton*>("settingsApply")->click();
+    QVERIFY(window.findChild<QDialog*>("applicationSettings"));
+    QCOMPARE(window.State().displayWheelZoomFactor, 1.5f);
+    AppCommandState reloaded;
+    LoadUserStartupPrefSettings(reloaded);
+    QCOMPARE(reloaded.displayWheelZoomFactor, 1.5f);
+    QCOMPARE(reloaded.undoHistoryMaxSize, 12);
+    QCOMPARE(reloaded.angleDisplayType, 2);
+    QCOMPARE(reloaded.trimState, 1);
+    QCOMPARE(reloaded.filletRadius, 2.25f);
+
+    // Cancel discards unapplied edits.
+    wheel->setValue(2.0);
+    dialog->findChild<QPushButton*>("settingsCancel")->click();
+    QCOMPARE(window.State().displayWheelZoomFactor, 1.5f);
+    AppCommandState afterCancel;
+    LoadUserStartupPrefSettings(afterCancel);
+    QCOMPARE(afterCancel.displayWheelZoomFactor, 1.5f);
+
+    // OPTIONS opens the same window, and OK saves and closes.
+    window.ShowSettings();
+    dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor")->setValue(1.25);
+    dialog->findChild<QPushButton*>("settingsOk")->click();
+    QCOMPARE(window.State().displayWheelZoomFactor, 1.25f);
+    AppCommandState afterOk;
+    LoadUserStartupPrefSettings(afterOk);
+    QCOMPARE(afterOk.displayWheelZoomFactor, 1.25f);
+  }
+
+  void issue1032WheelZoomUsesPreference() {
+    EditorWindow window;
+    window.State().displayWheelZoomFactor = 2.0f;
+    window.State().viewportZoom = 1.0f;
+    window.m_Viewport->show();
+    QWheelEvent wheel(QPointF(40, 40), window.m_Viewport->mapToGlobal(QPointF(40, 40)), {}, QPoint(0, 120), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(window.m_Viewport, &wheel);
+    QCOMPARE(window.State().viewportZoom, 2.0f);
   }
 
   void qtStartScreenHasRecentDrawingSurfaceAndVersionGatedWhatsNew() {

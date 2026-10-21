@@ -45,6 +45,9 @@
 #include <climits>
 #include <array>
 #include <cstdio>
+#include <functional>
+#include <memory>
+#include <vector>
 
 void EditorWindow::ShowSignInGate() {
   if (findChild<QDialog *>("signInGate"))
@@ -174,10 +177,39 @@ void EditorWindow::ShowSettings() {
   dialog->setObjectName("applicationSettings");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Settings");
-  dialog->resize(560, 500);
-  auto *layout = new QVBoxLayout(dialog);
-  layout->setContentsMargins(20, 18, 20, 16);
-  layout->setSpacing(12);
+  dialog->resize(760, 560);
+  // REQ-449: a category sidebar over a stack of pages. Controls stage their edit as a "commit"
+  // closure; Apply/OK run them all, Cancel runs none.
+  auto *outer = new QVBoxLayout(dialog);
+  auto *body = new QHBoxLayout();
+  outer->addLayout(body, 1);
+  auto *sidebar = new QListWidget(dialog);
+  sidebar->setObjectName("settingsCategories");
+  sidebar->setFixedWidth(170);
+  sidebar->setFrameShape(QFrame::NoFrame);
+  sidebar->setFocusPolicy(Qt::NoFocus);
+  sidebar->setSpacing(2);
+  sidebar->setStyleSheet(
+      "QListWidget { background:palette(button); border:1px solid palette(mid); border-radius:10px; padding:8px; outline:0; }"
+      "QListWidget::item { padding:9px 12px; border-radius:7px; }"
+      "QListWidget::item:hover:!selected { background:palette(midlight); }"
+      "QListWidget::item:selected { background:palette(highlight); color:palette(highlighted-text); }");
+  body->addWidget(sidebar);
+  auto *pages = new QStackedWidget(dialog);
+  pages->setObjectName("settingsPages");
+  body->addWidget(pages, 1);
+  auto commits = std::make_shared<std::vector<std::function<void()>>>();
+  auto newPage = [&](const char *title, const char *name) {
+    auto *page = new QWidget(pages);
+    page->setObjectName(name);
+    auto *pageLayout = new QVBoxLayout(page);
+    pageLayout->setContentsMargins(20, 18, 20, 16);
+    pageLayout->setSpacing(12);
+    pages->addWidget(page);
+    sidebar->addItem(title);
+    return pageLayout;
+  };
+  QVBoxLayout *layout = newPage("Account", "settingsPageAccount");
   auto *heading = new QLabel("Account", dialog);
   heading->setObjectName("accountSettingsHeading");
   QFont headingFont = heading->font();
@@ -279,19 +311,8 @@ void EditorWindow::ShowSettings() {
   // REQ-077: the update check is switchable, and switching it off means no network request is
   // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
   // problem has somewhere to read it off.
-  // REQ-084: the right-click preferences live in their own dialog, reached from here as in 0.7.4.
-  auto *rightClickRow = new QHBoxLayout();
-  auto *rightClickButton = new QPushButton("Right-click Customization...", dialog);
-  rightClickButton->setObjectName("settingsRightClickCustomization");
-  connect(rightClickButton, &QPushButton::clicked, this, [this] { ShowRightClickCustomization(); });
-  rightClickRow->addWidget(rightClickButton);
-  rightClickRow->addStretch();
-  layout->addLayout(rightClickRow);
-
   layout->addStretch();
-  auto *divider = new QFrame(dialog);
-  divider->setFrameShape(QFrame::HLine);
-  layout->addWidget(divider);
+  layout = newPage("Updates and Privacy", "settingsPageUpdates");
   auto *updatesHeading = new QLabel("Updates", dialog);
   updatesHeading->setObjectName("updatesSettingsHeading");
   updatesHeading->setFont(headingFont);
@@ -316,72 +337,186 @@ void EditorWindow::ShowSettings() {
   skippedRow->addWidget(clearSkip);
   skippedRow->addStretch();
   layout->addLayout(skippedRow);
-  auto *updatesError = new QLabel(dialog);
-  updatesError->setObjectName("updateSettingsError");
-  updatesError->setWordWrap(true);
-  updatesError->setStyleSheet("color:#c54646;");
-  layout->addWidget(updatesError);
-  auto syncUpdates = [this, checkEnabled, useBeta, skippedLabel, clearSkip] {
-    const QSignalBlocker blockCheck(checkEnabled);
-    const QSignalBlocker blockBeta(useBeta);
-    checkEnabled->setChecked(m_State.updatePrefs.enabled);
-    useBeta->setChecked(m_State.updatePrefs.useBetaChannel);
-    useBeta->setEnabled(m_State.updatePrefs.enabled);
-    const bool skipping = !m_State.updatePrefs.skippedVersion.empty();
-    skippedLabel->setText("Skipping " + QString::fromUtf8(m_State.updatePrefs.skippedVersion.c_str()));
+  // REQ-449: staged like every other control. Only Apply/OK write the preferences.
+  auto stagedSkip = std::make_shared<std::string>(m_State.updatePrefs.skippedVersion);
+  checkEnabled->setChecked(m_State.updatePrefs.enabled);
+  useBeta->setChecked(m_State.updatePrefs.useBetaChannel);
+  auto syncUpdates = [checkEnabled, useBeta, skippedLabel, clearSkip, stagedSkip] {
+    useBeta->setEnabled(checkEnabled->isChecked());
+    const bool skipping = !stagedSkip->empty();
+    skippedLabel->setText("Skipping " + QString::fromUtf8(stagedSkip->c_str()));
     skippedLabel->setVisible(skipping);
     clearSkip->setVisible(skipping);
   };
-  // Saved immediately, like the Account actions. A failed write puts the control back to what is
-  // actually stored, so the dialog never shows a setting that will not survive a restart.
-  auto applyUpdatePrefs = [this, updatesError, syncUpdates](const update::UpdatePrefs &next) {
-    const update::UpdatePrefs previous = m_State.updatePrefs;
-    m_State.updatePrefs = next;
-    if (SaveUserStartupPrefs(m_State)) {
-      updatesError->clear();
-      m_Update->prefs.skippedVersion = next.skippedVersion;
-    } else {
-      m_State.updatePrefs = previous;
-      updatesError->setText("Your update settings could not be saved.");
-    }
-    syncUpdates();
-  };
-  connect(checkEnabled, &QCheckBox::toggled, dialog, [this, applyUpdatePrefs](bool on) {
-    auto next = m_State.updatePrefs;
-    next.enabled = on;
-    applyUpdatePrefs(next);
-  });
-  connect(useBeta, &QCheckBox::toggled, dialog, [this, applyUpdatePrefs](bool on) {
-    auto next = m_State.updatePrefs;
-    next.useBetaChannel = on;
-    applyUpdatePrefs(next);
-  });
-  connect(clearSkip, &QPushButton::clicked, dialog, [this, applyUpdatePrefs] {
-    auto next = m_State.updatePrefs;
-    next.skippedVersion.clear();
-    applyUpdatePrefs(next);
-  });
+  connect(checkEnabled, &QCheckBox::toggled, dialog, [syncUpdates](bool) { syncUpdates(); });
+  connect(clearSkip, &QPushButton::clicked, dialog, [stagedSkip, syncUpdates] { stagedSkip->clear(); syncUpdates(); });
   syncUpdates();
-  // A skip chosen in the update dialog while Settings is open must show up here too.
+  commits->push_back([this, checkEnabled, useBeta, stagedSkip] {
+    m_State.updatePrefs.enabled = checkEnabled->isChecked();
+    m_State.updatePrefs.useBetaChannel = useBeta->isChecked();
+    m_State.updatePrefs.skippedVersion = *stagedSkip;
+    m_Update->prefs.skippedVersion = *stagedSkip;
+  });
+  // A skip chosen in the update dialog while Settings is open must show up here too, unless the
+  // user is mid-edit on it here.
   auto *updatesSync = new QTimer(dialog);
   updatesSync->setInterval(250);
-  connect(updatesSync, &QTimer::timeout, dialog, syncUpdates);
+  auto lastSeenSkip = std::make_shared<std::string>(m_State.updatePrefs.skippedVersion);
+  connect(updatesSync, &QTimer::timeout, dialog, [this, stagedSkip, lastSeenSkip, syncUpdates] {
+    if (m_State.updatePrefs.skippedVersion != *lastSeenSkip) {
+      *lastSeenSkip = m_State.updatePrefs.skippedVersion;
+      *stagedSkip = *lastSeenSkip;
+      syncUpdates();
+    }
+  });
   updatesSync->start();
 
   // Next to Updates: the other thing here that talks to the network.
-  auto *usageDivider = new QFrame(dialog);
-  usageDivider->setFrameShape(QFrame::HLine);
-  layout->addWidget(usageDivider);
   layout->addWidget(usageBox);
+  layout->addStretch();
 
-  auto* surveyDisplay = new QPushButton("Survey point display…", dialog);
+  // ---- Display page (REQ-449) ------------------------------------------------------------
+  layout = newPage("Display", "settingsPageDisplay");
+  auto addHeading = [&](QVBoxLayout *into, const QString &text, const char *name) {
+    auto *h = new QLabel(text, dialog);
+    h->setObjectName(name);
+    h->setFont(headingFont);
+    into->addWidget(h);
+  };
+  addHeading(layout, "Display", "displaySettingsHeading");
+  auto *displayForm = new QFormLayout();
+  layout->addLayout(displayForm);
+  // Each helper builds a control from the current preference and registers the closure that writes
+  // it back on Apply/OK. Values are range-checked by the control, mirroring the load-time clamps.
+  auto intField = [&](QFormLayout *form, const char *name, const QString &title, int *value, int lo, int hi, const QString &suffix = {}) {
+    auto *field = new QSpinBox(dialog);
+    field->setObjectName(name); field->setRange(lo, hi); field->setValue(*value); field->setSuffix(suffix);
+    field->setKeyboardTracking(false);
+    form->addRow(title, field);
+    commits->push_back([field, value] { *value = field->value(); });
+    return field;
+  };
+  auto floatField = [&](QFormLayout *form, const char *name, const QString &title, float *value, double lo, double hi, double step, int decimals, const QString &suffix = {}) {
+    auto *field = new QDoubleSpinBox(dialog);
+    field->setObjectName(name); field->setRange(lo, hi); field->setDecimals(decimals);
+    field->setSingleStep(step); field->setSuffix(suffix); field->setValue(static_cast<double>(*value));
+    field->setKeyboardTracking(false);
+    form->addRow(title, field);
+    commits->push_back([field, value] { *value = static_cast<float>(field->value()); });
+    return field;
+  };
+  intField(displayForm, "settingsArcSmoothness", "Arc and circle smoothness", &m_State.displayArcCircleSmoothness, 8, 20000, " segments");
+  floatField(displayForm, "settingsWheelZoomFactor", "Mouse wheel zoom step", &m_State.displayWheelZoomFactor, 1.01, 3.0, 0.01, 2, " x");
+  intField(displayForm, "settingsLinearPrecision", "Linear precision", &m_State.displayLinearPrecision, 0, 12, " decimals");
+  auto *angleType = new QComboBox(dialog);
+  angleType->setObjectName("settingsAngleType");
+  angleType->addItems({"Decimal degrees", "Degrees / minutes / seconds", "Surveyor units"});
+  angleType->setCurrentIndex(m_State.angleDisplayType);
+  displayForm->addRow("Angle format", angleType);
+  commits->push_back([this, angleType] { m_State.angleDisplayType = angleType->currentIndex(); });
+  intField(displayForm, "settingsAnglePrecision", "Angle precision", &m_State.angleDisplayPrecision, 0, 6, " decimals");
+  auto *clockwise = new QCheckBox("Angles run clockwise", dialog);
+  clockwise->setObjectName("settingsAngleClockwise");
+  clockwise->setChecked(m_State.angleDisplayClockwise);
+  displayForm->addRow(clockwise);
+  commits->push_back([this, clockwise] { m_State.angleDisplayClockwise = clockwise->isChecked(); });
+  auto *angleBase = new QDoubleSpinBox(dialog);
+  angleBase->setObjectName("settingsAngleBase");
+  angleBase->setRange(0.0, 360.0); angleBase->setDecimals(4); angleBase->setSuffix(" deg");
+  angleBase->setValue(m_State.angleDisplayBaseDeg);
+  displayForm->addRow("Zero direction (clockwise from north)", angleBase);
+  commits->push_back([this, angleBase] { m_State.angleDisplayBaseDeg = angleBase->value(); });
+  addHeading(layout, "Text and dimension sizes on screen", "displaySizesHeading");
+  auto *sizeForm = new QFormLayout();
+  layout->addLayout(sizeForm);
+  floatField(sizeForm, "settingsTextMinPx", "Text, smallest", &m_State.viewportTextMinPx, 4, 48, 1, 0, " px");
+  floatField(sizeForm, "settingsTextMaxPx", "Text, largest", &m_State.viewportTextMaxPx, 24, 320, 1, 0, " px");
+  floatField(sizeForm, "settingsMtextMinPx", "MTEXT, smallest", &m_State.viewportMtextMinPx, 4, 48, 1, 0, " px");
+  floatField(sizeForm, "settingsMtextMaxPx", "MTEXT, largest", &m_State.viewportMtextMaxPx, 24, 320, 1, 0, " px");
+  floatField(sizeForm, "settingsDimArrowScale", "Dimension arrow size", &m_State.viewportDimArrowScale, 0.2, 4.0, 0.1, 2, " x");
+  layout->addStretch();
+
+  // ---- Drafting page (REQ-449) ---------------------------------------------------------
+  layout = newPage("Drafting", "settingsPageDrafting");
+  addHeading(layout, "Drafting", "draftingSettingsHeading");
+  auto *draftForm = new QFormLayout();
+  layout->addLayout(draftForm);
+  floatField(draftForm, "settingsSnapAperture", "Object snap aperture", &m_State.objectSnapAperturePx, 4, 64, 1, 0, " px");
+  intField(draftForm, "settingsIsolines", "Solid ISOLINES", &m_State.viewportSolidIsolines, 0, kSolidMaxIsolines);
+  intField(draftForm, "settingsUndoHistory", "Undo steps kept per drawing", &m_State.undoHistoryMaxSize, 1, 200);
+  auto *trimState = new QComboBox(dialog);
+  trimState->setObjectName("settingsTrimState");
+  trimState->addItems({"Draw a line to trim", "Pick cutting edges first"});
+  trimState->setCurrentIndex(m_State.trimState);
+  draftForm->addRow("TRIM behaviour", trimState);
+  commits->push_back([this, trimState] { m_State.trimState = trimState->currentIndex(); });
+  floatField(draftForm, "settingsFilletRadius", "FILLET radius", &m_State.filletRadius, 0, 1.0e9, 0.1, 4);
+  auto *cornerTrim = new QComboBox(dialog);
+  cornerTrim->setObjectName("settingsCornerTrimMode");
+  cornerTrim->addItems({"Do not trim corners", "Trim corners"});
+  cornerTrim->setCurrentIndex(m_State.cornerTrimMode);
+  draftForm->addRow("FILLET / CHAMFER trimming", cornerTrim);
+  commits->push_back([this, cornerTrim] { m_State.cornerTrimMode = cornerTrim->currentIndex(); });
+  floatField(draftForm, "settingsChamferDist1", "CHAMFER first distance", &m_State.chamferDist1, 0, 1.0e9, 0.1, 4);
+  floatField(draftForm, "settingsChamferDist2", "CHAMFER second distance", &m_State.chamferDist2, 0, 1.0e9, 0.1, 4);
+  floatField(draftForm, "settingsChamferAngle", "CHAMFER angle", &m_State.chamferAngle, 0.01, 179.99, 1, 2, " deg");
+  auto *chamferMode = new QComboBox(dialog);
+  chamferMode->setObjectName("settingsChamferMode");
+  chamferMode->addItems({"Distance and distance", "Distance and angle"});
+  chamferMode->setCurrentIndex(m_State.chamferMode);
+  draftForm->addRow("CHAMFER method", chamferMode);
+  commits->push_back([this, chamferMode] { m_State.chamferMode = chamferMode->currentIndex(); });
+  // Focused pages that already own their controls; reached from here so nothing is duplicated.
+  auto *polarButton = new QPushButton("Polar tracking…", dialog);
+  polarButton->setObjectName("settingsPolarTracking");
+  connect(polarButton, &QPushButton::clicked, this, [this] { ShowPolarSettings(); });
+  layout->addWidget(polarButton, 0, Qt::AlignLeft);
+  // REQ-084: the right-click preferences live in their own dialog, reached from here as in 0.7.4.
+  auto *rightClickButton = new QPushButton("Right-click Customization...", dialog);
+  rightClickButton->setObjectName("settingsRightClickCustomization");
+  connect(rightClickButton, &QPushButton::clicked, this, [this] { ShowRightClickCustomization(); });
+  layout->addWidget(rightClickButton, 0, Qt::AlignLeft);
+  layout->addStretch();
+
+  // ---- Survey Points page (REQ-449) ----------------------------------------------------
+  layout = newPage("Survey Points", "settingsPageSurveyPoints");
+  addHeading(layout, "Survey Points", "surveyPointsSettingsHeading");
+  auto *surveyNote = new QLabel("How survey points and their labels look in the drawing.", dialog);
+  surveyNote->setWordWrap(true);
+  layout->addWidget(surveyNote);
+  auto *surveyDisplay = new QPushButton("Survey point display…", dialog);
   surveyDisplay->setObjectName("surveyPointDisplaySettings");
-  layout->addWidget(surveyDisplay);
+  layout->addWidget(surveyDisplay, 0, Qt::AlignLeft);
   connect(surveyDisplay, &QPushButton::clicked, this, &EditorWindow::ShowSurveyPointDisplay);
   layout->addStretch();
-  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+
+  auto saveStatus = new QLabel(dialog);
+  saveStatus->setObjectName("settingsSaveStatus");
+  saveStatus->setWordWrap(true);
+  saveStatus->setStyleSheet("color:#c54646;");
+  outer->addWidget(saveStatus);
+  auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Apply | QDialogButtonBox::Cancel, dialog);
+  buttons->button(QDialogButtonBox::Ok)->setObjectName("settingsOk");
+  buttons->button(QDialogButtonBox::Apply)->setObjectName("settingsApply");
+  buttons->button(QDialogButtonBox::Cancel)->setObjectName("settingsCancel");
+  outer->addWidget(buttons);
+  // REQ-201: a failed write is shown and keeps the window open, never a silent "saved".
+  auto applyAll = [this, commits, saveStatus] {
+    for (const auto &commit : *commits) commit();
+    BumpCadGpuCache(m_State);
+    Refresh();
+    if (!SaveUserStartupPrefs(m_State)) {
+      saveStatus->setText("Your settings could not be saved. Check folder permissions and try again. They stay active until GoSurvey closes.");
+      return false;
+    }
+    saveStatus->clear();
+    return true;
+  };
+  connect(buttons->button(QDialogButtonBox::Apply), &QPushButton::clicked, dialog, [applyAll] { applyAll(); });
+  connect(buttons->button(QDialogButtonBox::Ok), &QPushButton::clicked, dialog, [applyAll, dialog] { if (applyAll()) dialog->accept(); });
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
-  layout->addWidget(buttons);
+  connect(sidebar, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
+  sidebar->setCurrentRow(0);
   connect(action, &QPushButton::clicked, this, [this] {
     if (m_State.authSignedIn)
       m_State.authSignOutRequested = true;

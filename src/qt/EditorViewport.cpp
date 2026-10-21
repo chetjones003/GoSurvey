@@ -1471,7 +1471,7 @@ void EditorViewport::wheelEvent(QWheelEvent* event) {
   ray3d::Vec3 before, after;
   const bool anchor = ViewPoint(event->position(), before);
   m_State.viewportZoom = std::clamp(m_State.viewportZoom * static_cast<float>(
-      std::pow(1.15, event->angleDelta().y() / 120.0)), 1.e-8f, 1.e8f);
+      std::pow(static_cast<double>(m_State.displayWheelZoomFactor), event->angleDelta().y() / 120.0)), 1.e-8f, 1.e8f);
   if (anchor && ViewPoint(event->position(), after)) {
     m_State.viewportPanX += before.x - after.x;
     m_State.viewportPanY += before.y - after.y;
