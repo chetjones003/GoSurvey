@@ -7,7 +7,7 @@
 
 ## 1. Authority
 - Goal:         Build/Platform quality (no product goal applies).
-- Requirements: REQ-324 (accepted; revised 2026-10-20 by D-2026-10-20-a), REQ-437 (PR checks).
+- Requirements: REQ-324 (accepted; revised 2026-10-20 by D-2026-10-20-d), REQ-437 (PR checks).
 - Constraints:  `release.yml` must stay non-blocking for `/analyze` (REQ-324). Third-party code is never triaged.
 - Acceptance (GitHub #977):
   - Every existing finding is reviewed and resolved, suppressed with justification, or explicitly accepted.
@@ -54,4 +54,4 @@ Accepted baseline: none.
 - CTest: see implementation log.
 
 ## 8. Implementation log
-- 2026-10-20 — Triaged, fixed, suppressed and wired the blocking PR job; recorded D-2026-10-20-a, REQ-324 revision and coding-standards section 11.
+- 2026-10-20 — Triaged, fixed, suppressed and wired the blocking PR job; recorded D-2026-10-20-d, REQ-324 revision and coding-standards section 11.

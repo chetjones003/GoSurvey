@@ -516,6 +516,8 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Geometry math (util)
   src/util/geom2d.cpp
+  # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
+  src/util/spline.cpp
   src/util/curveintersect.cpp
   src/util/meshgeom.cpp
   src/util/gltfimport.cpp
@@ -1076,6 +1078,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/BulgeArcTests.cpp
     # REQ-444 (issue #803): the scallop geometry behind REVCLOUD. Pure geom2d, like BulgeArcTests.
     tests/RevisionCloudTests.cpp
+    # REQ-443 (issue #803): the SPLINE mathematics. Pure util/spline - needs spline.cpp, added below.
+    tests/SplineTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
@@ -1170,6 +1174,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-316 / ADR-047 bulge -> arc math (BulgeArcTests). Pure geom2d — <cmath> only — so the
     # quarter-circle and tangency cases POLYLINE arc mode and JOIN rest on are pinned without GL.
     src/util/geom2d.cpp
+    src/util/spline.cpp
     # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
     src/util/benchscene.cpp
     # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.

@@ -215,7 +215,7 @@ Let tools enforce mechanical style so reviews can focus on substance.
   - **4267 / 4245**: `size_t`→32-bit and signed/unsigned at Win32 / ImGui / vendored
     API boundaries.
   - **4456–4459**: local / parameter / member / global shadowing — style, not a bug.
-  MSVC `/analyze` (REQ-324, blocking on PRs since D-2026-10-20-a / #977) adds these justified suppressions,
+  MSVC `/analyze` (REQ-324, blocking on PRs since D-2026-10-20-d / #977) adds these justified suppressions,
   also in `gosurvey_target_warnings`:
   - **6246**: shadowing reported by the analyzer — same policy as 4456–4459.
   - **6262** (large stack frame): `/analyze:stacksize 65536` for product code (largest frame ~40 KB, not

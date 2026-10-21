@@ -49,7 +49,10 @@ enum class Kind {
   /// full cloud. Default OFF (D-2026-09-18, AutoCAD parity — most osnap kinds default on, but a
   /// dense cloud competing with every other snap by default was judged more disruptive than
   /// useful, the same reasoning REQ-330 applied to Quadrant).
-  PointCloud
+  PointCloud,
+  /// Nearest point on a curve under the cursor. Weakest 2D snap, reached through the one-pick
+  /// override rather than a persistent toggle (REQ-443).
+  Nearest
 };
 
 struct Hit {
@@ -137,6 +140,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   case Kind::Edge:
   case Kind::Face:
   case Kind::PointCloud:
+  case Kind::Nearest:
     return 0;
   default:
     return 1;  // a named point: an endpoint, a midpoint, a centre, a knot, a face centroid, a grip
@@ -177,6 +181,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   case Kind::PointCloud:
     return 0;  ///< Weakest claim, like Surface/Face — real CAD geometry snaps win when they compete.
+  case Kind::Nearest:
+    return 0;  ///< Nearest is a fallback, so named points beat it even when farther away.
   }
   return 0;
 }
