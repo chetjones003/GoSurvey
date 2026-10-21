@@ -5699,7 +5699,10 @@ private Q_SLOTS:
     QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-edit-prompt.png"));
     window.Submit("F"); window.Submit("2:1"); window.Submit("");
     QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
-    state.selection.clear(); window.Submit("ZOOMEXTENTS");
+    // Frame the 200 ft test site directly. Qt's ZOOMEXTENTS never reaches the viewport (a separate
+    // defect; the pending zoom is not consumed by the Qt viewport), so this capture sets the view.
+    state.selection.clear();
+    state.viewportPanX = 100.0; state.viewportPanY = 100.0; state.viewportZoom = 0.3f;
     QApplication::processEvents(); QTest::qWait(100);
     QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
     QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts + "qt-997-grading-result-viewport.png"));
