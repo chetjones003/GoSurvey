@@ -165,7 +165,7 @@ def read_analyzed_commands(compilation_database: Path, root: Path):
 
 def changed_paths(base_sha: str, root: Path) -> list[Path]:
     result = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=ACMR", f"{base_sha}...HEAD"],
+        ["git", "-C", str(root), "diff", "--name-only", "--diff-filter=ACMR", base_sha, "HEAD"],
         check=True,
         text=True,
         capture_output=True,
@@ -203,7 +203,8 @@ def cmake_changes_affect_analysis(base_sha: str, root: Path) -> bool:
             str(root),
             "diff",
             "--unified=0",
-            f"{base_sha}...HEAD",
+            base_sha,
+            "HEAD",
             "--",
             ":(glob)**/CMakeLists.txt",
             ":(glob)**/*.cmake",

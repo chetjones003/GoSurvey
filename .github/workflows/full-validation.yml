@@ -67,7 +67,7 @@ jobs:
           import subprocess
 
           files = subprocess.check_output(
-              ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{os.environ['BASE_SHA']}...HEAD"],
+              ["git", "diff", "--name-only", "--diff-filter=ACMR", os.environ["BASE_SHA"], "HEAD"],
               text=True,
           ).splitlines()
           suffixes = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp", ".inc")

@@ -58,7 +58,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git diff --check "$BASE_SHA...HEAD"
+          git diff --check "$BASE_SHA" HEAD
           python -m compileall -q .github/scripts
 
   # These inexpensive security scans remain required on every non-docs PR.
