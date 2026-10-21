@@ -1,0 +1,60 @@
+name: self-hosted benchmark
+
+on:
+  # Bootstrap the new workflow without modifying the default/release branch.
+  push:
+    branches: [chore/self-hosted-runner-benchmark]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gosurvey-victus-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: laptop / environment, build and test
+    if: github.repository == 'chetjones003/GoSurvey' && github.actor == 'chetjones003'
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      NINJA_STATUS: '[%f/%t; %r running; %e s] '
+    steps:
+      - name: Require a normal interactive Windows account
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Stop this runner and restart it from a normal PowerShell window.'
+          }
+          if ([Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) {
+            throw 'The initial GUI benchmark requires a logged-in desktop, not a service.'
+          }
+
+      - name: Check out the trusted benchmark revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Inspect tools, measure builds and run all tests
+        run: ./tools/benchmark-windows-runner.ps1
+
+      - name: Upload laptop benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: laptop-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/artifacts/runner-benchmark/
+            build/.cmake/release/Testing/Temporary/LastTest.log
+            build/.cmake/release/Testing/Temporary/LastTestsFailed.log
+            build/artifacts/qt-editor/**/qt-tests.xml
+            build/artifacts/qt-editor/**/qt-tests.log

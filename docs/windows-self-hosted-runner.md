@@ -100,6 +100,22 @@ workflow. The setup script does not deploy a replacement system graphics driver.
 
 ## 4. Route trusted jobs deliberately
 
+The initial `gosurvey-victus-ci` laptop is validated separately by
+`.github/workflows/self-hosted-benchmark.yml`. Its bootstrap push trigger is
+limited to `chore/self-hosted-runner-benchmark`, and the job accepts only the
+repository owner's actor in this repository. It never runs on a PR event.
+The job checks normal interactive execution before checkout, uses the uniquely
+labeled laptop, and uploads preflight/build/cache/CTest evidence. A future manual
+dispatch becomes available when the workflow reaches the default branch.
+
+`tools/benchmark-windows-runner.ps1` can also be run locally from a normal
+PowerShell 7 session. It times an initial build and a `--clean-first` rebuild with
+the local cache, then runs the complete CTest suite using native graphics. The
+default test concurrency is capped at eight. It preserves the external compiler
+cache and writes reports under `build/artifacts/runner-benchmark/`. Treat the first
+build as cold only when its actual cache counters show that. Keep separate
+checkout/build trees for simultaneous runner instances.
+
 A runner with the additional label above can be selected with:
 
 ```yaml
