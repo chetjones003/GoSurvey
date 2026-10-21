@@ -7,8 +7,8 @@
 
 ## 1. Authority
 - Goal:         drawing-command completeness (REQ-104).
-- Requirements: REQ-104 (proposed sketch), new REQ-443, REQ-444, REQ-442 (proposed).
-- Decision:     D-2026-10-20-a (proposed).
+- Requirements: REQ-104 (proposed sketch), new REQ-443, REQ-444, REQ-442 (accepted).
+- Decision:     D-2026-10-20-e (accepted).
 - Owning subsystem: Commands/Domain/IO/Render/UI.
 
 ## 2. Scope
