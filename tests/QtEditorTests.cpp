@@ -592,6 +592,36 @@ class QtEditorTests final : public QObject {
   }
 
 private Q_SLOTS:
+  void issue803SplineRibbonPreviewAndSelectionScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+
+    auto* splineAction = Action(window, "Spline");
+    QVERIFY(splineAction);
+    QVERIFY(splineAction->isEnabled());
+    splineAction->trigger();
+    QCOMPARE(window.State().active, AppCommandState::Kind::Spline);
+    window.State().splineDraftPoints = {{-30, -10, 0}, {-10, 20, 0}, {12, -15, 0}};
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(150);
+    QVERIFY(window.grab().save(Issue914Shot("qt-803-spline-preview.png")));
+
+    CadSpline committed;
+    QVERIFY(spline::MakeFit(window.State().splineDraftPoints, false, &committed, nullptr));
+    window.State().splineDraftPoints.clear();
+    window.State().active = AppCommandState::Kind::None;
+    window.State().cadSplines = {std::move(committed)};
+    window.State().cadSplineAttrs = {EntityAttributes{}};
+    window.State().selection = {{SelectedEntity::Type::Spline, 0}};
+    window.Refresh();
+    QTest::qWait(150);
+    QVERIFY(window.grab().save(Issue914Shot("qt-803-spline-selected.png")));
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

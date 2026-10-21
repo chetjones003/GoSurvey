@@ -595,6 +595,18 @@ void EditorWindow::RefreshProperties() {
     hint->setWordWrap(true);
     rows->addWidget(hint);
   }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Spline) {
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.cadSplines.size()) {
+      const CadSpline& sp = st.cadSplines[static_cast<size_t>(index)];
+      auto* rows = section("Spline", "propertiesSpline");
+      readOnly(rows, "Method", sp.isFit() ? "Fit points" : "Control vertices", "propSplineMethod");
+      readOnly(rows, "Degree", QString::number(sp.degree), "propSplineDegree");
+      readOnly(rows, "Closed", sp.periodic ? "Yes" : "No", "propSplineClosed");
+      readOnly(rows, "Point count", QString::number(spline::EditablePointCount(sp)), "propSplinePointCount");
+      readOnly(rows, "Length", fmt(spline::Length(sp)), "propSplineLength");
+    }
+  }
   if (!st.selectedSurveyPointIndices.empty()) {
     auto* points = new QLabel(QString("%1 survey point%2 selected. Bulk editing: VIEWPOINTS.").arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s"), body);
     points->setObjectName("propertiesSurveyNote");

@@ -7,7 +7,7 @@
 # log. Nothing here publishes anything — that stays in release.yml (REQ-202/ADR-029), which is
 # manual-dispatch only and untouched by this file.
 #
-# msvc-analyze is BLOCKING (issue #977, D-2026-10-20-a): the backlog was triaged, real findings were
+# msvc-analyze is BLOCKING (issue #977, D-2026-10-20-d): the backlog was triaged, real findings were
 # fixed and the justified suppressions are recorded in CMakeLists.txt and spec/coding-standards.md
 # section 11. GOSURVEY_ENABLE_ANALYZE is paired with GOSURVEY_ANALYZE_WERROR (/WX), so any new
 # /analyze or /W4 warning fails the PR. release.yml keeps /analyze report-only (REQ-324).

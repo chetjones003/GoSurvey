@@ -142,7 +142,11 @@ struct SelectedEntity {
     PositionMarker = 17,
     /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
     /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
-    Multileader = 18
+    Multileader = 18,
+    /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
+    /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
+    /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
+    Spline = 19
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -839,6 +843,9 @@ struct CadExtendedGeometryInput {
   const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
+  /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
+  const std::vector<CadSpline>* splines = nullptr;
+  const std::vector<EntityAttributes>* splineAttrs = nullptr;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -996,6 +1003,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
   std::vector<EntityAttributes> ellAttrs;
+  std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
+  std::vector<EntityAttributes> splineAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1024,7 +1033,7 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
+           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
            filledRegions.empty();
   }
 };
@@ -1335,6 +1344,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1513,6 +1524,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -2057,6 +2070,8 @@ struct AppCommandState {
     /// Surface and Pad elevation, the way every other command with options does - it does not take
     /// everything on one line and give up. padSolidPhase drives it.
     PadSolid,
+    /// REQ-443: create a fit-point or control-vertex NURBS spline.
+    Spline,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2068,6 +2083,7 @@ struct AppCommandState {
     case Kind::Grading:       return "GRADING";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
+    case Kind::Spline:        return "SPLINE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2536,6 +2552,9 @@ struct AppCommandState {
   float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+
+  enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
+  std::vector<spline::Vec3> splineDraftPoints;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
@@ -3505,6 +3524,8 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -4289,6 +4310,10 @@ struct AppCommandState {
   // Ellipse originals.
   float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
   float entityGripOrigEllRatio = 0.f;
+
+  /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
+  /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
+  CadSpline entityGripOrigSpline;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -5939,7 +5964,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
   PositionMarker,
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
-  Multileader
+  Multileader,
+  /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
+  Spline
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -6967,6 +6994,12 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     st.userCirclesCxCyZR[k + 3] = st.entityGripOrigR;  // [k+2] is Z — a grip drag does not change it
     break;
   }
+  case SelectedEntity::Type::Spline: {  // REQ-443
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
+      return;
+    st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
+    break;
+  }
   case SelectedEntity::Type::Polyline: {
     if (st.entityGripOrigPolyBulgeVi >= 0) {  // REQ-316 / ADR-047: an arc-segment bulge grip
       if (static_cast<size_t>(st.entityGripOrigPolyBulgeVi) < st.userPolylineVertsBulge.size())
@@ -7211,6 +7244,7 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);

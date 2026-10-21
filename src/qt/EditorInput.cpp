@@ -307,7 +307,8 @@ void EditorWindow::ShowSnapOverride(const QPoint& position) {
       {"Perpendicular", CadSnap::Kind::Perpendicular}, {"Survey", CadSnap::Kind::SurveyCenter},
       {"Geometric center", CadSnap::Kind::GeometricCenter}, {"Intersection", CadSnap::Kind::Intersection},
       {"Apparent intersection", CadSnap::Kind::ApparentIntersection}, {"Surface", CadSnap::Kind::Surface},
-      {"Solid edge", CadSnap::Kind::Edge}, {"Solid face", CadSnap::Kind::Face}, {"Point cloud", CadSnap::Kind::PointCloud}};
+      {"Solid edge", CadSnap::Kind::Edge}, {"Solid face", CadSnap::Kind::Face}, {"Point cloud", CadSnap::Kind::PointCloud},
+      {"Nearest", CadSnap::Kind::Nearest}};
   for (const auto& [label, kind] : kinds) {
     if (kind == CadSnap::Kind::Perpendicular && !CadSnap::CommandHasPerpendicularSnapReference(m_State, true, true)) continue;
     connect(menu.addAction(label), &QAction::triggered, this, [this, kind, label] {

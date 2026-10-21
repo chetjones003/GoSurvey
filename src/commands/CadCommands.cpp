@@ -151,6 +151,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
   doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
   doc.cadMultileaderAttrs    = cmd.cadMultileaderAttrs;
+  doc.cadSplines             = cmd.cadSplines;  // REQ-443
+  doc.cadSplineAttrs         = cmd.cadSplineAttrs;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
@@ -259,6 +261,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
   cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
   cmd.cadMultileaderAttrs        = doc.cadMultileaderAttrs;
+  cmd.cadSplines                 = doc.cadSplines;  // REQ-443
+  cmd.cadSplineAttrs             = doc.cadSplineAttrs;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
   cmd.cadPipingSystems           = doc.cadPipingSystems;
@@ -1487,6 +1491,16 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::Spline: {  // REQ-443: fit points, or control vertices for a CV spline
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadSplines.size()) {
+        const CadSpline& sp = cmd.cadSplines[static_cast<size_t>(sel.index)];
+        for (size_t i = 0; i < spline::EditablePointCount(sp); ++i) {
+          const spline::Vec3 v = spline::EditablePoint(sp, i);
+          tryGrip(sel, static_cast<float>(v.x), static_cast<float>(v.y), static_cast<int>(i));
+        }
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1566,6 +1580,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     cmd.entityGripOrigEllRatio = el.ratio;
     break;
   }
+  case SelectedEntity::Type::Spline:  // REQ-443
+    cmd.entityGripOrigSpline = cmd.cadSplines[static_cast<size_t>(bestSel.index)];
+    break;
   default:
     break;
   }
@@ -1750,6 +1767,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
   snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
   snap.cadMultileaderAttrs  = st.cadMultileaderAttrs;
+  snap.cadSplines           = st.cadSplines;  // REQ-443
+  snap.cadSplineAttrs       = st.cadSplineAttrs;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -1858,6 +1877,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
   st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
   st.cadMultileaderAttrs  = snap.cadMultileaderAttrs;
+  st.cadSplines           = snap.cadSplines;  // REQ-443
+  st.cadSplineAttrs       = snap.cadSplineAttrs;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
@@ -1983,7 +2004,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Solid,
     EntityKind::PointCloud,
     EntityKind::PositionMarker,  ///< REQ-359 — append-only id sweep
-    EntityKind::Multileader};    ///< REQ-367 — last, so kinds above keep their ids.
+    EntityKind::Multileader,     ///< REQ-367
+    EntityKind::Spline};         ///< REQ-443 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -2006,6 +2028,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::PointCloud:   return &st.cadPointCloudAttrs; // REQ-171 / ADR-042
   case EntityKind::PositionMarker: return &st.cadPositionMarkerAttrs; // REQ-359
   case EntityKind::Multileader:    return &st.cadMultileaderAttrs;   // REQ-367
+  case EntityKind::Spline:         return &st.cadSplineAttrs;        // REQ-443
   }
   return &st.userLineAttrs;
 }
@@ -6706,6 +6729,8 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   ResetFeatureLineDraft(st);  // REQ-087: was missing, so a cancelled FEATURELINE kept its draft
   ResetArcDraft(st);
   ResetEllipseDraft(st);
+  st.splineDraftPoints.clear();
+  st.splineMethod = AppCommandState::SplineMethod::Fit;
   ResetRectDraft(st);
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
@@ -6858,6 +6883,7 @@ const CmdEntry kRegistry[] = {
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
+    {"spline", "spl", "Draw a fit-point or control-vertex spline (CV, Close, End, Undo)"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
     {"text", "", "Place single-line text"},
     {"mtext", "mt", "Place multiline text"},
@@ -7302,6 +7328,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "ellipse") {
     StartEllipseCommand(st, log);
+    return true;
+  }
+  if (primary == "spline") {
+    StartSplineCommand(st, log);
     return true;
   }
   if (primary == "text") {
@@ -8219,6 +8249,16 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       hits.push_back(e);
     }
   }
+  // REQ-443: a spline is tested as the curve it draws, by the same rule as the arc and ellipse above.
+  for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+    spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &curvePts);
+    if (CurveHitsRect(curvePts)) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Spline;
+      e.index = static_cast<int>(si);
+      hits.push_back(e);
+    }
+  }
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -8626,6 +8666,62 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
 static EntityAttributes DuplicatedEntityAttrs(EntityAttributes a) {
   a.id = 0;
   return a;
+}
+
+/// REQ-443: every transform command reduces to one point map on a spline, because a B-spline is an
+/// affine combination of its control points - moving, turning, scaling or mirroring those points is
+/// exactly moving, turning, scaling or mirroring the curve (`spline::MapPoints`). Fit points travel
+/// with them, so a transformed fit spline can still be re-derived by a later grip edit.
+///
+/// In place. The caller owns the undo snapshot and the GPU-cache bump, as every transform does.
+template <class F>
+static void MapSelectedSplines(AppCommandState& st, const F& f) {
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Spline || e.index < 0)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k < st.cadSplines.size())
+      spline::MapPoints(&st.cadSplines[k], f);
+  }
+}
+
+/// REQ-443: remove every selected spline and its attributes, highest index first. Both erase paths
+/// (ERASE and MIRROR's erase-source) call it, so a spline cannot be erased by one and left behind by
+/// the other.
+static void EraseSelectedSplines(AppCommandState& st) {
+  std::set<int> ix;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < st.cadSplines.size())
+      ix.insert(e.index);
+  for (auto it = ix.rbegin(); it != ix.rend(); ++it) {
+    const size_t k = static_cast<size_t>(*it);
+    st.cadSplines.erase(st.cadSplines.begin() + static_cast<std::ptrdiff_t>(k));
+    if (k < st.cadSplineAttrs.size())
+      st.cadSplineAttrs.erase(st.cadSplineAttrs.begin() + static_cast<std::ptrdiff_t>(k));
+  }
+}
+
+/// REQ-443: append a copy of every selected spline with its points mapped through f, the source
+/// untouched - the duplicate path COPY, ROTATE-copy, MIRROR and ARRAY share. The copy takes the
+/// source's layer and colour but not its id (see DuplicatedEntityAttrs).
+template <class F>
+static void DuplicateSelectedSplines(AppCommandState& st, const F& f) {
+  const size_t n0 = st.cadSplines.size();
+  std::vector<size_t> sources;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::Spline && e.index >= 0 && static_cast<size_t>(e.index) < n0)
+      sources.push_back(static_cast<size_t>(e.index));
+  if (sources.empty())
+    return;
+  while (st.cadSplineAttrs.size() < n0)
+    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  for (const size_t k : sources) {
+    CadSpline c = st.cadSplines[k];
+    spline::MapPoints(&c, f);
+    st.cadSplines.push_back(std::move(c));
+    st.cadSplineAttrs.push_back(DuplicatedEntityAttrs(st.cadSplineAttrs[k]));
+  }
+  BumpCadGpuCache(st);
 }
 
 /// Visit each selected feature line once as (index, firstVertex, lastVertexExclusive).
@@ -9098,6 +9194,10 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
   st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
+  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
+  });
+
   // Feature lines (REQ-087). Appended after the loop above rather than inside it only for
   // readability — ForEachSelectedFeatureLine snapshots its ranges, so growing the store mid-walk is
   // safe either way.
@@ -9159,6 +9259,13 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.userEllipses.push_back(el);
     st.userEllAttrs.push_back(cb.ellAttrs[i]);
     st.selection.push_back({ST::Ellipse, static_cast<int>(st.userEllipses.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.splines.size(); ++i) {  // REQ-443
+    CadSpline sp = cb.splines[i];
+    spline::MapPoints(&sp, [&](const spline::Vec3& p) { return spline::Vec3{p.x + dx, p.y + dy, p.z}; });
+    st.cadSplines.push_back(std::move(sp));
+    st.cadSplineAttrs.push_back(i < cb.splineAttrs.size() ? cb.splineAttrs[i] : EntityAttributes{});
+    st.selection.push_back({ST::Spline, static_cast<int>(st.cadSplines.size()) - 1});
   }
   const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
@@ -9247,7 +9354,7 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   const CadClipboard& cb = st.clipboard;
   using PT = PaperEntityRef::Type;
   st.selectedPaperEntities.clear();
-  int skipped = 0;
+  int skipped = static_cast<int>(cb.splines.size());  // Splines are model-space entities (REQ-443).
 
   for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
     L.paperLines.push_back(static_cast<float>(cb.lines[i + 0] + dx));
@@ -9365,13 +9472,14 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   ClearEntityIdsFrom(st.clipboard.polyAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.annotationAttrs, 0);
   ClearEntityIdsFrom(st.clipboard.filledRegionAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.splineAttrs, 0);  // REQ-443: pasted spline receives fresh identity.
   ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
     const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
-                    " dimension(s) skipped (paper space stores lines, text, circles, arcs, ellipses, polylines).");
+                    " object(s) skipped (paper space does not store dimensions or splines).");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
@@ -9600,6 +9708,12 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
   st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
 
+  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    double x = v.x, y = v.y;
+    RotateAroundBase(bx, by, rad, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
+
   // Feature lines (REQ-087) — the same append as the translated path, differing only in the point
   // function, which is exactly why both go through AppendFeatureLineCopy.
   ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
@@ -9644,6 +9758,9 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
   const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
+  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
+  });
   // Solids and pipe runs are copied too (REQ-351) — about any axis, since `brep::Rotate` turns
   // every frame a solid stores and a pipe run is only its path.
   RotateSelectedSolids(st, axisPoint, axisUnit, angleRad, log, /*duplicate=*/true, commandLabel);
@@ -10060,6 +10177,12 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
     const double len = ray3d::Length(dir);
     const ray3d::Vec3 normal = len > 0.0 ? ray3d::Vec3{-dir.y / len, dir.x / len, 0.0} : ray3d::Vec3{};
     MirrorSelectedSolidsAndPipeRuns(st, {static_cast<double>(x0), static_cast<double>(y0), 0.0}, normal, log);
+    if (len > 0.0) {
+      const ray3d::Vec3 planePoint{static_cast<double>(x0), static_cast<double>(y0), 0.0};
+      DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+        return ray3d::ReflectPointAcrossPlane(v, planePoint, normal);
+      });
+    }
   }
 
   const size_t polyVertsBefore = st.userPolylineVerts.size();
@@ -10419,6 +10542,11 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     el.majVx = static_cast<float>(mx - el.cx);
     el.majVy = static_cast<float>(my - el.cy);
   }
+  MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    double x = v.x, y = v.y;
+    RotateAroundBase(bx, by, rad, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
@@ -10537,6 +10665,9 @@ static void RotateSelectionInPlaceAboutAxis(AppCommandState& st, const ray3d::Ve
   const auto rotDir = [&](float x, float y, float z) -> ray3d::Vec3 {
     return ray3d::RotateVectorAboutAxis({x, y, z}, axisUnit, rad);
   };
+  MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::RotatePointAboutAxis(v, axisPoint, axisUnit, rad);
+  });
   size_t refused = 0;
 
   for (const auto& e : st.selection) {
@@ -10834,6 +10965,9 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float 
       continue;
     CadMultileaderTranslate(&st.cadMultileaders[static_cast<size_t>(e.index)], dx, dy, dz);
   }
+  MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443: a spline moves by moving its points
+    return spline::Vec3{v.x + dx, v.y + dy, v.z + dz};
+  });
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::BlockRef)
       continue;
@@ -11275,6 +11409,11 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     el.majVx = static_cast<float>(mx - el.cx);
     el.majVy = static_cast<float>(my - el.cy);
   }
+  MapSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    double x = v.x, y = v.y;
+    ScalePtAroundBase(bx, by, sc, &x, &y);
+    return spline::Vec3{x, y, v.z};
+  });
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Polyline)
       continue;
@@ -11361,6 +11500,14 @@ static void ScaleSelectionZAboutBase(AppCommandState& st, float bz, float sc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userEllipses.size())
         sz(&st.userEllipses[k].z);
+      break;
+    }
+    case SelectedEntity::Type::Spline: {  // REQ-443: elevations scale about the base elevation too
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadSplines.size())
+        spline::MapPoints(&st.cadSplines[k], [&](const spline::Vec3& v) {
+          return spline::Vec3{v.x, v.y, bz + static_cast<double>(sc) * (v.z - bz)};
+        });
       break;
     }
     case SelectedEntity::Type::Polyline: {
@@ -13289,6 +13436,9 @@ static bool CommitOffsetSigned(AppCommandState& st, float signedD, std::vector<s
   case SelectedEntity::Type::Polyline:
     ok = CommitOffsetPolyline(st, e.index, signedD, log);
     break;
+  case SelectedEntity::Type::Spline:
+    log.push_back("OFFSET — spline entities are not supported; nothing changed.");
+    return false;
   default:
     log.push_back("OFFSET — unsupported entity type.");
     return false;
@@ -13742,6 +13892,10 @@ static void HandleOffsetViewportPick(AppCommandState& st, double wx, double wy, 
                     "arc, ellipse, or polyline.");
       return;
     }
+    if (hit.type == SelectedEntity::Type::Spline) {
+      log.push_back("OFFSET — splines are not supported; nothing changed.");
+      return;
+    }
     st.offsetEntity = hit;
     st.offsetEntityValid = true;
     if (st.offsetThroughMode) {
@@ -14088,7 +14242,6 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     }
     return;
   }
-
   if (st.active == K::Text) {
     using TP = AppCommandState::TextCmdPhase;
     if (st.textPhase == TP::WaitInsertion) {
@@ -14522,6 +14675,12 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
 
   if (st.active == K::Revcloud) {
     SubmitRevcloudViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+
+  if (st.active == K::Spline) {
+    st.splineDraftPoints.push_back({wx, wy, CadCommitElevation(st)});
+    log.push_back("SPLINE — point added. Pick next point, or type Close / End / Undo:");
     return;
   }
 
@@ -15164,6 +15323,11 @@ bool CadGizmoAnchorWorld(const AppCommandState& st, ray3d::Vec3* out) {
       }
       break;
     }
+    case T::Spline:  // REQ-443: its control points bound it (convex-hull property); a handle position only
+      if (k < st.cadSplines.size())
+        for (const ray3d::Vec3& v : st.cadSplines[k].ctrl)
+          grow(v.x, v.y, v.z);
+      break;
     case T::Arc:
       // The full circle the arc lies on, not the arc's own extent. Conservative by up to a radius,
       // and the anchor is a handle position rather than an input to any move — see the header note.
@@ -16425,6 +16589,14 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.ellipses.push_back(st.userEllipses[k]);
       cb.ellAttrs.push_back(k < st.userEllAttrs.size() ? st.userEllAttrs[k] : EntityAttributes{});
       expandBbox(static_cast<float>(st.userEllipses[k].cx), static_cast<float>(st.userEllipses[k].cy));
+    } else if (e.type == SelectedEntity::Type::Spline) {  // REQ-443
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadSplines.size()) continue;
+      cb.splines.push_back(st.cadSplines[k]);
+      cb.splineAttrs.push_back(k < st.cadSplineAttrs.size() ? st.cadSplineAttrs[k] : EntityAttributes{});
+      std::vector<spline::Vec3> points;
+      spline::Tessellate(st.cadSplines[k], kSplineSampleTolerance, &points);
+      for (const auto& p : points) expandBbox(static_cast<float>(p.x), static_cast<float>(p.y));
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
       if (pi < 0 || (static_cast<size_t>(pi)+ 1) >= st.userPolylineOffsets.size())
@@ -16830,6 +17002,9 @@ static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity&
   case SelectedEntity::Type::Circle:
     log.push_back(std::string(cmdName) + " — 1 circle ignored: a circle has no end to lengthen from. Pick a line, "
                   "open polyline, or arc.");
+    return false;
+  case SelectedEntity::Type::Spline:
+    log.push_back(std::string(cmdName) + " — splines are not supported; nothing changed.");
     return false;
   case SelectedEntity::Type::Ellipse:
     log.push_back(std::string(cmdName) + " — 1 ellipse ignored: every ellipse in this drawing is a full closed "
@@ -17380,6 +17555,10 @@ void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vect
     if (hit.type == SelectedEntity::Type::Surface) {
       log.push_back("EXTEND — 1 surface ignored: a surface cannot be a boundary edge. Use a line, "
                     "circle, arc, ellipse, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Spline) {
+      log.push_back("EXTEND — splines cannot be boundary edges; nothing changed.");
       return;
     }
     for (const auto& c : st.extendBoundaries) {
@@ -19120,6 +19299,9 @@ static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e
   case T::Circle:
     log.push_back("FILLET — 1 circle ignored: fillet needs a curve with a definite tangent side. Pick a "
                   "line, non-full arc, or polyline segment.");
+    return false;
+  case T::Spline:
+    log.push_back("FILLET — spline entities are not supported; nothing changed.");
     return false;
   default:
     log.push_back("FILLET — 1 object ignored: only a line, arc, or polyline segment can be filleted.");
@@ -21948,6 +22130,18 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
+  // REQ-443: the curve itself, not its control polygon - a control point can sit well outside it.
+  {
+    std::vector<ray3d::Vec3> sp;
+    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+      if (EntityHiddenInViewport(vpFilter, st.cadSplineAttrs, si))
+        continue;
+      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+      for (const ray3d::Vec3& v : sp)
+        consider(v.x, v.y);
+    }
+  }
+
   const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
@@ -22304,6 +22498,32 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     EntityBoxGrowZ(b, elFlat ? el.z : el.z + rrx, false);
     out.push_back(b);
   }
+  {  // REQ-443: a spline's box is its curve's, with its elevation range
+    std::vector<ray3d::Vec3> sp;
+    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+      if (EntityHiddenInViewport(vpFilter, st.cadSplineAttrs, si))
+        continue;
+      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+      if (sp.empty())
+        continue;
+      EntityBox b{};
+      for (size_t i = 0; i < sp.size(); ++i) {
+        EntityBoxGrowZ(b, sp[i].z, i == 0);
+        if (i == 0) {
+          b.mnX = b.mxX = sp[i].x;
+          b.mnY = b.mxY = sp[i].y;
+        } else {
+          b.mnX = std::min(b.mnX, sp[i].x);
+          b.mxX = std::max(b.mxX, sp[i].x);
+          b.mnY = std::min(b.mnY, sp[i].y);
+          b.mxY = std::max(b.mxY, sp[i].y);
+        }
+      }
+      b.cx = 0.5 * (b.mnX + b.mxX);
+      b.cy = 0.5 * (b.mnY + b.mxY);
+      out.push_back(b);
+    }
+  }
   const auto& PV = st.userPolylineVerts;
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
@@ -22563,7 +22783,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
     *outSkipped = 0;
   std::vector<EntityBox> ents;
   ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
-               st.userEllipses.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
+               st.userEllipses.size() + st.cadSplines.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
   CollectEntityBoxes(st, ents, vpFilter);
 
@@ -24301,6 +24521,103 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("ELLIPSE — center, major axis endpoint, then minor/major ratio (0-1] on command line (Enter=0.5).");
 }
 
+void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("SPLINE — works in model space only.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::Spline;
+  st.lastCommand = AppCommandState::Kind::Spline;
+  st.splineMethod = AppCommandState::SplineMethod::Fit;
+  st.splineDraftPoints.clear();
+  log.push_back("SPLINE — Fit points (curve passes through them). Type CV for control vertices. Pick or type X,Y; Close / End / Undo:");
+}
+
+static bool FinishSplineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log) {
+  if (st.splineDraftPoints.size() < (closed ? 3u : 2u)) {
+    log.push_back(closed ? "SPLINE — a closed spline needs at least three points."
+                         : "SPLINE — an open spline needs at least two points.");
+    return false;
+  }
+  CadSpline splineEntity;
+  std::string why;
+  const bool ok = st.splineMethod == AppCommandState::SplineMethod::Fit
+                      ? spline::MakeFit(st.splineDraftPoints, closed, &splineEntity, &why)
+                      : spline::MakeControl(st.splineDraftPoints, closed, &splineEntity, &why);
+  if (!ok) {
+    log.push_back("SPLINE rejected — " + why + ". The draft is unchanged.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Create spline");
+  st.cadSplines.push_back(std::move(splineEntity));
+  st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  st.splineDraftPoints.clear();
+  st.active = AppCommandState::Kind::None;
+  log.push_back("SPLINE complete.");
+  return true;
+}
+
+static bool HandleSplineTextInput(const std::string& lineIn, AppCommandState& st,
+                                 std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::Spline)
+    return false;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  std::string option = line;
+  std::transform(option.begin(), option.end(), option.begin(), [](unsigned char c) {
+    return static_cast<char>(std::toupper(c));
+  });
+  if (option == "CV" || option == "CONTROL") {
+    if (!st.splineDraftPoints.empty()) {
+      log.push_back("SPLINE — choose Fit or CV before the first point.");
+      return true;
+    }
+    st.splineMethod = AppCommandState::SplineMethod::Control;
+    log.push_back("SPLINE — Control vertices selected. Pick or type X,Y; Close / End:");
+    return true;
+  }
+  if (option == "FIT") {
+    if (!st.splineDraftPoints.empty()) {
+      log.push_back("SPLINE — choose Fit or CV before the first point.");
+      return true;
+    }
+    st.splineMethod = AppCommandState::SplineMethod::Fit;
+    log.push_back("SPLINE — Fit points selected. Pick or type X,Y; Close / End:");
+    return true;
+  }
+  if (option == "UNDO" || option == "U") {
+    if (!st.splineDraftPoints.empty())
+      st.splineDraftPoints.pop_back();
+    log.push_back("SPLINE — last draft point removed.");
+    return true;
+  }
+  if (option == "CLOSE" || option == "CL") {
+    (void)FinishSplineDraft(st, true, log);
+    return true;
+  }
+  if (option == "END" || line.empty()) {
+    if (st.splineDraftPoints.empty()) {
+      st.active = AppCommandState::Kind::None;
+      log.push_back("SPLINE ended — nothing was added.");
+    } else {
+      (void)FinishSplineDraft(st, false, log);
+    }
+    return true;
+  }
+  float x = 0.f, y = 0.f;
+  if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
+    log.push_back("SPLINE — enter a point as X,Y, or choose CV, Fit, Close, End or Undo.");
+    return true;
+  }
+  st.splineDraftPoints.push_back({x, y, CadCommitElevation(st)});
+  log.push_back("SPLINE — point added. Enter another X,Y, or Close / End / Undo:");
+  return true;
+}
+
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -25119,6 +25436,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadMultileaderAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadSplineAttrs.size() < st.cadSplines.size()) {  // REQ-443
+    st.cadSplineAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   while (st.cadBlockRefAttrs.size() < st.cadBlockRefs.size()) {
     st.cadBlockRefAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -25150,6 +25471,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.cadPositionMarkerAttrs)  // REQ-359
     add(a.layer);
   for (const auto& a : st.cadMultileaderAttrs)  // REQ-367
+    add(a.layer);
+  for (const auto& a : st.cadSplineAttrs)  // REQ-443
     add(a.layer);
   for (const auto& a : st.cadBlockRefAttrs)
     add(a.layer);
@@ -26454,6 +26777,20 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     st.userPolylineVerts[xIdx + 1] = y;
     return;
   }
+  case SelectedEntity::Type::Spline: {  // REQ-443: drag one fit point / control vertex; its Z is kept
+    if (static_cast<size_t>(idx) >= st.cadSplines.size() || st.entityGripWhich < 0)
+      return;
+    CadSpline& sp = st.cadSplines[static_cast<size_t>(idx)];
+    const size_t which = static_cast<size_t>(st.entityGripWhich);
+    if (which >= spline::EditablePointCount(sp))
+      return;
+    const spline::Vec3 old = spline::EditablePoint(sp, which);
+    // A drag step that would make the fit points degenerate (two neighbours on top of each other) is
+    // simply not applied, so the curve on screen is always a valid one and the last good shape stands.
+    std::string why;
+    (void)spline::SetEditablePoint(&sp, which, spline::Vec3{static_cast<double>(x), static_cast<double>(y), old.z}, &why);
+    return;
+  }
   case SelectedEntity::Type::Arc: {
     if (static_cast<size_t>(idx) >= st.userArcs.size())
       return;
@@ -26562,6 +26899,7 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::Polyline:   return pick(st.userPolylineAttrs, e.index);
   case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
   case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
+  case SelectedEntity::Type::Spline:     return pick(st.cadSplineAttrs, e.index);  // REQ-443
   case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
   case SelectedEntity::Type::Table:      return pick(st.cadTableAttrs, e.index);
   case SelectedEntity::Type::BlockRef:   return pick(st.cadBlockRefAttrs, e.index);
@@ -26619,6 +26957,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
     case SelectedEntity::Type::Ellipse: {
       for (size_t i = 0; i < st.userEllipses.size(); ++i)
         consider(SelectedEntity::Type::Ellipse, static_cast<int>(i));
+      break;
+    }
+    case SelectedEntity::Type::Spline: {  // REQ-443
+      for (size_t i = 0; i < st.cadSplines.size(); ++i)
+        consider(SelectedEntity::Type::Spline, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Annotation: {
@@ -26758,6 +27101,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadPositionMarkerAttrs.clear();
   st.cadMultileaders.clear();  // REQ-367
   st.cadMultileaderAttrs.clear();
+  st.cadSplines.clear();  // REQ-443
+  st.cadSplineAttrs.clear();
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
   // that already had runs would keep them alongside the imported content — the same "written before
   // pipe runs existed" miss the document snapshot had. The derived solids go with them, the way
@@ -26904,6 +27249,7 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Circle:       otherKinds.insert("circle"); break;
       case T::Arc:          otherKinds.insert("arc"); break;
       case T::Ellipse:      otherKinds.insert("ellipse"); break;
+      case T::Spline:       otherKinds.insert("spline"); break;  // REQ-443
       case T::Annotation:   otherKinds.insert("text"); break;
       case T::FilledRegion: otherKinds.insert("hatch"); break;
       case T::Mesh:         otherKinds.insert("mesh"); break;
@@ -27453,6 +27799,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     if (k < st.userEllAttrs.size())
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
+  EraseSelectedSplines(st);  // REQ-443
 
   // Filled regions (REQ-042): erase from cadFilledRegions + parallel attrs, highest index first.
   std::set<int> fillIx;
@@ -27685,6 +28032,7 @@ static void EraseMirroredSourceNoUndo(AppCommandState& st) {
     if (k < st.userEllAttrs.size())
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
+  EraseSelectedSplines(st);  // REQ-443
 
   st.selection.clear();
   AbortMtextGripInteraction(st);
@@ -27732,6 +28080,9 @@ static void DuplicateCadSelectionReflectedAcrossPlane(AppCommandState& st, const
   const auto rv = [&](float x, float y, float z) {
     return ray3d::ReflectVectorAcrossPlane({x, y, z}, planeUnit);
   };
+  DuplicateSelectedSplines(st, [&](const spline::Vec3& v) {  // REQ-443
+    return ray3d::ReflectPointAcrossPlane(v, planePt, planeUnit);
+  });
   const size_t polyVertsBefore = st.userPolylineVerts.size();
   std::vector<float> newLines, newCircles, newCircleNormals;
   std::vector<EntityAttributes> newLineAttrs, newCircleAttrs;
@@ -28578,6 +28929,12 @@ double CadEntityPickDepthAtPick(const AppCommandState& st, const SelectedEntity&
     }
     return static_cast<double>(a.z);
   }
+  case T::Spline: {  // REQ-443: nearest point of its control polygon by elevation
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSplines.size() ||
+        st.cadSplines[static_cast<size_t>(e.index)].ctrl.empty())
+      return 0.0;
+    return st.cadSplines[static_cast<size_t>(e.index)].ctrl.front().z;
+  }
   case T::Ellipse: {
     if (static_cast<size_t>(e.index) >= st.userEllipses.size())
       return 0.0;
@@ -28880,6 +29237,23 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       }
     }
     consider(e, bestD2);
+  }
+  // REQ-443: a spline is measured against the CHORDS of its tessellation, the metric the ellipse uses,
+  // so a click that lands squarely on the curve between two samples still hits it.
+  {
+    std::vector<ray3d::Vec3> sp;
+    for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+      spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &sp);
+      if (sp.size() < 2)
+        continue;
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Spline;
+      e.index = static_cast<int>(si);
+      double bestD2 = 1e300;
+      for (size_t i = 1; i < sp.size(); ++i)
+        bestD2 = std::min(bestD2, d2Segment(sp[i - 1].x, sp[i - 1].y, sp[i - 1].z, sp[i].x, sp[i].y, sp[i].z));
+      consider(e, bestD2);
+    }
   }
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
@@ -30160,6 +30534,7 @@ static bool Try3DLineTrim(AppCommandState& st, double wx, double wy, float tolWo
       case SelectedEntity::Type::Circle: return "circle";
       case SelectedEntity::Type::Arc: return "arc";
       case SelectedEntity::Type::Ellipse: return "ellipse";
+      case SelectedEntity::Type::Spline: return "spline";
       case SelectedEntity::Type::Polyline: return "polyline";
       default: return "object";
     }
@@ -30718,6 +31093,10 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
                     "circle, arc, ellipse, or polyline.");
       return false;
     }
+    if (hit.type == SelectedEntity::Type::Spline) {
+      log.push_back("TRIM — splines cannot be cutting edges; nothing changed.");
+      return false;
+    }
     for (const auto& c : st.trimCutters) {
       if (SelectedEntityMatches(c, hit)) {
         log.push_back("TRIM — already a cutting edge.");
@@ -30747,6 +31126,8 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
         under.type == SelectedEntity::Type::FeatureLine)
       log.push_back("TRIM — 1 feature line ignored: trimming one has no defined elevation for the "
                     "new end.");
+    else if (under.type == SelectedEntity::Type::Spline)
+      log.push_back("TRIM — spline targets are not supported; nothing changed.");
     else
       log.push_back("TRIM — nothing to trim at pick.");
     return false;
@@ -30868,6 +31249,11 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("JOIN — " + std::to_string(surfacesSkipped) + " surface" +
                   (surfacesSkipped == 1 ? "" : "s") +
                   " ignored: a surface is derived from its definition, not linework that can be joined.");
+  const int splinesSkipped = static_cast<int>(std::count_if(st.selection.begin(), st.selection.end(),
+      [](const SelectedEntity& e) { return e.type == ST::Spline; }));
+  if (splinesSkipped > 0)
+    log.push_back("JOIN — " + std::to_string(splinesSkipped) + " spline" +
+                  (splinesSkipped == 1 ? "" : "s") + " ignored: spline joining is not supported.");
 
   // z0/z1 carry each edge's endpoint elevations through the join (issue 01). Without them the
   // rebuilt polyline was written flat at datum, so joining two lines surveyed at 286 ft produced a
@@ -41870,6 +42256,7 @@ auto* AttrsOfSelected(StateT& st, const SelectedEntity& e) {
   case T::Table:        return at(st.cadTableAttrs);
   case T::PositionMarker: return at(st.cadPositionMarkerAttrs);  // REQ-359
   case T::Multileader:    return at(st.cadMultileaderAttrs);     // REQ-367
+  case T::Spline:         return at(st.cadSplineAttrs);          // REQ-443
   case T::BlockRef:     return at(st.cadBlockRefAttrs);
   case T::Solid:        return at(st.cadSolidAttrs);    // REQ-352
   case T::PipeRun:      return at(st.cadPipeRunAttrs);  // REQ-352
@@ -42062,6 +42449,7 @@ bool CadLineStyleApplies(SelectedEntity::Type t) {
   case T::Circle:
   case T::Arc:
   case T::Ellipse:
+  case T::Spline:  // REQ-443
   case T::Polyline:
   case T::Annotation:
   case T::Table:
@@ -43181,6 +43569,11 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ARC canceled.");
   else if (st.active == AppCommandState::Kind::Ellipse)
     log.push_back("ELLIPSE canceled.");
+  else if (st.active == AppCommandState::Kind::Spline) {
+    st.splineDraftPoints.clear();
+    st.splineMethod = AppCommandState::SplineMethod::Fit;
+    log.push_back("SPLINE canceled — nothing was added.");
+  }
   else if (st.active == AppCommandState::Kind::Rect)
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
@@ -44206,6 +44599,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::Mtext && st.mtextPhase == AppCommandState::MtextPhase::WaitString && !line.empty()) {
     log.push_back("MTEXT — type in the on-screen editor over the box (Ctrl+Enter reformats; Save to place).");
+    return;
+  }
+
+  if (st.active == K::Spline) {
+    (void)HandleSplineTextInput(line, st, log);
     return;
   }
 
@@ -47489,6 +47887,13 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "ELLIPSE: Ratio (0-1] on command line | Enter = 0.5 | ESC cancel";
     }
   }
+  if (st.active == K::Spline) {
+    static char buf[160];
+    std::snprintf(buf, sizeof(buf),
+                  "SPLINE: %zu points — click or type X,Y | CV / Fit | Close / End / Undo | ESC cancel",
+                  st.splineDraftPoints.size());
+    return buf;
+  }
   if (st.active == K::Text) {
     switch (st.textPhase) {
     case TP::WaitInsertion:
@@ -47827,6 +48232,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Rect:       StartRectCommand(st, log);       break;
     case K::Arc:        StartArcCommand(st, log);        break;
     case K::Ellipse:    StartEllipseCommand(st, log);    break;
+    case K::Spline:     StartSplineCommand(st, log);     break;
     case K::Text:       StartTextCommand(st, log);       break;
     case K::Mtext:      StartMtextCommand(st, log);      break;
     case K::Mleader:    StartMleaderCommand(st, log);    break;
@@ -47914,6 +48320,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case T::Circle:     return (size_t)e.index < cmd.userCircleAttrs.size()     ? &cmd.userCircleAttrs[(size_t)e.index]     : nullptr;
     case T::Arc:        return (size_t)e.index < cmd.userArcAttrs.size()        ? &cmd.userArcAttrs[(size_t)e.index]        : nullptr;
     case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
+    case T::Spline:     return e.index >= 0 && (size_t)e.index < cmd.cadSplineAttrs.size() ? &cmd.cadSplineAttrs[(size_t)e.index] : nullptr;
     case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
     case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
     case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
@@ -47930,6 +48337,10 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case T::Arc:      if (!typeMatches(OT::Arc))     return false; break;
     case T::Ellipse:  if (!typeMatches(OT::Ellipse)) return false; break;
     case T::Polyline: if (!typeMatches(OT::Polyline))return false; break;
+    case T::Spline:
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadSplines.size() || cmd.qsObjectType != OT::All)
+        return false;
+      break;
     case T::Annotation: {
       if ((size_t)e.index >= cmd.cadAnnotations.size()) return false;
       const auto k = cmd.cadAnnotations[(size_t)e.index].kind;
@@ -47994,11 +48405,14 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
                                 cmd.userPolylineVerts[xi+4] - cmd.userPolylineVerts[xi+1]);
           }
         }
+      } else if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {
+        len = spline::Length(cmd.cadSplines[static_cast<size_t>(e.index)]);
       }
       return matchNum(static_cast<float>(len));
     }
     case QP::Radius: {
       double r = 0.0;
+      if (e.type == T::Spline) return false;
       if (e.type == T::Circle) {
         const size_t k = (size_t)e.index * 4;
         if (k + 3 < cmd.userCirclesCxCyZR.size()) r = cmd.userCirclesCxCyZR[k + 3];
@@ -48010,6 +48424,12 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     case QP::Closed:
       if (e.type == T::Polyline && (size_t)e.index < cmd.userPolylineClosed.size()) {
         const bool closed = cmd.userPolylineClosed[(size_t)e.index] != 0;
+        if (cmd.qsOperator == QO::SelectAll) return true;
+        const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
+        return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
+      }
+      if (e.type == T::Spline && e.index >= 0 && static_cast<size_t>(e.index) < cmd.cadSplines.size()) {
+        const bool closed = cmd.cadSplines[static_cast<size_t>(e.index)].periodic;
         if (cmd.qsOperator == QO::SelectAll) return true;
         const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
         return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
@@ -48068,6 +48488,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
     for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
+    for (int i = 0; i < (int)cmd.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
     const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});

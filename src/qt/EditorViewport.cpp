@@ -189,6 +189,7 @@ void EditorViewport::paintGL() {
     ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
+    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -296,6 +297,7 @@ void EditorViewport::paintGL() {
     ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
+    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -667,6 +669,16 @@ void EditorViewport::paintGL() {
             if (EllipseHasGrips(ellipse)) {
               ray3d::Vec3 points[3]; EllipseGripPoints(ellipse, points);
               grips.assign(std::begin(points), std::end(points));
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Spline: {  // REQ-443: fit points, or control vertices for a CV spline
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadSplines.size()) {
+            const CadSpline& sp = m_State.cadSplines[static_cast<std::size_t>(selected.index)];
+            for (std::size_t i = 0; i < spline::EditablePointCount(sp); ++i) {
+              const spline::Vec3 v = spline::EditablePoint(sp, i);
+              grips.push_back({v.x, v.y, v.z});
             }
           }
           break;

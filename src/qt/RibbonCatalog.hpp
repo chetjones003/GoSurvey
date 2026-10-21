@@ -40,7 +40,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Draw", "##RibbonLine", "Line", "line", "LINE", "Line — draw straight segments between points.\nCommand bar: LINE or L", false, false},
   {"Home", "Draw", "##RibbonArc", "Arc", "arc", "ARC", "Arc — three-point arc (start, mid, end).\nCommand bar: ARC", false, false},
   {"Home", "Draw", "##RibbonPLine", "Polyline", "polyline", "PLINE", "Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL", false, false},
-  {"Home", "Draw", "##RibbonSpline", "Spline", "c3d_spline", "", "Spline — not implemented yet.", false, true},
+  {"Home", "Draw", "##RibbonSpline", "Spline", "c3d_spline", "SPLINE", "Spline — draw a fit-point or control-vertex curve.\nCommand bar: SPLINE", false, false},
   {"Home", "Draw", "##RibbonCircle", "Circle", "Circle_Center_Radius", "CIRCLE", "Circle — center point and radius.\nCommand bar: CIRCLE or C", false, false},
   {"Home", "Draw", "##RibbonRect", "Rectangle", "rect", "RECT", "Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT", false, false},
   {"Home", "Draw", "##RibbonEllipse", "Ellipse", "ellipse", "ELLIPSE", "Ellipse — center, axis endpoint, then ratio.\nCommand bar: ELLIPSE or EL", false, false},
