@@ -23719,6 +23719,10 @@ std::string FormatSlope(double run) {
 std::string GradingDefaultSurface(const AppCommandState& st) {
   if (!st.gradingSurface.empty() && FindSurfaceIndex(st, st.gradingSurface) >= 0)
     return st.gradingSurface;
+  // Issue #997: an edited grading whose target surface is gone must be told which one to use, not
+  // quietly regraded to whatever surface happens to be left.
+  if (st.gradingEditId != 0)
+    return std::string();
   if (st.cadSurfaces.size() == 1)
     return st.cadSurfaces[0].name;
   return std::string();
@@ -23776,6 +23780,62 @@ std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
   if (outCount)
     *outCount = n;
   return id;
+}
+
+/// Take feature line \p id as GRADING's subject (issue #997). An ordinary line becomes the baseline
+/// of a new grading. A grading result is opened for EDITING instead: its stored baseline, slopes,
+/// side and target come back as the prompt's values. Returns false, having said why, when the
+/// result's baseline is gone - rebuilding it from nothing would be inventing a design.
+bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<std::string>& log) {
+  st.gradingEditId = 0;
+  const int ix = FindEntityIndexById(st.featureLineAttrs, id);
+  const CadFeatureLineInfo* info =
+      (ix >= 0 && static_cast<size_t>(ix) < st.featureLineInfo.size())
+          ? &st.featureLineInfo[static_cast<size_t>(ix)]
+          : nullptr;
+  if (info == nullptr || !info->grading) {
+    st.gradingBaselineId = id;
+    return true;
+  }
+  const CadGradingDefinition& def = *info->grading;
+  if (FindEntityIndexById(st.featureLineAttrs, def.baselineId) < 0) {
+    log.push_back("GRADING - the baseline of \"" + info->name +
+                  "\" is gone, so it cannot be rebuilt. It is left as it is.");
+    return false;
+  }
+  st.gradingEditId = id;
+  st.gradingBaselineId = def.baselineId;
+  st.gradingCutRun = def.cutRun;
+  st.gradingFillRun = def.fillRun;
+  st.gradingSideLeft = def.sideLeft;
+  st.gradingSideChosen = true;
+  const int si = FindSurfaceIndexById(st, def.surfaceId);
+  st.gradingSurface = si >= 0 ? st.cadSurfaces[static_cast<size_t>(si)].name : std::string();
+  log.push_back("GRADING - editing \"" + info->name + "\". Enter rebuilds it in place.");
+  if (si < 0)
+    log.push_back("GRADING - its target surface is gone. Type S to choose another.");
+  return true;
+}
+
+/// Replace feature line \p li's vertices in place, keeping its slot, id and attributes. The vertex
+/// and flag arrays are cut on different strides, so both are spliced here together and every later
+/// line's offset moves by the change in count.
+void ReplaceFeatureLineVertices(AppCommandState& st, size_t li, const std::vector<double>& xyz,
+                                const std::vector<uint8_t>& elevPt, bool closed) {
+  const int a = st.featureLineOffsets[li];
+  const int b = st.featureLineOffsets[li + 1];
+  const int n = static_cast<int>(xyz.size() / 3);
+  st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
+  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                             xyz.begin(), xyz.end());
+  if (st.featureLineElevPt.size() < static_cast<size_t>(b))
+    st.featureLineElevPt.resize(static_cast<size_t>(b), 0);
+  st.featureLineElevPt.erase(st.featureLineElevPt.begin() + a, st.featureLineElevPt.begin() + b);
+  st.featureLineElevPt.insert(st.featureLineElevPt.begin() + a, elevPt.begin(), elevPt.end());
+  for (size_t k = li + 1; k < st.featureLineOffsets.size(); ++k)
+    st.featureLineOffsets[k] += n - (b - a);
+  st.featureLineClosed[li] = static_cast<uint8_t>(closed ? 1 : 0);
 }
 
 /// Project the baseline's side slopes out to the surface and commit the daylight line.
@@ -23919,30 +23979,61 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   const bool skippedAny = (offSurface + neverMet + degenerate) > 0;
   const bool emitClosed = closed && !skippedAny;
 
-  PushUndoSnapshot(st, "Grading daylight line");
-  if (st.featureLineOffsets.empty())
-    st.featureLineOffsets.push_back(0);
-  const int baseVert = st.featureLineOffsets.back();
-  st.featureLineVerts.insert(st.featureLineVerts.end(), out.begin(), out.end());
-  st.featureLineElevPt.insert(st.featureLineElevPt.end(), outElev.begin(), outElev.end());
-  st.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
-  st.featureLineClosed.push_back(static_cast<uint8_t>(emitClosed ? 1 : 0));
+  // Issue #997: the inputs travel with the result, by stable id, so it can be edited after reopen.
+  EnsureEntityIds(st);
+  CadGradingDefinition def;
+  def.baselineId = st.gradingBaselineId;
+  def.surfaceId = static_cast<size_t>(si) < st.cadSurfaceAttrs.size()
+                      ? st.cadSurfaceAttrs[static_cast<size_t>(si)].id
+                      : 0;
+  def.cutRun = slopes.cutRun;
+  def.fillRun = slopes.fillRun;
+  def.sideLeft = st.gradingSideLeft;
+  const std::string description = "REQ-398 daylight line: cut " + FormatSlope(slopes.cutRun) +
+                                  ", fill " + FormatSlope(slopes.fillRun) + ", to " + surf.name;
 
-  CadFeatureLineInfo info;
-  const std::string baseName = (static_cast<size_t>(bi) < st.featureLineInfo.size() &&
-                                !st.featureLineInfo[static_cast<size_t>(bi)].name.empty())
-                                   ? st.featureLineInfo[static_cast<size_t>(bi)].name
-                                   : std::string("Baseline");
-  info.name = baseName + " Daylight";
-  info.description = "REQ-398 daylight line: cut " + FormatSlope(slopes.cutRun) + ", fill " +
-                     FormatSlope(slopes.fillRun) + ", to " + surf.name;
-  st.featureLineInfo.push_back(std::move(info));
-  st.featureLineAttrs.push_back(
-      MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
+  size_t resultIx = 0;
+  const bool editing = st.gradingEditId != 0;
+  if (editing) {
+    const int ti = FindEntityIndexById(st.featureLineAttrs, st.gradingEditId);
+    if (ti < 0 || static_cast<size_t>(ti) + 1 >= st.featureLineOffsets.size() ||
+        static_cast<size_t>(ti) >= st.featureLineInfo.size()) {
+      log.push_back("GRADING - the grading being edited is gone; nothing was changed.");
+      return;
+    }
+    resultIx = static_cast<size_t>(ti);
+    PushUndoSnapshot(st, "Edit grading");
+    ReplaceFeatureLineVertices(st, resultIx, out, outElev, emitClosed);
+    st.featureLineInfo[resultIx].description = description;
+    st.featureLineInfo[resultIx].grading = def;
+  } else {
+    PushUndoSnapshot(st, "Grading daylight line");
+    if (st.featureLineOffsets.empty())
+      st.featureLineOffsets.push_back(0);
+    const int baseVert = st.featureLineOffsets.back();
+    st.featureLineVerts.insert(st.featureLineVerts.end(), out.begin(), out.end());
+    st.featureLineElevPt.insert(st.featureLineElevPt.end(), outElev.begin(), outElev.end());
+    st.featureLineOffsets.push_back(baseVert + static_cast<int>(got));
+    st.featureLineClosed.push_back(static_cast<uint8_t>(emitClosed ? 1 : 0));
+
+    CadFeatureLineInfo info;
+    const std::string baseName = (static_cast<size_t>(bi) < st.featureLineInfo.size() &&
+                                  !st.featureLineInfo[static_cast<size_t>(bi)].name.empty())
+                                     ? st.featureLineInfo[static_cast<size_t>(bi)].name
+                                     : std::string("Baseline");
+    info.name = baseName + " Daylight";
+    info.description = description;
+    info.grading = def;
+    st.featureLineInfo.push_back(std::move(info));
+    st.featureLineAttrs.push_back(
+        MakeNewObjectAttrs(st, ObjectLayerKind::FeatureLine, st.featureLineInfo.back().name));  // REQ-361
+    resultIx = st.featureLineInfo.size() - 1;
+  }
   BumpCadGpuCache(st);
 
-  log.push_back("GRADING - daylight line \"" + st.featureLineInfo.back().name + "\" created, " +
-                std::to_string(got) + " of " + std::to_string(nv) + " stations daylighted.");
+  log.push_back("GRADING - daylight line \"" + st.featureLineInfo[resultIx].name + "\" " +
+                (editing ? "rebuilt" : "created") + ", " + std::to_string(got) + " of " +
+                std::to_string(nv) + " stations daylighted.");
   log.push_back("GRADING - cut " + FormatSlope(slopes.cutRun) + " at " + std::to_string(cut) +
                 " stations, fill " + FormatSlope(slopes.fillRun) + " at " + std::to_string(fill) +
                 " stations, already on grade at " + std::to_string(onGrade) + ".");
@@ -23957,6 +24048,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.active = AppCommandState::Kind::None;
   st.gradingPhase = AppCommandState::GradingPhase::WaitBaseline;
+  st.gradingEditId = 0;
 }
 
 }  // namespace
@@ -23968,6 +24060,7 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.lastCommand = AppCommandState::Kind::Grading;
   st.gradingBaselineId = 0;
   st.gradingSideChosen = false;
+  st.gradingEditId = 0;
 
   if (st.featureLineOffsets.size() < 2) {
     log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
@@ -23988,7 +24081,10 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   int n = 0;
   const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
   if (n == 1) {
-    st.gradingBaselineId = id;
+    if (!GradingTakeFeatureLine(st, id, log)) {
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
     GradingPrompt(st, log);
     return;
   }
@@ -24139,9 +24235,13 @@ void HandleGradingPick(AppCommandState& st, double wx, double wy, std::vector<st
   if (hit.index < 0 || static_cast<size_t>(hit.index) >= st.featureLineAttrs.size())
     return;
   EnsureEntityIds(st);
-  st.gradingBaselineId = st.featureLineAttrs[static_cast<size_t>(hit.index)].id;  // REQ-076
   ClearCadSelection(st);
   st.selection.push_back(hit);
+  // REQ-076 stable id. A grading result whose baseline is gone ends the command, left as it is.
+  if (!GradingTakeFeatureLine(st, st.featureLineAttrs[static_cast<size_t>(hit.index)].id, log)) {
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
   GradingPrompt(st, log);
 }
 
