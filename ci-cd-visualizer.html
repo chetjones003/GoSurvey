@@ -24,7 +24,7 @@
 <article class="card trigger"><div class="icon">🔀</div><h3>Pull request checks</h3><p>PR opened or updated against <b>master</b> or <b>beta</b>. New commits cancel the prior run for that PR.</p><span class="tag info">Automatic · PR gate</span></article>
 <article class="card trigger"><div class="icon">📦</div><h3>Release</h3><p>Started manually from Actions. Choose the ref in GitHub’s “Run workflow” selector.</p><span class="tag warn">Manual only</span></article>
 <article class="card trigger"><div class="icon">🌐</div><h3>GitHub Pages</h3><p>Push to <b>master</b> touching site/, resources/whats-new/, or this workflow; also manual.</p><span class="tag info">Automatic + manual</span></article>
-<article class="card trigger"><div class="icon">🛡️</div><h3>CodeQL</h3><p>Currently manual only. The file’s PR and weekly schedule triggers are intentionally disabled.</p><span class="tag warn">Manual only · hotfix</span></article>
+<article class="card trigger"><div class="icon">🛡️</div><h3>CodeQL</h3><p>Runs daily against both master and beta, with manual dispatch available. Pull requests do not trigger the whole-program scan.</p><span class="tag">Daily · master + beta</span></article>
 </div>
 </section>
 
@@ -61,7 +61,7 @@
 <div class="section-head"><div><h2>Other automation</h2><p>These do not form a release prerequisite.</p></div></div>
 <div class="grid two">
 <article class="card"><h3>🌐 Pages deployment</h3><p>Ubuntu runner → checkout → configure Pages → copy What's New PNGs into <code>site/img/features</code> → upload site artifact → deploy to GitHub Pages. New product releases do not trigger a site deployment; site reads release data from GitHub API at view time.</p></article>
-<article class="card"><h3>🛡️ CodeQL C++ analysis</h3><p>Windows runner → initialize C++ security-and-quality queries → configure/build with MSVC + Ninja → upload analysis. Workflow comment records automatic PR and weekly triggers disabled since 2026-09-08; findings are intended for Security tab and are not a release gate.</p></article>
+<article class="card"><h3>🛡️ CodeQL C++ analysis</h3><p>Daily matrix → check out master and beta in parallel → initialize C++ security-and-quality queries → configure/build with MSVC + Ninja → upload analysis. Error-severity findings fail the scan; pull requests do not trigger CodeQL.</p></article>
 </div>
 </section>
 
@@ -70,7 +70,7 @@
 <div class="grid two">
 <article class="finding critical"><h3><span class="tag stop">High impact</span>Release dispatch does not repeat PR tests</h3><p>The full build, CTest, clang-tidy and MSVC analysis are required before changes merge to master or beta. The manual release workflow builds and packages from its selected ref without rerunning that test suite.</p><p></p><div class="evidence">Evidence: origin/beta pr-checks.yml; release.yml build flags and workflow_dispatch trigger</div></article>
 <article class="finding critical"><h3><span class="tag stop">Security posture</span>Unsigned installers</h3><p>The signing step only prints a message. SHA-256 in the manifest checks that bytes match, but does not establish who published them; users may see SmartScreen warnings.</p><div class="evidence">Evidence: release.yml “Sign the installer” step</div></article>
-<article class="finding watch"><h3><span class="tag warn">Coverage gap</span>CodeQL automatic scans are off</h3><p>Only manual workflow dispatch remains. New PRs and weekly changes do not automatically receive CodeQL analysis while this hotfix is in place.</p><div class="evidence">Evidence: codeql.yml trigger and 2026-09-08 comment</div></article>
+<article class="finding watch"><h3><span class="tag">Scheduled coverage</span>CodeQL scans master and beta daily</h3><p>Both maintained branches receive a daily whole-program C++ security-and-quality scan. Manual dispatch remains available; PRs are not scanned automatically.</p><div class="evidence">Evidence: codeql.yml daily schedule and branch matrix</div></article>
 <article class="finding watch"><h3><span class="tag warn">Build policy</span>Windows jobs repeat some compile work</h3><p>Full validation configures independent Windows jobs for build/test, clang-tidy and MSVC analysis. The latest pre-optimization build and analysis each spent over 17 minutes compiling. MSVC analysis now builds only diff-affected object targets for ordinary source changes. That run reported zero sccache requests; the MSVC job now verifies launcher injection and reports cache stats, while CMP0141 is set early enough to enable /Z7.</p><div class="evidence">Evidence: run #39599214462; prior sccache stats showed 0 requests; new run will verify reuse</div></article>
 <article class="finding"><h3><span class="tag info">Important boundary</span>Branch protection is outside these files</h3><p>The live branch protections for master and beta require PR gate, Gitleaks, Trivy, full build and CTest, clang-tidy, and MSVC analysis; each still requires one approving review.</p><div class="evidence">Evidence: GitHub branch protection API checked for master and beta</div></article>
 <article class="finding"><h3><span class="tag info">User-facing content</span>Release notes can fall back silently</h3><p>If RELEASE_NOTES.md lacks a matching version section, manifest and release body use a generic fallback. The pipeline warns, but does not stop publishing.</p><div class="evidence">Evidence: release.yml “Write the update manifest” step</div></article>
@@ -93,7 +93,7 @@
 <tr><td><b>full-validation</b></td><td>PR → master/beta</td><td>Full Windows build, complete CTest, changed-line clang-tidy, blocking MSVC analysis</td><td>No</td><td>Yes · all full-validation jobs</td></tr>
 <tr><td><b>release</b></td><td>Manual dispatch</td><td>Build app; package installer; version gate; manifest</td><td>Stable release, rolling beta, or 14-day artifact</td><td>Self-gated on build/package, not tests/PR checks</td></tr>
 <tr><td><b>pages</b></td><td>Master path-filtered push or manual</td><td>Stage images and deploy <code>site/</code></td><td>GitHub Pages</td><td>No</td></tr>
-<tr><td><b>codeql</b></td><td>Manual dispatch (automatic triggers disabled)</td><td>C++ CodeQL build and analysis</td><td>Security analysis results</td><td>No</td></tr>
+<tr><td><b>codeql</b></td><td>Daily schedule (master + beta), manual dispatch</td><td>C++ CodeQL build and analysis</td><td>Security analysis results</td><td>No</td></tr>
 </tbody></table></div>
 </section>
 
