@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -1119,9 +1120,23 @@ struct CadSurfaceBreakline {
 ///
 /// Kept out of \c EntityAttributes deliberately (ADR-035 (c)): that struct is clipboard-copied and
 /// DXF-exported, and a feature line's name has no meaning in either place.
+/// The editable inputs a GRADING result keeps (REQ-398, issue #997), so the daylight line can be
+/// reopened and rebuilt rather than redrawn. Sources are held by stable entity id (REQ-076), never
+/// by index or name, so a deleted source resolves to nothing instead of to whatever took its place.
+struct CadGradingDefinition {
+  std::uint64_t baselineId = 0;  ///< the baseline feature line
+  std::uint64_t surfaceId = 0;   ///< the target surface
+  double cutRun = 2.0;           ///< run of run:rise where the baseline sits below ground
+  double fillRun = 3.0;          ///< ...and above it
+  bool sideLeft = true;          ///< outward side for an open baseline; unused when it is closed
+};
+
 struct CadFeatureLineInfo {
   std::string name;         ///< What the user called it. Not required to be unique.
   std::string description;
+  /// Present only on a GRADING result. Absent means an ordinary feature line, which is what every
+  /// drawing saved before issue #997 loads as.
+  std::optional<CadGradingDefinition> grading;
 };
 
 /// One row of a feature line's elevation table (REQ-088).
