@@ -6,14 +6,14 @@
 - Owner:   Claude
 
 ## 1. Authority
-- Requirements: REQ-444 (accepted 2026-10-20, D-2026-10-20-a). Qt only; ImGui unchanged.
+- Requirements: REQ-444 (accepted 2026-10-20, D-2026-10-20-e). Qt only; beta removed ImGui support under REQ-440.
 - Owning subsystem: Commands (typed command + state), util/geom2d (scallop geometry), Viewport
   (pick route, rubber preview), Qt ribbon catalog.
 
 ## 2. Scope
 - In scope: `REVCLOUD` click path and Object mode (closed polyline, rectangle, circle), Arc length /
   Reverse / Delete-original options, live preview, both Qt ribbon buttons enabled.
-- Out of scope: Spline (REQ-443), Wipeout (REQ-442), freehand drag, legacy ImGui ribbon, paper space.
+- Out of scope: Spline (REQ-443), Wipeout (REQ-442), freehand drag, retired ImGui ribbon, paper space.
 
 ## 3. Architectural boundary check
 - [x] No new entity kind, store, dependency or file-format change: the cloud is a closed bulge
