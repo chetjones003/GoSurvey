@@ -597,6 +597,12 @@ set(GOSURVEY_DOMAIN_SOURCES
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
 # once per configuration rather than once per executable that needs it.
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
+# CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
+if(MSVC)
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/commands/CadCommands.cpp"
+    PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
