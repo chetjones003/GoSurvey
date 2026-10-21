@@ -11,7 +11,8 @@
 param(
   [string]$EnvironmentFile = 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1',
   [ValidateRange(0, 64)][int]$BuildWorkers = 0,
-  [ValidateRange(0, 64)][int]$TestWorkers = 0
+  [ValidateRange(0, 64)][int]$TestWorkers = 8,
+  [string]$BaseSha = $env:BASE_SHA
 )
 
 $ErrorActionPreference = 'Stop'
@@ -174,6 +175,12 @@ function Find-WorkingClangTidy {
 
 try {
   Measure-BenchmarkStage preflight {
+    if (-not $BaseSha) { throw 'Supply -BaseSha for the same PR diff used by hosted analysis.' }
+    $report.baseSha = $BaseSha
+    $report.headSha = git rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Could not read the benchmark revision.' }
+    git cat-file -e "$BaseSha^{commit}"
+    if ($LASTEXITCODE -ne 0) { throw 'The benchmark base commit is not available locally.' }
     if (-not (Test-Path -LiteralPath $EnvironmentFile)) {
       throw "Environment helper missing: $EnvironmentFile. Run tools/setup-windows-build-runner.ps1 first."
     }
@@ -251,7 +258,32 @@ try {
   Save-CompilerCacheStats warm
   Copy-Item -LiteralPath build/.cmake/release/.ninja_log -Destination (Join-Path $outputDir 'warm.ninja_log')
   Measure-BenchmarkStage full_ctest {
+    $env:GOSURVEY_TEST_RUN_ID = 'benchmark-' + [Guid]::NewGuid().ToString('N')
     Invoke-BenchmarkCommand ctest @('--preset', 'ninja-release', '--output-junit', (Join-Path $outputDir 'ctest.xml'))
+  }
+  Measure-BenchmarkStage verify_coverage {
+    Invoke-BenchmarkCommand python @('tools/verify-test-coverage.py', '--artifacts', 'build/artifacts',
+      '--run-id', $env:GOSURVEY_TEST_RUN_ID)
+  }
+  Measure-BenchmarkStage clang_tidy {
+    & (Join-Path $PSScriptRoot 'run-clang-tidy-diff.ps1') -BaseSha $BaseSha `
+      -OutputDirectory (Join-Path $outputDir 'clang-tidy') -Jobs 2
+  }
+  $analyzeDir = 'build/.cmake/benchmark-msvc'
+  Measure-BenchmarkStage msvc_configure {
+    Invoke-BenchmarkCommand cmake @('--preset', 'ninja-release', '-B', $analyzeDir,
+      '-DGOSURVEY_ENABLE_ANALYZE=ON', '-DGOSURVEY_ANALYZE_WERROR=ON', '-DGOSURVEY_USE_PCH=OFF',
+      '-DCMAKE_C_COMPILER_LAUNCHER=sccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=sccache',
+      "-DCMAKE_PREFIX_PATH=$env:GOSURVEY_QT_ROOT")
+  }
+  Measure-BenchmarkStage msvc_analyze {
+    $selection = Join-Path $outputDir 'msvc-selection.json'
+    Invoke-BenchmarkCommand python @('.github/scripts/select_msvc_analyze_targets.py',
+      '--base-sha', $BaseSha, '--compile-commands', "$analyzeDir/compile_commands.json",
+      '--build-dir', $analyzeDir, '--targets-file', $selection)
+    Invoke-BenchmarkCommand python @('.github/scripts/run_msvc_analyze.py', '--selection', $selection,
+      '--build-dir', $analyzeDir, '--compiler-launcher', 'sccache', '--jobs', '4')
+    Save-CompilerCacheStats analyze
   }
   $report.passed = $true
 } catch {

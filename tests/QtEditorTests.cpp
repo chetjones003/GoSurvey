@@ -923,7 +923,7 @@ private Q_SLOTS:
     AttachPointCloud(window, big);
     QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("pointCloudImportProgress"), 10000);
     auto* progress = window.findChild<QDialog*>("pointCloudImportProgress");
-    QTest::qWait(3000);
+    QTRY_VERIFY_WITH_TIMEOUT(progress->isVisible(), 10000);
     for (const auto& [name, sheet] : options) {
       if (!sheet.isEmpty()) progress->setStyleSheet(sheet);
       QVERIFY(progress->grab().save(Issue907Shot(("qt-916-progress-" + QString(name) + ".png").toUtf8().constData())));
@@ -9079,10 +9079,14 @@ private Q_SLOTS:
     QVERIFY(st.cadSurfaces[1].sourcePointGroups.empty());
     // Boundaries keep an order the user can change (REQ-069). Let the rebuild the removal asked for
     // finish first: a rebuild drops boundaries whose entity no longer exists, and these are stand-ins.
-    QTest::qWait(600);
+    QTRY_VERIFY_WITH_TIMEOUT(st.surfaceRebuildAsync.empty() &&
+                                SurfaceRebuildStateOf(st, 0) == SurfaceState::Current &&
+                                SurfaceRebuildStateOf(st, 1) == SurfaceState::Current,
+                            10000);
     st.cadSurfaces[1].boundaries.push_back({31, CadBoundaryKind::Outer, "first"});
     st.cadSurfaces[1].boundaries.push_back({32, CadBoundaryKind::Hide, "second"});
-    QTest::qWait(600);  // the manager notices the change on its refresh timer
+    // Wait for the refresh timer to publish both rows, regardless of runner load.
+    QTRY_VERIFY_WITH_TIMEOUT(find(kBoundaryItem, 1, 0) && find(kBoundaryItem, 1, 1), 10000);
     tree->setCurrentItem(find(kBoundaryItem, 1, 0));
     auto* up = manager->findChild<QPushButton*>("surfaceManagerMoveUp");
     auto* down = manager->findChild<QPushButton*>("surfaceManagerMoveDown");

@@ -27,10 +27,12 @@ for ($i = 0; $i -lt $functions.Count; ++$i) {
 if ($selected.Count -eq 0) { throw "Qt test shard $ShardIndex has no test functions." }
 
 $shardName = "shard-$ShardIndex"
-$shardRoot = Join-Path (Split-Path -Parent $workDir) "qt-editor/$shardName-$PID"
-$tempDir = Join-Path $shardRoot 'temp'
+$runId = if ($env:GOSURVEY_TEST_RUN_ID) { $env:GOSURVEY_TEST_RUN_ID } else { 'manual' }
+if ($runId -notmatch '^[A-Za-z0-9_-]+$') { throw 'Invalid test run identifier.' }
+$shardRoot = Join-Path (Split-Path -Parent $workDir) "qt-editor/$runId/$shardName"
+$tempDir = Join-Path $shardRoot "temp-$PID"
 $artifactDir = Join-Path $shardRoot 'artifacts'
-$appDataDir = Join-Path $shardRoot 'appdata'
+$appDataDir = Join-Path $shardRoot "appdata-$PID"
 New-Item -ItemType Directory -Force -Path $tempDir, $artifactDir | Out-Null
 New-Item -ItemType Directory -Force -Path $appDataDir | Out-Null
 
@@ -39,6 +41,8 @@ $env:TMP = $tempDir
 $env:APPDATA = $appDataDir
 $env:GOSURVEY_QT_TEST_SHARD = "$shardName-$PID"
 $env:GOSURVEY_QT_TEST_ARTIFACT_DIR = $artifactDir
+@{ count = $ShardCount; index = $ShardIndex; expected = $functions; selected = $selected } |
+  ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $shardRoot 'discovery.json') -Encoding UTF8
 
 $log = Join-Path $shardRoot 'qt-tests.log'
 $launcher = Join-Path $PSScriptRoot 'run-qt-tests-hidden.ps1'

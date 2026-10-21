@@ -190,7 +190,12 @@ jobs:
         env:
           QT_OPENGL: desktop
           GALLIUM_DRIVER: llvmpipe
-        run: ctest --preset ninja-release --parallel 8 --output-junit "${{ github.workspace }}/build/artifacts/ci/ctest.xml"
+        run: |
+          $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
+          ctest --preset ninja-release --parallel 8 --output-junit "${{ github.workspace }}/build/artifacts/ci/ctest.xml"
+          if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
+          python tools/verify-test-coverage.py --artifacts build/artifacts --run-id $env:GOSURVEY_TEST_RUN_ID
+          if ($LASTEXITCODE -ne 0) { throw 'Test shard coverage is incomplete.' }
 
       - name: Summarize CI performance
         if: always()
@@ -205,6 +210,9 @@ jobs:
           include-hidden-files: true
           path: |
             build/artifacts/ci/
+            build/artifacts/catch/
+            build/artifacts/coverage-*.json
+            build/artifacts/qt-editor/**/discovery.json
             build/.cmake/release/.ninja_log
             build/.cmake/release/Testing/Temporary/LastTest.log
             build/.cmake/release/Testing/Temporary/LastTestsFailed.log
@@ -280,100 +288,9 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          $clangTidy = Get-Command clang-tidy -ErrorAction SilentlyContinue
-          if (-not $clangTidy) {
-            $candidate = 'C:\Program Files\LLVM\bin\clang-tidy.exe'
-            if (-not (Test-Path $candidate)) { throw "clang-tidy.exe not found on this runner image." }
-            $clangTidy = $candidate
-          } else {
-            $clangTidy = $clangTidy.Source
-          }
-          Write-Host "Using $clangTidy ($(& $clangTidy --version | Select-Object -First 1))"
-
-          git fetch --depth=1 origin $env:BASE_SHA
-          $changed = git diff --name-only --diff-filter=ACMR "$env:BASE_SHA" HEAD |
-            Where-Object { $_ -match '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' } |
-            Where-Object { $_ -notmatch '^third_party/' } |
-            Where-Object { Test-Path $_ }
-
-          if (-not $changed) {
-            Write-Host "No changed C/C++ files to lint."
-            exit 0
-          }
-          Write-Host "Linting (changed lines only):`n$($changed -join "`n")"
-
-          # One combined {name, lines} entry per changed file, reused for every invocation below
-          # (see the job header comment for why: a header's diagnostics can surface while a
-          # DIFFERENT .cpp is the file clang-tidy was invoked on). "name" uses backslashes because
-          # clang-tidy's line-filter matches the diagnostic's file path as the compiler reports it,
-          # which on this MSVC/Windows runner is a backslash-separated absolute path — a
-          # forward-slash "name" (git's own path spelling) never matches that suffix at all.
-          $filterEntries = @()
-          $lintFiles = @()
-          foreach ($file in $changed) {
-            $hunkStarts = git diff -U0 "$env:BASE_SHA" HEAD -- $file |
-              Select-String -Pattern '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-            $ranges = @()
-            foreach ($m in $hunkStarts) {
-              $start = [int]$m.Matches[0].Groups[1].Value
-              $countGroup = $m.Matches[0].Groups[2]
-              $count = if ($countGroup.Success) { [int]$countGroup.Value } else { 1 }
-              if ($count -eq 0) { continue }  # pure deletion: no new lines in this hunk to check
-              $ranges += "[$start,$($start + $count - 1)]"
-            }
-            if ($ranges.Count -eq 0) { continue }  # file touched only by deletions; nothing new to lint
-            # Two backslashes, not one: this string is embedded directly into JSON text below, and
-            # JSON requires a literal backslash to be written as \\ — a single backslash here would
-            # make the JSON invalid (a Windows path backslash followed by certain letters, e.g. the
-            # "\u" in "CadCommands.hpp", parses as a bad unicode escape, not a path separator).
-            $name = $file -replace '/', '\\'
-            $filterEntries += "{`"name`":`"$name`",`"lines`":[$($ranges -join ',')]}"
-            $lintFiles += $file
-          }
-
-          if ($filterEntries.Count -eq 0) {
-            Write-Host "No added/modified lines in any changed C/C++ file (deletions only)."
-            exit 0
-          }
-
-          # This generated MOC include is needed only when clang-tidy analyzes the Qt test TU.
-          # Invoke metadata generation directly: the Ninja autogen target also builds the app.
-          if ($lintFiles -contains 'tests/QtEditorTests.cpp') {
-            cmake -E cmake_autogen build/.cmake/release/CMakeFiles/GoSurveyQtTests_autogen.dir/AutogenInfo.json Release
-            if ($LASTEXITCODE -ne 0) { throw "Qt test MOC generation failed (exit $LASTEXITCODE)" }
-          }
-
-          New-Item -ItemType Directory -Force -Path build/artifacts/ci/clang-tidy | Out-Null
-          $lineFilter = "[$($filterEntries -join ',')]"
-          Write-Host "Line filter:`n$lineFilter"
-
-          # Each invocation reads the same compile database and writes no shared files. A cap of
-          # two uses the hosted runner's cores without multiplying peak memory across a large PR.
-          $results = $lintFiles | ForEach-Object -Parallel {
-            $file = $_
-            $tool = $using:clangTidy
-            $filter = $using:lineFilter
-            # --warnings-as-errors=* makes a Checks: match fail the run (the exit code is 0 on
-            # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
-            # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
-            # local editor integration), where warnings-not-errors is the more useful default.
-            # The filter limits reported findings. Clang still parses the complete translation unit.
-            $timer = [Diagnostics.Stopwatch]::StartNew()
-            $output = & $tool --enable-check-profile --store-check-profile=build/artifacts/ci/clang-tidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$filter" -p build/.cmake/release $file 2>&1
-            $exitCode = $LASTEXITCODE
-            [PSCustomObject]@{ File = $file; ExitCode = $exitCode; Seconds = $timer.Elapsed.TotalSeconds; Output = @($output) }
-          } -ThrottleLimit 2
-
-          $failed = $false
-          foreach ($result in $results) {
-            Write-Host "clang-tidy: $($result.File) (exit $($result.ExitCode), $([Math]::Round($result.Seconds, 2)) seconds)"
-            foreach ($line in $result.Output) { Write-Host $line }
-            if ($result.ExitCode -ne 0) { $failed = $true }
-          }
-          if ($failed) {
-            Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
-            exit 1
-          }
+          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch the PR base." }
+          ./tools/run-clang-tidy-diff.ps1 -BaseSha $env:BASE_SHA
 
       - name: Summarize CI performance
         if: always()

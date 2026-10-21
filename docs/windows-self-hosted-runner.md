@@ -119,8 +119,12 @@ dispatch becomes available when the workflow reaches the default branch.
 
 `tools/benchmark-windows-runner.ps1` can also be run locally from a normal
 PowerShell 7 session. It times an initial build and a `--clean-first` rebuild with
-the local cache, then runs the complete CTest suite using native graphics. The
-default test concurrency is capped at eight. It preserves the external compiler
+the local cache, then runs the complete CTest suite using native graphics and
+audits exact case coverage across two Catch2 and six Qt shards. It also measures
+clang-tidy and MSVC analysis against the same PR base used by hosted checks.
+Supply `-BaseSha <PR-base-commit>` (or set `BASE_SHA`); the benchmark workflow
+resolves that commit automatically. Reports retain analyzer scope and versions.
+Default CTest concurrency is eight. It preserves the external compiler
 cache and writes reports under `build/artifacts/runner-benchmark/`. Treat the first
 build as cold only when its actual cache counters show that. Keep separate
 checkout/build trees for simultaneous runner instances.
