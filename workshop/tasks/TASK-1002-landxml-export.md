@@ -4,8 +4,8 @@
 - GitHub issue #1002 (sub-issue of #802): export supported drawing data to LandXML. The user
   dispatched it with its acceptance criteria as the agreed scope on 2026-10-20.
 - **SPEC GAP, handled with a proposal:** no accepted requirement covered LandXML (#802 recorded it as
-  a SPEC GAP). REQ-445 and decision D-2026-10-20-f are written as **proposed**, from the issue's
-  acceptance criteria, and need the user's acceptance in review. Nothing was added to the spec
+  a SPEC GAP). REQ-448 and decision D-2026-10-20-i were proposed from the issue's
+  acceptance criteria and accepted by the user on 2026-10-20. Nothing was added to the spec
   beyond what the issue and the implementation needed.
 - Constraints used: REQ-101 precision, REQ-201 observable failures, REQ-300 dependency policy,
   ADR-025 local XY / absolute Z, ADR-028 surfaces, ADR-035 feature lines, ADR-054 double geometry.
