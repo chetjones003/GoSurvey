@@ -1,0 +1,38 @@
+name: Set up cached GoSurvey Qt
+description: Restore the Windows Qt kit before bootstrapping Python or aQt.
+runs:
+  using: composite
+  steps:
+    - name: Restore Qt kit
+      id: qt-cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ github.workspace }}/../Qt
+        key: gosurvey-qt-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.workspace }}-6.8.3-msvc2022_64
+
+    - name: Install Qt on a cache miss
+      if: steps.qt-cache.outputs.cache-hit != 'true'
+      uses: jurplel/install-qt-action@v4
+      with:
+        dir: ${{ github.workspace }}/..
+        version: '6.8.3'
+        arch: win64_msvc2022_64
+        cache: false
+
+    - name: Restore and validate Qt environment
+      shell: pwsh
+      env:
+        QT_INSTALL_PARENT: ${{ github.workspace }}/..
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $root = [IO.Path]::GetFullPath((Join-Path $env:QT_INSTALL_PARENT 'Qt/6.8.3/msvc2022_64'))
+        foreach ($required in 'bin/Qt6Core.dll', 'bin/moc.exe', 'bin/windeployqt.exe', 'lib/cmake/Qt6/Qt6Config.cmake') {
+          if (-not (Test-Path -LiteralPath (Join-Path $root $required))) {
+            throw "Qt kit is incomplete: $required is missing from $root."
+          }
+        }
+        "QT_ROOT_DIR=$root" | Add-Content $env:GITHUB_ENV
+        "QT_PLUGIN_PATH=$root/plugins" | Add-Content $env:GITHUB_ENV
+        "QML2_IMPORT_PATH=$root/qml" | Add-Content $env:GITHUB_ENV
+        "$root/bin" | Add-Content $env:GITHUB_PATH
+        Write-Host "Qt kit ready: $root"

@@ -1472,7 +1472,7 @@ if(GOSURVEY_BUILD_TESTS)
   # as one CTest process to avoid paying process startup for every case; Catch still reports the
   # failing case and supports direct filters (`GoSurveyTests "test name"`). The full runner was
   # verified locally before batching (all cases pass in one process).
-  add_test(NAME unit.catch COMMAND GoSurveyTests)
+  add_test(NAME unit.catch COMMAND GoSurveyTests --durations yes)
   set_tests_properties(unit.catch PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both

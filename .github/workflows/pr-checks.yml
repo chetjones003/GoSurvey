@@ -60,6 +60,7 @@ jobs:
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
           git diff --check "$BASE_SHA" HEAD
           python -m compileall -q .github/scripts
+          python -m unittest discover -s .github/scripts -p "test_*.py"
 
   # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:

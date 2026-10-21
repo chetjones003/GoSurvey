@@ -28,6 +28,9 @@ permissions:
   pull-requests: read
   security-events: write
 
+env:
+  NINJA_STATUS: '[%f/%t; %r running; %e s] '
+
 jobs:
   # ---------------------------------------------------------------------------
   # docs-only classification — fail closed: an API/classification error leaves the output empty,
@@ -103,11 +106,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
+        uses: ./.github/actions/setup-qt
 
       - name: Set up Mesa OpenGL for hosted tests
         shell: pwsh
@@ -150,6 +149,10 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
+      - name: Record runner capacity and Ninja defaults
+        shell: pwsh
+        run: ./.github/scripts/record_ci_runner.ps1
+
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
@@ -157,6 +160,7 @@ jobs:
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DGOSURVEY_USE_PCH=OFF
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
@@ -186,14 +190,26 @@ jobs:
         env:
           QT_OPENGL: desktop
           GALLIUM_DRIVER: llvmpipe
-        run: ctest --preset ninja-release --parallel 8
+        run: ctest --preset ninja-release --parallel 8 --output-junit "${{ github.workspace }}/build/artifacts/ci/ctest.xml"
 
-      - name: sccache stats
+      - name: Summarize CI performance
         if: always()
-        shell: pwsh
-        run: |
-          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
-          else { sccache --show-stats }
+        run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
+
+      - name: Upload CI performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.job }}-${{ github.run_attempt }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            build/artifacts/ci/
+            build/.cmake/release/.ninja_log
+            build/.cmake/release/Testing/Temporary/LastTest.log
+            build/.cmake/release/Testing/Temporary/LastTestsFailed.log
+            build/artifacts/qt-editor/**/qt-tests.xml
+            build/artifacts/qt-editor/**/qt-tests.log
 
   # ---------------------------------------------------------------------------
   # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
@@ -234,11 +250,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
+        uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
         shell: pwsh
@@ -251,6 +263,10 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Record runner capacity and Ninja defaults
+        shell: pwsh
+        run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Configure (compile_commands.json only, no build)
         # GOSURVEY_USE_PCH=OFF: this step deliberately never builds, so no cmake_pch.cxx.pch
@@ -321,12 +337,13 @@ jobs:
           }
 
           # This generated MOC include is needed only when clang-tidy analyzes the Qt test TU.
-          # Building it on unrelated C++ changes previously spent about ten minutes for no benefit.
+          # Invoke metadata generation directly: the Ninja autogen target also builds the app.
           if ($lintFiles -contains 'tests/QtEditorTests.cpp') {
-            cmake --build --preset ninja-release --target GoSurveyQtTests_autogen
+            cmake -E cmake_autogen build/.cmake/release/CMakeFiles/GoSurveyQtTests_autogen.dir/AutogenInfo.json Release
             if ($LASTEXITCODE -ne 0) { throw "Qt test MOC generation failed (exit $LASTEXITCODE)" }
           }
 
+          New-Item -ItemType Directory -Force -Path build/artifacts/ci/clang-tidy | Out-Null
           $lineFilter = "[$($filterEntries -join ',')]"
           Write-Host "Line filter:`n$lineFilter"
 
@@ -340,16 +357,16 @@ jobs:
             # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
             # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
             # local editor integration), where warnings-not-errors is the more useful default.
-            # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
-            # the exit code), so this also cuts the run time and log size on a large header.
-            $output = & $tool --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$filter" -p build/.cmake/release $file 2>&1
+            # The filter limits reported findings. Clang still parses the complete translation unit.
+            $timer = [Diagnostics.Stopwatch]::StartNew()
+            $output = & $tool --enable-check-profile --store-check-profile=build/artifacts/ci/clang-tidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$filter" -p build/.cmake/release $file 2>&1
             $exitCode = $LASTEXITCODE
-            [PSCustomObject]@{ File = $file; ExitCode = $exitCode; Output = @($output) }
+            [PSCustomObject]@{ File = $file; ExitCode = $exitCode; Seconds = $timer.Elapsed.TotalSeconds; Output = @($output) }
           } -ThrottleLimit 2
 
           $failed = $false
           foreach ($result in $results) {
-            Write-Host "clang-tidy: $($result.File) (exit $($result.ExitCode))"
+            Write-Host "clang-tidy: $($result.File) (exit $($result.ExitCode), $([Math]::Round($result.Seconds, 2)) seconds)"
             foreach ($line in $result.Output) { Write-Host $line }
             if ($result.ExitCode -ne 0) { $failed = $true }
           }
@@ -357,6 +374,25 @@ jobs:
             Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
             exit 1
           }
+
+      - name: Summarize CI performance
+        if: always()
+        run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci
+
+      - name: Upload CI performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.job }}-${{ github.run_attempt }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            build/artifacts/ci/
+            build/.cmake/release/.ninja_log
+            build/.cmake/release/Testing/Temporary/LastTest.log
+            build/.cmake/release/Testing/Temporary/LastTestsFailed.log
+            build/artifacts/qt-editor/**/qt-tests.xml
+            build/artifacts/qt-editor/**/qt-tests.log
 
   # ---------------------------------------------------------------------------
   # lint / msvc-analyze — blocking (see header comment). Analyze changed translation units and
@@ -383,11 +419,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
+        uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
         shell: pwsh
@@ -400,6 +432,10 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Record runner capacity and Ninja defaults
+        shell: pwsh
+        run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -445,9 +481,21 @@ jobs:
           --build-dir build/.cmake/release
           --compiler-launcher sccache
 
-      - name: sccache stats
+      - name: Summarize CI performance
         if: always()
-        shell: pwsh
-        run: |
-          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
-          else { sccache --show-stats }
+        run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
+
+      - name: Upload CI performance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ github.job }}-${{ github.run_attempt }}
+          retention-days: 7
+          include-hidden-files: true
+          path: |
+            build/artifacts/ci/
+            build/.cmake/release/.ninja_log
+            build/.cmake/release/Testing/Temporary/LastTest.log
+            build/.cmake/release/Testing/Temporary/LastTestsFailed.log
+            build/artifacts/qt-editor/**/qt-tests.xml
+            build/artifacts/qt-editor/**/qt-tests.log

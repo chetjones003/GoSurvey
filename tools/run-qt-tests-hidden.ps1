@@ -22,6 +22,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Exe,
   [int]$TimeoutSec = 600,
   [string]$Log = "",
+  [string]$JUnitLog = "",
   [string]$WorkingDirectory = "",
   # Run any Qt executable (e.g. GoSurveyQt.exe --smoke-test): pass the arguments through untouched,
   # without the QtTest "-o <log>,txt" option the test executable takes.
@@ -74,7 +75,8 @@ if ($desktop -eq [IntPtr]::Zero) {
 
 try {
   $quoted = ($TestArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
-  $cmd = if ($PlainArguments) { "`"$exePath`" $quoted" } else { "`"$exePath`" -o `"$Log,txt`" $quoted" }
+  $reportArgs = if ($JUnitLog) { " -o `"$JUnitLog,junitxml`"" } else { "" }
+  $cmd = if ($PlainArguments) { "`"$exePath`" $quoted" } else { "`"$exePath`" -o `"$Log,txt`"$reportArgs $quoted" }
   $si = New-Object HiddenDesktop+STARTUPINFO
   $si.cb = [Runtime.InteropServices.Marshal]::SizeOf($si)
   $si.lpDesktop = "winsta0\$desktopName"

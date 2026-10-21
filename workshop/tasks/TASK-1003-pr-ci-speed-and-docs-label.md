@@ -82,3 +82,19 @@
 - 2026-10-21 — Re-ran full CTest at eight workers: all 188 registrations passed in 107.94 seconds (previous local four-worker result was 164.19 seconds). Updated full-validation concurrency to eight; hosted runtime remains unmeasured.
 
 - 2026-10-21 — User clarified that MSVC `/analyze` must remain blocking but should analyze only the PR diff. Added a selector that analyzes changed translation units plus all consumers of changed headers; if an include graph is ambiguous or analyzer-affecting CMake/source-generation inputs changed, it fails closed to the full analyzed set. Added 11 selector regression cases.
+
+
+## 12. Follow-up: measured cache and duplicate-build defects (2026-10-21)
+- User authorization: implement all proposed fixes and monitor PR #1043.
+- Bug report: the completed aeee012e build spent 9m16s compiling, with 313/430 sccache requests bypassing caching (/Fp:311, /Yc:2); clang-tidy spent about 10m10s building app dependencies to generate test MOC, then about 4m51s analyzing. Expected: unchanged objects are cacheable and metadata preparation does not compile the app. Reproduce via full-validation on a PR changing QtEditorTests.cpp.
+- Authority: accepted REQ-205, REQ-324, REQ-437; retain all tests, blocking checks, and explicit docs-only labeling.
+- Plan: disable PCH only in the cached CI build; invoke configured Qt autogen directly; reuse a cached Qt kit without Python/aQt setup on a hit; record runner capacity, Ninja overlap, total cache effectiveness, per-case test times, and clang-tidy profiles. Preserve parallel limits until measured. Resolve the beta decision-log conflict without dropping either decision.
+- Validation: cache denominator and Ninja multi-output/overlap regressions; fresh-tree Qt metadata generation without application objects; local PCH-off full target build and CTest; YAML/PowerShell syntax and failure-path checks. Hosted cold/warm measurements follow after push.
+- Plan verification: PASS for scope/architecture/coverage. These are build-only changes with no new product dependency or API; performance acceptance remains pending measured CI results.
+
+- Implementation: PCH OFF in the cached CI build; direct cmake_autogen for Qt test metadata; shared cached Qt setup in all three full-validation Windows jobs; runner capacity/Ninja running-count output; final cache denominator, Ninja overlap and slow-test summaries; retained Ninja/CTest/Qt/clang-tidy profiling artifacts. Test worker limits and coverage are unchanged.
+- Conflict: merged current beta; retained the ribbon-caption decision and renamed this branch's superseded async-gate decision to D-2026-10-21-e to avoid the duplicate identifier.
+- Regression evidence: fresh Qt metadata configure/generation succeeded with QtEditorTests.moc present and ZERO project object files. Full PCH-off MSVC build passed: 428 sccache requests, 428 cacheable, zero bypasses/errors (cold cache). Cache-report tests cover the prior false 97-percent denominator and multi-output Ninja overlap.
+- Validation: 24 Python checks PASS; actionlint PASS; YAML and all 24 embedded PowerShell scripts parsed; cached Qt environment accepted a complete kit and rejected an incomplete kit. Full CTest PASS: 188/188 in 110.42s; four Qt JUnit files contain 217 case records. An initial Qt reporter argument-binding failure was corrected with an explicit JUnitLog parameter, then the COMPLETE suite was rerun successfully.
+- Verification: build/code-quality/architecture/dependency/testing PASS for this change. Hosted cold/warm performance acceptance remains pending; first cache fill is expected to be slower than the steady-state repeat. No compiler replacement, test removal, or weakened required check was introduced.
+- Final reporting failure-path check: incomplete XML from an aborted test is explicitly reported without discarding other timing evidence. All 25 Python checks pass. Clang-tidy profiling CLI produced a JSON profile in the local smoke check.

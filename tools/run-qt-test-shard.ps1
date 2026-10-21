@@ -45,7 +45,8 @@ $launcher = Join-Path $PSScriptRoot 'run-qt-tests-hidden.ps1'
 $launcherArgs = @(
   '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launcher,
   '-Exe', $exePath, '-TimeoutSec', "$TimeoutSec", '-Log', $log,
-  '-WorkingDirectory', $workDir
+  '-WorkingDirectory', $workDir,
+  '-JUnitLog', (Join-Path $artifactDir 'qt-tests.xml')
 ) + $selected
 
 Write-Host "Qt shard ${ShardIndex}/${ShardCount}: $($selected.Count) of $($functions.Count) test functions."
