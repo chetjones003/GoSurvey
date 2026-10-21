@@ -263,3 +263,26 @@ Remote verification and final visual comparison: pending after this push.
 MSVC selector validation on the committed implementation: two changed test
 sources selected two affected source translation units plus Qt's generated MOC
 unit (three total out of 380 candidates). No full-project fallback was needed.
+
+## Laptop analyzer discovery regression (2026-10-21)
+
+Run 39689102056 passed all builds, full CTest (122.039s), and exact coverage.
+It then failed before clang-tidy executed: `Get-Command -CommandType Application`
+returned both standalone LLVM and Chocolatey Winlibs executables, and `.Source`
+produced an array that the call operator converted into one invalid command.
+The benchmark preflight had already selected a working standalone executable.
+
+BUG REPORT: multiple installed clang-tidy tools prevent analysis. Expected under
+REQ-205/437: invoke one available tool and propagate genuine analyzer failures.
+Reproduction: `tools/test-run-clang-tidy-diff.ps1` stubs two discovery results but
+runs real LLVM; before the fix it reproduces the joined-path command error.
+Verified plan APPROVE: select the first executable from PATH, retain the existing
+startup check and nonzero diagnostic handling. Regression test must pass safe
+changed code and reject a real division-by-zero finding. No test code/coverage
+or analysis policy changes. Rebenchmark both runners after pushing the fix.
+
+Regression validation PASS after selecting the first executable: safe C++ code
+runs successfully with two discovery candidates, the recorded tool is the first
+candidate, and a real changed-line division-by-zero diagnostic fails the helper.
+The regression was observed red against the prior implementation. Test contents
+are unchanged by this follow-up; the previous laptop test result remains valid.

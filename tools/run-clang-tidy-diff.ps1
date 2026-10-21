@@ -10,7 +10,7 @@ $buildDir = (Resolve-Path -LiteralPath $BuildDirectory).Path
 $outputDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputDirectory)
 $repoRoot = (Get-Location).Path
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
-$tool = (Get-Command clang-tidy -CommandType Application).Source
+$tool = (Get-Command clang-tidy -CommandType Application | Select-Object -First 1).Source
 $version = @(& $tool --version 2>&1)
 if ($LASTEXITCODE -ne 0) { throw 'clang-tidy could not start.' }
 $changed = @(git diff --name-only --diff-filter=ACMR $BaseSha HEAD)
