@@ -20,7 +20,7 @@ inline constexpr Button kButtons[] = {
   {"Home", "Create Ground Data", "##CgdPoints", "Points", "Point_Style", "CREATEPOINTS", "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", false, false},
   {"Home", "Create Ground Data", "##CgdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
   {"Home", "Create Ground Data", "##CgdTraverse", "Traverse", "traverse", "TRAVERSE", "Traverse Editor — raw observations, Face 1/Face 2, least-squares closure.\nCommand bar: TRAVERSE", false, false},
-  {"Home", "Create Ground Data", "##CgdSurfaces", "Surfaces", "c3d_surfaces", "", "Surfaces — not implemented yet.", false, true},
+  {"Home", "Create Ground Data", "##CgdSurfaces", "Surfaces", "c3d_surfaces", "@createSurface", "Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...", false, false},
   {"Home", "Create Ground Data", "##CgdGrading", "Grading", "c3d_grading", "", "Grading — not implemented yet.", false, true},
   {"Home", "Create Design", "##CdParcel", "Parcel", "c3d_parcel", "", "Parcel — not implemented yet.", false, true},
   {"Home", "Create Design", "##CdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
