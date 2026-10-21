@@ -125,6 +125,23 @@ class SelectMsvcAnalyzeTargetsTests(unittest.TestCase):
 """
         self.assertFalse(selector.cmake_diff_affects_analysis(diff))
 
+    def test_source_local_bigobj_option_selects_only_that_translation_unit(self):
+        diff = '''diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -0,0 +1 @@
++set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/first.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+'''
+        full_scope, source_paths = selector.classify_cmake_diff(diff)
+        targets, reason = selector.select_targets(
+            [self.root / path for path in source_paths], self.analyzed, self.root,
+            analysis_configuration_changed=full_scope,
+        )
+        self.assertFalse(full_scope)
+        self.assertEqual(source_paths, {"src/first.cpp"})
+        self.assertEqual(targets, ["CMakeFiles/App.dir/src/first.cpp.obj"])
+        self.assertIn("diff-scoped", reason)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,6 +30,11 @@ ANALYSIS_CONFIGURATION_RE = re.compile(
     r"AUTOMOC|AUTOUIC|AUTORCC|SOURCES|/analyze|/WX|/W[0-4]|/wd\d+|"
     r"/external:|/Z[67]|/Zi|/EH[a-z]+)\b"
 )
+SAFE_SOURCE_COMPILE_OPTION_RE = re.compile(
+    r'(?i)^\s*set_source_files_properties\(\s*"\$\{CMAKE_CURRENT_SOURCE_DIR\}/'
+    r'([^";]+\.(?:c|cc|cpp|cxx|c\+\+))"\s+PROPERTIES\s+'
+    r'COMPILE_OPTIONS\s+"/bigobj"\s*\)\s*$'
+)
 INCLUDE_RE = re.compile(r"^\s*#\s*include\s+(\S+)")
 LITERAL_INCLUDE_RE = re.compile(r'^[<"]([^>"]+)[>"]$')
 INCLUDE_DIR_RE = re.compile(r'(?i)(?:[-/]external:I|/I|-I)(?:"([^"]+)"|([^\s]+))')
@@ -173,8 +178,9 @@ def changed_paths(base_sha: str, root: Path) -> list[Path]:
     return [(root / path).resolve() for path in result.stdout.splitlines() if path]
 
 
-def cmake_diff_affects_analysis(diff_text: str) -> bool:
+def classify_cmake_diff(diff_text: str) -> tuple[bool, set[str]]:
     current_path = ""
+    source_scoped_changes: set[str] = set()
     for line in diff_text.splitlines():
         if line.startswith("+++ b/"):
             current_path = line[6:]
@@ -184,6 +190,10 @@ def cmake_diff_affects_analysis(diff_text: str) -> bool:
             content = line[1:].lstrip()
             if content.startswith("#"):
                 continue
+            source_option = SAFE_SOURCE_COMPILE_OPTION_RE.match(content)
+            if source_option:
+                source_scoped_changes.add(source_option.group(1).replace("\\", "/"))
+                continue
             is_cmake_file = (
                 current_path == "CMakeLists.txt"
                 or current_path.endswith("/CMakeLists.txt")
@@ -191,11 +201,15 @@ def cmake_diff_affects_analysis(diff_text: str) -> bool:
             )
             policy_change = "cmake_policy" in content.lower() and "cmp0141" not in content.lower()
             if is_cmake_file and (ANALYSIS_CONFIGURATION_RE.search(content) or policy_change):
-                return True
-    return False
+                return True, set()
+    return False, source_scoped_changes
 
 
-def cmake_changes_affect_analysis(base_sha: str, root: Path) -> bool:
+def cmake_diff_affects_analysis(diff_text: str) -> bool:
+    return classify_cmake_diff(diff_text)[0]
+
+
+def cmake_analysis_scope_changes(base_sha: str, root: Path) -> tuple[bool, set[Path]]:
     result = subprocess.run(
         [
             "git",
@@ -213,7 +227,8 @@ def cmake_changes_affect_analysis(base_sha: str, root: Path) -> bool:
         text=True,
         capture_output=True,
     )
-    return cmake_diff_affects_analysis(result.stdout)
+    full_scope, source_paths = classify_cmake_diff(result.stdout)
+    return full_scope, {root / path for path in source_paths}
 
 
 def select_targets(
@@ -306,8 +321,9 @@ def main() -> int:
     root = args.repo_root.resolve()
     build_dir = args.build_dir.resolve()
     analyzed = read_analyzed_commands(args.compile_commands.resolve(), root)
-    config_changed = cmake_changes_affect_analysis(args.base_sha, root)
+    config_changed, source_scoped_changes = cmake_analysis_scope_changes(args.base_sha, root)
     paths = changed_paths(args.base_sha, root)
+    paths.extend(source_scoped_changes)
     targets, reason = select_targets(
         paths, analyzed, root, analysis_configuration_changed=config_changed
     )
