@@ -3201,6 +3201,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
+  /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
+  std::uint64_t gradingEditId = 0;
 
   /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
   std::vector<float> featureLineDraftVerts;

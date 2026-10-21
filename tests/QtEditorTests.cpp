@@ -5421,6 +5421,289 @@ private Q_SLOTS:
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
   }
 
+  // Issue #997 / REQ-398: a flat surface at 100 and a closed 120 ft pad at 105, so every station is
+  // 5 ft of FILL and the daylight offset is 5 x the fill run - 15 ft at 3:1, 10 ft at 2:1.
+  static void BuildGradingSite(EditorWindow& window, const char* secondSurface = nullptr) {
+    auto& state = window.State();
+    auto addSurface = [&](const QString& name) {
+      window.Submit("SURFACECREATE " + name);
+      window.Submit("SURFACEADDPOINT " + name + ", 0, 0, 100");
+      window.Submit("SURFACEADDPOINT " + name + ", 200, 0, 100");
+      window.Submit("SURFACEADDPOINT " + name + ", 200, 200, 100");
+      window.Submit("SURFACEADDPOINT " + name + ", 0, 200, 100");
+      window.Submit("SURFACEREBUILD " + name);
+    };
+    addSurface("Ground");
+    if (secondSurface) addSurface(QString::fromUtf8(secondSurface));
+    QTRY_VERIFY_WITH_TIMEOUT(!state.cadSurfaces.empty() && state.cadSurfaces[0].tin, 10000);
+    if (secondSurface) QTRY_VERIFY_WITH_TIMEOUT(state.cadSurfaces.size() == 2 && state.cadSurfaces[1].tin, 10000);
+    window.Submit("FEATURELINE Pad");
+    window.Submit("40,40,105"); window.Submit("160,40,105");
+    window.Submit("160,160,105"); window.Submit("40,160,105"); window.Submit("CLOSE");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(1));
+  }
+
+  // Plan distance from the baseline's first vertex to feature line `line`'s first vertex.
+  static double FirstDaylightOffset(const AppCommandState& state, std::size_t line) {
+    const auto v = static_cast<std::size_t>(state.featureLineOffsets[line]) * 3;
+    return std::hypot(state.featureLineVerts[v] - 40.0, state.featureLineVerts[v + 1] - 40.0);
+  }
+
+  static std::size_t FeatureLineById(const AppCommandState& state, std::uint64_t id) {
+    const int ix = FindEntityIndexById(state.featureLineAttrs, id);
+    return ix < 0 ? std::size_t(-1) : static_cast<std::size_t>(ix);
+  }
+
+  static bool LogContains(const EditorWindow& window, const char* text) {
+    for (const auto& line : window.m_Log) if (line.find(text) != std::string::npos) return true;
+    return false;
+  }
+
+  void gradingStoresAnEditableDefinitionOnTheDaylightLine() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("C"); window.Submit("4:1");
+    window.Submit("F"); window.Submit("3:1"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    QVERIFY(!state.featureLineInfo[0].grading);  // the baseline stays an ordinary feature line
+    const auto& def = state.featureLineInfo[1].grading;
+    QVERIFY(def.has_value());
+    QCOMPARE(def->baselineId, state.featureLineAttrs[0].id);
+    QCOMPARE(def->surfaceId, state.cadSurfaceAttrs[0].id);
+    QVERIFY(def->surfaceId != 0);
+    QCOMPARE(def->cutRun, 4.0);
+    QCOMPARE(def->fillRun, 3.0);
+    QVERIFY(std::abs(FirstDaylightOffset(state, 1) - 15.0) < 0.002);  // REQ-101
+  }
+
+  void gradingEditsTheSelectedResultWithoutCreatingAnotherDaylightLine() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("C"); window.Submit("4:1");
+    window.Submit("F"); window.Submit("3:1"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    EnsureEntityIds(state);  // ids are assigned lazily, on the next sweep
+    const auto daylightId = state.featureLineAttrs[1].id;
+    const auto layer = state.featureLineAttrs[1].layer;
+    const auto before = state.featureLineVerts;
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADING");
+    QVERIFY(LogContains(window, "editing \"Pad Daylight\""));
+    QVERIFY(LogContains(window, "cut 4:1 (25.00%)"));  // the stored slopes come back as the prompt's
+    window.Submit("F"); window.Submit("2:1"); window.Submit("");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    QCOMPARE(state.featureLineAttrs[1].id, daylightId);
+    QCOMPARE(state.featureLineAttrs[1].layer, layer);
+    QCOMPARE(state.featureLineInfo[1].name, std::string("Pad Daylight"));
+    QCOMPARE(state.featureLineInfo[1].grading->fillRun, 2.0);
+    QCOMPARE(state.featureLineInfo[1].grading->cutRun, 4.0);
+    QVERIFY(std::abs(FirstDaylightOffset(state, 1) - 10.0) < 0.002);
+    QVERIFY(LogContains(window, "\"Pad Daylight\" rebuilt"));
+
+    window.Submit("UNDO");
+    QVERIFY(state.featureLineVerts == before);
+    QCOMPARE(state.featureLineInfo[1].grading->fillRun, 3.0);
+    QCOMPARE(state.featureLineAttrs[1].id, daylightId);
+  }
+
+  void gradingEditCancelOrFailureLeavesThePreviousResult() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    const auto verts = state.featureLineVerts;
+    const auto offsets = state.featureLineOffsets;
+    const auto fill = state.featureLineInfo[1].grading->fillRun;
+
+    // Escape after changing a slope: nothing is rebuilt and the definition is untouched.
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADING"); window.Submit("F"); window.Submit("2:1");
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.featureLineVerts == verts);
+    QCOMPARE(state.featureLineInfo[1].grading->fillRun, fill);
+
+    // A slope so flat it runs off the surface: the calculation fails and the old result stays.
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADING"); window.Submit("F"); window.Submit("100:1"); window.Submit("");
+    QVERIFY(LogContains(window, "too few for a line"));
+    QVERIFY(state.featureLineVerts == verts);
+    QVERIFY(state.featureLineOffsets == offsets);
+    QCOMPARE(state.featureLineInfo[1].grading->fillRun, fill);
+  }
+
+  void gradingDefinitionSurvivesDwgSaveAndReopenAndRebuildsThere() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath("grading-997.dwg").toUtf8();
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("C"); window.Submit("4:1");
+    window.Submit("F"); window.Submit("3:1"); window.Submit("");
+    EnsureEntityIds(state);
+    const auto baselineId = state.featureLineAttrs[0].id;
+    const auto daylightId = state.featureLineAttrs[1].id;
+    const auto surfaceId = state.cadSurfaceAttrs[0].id;
+    std::vector<std::string> log;
+    QVERIFY(SaveDrawingDocument(state, path.constData(), log));
+
+    window.CreateDrawingFromTemplate();  // a fresh tab, as File > Open does
+    QVERIFY(state.featureLineClosed.empty());
+    QVERIFY(OpenDrawingDocument(state, path.constData(), log));
+    const auto day = FeatureLineById(state, daylightId);
+    QVERIFY(day != std::size_t(-1));
+    QVERIFY(state.featureLineInfo[day].grading.has_value());
+    QCOMPARE(state.featureLineInfo[day].grading->baselineId, baselineId);
+    QCOMPARE(state.featureLineInfo[day].grading->surfaceId, surfaceId);
+    QCOMPARE(state.featureLineInfo[day].grading->cutRun, 4.0);
+    QCOMPARE(state.featureLineInfo[day].grading->fillRun, 3.0);
+    QVERIFY(std::abs(FirstDaylightOffset(state, day) - 15.0) < 0.002);
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, static_cast<int>(day)}};
+    window.Submit("GRADING"); window.Submit("F"); window.Submit("2:1"); window.Submit("");
+    QVERIFY(LogContains(window, "rebuilt"));
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    QCOMPARE(state.featureLineAttrs[day].id, daylightId);
+    QVERIFY(std::abs(FirstDaylightOffset(state, day) - 10.0) < 0.002);
+  }
+
+  void gradingPayloadWithoutDefinitionLoadsAsOrdinaryFeatureLine() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    const std::string json = SerializeGoSurveyJson(state);
+    const auto key = json.find("\"grading\":");
+    QVERIFY(key != std::string::npos);
+    QCOMPARE(json.find("\"grading\":", key + 1), std::string::npos);
+
+    // A drawing written before #997 has no "grading" key: it opens as an ordinary feature line.
+    std::string legacy = json; legacy.replace(key, 10, "\"legacyX\":");
+    AppCommandState old; std::vector<std::string> log;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(old, legacy, log));
+    QCOMPARE(old.featureLineInfo.size(), std::size_t(2));
+    QVERIFY(!old.featureLineInfo[1].grading);
+
+    // A definition with no baseline could never be rebuilt, so it is dropped rather than kept.
+    std::string broken = json;
+    const auto id = broken.find("\"baselineId\":", key);
+    QVERIFY(id != std::string::npos);
+    const auto idEnd = broken.find_first_of(",}", id);
+    broken.replace(id, idEnd - id, "\"baselineId\":0");
+    AppCommandState bad;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(bad, broken, log));
+    QVERIFY(!bad.featureLineInfo[1].grading);
+
+    AppCommandState good;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(good, json, log));
+    QVERIFY(good.featureLineInfo[1].grading.has_value());
+  }
+
+  void gradingWithDeletedBaselineIsReportedAndLeftIntact() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    EnsureEntityIds(state);  // ids are assigned lazily, on the next sweep
+    const auto daylightId = state.featureLineAttrs[1].id;
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("ERASE");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(1));
+    const auto day = FeatureLineById(state, daylightId);
+    QCOMPARE(day, std::size_t(0));
+    const auto verts = state.featureLineVerts;
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING");
+    QVERIFY(LogContains(window, "the baseline of \"Pad Daylight\" is gone"));
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(state.featureLineVerts == verts);
+    QVERIFY(state.featureLineInfo[0].grading.has_value());  // kept, in case the baseline is undone back
+  }
+
+  void gradingWithDeletedTargetSurfaceAsksInsteadOfSubstituting() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window, "Other");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("S"); window.Submit("Ground"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    const auto verts = state.featureLineVerts;
+    window.Submit("SURFACEDELETE Ground");
+    QCOMPARE(state.cadSurfaces.size(), std::size_t(1));
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADING");
+    QVERIFY(LogContains(window, "its target surface is gone"));
+    QVERIFY(LogContains(window, "no surface chosen"));
+    window.Submit("");  // Enter does not quietly regrade to the surface that is left
+    QVERIFY(LogContains(window, "choose a surface first"));
+    QVERIFY(state.featureLineVerts == verts);
+
+    window.Submit("S"); window.Submit("Other"); window.Submit("");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.featureLineInfo[1].grading->surfaceId, state.cadSurfaceAttrs[0].id);
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+  }
+
+  void gradingRibbonToolsStartCreateAndEdit() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    for (const char* id : {"ribbon_CgdGrading", "ribbon_CdGrading", "ribbon_SvyGrading", "ribbon_TsGrade"}) {
+      auto* action = window.findChild<QAction*>(id); QVERIFY2(action, id);
+      QCOMPARE(action->property("ribbonCommand").toString(), QString("GRADING"));
+      QVERIFY(!action->property("releasePlaceholder").toBool());
+    }
+    auto* optimize = window.findChild<QAction*>("ribbon_OptGrading"); QVERIFY(optimize);
+    QVERIFY(!optimize->isEnabled());  // Grading Optimization is #813, still a placeholder
+
+    auto* create = window.findChild<QAction*>("ribbon_CdGrading");
+    QVERIFY(create->isEnabled());
+    auto* commandBar = window.findChild<QWidget*>("floatingCommandBar"); QVERIFY(commandBar);
+    // Error state: no feature lines yet.
+    create->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(LogContains(window, "the drawing has no feature lines"));
+    QApplication::processEvents();
+    QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-no-feature-lines.png"));
+
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    create->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::Grading);
+    QApplication::processEvents();
+    QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-create-prompt.png"));
+    window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.findChild<QAction*>("ribbon_SvyGrading")->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::Grading);
+    QCOMPARE(state.gradingEditId, state.featureLineAttrs[1].id);
+    QApplication::processEvents();
+    QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-edit-prompt.png"));
+    window.Submit("F"); window.Submit("2:1"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    state.selection.clear(); window.Submit("ZOOMEXTENTS");
+    QApplication::processEvents(); QTest::qWait(100);
+    QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
+  }
+
   void releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
     QTest::qWait(100);

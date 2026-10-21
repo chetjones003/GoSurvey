@@ -11016,10 +11016,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
                the ground at all, because the ground falls away at least as fast as the fill slope
                descends, is reported the same way rather than searched indefinitely.
 
-               The daylight line is **baked** geometry, not a live object: it is produced once from
-               the inputs as they stand, following the EXTRACT precedent set for contours by
-               decision D-2026-08-12 (D2), and does not track later edits to the baseline or the
-               surface. Re-running the command is how it is refreshed.
+               **Issue #997 extension (D-2026-10-20-f):** the daylight feature line
+               retains an editable grading definition: stable baseline and target-surface entity
+               ids, separate cut/fill slopes, and the side for an open baseline. Selecting that
+               result and running GRADING restores its definition for editing. Enter rebuilds
+               the same result in place, preserving its entity id; cancellation or a failed
+               calculation leaves the previous definition and geometry intact. The definition
+               survives DWG save/reopen through the existing GoSurvey payload and participates in
+               undo and document switching as feature-line metadata. Missing sources are reported
+               rather than substituted. Existing drawings without this metadata remain ordinary
+               feature lines. Rebuilding is explicit; automatic tracking of later source edits
+               remains outside this increment. The Qt **Grading** controls (Home → Create Ground
+               Data and Create Design, Survey → Grading Creation Tools, TIN Surface → Grading Tools)
+               start GRADING; Grading Optimization stays a placeholder (#813).
 - Acceptance:
   - on a surface of known plane, a fill baseline of known height above it daylights at the offset
     computed by hand, within REQ-101, and the daylight point's elevation equals the surface's there;
@@ -11033,12 +11042,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
     and the command terminates;
   - the reported slope wording matches REQ-074's exactly, in both conventions;
   - a closed baseline's daylight line encloses the baseline, and an open baseline requires a side;
-  - the daylight line survives a `.gs` round trip as ordinary geometry;
+  - the daylight line and editable grading definition survive DWG save/reopen; selecting it and
+    changing a slope or target rebuilds the same object, and undo restores the previous result;
+  - editing a result whose baseline is gone reports it and changes nothing; a result whose target
+    surface is gone asks for one rather than grading to another, and a cancelled or failed rebuild
+    leaves the previous geometry and definition;
+  - the Qt Grading ribbon controls start GRADING;
   - every offset above holds at survey coordinate magnitudes (E 2,196,000 / N 1,400,000) within
     REQ-101, which ADR-054's `double` stores make reachable.
 - Owner-layer: Domain, Commands, IO
-- Status:      proposed
-- Revisions:   2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
+- Status:      accepted
+- Revisions:   2026-10-20 — D-2026-10-20-f: issue #997 extends baked output with a persistent
+               editable definition attached to the existing daylight feature line, without a new
+               geometry store or entity kind; acceptance's `.gs` round trip restated as DWG
+               (D-2026-10-20-d); Status corrected to accepted, matching D-2026-10-05-b.
+               2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
                ADR-028 and restated in `roadmap.md`'s M-Surfaces out-of-scope list, by decision
                **D-2026-10-05-b**. That exclusion has already been reversed once in exactly this
                shape: feature lines sat on the same list until D-2026-08-19-a moved them off it, and
@@ -11053,8 +11071,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
                  which is what Civil 3D's grading groups produce, and which would give volumes,
                  contours and statistics for free from tools already built. The larger and more
                  valuable follow-on;
-               - **linking** the daylight line to its baseline or surface so it updates when they
-                 change. Baked-only is deliberate for the first increment, per the Statement;
+               - **automatically rebuilding** the daylight line when its baseline or surface
+                 changes; #997 retains the inputs and supports explicit editing/rebuilding;
                - **intermediate slope breaks** (a bench or berm part-way down the slope).
 - Known limit: the outward projection advances in finite steps before bisecting the bracketed
                crossing, so ground detail finer than one step can hide a second crossing and the

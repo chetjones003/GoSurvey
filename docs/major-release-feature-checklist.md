@@ -231,7 +231,7 @@ Result: [ ] PASS  [ ] FAIL  [ ] BLOCKED — Notes: ____________________
 **Prerequisites:** Surface from D3 and a short baseline polyline/feature line.
 
 1. Create/edit a feature line or 3D polyline and verify elevations at its vertices.
-2. Run a supported side-slope/daylight operation against the test surface.
+2. Run a supported side-slope/daylight operation against the test surface (Home ribbon **Grading**). After reopen in step 4, select the daylight line, run GRADING again, change the fill slope, and press Enter: the same line is rebuilt in place, and UNDO restores the previous one.
 3. Create a simple 3D solid, then try one supported Boolean or solid edit.
 4. Orbit the view, inspect selection/properties, save, close, and reopen.
 5. Attempt a documented invalid operation (for example, outside the surface boundary) and inspect its refusal.

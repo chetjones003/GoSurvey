@@ -1563,6 +1563,15 @@ json BuildRoot(const AppCommandState& st) {
     json o;
     o["name"] = i.name;
     o["description"] = i.description;
+    if (i.grading) {  // REQ-398 / issue #997: written only on grading results
+      json g;
+      g["baselineId"] = i.grading->baselineId;
+      g["surfaceId"] = i.grading->surfaceId;
+      g["cutRun"] = i.grading->cutRun;
+      g["fillRun"] = i.grading->fillRun;
+      g["sideLeft"] = i.grading->sideLeft;
+      o["grading"] = std::move(g);
+    }
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
@@ -3050,6 +3059,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.is_object()) {
         i.name = o.value("name", std::string());
         i.description = o.value("description", std::string());
+        // Issue #997. A definition without a usable baseline or slope is dropped, leaving an
+        // ordinary feature line, rather than one that can never be rebuilt.
+        const auto g = o.find("grading");
+        if (g != o.end() && g->is_object()) {
+          CadGradingDefinition d;
+          d.baselineId = g->value("baselineId", std::uint64_t{0});
+          d.surfaceId = g->value("surfaceId", std::uint64_t{0});
+          d.cutRun = g->value("cutRun", 0.0);
+          d.fillRun = g->value("fillRun", 0.0);
+          d.sideLeft = g->value("sideLeft", true);
+          if (d.baselineId != 0 && std::isfinite(d.cutRun) && d.cutRun > 0.0 &&
+              std::isfinite(d.fillRun) && d.fillRun > 0.0)
+            i.grading = d;
+        }
       }
       st.featureLineInfo.push_back(std::move(i));
     }
