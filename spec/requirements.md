@@ -13359,6 +13359,68 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+### REQ-445 — PDF plot honours the Page Setup options (GitHub issue #769)
+
+- Purpose: a control in the Page Setup dialog must change the printed sheet as the dialog says
+- Priority: should
+- Type: functional
+- Depends on: REQ-029 (single-layout PDF plot), REQ-101 (tolerance)
+- Statement: The PDF plot of a paper layout honours four Page Setup options, each read from the
+  layout's saved settings: (a) **plot offset X and Y**, which move the sheet content by the stated
+  amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
+  scales the content to fill the printable area; (d) **plot scale**, which sets the scale of the
+  content on the sheet. A Page Setup control that the plot does not honour is a defect, not an
+  accepted limitation.
+- Acceptance:
+  1. with each option set on its own, the PDF differs from the same layout plotted with no option
+     set, and a measured offset, centre position, fitted extent or plotted scale matches the stated
+     value within REQ-101 tolerance;
+  2. with all four options at their defaults, the PDF is identical to the current plot (no
+     regression);
+  3. a test exists for each of the four options.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1).
+
+### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
+
+- Purpose: the printed sheet must show line thickness and dash patterns as the drawing sets them
+- Priority: should
+- Type: functional
+- Depends on: REQ-049 (plot of native sheet geometry), REQ-048 (plot colour), REQ-029
+- Statement: The PDF plot draws each plotted line at the thickness of its lineweight and with the dash
+  pattern of its linetype (continuous, dashed, hidden, centre and the other drawing linetypes), for
+  model geometry shown through viewports and for native paper-space geometry (REQ-049). A line with a
+  continuous linetype and the default lineweight is plotted as it is today.
+- Acceptance:
+  1. a line with a 2 mm lineweight plots at a stroke width measurably thicker than the default line;
+  2. a line with a dashed linetype plots with a dash pattern (gaps present), and a continuous line
+     plots solid;
+  3. a plot with only default lineweights and continuous linetypes is identical to today's plot;
+  4. a test exists for lineweight and for linetype.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-g, GitHub issue #770, audit #751 P2/P3).
+
+### REQ-447 — One undo history across model and paper space (GitHub issue #771)
+
+- Purpose: undo must match what the user did, in the order they did it
+- Priority: should
+- Type: functional
+- Depends on: REQ-038, REQ-039 (paper-space edits are undoable)
+- Statement: There is one undo history for the drawing. Every undoable action, in model space or in
+  paper space, is one step in the order it was performed. Undo and Redo follow that order whatever
+  space is active, so an undo may change a space the user is not currently viewing. The active space
+  never splits the history.
+- Acceptance:
+  1. draw a model line, then a paper line, then a paper circle; Undo removes the circle, then the paper
+     line, then the model line, in that order, whichever space is active between steps;
+  2. Redo restores the same steps in the same order;
+  3. a test covers the cross-space order.
+- Owner-layer: Commands / Domain
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-h, GitHub issue #771, audit #751 N1).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -14232,6 +14294,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
 | REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
 | REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
+| REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
+| REQ-446 | IO/Renderer | `PdfPlot` tests for lineweight stroke width and linetype dash pattern; default plot unchanged — to be added with the implementing PR | accepted |
+| REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

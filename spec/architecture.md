@@ -499,7 +499,7 @@ A change is rejected if it breaks any of these:
   CSV) stay model-only. (c) **Snapping** in paper space resolves against paper-space
   entities only; snapping to model geometry shown inside viewports is deferred.
   (d) **Persistence:** paper-space entities serialize per layout in the native `.gs`
-  (REQ-031/037); DXF persistence deferred. No new dependency, no new global.
+  (REQ-031/037); DXF persistence deferred. No new dependency, no new global. Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h).
 - Alternatives: (a) one global entity store tagged with a space id — rejected: breaks
   single-owner (§10.1), and per-layout ownership matches how viewports/frozen-layers are
   already owned. (b) a separate parallel command set for paper geometry — rejected:
@@ -533,7 +533,7 @@ A change is rejected if it breaks any of these:
   `PaperLayout` remains the single visible owner (§10.1). These render through the
   pan/zoom-aware ImGui paper overlay (consistent with ADR-009's revert of the GL paper
   pass), participate in paper selection/snap/edit, and **persist per layout in `.gs`**
-  (REQ-031/037 pattern); DXF persistence of the new paper types stays **deferred**.
+  (REQ-031/037 pattern); DXF persistence of the new paper types stays **deferred**. Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h).
   (b) **Copy/paste routes by active space** (the ADR-008/009 active-space branch
   pattern): copy reads the model selection+arrays in model/floating-model space, or the
   active layout's selection+stores in paper space; paste writes into whichever space is
@@ -582,7 +582,7 @@ A change is rejected if it breaks any of these:
 - Consequences: the paper selection/box-select/Properties/draw/modify branches each grow to cover all
   paper object types; one new shared inline-text-edit helper reused by model + paper; the text-anchor
   fix corrects paper text picking and snapping. DXF persistence of paper objects stays deferred (.gs
-  only). Delivered incrementally (Phase 1 selection/text-pick/Properties, Phase 2 in-place editor,
+  only). Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h). Delivered incrementally (Phase 1 selection/text-pick/Properties, Phase 2 in-place editor,
   Phase 3 grips, Phase 4 draw + modify) so each slice is independently verifiable.
 
 - Addendum (2026-06-18): solid fills (`CadFilledRegion`, ADR-011) are now clipboard-copyable too.
