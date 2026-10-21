@@ -8735,6 +8735,56 @@ private Q_SLOTS:
     manager->close();
   }
 
+  void homeSurfacesOpensCreateSurfaceAndCancelLeavesDrawingUnchanged() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.show();
+    auto* create = window.findChild<QAction*>("ribbon_CgdSurfaces");
+    QVERIFY(create);
+    QVERIFY(create->isEnabled());
+    const auto count = window.State().cadSurfaces.size();
+    const bool couldUndo = CanUndo(window.State());
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      QCOMPARE(dialog->windowTitle(), QString("Create Surface"));
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("Cancelled surface");
+      dialog->findChild<QPushButton*>("createSurfaceCancel")->click();
+    });
+    create->trigger();
+    QCOMPARE(window.State().cadSurfaces.size(), count);
+    QCOMPARE(CanUndo(window.State()), couldUndo);
+  }
+
+  void homeSurfacesCreatedSurfaceSurvivesSaveAndReopen() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.show();
+    auto* create = window.findChild<QAction*>("ribbon_CgdSurfaces");
+    QVERIFY(create);
+    WhenDialogShows(window, [&window] {
+      auto* dialog = window.findChild<QDialog*>("createSurfaceDialog");
+      QVERIFY(dialog);
+      dialog->findChild<QLineEdit*>("createSurfaceName")->setText("Home Pond");
+      dialog->findChild<QLineEdit*>("createSurfaceDescription")->setText("From Home ribbon");
+      dialog->findChild<QPushButton*>("createSurfaceOk")->click();
+    });
+    create->trigger();
+    auto& st = window.State();
+    QCOMPARE(st.cadSurfaces.size(), size_t(1));
+    QCOMPARE(QString::fromStdString(st.cadSurfaces[0].name), QString("Home Pond"));
+    const QByteArray path = directory.filePath("home-surface.dwg").toUtf8();
+    std::vector<std::string> log;
+    QVERIFY(SaveDrawingDocument(st, path.constData(), log));
+    AppCommandState reopened;
+    QVERIFY(OpenDrawingDocument(reopened, path.constData(), log));
+    QCOMPARE(reopened.cadSurfaces.size(), size_t(1));
+    QCOMPARE(QString::fromStdString(reopened.cadSurfaces[0].name), QString("Home Pond"));
+    QCOMPARE(QString::fromStdString(reopened.cadSurfaces[0].description), QString("From Home ribbon"));
+  }
+
   void surfaceRibbonButtonsAreEnabledAndOpenTheNativeDialogs() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
