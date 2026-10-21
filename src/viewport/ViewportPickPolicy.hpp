@@ -195,6 +195,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
                                                                              : R::SnappedPointPick;
 
+  // REQ-444 REVCLOUD: corners, except at the `O`bject prompt, where the click names the closed
+  // polyline, rectangle or circle to convert instead of a coordinate.
+  case K::Revcloud:
+    return cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject ? R::RawEntityPick
+                                                                           : R::SnappedPointPick;
+
   // PIPERUN (issue #486 increment B2 / REQ-345): every phase past the size prompt wants an
   // ordinary snapped coordinate — the start point, then each further vertex. At the
   // WaitNominalSize phase a click still routes here and `SubmitPipeRunViewportPick` reports the

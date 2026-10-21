@@ -1074,6 +1074,8 @@ if(GOSURVEY_BUILD_TESTS)
     # length. Pure geom2d, double math; the tangency and quarter-circle cases are what POLYLINE arc
     # mode and JOIN both rest on, and a sign error here is silent in plan view.
     tests/BulgeArcTests.cpp
+    # REQ-444 (issue #803): the scallop geometry behind REVCLOUD. Pure geom2d, like BulgeArcTests.
+    tests/RevisionCloudTests.cpp
     tests/UpdateCheckTests.cpp
     # REQ-308 Start screen. RecentDrawingsTests drives the MRU store; StartScreenTests covers the
     # tab-index sentinel invariant and the thumbnail-cache naming/eviction (header-only, pure).
