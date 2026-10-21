@@ -31,6 +31,13 @@ TEST_CASE("Issue #762 Qt ribbon actions remain connected", "[ribbon][issue762]")
   CHECK_FALSE(points->placeholder);
 }
 
+TEST_CASE("Issue #1002 Export to LandXML is wired to its command", "[ribbon][issue1002]") {
+  const auto* landXml = FindButton("##RibbonExpLandXml");
+  REQUIRE(landXml != nullptr);
+  CHECK(std::string(landXml->command) == "EXPORTLANDXML");
+  CHECK_FALSE(landXml->placeholder);
+}
+
 TEST_CASE("Issue #762 Qt ribbon does not create an unsupported Manage panel", "[ribbon][issue762]") {
   for (const auto& button : qtribbon::kButtons)
     CHECK(std::string(button.tab) != "Manage");

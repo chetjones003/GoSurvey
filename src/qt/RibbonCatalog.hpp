@@ -236,7 +236,7 @@ inline constexpr Button kButtons[] = {
   {"Output", "Export", "##RibbonExportPointCloud", "Export Point Cloud", "Export", "EXPORTPTS", "Export Point Cloud — write the selected point clouds (or all, if none is selected) to PTS, PTX, LAS or LAZ.\nCommand bar: EXPORTPTS, EXPORTPTX, EXPORTLAS, EXPORTLAZ", false, false},
   {"Output", "Export", "##RibbonExportPoints", "Export Points", "c3d_exportpoints", "EXPORTPOINTS", "Export survey points to a point file (PNEZD / user format).", false, false},
   {"Output", "Export", "##RibbonExpImx", "Export IMX", "c3d_exportto", "", "Export IMX — not implemented yet.", false, true},
-  {"Output", "Export", "##RibbonExpLandXml", "Export to LandXML", "c3d_landxml", "", "Export to LandXML — not implemented yet.", false, true},
+  {"Output", "Export", "##RibbonExpLandXml", "Export to LandXML", "c3d_landxml", "EXPORTLANDXML", "Export to LandXML — write the drawing's survey points, TIN surfaces and feature lines to a LandXML 1.2 file.\nCommand bar: EXPORTLANDXML", false, false},
   {"Output", "Export", "##RibbonExpC3dDwg", "Export Civil 3D Drawing", "c3d_exportto", "", "Export Civil 3D Drawing — not implemented yet.", false, true},
   {"Output", "Export", "##RibbonExpFgdb", "Export to FGDB", "c3d_exportto", "", "Export to FGDB — not implemented yet.", false, true},
   {"Output", "Export", "##RibbonRehabMgr", "Rehab Manager", "c3d_exportto", "", "Rehab Manager — not implemented yet.", false, true},

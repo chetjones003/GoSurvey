@@ -13033,6 +13033,58 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
 
 
+### REQ-445 — LandXML export (GitHub issue #1002, part of #802)
+
+- Purpose: surveyors hand ground data to engineers and to other software; LandXML is the common
+  interchange file for points, surfaces and linework, and the Output → Export → Export to LandXML
+  ribbon button has been a placeholder.
+- Priority: should
+- Type: functional
+- Depends on: REQ-068 (TIN surfaces), REQ-087 (feature lines), REQ-022 and REQ-357 (drawing unit and
+  foot definition), REQ-101 (coordinate precision), REQ-201 (failures are observable), REQ-300
+  (no new dependency).
+- Statement:
+  1. A typed `EXPORTLANDXML "<file>"` command and the Output → Export → Export to LandXML ribbon
+     button write the **current drawing** to a LandXML 1.2 file. Typed without a file, the Qt editor
+     opens a save dialog and then runs the same command; headless runs always name the file.
+  2. **Contents.** Every survey point (`CgPoint`: point number as `name`, description as `desc`,
+     field code as `code`), every built TIN surface (`Surfaces/Surface`: name, description, points,
+     triangular faces) and every feature line (`PlanFeatures/PlanFeature`: name, description, one
+     `Line` per segment, plus the closing segment of a closed line).
+  3. **Coordinates** are written as world coordinates, northing first: the drawing's stored local X/Y
+     get the document origin added back in double (REQ-101), and Z is the absolute elevation.
+  4. **Units.** The file declares the drawing's unit (feet as US survey or international foot per
+     Drawing Settings, inches, meters or millimeters) and does not rescale any value. A unitless
+     drawing writes no `Units` element rather than naming a unit it does not have.
+  5. **Failure is visible (REQ-201).** An empty drawing writes no file. An unwritable destination
+     logs why and leaves any earlier file at that path untouched. An item LandXML cannot hold here
+     (a grid surface, a surface with no built triangulation, a feature line under two vertices, a
+     non-finite coordinate) is skipped and named in the log. Names and descriptions are written as
+     valid XML text; characters XML cannot hold are replaced and counted in the log.
+  6. **Out of scope** (separate requirements if wanted): importing LandXML (GitHub #1003), grid
+     surfaces, the coordinate-system/zone element, surface source data (breaklines, boundaries,
+     point files), feature-line elevation-point flags, and alignments, profiles or corridors.
+- Acceptance:
+  - A drawing with survey points, a built TIN and a feature line exports a file that contains all
+    three, with names and descriptions intact, including names containing `& < > "`.
+  - A drawing whose document origin is far from zero exports world coordinates (origin added
+    back) that equal the stored value plus the origin exactly in double.
+  - US-survey-foot, international-foot, inch, meter and millimeter drawings declare the matching
+    `Units`; a unitless drawing declares none.
+  - The file is accepted by an independent reader: it validates against the official
+    LandXML 1.2 schema (`tools/validate-landxml.ps1`).
+  - An empty drawing, an unwritable path and a skipped item each log a reason; no partial file is
+    left behind.
+  - The Output → Export → Export to LandXML button is enabled and runs `EXPORTLANDXML`; its "not
+    implemented yet" tooltip is gone.
+- Frontend: **Qt only.** The writer and command live in the shared IO and Commands layers
+  (`src/io/LandXmlIo.*`); the save dialog and ribbon button are in the Qt editor (`src/qt/`).
+- Owner-layer: IO/Commands/Qt UI
+- Decision: D-2026-10-20-f.
+- Status: proposed
+- Revisions: 2026-10-20 — proposed from GitHub #1002 as implemented; awaiting user acceptance.
+
+
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
@@ -14232,6 +14284,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
 | REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
 | REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
+| REQ-445 | IO/Commands/Qt UI | `LandXmlExportTests` (points, TIN, feature lines, units, failures, XML text), `QtEditorTests` `issue1002RibbonExportsLandXmlThroughTheCommand`, transcript `issue1002-landxml-export`, schema check `tools/validate-landxml.ps1` | proposed |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
