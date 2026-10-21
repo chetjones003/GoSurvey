@@ -11016,7 +11016,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
                the ground at all, because the ground falls away at least as fast as the fill slope
                descends, is reported the same way rather than searched indefinitely.
 
-               **Issue #997 extension (D-2026-10-20-f):** the daylight feature line
+               **Issue #997 extension (D-2026-10-20-j):** the daylight feature line
                retains an editable grading definition: stable baseline and target-surface entity
                ids, separate cut/fill slopes, and the side for an open baseline. Selecting that
                result and running GRADING restores its definition for editing. Enter rebuilds
@@ -11052,7 +11052,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     REQ-101, which ADR-054's `double` stores make reachable.
 - Owner-layer: Domain, Commands, IO
 - Status:      accepted
-- Revisions:   2026-10-20 — D-2026-10-20-f: issue #997 extends baked output with a persistent
+- Revisions:   2026-10-20 — D-2026-10-20-j: issue #997 extends baked output with a persistent
                editable definition attached to the existing daylight feature line, without a new
                geometry store or entity kind; acceptance's `.gs` round trip restated as DWG
                (D-2026-10-20-d); Status corrected to accepted, matching D-2026-10-05-b.

@@ -2,7 +2,7 @@
 
 - Type: feature
 - Status: verify
-- Authority: REQ-398 as extended by D-2026-10-20-f (GitHub issue #997, sub-issue of #802). The
+- Authority: REQ-398 as extended by D-2026-10-20-j (GitHub issue #997, sub-issue of #802). The
   user chose persistent grading objects over the baked-only first increment. Historical TASK-289 and
   the `req371-grading-daylight` transcript still say REQ-371; current REQ-371 is unrelated.
 - Constraints: ADR-028 consequences (no new store or entity kind), REQ-076 stable ids, ADR-044 DWG
