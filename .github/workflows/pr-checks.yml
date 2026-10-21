@@ -124,13 +124,6 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
-      - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
-
       - name: Run sccache
         uses: mozilla-actions/sccache-action@v0.0.11
 
@@ -237,9 +230,6 @@ jobs:
         # compiler error (unrelated to the file's own content) rather than a real finding.
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
 
-      - name: Generate Qt test moc files
-        run: cmake --build --preset ninja-release --target GoSurveyQtTests_autogen
-
       - name: clang-tidy (lines changed in this PR only)
         shell: pwsh
         env:
@@ -274,6 +264,7 @@ jobs:
           # which on this MSVC/Windows runner is a backslash-separated absolute path — a
           # forward-slash "name" (git's own path spelling) never matches that suffix at all.
           $filterEntries = @()
+          $lintFiles = @()
           foreach ($file in $changed) {
             $hunkStarts = git diff -U0 "$env:BASE_SHA" HEAD -- $file |
               Select-String -Pattern '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
@@ -292,25 +283,46 @@ jobs:
             # "\u" in "CadCommands.hpp", parses as a bad unicode escape, not a path separator).
             $name = $file -replace '/', '\\'
             $filterEntries += "{`"name`":`"$name`",`"lines`":[$($ranges -join ',')]}"
+            $lintFiles += $file
           }
 
           if ($filterEntries.Count -eq 0) {
             Write-Host "No added/modified lines in any changed C/C++ file (deletions only)."
             exit 0
           }
+
+          # This generated MOC include is needed only when clang-tidy analyzes the Qt test TU.
+          # Building it on unrelated C++ changes previously spent about ten minutes for no benefit.
+          if ($lintFiles -contains 'tests/QtEditorTests.cpp') {
+            cmake --build --preset ninja-release --target GoSurveyQtTests_autogen
+            if ($LASTEXITCODE -ne 0) { throw "Qt test MOC generation failed (exit $LASTEXITCODE)" }
+          }
+
           $lineFilter = "[$($filterEntries -join ',')]"
           Write-Host "Line filter:`n$lineFilter"
 
-          $failed = $false
-          foreach ($file in $changed) {
+          # Each invocation reads the same compile database and writes no shared files. A cap of
+          # two uses the hosted runner's cores without multiplying peak memory across a large PR.
+          $results = $lintFiles | ForEach-Object -Parallel {
+            $file = $_
+            $tool = $using:clangTidy
+            $filter = $using:lineFilter
             # --warnings-as-errors=* makes a Checks: match fail the run (the exit code is 0 on
             # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
             # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
             # local editor integration), where warnings-not-errors is the more useful default.
             # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
             # the exit code), so this also cuts the run time and log size on a large header.
-            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$lineFilter" -p build/.cmake/release $file
-            if ($LASTEXITCODE -ne 0) { $failed = $true }
+            $output = & $tool --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$filter" -p build/.cmake/release $file 2>&1
+            $exitCode = $LASTEXITCODE
+            [PSCustomObject]@{ File = $file; ExitCode = $exitCode; Output = @($output) }
+          } -ThrottleLimit 2
+
+          $failed = $false
+          foreach ($result in $results) {
+            Write-Host "clang-tidy: $($result.File) (exit $($result.ExitCode))"
+            foreach ($line in $result.Output) { Write-Host $line }
+            if ($result.ExitCode -ne 0) { $failed = $true }
           }
           if ($failed) {
             Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
@@ -356,13 +368,6 @@ jobs:
           Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
-
-      - name: Set up Qt
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.8.3'
-          arch: win64_msvc2022_64
-          cache: true
 
       - name: Configure
         run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON -DGOSURVEY_ANALYZE_WERROR=ON
