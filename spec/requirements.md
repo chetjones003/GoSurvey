@@ -13606,6 +13606,50 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-21 — catalogued and accepted (D-2026-10-21-a, GitHub issue #1032).
 
+### REQ-450 — Configurable viewport cursor: crosshair and pickbox controls in Qt Settings (GitHub issue #1033)
+
+- Purpose: the cursor the user draws with should look the way they want, and read as a mode signal
+- Priority: should
+- Type: functional
+- Depends on: REQ-121 (pickbox during object selection), REQ-449 (Settings window and its Apply/OK/Cancel), REQ-310 (3D crosshair, not covered here)
+- Statement:
+  1. **Normal cursor.** During normal CAD use the Qt viewport draws its own cursor at the pointer: a
+     crosshair of two arms with a **pickbox** (a small square) at the centre. It replaces the
+     operating-system cursor over the viewport.
+  2. **Selection cursor.** During an object-selection step (REQ-121, and its paper-space counterpart)
+     only the pickbox is drawn, without the arms; when the step ends the normal cursor returns.
+  3. **Settings.** The Qt Settings window (Display category) offers four app-wide controls:
+     | Control | Unit | Range | Default |
+     |---|---|---|---|
+     | Crosshair colour | any RGB colour | any | amber (255, 168, 0), the colour the shipped default drawing template already uses |
+     | Crosshair arm length | % of the viewport's shorter side, total length of each arm line | 1 to 100 | 5 |
+     | Pickbox size | pixels, half the square's width | 2 to 20 | 4 |
+     | Snap aperture | pixels, one setting shared by every object-snap and pick | 4 to 64 | 14 |
+  4. **Persistence.** The four values are application preferences saved in `gosurvey-user.json`; they
+     apply to every drawing and survive a restart. Out-of-range saved values are clamped on load.
+     Creating a new drawing from a template does not change them, even though the template file also
+     carries a copy of the cursor values.
+  5. **Preview and revert.** Changing a cursor control (colour, arm length, pickbox size) updates the
+     viewport immediately. **Apply** keeps the new values, **OK** keeps them and closes, **Cancel**
+     (or closing the window) restores the values saved when the window was opened or last applied.
+     The snap aperture follows REQ-449's staging: it takes effect on Apply or OK.
+  6. **Out of scope:** the 3D UCS-axis crosshair (REQ-310) and the crosshair line thickness.
+- Acceptance:
+  1. normal use draws the arms and the central pickbox at the configured colour, arm length and size;
+  2. an object-selection step draws the pickbox only, and the arms return when the step ends;
+  3. the Display category shows the four controls with the ranges above, and the defaults are the
+     values in the table when nothing is saved;
+  4. the four values are written to the preferences file by Apply/OK and read back after a restart,
+     and out-of-range stored values are clamped;
+  5. a new drawing created from a template keeps the user's cursor values rather than the template's;
+  6. editing a cursor control changes the live viewport value before Apply; Cancel restores the saved
+     value; Apply then Cancel keeps the applied value;
+  7. tests cover the cursor shape decision (normal versus selection), persistence and clamping, and
+     the preview/Cancel/Apply behaviour.
+- Owner-layer: Qt UI (`EditorViewport`, `ShowSettings`); Commands (cursor-shape rule in `ViewportPickPolicy.hpp`); IO (`UserPrefs`)
+- Status: accepted
+- Revisions: 2026-10-21 - catalogued and accepted (D-2026-10-21-b, GitHub issue #1033).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -14486,6 +14530,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-446 | IO/Renderer | `PdfPlot` tests for lineweight stroke width and linetype dash pattern; default plot unchanged — to be added with the implementing PR | accepted |
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
+| REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |

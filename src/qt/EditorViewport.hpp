@@ -2,6 +2,7 @@
 
 #include <QOpenGLWidget>
 #include <QElapsedTimer>
+#include <QEnterEvent>
 #include <QPoint>
 #include <QPointF>
 #include <QTimer>
@@ -12,6 +13,7 @@
 #include "CadSnap.hpp"
 
 class ViewportRenderer;
+class QPainter;
 
 class EditorViewport final : public QOpenGLWidget {
 public:
@@ -42,7 +44,10 @@ protected:
   void wheelEvent(QWheelEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
   void keyReleaseEvent(QKeyEvent* event) override;
+  void enterEvent(QEnterEvent* event) override;
+  void leaveEvent(QEvent* event) override;
 private:
+  void DrawCursor(QPainter& painter);
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
@@ -62,6 +67,7 @@ private:
   ray3d::Vec3 m_Cursor;
   CadSnap::Hit m_Snap;
   bool m_Ready = false;
+  bool m_PointerInside = false;
   bool m_Grid = true;
   bool m_LeftDragSelection = false;
   bool m_HasSelectionBoxSnapshot = false;
