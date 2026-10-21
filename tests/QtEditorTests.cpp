@@ -81,6 +81,7 @@
 #include <QDialogButtonBox>
 #include <QListWidget>
 #include <QDoubleSpinBox>
+#include <QSlider>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QTableWidget>
@@ -3098,7 +3099,7 @@ private Q_SLOTS:
     window.ShowSettings();
     auto* dialog = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(dialog);
-    auto* arm = dialog->findChild<QSpinBox*>("settingsCrosshairSize");
+    auto* arm = dialog->findChild<QSlider*>("settingsCrosshairSize");
     auto* pickbox = dialog->findChild<QSpinBox*>("settingsPickboxSize");
     auto* aperture = dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture");
     auto* colorButton = dialog->findChild<QPushButton*>("settingsCrosshairColor");
@@ -3127,7 +3128,7 @@ private Q_SLOTS:
     window.ShowSettings();
     dialog = window.findChild<QDialog*>("applicationSettings");
     QVERIFY(dialog);
-    dialog->findChild<QSpinBox*>("settingsCrosshairSize")->setValue(40);
+    dialog->findChild<QSlider*>("settingsCrosshairSize")->setValue(40);
     dialog->findChild<QSpinBox*>("settingsPickboxSize")->setValue(7);
     dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture")->setValue(20);
     QCOMPARE(state.objectSnapAperturePx, 14.f);   // the aperture is staged until Apply
@@ -3137,7 +3138,7 @@ private Q_SLOTS:
     QCOMPARE(applied.displayCrosshairSizePct, 40);
     QCOMPARE(applied.viewportCrosshairPickHalfPxX, 7.f);
     QCOMPARE(applied.objectSnapAperturePx, 20.f);
-    dialog->findChild<QSpinBox*>("settingsCrosshairSize")->setValue(60);
+    dialog->findChild<QSlider*>("settingsCrosshairSize")->setValue(60);
     dialog->findChild<QPushButton*>("settingsCancel")->click();
     QCOMPARE(state.displayCrosshairSizePct, 40);
     QCOMPARE(state.viewportCrosshairPickHalfPxX, 7.f);

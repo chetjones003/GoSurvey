@@ -17,6 +17,8 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QColorDialog>
+#include <QPixmap>
+#include <QSlider>
 #include <QPushButton>
 #include <QPalette>
 #include <QSignalBlocker>
@@ -442,8 +444,11 @@ void EditorWindow::ShowSettings() {
   colorButton->setObjectName("settingsCrosshairColor");
   auto paintSwatch = [this, colorButton] {
     const QColor color = QColor::fromRgbF(m_State.viewportCrosshairR, m_State.viewportCrosshairG, m_State.viewportCrosshairB);
+    QPixmap swatch(28, 16);
+    swatch.fill(color);
+    colorButton->setIcon(QIcon(swatch));
+    colorButton->setIconSize(swatch.size());
     colorButton->setText(color.name().toUpper());
-    colorButton->setStyleSheet(QString("QPushButton { border-left:22px solid %1; text-align:left; padding:4px 8px; }").arg(color.name()));
   };
   paintSwatch();
   cursorForm->addRow("Crosshair color", colorButton);
@@ -457,12 +462,18 @@ void EditorWindow::ShowSettings() {
     paintSwatch();
     m_Viewport->update();
   });
-  auto *armLength = new QSpinBox(dialog);
+  auto *armLength = new QSlider(Qt::Horizontal, dialog);
   armLength->setObjectName("settingsCrosshairSize");
   armLength->setRange(1, 100); armLength->setValue(m_State.displayCrosshairSizePct);
-  armLength->setSuffix(" % of viewport"); armLength->setKeyboardTracking(false);
-  cursorForm->addRow("Crosshair arm length", armLength);
-  connect(armLength, &QSpinBox::valueChanged, dialog, [this](int value) {
+  auto *armText = new QLabel(QString("%1%").arg(armLength->value()), dialog);
+  armText->setObjectName("settingsCrosshairSizeText");
+  armText->setMinimumWidth(40);
+  auto *armRow = new QHBoxLayout();
+  armRow->addWidget(armLength, 1);
+  armRow->addWidget(armText);
+  cursorForm->addRow("Crosshair arm length (% of viewport)", armRow);
+  connect(armLength, &QSlider::valueChanged, dialog, [this, armText](int value) {
+    armText->setText(QString("%1%").arg(value));
     m_State.displayCrosshairSizePct = value;
     m_Viewport->update();
   });
