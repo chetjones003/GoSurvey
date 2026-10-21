@@ -17,7 +17,7 @@ name: full-validation
 on:
   pull_request:
     branches: [master, beta]
-    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 concurrency:
   group: full-validation-${{ github.event.pull_request.number }}
