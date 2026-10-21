@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 45
     defaults:
       run:
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"
     env:
       NINJA_STATUS: '[%f/%t; %r running; %e s] '
     steps:

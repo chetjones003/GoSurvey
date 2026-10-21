@@ -63,6 +63,24 @@ function Save-CompilerCacheStats {
   Invoke-BenchmarkCommand sccache @('--show-stats')
 }
 
+function Find-WorkingClangTidy {
+  param([string[]]$Candidates)
+  $attempts = [Collections.Generic.List[object]]::new()
+  foreach ($candidate in ($Candidates | Select-Object -Unique)) {
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+    $version = @(& $candidate --version 2>&1)
+    $code = $LASTEXITCODE
+    $text = $version -join "`n"
+    $attempts.Add([ordered]@{ path = $candidate; exitCode = $code; output = $text })
+    Write-Host "clang-tidy probe: $candidate (exit $code)"
+    Write-Host $text
+    if ($code -eq 0 -and $text -match 'LLVM version') {
+      return [ordered]@{ path = $candidate; version = $text; attempts = @($attempts.ToArray()) }
+    }
+  }
+  throw "No installed clang-tidy passed its version check. Inspected: $($attempts.path -join ', ')"
+}
+
 try {
   Measure-BenchmarkStage preflight {
     if (-not (Test-Path -LiteralPath $EnvironmentFile)) {
@@ -71,9 +89,6 @@ try {
     . $EnvironmentFile
     foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'cl', 'rc', 'python', 'clang-tidy', 'sccache') {
       if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { throw "Required tool is missing from PATH: $tool" }
-    }
-    foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'python', 'clang-tidy', 'sccache') {
-      Invoke-BenchmarkCommand $tool @('--version')
     }
     foreach ($required in 'bin\Qt6Core.dll', 'bin\moc.exe', 'bin\windeployqt.exe', 'lib\cmake\Qt6\Qt6Config.cmake') {
       if (-not (Test-Path -LiteralPath (Join-Path $env:GOSURVEY_QT_ROOT $required))) {
@@ -98,6 +113,21 @@ try {
       sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
     }
     $report.host | ConvertTo-Json -Depth 5 | Write-Host
+    $report.tools = @('git', 'cmake', 'ctest', 'ninja', 'cl', 'rc', 'python', 'clang-tidy', 'sccache') |
+      ForEach-Object {
+        $command = Get-Command $_
+        [ordered]@{ name = $_; type = [string]$command.CommandType; path = $command.Source }
+      }
+    $report.tools | ConvertTo-Json | Write-Host
+    # Developer shells can put VS-bundled LLVM ahead of the standalone install.
+    # Probe actual executables and fail closed if none can start successfully.
+    $tidyCandidates = @((Join-Path $env:ProgramFiles 'LLVM\bin\clang-tidy.exe')) +
+      @(Get-Command clang-tidy.exe -All -CommandType Application | ForEach-Object Source)
+    $report.clangTidy = Find-WorkingClangTidy $tidyCandidates
+    $env:Path = (Split-Path -Parent $report.clangTidy.path) + ';' + $env:Path
+    foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'python', 'sccache') {
+      Invoke-BenchmarkCommand $tool @('--version')
+    }
     # This benchmark reuses the local disk cache, with no hosted cache downloads.
     $env:SCCACHE_GHA_ENABLED = 'false'
     Save-CompilerCacheStats before

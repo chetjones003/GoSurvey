@@ -70,3 +70,27 @@ Implementation complete; hardware verification pending.
 - Public-repository migration constraint: fork workflow approval is currently
   `first_time_contributors`. This experiment has no PR trigger; broad persistent
   runner PR routing still needs a deliberate trust/isolation policy.
+
+## First laptop run: startup failures
+
+- Run 39669157648 on fcc92622 passed normal-user/desktop and checkout checks, then
+  failed preflight because bare `clang-tidy --version` aborted with duplicate
+  LLVM `color` option registration (exit 3). Compilation/tests did not start.
+  MSVC 2022, CMake 4.0.1, Ninja 1.12.1 and Python 3.13.3 were reached successfully.
+- The job shell also loaded an interactive PSReadLine profile, producing terminal
+  errors. The logged command had no `-NoProfile`; use an explicit noninteractive
+  no-profile shell for this workflow.
+- Leading LLVM hypotheses: a VS-bundled executable shadows standalone LLVM; the
+  interactive profile changes command resolution; or the installed LLVM package
+  itself cannot start. Underlying LLVM packaging/DLL cause is not yet proven.
+- Plan verification APPROVE: record hardware/tool paths before version probes;
+  prefer the standalone installed executable, verify candidate startup, and fail
+  if no installed candidate works. Preserve the selected executable/version and
+  unsuccessful attempts as evidence and put the selected directory first on PATH.
+  This validates an installed tool; it does not waive static-analysis readiness.
+  The next laptop run must establish which executable actually works.
+- Validation: an exit-3 fixture is rejected when it is the only candidate; a
+  subsequent healthy fixture is selected with both attempts retained. The local
+  standalone LLVM 21.1.8 executable passes the same probe. PowerShell syntax,
+  actionlint and patch whitespace pass. This does not establish the laptop's
+  installed LLVM version or underlying packaging cause; hardware rerun pending.
