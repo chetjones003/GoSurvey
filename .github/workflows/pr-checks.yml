@@ -1,5 +1,5 @@
-# Fast required PR gate (REQ-437). Complete C++ build/tests and static analysis run in
-# full-validation.yml on the same PR but do not block merge. A validated docs-only PR skips CI;
+# PR gate (REQ-437). Full C++ build/tests and static analysis run in full-validation.yml;
+# both workflows' check statuses are required and block merge. A validated docs-only PR skips CI;
 # review requirements remain governed by branch rules.
 
 name: pr-checks

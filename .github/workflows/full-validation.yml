@@ -1,13 +1,14 @@
-# Full asynchronous validation (REQ-437). The required PR gate lives in pr-checks.yml; this
-# workflow runs the complete build, CTest suite, clang-tidy, and MSVC analysis without blocking
+# Full validation (REQ-437). Jobs live in a separate workflow for visibility and concurrency;
+# master and beta branch protection require every full-validation status, so these checks block
 # merge. A validated `docs-only` PR skips the work; approval remains governed by branch rules.
 #
 # Deliberately split into separate, independently-named jobs rather than one monolithic job: the
 # PR checks list in GitHub's UI shows one line per job, so a failure is attributable at a glance
-# (`full / clang-tidy` failed) instead of digging through one big log. Nothing here publishes
+# (`full / clang-tidy` failed) instead of digging through one big log. Branch protection requires
+# every status here. Nothing in this workflow publishes
 # anything — that stays in release.yml (REQ-202/ADR-029), which is manual-dispatch only.
 #
-# MSVC analysis remains enforced here as a complete asynchronous validation. release.yml stays
+# MSVC analysis remains enforced here as a complete project validation. release.yml stays
 # unchanged and manual-dispatch only (REQ-202/ADR-029).
 
 name: full-validation
@@ -37,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
+      has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
     steps:
       - name: Check out classifier
         uses: actions/checkout@v4
@@ -51,6 +53,31 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
         run: python .github/scripts/classify_docs_only.py
+
+      - name: Detect changed C/C++ files
+        id: changed-cpp
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python - <<'PY'
+          import os
+          import subprocess
+
+          files = subprocess.check_output(
+              ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{os.environ['BASE_SHA']}...HEAD"],
+              text=True,
+          ).splitlines()
+          suffixes = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
+          changed = any(
+              path.lower().endswith(suffixes) and not path.lower().startswith("third_party/")
+              for path in files
+          )
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"has_cpp_changes={str(changed).lower()}\n")
+          print(f"Changed C/C++ files present: {changed}")
+          PY
 
   # ---------------------------------------------------------------------------
   # Build and test the supported Qt application and headless helpers.
@@ -158,7 +185,7 @@ jobs:
         env:
           QT_OPENGL: desktop
           GALLIUM_DRIVER: llvmpipe
-        run: ctest --preset ninja-release --parallel 4
+        run: ctest --preset ninja-release --parallel 8
 
       - name: sccache stats
         if: always()
@@ -193,7 +220,8 @@ jobs:
     if: >-
       always() &&
       (needs.classify-docs-only.result != 'success' ||
-       needs.classify-docs-only.outputs.docs_only != 'true')
+       (needs.classify-docs-only.outputs.docs_only != 'true' &&
+        needs.classify-docs-only.outputs.has_cpp_changes != 'false'))
     runs-on: windows-latest
     steps:
       - name: Check out
@@ -341,6 +369,8 @@ jobs:
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: windows-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -369,11 +399,35 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath $dir -Force
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
       - name: Configure
-        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON -DGOSURVEY_ANALYZE_WERROR=ON
+        run: >
+          cmake --preset ninja-release
+          -DGOSURVEY_ENABLE_ANALYZE=ON
+          -DGOSURVEY_ANALYZE_WERROR=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Verify sccache is in the compile commands
+        shell: pwsh
+        run: |
+          $commands = & ninja -C build/.cmake/release -t commands
+          if ($LASTEXITCODE -ne 0) { throw "Ninja could not list compile commands (exit $LASTEXITCODE)" }
+          if (-not ($commands | Select-String -Pattern 'sccache(\.exe)?' -Quiet)) {
+            throw 'CMake generated compile commands without sccache; the MSVC cache would otherwise remain unused.'
+          }
 
       - name: Register MSVC /analyze problem matcher
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Build (findings become annotations and fail the build)
         run: cmake --build --preset ninja-release
+
+      - name: sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
+          else { sccache --show-stats }

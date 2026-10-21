@@ -8,13 +8,13 @@
 ## 1. Authority
 - Goal:         User-approved CI performance improvement; no product goal applies.
 - Requirements: REQ-205 (accepted), REQ-437 (accepted).
-- Constraints:  Keep all validation coverage on ordinary PRs; allow full C++ checks to run asynchronously behind a fast required gate; remove no test unless its coverage is demonstrably redundant; docs-only skip requires the explicit `docs-only` label and fully validated documentation paths; approval remains required.
+- Constraints:  Keep all validation coverage on ordinary PRs; keep every full C++ check required and blocking while reducing runtime; remove no test unless its coverage is demonstrably redundant; docs-only skip requires the explicit `docs-only` label and fully validated documentation paths; approval remains required.
 - Acceptance:   REQ-205: "The build is kept within a budget so the edit → build → test loop stays usable." REQ-437: a labeled PR skips only when every changed path qualifies; absent label, paths, incomplete listings, limit, count mismatch, or classifier failure runs CI; approval remains required.
 - Owning subsystem: Repository governance and GitHub Actions (`.github/workflows/`, `.github/scripts/`).
 
 ## 2. Scope
 - In scope: Reduce avoidable PR-check wall time and make docs-only classifier fallback reasons visible.
-- Out of scope: Remove test coverage, change docs-only label policy, or change application behavior. User-approved scope includes splitting required and asynchronous checks and updating branch protection.
+- Out of scope: Remove test coverage, change docs-only label policy, or change application behavior. User-approved scope includes separating full-validation into its own workflow while keeping every job required in branch protection.
 - Smallest change: Parallelize independent clang-tidy work conservatively, skip unnecessary Qt MOC generation and the unused CTest-unreferenced fixture executable, remove redundant setup, and report classifier fallback reason.
 
 ## 3. Architectural boundary check
@@ -41,11 +41,11 @@
   - [x] Refresh the CI visualizer and statically review the diff.
 
 ## 7. Workflow-specific notes
-- Workflow: PRs run the required fast gate plus security scans; full build, CTest, clang-tidy, and MSVC analysis run in a parallel non-required workflow. Docs-only label events re-run classification in both workflows.
+- Workflow: PRs run the gate, security scans, full build and CTest, clang-tidy, and MSVC analysis. Full validation uses a separate workflow for visibility; every status remains required and blocks merge. Docs-only label events re-run classification in both workflows.
 
 ## 8. Implementation log
 - 2026-10-21 — Confirmed REQ-437 policy: no label returns false before the changed-files API call. The workflow already includes `labeled` and `unlabeled` pull request events, so label changes re-run classification.
-- 2026-10-21 — Found duplicate Qt setup steps in build/test and MSVC analysis; unconditional Qt test MOC generation before clang-tidy; sequential per-file clang-tidy; and serial CTest invocation. sccache is configured, but prior stats showed zero requests; no speculative cache change planned.
+- 2026-10-21 — Found duplicate Qt setup steps in build/test and MSVC analysis; unconditional Qt test MOC generation before clang-tidy; sequential per-file clang-tidy; and serial CTest invocation. sccache is configured, but prior stats showed zero requests; configured sccache in the MSVC analysis job and corrected CMP0141 setup before project() so MSVC /Z7 is selected when a compiler launcher is enabled; hosted cache hit rate remains to be measured.
 - 2026-10-21 — Initial CTest safety review found shared fixed temp paths, so naive parallel execution was rejected. Follow-up audit measured the whole Catch2 suite in one process and found that sequential in-process execution passes all 2,542 Catch cases while avoiding per-case process startup. Headless transcript outputs are per-test and passed at `-j4`.
 - 2026-10-21 — Follow-up CI review compared the older `master` workflow (which did not run CTest) with this beta-based task branch (which does). Kept both test and headless targets enabled, and changed the build command to request only `GoSurveyQt`, `GoSurveyTests`, `gosurvey_headless`, and `GoSurveyQtTests`; `GsJsonDwgFixture` has no CTest consumers.
 - 2026-10-21 — Local validation on MSVC 19.51 and Qt 6.8.3: configure passed; all four selected build targets built; all nine docs-only classifier tests passed; CTest passed all 2,726 tests in 551.41 seconds. CI wall-time impact is still pending an Actions run.
@@ -76,3 +76,7 @@
 
 - 2026-10-21 — User selected the fast-gate architecture after reviewing the latest hosted timings. Added `full-validation.yml` for the full build/test and static-analysis jobs; retained docs-only fail-closed classification and both security scans in required `pr-checks.yml`. The required gate runs patch whitespace checks and Python syntax compilation.
 - 2026-10-21 — Queried live branch protection: `master` and `beta` require build/test, clang-tidy, Gitleaks, and Trivy; MSVC analysis was not in the required context list. Updated both branches to require `PR gate`, retaining both security contexts and the existing review requirement. Verified the GitHub Actions app ID is bound to all three required checks.
+
+- 2026-10-21 � User clarified that all checks must continue to block. Reinstated required full-validation status contexts for master and beta; fast-gate architecture is superseded. Added changed-C/C++ path detection so clang-tidy skips the entire Windows setup for PRs without C/C++ changes, and enabled sccache for the MSVC analysis job.
+
+- 2026-10-21 � Re-ran full CTest at eight workers: all 188 registrations passed in 107.94 seconds (previous local four-worker result was 164.19 seconds). Updated full-validation concurrency to eight; hosted runtime remains unmeasured.

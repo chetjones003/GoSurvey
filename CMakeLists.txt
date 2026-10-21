@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 cmake_policy(SET CMP0091 NEW)  # let CMAKE_MSVC_RUNTIME_LIBRARY (below) control /MD vs /MDd
+
+# sccache requires embedded MSVC debug information instead of the default /Zi PDB format.
+# CMP0141 must be NEW before project() initializes compiler flags; the launcher is passed by CI.
+if(POLICY CMP0141)
+  if(CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+    cmake_policy(SET CMP0141 NEW)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+  endif()
+endif()
+
 project(GoSurvey VERSION 0.7.4 LANGUAGES CXX C RC)
 
 if(MSVC)
@@ -33,13 +43,6 @@ if(CMAKE_CONFIGURATION_TYPES)
 endif()
 set(GOSURVEY_ARTIFACT_DIR "${CMAKE_BINARY_DIR}/../../artifacts/${CMAKE_BUILD_TYPE}")
 file(MAKE_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
-
-# sccache cannot hash MSVC's default /Zi PDB. CI passes CMAKE_CXX_COMPILER_LAUNCHER=sccache;
-# local builds leave the launcher unset and keep the default debug format.
-if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
-  cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
-endif()
 
 # ---------------------------------------------------------------------------
 # MSVC exception + RTTI model (GitHub issue #375).
