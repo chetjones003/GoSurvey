@@ -1529,8 +1529,13 @@ requirements is a planning failure, not a sign of rigor.
     DWG, Settings, Export DXF/DWG, and Plot/Batch Plot all work correctly from their new ribbon
     locations, Home's paper-space Layout section still renders correctly with only Rect VP/Poly VP,
     and no scrollbar/clipping is introduced at any width already covered by increment 2.
-- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`) / IO (`src/io/UserPrefs.cpp`,
-  preference persistence)
+- Acceptance — Qt ribbon caption spacing (GitHub issue #1030; accepted 2026-10-21, D-2026-10-21-a):
+  - ribbon group captions have visible bottom breathing room;
+  - the ribbon may grow slightly to provide that space while command button sizes and behavior stay
+    unchanged;
+  - supported window widths retain no horizontal or vertical ribbon scrollbars.
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`, Qt ribbon
+  `src/qt/EditorRibbon.cpp`) / IO (`src/io/UserPrefs.cpp`, preference persistence)
 - Status: accepted
 - Revisions: 2026-08-25 — initial (GitHub issue #83, D-2026-08-25-c). Sequenced into 3 increments;
   increment 1's acceptance fully specified, increments 2-3 deferred until reached (REQ-103 precedent).
@@ -1547,6 +1552,9 @@ requirements is a planning failure, not a sign of rigor.
   not Manage; Plot/Batch Plot → Output, moved off Home, not duplicated).
   2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
   delivered, all 3 increments complete, issue #83 closed.
+  2026-10-21 (D-2026-10-21-a) — user accepted the issue #1030 Qt caption-spacing addition:
+  visible bottom breathing room, a slight ribbon height increase if needed, unchanged command button
+  sizing/behavior, and no horizontal or vertical ribbon scrollbars at supported widths.
 
 ### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
 - **Duplication note (found merging `master` into `beta` for REQ-304/issue #82, D-2026-08-25-l):**

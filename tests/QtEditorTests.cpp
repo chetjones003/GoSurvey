@@ -5279,6 +5279,28 @@ private Q_SLOTS:
     auto* draw = window.findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->menu()->actions().contains(line));
   }
 
+  void ribbonPanelCaptionsHaveBottomSpaceWithoutResizingButtons() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1400, 800); window.show();
+    QTest::qWait(100);
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
+    auto* panel = window.findChild<QWidget*>("ribbonPanel_Home_Palettes"); QVERIFY(panel);
+    auto* caption = panel->findChild<QLabel*>("ribbonPanelLabel"); QVERIFY(caption);
+    auto* toolspace = panel->findChild<QToolButton*>("tool_RibbonToolspaceHome"); QVERIFY(toolspace);
+
+    QCOMPARE(panel->height(), 98);
+    QVERIFY(panel->height() - caption->geometry().bottom() - 1 >= 4);
+    QCOMPARE(toolspace->minimumWidth(), 58);
+    QCOMPARE(toolspace->height(), 73);
+    QCOMPARE(page->height(), 102);
+    QCOMPARE(ribbon->height(), 130);
+
+    window.resize(850, 650); QTest::qWait(100);
+    QVERIFY(ribbon->width() <= window.width());
+    QVERIFY(page->width() <= ribbon->width());
+    for (auto* scrollBar : ribbon->findChildren<QScrollBar*>()) QVERIFY(!scrollBar->isVisible());
+  }
+
   void releaseRibbonContextTracksSelectionAndRestoresNormalTab() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto* ribbon = window.findChild<QTabWidget*>("ribbon"); auto& state = window.State();
