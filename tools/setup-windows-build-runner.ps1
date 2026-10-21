@@ -30,7 +30,7 @@ $packages = @('Git.Git', 'Kitware.CMake', 'Ninja-build.Ninja', 'Microsoft.PowerS
 if ($PlanOnly) {
   Write-Host 'Windows 11 x64 setup plan (no downloads or changes):'
   Write-Host "  WinGet packages: $($packages -join ', ')"
-  Write-Host '  MSVC: use an existing C++ toolchain or install VS 2022 Build Tools + Windows SDK.'
+  Write-Host '  MSVC: require 14.50+; use VS 2026 C++ tools or install stable Build Tools + Windows SDK.'
   Write-Host "  Qt: $qtRoot via isolated aqtinstall 3.3.0."
   Write-Host "  Environment and interactive runner launchers: $InstallRoot"
   Write-Host '  Compiler cache: per-user LOCALAPPDATA\GoSurveyCI\sccache, outside checkouts.'
@@ -88,19 +88,24 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 $vsPath = ''
 if (Test-Path -LiteralPath $vswhere) {
-  $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+  $vsPath = & $vswhere -latest -version '[18.0,)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
   if ($LASTEXITCODE -ne 0) { throw 'vswhere could not inspect the installed C++ toolchain.' }
 }
 if (-not $vsPath) {
-  Write-Host 'Installing MSVC and the Windows SDK; this can take several minutes ...'
-  Invoke-SetupCommand $winget.Source @('install', '--id', 'Microsoft.VisualStudio.2022.BuildTools',
+  Write-Host 'Installing stable VS 2026 Build Tools and the Windows SDK; this can take several minutes ...'
+  Invoke-SetupCommand $winget.Source @('install', '--id', 'Microsoft.VisualStudio.BuildTools',
     '--exact', '--source', 'winget', '--force', '--disable-interactivity',
     '--accept-source-agreements', '--accept-package-agreements', '--override',
     '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended')
-  $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+  $vsPath = & $vswhere -latest -version '[18.0,)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
   if ($LASTEXITCODE -ne 0 -or -not $vsPath) {
     throw 'The C++ workload is missing. Add Desktop development with C++ in Visual Studio Installer, then rerun.'
   }
+}
+$toolVersion = (Get-Content -LiteralPath (Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+if ([version]$toolVersion -lt [version]'14.50' -or
+    -not (Test-Path -LiteralPath (Join-Path $vsPath "VC\Tools\MSVC\$toolVersion\bin\Hostx64\x64\cl.exe"))) {
+  throw 'The selected VS installation needs MSVC 14.50+ x64 tools. Modify its Desktop development with C++ workload, then rerun setup.'
 }
 
 $qtFiles = @('bin\Qt6Core.dll', 'bin\moc.exe', 'bin\windeployqt.exe', 'lib\cmake\Qt6\Qt6Config.cmake')
@@ -143,10 +148,13 @@ $workers = [int][Math]::Min($cpuBudget, $memoryBudget)
 $env:CMAKE_BUILD_PARALLEL_LEVEL = [string]$workers
 $env:CTEST_PARALLEL_LEVEL = [string]$workers
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-$vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+$vsPath = & $vswhere -latest -version '[18.0,)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
 if ($LASTEXITCODE -ne 0 -or -not $vsPath) { throw 'MSVC C++ tools were not found.' }
+$toolVersion = (Get-Content -LiteralPath (Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+if ([version]$toolVersion -lt [version]'14.50') { throw 'GoSurvey bundled libraries require MSVC 14.50+.' }
+$env:Path = (Split-Path -Parent $vswhere) + ';' + $env:Path
 Import-Module (Join-Path $vsPath 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
-Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+Enter-VsDevShell -VsInstallPath $vsPath -SkipAutomaticLocation -DevCmdArguments "-arch=x64 -host_arch=x64 -vcvars_ver=$toolVersion"
 Write-Host "GoSurvey tools ready; $workers build/test workers; cache at $env:SCCACHE_DIR"
 '@
 $environmentScript = $environmentScript.Replace('__QT_ROOT__', $qtRoot.Replace("'", "''"))

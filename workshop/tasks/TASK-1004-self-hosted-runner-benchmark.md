@@ -159,3 +159,44 @@ Implementation complete; hardware verification pending.
   and patch whitespace PASS. Review confirms startup/stat errors remain failures,
   only the owned endpoint is stopped, and no test/protection behavior changes.
   Hardware validation remains pending; no performance claim is made.
+
+## Fourth laptop run: bundled-library runtime incompatibility
+
+- Run 39677654768 on e79e2039 verifies the cache startup fix: preflight 5.513s,
+  configure 10.825s, every cache-control call below 0.14s, owned server stopped.
+  The initial build fails after 311.21s at GoSurvey linking (not a full build
+  timing). Cache counters show 239 successful compilations, 239 misses, no hits
+  or uncacheable calls. Cached rebuild and CTest were not reached.
+- Root cause: MSVC 14.44.35207 cannot resolve the bundled E57Format/csmap objects'
+  `__std_find_first_not_of_trivial_pos_1`, `_pos_2`, and
+  `__std_find_last_not_of_trivial_pos_2` runtime references. These implementations
+  were added in MSVC 14.50 (Microsoft STL changelog, #5206). The local 14.51
+  msvcprt.lib exports these exact symbols. The setup script incorrectly treats
+  any installed C++ workload as sufficient and otherwise installs VS 2022.
+- Plan verification APPROVE: select/install stable VS 2026 Build Tools with
+  MSVC 14.50+ and verify its default x64 tools. Add a tiny compile/link preflight
+  using these three actual symbols, retaining source/object/link output under
+  artifacts. Do not modify vendor binaries or add fake compatibility functions.
+  Document the one-time machine upgrade; runner jobs remain non-elevated and
+  never install tools. Installation on the laptop needs its administrator session.
+- Validation plan: compile/link the real probe against local MSVC 14.51, verify
+  setup's read-only plan and syntax, and retain the existing laptop link failure
+  as evidence of the older runtime. Actual hardware rerun follows installation.
+- Sources: https://github.com/microsoft/STL/wiki/Changelog#msvc-build-tools-1450
+  and https://learn.microsoft.com/en-us/cpp/overview/acquire-msvc . Microsoft
+  binary-compatibility guidance requires linking with tools at least as new as
+  the newest binary input; updating only the redistributable cannot fix linking.
+- Local regression PASS: the real probe fails with the same three unresolved
+  functions on 14.44.35207 and links successfully on 14.51.36231. The tiny probe
+  explicitly links msvcprt.lib, matching the vendored libraries' default-library
+  directive; its executable is not run. The installer plan makes no changes.
+- Developer-shell validation also found VS 2026 expects vswhere on PATH. The
+  generated helper now adds its directory and explicitly selects the default
+  supported toolset, avoiding fallback to older side-by-side tools.
+- Hardware verification is pending the laptop's one-time administrator install.
+  Runner jobs cannot perform that privileged step. Keep hosted validation in
+  place and preserve caches/tests; resume benchmark after the helper is refreshed.
+- PowerShell syntax (installer, generated environment and benchmark), actionlint,
+  read-only installer plan and whitespace PASS. Tooling architecture/code review
+  PASS: stable toolchain provisioning only, no vendor binary changes, runtime
+  shims, product behavior changes, skipped coverage or weakened required checks.

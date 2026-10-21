@@ -30,14 +30,23 @@ with its actual location. If WinGet is missing, install/update Microsoft's
 [App Installer](https://apps.microsoft.com/detail/9nblggh4nns1) first.
 
 The script installs Git, CMake, Ninja, PowerShell 7, Python 3.13, LLVM/clang-tidy,
-sccache, GitHub CLI, and 7-Zip using WinGet. It uses an existing MSVC C++ toolchain
-or installs Visual Studio 2022 Build Tools with the C++ workload and Windows SDK.
+sccache, GitHub CLI, and 7-Zip using WinGet. It requires MSVC 14.50 or newer,
+using an existing Visual Studio 2026 C++ installation or installing stable
+`Microsoft.VisualStudio.BuildTools` with the C++ workload and Windows SDK.
 It installs the same Qt 6.8.3 MSVC x64 kit used in CI through an isolated aQt
 environment. Existing package installations are checked before installing.
 
 Defaults: helper files under `C:\GoSurveyCI`, Qt under `C:\Qt`. Override with
 `-InstallRoot` and `-QtDirectory` if needed. If an installer requests a restart,
 restart Windows and rerun the script. The script never restarts Windows itself.
+
+For machines prepared by the earlier VS 2022 setup, stop the runner, download
+the updated setup script and rerun it as administrator. This also refreshes the
+environment helper to select the newer tools explicitly. Then restart the runner
+from a normal PowerShell window. The bundled E57/CS-MAP libraries need STL
+functions absent from MSVC 14.44; updating only the VC++ Redistributable will
+not fix their link errors. Benchmark preflight now checks those exact runtime
+references with a tiny compile/link probe before the project build.
 
 `-PreventSleep` changes plugged-in sleep and hibernate timeouts. Check Windows'
 lid-close setting separately if the laptop will run with its lid closed, and

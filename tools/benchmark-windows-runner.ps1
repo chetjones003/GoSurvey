@@ -126,6 +126,34 @@ function Start-BenchmarkCompilerCache {
   $report.cacheServer.started = $true
 }
 
+function Test-BenchmarkMsvcRuntime {
+  # These are the actual unresolved STL references in our vendored E57/CS-MAP
+  # libraries. Check the selected link environment before compiling the project.
+  $source = Join-Path $outputDir 'msvc-runtime-probe.cpp'
+  @'
+#include <cstddef>
+extern "C" std::size_t __stdcall __std_find_first_not_of_trivial_pos_1(const void*, std::size_t, const void*, std::size_t) noexcept;
+extern "C" std::size_t __stdcall __std_find_first_not_of_trivial_pos_2(const void*, std::size_t, const void*, std::size_t) noexcept;
+extern "C" std::size_t __stdcall __std_find_last_not_of_trivial_pos_2(const void*, std::size_t, const void*, std::size_t) noexcept;
+int main() {
+  const char text[] = "abc";
+  const wchar_t wide[] = L"abc";
+  return static_cast<int>(__std_find_first_not_of_trivial_pos_1(text, 3, text, 1)
+    + __std_find_first_not_of_trivial_pos_2(wide, 3, wide, 1)
+    + __std_find_last_not_of_trivial_pos_2(wide, 3, wide, 1));
+}
+'@ | Set-Content -LiteralPath $source
+  $output = @(& cl /nologo /MD /EHsc $source "/Fo$(Join-Path $outputDir 'msvc-runtime-probe.obj')" `
+    "/Fe$(Join-Path $outputDir 'msvc-runtime-probe.exe')" /link msvcprt.lib 2>&1)
+  $code = $LASTEXITCODE
+  $output | Set-Content -LiteralPath (Join-Path $outputDir 'msvc-runtime-probe.log')
+  $output | Out-Host
+  $report.msvcRuntime = [ordered]@{ passed = ($code -eq 0); exitCode = $code; compiler = (Get-Command cl).Source }
+  if ($code -ne 0) {
+    throw 'Selected MSVC cannot link the runtime functions required by bundled E57/CS-MAP libraries. Install MSVC 14.50+ (stable Visual Studio 2026 Build Tools) and restart the runner. See msvc-runtime-probe.log.'
+  }
+}
+
 function Find-WorkingClangTidy {
   param([string[]]$Candidates)
   $attempts = [Collections.Generic.List[object]]::new()
@@ -191,6 +219,7 @@ try {
     foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'python') {
       Invoke-BenchmarkCommand $tool @('--version')
     }
+    Test-BenchmarkMsvcRuntime
     # This benchmark reuses the local disk cache, with no hosted cache downloads.
     $env:SCCACHE_GHA_ENABLED = 'false'
     Invoke-CompilerCacheCommand @('--version') cache-version | Out-Host
