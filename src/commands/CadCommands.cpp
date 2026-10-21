@@ -6836,6 +6836,7 @@ const CmdEntry kRegistry[] = {
     {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
     {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
     {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
+    {"revcloud", "", "Revision cloud: click corners round an area, or O to convert a closed shape (A arc length, R reverse, D delete original)"},
     {"piperun", "pipe",
      "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = schedule 40), then "
      "points (U undo, END/Enter finishes)"},
@@ -14516,6 +14517,11 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
 
   if (st.active == K::Polysolid) {
     SubmitPolysolidViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+
+  if (st.active == K::Revcloud) {
+    SubmitRevcloudViewportPick(st, static_cast<float>(wx), static_cast<float>(wy), log);
     return;
   }
 
@@ -38142,6 +38148,368 @@ void SubmitPolysolidViewportPick(AppCommandState& st, float wx, float wy,
 }
 
 // ---------------------------------------------------------------------------------------------
+// REVCLOUD (REQ-444, GitHub issue #803): a scalloped closed outline. Shaped after POLYSOLID above
+// - a path-building command with its own Kind, its own draft state, and one prompt-text function
+// the status bar and the typed-line echo share - but it commits NO new entity kind: the result is
+// an ordinary closed polyline whose segments are all arcs (REQ-316), so selection, snapping, grips,
+// layers, undo and DXF/DWG are already right for it. The scallop geometry is `BuildRevisionCloud`
+// (geom2d), which the live preview and the commit both call, so what is on screen is what is made.
+// ---------------------------------------------------------------------------------------------
+
+namespace {
+
+[[nodiscard]] std::string RevcloudNumber(double v) {
+  char buf[48];
+  std::snprintf(buf, sizeof(buf), "%.6g", v);
+  return buf;
+}
+
+/// Add the finished cloud to the polyline store. The caller owns the undo snapshot.
+void AppendRevcloudPolyline(AppCommandState& st, const std::vector<double>& xy,
+                            const std::vector<float>& bulge, double z) {
+  const int n = static_cast<int>(bulge.size());
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(0);
+  const int baseVert = st.userPolylineOffsets.back();
+  for (int i = 0; i < n; ++i) {
+    st.userPolylineVerts.push_back(static_cast<float>(xy[static_cast<std::size_t>(i) * 2]));
+    st.userPolylineVerts.push_back(static_cast<float>(xy[static_cast<std::size_t>(i) * 2 + 1]));
+    st.userPolylineVerts.push_back(static_cast<float>(z));
+  }
+  st.userPolylineOffsets.push_back(baseVert + n);
+  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+  for (int i = 0; i < n; ++i)
+    st.userPolylineVertsBulge[static_cast<std::size_t>(baseVert) + static_cast<std::size_t>(i)] =
+        bulge[static_cast<std::size_t>(i)];
+  SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+  st.userPolylineClosed.push_back(1u);
+  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+}
+
+/// Build the cloud for \p corners and store it. \p replace, when set, is erased first and shares
+/// the one undo step. False (nothing changed) with the reason logged if the cloud cannot be built.
+bool CommitRevcloud(AppCommandState& st, const std::vector<double>& corners, double z,
+                    const SelectedEntity* replace, std::vector<std::string>& log) {
+  std::vector<double> xy;
+  std::vector<float> bulge;
+  std::string why;
+  if (!BuildRevisionCloud(corners, st.revcloudArcLength, st.revcloudReverse, &xy, &bulge, &why)) {
+    log.push_back("REVCLOUD - " + why + ".");
+    return false;
+  }
+  if (replace) {
+    // ExecuteDeleteSelection takes the undo snapshot itself, and the cloud is added after it, so
+    // one UNDO puts the original back and removes the cloud together.
+    st.selection.assign(1, *replace);
+    ExecuteDeleteSelection(st, log);
+  } else {
+    PushUndoSnapshot(st, "Revision Cloud");
+  }
+  AppendRevcloudPolyline(st, xy, bulge, z);
+  log.push_back("REVCLOUD - cloud of " + std::to_string(bulge.size()) + " arcs created.");
+  return true;
+}
+
+}  // namespace
+
+void CancelRevcloudCommand(AppCommandState& st) {
+  st.revcloudPhase = AppCommandState::RevcloudPhase::WaitFirstPoint;
+  st.revcloudDraft.clear();
+  st.revcloudPending = 0;
+  // Arc length, Reverse and Delete-original deliberately SURVIVE the cancel: they are the settings
+  // the next cloud will want.
+}
+
+std::string CadRevcloudPromptText(const AppCommandState& st) {
+  using P = AppCommandState::RevcloudPhase;
+  const std::string opts = std::string("[Arc length=") + RevcloudNumber(st.revcloudArcLength) +
+                           (st.revcloudReverse ? " Reverse=on" : "") + "]";
+  switch (st.revcloudPhase) {
+  case P::WaitObject:
+    return std::string("REVCLOUD - select a closed polyline, rectangle or circle to turn into a cloud ") +
+           opts + (st.revcloudDeleteOriginal ? " (original will be deleted)" : " (original is kept)");
+  case P::WaitFirstPoint:
+    return "REVCLOUD - first corner, or Object / Arc length / Reverse / Delete original " + opts;
+  case P::WaitNextPoint:
+    break;
+  }
+  return std::string("REVCLOUD - next corner, or Close / Undo / Arc length / Reverse, Enter to close ") + opts;
+}
+
+void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (ActivePaperGeometryTarget(st)) {
+    log.push_back("REVCLOUD - revision clouds can only be drawn in model space.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  CancelRevcloudCommand(st);
+  st.active = AppCommandState::Kind::Revcloud;
+  st.lastCommand = AppCommandState::Kind::Revcloud;
+  log.push_back(CadRevcloudPromptText(st));
+}
+
+std::vector<double> CadRevcloudPreviewPolyline(const AppCommandState& st, double curX, double curY,
+                                               std::vector<float>* outBulge) {
+  std::vector<double> corners = st.revcloudDraft;
+  corners.push_back(curX);
+  corners.push_back(curY);
+  std::vector<double> xy;
+  std::vector<float> bulge;
+  if (corners.size() < 6 || !BuildRevisionCloud(corners, st.revcloudArcLength, st.revcloudReverse, &xy, &bulge, nullptr))
+    return {};
+  if (outBulge)
+    *outBulge = std::move(bulge);
+  return xy;
+}
+
+namespace {
+
+/// The corners of the closed polyline or circle under (\p wx, \p wy), and the elevation it lies at.
+/// False, with the reason logged, for anything that is not a flat closed shape of straight edges
+/// or a circle.
+bool RevcloudCornersFromObject(const AppCommandState& st, const SelectedEntity& hit,
+                               std::vector<double>* corners, double* z, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  const std::size_t i = static_cast<std::size_t>(hit.index);
+  if (hit.type == T::Circle) {
+    float nx = 0.f, ny = 0.f, nz = 1.f;
+    CircleNormalAt(st.userCircleNormals, i, &nx, &ny, &nz);
+    if (std::fabs(nx) > 1e-6f || std::fabs(ny) > 1e-6f) {
+      log.push_back("REVCLOUD - that circle is not flat in the XY plane; a cloud can only follow a flat shape.");
+      return false;
+    }
+    const double cx = st.userCirclesCxCyZR[i * 4 + 0];
+    const double cy = st.userCirclesCxCyZR[i * 4 + 1];
+    const double r = st.userCirclesCxCyZR[i * 4 + 3];
+    *z = st.userCirclesCxCyZR[i * 4 + 2];
+    // Corners spaced so each chord's scallop is no longer than the arc length, never fewer than 8
+    // or the polygon is a poor stand-in for the circle.
+    const double chord = st.revcloudArcLength / RevisionCloudArcPerChord();
+    const double sinHalf = std::min(1.0, chord / (2.0 * r));
+    const int n = std::max(8, static_cast<int>(std::ceil(3.14159265358979323846 / std::asin(sinHalf))));
+    if (n > kRevisionCloudMaxScallops) {
+      log.push_back("REVCLOUD - that arc length is too small for this circle; the cloud would be enormous.");
+      return false;
+    }
+    for (int k = 0; k < n; ++k) {
+      const double a = 2.0 * 3.14159265358979323846 * k / n;
+      corners->push_back(cx + r * std::cos(a));
+      corners->push_back(cy + r * std::sin(a));
+    }
+    return true;
+  }
+  // Polyline.
+  if (i >= st.userPolylineClosed.size() || !st.userPolylineClosed[i]) {
+    log.push_back("REVCLOUD - that polyline is not closed; close it first (or draw the cloud by clicking points).");
+    return false;
+  }
+  const int a = st.userPolylineOffsets[i];
+  const int b = st.userPolylineOffsets[i + 1];
+  *z = st.userPolylineVerts[static_cast<std::size_t>(a) * 3 + 2];
+  for (int v = a; v < b; ++v) {
+    const std::size_t at = static_cast<std::size_t>(v);
+    if (static_cast<std::size_t>(v) < st.userPolylineVertsBulge.size() && st.userPolylineVertsBulge[at] != 0.f) {
+      log.push_back("REVCLOUD - that polyline has curved segments; a cloud can only follow straight edges.");
+      return false;
+    }
+    if (std::fabs(static_cast<double>(st.userPolylineVerts[at * 3 + 2]) - *z) > 1e-4) {
+      log.push_back("REVCLOUD - that polyline is not flat; a cloud can only follow a flat shape.");
+      return false;
+    }
+    corners->push_back(st.userPolylineVerts[at * 3]);
+    corners->push_back(st.userPolylineVerts[at * 3 + 1]);
+  }
+  return true;
+}
+
+void ConvertRevcloudObjectAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  SelectedEntity hit;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, nullptr)) {
+    log.push_back("REVCLOUD - nothing there. Pick a closed polyline, rectangle or circle (Esc cancels).");
+    return;
+  }
+  if (hit.type != SelectedEntity::Type::Polyline && hit.type != SelectedEntity::Type::Circle) {
+    log.push_back("REVCLOUD - a cloud can follow a closed polyline, a rectangle or a circle. Nothing else is a closed shape of straight edges.");
+    return;
+  }
+  std::vector<double> corners;
+  double z = 0.0;
+  if (!RevcloudCornersFromObject(st, hit, &corners, &z, log))
+    return;
+  if (!CommitRevcloud(st, corners, z, st.revcloudDeleteOriginal ? &hit : nullptr, log))
+    return;  // the reason is logged; the command stays open at the Object prompt
+  CancelRevcloudCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+/// Close the draft path into a cloud and end the command; stays open (reason logged) if it cannot.
+void FinishRevcloudPath(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.revcloudDraft.size() < 6) {
+    log.push_back("REVCLOUD - a cloud needs at least three corners.");
+    return;
+  }
+  if (!CommitRevcloud(st, st.revcloudDraft, st.revcloudZ, nullptr, log))
+    return;
+  CancelRevcloudCommand(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+void AddRevcloudCorner(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
+  using P = AppCommandState::RevcloudPhase;
+  if (st.revcloudPhase == P::WaitFirstPoint) {
+    st.revcloudDraft.assign({x, y});
+    st.revcloudZ = static_cast<double>(CadCommitElevation(st));
+    st.revcloudPhase = P::WaitNextPoint;
+    log.push_back(CadRevcloudPromptText(st));
+    return;
+  }
+  const std::size_t n = st.revcloudDraft.size();
+  // Coming back to the start - within one scallop of it - closes the cloud, as the prompt says.
+  if (n >= 6 && std::hypot(x - st.revcloudDraft[0], y - st.revcloudDraft[1]) < st.revcloudArcLength * 0.5) {
+    FinishRevcloudPath(st, log);
+    return;
+  }
+  if (std::hypot(x - st.revcloudDraft[n - 2], y - st.revcloudDraft[n - 1]) < 1e-9) {
+    log.push_back("REVCLOUD - that is the same point as the last corner.");
+    return;
+  }
+  st.revcloudDraft.push_back(x);
+  st.revcloudDraft.push_back(y);
+  log.push_back(CadRevcloudPromptText(st));
+}
+
+bool SetRevcloudArcLength(AppCommandState& st, const std::string& text, std::vector<std::string>& log) {
+  char* end = nullptr;
+  const double v = std::strtod(text.c_str(), &end);
+  if (text.empty() || !end || *end != '\0' || !std::isfinite(v) || v <= 0.0) {
+    log.push_back("REVCLOUD - the arc length must be a number greater than zero; it stays " +
+                  RevcloudNumber(st.revcloudArcLength) + ".");
+    return false;
+  }
+  st.revcloudArcLength = v;
+  log.push_back("REVCLOUD - arc length = " + RevcloudNumber(v) + ".");
+  return true;
+}
+
+}  // namespace
+
+bool HandleRevcloudTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+  using P = AppCommandState::RevcloudPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+
+  // `A` on its own line takes the next line as its value.
+  if (st.revcloudPending != 0) {
+    st.revcloudPending = 0;
+    if (!line.empty())
+      (void)SetRevcloudArcLength(st, line, log);
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+
+  if (line.empty()) {
+    // Enter closes a path under way; with nothing started there is nothing to close, so it ends
+    // the command rather than reporting a refusal for something the user never began.
+    if (st.revcloudPhase == P::WaitNextPoint) {
+      FinishRevcloudPath(st, log);
+      return true;
+    }
+    log.push_back("REVCLOUD canceled.");
+    CancelRevcloudCommand(st);
+    st.active = AppCommandState::Kind::None;
+    return true;
+  }
+
+  const char head = static_cast<char>(std::toupper(static_cast<unsigned char>(line[0])));
+  const std::string rest = StringUtil::trimCopy(line.substr(1));
+  const bool bareLetter = rest.empty();
+
+  // No coordinate begins with one of these letters, so there is nothing to disambiguate against.
+  if (head == 'A') {
+    if (bareLetter) {
+      st.revcloudPending = 'A';
+      log.push_back("REVCLOUD - arc length?");
+      return true;
+    }
+    (void)SetRevcloudArcLength(st, rest, log);
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+  if (head == 'R' && bareLetter) {
+    st.revcloudReverse = !st.revcloudReverse;
+    log.push_back(st.revcloudReverse ? "REVCLOUD - reverse direction on: the arcs bulge inward."
+                                     : "REVCLOUD - reverse direction off: the arcs bulge outward.");
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+  if (head == 'D' && bareLetter) {
+    st.revcloudDeleteOriginal = !st.revcloudDeleteOriginal;
+    log.push_back(st.revcloudDeleteOriginal ? "REVCLOUD - Object mode will delete the original shape."
+                                            : "REVCLOUD - Object mode will keep the original shape.");
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+  if (head == 'O' && bareLetter) {
+    if (st.revcloudPhase == P::WaitNextPoint) {
+      log.push_back("REVCLOUD - Object converts a shape already drawn; it cannot join a path already under way.");
+      return true;
+    }
+    st.revcloudPhase = P::WaitObject;
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+  if (head == 'C' && bareLetter) {
+    if (st.revcloudPhase != P::WaitNextPoint) {
+      log.push_back("REVCLOUD - nothing to close yet.");
+      return true;
+    }
+    FinishRevcloudPath(st, log);
+    return true;
+  }
+  if (head == 'U' && bareLetter) {
+    if (st.revcloudPhase != P::WaitNextPoint) {
+      log.push_back("REVCLOUD - nothing to undo yet.");
+      return true;
+    }
+    st.revcloudDraft.resize(st.revcloudDraft.size() - 2);
+    if (st.revcloudDraft.empty()) {
+      st.revcloudPhase = P::WaitFirstPoint;
+      log.push_back("REVCLOUD - back to the first corner.");
+    }
+    log.push_back(CadRevcloudPromptText(st));
+    return true;
+  }
+
+  // Anything else is a coordinate - except at the Object prompt, which wants something already
+  // drawn; typing a point there would silently start an ordinary path instead.
+  if (st.revcloudPhase == P::WaitObject) {
+    log.push_back("REVCLOUD - click the closed polyline, rectangle or circle to turn into a cloud (Esc cancels).");
+    return true;
+  }
+  ray3d::Vec3 last{};
+  const bool haveLast = st.revcloudPhase == P::WaitNextPoint;
+  if (haveLast)
+    last = ray3d::Vec3{st.revcloudDraft[st.revcloudDraft.size() - 2], st.revcloudDraft.back(), st.revcloudZ};
+  ray3d::Vec3 pt{};
+  if (!ParseSolidBasePoint(st, line, &pt, log, "REVCLOUD", haveLast ? &last : nullptr))
+    return true;  // the reason has been reported; the prompt stands
+  AddRevcloudCorner(st, pt.x, pt.y, log);
+  return true;
+}
+
+void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject) {
+    ConvertRevcloudObjectAt(st, wx, wy, log);
+    return;
+  }
+  AddRevcloudCorner(st, static_cast<double>(wx), static_cast<double>(wy), log);
+}
+
+// ---------------------------------------------------------------------------------------------
 // PIPERUN (issue #486 increment B2 / REQ-345): prompted nominal size + pressure class, then
 // click-to-add straight vertices — a `CadPipeRun`'s path, committed as one entity on Enter/END.
 // Shaped after POLYSOLID immediately above: a path-building command with its own Kind, its own
@@ -42788,6 +43156,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("POLYSOLID canceled.");
     CancelPolysolidCommand(st);
   }
+  else if (st.active == AppCommandState::Kind::Revcloud) {
+    log.push_back("REVCLOUD canceled.");  // REQ-201: never silent
+    CancelRevcloudCommand(st);
+  }
   else if (st.active == AppCommandState::Kind::PipeRun) {
     log.push_back("PIPERUN canceled.");
     CancelPipeRunCommand(st);
@@ -43891,6 +44263,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       (void)HandlePolysolidTextInput(line, st, log);
       return;
     }
+    // REQ-444 REVCLOUD: Enter closes the cloud, so it is handled here for the same reason.
+    if (st.active == K::Revcloud) {
+      (void)HandleRevcloudTextInput(line, st, log);
+      return;
+    }
     // PIPERUN (REQ-345 / D-2026-09-24-c): a bare Enter is meaningful at EVERY one of its prompts —
     // it keeps the remembered size, takes the schedule-40 wall, and finishes the run — and all three
     // are advertised in the prompt text itself. Handled here for the reason every note above gives:
@@ -44478,6 +44855,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // argument count, so there is no one-line form to offer.
     if (plotTok == "polysolid" || plotTok == "psolid") {
       StartPolysolidCommand(st, log);
+      return;
+    }
+    // REQ-444 REVCLOUD: prompted only - a path has no fixed argument count.
+    if (plotTok == "revcloud") {
+      StartRevcloudCommand(st, log);
       return;
     }
     // PIPERUN (issue #486 increment B2 / REQ-345): prompted only, same reason POLYSOLID is — a
@@ -46432,6 +46814,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (HandlePolysolidTextInput(line, st, log))
       return;
     log.push_back(CadPolysolidPromptText(st));
+    return;
+  }
+
+  // REQ-444 REVCLOUD, beside it for the same reason: a corner, or a letter that sets an option.
+  if (st.active == AppCommandState::Kind::Revcloud) {
+    if (HandleRevcloudTextInput(line, st, log))
+      return;
+    log.push_back(CadRevcloudPromptText(st));
     return;
   }
 
