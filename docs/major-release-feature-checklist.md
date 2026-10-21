@@ -376,4 +376,3 @@ Use the current Command Reference and manual navigation as a gap check against w
 **Product checklist outcome:** PASS / FAIL / BLOCKED
 
 **Tester sign-off / date:** ____________________
-

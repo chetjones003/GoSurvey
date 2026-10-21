@@ -1670,6 +1670,32 @@ json BuildRoot(const AppCommandState& st) {
   if (!multileaderAttrs.empty())
     doc["multileaderAttrs"] = std::move(multileaderAttrs);
 
+  json splines = json::array();
+  for (const CadSpline& s : st.cadSplines) {
+    json o;
+    o["degree"] = s.degree;
+    o["periodic"] = s.periodic;
+    o["knots"] = s.knots;
+    o["ctrl"] = json::array();
+    for (const ray3d::Vec3& p : s.ctrl)
+      o["ctrl"].push_back({p.x, p.y, p.z});
+    o["weights"] = s.weights;
+    o["fit"] = json::array();
+    for (const ray3d::Vec3& p : s.fit)
+      o["fit"].push_back({p.x, p.y, p.z});
+    splines.push_back(std::move(o));
+  }
+  if (!splines.empty())
+    doc["splines"] = std::move(splines);
+  json splineAttrs = json::array();
+  for (const auto& a : st.cadSplineAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    splineAttrs.push_back(std::move(o));
+  }
+  if (!splineAttrs.empty())
+    doc["splineAttrs"] = std::move(splineAttrs);
+
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
   for (const CadBlockDefinition& d : st.blockDefs)
@@ -3164,6 +3190,45 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadMultileaderAttrs.push_back(EntityAttributesFromJson(o));
   }
   st.cadMultileaderAttrs.resize(st.cadMultileaders.size());
+
+  st.cadSplines.clear();
+  st.cadSplineAttrs.clear();
+  if (doc.contains("splines") && doc["splines"].is_array()) {
+    const json* attrs = doc.contains("splineAttrs") && doc["splineAttrs"].is_array()
+                            ? &doc["splineAttrs"] : nullptr;
+    size_t splineIndex = 0;
+    for (const auto& o : doc["splines"]) {
+      const size_t attrIndex = splineIndex++;
+      if (!o.is_object())
+        continue;
+      CadSpline s;
+      s.degree = o.value("degree", 3);
+      s.periodic = o.value("periodic", false);
+      if (o.contains("knots") && o["knots"].is_array())
+        for (const auto& k : o["knots"])
+          if (k.is_number()) s.knots.push_back(k.get<double>());
+      const auto readPoints = [](const json& list, std::vector<ray3d::Vec3>* out) {
+        if (!list.is_array()) return;
+        for (const auto& p : list) {
+          if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+            continue;
+          out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+        }
+      };
+      if (o.contains("ctrl")) readPoints(o["ctrl"], &s.ctrl);
+      if (o.contains("fit")) readPoints(o["fit"], &s.fit);
+      if (o.contains("weights") && o["weights"].is_array())
+        for (const auto& w : o["weights"])
+          if (w.is_number()) s.weights.push_back(w.get<double>());
+      if (spline::Validate(s).empty()) {
+        st.cadSplines.push_back(std::move(s));
+        st.cadSplineAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
+                                        ? EntityAttributesFromJson((*attrs)[attrIndex])
+                                        : EntityAttributes{});
+      }
+    }
+  }
+  st.cadSplineAttrs.resize(st.cadSplines.size());
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();

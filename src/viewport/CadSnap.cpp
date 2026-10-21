@@ -27,6 +27,24 @@ namespace {
 
 constexpr float kHugePickDistSq = 1.e30f;
 
+/// Closest point in plan view on a spline's adaptive chord list, carrying Z along the chosen chord.
+[[nodiscard]] spline::Vec3 ClosestOnSplineChords(const std::vector<spline::Vec3>& points, double x, double y) {
+  spline::Vec3 nearest = points.front();
+  double best = std::numeric_limits<double>::infinity();
+  for (std::size_t i = 1; i < points.size(); ++i) {
+    const auto& a = points[i - 1];
+    const auto& b = points[i];
+    const double dx = b.x - a.x, dy = b.y - a.y;
+    const double len2 = dx * dx + dy * dy;
+    const double t = len2 > 1e-18 ? std::clamp(((x - a.x) * dx + (y - a.y) * dy) / len2, 0.0, 1.0) : 0.0;
+    const spline::Vec3 q{a.x + t * dx, a.y + t * dy, a.z + t * (b.z - a.z)};
+    const double ex = q.x - x, ey = q.y - y;
+    const double dist2 = ex * ex + ey * ey;
+    if (dist2 < best) { best = dist2; nearest = q; }
+  }
+  return nearest;
+}
+
 [[nodiscard]] float DistSqPointToSegment(float px, float py, float ax, float ay, float bx, float by) {
   const float vx = bx - ax;
   const float vy = by - ay;
@@ -451,6 +469,11 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
   const float dx = px - wx;
   const float dy = py - wy;
   ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz, /*heuristicAccept=*/false, solid);
+}
+
+/// Convert a double spline coordinate to the float precision used by snap accumulation.
+[[nodiscard]] float SnapFloatCoordinate(double value) {
+  return static_cast<float>(value); // NOLINT(bugprone-narrowing-conversions): snap accumulator is float-backed.
 }
 
 /// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
@@ -953,6 +976,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
   const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
   const bool wantPointCloud = want(Kind::PointCloud, cmd.objectSnapPointCloud);
+  const bool wantNearest = want(Kind::Nearest, false);
   const bool wantCenterOfFace = want(Kind::CenterOfFace, cmd.objectSnap3dEnabled && cmd.objectSnap3dCenterFace);
   const bool wantKnot = want(Kind::Knot, cmd.objectSnap3dEnabled && cmd.objectSnap3dKnot);
 
@@ -1294,6 +1318,48 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
                  el.z);  // the ellipse's plane, same as its centre candidate above
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, el.z, el.z);
+    }
+  }
+
+  // REQ-443: a spline's editable fit/CV points and its true curve ends participate in Endpoint;
+  // perpendicular candidates are projected onto its adaptive tessellation chords.
+  for (size_t splineIdx = 0; splineIdx < cmd.cadSplines.size(); ++splineIdx) {
+    if (exclude.valid && exclude.type == SelectedEntity::Type::Spline &&
+        exclude.index == static_cast<int>(splineIdx)) continue;
+    const CadSpline& sp = cmd.cadSplines[splineIdx];
+    if (wantEndpoint) {
+      for (size_t p = 0; p < spline::EditablePointCount(sp); ++p) {
+        const auto v = spline::EditablePoint(sp, p);
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(v.x), SnapFloatCoordinate(v.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(v.z));
+      }
+      if (!sp.periodic) {
+        const auto a = spline::Evaluate(sp, spline::DomainMin(sp));
+        const auto b = spline::Evaluate(sp, spline::DomainMax(sp));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(a.x), SnapFloatCoordinate(a.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(a.z));
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(b.x), SnapFloatCoordinate(b.y), Kind::Endpoint, tolWorld,
+                 SnapFloatCoordinate(b.z));
+      }
+    }
+    if (havePerpRef || wantNearest) {
+      std::vector<spline::Vec3> points;
+      spline::Tessellate(sp, kSplineSampleTolerance, &points);
+      if (wantNearest && !points.empty()) {
+        const spline::Vec3 nearest = ClosestOnSplineChords(points, wx, wy);
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                 SnapFloatCoordinate(nearest.x), SnapFloatCoordinate(nearest.y), Kind::Nearest,
+                 tolWorld, SnapFloatCoordinate(nearest.z));
+      }
+      if (!havePerpRef) continue;
+      for (size_t p = 1; p < points.size(); ++p)
+        AppendPerpendicularFromRef(refPx, refPy, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy),
+                                   SnapFloatCoordinate(points[p - 1].x), SnapFloatCoordinate(points[p - 1].y),
+                                   SnapFloatCoordinate(points[p].x), SnapFloatCoordinate(points[p].y), tolWorld, &acc,
+                                   SnapFloatCoordinate(points[p - 1].z), SnapFloatCoordinate(points[p].z));
     }
   }
 
@@ -2120,6 +2186,16 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   }
+  case Kind::Nearest:
+    for (const CadSpline& sp : cmd.cadSplines) {
+      std::vector<spline::Vec3> points;
+      spline::Tessellate(sp, kSplineSampleTolerance, &points);
+      if (points.empty()) continue;
+      const spline::Vec3 nearest = ClosestOnSplineChords(points, sortWorldX, sortWorldY);
+      PushSnapPickerEntry(static_cast<float>(nearest.x), static_cast<float>(nearest.y), Kind::Nearest,
+                          sortWorldX, sortWorldY, out, static_cast<float>(nearest.z));
+    }
+    break;
   case Kind::Perpendicular: {
     if (!havePerpRef)
       break;

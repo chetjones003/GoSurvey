@@ -38,6 +38,7 @@ QString EntityLabel(const AppCommandState& st, const SelectedEntity& e) {
   case T::Circle: return "Circle " + n;
   case T::Arc: return "Arc " + n;
   case T::Ellipse: return "Ellipse " + n;
+  case T::Spline: return "Spline " + n;
   case T::Polyline: return "Polyline " + n;
   case T::Annotation:
     if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
