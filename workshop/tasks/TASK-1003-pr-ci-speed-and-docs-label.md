@@ -15,7 +15,7 @@
 ## 2. Scope
 - In scope: Reduce avoidable PR-check wall time and make docs-only classifier fallback reasons visible.
 - Out of scope: Remove or weaken checks, change docs-only label policy, alter branch protection, or change application behavior.
-- Smallest change: Parallelize independent clang-tidy work conservatively, skip unnecessary Qt MOC generation, remove redundant setup, and report classifier fallback reason.
+- Smallest change: Parallelize independent clang-tidy work conservatively, skip unnecessary Qt MOC generation and the unused CTest-unreferenced fixture executable, remove redundant setup, and report classifier fallback reason.
 
 ## 3. Architectural boundary check
 - [x] No — workflow configuration and local diagnostics only.
@@ -47,6 +47,7 @@
 - 2026-10-21 — Confirmed REQ-437 policy: no label returns false before the changed-files API call. The workflow already includes `labeled` and `unlabeled` pull request events, so label changes re-run classification.
 - 2026-10-21 — Found duplicate Qt setup steps in build/test and MSVC analysis; unconditional Qt test MOC generation before clang-tidy; sequential per-file clang-tidy; and serial CTest invocation. sccache is configured, but prior stats showed zero requests; no speculative cache change planned.
 - 2026-10-21 — Rejected CTest parallelism because test code reuses fixed temporary paths. Kept tests serial and focused speed changes on isolated clang-tidy processes and avoidable setup work.
+- 2026-10-21 — Follow-up CI review compared the older `master` workflow (which did not run CTest) with this beta-based task branch (which does). Kept both test and headless targets enabled, and changed the build command to request only `GoSurveyQt`, `GoSurveyTests`, `gosurvey_headless`, and `GoSurveyQtTests`; `GsJsonDwgFixture` has no CTest consumers.
 
 ## 9. Self-verification
 - [x] build-project — n/a (workflow only)

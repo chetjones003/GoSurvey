@@ -134,7 +134,9 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build --preset ninja-release
+        # Build the application and every executable referenced by this job's CTest cases.
+        # GsJsonDwgFixture is a developer fixture-authoring tool with no CTest consumers.
+        run: cmake --build --preset ninja-release --target GoSurveyQt GoSurveyTests gosurvey_headless GoSurveyQtTests
 
       - name: Stage Mesa runtime dependencies for test deployment
         shell: pwsh
