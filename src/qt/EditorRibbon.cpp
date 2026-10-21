@@ -59,6 +59,11 @@ int SelectedSurface(const AppCommandState& state) {
 
 // Expanded panels use three short rows. At smaller widths whole panels become native
 // menus containing the very same actions, so resizing never clips or loses a command.
+constexpr int kRibbonPanelHeight = 98;
+constexpr int kRibbonPageHeight = 102;
+constexpr int kRibbonHeight = 130;
+constexpr int kRibbonCaptionBottomSpace = 4;
+
 class RibbonPage final : public QWidget {
   struct Panel { QWidget* expanded; QToolButton* collapsed; QMenu* menu; int priority; };
   std::vector<Panel> m_Panels;
@@ -67,7 +72,7 @@ class RibbonPage final : public QWidget {
   QMenu* m_Overflow;
 public:
   explicit RibbonPage(QWidget* parent) : QWidget(parent) {
-    setMinimumWidth(0); setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); setFixedHeight(98);
+    setMinimumWidth(0); setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed); setFixedHeight(kRibbonPageHeight);
     m_Row = new QHBoxLayout(this); m_Row->setContentsMargins(3, 2, 3, 1); m_Row->setSpacing(2);
     m_More = new QToolButton(this); m_More->setObjectName("ribbonMore"); m_More->setText("More");
     m_More->setIcon(CadCommandIcon("layers.png")); m_More->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
@@ -77,7 +82,7 @@ public:
   }
   void AddPanel(QWidget* panel, const QString& title, const QList<QAction*>& actions, int priority) {
     panel->setParent(this); panel->setProperty("ribbonPanel", true);
-    panel->setFixedSize(panel->sizeHint().width(), 94);
+    panel->setFixedSize(panel->sizeHint().width(), kRibbonPanelHeight);
     auto* collapsed = new QToolButton(this); collapsed->setObjectName("collapsed_" + panel->objectName());
     collapsed->setText(title); collapsed->setToolTip(title); collapsed->setAutoRaise(true);
     collapsed->setFixedSize(std::clamp(fontMetrics().horizontalAdvance(title) + 22, 66, 155), 92);
@@ -165,7 +170,7 @@ void EditorWindow::BuildRibbonPages() {
   strip->addWidget(shared);
   ribbon->setUsesScrollButtons(true); ribbon->setElideMode(Qt::ElideNone);
   ribbon->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); ribbon->setMinimumWidth(0);
-  ribbon->setFixedHeight(126);
+  ribbon->setFixedHeight(kRibbonHeight);
   const QStringList names = {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling",
       "Layout", "SurfaceCtx", "SurveyPointCtx", "PointCloudCtx", "BlockEditor", "GeolocationCtx", "PdfCtx", "HatchCtx"};
   for (const auto& name : names) {
@@ -183,7 +188,7 @@ void EditorWindow::BuildRibbonPages() {
     if (name == "Modeling") panels = {"Primitives", "Create", "Booleans", "Edit", "3D Modify", "Piping"};
     for (const auto& panelName : panels) {
       auto* panel = new QWidget(page); panel->setObjectName("ribbonPanel_" + name + "_" + panelName);
-      auto* column = new QVBoxLayout(panel); column->setContentsMargins(5, 0, 5, 0); column->setSpacing(1);
+      auto* column = new QVBoxLayout(panel); column->setContentsMargins(5, 0, 5, kRibbonCaptionBottomSpace); column->setSpacing(1);
       auto* grid = new QGridLayout; grid->setContentsMargins(0, 0, 0, 0); grid->setHorizontalSpacing(2); grid->setVerticalSpacing(0);
       column->addLayout(grid, 1); int col = 0, row = 0; QList<QAction*> actions;
       for (const auto& item : qtribbon::kButtons) {
