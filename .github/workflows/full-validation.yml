@@ -8,7 +8,8 @@
 # every status here. Nothing in this workflow publishes
 # anything — that stays in release.yml (REQ-202/ADR-029), which is manual-dispatch only.
 #
-# MSVC analysis remains enforced here as a complete project validation. release.yml stays
+# MSVC analysis remains a blocking diff-scoped check with a fail-closed full-project fallback.
+# release.yml stays
 # unchanged and manual-dispatch only (REQ-202/ADR-029).
 
 name: full-validation
@@ -69,7 +70,7 @@ jobs:
               ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{os.environ['BASE_SHA']}...HEAD"],
               text=True,
           ).splitlines()
-          suffixes = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx")
+          suffixes = (".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp", ".inc")
           changed = any(
               path.lower().endswith(suffixes) and not path.lower().startswith("third_party/")
               for path in files
@@ -358,8 +359,9 @@ jobs:
           }
 
   # ---------------------------------------------------------------------------
-  # lint / msvc-analyze — blocking (see header comment). Findings surface as build annotations via
-  # the existing problem matcher and fail the job through /WX.
+  # lint / msvc-analyze — blocking (see header comment). Analyze changed translation units and
+  # consumers of changed headers; if dependency classification is uncertain, analyze all units.
+  # Findings surface as build annotations via the existing problem matcher and fail through /WX.
   # ---------------------------------------------------------------------------
   lint-msvc-analyze:
     name: full / msvc-analyze
@@ -405,8 +407,10 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ninja-release
+          -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
           -DGOSURVEY_ENABLE_ANALYZE=ON
           -DGOSURVEY_ANALYZE_WERROR=ON
+          -DGOSURVEY_USE_PCH=OFF
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
@@ -422,8 +426,24 @@ jobs:
       - name: Register MSVC /analyze problem matcher
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
-      - name: Build (findings become annotations and fail the build)
-        run: cmake --build --preset ninja-release
+      - name: Select changed translation units
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$env:BASE_SHA"
+          python .github/scripts/select_msvc_analyze_targets.py `
+            --base-sha "$env:BASE_SHA" `
+            --compile-commands build/.cmake/release/compile_commands.json `
+            --build-dir build/.cmake/release `
+            --targets-file build/.cmake/release/msvc-analyze-selection.json
+
+      - name: Run MSVC /analyze for affected translation units
+        run: >
+          python .github/scripts/run_msvc_analyze.py
+          --selection build/.cmake/release/msvc-analyze-selection.json
+          --build-dir build/.cmake/release
+          --compiler-launcher sccache
 
       - name: sccache stats
         if: always()

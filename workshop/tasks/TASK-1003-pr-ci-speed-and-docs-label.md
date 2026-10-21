@@ -32,7 +32,7 @@
 
 ## 6. Plan
 - Approach: Keep all existing coverage unless proven redundant, batch sequential Catch2 cases to avoid process startup, shard isolated Qt cases, parallelize independent CTest work with a four-worker cap, avoid setup for unaffected source changes, and make fail-closed classification outcomes explain themselves.
-- Files/functions to touch: `.github/workflows/pr-checks.yml`, `.github/scripts/classify_docs_only.py`, `CMakeLists.txt`, `cmake/GoSurveyQtTests.cmake`, `tools/run-qt-test-shard.ps1`, `tests/QtEditorTests.cpp`, `workshop/tasks/TASK-1003-pr-ci-speed-and-docs-label.md`, `ci-cd-visualizer.html`.
+- Files/functions to touch: `.github/workflows/pr-checks.yml`, `.github/scripts/classify_docs_only.py`, `CMakeLists.txt`, `cmake/GoSurveyQtTests.cmake`, `tools/run-qt-test-shard.ps1`, `tests/QtEditorTests.cpp`, `.github/scripts/select_msvc_analyze_targets.py`, `workshop/tasks/TASK-1003-pr-ci-speed-and-docs-label.md`, `ci-cd-visualizer.html`.
 - Test approach: Run the focused docs-only classifier suite and the exact CI build-target list followed by full CTest; CI timing impact remains pending an Actions run.
 - Steps:
   - [x] Diagnose classifier gate and identify workflow timing candidates.
@@ -80,3 +80,5 @@
 - 2026-10-21 — User clarified that all checks must continue to block. Reinstated required full-validation status contexts for master and beta; fast-gate architecture is superseded. Added changed-C/C++ path detection so clang-tidy skips the entire Windows setup for PRs without C/C++ changes, and enabled sccache for the MSVC analysis job.
 
 - 2026-10-21 — Re-ran full CTest at eight workers: all 188 registrations passed in 107.94 seconds (previous local four-worker result was 164.19 seconds). Updated full-validation concurrency to eight; hosted runtime remains unmeasured.
+
+- 2026-10-21 — User clarified that MSVC `/analyze` must remain blocking but should analyze only the PR diff. Added a selector that analyzes changed translation units plus all consumers of changed headers; if an include graph is ambiguous or analyzer-affecting CMake/source-generation inputs changed, it fails closed to the full analyzed set. Added 11 selector regression cases.
