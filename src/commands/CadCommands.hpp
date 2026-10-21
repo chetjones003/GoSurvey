@@ -127,7 +127,7 @@ struct SelectedEntity {
     /// zero-or-many, so giving it an `e.index` slot would be inventing storage this feature does not
     /// need. What ADR-059 (h) got wrong was concluding from that shape that the plane could not be
     /// an entity **at all** — it reversed a view-state bool's non-negotiables (no Properties report,
-    /// no `.gs`, no undo), not its selection storage. This tag exists so the Properties panel and the
+    /// no `internal document payload`, no undo), not its selection storage. This tag exists so the Properties panel and the
     /// transform-refusal doc comments above have a name for what a selected plane IS, the same as
     /// `Solid`/`PointCloud` do; `DrawPropertiesPanel` still branches on `sectionPlaneSelected`
     /// directly rather than scanning `selection` for it. **Display-and-erase-and-slide/flip/resize
@@ -142,7 +142,11 @@ struct SelectedEntity {
     PositionMarker = 17,
     /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
     /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
-    Multileader = 18
+    Multileader = 18,
+    /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
+    /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
+    /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
+    Spline = 19
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -839,6 +843,9 @@ struct CadExtendedGeometryInput {
   const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
+  /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
+  const std::vector<CadSpline>* splines = nullptr;
+  const std::vector<EntityAttributes>* splineAttrs = nullptr;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -971,7 +978,7 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
 /// \c Kind::Scale, \c modifyPhase == NeedDestination — live scale from cursor (see \ref AppCommandState::scalePhase).
 bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale);
 
-/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for ImGui overlay.
+/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for the viewport overlay.
 /// New CAD entities: mirror this pattern — GL rubber (\p main.cpp) + \ref CadAnnotationCollectTransformPreviews / UI overlay (\p CadUi.cpp) + grips (\p CadUi.cpp).
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out);
@@ -996,6 +1003,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
   std::vector<EntityAttributes> ellAttrs;
+  std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
+  std::vector<EntityAttributes> splineAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1024,7 +1033,7 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
+           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
            filledRegions.empty();
   }
 };
@@ -1335,6 +1344,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1368,7 +1379,7 @@ struct DrawingGeometrySnapshot {
   double worldDocumentOriginY = 0.0;
   /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
   /// `AppCommandState::viewportSectionClip`/`Offset`/`Flip`/`FrameValid`/`Frame`/`Extent` — moved
-  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `.gs`) so creating, deleting, sliding,
+  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `internal document payload`) so creating, deleting, sliding,
   /// flipping and resizing the plane are all undoable, and the plane survives a save/reload. Local
   /// coordinates, exactly like every other entity here (see "Local storage invariant").
   bool                sectionPlaneActive = false;
@@ -1447,7 +1458,7 @@ struct DrawingDocument {
   float  viewportFovDeg = kDefaultFovDeg;
   /// The section clip is per TAB (REQ-341, D-2026-09-16-b): a clip set in one drawing must not hide
   /// half of another when the user switches to it, and switching back restores it. A fresh document
-  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
+  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `internal document payload`.
   bool   viewportSectionClip = false;
   double viewportSectionClipOffset = 0.0;
   bool   viewportSectionClipFlip = false;
@@ -1513,6 +1524,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -1545,7 +1558,7 @@ struct DrawingDocument {
   std::vector<SelectedEntity>   selection;
   /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
   /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
-  /// would hide whatever objects happened to draw those numbers there. Never written to `.gs` —
+  /// would hide whatever objects happened to draw those numbers there. Never written to `internal document payload` —
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
@@ -1553,7 +1566,7 @@ struct DrawingDocument {
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
-  std::string filePath;           ///< Absolute path to the .gs file, empty if never saved.
+  std::string filePath;           ///< Absolute path to the .dwg drawing file, empty if never saved.
   std::vector<DrawingGeometrySnapshot> undoStack;
   std::vector<DrawingGeometrySnapshot> redoStack;
 };
@@ -1635,6 +1648,12 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
+/// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
+/// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
+/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
+/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
+bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
@@ -1977,6 +1996,10 @@ struct AppCommandState {
     /// named dimensions, so it has different state and a different state machine, and folding it
     /// into `Solid` would mean a table with a variable-length entry no other row uses.
     Polysolid,
+    /// REQ-444 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
+    /// closed polyline / circle. Its own Kind because it has a path-building state machine like
+    /// POLYSOLID, but it commits an ordinary closed bulge polyline (REQ-316), not a new entity.
+    Revcloud,
     /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
     /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
     /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
@@ -2047,6 +2070,8 @@ struct AppCommandState {
     /// Surface and Pad elevation, the way every other command with options does - it does not take
     /// everything on one line and give up. padSolidPhase drives it.
     PadSolid,
+    /// REQ-443: create a fit-point or control-vertex NURBS spline.
+    Spline,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2058,6 +2083,7 @@ struct AppCommandState {
     case Kind::Grading:       return "GRADING";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
+    case Kind::Spline:        return "SPLINE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2121,6 +2147,7 @@ struct AppCommandState {
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
+    case Kind::Revcloud:           return "REVCLOUD";   // REQ-444
     case Kind::PressPull:          return "PRESSPULL";
     case Kind::BConnectMode:       return "BCONNECTMODE";
     case Kind::BConnect:           return "BCONNECT";
@@ -2313,7 +2340,6 @@ struct AppCommandState {
   float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
   float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
   int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
-  double cmdLogLastChangeTime = 0.0;  ///< ImGui time of the last log append (drives the fade).
   size_t cmdLogLastSizeForFade = 0;   ///< log size seen at the last fade-timer reset.
   std::vector<std::string> cmdEnteredHistory;  ///< recently submitted command-line entries (newest last; capped). Runtime only.
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
@@ -2477,7 +2503,7 @@ struct AppCommandState {
   bool objectSnap3dKnot = false;          ///< A NURBS (freeform) face's knot points.
   bool objectSnap3dPerpendicular = false; ///< Foot of the perpendicular from a command reference onto a planar face.
   /// Isolines drawn around a curved solid face, per full turn (AutoCAD calls this ISOLINES).
-  /// Per drawing, persisted in `.gs` and in user preferences like every other display setting.
+  /// Per drawing, persisted in `internal document payload` and in user preferences like every other display setting.
   int viewportSolidIsolines = kSolidDefaultIsolines;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
@@ -2501,7 +2527,7 @@ struct AppCommandState {
   bool pendingZoomExtents = false;
   bool pendingZoomWindow = false;
   /// REQ-399: bring the main GoSurvey window to the foreground on the next frame (the main loop owns
-  /// the GLFW window handle, so this is a request rather than a direct call from the PDF viewer window).
+  /// the main window handle, so this is a request rather than a direct call from the PDF viewer window).
   bool requestMainWindowFocus = false;
   float pendingZoomMnX = 0.f;
   float pendingZoomMxX = 0.f;
@@ -2526,6 +2552,9 @@ struct AppCommandState {
   float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
   enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+
+  enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
+  std::vector<spline::Vec3> splineDraftPoints;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
@@ -2586,13 +2615,12 @@ struct AppCommandState {
   // must not become a dependency of the commands layer.
   int mtextEditCaret = 0;
   int mtextEditAnchor = 0;            ///< caret == anchor means no selection
-  /// The editor owns keyboard focus. Deliberately NOT ImGui's ActiveID: holding that persistently makes
-  /// ImGui refuse to hover any other item, which dead-locks every other control in the application. The
+  /// The editor owns keyboard focus. Keeping that ownership local prevents one input control from
+  /// blocking pointer interaction with the rest of the application. The
   /// widget only takes ActiveID for the duration of a drag-select, exactly as a stock widget does.
   bool mtextEditFocused = false;
   bool mtextEditMouseSelecting = false;
   float mtextEditScrollY = 0.f;       ///< px scrolled when the text outgrows the box's height cap
-  double mtextEditBlinkT = 0.0;       ///< ImGui time the caret last moved (restarts the blink)
   std::vector<std::string> mtextEditUndo;  ///< in-editor Ctrl+Z snapshots (drawing undo is separate)
   std::vector<std::string> mtextEditRedo;
   float mtextEditLastHeight = 0.f;    ///< height the wrapped layout used last frame (positions the box)
@@ -2680,7 +2708,7 @@ struct AppCommandState {
   /// in the application ever assigned `Camera::projection`, so perspective was unreachable.
   ///
   /// They sit here, beside azimuth/elevation, because they share exactly that lifetime: per
-  /// drawing, saved per tab, persisted in `.gs`, restored by a named view. **Orthographic is the
+  /// drawing, saved per tab, persisted in `internal document payload`, restored by a named view. **Orthographic is the
   /// default everywhere**, which is what keeps REQ-058's plan-view parity guarantee intact.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float viewportFovDeg = kDefaultFovDeg;  ///< Perspective vertical FOV; ignored when orthographic.
@@ -2802,7 +2830,7 @@ struct AppCommandState {
   bool segmentAngleKeyboardAwaitBearing = false;
 
   /// Next stable entity id to hand out for this drawing (REQ-076 / ADR-027). Monotonic, persisted
-  /// in `.gs`, and **never rewound** — in particular it is deliberately NOT part of
+  /// in `internal document payload`, and **never rewound** — in particular it is deliberately NOT part of
   /// \ref DrawingGeometrySnapshot, so draw → undo → draw gives the second entity a *new* id rather
   /// than reusing the undone one's. Reuse is the one thing an identity must not do.
   std::uint64_t nextEntityId = 1;
@@ -3034,6 +3062,26 @@ struct AppCommandState {
   /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
   char polysolidPending = 0;
 
+  // --- REQ-444 REVCLOUD: a scalloped closed outline ----------------------------------------------
+
+  enum class RevcloudPhase : std::uint8_t {
+    WaitFirstPoint,  ///< the first corner, or `O` to convert a closed shape already drawn
+    WaitObject,      ///< `O` was given: the next click names the closed polyline or circle
+    WaitNextPoint    ///< a path is under way; each further point adds a corner
+  } revcloudPhase = RevcloudPhase::WaitFirstPoint;
+
+  /// The corners picked so far, as x,y pairs in storage coordinates.
+  std::vector<double> revcloudDraft;
+  /// Elevation the cloud commits at: the work plane's, read when the first corner is picked.
+  double revcloudZ = 0.0;
+  /// Remembered between invocations (REQ-444 item 3): the size of each scallop, whether they bulge
+  /// the other way, and whether Object mode erases the shape it converted.
+  double revcloudArcLength = 0.5;
+  bool revcloudReverse = false;
+  bool revcloudDeleteOriginal = false;
+  /// A letter typed on its own, waiting for its value on the next line (`A` then `1`). 0 = none.
+  char revcloudPending = 0;
+
   /// Remembered between invocations, the way AutoCAD remembers PSOLWIDTH and PSOLHEIGHT: a wall is
   /// almost always drawn at the same size as the last one, and re-typing it every time is the
   /// friction that makes a command feel wrong. Saved with the drawing.
@@ -3197,6 +3245,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
+  /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
+  std::uint64_t gradingEditId = 0;
 
   /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
   std::vector<float> featureLineDraftVerts;
@@ -3268,7 +3319,7 @@ struct AppCommandState {
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
-  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// the same reasons: the window's POSITION persists in its settings, and which
   /// palette happened to be open is not worth a key in the settings file. Opened automatically by
   /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
   bool pipeFittingPaletteOpen = false;
@@ -3331,7 +3382,6 @@ struct AppCommandState {
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
   /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
   /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
@@ -3371,6 +3421,9 @@ struct AppCommandState {
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
+  /// Paper layout captured by OFFSET when its paper object is picked; guards the side-pick from
+  /// ever resolving the stored index against a different layout after a tab switch.
+  int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
 
@@ -3464,7 +3517,7 @@ struct AppCommandState {
 
   /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
   /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
-  /// persisted in `.gs` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
+  /// persisted in `internal document payload` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
   std::vector<CadPipingSystem> cadPipingSystems;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
@@ -3474,6 +3527,8 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -3485,7 +3540,7 @@ struct AppCommandState {
   char blockEditPickerName[256]{};
   /// In-place block editing (REQ-107 / ADR-043). While active, the model arrays hold the
   /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
-  /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
+  /// drawing. Session-only — never in \ref DrawingDocument, never in `internal document payload`.
   bool blockEditActive = false;
   bool bconnectAwaitingFace = false;
   char bconnectNameBuf[128]{};
@@ -3579,8 +3634,6 @@ struct AppCommandState {
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
   double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
   float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
-  /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
-  bool devShellVisible = false;
   std::vector<std::string> blockRecent;
   std::vector<std::string> blockFavorites;
   std::string blockLibraryFilter;
@@ -3740,7 +3793,7 @@ struct AppCommandState {
   };
 
   /// The Volume Dashboard's own state (REQ-073 amendment). **UI/session-only** — never in
-  /// \ref DrawingGeometrySnapshot, never in \ref DrawingDocument, never in `.gs` — the amendment's
+  /// \ref DrawingGeometrySnapshot, never in \ref DrawingDocument, never in `internal document payload` — the amendment's
   /// own rule, matching REQ-075's Surface Manager for the same reason: this is a VIEW onto document
   /// state (which two surfaces, and their last computed comparison), not document state itself.
   struct VolumeDashboardState {
@@ -3788,7 +3841,7 @@ struct AppCommandState {
   std::string lastVolumeBaseName;
   std::string lastVolumeComparisonName;
 
-  /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
+  /// REQ-145 Quick Profile — session graph only, never `internal document payload` (same rule as Volume Dashboard).
   struct QuickProfileState {
     bool open = false;
     bool hasResult = false;
@@ -3829,7 +3882,7 @@ struct AppCommandState {
     ///
     /// The **resolved style by value**, not a revision counter. ADR-036 (e) names the key
     /// "(tin pointer, style revision)"; a counter has to be bumped by every route that can change the
-    /// table, and undo restore, `.gs` load, tab switch and DXF import are four of them, so the one
+    /// table, and undo restore, `internal document payload` load, tab switch and DXF import are four of them, so the one
     /// that gets forgotten leaves stale contours on screen with nothing to point at. Comparing the
     /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
     /// comparison is cheaper than the allocation it prevents.
@@ -3875,7 +3928,7 @@ struct AppCommandState {
   };
 
   /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
-  /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
+  /// \ref DrawingDocument, never in `internal document payload` — which is what makes REQ-070's "never stored in `internal document payload`"
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
 
@@ -3889,7 +3942,7 @@ struct AppCommandState {
   };
   mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
 
-  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `.gs`.
+  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `internal document payload`.
   struct SurfaceWatershedCacheEntry {
     std::uint64_t surfaceId = 0;
     std::weak_ptr<const CadTin> builtFrom;
@@ -4009,7 +4062,7 @@ struct AppCommandState {
   /// selection does not interfere with whole-entity selection" hold without every consumer of
   /// \ref selection having to know this exists.
   ///
-  /// **Session state, like \ref hiddenEntityIds** — not written to `.gs` and not carried in an undo
+  /// **Session state, like \ref hiddenEntityIds** — not written to `internal document payload` and not carried in an undo
   /// snapshot. A selection is not part of the drawing, and a reference that expires on a topology
   /// change (\ref SelectedSubObject) would be meaningless after a reload anyway.
   std::vector<SelectedSubObject> subObjectSelection;
@@ -4174,7 +4227,7 @@ struct AppCommandState {
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
   ///
   /// Ids, not indices: erase compacts the entity arrays (architecture §11.9), so an index would
-  /// come to name a different object. **Session state** — deliberately not written to `.gs`, so a
+  /// come to name a different object. **Session state** — deliberately not written to `internal document payload`, so a
   /// drawing always opens showing everything.
   std::vector<std::uint64_t> hiddenEntityIds;
 
@@ -4260,6 +4313,10 @@ struct AppCommandState {
   // Ellipse originals.
   float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
   float entityGripOrigEllRatio = 0.f;
+
+  /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
+  /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
+  CadSpline entityGripOrigSpline;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -4697,7 +4754,7 @@ struct AppCommandState {
   bool showSurfacePropertiesWindow = false;
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
-  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
+  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `internal document payload`.
   enum class ToolspaceTab : std::uint8_t { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
@@ -4766,7 +4823,7 @@ struct AppCommandState {
   /// the same decision `SECTION` made (D-2026-09-09-i) and for the same reason, so the two commands
   /// cut on the same plane and a user can section exactly what they are looking into.
   ///
-  /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
+  /// **Deliberately NOT persisted to `internal document payload`**, unlike \ref viewportProjection which sits beside a
   /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
   /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-341
   /// records persistence as a possible increment rather than an oversight.
@@ -4803,7 +4860,7 @@ struct AppCommandState {
   /// True while the section plane is SELECTED and showing its handles (REQ-343).
   ///
   /// Not a `SelectedEntity`. The plane is still a view state — it has no layer, no attributes and
-  /// no place in `.gs` — so putting it in `selection` would put a branch for it in every consumer
+  /// no place in `internal document payload` — so putting it in `selection` would put a branch for it in every consumer
   /// of that vector (MOVE, DELETE, DXF export, the property panel, the highlight walk), and the
   /// first one that forgot would be a view setting silently exported or erased. That is the same
   /// argument `SelectedSubObject` records for keeping its own store.
@@ -4986,7 +5043,6 @@ struct AppCommandState {
   // System → Graphics Performance sub-dialog.
   bool showGraphicsPerformanceDialog = false;
   bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
-  bool gfxAcceleratedFontDisplay = true;       ///< Placeholder (font rasterization through ImGui is already GPU).
   int gfxVideoMemoryCachingLevel = 5;          ///< Placeholder 1..5.
   bool gfx3dFastShadedMode = true;             ///< Placeholders (no 3D pipeline).
   bool gfx3dAdvancedMaterialEffects = true;
@@ -5051,7 +5107,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   struct DrawingTab {
     std::string  name;
-    uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     uid = 0;  ///< Stable per-tab ID used to prevent label collisions.
     uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
     /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
     /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
@@ -5093,7 +5149,7 @@ struct AppCommandState {
     std::string      message;      ///< why the marker is damaged
     gsproj::LockInfo holder;       ///< Locked: who holds it
     bool             stale = false;
-    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+    bool             openRequested = false;  ///< ask the UI to open the modal on its next update
   } projectPrompt;
   bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
   /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
@@ -5192,8 +5248,6 @@ struct AppCommandState {
   int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
   uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
   bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
-  bool pendingViewportFocus   = false; ///< Request ImGui focus on the Drawing1 window next frame.
-  bool pendingPropertiesFocus = false; ///< Request ImGui focus on the Properties tab on next Begin().
   bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
   int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
   int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
@@ -5208,7 +5262,7 @@ struct AppCommandState {
 
   // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
   uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.
-  std::string activeDocFilePath;            ///< Absolute path to the active doc's .gs file.
+  std::string activeDocFilePath;            ///< Absolute path to the active doc's .dwg drawing file.
   int undoHistoryMaxSize = 50; ///< Maximum undo frames per drawing tab (0 = unlimited). Settings → User Preferences.
 
   // --- Close confirmation ---
@@ -5444,6 +5498,9 @@ struct AppCommandState {
   // 1->2, the same "done picking edges" signal model-space TRIM/EXTEND get from a real Enter.
   int   paperExtendPhase = 0;
   std::vector<PaperEntityRef> paperExtendBoundaries;
+  // Paper-space TRIM cutting edges (REQ-039). Kept separate from model `trimCutters`, whose
+  // SelectedEntity indices address model stores and must never be interpreted as paper indices.
+  std::vector<PaperEntityRef> paperTrimCutters;
   // Paper-space BREAK of native paper entities (REQ-103 step 4): 0 idle, 1 waiting for the
   // entity+first-point pick, 2 waiting for the second point (applies, loops back to 1). Pure click
   // flow like paper EXTEND — no typed value, so not simplified away.
@@ -5492,9 +5549,9 @@ struct AppCommandState {
   /// REQ-155 (issue #155): while floating model space is entered, \ref activeUcs holds that
   /// VIEWPORT's active UCS (so coordinate entry / grid / ORTHO / readout / UCSFOLLOW resolve
   /// against the viewport's frame). The drawing-scoped UCS is parked here for the duration and
-  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`.gs` save,
+  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`internal document payload` save,
   /// per-tab snapshot) must go through it so a save/tab-switch WHILE floating records the
-  /// drawing's frame, not the viewport's. Session-only — never written to `.gs`.
+  /// drawing's frame, not the viewport's. Session-only — never written to `internal document payload`.
   ucs::Ucs drawingActiveUcsStash;
   bool     floatingUcsSwapActive = false;
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
@@ -5752,7 +5809,7 @@ inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.ac
 
 /// The DRAWING-scoped active UCS (REQ-154), correct even while a per-viewport frame is live in
 /// \ref AppCommandState::activeUcs because floating model space is entered (REQ-155). Persistence —
-/// the `.gs` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
+/// the `internal document payload` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
 /// or a save/tab-switch performed while floating would record the viewport's frame as the drawing's.
 inline const ucs::Ucs& CadDrawingScopedUcs(const AppCommandState& st) {
   return st.floatingUcsSwapActive ? st.drawingActiveUcsStash : st.activeUcs;
@@ -5894,7 +5951,7 @@ enum class EntityKind : std::uint8_t {
   /// walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting Surface anywhere but the
   /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
   /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
-  /// legacy `.gs` loading with the ids it loaded with yesterday.
+  /// legacy `internal document payload` loading with the ids it loaded with yesterday.
   Surface,
   /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
   Table,
@@ -5910,7 +5967,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
   PositionMarker,
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
-  Multileader
+  Multileader,
+  /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
+  Spline
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -5928,9 +5987,9 @@ struct EntityRef {
 ///
 /// **Idempotent**: an entity that already has an id keeps it, always. Only `id == 0` is filled, from
 /// \ref AppCommandState::nextEntityId, in a fixed array order — which is what makes assignment
-/// deterministic for a legacy `.gs` (same file, same ids, every load).
+/// deterministic for a legacy `internal document payload` (same file, same ids, every load).
 ///
-/// Deliberately called only at **cold boundaries** — before an undo snapshot, before a `.gs` save,
+/// Deliberately called only at **cold boundaries** — before an undo snapshot, before a `internal document payload` save,
 /// and before a reference is taken — never per frame (architecture §11.7). Assigning at the 127
 /// sites that construct an EntityAttributes was rejected: a missed site there is not a compile
 /// error, it is a silently id-less entity (the ADR-025 (a) lesson).
@@ -6283,6 +6342,22 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
 
+// --- REQ-444 REVCLOUD ----------------------------------------------------------------------------
+/// Open the command: pick a first corner, or `O` to convert a closed shape already drawn.
+void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, echoing the arc length and options in force.
+[[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
+void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Drop the draft path, keeping the remembered arc length and options.
+void CancelRevcloudCommand(AppCommandState& st);
+/// The cloud the cursor currently proposes (the draft plus \p cursor, closed), built by the SAME
+/// function the commit uses. Empty when the draft is too short for one.
+[[nodiscard]] std::vector<double> CadRevcloudPreviewPolyline(const AppCommandState& st, double curX, double curY,
+                                                             std::vector<float>* outBulge);
+
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -6539,7 +6614,7 @@ void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vec
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
-/// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
+/// the identical current/stale/rebuilding classification for a surface, and it has no UI
 /// dependency, so it lives here rather than in either panel.
 enum class SurfaceState : std::uint8_t { Current, Stale, Rebuilding };
 
@@ -6643,6 +6718,42 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
 /// on failure or cancellation, logs the reason and commits nothing. A no-op while no import is in
 /// flight or the in-flight one has not finished yet.
 void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
+
+/// What a progress display shows for an in-flight import (REQ-172,
+/// ADR-060): the build's three real phases weighted by rough cost, and an ETA recomputed at most
+/// once a second.
+struct PointCloudImportProgress {
+  /// "Reading scan..." / "Building spatial index..." / "Sampling preview...".
+  const char* phase = "Reading scan...";
+  /// 0..1, or negative when the point total is unknown (indeterminate bar).
+  float fraction = -1.f;
+  /// "estimating..." or "~2m 30s remaining"; empty when the total is unknown.
+  std::string eta;
+};
+PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCloudImportAsync& job);
+
+/// Which writer an export uses. REQ-172 delivers export for PTS, PTX, LAS and LAZ; E57 is
+/// import-only (no writer exists).
+enum class PointCloudExportFormat : std::uint8_t { Pts, Ptx, Las, Laz };
+
+/// What `EXPORTPTS` / `EXPORTPTX` / `EXPORTLAS` / `EXPORTLAZ` will write: the selected point
+/// clouds, or every cloud in the drawing when none is selected (REQ-172).
+struct PointCloudExportPlan {
+  int cloudCount = 0;
+  /// True when at least one cloud is selected, false when the export covers every cloud.
+  bool fromSelection = false;
+  /// Sum of the clouds' full point counts (not their bounded preview samples).
+  std::int64_t pointCount = 0;
+  /// Suggested file name: the cloud's own stem for one cloud, `pointclouds.<ext>` for several.
+  std::string defaultFileName;
+};
+PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudExportFormat format);
+
+/// Writes the planned point clouds to \p pathUtf8 in \p format, logging the outcome in the same
+/// words as the typed commands. Returns false (drawing and file untouched on a refusal) if there
+/// is nothing to export or the writer fails. Not a drawing edit, so there is nothing to undo.
+bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
+                             const std::string& pathUtf8, std::vector<std::string>& log);
 
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
@@ -6884,6 +6995,12 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     st.userCirclesCxCyZR[k] = st.entityGripOrigCx;
     st.userCirclesCxCyZR[k + 1] = st.entityGripOrigCy;
     st.userCirclesCxCyZR[k + 3] = st.entityGripOrigR;  // [k+2] is Z — a grip drag does not change it
+    break;
+  }
+  case SelectedEntity::Type::Spline: {  // REQ-443
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
+      return;
+    st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -7130,6 +7247,7 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -8366,6 +8484,8 @@ void RecalcAlignResult(AppCommandState& st);
 /// \p applyScale — false strips scale (rotation + translation only; re-derives tx/ty from centroids).
 void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool applyScale);
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Start PDF page rasterization on a worker while the dialog remains responsive.
+void StartPdfAttachBuild(AppCommandState& st, std::vector<std::string>& log);
 /// Called from the viewport when the user clicks to place the PDF attachment.
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
@@ -8466,28 +8586,3 @@ bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* o
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);
-
-bool LoadApplicationFont();
-
-/// DevShell Fonts tab (debug-only live font tuner): one TTF path (or, for the bundled Wiki roles, a
-/// filename under resources/fonts/) and a pixel size per role. Mirrors the roles LoadApplicationFont
-/// wires up at startup.
-struct FontTuningRole {
-  std::string path;
-  float       sizePx = 16.f;
-};
-struct FontTuning {
-  FontTuningRole defaultFont{"C:/Windows/Fonts/arial.ttf", 16.f};
-  FontTuningRole toolspace{"C:/Windows/Fonts/arial.ttf", 16.f};
-  FontTuningRole billboard{"C:/Windows/Fonts/arial.ttf", 20.f};
-  FontTuningRole wikiBody{"IBMPlexSans-Regular.ttf", 16.f};
-  FontTuningRole wikiHeading{"IBMPlexSansCondensed-SemiBold.ttf", 17.f};
-  FontTuningRole wikiMono{"IBMPlexMono-Regular.ttf", 15.f};
-};
-
-/// Rebuilds every FontReg role from \p tuning. Clears and repopulates io.Fonts, but does NOT touch
-/// the GL texture — the caller (DevShell) must follow a successful call with
-/// ImGui_ImplOpenGL3_DestroyFontsTexture + io.Fonts->Build + ImGui_ImplOpenGL3_CreateFontsTexture,
-/// since this file has no OpenGL dependency. False (default font missing) leaves io.Fonts empty;
-/// the caller should not proceed to the texture rebuild in that case.
-bool LoadApplicationFontWithTuning(const FontTuning& tuning);

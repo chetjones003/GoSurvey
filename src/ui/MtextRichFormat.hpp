@@ -1,15 +1,10 @@
 #pragma once
 
-#include <imgui.h>
-
 #include "MtextRichSpans.hpp"  // MtextRichSpan + MtextRichBuildSpans (pure; ADR-023)
 
 #include <cstdint>
 #include <string>
 #include <vector>
-
-struct ImDrawList;
-struct ImFont;
 
 /// GoSurvey MTEXT rich wire uses ASCII control tags only (UTF-8 user text allowed between tags):
 ///   [[b]] [[/b]]  [[i]] [[/i]]  [[u]] [[/u]]  [[caps]] [[/caps]]
@@ -22,16 +17,3 @@ struct ImFont;
 [[nodiscard]] std::string MtextRichColorTag(uint8_t r, uint8_t g, uint8_t b);
 
 [[nodiscard]] std::string MtextRichFlattenToPlain(const std::string& wire);
-
-/// WYSIWYG layout: draws wrapped rich text at \p origin with max line width \p maxWidth. \p baseFontFamily
-/// is the typeface used for runs without a [[font:…]] override (empty = the fallback \p font).
-void MtextRichDrawWrapped(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 origin, float maxWidth, ImU32 baseRgb,
-                          const std::string& wire, const std::string& baseFontFamily = {});
-
-/// Vertical size (px) of the same wrapped layout as \ref MtextRichDrawWrapped (no drawing).
-[[nodiscard]] float MtextRichWrappedHeight(ImFont* font, float fontPx, float maxWidth, const std::string& wire,
-                                           const std::string& baseFontFamily = {});
-
-/// Unwrapped content size in pixels (only hard newlines break lines; \p maxWidth should be very large).
-void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wire, float* outW, float* outH,
-                               const std::string& baseFontFamily = {});

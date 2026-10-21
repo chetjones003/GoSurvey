@@ -2,7 +2,7 @@
 #
 # A feature line lives in its OWN store, not the polyline arrays (ADR-035 (g)). This transcript
 # checks the data layer end to end: it can be created with per-vertex elevations and elevation
-# points, it gets a stable entity id, it survives a .gs round trip, it undoes in one step, and it
+# points, it gets a stable entity id, it survives a document JSON payload round trip, it undoes in one step, and it
 # does not disturb the polyline store.
 #
 # Stages 2 and 3 add render/pick/snap and the modify commands.
@@ -53,7 +53,7 @@ CMD FEATURELINELIST
 EXPECT LOG "Feature line 1: "Toe of slope""
 REDO
 
-# --- .gs round trip preserves vertices, elevations, elevation points and the name ------------------
+# --- document JSON payload round trip preserves vertices, elevations, elevation points and the name ------------------
 SAVEAS %OUT%/fl-a.dwg
 OPEN %OUT%/fl-a.dwg
 CMD FEATURELINELIST

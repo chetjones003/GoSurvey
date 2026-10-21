@@ -7,7 +7,7 @@
 ///
 /// Dependency-free (only `<vector>`/`<cstdint>` here, `<cmath>` in the .cpp) so the test target
 /// links it directly. The scene is generated rather than committed as a data file: 250,000 segments
-/// is ~1.5 million coordinates, which as `.gs` JSON is a >100 MB artifact in the repository. A
+/// is ~1.5 million coordinates, which as GoSurvey document JSON is a >100 MB artifact in the repository. A
 /// deterministic generator IS a committed bench scene — same commit, same bytes, same geometry —
 /// and it is diffable, which a 100 MB blob is not.
 namespace benchscene {

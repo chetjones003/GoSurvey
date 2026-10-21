@@ -62,7 +62,7 @@ QColor VerdictColor(Verdict verdict) {
 }
 // The button behind "Scale checks (n)": the worst verdict on the page, blue when there are no checks yet.
 QString VerdictButtonStyle(bool haveVerdict, Verdict worst) {
-  const char* base = !haveVerdict ? "#3373c7" : worst == Verdict::Good ? "#2b8c47" : worst == Verdict::Check ? "#bd8014" : "#bd3833";
+  const char* base = !haveVerdict ? "#168e8a" : worst == Verdict::Good ? "#2b8c47" : worst == Verdict::Check ? "#bd8014" : "#bd3833";
   return QString("QPushButton{background:%1;color:white;font-weight:600;border:1px solid rgba(255,255,255,140);"
                  "border-radius:4px;padding:3px 10px;} QPushButton:disabled{background:#59626f;color:#c5ccd6;}").arg(base);
 }
@@ -157,28 +157,28 @@ QTableWidget* MakeTable(QWidget* parent, const char* name, const QStringList& he
   return table;
 }
 
-// The look of the scale dialogs: the PDF window's deep navy (issue #906, selected design B).
+// The look of the scale dialogs, using the application graphite palette.
 QString DialogStyle() {
   return QString(
-      "QRadioButton::indicator{width:14px;height:14px;border-radius:8px;border:2px solid #6c7fa6;background:#0e131c;}"
-      "QRadioButton::indicator:checked{border:2px solid #3b82f6;background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
-      "stop:0 #3b82f6,stop:0.5 #3b82f6,stop:0.6 #0e131c,stop:1 #0e131c);}"
-      "QCheckBox::indicator{width:15px;height:15px;border:2px solid #6c7fa6;border-radius:3px;background:#0e131c;}"
-      "QCheckBox::indicator:checked{background:#3b82f6;border-color:#3b82f6;}"
-      "QDialog{background:#141b28;} QLabel{color:#e8eef9;} QLabel:disabled{color:#8795b0;} QCheckBox,QRadioButton{color:#e8eef9;}"
-      "QGroupBox{background:#1b2433;border:1px solid #2f3d58;border-radius:8px;margin-top:14px;padding:10px;color:#e8eef9;}"
-      "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;color:#8fb8ff;font-weight:600;}"
-      "QPushButton{background:#25324a;border:1px solid #3b4a68;border-radius:5px;padding:6px 14px;color:#e8eef9;}"
-      "QPushButton:hover{background:#2c3b57;} QPushButton:disabled{color:#6c7a94;background:#1b2433;}"
-      "QPushButton:default{background:#3b82f6;color:white;border-color:#3b82f6;font-weight:600;}"
-      "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#0e131c;border:1px solid #3b4a68;border-radius:4px;padding:3px 6px;color:#fff;}"
-      "QComboBox QAbstractItemView{background:#0e131c;color:#fff;selection-background-color:#3b82f6;}"
-      "QTableWidget{background:#141b28;alternate-background-color:#1b2433;border:1px solid #2f3d58;color:#cfd8ea;"
-      "selection-background-color:#27406e;selection-color:white;}"
-      "QHeaderView::section{background:#25324a;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #3b4a68;font-weight:600;}"
-      "QTabWidget::pane{border:1px solid #2f3d58;background:#141b28;} QTabBar::tab{padding:7px 16px;background:#1b2433;color:#cfd8ea;"
+      "QRadioButton::indicator{width:14px;height:14px;border-radius:8px;border:2px solid #59646a;background:#171b1e;}"
+      "QRadioButton::indicator:checked{border:2px solid #55d8d0;background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
+      "stop:0 #55d8d0,stop:0.5 #55d8d0,stop:0.6 #171b1e,stop:1 #171b1e);}"
+      "QCheckBox::indicator{width:15px;height:15px;border:2px solid #59646a;border-radius:3px;background:#171b1e;}"
+      "QCheckBox::indicator:checked{background:#55d8d0;border-color:#55d8d0;}"
+      "QDialog{background:#22272b;} QLabel{color:#e8eef9;} QLabel:disabled{color:#9aa5aa;} QCheckBox,QRadioButton{color:#e8eef9;}"
+      "QGroupBox{background:#292f34;border:1px solid #3c444a;border-radius:8px;margin-top:14px;padding:10px;color:#e8eef9;}"
+      "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;color:#55d8d0;font-weight:600;}"
+      "QPushButton{background:#30373c;border:1px solid #41494e;border-radius:5px;padding:6px 14px;color:#e8eef9;}"
+      "QPushButton:hover{background:#3a4247;} QPushButton:disabled{color:#899398;background:#242a2f;}"
+      "QPushButton:default{background:#168e8a;color:white;border-color:#55d8d0;font-weight:600;}"
+      "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#171b1e;border:1px solid #41494e;border-radius:4px;padding:3px 6px;color:#fff;}"
+      "QComboBox QAbstractItemView{background:#171b1e;color:#fff;selection-background-color:#168e8a;}"
+      "QTableWidget{background:#22272b;alternate-background-color:#292f34;border:1px solid #3c444a;color:#cfd8da;"
+      "selection-background-color:#244846;selection-color:white;}"
+      "QHeaderView::section{background:#30373c;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
+      "QTabWidget::pane{border:1px solid #3c444a;background:#22272b;} QTabBar::tab{padding:7px 16px;background:#292f34;color:#cfd8da;"
       "border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px;}"
-      "QTabBar::tab:selected{background:#3b82f6;color:white;font-weight:600;}");
+      "QTabBar::tab:selected{background:#30373c;color:white;border-bottom:2px solid #55d8d0;font-weight:600;}");
 }
 
 void StyleDialog(QDialog& dialog, QVBoxLayout* layout) {
@@ -221,8 +221,9 @@ std::map<int, PageScale> PdfWindow::ScalesInForce() const {
 
 QPointF PdfWindow::PageToCanvas(float x, float y) const {
   const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
-  const double factor = static_cast<double>(m_Page->width()) / size.wPt;
-  return {x * factor, (size.hPt - y) * factor};
+  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
+  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+  return {x * scaleX, (size.hPt - y) * scaleY};
 }
 
 void PdfWindow::BuildScaleToolbar() {
@@ -259,7 +260,7 @@ void PdfWindow::BuildScaleToolbar() {
   m_SnapStatus->setObjectName("pdfSnapStatus");
   bar->addWidget(m_SnapStatus);
   bar->setStyleSheet(
-      "QLabel#pdfScaleLabel{background:#25324a;border:1px solid #3b4a68;border-radius:10px;padding:3px 12px;color:#cfe3ff;font-weight:600;}"
+      "QLabel#pdfScaleLabel{background:#30373c;border:1px solid #41494e;border-radius:10px;padding:3px 12px;color:#d8e3e4;font-weight:600;}"
       "QToolButton:checked{background:#1f7a3e;color:white;border-radius:4px;} QLabel#pdfSnapStatus{color:#f5b73a;}");
   m_SnapPoll = new QTimer(this);
   m_SnapPoll->setInterval(30);
@@ -287,6 +288,7 @@ void PdfWindow::EscapeTool() {
 }
 
 void PdfWindow::SceneChanged() {
+  ++m_Revision;
   m_SelectedCheck = -1;
   setWindowModified(HasUnsavedChanges());
   UpdateScaleDisplay();

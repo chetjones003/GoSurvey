@@ -1,13 +1,26 @@
 #pragma once
 #include <QMainWindow>
 #include "CadCommands.hpp"
+#include "AdjustmentEditor.hpp"
+#include <atomic>
 #include <future>
 #include <functional>
+#include <memory>
+#include <QStringList>
+#include <vector>
 class QPlainTextEdit;
 class QTableWidget;
 class QLabel;
 class QTimer;
 class QAction;
+class QListWidget;
+class QCheckBox;
+class QComboBox;
+class QDoubleSpinBox;
+class QSpinBox;
+class QEvent;
+class QTabWidget;
+class AdjustmentPlanView;
 
 class AdjustmentWindow final : public QMainWindow {
 public:
@@ -15,14 +28,19 @@ public:
   ~AdjustmentWindow() override;
   bool RunSmokeChecks(QString& error);
   bool LoadFile(const QString& path, QString& error);
+  int ImportFiles(const QStringList& paths, QStringList& failures);
   bool SaveFile(const QString& path, QString& error);
+  bool ExportReportFile(const QString& path, QString& error);
   bool AcceptResult(QString& error);
   int CommitToDrawing();
   bool IsBusy() const { return m_Work.valid(); }
   bool HasUnsavedChanges() const;
+  /// REQ-431: check the text now instead of after the typing pause.
+  void ValidateNow();
   std::function<void()> drawingChanged;
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void changeEvent(QEvent* event) override;
 private:
   void Import();
   void Calculate();
@@ -33,14 +51,41 @@ private:
   void PollCalculation();
   void PresentResult();
   void ExportReport();
-  void EditWeights();
+  void ExportReportAs(const QString& extension);
+  void ApplySettingsDraft();
+  void ResetSettingsDraft();
+  void ShowSettings();
   void SetBusy(bool busy);
+  void RefreshImportedFiles();
+  void RefreshPreview();
+  void RefreshFilesAndSummary();
+  void BuildOptionsBar(QWidget* parent);
+  void InvalidateResult();
+  void SyncOptionsFromText();
+  void WriteScaleDirective();
+  void ApplyOptionsToData();
+  void RefreshOptionsBar();
+  QString ApplyResolvedScale();
+  QString UnitSuffix() const;
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
-  QPlainTextEdit* m_Editor;
+  AdjustmentCodeEdit* m_Editor;
+  AdjustmentPlanView* m_Plan;
+  QLabel* m_Files;
+  QLabel* m_Summary;
+  QLabel* m_TextStatus;
+  QTimer* m_ValidateTimer;
+  TraverseData m_PreviewData;  ///< the text as last read without error, solved for the plan only
   QPlainTextEdit* m_Output;
   QTableWidget* m_Coordinates;
   QTableWidget* m_Residuals;
+  AdjustmentPlanView* m_ResultPlan = nullptr;
+  QTabWidget* m_ContextTabs = nullptr;
+  std::vector<QDoubleSpinBox*> m_SettingsWeightEditors;
+  QComboBox* m_SettingsAdjustmentType = nullptr;
+  QSpinBox* m_SettingsMaxIterations = nullptr;
+  QLabel* m_SettingsStatus = nullptr;
+  QListWidget* m_ImportedFiles;
   TraverseData m_Data;
   LsaWeights m_Weights;
   QString m_Path;
@@ -49,8 +94,21 @@ private:
   bool m_Imported = false;
   std::uint32_t m_ResultDrawingUid = 0;
   std::future<std::pair<TraverseData, LsaResult>> m_Work;
+  std::shared_ptr<std::atomic<bool>> m_CancelRequested;
   QTimer* m_Poll;
   QAction* m_RunAction;
+  QAction* m_StopAction;
   QAction* m_AcceptAction;
   QAction* m_CommitAction;
+  QWidget* m_OptionsBar = nullptr;
+  QLabel* m_UnitsLabel = nullptr;
+  QCheckBox* m_CurvRefr = nullptr;
+  QDoubleSpinBox* m_RefractionK = nullptr;
+  QLabel* m_RefractionWarning = nullptr;
+  QCheckBox* m_ScaleCheck = nullptr;
+  QComboBox* m_ScaleKind = nullptr;
+  QLabel* m_ScaleReadout = nullptr;
+  QLabel* m_ResidualNote = nullptr;
+  bool m_SyncingOptions = false;
+  QString m_ScaleNote;
 };

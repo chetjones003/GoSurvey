@@ -7,7 +7,7 @@
 # statement about the command layer, the display cache and the undo stack acting together. That is
 # what this file is for.
 #
-# **On SURFSTYLE rather than the dialog.** The Surface Style editor is an ImGui window this driver
+# **On SURFSTYLE rather than the dialog.** The Surface Style editor is a Qt window this driver
 # cannot reach, the same limitation req068-surface-selection works around. SURFSTYLE is the command
 # form of the same operations and calls the same helpers, so what is asserted here is the real edit
 # path and not a test-only shortcut.
@@ -38,7 +38,7 @@ EXPECT SURFACETINGEN 1
 CHECK ALL
 
 # --- contours are NOT entities -------------------------------------------------------------------
-# REQ-070 states this separately from "never stored in .gs", and it is separately breakable: a UI
+# REQ-070 states this separately from "never stored in document JSON payload", and it is separately breakable: a UI
 # count or a selection funnel could start reporting them on its own. 867 contour segments are on
 # screen and the drawing still holds the polylines it opened with.
 EXPECT POLYLINES 0
@@ -120,7 +120,7 @@ CHECK ALL
 
 # --- an interval nobody could type is refused by the display path, not obeyed ------------------------
 # 0.0001 ft over this surface's 33 ft of relief is ~332,000 contour levels. The dialog cannot produce
-# that, but a hand-edited `.gs` can, and the display pass has to degrade rather than lock the UI up.
+# that, but a hand-edited `document JSON payload` can, and the display pass has to degrade rather than lock the UI up.
 # Contours come out EMPTY and the surface still draws its border — the Surface Manager reports why
 # (REQ-201), which is the half that keeps this from looking like a defect in the generator.
 #
@@ -160,7 +160,7 @@ CMD SURFSTYLE NEW Contours1ft
 EXPECT LOG "created style"
 CHECK ALL
 
-# --- styles round-trip .gs, and reopening changes nothing -------------------------------------------
+# --- styles round-trip document JSON payload, and reopening changes nothing -------------------------------------------
 # REQ-070's last acceptance condition. The reopened drawing must resolve the same styles to the same
 # geometry — a table that failed to persist would fall back to Standard and quietly redraw every
 # surface at the default interval, which looks like nothing went wrong.

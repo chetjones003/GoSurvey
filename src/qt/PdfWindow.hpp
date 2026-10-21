@@ -5,8 +5,11 @@
 #include "PdfSnap.hpp"
 #include <QPointF>
 #include "PdfCoordExtract.hpp"
+#include "PdfAlign.hpp"
+#include "PdfDiff.hpp"
 #include <QString>
 #include <atomic>
+#include <cstdint>
 #include <future>
 #include <memory>
 class PdfCanvas;
@@ -16,6 +19,7 @@ class QActionGroup;
 class QPushButton;
 class PdfThumbnails;
 class QCheckBox;
+class QComboBox;
 class QDockWidget;
 class QLabel;
 class QLineEdit;
@@ -26,6 +30,9 @@ class QSpinBox;
 class QScrollArea;
 class QTimer;
 class QDialog;
+class QSlider;
+class QDoubleSpinBox;
+class QProgressBar;
 class QTableWidget;
 class EditorWindow;
 
@@ -36,7 +43,8 @@ public:
   void Open(const QString& path);
   bool LoadFile(const QString& path, QString& error);
   bool SaveFile(const QString& path, QString& error);
-  bool IsBusy() const { return m_Work.valid(); }
+  bool IsBusy() const { return m_Work.valid() || m_OpenWork.valid(); }
+  bool IsSaving() const { return m_SaveWork.valid(); }
   bool HasUnsavedChanges() const { return m_Annotations.Dirty(); }
   bool AddAnnotation(const pdfview::Annot& annotation, QString& error);
   bool IsSearching() const { return m_Search.valid(); }
@@ -44,6 +52,7 @@ public:
   /// REQ-430: the scale in force on a zero-based page (the session's change, else the file's); null = unscaled.
   const pdfview::PageScale* EffectiveScale(int page) const;
   bool SnapEnabled() const { return m_SnapOn; }
+  void ShowScaleAudit();
   /// The Set scale dialog's remembered entries.
   struct ScaleForm {
     int mode = 0;       ///< 0 preset, 1 typed ratio
@@ -60,10 +69,21 @@ protected:
   void closeEvent(QCloseEvent* event) override;
 private:
   friend class QtEditorTests;
+  struct SaveResult { bool succeeded = false; std::string error; };
   void RequestRender();
   void PollRender();
+  void PollOpen();
+  bool AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error);
   std::unique_ptr<pdfview::PdfDocument> m_Document;
   std::future<pdfview::Bitmap> m_Work;
+  std::future<pdfview::PdfDocument::OpenResult> m_OpenWork;
+  QString m_OpenPath;
+  QTimer* m_OpenPoll = nullptr;
+  std::future<SaveResult> m_SaveWork;
+  QString m_SaveDestination;
+  uint64_t m_Revision = 0;
+  uint64_t m_SaveRevision = 0;
+  QTimer* m_SavePoll = nullptr;
   std::atomic<bool> m_Cancel{false};
   PdfCanvas* m_Page;
   QSpinBox* m_PageNumber;
@@ -73,8 +93,21 @@ private:
   bool m_Pending = false;
   pdfview::AnnotSession m_Annotations;
   pdfview::ScaleRead m_FileScales; ///< what the opened file already says (REQ-390 clause 3)
-  int m_Tool = -1;
+  int m_Tool = -2;
   std::vector<std::pair<float, float>> m_Draft;
+  int m_SelectedAnnotation = -1;
+  bool m_AnnotationDragging = false;
+  int m_AnnotationHandle = -1;
+  QPointF m_DragStart;
+  pdfview::Annot m_DragOriginal;
+  std::optional<pdfview::Annot> m_DragPreview;
+  unsigned m_AnnotationColor = 0xFF0000;
+  float m_AnnotationThickness = 1.f;
+  float m_AnnotationFontSize = 12.f;
+  bool m_AnnotationFill = false;
+  std::string m_AnnotationFont = "Helvetica";
+  bool m_AnnotationBold = false;
+  bool m_AnnotationItalic = false;
   EditorWindow* m_Editor = nullptr;
   bool m_ExtractMode = false;
   bool m_ExtractDragging = false;
@@ -116,6 +149,13 @@ private:
   QListView* m_ThumbView = nullptr;
   PdfThumbnails* m_Thumbs = nullptr;
   void PageClick(QPointF point, Qt::MouseButton button);
+  void EditSelectedAnnotation();
+  void MoveAnnotation(QPointF point);
+  void EndAnnotation(QPointF point, Qt::MouseButton button);
+  QPointF CanvasToPage(QPointF point) const;
+  QPointF PageToCanvas(float x, float y) const;
+  int HitAnnotation(QPointF pagePoint, float tolerance) const;
+  void ApplyAnnotationStyle(pdfview::Annot& annotation) const;
   void DrawAnnotations(QPainter& painter);
   void DrawExtractOverlay(QPainter& painter);
   void BeginExtract(QPointF point, Qt::MouseButton button);
@@ -125,6 +165,8 @@ private:
   void ShowExtractReview();
   void DecideExtractCandidate(int row, bool accept);
   void SaveAs();
+  void StartSaveAs(const QString& path);
+  void PollSave();
   void SplitPages();
   bool ConfirmDiscard();
   pdfview::PageScale CurrentScale() const;
@@ -157,7 +199,6 @@ private:
   void ToggleSnap();
   void StartSnapRead(int page);
   void DrawScaleOverlay(QPainter& painter);
-  QPointF PageToCanvas(float x, float y) const;
   std::map<int, pdfview::PageScale> ScalesInForce() const;
   QActionGroup* m_ToolGroup = nullptr;
   QAction* m_SnapAction = nullptr;
@@ -183,4 +224,85 @@ private:
   QTimer* m_SnapPoll = nullptr;
   QPointF m_LastPointer;                ///< the pointer on the canvas, for the snap marker and the check rubber band
   bool m_PointerIn = false;
+
+  // REQ-395 Qt workflow. Reading and matching run away from the UI thread; the result is only a suggestion
+  // until the user explicitly applies the consensus scale through the undoable annotation session.
+  struct AuditOutcome {
+    bool ok = false;
+    pdfview::DimMatchSet matches;
+  };
+  std::future<AuditOutcome> m_AuditWork;
+  std::atomic<bool> m_AuditCancel{false};
+  QTimer* m_AuditPoll = nullptr;
+  QDialog* m_AuditDialog = nullptr;
+  QTableWidget* m_AuditTable = nullptr;
+  QLabel* m_AuditSummary = nullptr;
+  QCheckBox* m_AuditAllRows = nullptr;
+  QCheckBox* m_AuditShowSheet = nullptr;
+  int m_AuditSelected = -1;
+  pdfview::DimAudit m_AuditResult;
+  pdfview::DimMatchSet m_AuditMatches;
+  int m_AuditPage = -1;
+  bool m_AuditReady = false;
+  std::vector<int> m_AuditRows;
+  void StartScaleAudit();
+  void PollScaleAudit();
+  void RefreshScaleAudit();
+  void DrawAuditOverlay(QPainter& painter);
+
+  // REQ-392/393 Qt comparison session. All CPU rendering, alignment, and change detection run on a worker.
+  struct CompareOutcome {
+    bool ok = false;
+    std::string error;
+    std::unique_ptr<pdfview::PdfDocument> openedRevision;
+    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView;
+    pdfalign::AutoResult alignment;
+    pdfalign::Transform automaticTransform;
+    bool hasAlignment = false;
+    pdfdiff::Result changes;
+  };
+  struct CompareSession {
+    std::unique_ptr<pdfview::PdfDocument> revision;
+    QString source;
+    int basePage = 0, revisionPage = 0;
+    pdfalign::Transform transform;
+    pdfalign::Transform automatic;
+    QImage overlay;
+    QImage revisionOverlay;
+    QImage baseView;
+    QImage revisionView;
+    std::vector<pdfdiff::Region> changes;
+    int mode = 0; // Tint, Opacity, Base, Revision
+    int opacity = 50;
+    bool busy = false, aligned = false, haveChanges = false, lowConfidence = false;
+    bool manualAlignment = false;
+    pdfdiff::Settings settings;
+    std::atomic<bool> cancel{false};
+  };
+  std::unique_ptr<CompareSession> m_Compare;
+  std::future<CompareOutcome> m_CompareWork;
+  QTimer* m_ComparePoll = nullptr;
+  QDialog* m_CompareDialog = nullptr;
+  QComboBox* m_CompareMode = nullptr;
+  QSlider* m_CompareOpacity = nullptr;
+  QSpinBox* m_CompareBasePage = nullptr;
+  QSpinBox* m_CompareRevisionPage = nullptr;
+  QDoubleSpinBox* m_CompareTolerance = nullptr;
+  QDoubleSpinBox* m_CompareMinRegion = nullptr;
+  QCheckBox* m_CompareShowHighlights = nullptr;
+  QLabel* m_CompareStatus = nullptr;
+  QProgressBar* m_CompareProgress = nullptr;
+  QTableWidget* m_CompareTable = nullptr;
+  bool m_ComparePicking = false;
+  bool m_CompareClosePending = false;
+  int m_ComparePickCount = 0;
+  int m_ComparePickTarget = 0;
+  pdfalign::Pt m_ComparePicks[4];
+  void BeginCompare();
+  void StartCompare(bool findChanges);
+  void PollCompare();
+  void UpdateCompareOverlay();
+  void DrawCompareOverlay(QPainter& painter);
+  void ComparePick(QPointF point, Qt::MouseButton button);
+  void SaveCompareChanges();
 };

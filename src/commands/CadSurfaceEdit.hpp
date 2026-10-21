@@ -2,7 +2,7 @@
 // Surface and surface-style edits as services (issue #893, REQ-068 / REQ-069 / REQ-070 / REQ-072 /
 // REQ-075 / REQ-124 / REQ-136 / REQ-361).
 //
-// The 0.7.4 ImGui Create Surface, Surface Properties, Surfaces and Surface Style windows apply their
+// The Create Surface, Surface Properties, Surfaces and Surface Style panels apply their
 // edits inside their own draw code. A second frontend cannot reuse widgets, so the rules those
 // widgets enforce live here instead: what is refused (and the exact message), which value is stored,
 // and what one undo step covers. Both frontends call these; neither re-implements them.

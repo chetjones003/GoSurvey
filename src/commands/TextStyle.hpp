@@ -15,7 +15,7 @@
 namespace TextStyles {
 
 inline constexpr const char* kStandardName = "Standard";
-/// Application default typeface (REQ-044 empty `fontFamily` = this file). Stroke font, not ImGui TTF.
+/// Application default typeface (REQ-044 empty `fontFamily` = this file). This is a stroke font, not TTF.
 inline constexpr const char* kDefaultFontFamily = "romans.shx";
 
 /// Empty family means the app default (Standard's font). Non-empty is used as stored.

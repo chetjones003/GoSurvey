@@ -9,35 +9,18 @@
 // Not shipped: GoSurvey.exe neither links nor installs this (see CMakeLists.txt).
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "QtText.hpp"
 #include "DwgIo.hpp"
 
-#include <imgui.h>
 
+#include <QCoreApplication>
+#include <QGuiApplication>
 #include <cstdio>
 #include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <vector>
-
-// Mirrors HeadlessDriver.cpp's InitHeadlessImGui (ADR-031 (c')) — sets up a headless ImGui font
-// atlas so text/surface-label measurement (ImGui::GetFont()) does not crash outside the GUI.
-// Duplicated rather than linked: HeadlessDriver.cpp owns its own main().
-static void InitHeadlessImGuiLocal() {
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(1920.f, 1080.f);
-  io.DeltaTime = 1.0f / 60.0f;
-  io.IniFilename = nullptr;
-  io.Fonts->AddFontDefault();
-  io.FontGlobalScale = 1.35f;
-  unsigned char* pixels = nullptr;
-  int w = 0;
-  int h = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-  ImGui::NewFrame();
-}
 
 static int Usage() {
   std::fprintf(stderr,
@@ -47,8 +30,8 @@ static int Usage() {
 }
 
 static int ToDwg(const char* inJson, const char* outDwg) {
-  InitHeadlessImGuiLocal();
   AppCommandState st;
+  st.measureAnnotationText = MeasureQtText;
   std::vector<std::string> log;
   if (!LoadGoSurveyTemplateFile(st, inJson, log)) {
     for (auto& s : log) std::fprintf(stderr, "%s\n", s.c_str());
@@ -85,8 +68,12 @@ int main(int argc, char** argv) {
     if (argc != 4)
       return Usage();
     const std::string mode = argv[1];
-    if (mode == "to-dwg")
+    if (mode == "to-dwg") {
+      qputenv("QT_QPA_PLATFORM", "offscreen");
+      qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", QCoreApplication::applicationDirPath().toLocal8Bit() + "/qt-plugins/platforms");
+      QGuiApplication qtApp(argc, argv);
       return ToDwg(argv[2], argv[3]);
+    }
     if (mode == "from-dwg")
       return FromDwg(argv[2], argv[3]);
     return Usage();

@@ -473,5 +473,10 @@ std::string TraverseFormatDist(double val);
 /// identically.
 void ReduceLegFromSets(TraverseLeg& leg);
 
+/// Append imported observations to an existing traverse, joining the imported
+/// start station to the current chain end and remapping imported station ids.
+/// An empty destination takes ownership of the imported traverse unchanged.
+void TraverseAppendImported(TraverseData& into, TraverseData&& imported);
+
 /// Compute all legs in \p td: fills computed fields and closure info.
 void ComputeTraverse(TraverseData& td);

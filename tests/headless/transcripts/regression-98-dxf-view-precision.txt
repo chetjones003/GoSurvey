@@ -25,8 +25,8 @@
 # and it CONVERGES: the third export is byte-identical to the second, because by then the extents are
 # being computed from coordinates that already survive the six-decimal round trip unchanged.
 #
-# So it could have been accepted the way REQ-079 accepts `.gs` normalization — amend the invariant
-# to compare the SECOND and THIRD exports (decision D-2026-08-17-a did exactly that for `.gs`, after
+# So it could have been accepted the way REQ-079 accepts `document JSON payload` normalization — amend the invariant
+# to compare the SECOND and THIRD exports (decision D-2026-08-17-a did exactly that for `document JSON payload`, after
 # issue #61). It was not. The extents are now snapped to the precision they are written at BEFORE
 # anything is derived from them, so the view a file states is exactly the view a reader derives from
 # the extents that same file states, and the first export is already a fixed point. See
@@ -62,7 +62,7 @@ EXPECT LINES 2
 EXPORT DXF %OUT%/r98-b.dxf
 
 # The bug, and the acceptance condition of the issue: the FIRST cycle is already a fixed point, with
-# no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+# no idempotence carve-out of the kind REQ-079 needed for `document JSON payload`.
 EXPECT SAMEFILE %OUT%/r98-a.dxf %OUT%/r98-b.dxf
 
 NEW

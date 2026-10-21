@@ -1,7 +1,7 @@
 #pragma once
 
 // REQ-392 — lining two revisions of a sheet up, and telling what is on one, the other, or both. Pure: no
-// PDFium, no ImGui, no OpenGL, so every rule is unit-testable. Points are PDF points from a page's
+// PDFium or OpenGL dependencies, so every rule is unit-testable. Points are PDF points from a page's
 // bottom-left corner, as the viewer reports them.
 
 #include "PdfDocument.hpp" // Bitmap only

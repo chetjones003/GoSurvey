@@ -23,11 +23,14 @@
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QMouseEvent>
+#include <QMenu>
+#include <QIcon>
 #include <QOpenGLContext>
 #include <QApplication>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPolygonF>
+#include <QPixmap>
 #include <QWheelEvent>
 #include <algorithm>
 
@@ -102,6 +105,46 @@ void EditorViewport::InvalidateGeometry() {
   update();
 }
 
+void EditorViewport::CancelSelectionBox() {
+  if (m_HasSelectionBoxSnapshot) {
+    m_State.selection = m_SelectionBeforeBox;
+    m_State.selectedSurveyPointIndices = m_SurveySelectionBeforeBox;
+  }
+  m_HasSelectionBoxSnapshot = false;
+  m_SelectionBeforeBox.clear();
+  m_SurveySelectionBeforeBox.clear();
+  m_State.selBoxWaitingSecond = false;
+  m_State.selBoxPreview.clear();
+  m_LeftDragSelection = false;
+  if (changed) changed();
+  update();
+}
+
+// Escape or right-click during a grip drag puts the object back exactly as it was. Returns whether a grip
+// edit was in progress, so the caller can stop there rather than also cancelling the command.
+bool EditorViewport::CancelGripEdit() {
+  if (m_State.entityGripMoveActive) {
+    RestoreEntityGripOriginal(m_State);
+    ClearEntityGripInteraction(m_State);
+  } else if (m_State.mtextGripMoveActive) {
+    AbortMtextGripInteraction(m_State);
+  } else if (m_State.dimGripMoveActive) {
+    if (m_State.dimGripAnnotationIndex >= 0 && static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
+      ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
+      ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
+      ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
+      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+    }
+    ClearDimGripInteraction(m_State);
+  } else {
+    return false;
+  }
+  m_GripMovedWithButton = false;
+  BumpCadGpuCache(m_State);
+  return true;
+}
+
 void EditorViewport::ClearTransientInput() {
   m_Snap = {};
   m_State.viewportSnapPickValid = false;
@@ -132,12 +175,21 @@ void EditorViewport::paintGL() {
       preview.insert(preview.end(), ghostLines.begin(), ghostLines.end());
       previewCircles.insert(previewCircles.end(), ghostCircles.begin(), ghostCircles.end());
     }
+    CadSubObjectOverlay subObjectOverlay;
+    std::vector<float> subObjectLines;
+    BuildSubObjectHighlight(m_State, &subObjectOverlay.selectedFaceTris,
+        &subObjectOverlay.selectedFaceEdges, &subObjectLines);
+    highlight.insert(highlight.end(), subObjectLines.begin(), subObjectLines.end());
+    std::vector<float> subHoverLines;
+    BuildSubObjectHoverHighlight(m_State, &subObjectOverlay.hoverFaceTris,
+        &subObjectOverlay.hoverFaceEdges, &subHoverLines);
     RefreshSolidDisplayGeometry(m_State);
     RefreshSurfaceDisplayGeometry(m_State);
     CadExtendedGeometryInput ext;
     ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
+    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -149,19 +201,22 @@ void EditorViewport::paintGL() {
     ext.featureLineOffsets = &m_State.featureLineOffsets;
     ext.featureLineClosed = &m_State.featureLineClosed;
     ext.featureLineAttrs = &m_State.featureLineAttrs;
+    ext.hiddenEntityIds = &m_State.hiddenEntityIds;
     ext.blockDefs = &m_State.blockDefs;
     ext.blockRefs = &m_State.cadBlockRefs;
     ext.blockRefAttrs = &m_State.cadBlockRefAttrs;
+    ext.annotationScales = &m_State.annotationScales;
+    ext.currentAnnotationScaleIndex = m_State.currentAnnotationScaleIndex;
     RenderTuning tuning;
     tuning.bgR = tuning.bgG = tuning.bgB = 0.f;
     if (!qApp->property("cadLightTheme").toBool()) {
-      tuning.bgR = 4.f / 255.f;
-      tuning.bgG = 18.f / 255.f;
-      tuning.bgB = 32.f / 255.f;
-      tuning.gridR = 0.055f;
-      tuning.gridG = 0.11f;
-      tuning.gridB = 0.16f;
-      tuning.gridA = 0.36f;
+      tuning.bgR = 32.f / 255.f;
+      tuning.bgG = 36.f / 255.f;
+      tuning.bgB = 40.f / 255.f;
+      tuning.gridR = 0.12f;
+      tuning.gridG = 0.20f;
+      tuning.gridB = 0.20f;
+      tuning.gridA = 0.40f;
     }
     if (m_State.viewportSectionClip) {
       tuning.sectionClip = CadSectionClipPlane(m_State);
@@ -189,11 +244,11 @@ void EditorViewport::paintGL() {
     m_Renderer->SetSize(w, h);
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,
-        &preview, &previewCircles, &highlight, &highlightCircles, nullptr, nullptr, nullptr,
+        &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
         &m_State.pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
-        &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, nullptr,
+        &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, &subObjectOverlay,
         gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
         &m_State.cadPointClouds, &m_State.cadPointCloudAttrs, &m_State.pointCloudDisplay);
     const bool capturePending = m_State.pendingThumbnailTabIdx == m_State.activeDrawingIdx &&
@@ -242,6 +297,7 @@ void EditorViewport::paintGL() {
     ext.arcs = &m_State.userArcs; ext.arcAttrs = &m_State.userArcAttrs;
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
+    ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -327,17 +383,87 @@ void EditorViewport::paintGL() {
     painter.drawPath(sheetPath);
     painter.setClipRect(sheetRect.intersected(rect()));
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor("#252a30"), 1));
-    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6)
+    // Sheet fills (issue #768): one even-odd path per region, under the linework like the plot does.
+    for (std::size_t fi = 0; fi < layout.paperFilledRegions.size(); ++fi) {
+      const CadFilledRegion& fill = layout.paperFilledRegions[fi];
+      QPainterPath path;
+      path.setFillRule(Qt::OddEvenFill);
+      for (std::size_t lp = 0; lp < fill.loopStart.size(); ++lp) {
+        const int begin = fill.loopStart[lp], count = fill.loopCount(lp);
+        if (count < 3) continue;
+        QPolygonF loop;
+        for (int k = 0; k < count; ++k) {
+          const std::size_t vi = static_cast<std::size_t>(begin + k) * 3;
+          if (vi + 1 < fill.vertsXyz.size()) loop << project(fill.vertsXyz[vi], fill.vertsXyz[vi + 1]);
+        }
+        path.addPolygon(loop);
+        path.closeSubpath();
+      }
+      QColor color("#d9d9d9");
+      if (fi < layout.paperFilledRegionAttrs.size()) {
+        const QColor entityColor(QString::fromUtf8(layout.paperFilledRegionAttrs[fi].color.c_str()));
+        if (entityColor.isValid()) color = entityColor;
+      }
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(color);
+      painter.drawPath(path);
+    }
+    painter.setBrush(Qt::NoBrush);
+    const auto isTrimHighlighted = [&](PaperEntityRef::Type type, int index) {
+      if (m_State.paperHoverValid && m_State.paperHover.type == type && m_State.paperHover.index == index)
+        return true;
+      return std::find_if(m_State.paperTrimCutters.begin(), m_State.paperTrimCutters.end(),
+          [&](const PaperEntityRef& cutter) { return cutter.type == type && cutter.index == index; }) !=
+          m_State.paperTrimCutters.end();
+    };
+    for (std::size_t i = 0; i + 5 < layout.paperLines.size(); i += 6) {
+      const int index = static_cast<int>(i / 6);
+      painter.setPen(QPen(isTrimHighlighted(PaperEntityRef::Type::Line, index) ? QColor("#00a8ff") : QColor("#252a30"),
+                          isTrimHighlighted(PaperEntityRef::Type::Line, index) ? 2.5 : 1));
       painter.drawLine(project(layout.paperLines[i], layout.paperLines[i + 1]),
                        project(layout.paperLines[i + 3], layout.paperLines[i + 4]));
+    }
     for (std::size_t i = 0; i + 2 < layout.paperCircles.size(); i += 3) {
+      const int index = static_cast<int>(i / 3);
       const QPointF center = project(layout.paperCircles[i], layout.paperCircles[i + 1]);
       const QPointF edge = project(layout.paperCircles[i] + layout.paperCircles[i + 2], layout.paperCircles[i + 1]);
       const double radius = QLineF(center, edge).length();
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Circle, index);
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       painter.drawEllipse(center, radius, radius);
     }
+    for (std::size_t i = 0; i < layout.paperArcs.size(); ++i) {
+      const auto& arc = layout.paperArcs[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Arc, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      QPolygonF curve;
+      constexpr int samples = 48;
+      for (int step = 0; step <= samples; ++step) {
+        const double t = static_cast<double>(step) / samples;
+        const double angle = arc.startRad + arc.sweepRad * t;
+        curve << project(arc.cx + arc.r * std::cos(angle), arc.cy + arc.r * std::sin(angle));
+      }
+      painter.drawPolyline(curve);
+    }
+    for (std::size_t i = 0; i < layout.paperEllipses.size(); ++i) {
+      const auto& ellipse = layout.paperEllipses[i];
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Ellipse, static_cast<int>(i));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      QPolygonF curve;
+      constexpr int samples = 64;
+      for (int step = 0; step <= samples; ++step) {
+        const double angle = 6.283185307179586 * static_cast<double>(step) / samples;
+        const double majorX = ellipse.majVx * std::cos(angle);
+        const double majorY = ellipse.majVy * std::cos(angle);
+        const double minorScale = ellipse.ratio * std::sin(angle);
+        curve << project(ellipse.cx + majorX - ellipse.majVy * minorScale,
+                         ellipse.cy + majorY + ellipse.majVx * minorScale);
+      }
+      painter.drawPolyline(curve);
+    }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
       QPolygonF polyline;
       for (int v = begin; v < end; ++v) {
@@ -353,6 +479,57 @@ void EditorViewport::paintGL() {
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
+    for (const auto& table : layout.paperTables) {  // issue #768: first-class sheet tables
+      painter.setPen(QPen(QColor("#303941"), 1));
+      float cx[4], cy[4];
+      QPolygonF outline;
+      for (int c = 0; c < 4; ++c) {
+        CadTableWorldCorner(table, c, &cx[c], &cy[c]);
+        outline << project(cx[c], cy[c]);
+      }
+      painter.drawPolygon(outline);
+      const float tw = std::max(table.width, 1.e-3f), th = std::max(table.height, 1.e-3f);
+      const int rows = CadTableRowCount(table);
+      for (int c = 1; c < table.cols; ++c) {
+        float ax, ay, bx, by;
+        const float lx = tw * static_cast<float>(c) / static_cast<float>(table.cols);
+        CadTableLocalToWorld(table, lx, 0.f, &ax, &ay);
+        CadTableLocalToWorld(table, lx, th, &bx, &by);
+        painter.drawLine(project(ax, ay), project(bx, by));
+      }
+      for (int r = 1; r < rows; ++r) {
+        float ax, ay, bx, by;
+        const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
+        CadTableLocalToWorld(table, 0.f, ly, &ax, &ay);
+        CadTableLocalToWorld(table, tw, ly, &bx, &by);
+        painter.drawLine(project(ax, ay), project(bx, by));
+      }
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(table, &cells);
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(table.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(table.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      for (std::size_t i = 0; i < cells.size() && i < table.cells.size(); ++i) {
+        const QPointF a = project(cells[i].x0, cells[i].y1), b = project(cells[i].x1, cells[i].y0);
+        painter.drawText(QRectF(a, b).normalized().adjusted(2, 1, -1, -1), Qt::AlignLeft | Qt::AlignVCenter,
+                         QString::fromUtf8(table.cells[i].c_str()));
+      }
+    }
+    for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      auto drawPath = [&](const std::vector<float>& pts) {
+        for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
+          painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+      };
+      painter.setPen(QPen(QColor("#252a30"), 1));
+      drawPath(leader.pathXyz);
+      for (const auto& branch : leader.extraLeaderPaths)
+        drawPath(branch);
+      const auto& label = leader.label;
+      painter.setPen(QColor("#20252a"));
+      painter.setFont(QFont(QString::fromUtf8(label.fontFamily.c_str()),
+          std::max(1, qRound(std::clamp(label.plottedHeightInches * pxPerInch, 1.f, 160.f) * 0.75f))));
+      painter.drawText(project(label.boxMinX, label.boxMaxY), QString::fromUtf8(label.text.c_str()));
+    }
     for (const auto& annotation : layout.paperTexts) {
       const QPointF origin = project(annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMinX : annotation.insX,
                                       annotation.kind == CadAnnotation::Kind::Mtext ? annotation.boxMaxY : annotation.insY);
@@ -441,6 +618,124 @@ void EditorViewport::paintGL() {
     painter.restore();
   } else {
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
+    const Camera gripCamera = CadViewCamera(m_State);
+    for (const SelectedEntity& selected : m_State.selection) {
+      std::vector<ray3d::Vec3> grips;
+      switch (selected.type) {
+        case SelectedEntity::Type::LineSeg: {
+          const std::size_t k = static_cast<std::size_t>(selected.index) * 6;
+          if (selected.index >= 0 && k + 5 < m_State.userLinesFlat.size()) {
+            grips.push_back({m_State.userLinesFlat[k], m_State.userLinesFlat[k + 1], m_State.userLinesFlat[k + 2]});
+            grips.push_back({m_State.userLinesFlat[k + 3], m_State.userLinesFlat[k + 4], m_State.userLinesFlat[k + 5]});
+          }
+          break;
+        }
+        case SelectedEntity::Type::Circle: {
+          const std::size_t k = static_cast<std::size_t>(selected.index) * 4;
+          if (selected.index >= 0 && k + 3 < m_State.userCirclesCxCyZR.size()) {
+            const auto& c = m_State.userCirclesCxCyZR;
+            grips.push_back({c[k], c[k + 1], c[k + 2]});
+            grips.push_back({c[k] + c[k + 3], c[k + 1], c[k + 2]});
+          }
+          break;
+        }
+        case SelectedEntity::Type::Polyline: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index + 1) < m_State.userPolylineOffsets.size()) {
+            const int first = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index)];
+            const int last = m_State.userPolylineOffsets[static_cast<std::size_t>(selected.index + 1)];
+            for (int vertex = first; vertex < last; ++vertex) {
+              const std::size_t k = static_cast<std::size_t>(vertex) * 3;
+              if (k + 2 < m_State.userPolylineVerts.size())
+                grips.push_back({m_State.userPolylineVerts[k], m_State.userPolylineVerts[k + 1], m_State.userPolylineVerts[k + 2]});
+            }
+            CadForEachPolylineArcMidGrip(m_State, selected.index,
+                [&](int, float x, float y, float z) { grips.push_back({x, y, z}); });
+          }
+          break;
+        }
+        case SelectedEntity::Type::Arc: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.userArcs.size()) {
+            const CadArc& arc = m_State.userArcs[static_cast<std::size_t>(selected.index)];
+            const double end = arc.startRad + arc.sweepRad;
+            grips.push_back({arc.cx, arc.cy, arc.z});
+            grips.push_back({arc.cx + arc.r * std::cos(arc.startRad), arc.cy + arc.r * std::sin(arc.startRad), arc.z});
+            grips.push_back({arc.cx + arc.r * std::cos(end), arc.cy + arc.r * std::sin(end), arc.z});
+          }
+          break;
+        }
+        case SelectedEntity::Type::Ellipse: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.userEllipses.size()) {
+            const CadEllipse& ellipse = m_State.userEllipses[static_cast<std::size_t>(selected.index)];
+            if (EllipseHasGrips(ellipse)) {
+              ray3d::Vec3 points[3]; EllipseGripPoints(ellipse, points);
+              grips.assign(std::begin(points), std::end(points));
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Spline: {  // REQ-443: fit points, or control vertices for a CV spline
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadSplines.size()) {
+            const CadSpline& sp = m_State.cadSplines[static_cast<std::size_t>(selected.index)];
+            for (std::size_t i = 0; i < spline::EditablePointCount(sp); ++i) {
+              const spline::Vec3 v = spline::EditablePoint(sp, i);
+              grips.push_back({v.x, v.y, v.z});
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::BlockRef: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadBlockRefs.size()) {
+            const auto& ref = m_State.cadBlockRefs[static_cast<std::size_t>(selected.index)];
+            const int defIndex = CadBlockFindDef(m_State.blockDefs, ref.defName);
+            if (defIndex >= 0) {
+              const auto& def = m_State.blockDefs[static_cast<std::size_t>(defIndex)];
+              for (int grip = 0; grip < CadBlockDynGripCount(def); ++grip) {
+                float x = 0.f, y = 0.f, z = 0.f;
+                if (CadBlockDynGripShownOnInsert(grip) && CadBlockDynGripWorld(def, ref, grip, &x, &y, &z))
+                  grips.push_back({x, y, z});
+              }
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Annotation: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadAnnotations.size()) {
+            const CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(selected.index)];
+            if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
+              grips = {{ann.boxMinX, ann.boxMinY, 0}, {ann.boxMaxX, ann.boxMinY, 0},
+                       {ann.boxMaxX, ann.boxMaxY, 0}, {ann.boxMinX, ann.boxMaxY, 0}};
+              if (ann.surveyPointLabelForId >= 0) grips.push_back({ann.insX, ann.insY, 0});
+            } else if (ann.kind == CadAnnotation::Kind::DimAligned || ann.kind == CadAnnotation::Kind::DimLinear) {
+              float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
+              if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) {
+                const float offset = ann.dimSignedOffset;
+                grips = {{ann.dimExt1X, ann.dimExt1Y, 0}, {ann.dimExt2X, ann.dimExt2Y, 0},
+                         {sx1 + nx * offset, sy1 + ny * offset, 0}, {sx2 + nx * offset, sy2 + ny * offset, 0},
+                         {ann.insX, ann.insY, 0}};
+              }
+            }
+          }
+          break;
+        }
+        default: break;
+      }
+      for (std::size_t i = 0; i < grips.size(); ++i) {
+        float x = 0.f, y = 0.f;
+        gripCamera.WorldToScreen(grips[i].x, grips[i].y, grips[i].z,
+            static_cast<float>(width()), static_cast<float>(height()), &x, &y);
+        if (!std::isfinite(x) || !std::isfinite(y)) continue;
+        const bool entityHot = m_State.entityGripMoveActive && m_State.entityGripType == selected.type &&
+            m_State.entityGripEntityIndex == selected.index && m_State.entityGripWhich == static_cast<int>(i);
+        const bool dimHot = selected.type == SelectedEntity::Type::Annotation && m_State.dimGripMoveActive &&
+            m_State.dimGripAnnotationIndex == selected.index && m_State.dimGripWhich == static_cast<int>(i);
+        const bool mtextHot = selected.type == SelectedEntity::Type::Annotation && m_State.mtextGripMoveActive &&
+            m_State.mtextGripAnnotationIndex == selected.index && m_State.mtextGripCorner == static_cast<int>(i);
+        const bool hot = entityHot || dimHot || mtextHot;
+        painter.setPen(QPen(Qt::white, 1));
+        painter.setBrush(hot ? QColor("#f57842") : QColor("#3b82f6"));
+        painter.drawRect(QRectF(x - 4, y - 4, 8, 8));
+      }
+    }
   }
   if (!paperSpace) DrawQtSurveyPoints(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
   if (m_State.selBoxWaitingSecond) {
@@ -449,6 +744,12 @@ void EditorViewport::paintGL() {
     painter.setPen(QPen(color, 1, window ? Qt::SolidLine : Qt::DashLine));
     painter.setBrush(QColor(color.red(), color.green(), color.blue(), 35));
     painter.drawRect(QRectF(QPointF(m_State.selBoxAnchorScreenX, m_State.selBoxAnchorScreenY), m_Last).normalized());
+  }
+  if (m_State.multiSelectionEnabled && m_State.viewportPickAmbiguous && m_State.active == AppCommandState::Kind::None) {
+    painter.setPen(QPen(QColor("#f0c75e"), 1.5));
+    const QPointF p = m_Last;
+    painter.drawRect(QRectF(p.x() + 5, p.y() - 13, 10, 10));
+    painter.drawRect(QRectF(p.x() + 9, p.y() - 9, 10, 10));
   }
   painter.setPen(QColor("#bcc6d3"));
   // The guide uses the same UCS constraint as the shared preview/commit path.
@@ -517,6 +818,18 @@ bool EditorViewport::ViewPoint(QPointF point, ray3d::Vec3& world) const {
 void EditorViewport::mousePressEvent(QMouseEvent* event) {
   setFocus();
   m_Last = event->position();
+  const auto projectReadOnly = [this] {
+    const auto uid = m_State.activeDrawingIdx >= 0 && static_cast<std::size_t>(m_State.activeDrawingIdx) < m_State.drawingTabs.size()
+        ? m_State.drawingTabs[static_cast<std::size_t>(m_State.activeDrawingIdx)].projectUid : 0u;
+    return uid != 0 && std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
+        [uid](const auto& project) { return project.uid == uid && project.readOnly; });
+  };
+  if (event->button() == Qt::LeftButton &&
+      (m_State.entityGripMoveActive || m_State.dimGripMoveActive || m_State.mtextGripMoveActive)) {
+    ClearEntityGripInteraction(m_State); ClearDimGripInteraction(m_State); ClearMtextGripInteraction(m_State);
+    m_GripMovedWithButton = false;
+    if (changed) changed(); update(); return;
+  }
   if (event->button() == Qt::LeftButton) {
     const QPointF c(width() - 80, 76);
     const QPolygonF top({c + QPointF(0, -34), c + QPointF(42, -12), c + QPointF(0, 10), c + QPointF(-42, -12)});
@@ -537,6 +850,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     } else if (m_State.gizmoDragActive && !IsGizmoCommandKind(m_State.active)) {
       CancelGizmoDrag(m_State);
       m_Log.push_back("Gizmo drag cancelled.");
+    } else if (CancelGripEdit()) {
+    } else if (m_State.selBoxWaitingSecond) {
+      CancelSelectionBox();
     } else {
       RightPress(event->globalPosition().toPoint());
     }
@@ -551,10 +867,23 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         static_cast<float>(width()), static_cast<float>(height()));
     const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
-    m_Snap = m_State.active != AppCommandState::Kind::None ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
-        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
+    const bool gripActive = m_State.entityGripMoveActive || m_State.dimGripMoveActive || m_State.mtextGripMoveActive;
+    CadSnap::SnapExclude exclude{};
+    if (m_State.entityGripMoveActive && m_State.entityGripEntityIndex >= 0) {
+      exclude.valid = true; exclude.type = m_State.entityGripType; exclude.index = m_State.entityGripEntityIndex;
+    }
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+        true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
+    else if (m_State.entityGripMoveActive) {
+      float orthoX = static_cast<float>(m_Cursor.x), orthoY = static_cast<float>(m_Cursor.y);
+      ApplyOrthoConstrainFromAnchor(m_State, m_State.entityGripAnchorX, m_State.entityGripAnchorY,
+          &orthoX, &orthoY, m_State.orthoMode);
+      m_Cursor.x = orthoX; m_Cursor.y = orthoY;
+    }
     m_State.viewportSnapPickValid = m_Snap.valid;
     if (m_Snap.valid) m_State.viewportSnapPickKind = static_cast<int>(m_Snap.kind);
     m_State.viewportSnapPickLocalX = m_Cursor.x;
@@ -567,6 +896,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
+    if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
+        m_State.activeSpaceIndex >= 0 && !InFloatingModelSpace(m_State)) {
+      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+          false, CadViewIsPlan(m_State) ? nullptr : &ray);
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     const auto route = ViewportClickRouteFor(m_State);
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
@@ -602,6 +940,83 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       event->accept();
       return;
     }
+    if (m_State.active == AppCommandState::Kind::None && m_State.selection.size() == 1 &&
+        m_State.selection.front().type == SelectedEntity::Type::Annotation &&
+        !(event->modifiers() & Qt::ShiftModifier) && !projectReadOnly()) {
+      const int annotationIndex = m_State.selection.front().index;
+      if (annotationIndex >= 0 && static_cast<std::size_t>(annotationIndex) < m_State.cadAnnotations.size()) {
+        CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(annotationIndex)];
+        auto screenDistanceSq = [&](double x, double y) {
+          float sx = 0.f, sy = 0.f;
+          camera.WorldToScreen(x, y, 0.f, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+          return std::pow(sx - m_Last.x(), 2) + std::pow(sy - m_Last.y(), 2);
+        };
+        if (annotation.kind == CadAnnotation::Kind::Mtext || annotation.kind == CadAnnotation::Kind::Table) {
+          const float xs[] = {annotation.boxMinX, annotation.boxMaxX, annotation.boxMaxX, annotation.boxMinX};
+          const float ys[] = {annotation.boxMinY, annotation.boxMinY, annotation.boxMaxY, annotation.boxMaxY};
+          int grip = -1;
+          double nearest = 100.0;
+          for (int i = 0; i < 4; ++i) {
+            const double distance = screenDistanceSq(xs[i], ys[i]);
+            if (distance < nearest) { nearest = distance; grip = i; }
+          }
+          if (annotation.surveyPointLabelForId >= 0) {
+            const double distance = screenDistanceSq(annotation.insX, annotation.insY);
+            if (distance < nearest) { nearest = distance; grip = 4; }
+          }
+          if (grip >= 0 && nearest <= 100.0) {
+            PushUndoSnapshot(m_State, "Grip edit");
+            m_State.mtextGripOrigBoxMinX = annotation.boxMinX; m_State.mtextGripOrigBoxMaxX = annotation.boxMaxX;
+            m_State.mtextGripOrigBoxMinY = annotation.boxMinY; m_State.mtextGripOrigBoxMaxY = annotation.boxMaxY;
+            m_State.mtextGripAnnotationIndex = annotationIndex; m_State.mtextGripCorner = grip;
+            m_State.mtextGripDownWorldX = static_cast<float>(m_Cursor.x); m_State.mtextGripDownWorldY = static_cast<float>(m_Cursor.y);
+            if (grip < 4) {
+              const int opposite[] = {2, 3, 0, 1};
+              m_State.mtextGripFixedCornerX = xs[opposite[grip]]; m_State.mtextGripFixedCornerY = ys[opposite[grip]];
+            }
+            m_State.mtextGripMoveActive = true;
+            m_GripMovedWithButton = false;
+            if (changed) changed(); update(); return;
+          }
+        } else if (annotation.kind == CadAnnotation::Kind::DimAligned || annotation.kind == CadAnnotation::Kind::DimLinear) {
+          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, measure = 0.f;
+          if (CadDimAnyGeometry(annotation, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &measure)) {
+            const float offset = annotation.dimSignedOffset;
+            const float gx[] = {annotation.dimExt1X, annotation.dimExt2X, sx1 + nx * offset, sx2 + nx * offset, annotation.insX};
+            const float gy[] = {annotation.dimExt1Y, annotation.dimExt2Y, sy1 + ny * offset, sy2 + ny * offset, annotation.insY};
+            int grip = -1; double nearest = 100.0;
+            for (int i = 0; i < 5; ++i) { const double d = screenDistanceSq(gx[i], gy[i]); if (d < nearest) { nearest = d; grip = i; } }
+            if (grip >= 0 && nearest <= 100.0) {
+              PushUndoSnapshot(m_State, "Grip edit");
+              m_State.dimGripAnnotationIndex = annotationIndex; m_State.dimGripWhich = grip;
+              m_State.dimGripOrigSignedOffset = annotation.dimSignedOffset;
+              m_State.dimGripOrigExt1X = annotation.dimExt1X; m_State.dimGripOrigExt1Y = annotation.dimExt1Y;
+              m_State.dimGripOrigExt2X = annotation.dimExt2X; m_State.dimGripOrigExt2Y = annotation.dimExt2Y;
+              m_State.dimGripOrigInsX = annotation.insX; m_State.dimGripOrigInsY = annotation.insY;
+              m_State.dimGripDragNx = nx; m_State.dimGripDragNy = ny;
+              const float dmx = .5f * (sx1 + sx2), dmy = .5f * (sy1 + sy2);
+              m_State.dimGripTextAlongN = (annotation.insX - dmx) * nx + (annotation.insY - dmy) * ny;
+              m_State.dimGripTextAlongT = (annotation.insX - dmx) * tx + (annotation.insY - dmy) * ty;
+              m_State.dimGripDownWorldX = static_cast<float>(m_Cursor.x); m_State.dimGripDownWorldY = static_cast<float>(m_Cursor.y);
+              m_State.dimGripMoveActive = true;
+              m_GripMovedWithButton = false;
+              if (changed) changed(); update(); return;
+            }
+          }
+        }
+      }
+    }
+    if (m_State.active == AppCommandState::Kind::None && !m_State.selection.empty() &&
+        !(event->modifiers() & Qt::ShiftModifier)) {
+      const bool readOnly = projectReadOnly();
+      if (!readOnly && TryBeginEntityGripAtLocal(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+          camera.orthoHalfH * 12.f / static_cast<float>(std::max(1, height())))) {
+        m_GripMovedWithButton = false;
+        if (changed) changed();
+        update();
+        return;
+      }
+    }
     if (m_State.showCreatePointsWindow && m_State.active == AppCommandState::Kind::None) {
       int hit = -1;
       double nearest = 100.0;
@@ -624,21 +1039,122 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         if (readOnly) m_Log.push_back("CREATEPOINTS: the project is read-only; no point placed.");
         else TryPlaceSurveyPoint(m_State, m_Cursor.x, m_Cursor.y, m_State.createPointsOpts.defaultElevation, m_Log);
       }
+    } else if ((event->modifiers() & Qt::ControlModifier) && m_State.activeSpaceIndex == kModelSpaceIndex) {
+      solidpick::Tolerance tolerance{};
+      const double aperture = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
+      tolerance.vertex = aperture;
+      tolerance.edge = aperture;
+      SubmitSubObjectPick(m_State, ray, tolerance, event->modifiers() & Qt::ShiftModifier, m_Log);
     } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
       SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, false,
           m_Last.x() >= m_State.selBoxAnchorScreenX, CadViewIsPlan(m_State) ? nullptr : &ray);
+      m_LeftDragSelection = false;
+      m_HasSelectionBoxSnapshot = false;
+      m_SelectionBeforeBox.clear();
+      m_SurveySelectionBeforeBox.clear();
     } else {
-      SelectedEntity picked;
-      float distance = 0.f;
-      if (!(event->modifiers() & Qt::ShiftModifier)) ClearSelection(m_State);
-      if (PickClosestCadEntity(m_State, m_Cursor.x, m_Cursor.y,
-          camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), &picked, &distance, CadViewIsPlan(m_State) ? nullptr : &ray)) {
-        const auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
-            [&](const SelectedEntity& entry) { return entry.type == picked.type && entry.index == picked.index; });
-        if (it == m_State.selection.end()) m_State.selection.push_back(picked);
-        else m_State.selection.erase(it);
-      } else BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
-          static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      if (!m_State.subObjectSelection.empty()) m_State.subObjectSelection.clear();
+      ViewportPickRequest request;
+      request.rawX = m_Cursor.x; request.rawY = m_Cursor.y;
+      request.orbitRay = CadViewIsPlan(m_State) ? nullptr : &ray;
+      request.eyeRay = ray; request.eyeRayValid = true;
+      request.lineTol = camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height()));
+      request.orthoHalfH = camera.orthoHalfH; request.viewportHeightPx = static_cast<float>(height());
+      request.modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex;
+      const ViewportPickResult hit = ResolveViewportClickPick(m_State, request, request.lineTol * .5f);
+      if (hit.family != ViewportPickFamily::None) {
+        SelectedEntity picked = hit.entity;
+        if (hit.family == ViewportPickFamily::Linework && hit.candidates.size() > 1 && m_State.multiSelectionEnabled) {
+          auto* menu = new QMenu(this);
+          menu->setAttribute(Qt::WA_DeleteOnClose);
+          menu->setStyleSheet("QMenu { min-width: 240px; }");
+          for (const CadPickCandidate& candidate : hit.candidates) {
+            const char* kind = "Object";
+            switch (candidate.entity.type) {
+              case SelectedEntity::Type::LineSeg: kind = "Line"; break;
+              case SelectedEntity::Type::Circle: kind = "Circle"; break;
+              case SelectedEntity::Type::Polyline: kind = "Polyline"; break;
+              case SelectedEntity::Type::Arc: kind = "Arc"; break;
+              case SelectedEntity::Type::Ellipse: kind = "Ellipse"; break;
+              default: break;
+            }
+            QAction* action = menu->addAction(QString("%1 %2").arg(kind).arg(candidate.entity.index + 1));
+            const EntityAttributes* attr = nullptr;
+            const auto index = static_cast<std::size_t>(candidate.entity.index);
+            switch (candidate.entity.type) {
+              case SelectedEntity::Type::LineSeg: if (index < m_State.userLineAttrs.size()) attr = &m_State.userLineAttrs[index]; break;
+              case SelectedEntity::Type::Circle: if (index < m_State.userCircleAttrs.size()) attr = &m_State.userCircleAttrs[index]; break;
+              case SelectedEntity::Type::Polyline: if (index < m_State.userPolylineAttrs.size()) attr = &m_State.userPolylineAttrs[index]; break;
+              case SelectedEntity::Type::Arc: if (index < m_State.userArcAttrs.size()) attr = &m_State.userArcAttrs[index]; break;
+              case SelectedEntity::Type::Ellipse: if (index < m_State.userEllAttrs.size()) attr = &m_State.userEllAttrs[index]; break;
+              default: break;
+            }
+            if (attr) {
+              float rgba[4]{};
+              ResolveEntityRgbaForViewport(*attr, FindDrawingLayerRowCi(m_State, attr->layer), .8f, .8f, .8f, rgba);
+              QPixmap swatch(14, 14); swatch.fill(QColor::fromRgbF(rgba[0], rgba[1], rgba[2], rgba[3]));
+              action->setIcon(QIcon(swatch));
+              action->setText(QString("%1 %2 — Layer %3").arg(kind).arg(candidate.entity.index + 1).arg(QString::fromStdString(attr->layer)));
+            }
+            const SelectedEntity candidateEntity = candidate.entity;
+            const Qt::KeyboardModifiers modifiers = event->modifiers();
+            connect(action, &QAction::triggered, this, [this, candidateEntity, modifiers] {
+              auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [&](const SelectedEntity& entry) {
+                return entry.type == candidateEntity.type && entry.index == candidateEntity.index;
+              });
+              if (modifiers & Qt::ShiftModifier) {
+                if (it != m_State.selection.end()) m_State.selection.erase(it);
+              } else if (it == m_State.selection.end()) m_State.selection.push_back(candidateEntity);
+              if (changed) changed();
+              update();
+            });
+          }
+          menu->popup(event->globalPosition().toPoint());
+          return;
+        }
+        if (hit.family == ViewportPickFamily::Solid) {
+          m_State.subObjectSelection.clear();
+          const auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
+              [&](const SelectedEntity& entry) { return entry.type == hit.entity.type && entry.index == hit.entity.index; });
+          if (event->modifiers() & Qt::ShiftModifier) {
+            if (it != m_State.selection.end()) m_State.selection.erase(it);
+          } else if (it == m_State.selection.end()) m_State.selection.push_back(hit.entity);
+        } else if (hit.family == ViewportPickFamily::Annotation && hit.entity.index >= 0 &&
+                   static_cast<std::size_t>(hit.entity.index) < m_State.cadAnnotations.size()) {
+          const CadAnnotation& annotation = m_State.cadAnnotations[static_cast<std::size_t>(hit.entity.index)];
+          const bool linked = annotation.kind == CadAnnotation::Kind::Mtext && annotation.surveyPointLabelForId >= 0;
+          if (event->modifiers() & Qt::ShiftModifier) {
+            auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(), [&](const SelectedEntity& entry) {
+              return entry.type == hit.entity.type && entry.index == hit.entity.index;
+            });
+            if (it == m_State.selection.end()) m_State.selection.push_back(hit.entity);
+            else m_State.selection.erase(it);
+            if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, true);
+          } else {
+            ClearCadSelection(m_State);
+            if (linked) ApplyLinkedSurveyForAnnotationPick(m_State, hit.entity.index, false);
+            else m_State.selectedSurveyPointIndices.clear();
+            m_State.selection.push_back(hit.entity);
+            if (linked) SyncSurveyPointLinkedMtextSelection(m_State,
+                SurveyPointIndexForId(m_State, annotation.surveyPointLabelForId));
+          }
+        } else {
+          auto it = std::find_if(m_State.selection.begin(), m_State.selection.end(),
+              [&](const SelectedEntity& entry) { return entry.type == picked.type && entry.index == picked.index; });
+          if (event->modifiers() & Qt::ShiftModifier) {
+            if (it != m_State.selection.end()) m_State.selection.erase(it);
+          } else if (it == m_State.selection.end()) m_State.selection.push_back(picked);
+        }
+      } else {
+        m_SelectionBeforeBox = m_State.selection;
+        m_SurveySelectionBeforeBox = m_State.selectedSurveyPointIndices;
+        m_HasSelectionBoxSnapshot = true;
+        if (!(event->modifiers() & Qt::ShiftModifier)) ClearSelection(m_State);
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
+        BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+            static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      }
     }
   }
   if (changed) changed();
@@ -709,12 +1225,26 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   ClearTransientInput();
   if (WorldPoint(m_Last, m_Cursor)) {
     const Camera camera = CadViewCamera(m_State);
+    const bool paperTrimHover = m_State.active == AppCommandState::Kind::Trim &&
+        m_State.activeSpaceIndex >= 0 &&
+        m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
+        !InFloatingModelSpace(m_State);
+    if (paperTrimHover) {
+      const auto& layout = m_State.paperLayouts[static_cast<std::size_t>(m_State.activeSpaceIndex)];
+      m_State.paperHoverValid = PickPaperEntityAt(layout, static_cast<float>(m_Cursor.x),
+          static_cast<float>(m_Cursor.y), camera.orthoHalfH * 8.f /
+              static_cast<float>(std::max(1, height())), &m_State.paperHover);
+    } else {
+      m_State.paperHoverValid = false;
+    }
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
     const bool sectionGripDrag = m_State.sectionPlaneGripDrag >= 0;
     const auto overrideKind = static_cast<CadSnap::Kind>(m_State.objectSnapKindOverrideKind);
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag)
+    const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
+        m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
+    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)
@@ -764,12 +1294,122 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       previewTol.edge = previewTol.vertex;
       UpdateSectionPlanePreview(m_State, ray, previewTol);
     }
+    if (m_State.active == AppCommandState::Kind::None && !m_State.entityGripMoveActive &&
+        (event->modifiers() & Qt::ControlModifier) && m_State.activeSpaceIndex == kModelSpaceIndex) {
+      m_State.viewportHoverEntityValid = false;
+      const auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
+          static_cast<float>(width()), static_cast<float>(height()));
+      solidpick::Tolerance tolerance;
+      tolerance.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
+      tolerance.edge = tolerance.vertex;
+      SelectedSubObject hovered;
+      m_State.subObjectHoverValid = PickSubObjectAcrossSolids(m_State, ray, tolerance, &hovered);
+      if (m_State.subObjectHoverValid) m_State.subObjectHover = hovered;
+    } else if (m_State.active == AppCommandState::Kind::None && !m_State.entityGripMoveActive) {
+      m_State.subObjectHoverValid = false;
+      const auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
+          static_cast<float>(width()), static_cast<float>(height()));
+      ViewportPickRequest request;
+      request.rawX = m_Cursor.x; request.rawY = m_Cursor.y;
+      request.orbitRay = CadViewIsPlan(m_State) ? nullptr : &ray;
+      request.eyeRay = ray; request.eyeRayValid = true;
+      request.lineTol = camera.orthoHalfH * 8.f / static_cast<float>(std::max(1, height()));
+      request.orthoHalfH = camera.orthoHalfH; request.viewportHeightPx = static_cast<float>(height());
+      request.modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex;
+      const auto hover = ResolveViewportPick(m_State, request);
+      m_State.viewportHoverEntityValid = hover.family != ViewportPickFamily::None;
+      if (m_State.viewportHoverEntityValid) m_State.viewportHoverEntity = hover.entity;
+      m_State.viewportPickCandidates = hover.family == ViewportPickFamily::Linework ? hover.candidates : std::vector<CadPickCandidate>{};
+      m_State.viewportPickAmbiguous = m_State.viewportPickCandidates.size() > 1;
+    }
+    if (m_State.entityGripMoveActive) {
+      if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
+      ApplyEntityGripPoint(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+                           static_cast<float>(m_Cursor.z));
+      BumpCadGpuCache(m_State);
+    }
+    if (m_State.mtextGripMoveActive && m_State.mtextGripAnnotationIndex >= 0 &&
+        static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
+      if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
+      if (m_State.mtextGripCorner == 4 && ann.surveyPointLabelForId >= 0) {
+        const float dx = static_cast<float>(m_Cursor.x) - m_State.mtextGripDownWorldX;
+        const float dy = static_cast<float>(m_Cursor.y) - m_State.mtextGripDownWorldY;
+        ann.boxMinX = m_State.mtextGripOrigBoxMinX + dx; ann.boxMaxX = m_State.mtextGripOrigBoxMaxX + dx;
+        ann.boxMinY = m_State.mtextGripOrigBoxMinY + dy; ann.boxMaxY = m_State.mtextGripOrigBoxMaxY + dy;
+      } else {
+        ann.boxMinX = std::min(m_State.mtextGripFixedCornerX, static_cast<float>(m_Cursor.x));
+        ann.boxMaxX = std::max(m_State.mtextGripFixedCornerX, static_cast<float>(m_Cursor.x));
+        ann.boxMinY = std::min(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
+        ann.boxMaxY = std::max(m_State.mtextGripFixedCornerY, static_cast<float>(m_Cursor.y));
+      }
+      ann.insX = ann.boxMinX; ann.insY = ann.boxMinY; BumpCadGpuCache(m_State);
+    }
+    if (m_State.dimGripMoveActive && m_State.dimGripAnnotationIndex >= 0 &&
+        static_cast<std::size_t>(m_State.dimGripAnnotationIndex) < m_State.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.dimGripAnnotationIndex)];
+      if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
+      const float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y);
+      switch (m_State.dimGripWhich) {
+        case 0: ann.dimExt1X = x; ann.dimExt1Y = y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
+        case 1: ann.dimExt2X = x; ann.dimExt2Y = y; CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
+        case 2: case 3:
+          ann.dimSignedOffset = m_State.dimGripOrigSignedOffset + (x - m_State.dimGripDownWorldX) * m_State.dimGripDragNx + (y - m_State.dimGripDownWorldY) * m_State.dimGripDragNy;
+          CadDimAlignedApplyInsFromLocalOffset(&ann, m_State.dimGripTextAlongN, m_State.dimGripTextAlongT); break;
+        case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
+        default: break;
+      }
+      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
+      if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = std::atan2(ty, tx);
+      BumpCadGpuCache(m_State);
+    }
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
   }
   update();
 }
 
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
+  if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.entityGripMoveActive) {
+    ClearEntityGripInteraction(m_State);
+  }
+  if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.dimGripMoveActive) ClearDimGripInteraction(m_State);
+  if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.mtextGripMoveActive) {
+    const int index = m_State.mtextGripAnnotationIndex;
+    if (index >= 0 && static_cast<std::size_t>(index) < m_State.cadAnnotations.size()) {
+      CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(index)];
+      if (ann.surveyPointLabelForId >= 0 && m_State.mtextGripCorner == 4) {
+        const int pointIndex = SurveyPointIndexForId(m_State, ann.surveyPointLabelForId);
+        if (pointIndex >= 0) {
+          const SurveyPoint& point = m_State.surveyPoints[static_cast<std::size_t>(pointIndex)];
+          ann.surveyLabelUserOffsetEast = static_cast<float>(ann.boxMinX - point.easting);
+          ann.surveyLabelUserOffsetNorth = static_cast<float>(.5 * (ann.boxMinY + ann.boxMaxY) - point.northing);
+          ann.surveyLabelHasUserOffset = true;
+        }
+      }
+    }
+    ClearMtextGripInteraction(m_State);
+  }
+  if (event->button() == Qt::LeftButton && m_GripMovedWithButton) m_GripMovedWithButton = false;
+  if (event->button() == Qt::LeftButton && m_LeftDragSelection) {
+    const QPointF delta = event->position() - m_SelectionPress;
+    if (std::abs(delta.x()) + std::abs(delta.y()) > 3.0) {
+      ray3d::Vec3 point;
+      if (WorldPoint(event->position(), point)) {
+        m_State.uiCursorWorldZ = static_cast<float>(point.z);
+        const auto camera = CadViewCamera(m_State);
+        const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()),
+            static_cast<float>(width()), static_cast<float>(height()));
+        SubmitViewportPick(m_State, point.x, point.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+            event->position().x() >= m_SelectionPress.x(), CadViewIsPlan(m_State) ? nullptr : &ray);
+        m_State.selBoxWaitingSecond = false;
+        m_HasSelectionBoxSnapshot = false;
+        m_SelectionBeforeBox.clear();
+        m_SurveySelectionBeforeBox.clear();
+      }
+      m_LeftDragSelection = false;
+    }
+  }
   if (event->button() == Qt::LeftButton) {
     const auto camera = CadViewCamera(m_State);
     const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()),
@@ -843,6 +1483,8 @@ void EditorViewport::wheelEvent(QWheelEvent* event) {
 
 void EditorViewport::keyPressEvent(QKeyEvent* event) {
   if (event->key() == Qt::Key_Escape) {
+    CancelGripEdit();
+    if (m_State.selBoxWaitingSecond) CancelSelectionBox();
     m_State.showCreatePointsWindow = false;
     if (m_State.sectionPlaneGripDrag >= 0) {
       AbortSectionPlaneGripDrag(m_State);
@@ -854,6 +1496,20 @@ void EditorViewport::keyPressEvent(QKeyEvent* event) {
       CancelActiveCommand(m_State, m_Log);
     }
     ClearTransientInput();
+    m_LeftDragSelection = false; m_GripMovedWithButton = false;
+  }
+  else if (event->key() == Qt::Key_Control && m_State.active == AppCommandState::Kind::None &&
+           m_State.activeSpaceIndex == kModelSpaceIndex) {
+    const Camera camera = CadViewCamera(m_State);
+    const auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
+        static_cast<float>(width()), static_cast<float>(height()));
+    solidpick::Tolerance tolerance;
+    tolerance.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(m_State));
+    tolerance.edge = tolerance.vertex;
+    SelectedSubObject hovered;
+    m_State.subObjectHoverValid = PickSubObjectAcrossSolids(m_State, ray, tolerance, &hovered);
+    if (m_State.subObjectHoverValid) m_State.subObjectHover = hovered;
+    update(); event->accept(); return;
   }
   else if (event->key() == Qt::Key_Delete) ExecuteDeleteSelection(m_State, m_Log);
   else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
@@ -864,6 +1520,16 @@ void EditorViewport::keyPressEvent(QKeyEvent* event) {
   } else { QOpenGLWidget::keyPressEvent(event); return; }
   if (changed) changed();
   update();
+}
+
+void EditorViewport::keyReleaseEvent(QKeyEvent* event) {
+  if (event->key() == Qt::Key_Control) {
+    m_State.subObjectHoverValid = false;
+    update();
+    event->accept();
+    return;
+  }
+  QOpenGLWidget::keyReleaseEvent(event);
 }
 
 void EditorViewport::SetOrientation(float azimuth, float elevation) {

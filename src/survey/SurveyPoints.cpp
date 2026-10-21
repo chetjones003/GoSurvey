@@ -1,11 +1,8 @@
 #include "SurveyPoints.hpp"
 
 #include "CadCommands.hpp"
-#include "MtextRichFormat.hpp"
 #include "NumFormat.hpp"
 #include "StringUtil.hpp"
-
-#include <imgui.h>
 
 #include <algorithm>
 #include <cmath>
@@ -768,7 +765,6 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   const float halfH = std::max(st.viewportLastSurveyLayoutOrthoHalfH, 1.e-4f);
   const float worldPerPxY = (2.f * halfH) / vpH;
 
-  ImFont* font = ImGui::GetCurrentContext() ? ImGui::GetFont() : nullptr;
   const float fontPx =
       std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), st.viewportMtextMinPx, st.viewportMtextMaxPx);
 
@@ -780,12 +776,13 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   // the renderer centres the glyphs in — so a label the user gave a font to was drawn out of its own
   // box, overhanging west toward the very marker the box exists to stand clear of, and picking it
   // meant clicking somewhere other than the text. Nothing about the default-font case changes.
+  //
+  // The frontend supplies the measurer (Qt text layout). Without one, use the same
+  // no-font estimate returned before any font exists.
   float pw = 8.f;
-  float ph = fontPx * 1.22f;
+  float ph = std::max(fontPx * 1.22f, 4.f);
   if (st.measureAnnotationText)
     st.measureAnnotationText(fontPx, a.text, a.fontFamily, &pw, &ph);
-  else
-    MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
 
   constexpr float kPadPx = 8.f;
   const float bw = (pw + 2.f * kPadPx) * worldPerPxY;

@@ -28,6 +28,8 @@ public:
   void SetOrientation(float azimuth, float elevation);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
+  void CancelSelectionBox();
+  bool CancelGripEdit();
   bool IsRendererReady() const { return m_Ready; }
   QPoint CursorPosition() const { return m_Last.toPoint(); }
 protected:
@@ -39,6 +41,7 @@ protected:
   void mouseReleaseEvent(QMouseEvent* event) override;
   void wheelEvent(QWheelEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
+  void keyReleaseEvent(QKeyEvent* event) override;
 private:
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
@@ -60,6 +63,12 @@ private:
   CadSnap::Hit m_Snap;
   bool m_Ready = false;
   bool m_Grid = true;
+  bool m_LeftDragSelection = false;
+  bool m_HasSelectionBoxSnapshot = false;
+  std::vector<SelectedEntity> m_SelectionBeforeBox;
+  std::vector<int> m_SurveySelectionBeforeBox;
+  bool m_GripMovedWithButton = false;
+  QPointF m_SelectionPress;
   std::uint32_t m_RenderRevision = 0;
   QString m_Error;
   /// Time-sensitive right-click (REQ-084 (b)): a press is decided by how long the button is held.

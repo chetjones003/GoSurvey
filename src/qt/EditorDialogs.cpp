@@ -17,6 +17,7 @@
 #include <QInputDialog>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPalette>
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QComboBox>
@@ -62,7 +63,9 @@ void EditorWindow::ShowSignInGate() {
   auto *brandPanel = new QWidget(dialog);
   brandPanel->setObjectName("signInBrandPanel");
   brandPanel->setFixedWidth(250);
-  brandPanel->setStyleSheet("QWidget#signInBrandPanel { background:#243a53; }");
+  const bool darkAppearance = palette().color(QPalette::Window).lightness() < 128;
+  brandPanel->setStyleSheet(QString("QWidget#signInBrandPanel { background:%1; }")
+                                .arg(darkAppearance ? "#30373c" : "#243a53"));
   auto *brandLayout = new QVBoxLayout(brandPanel);
   brandLayout->setContentsMargins(26, 28, 26, 24);
   auto *logo = new QLabel(brandPanel);
@@ -123,10 +126,10 @@ void EditorWindow::ShowSignInGate() {
   signIn->setObjectName("signInButton");
   signIn->setDefault(true);
   signIn->setMinimumHeight(40);
-  signIn->setStyleSheet(
-      "QPushButton { background:#438fda; color:white; font-weight:600; "
+  signIn->setStyleSheet(QString(
+      "QPushButton { background:%1; color:white; font-weight:600; "
       "padding:9px; border:0; border-radius:4px; } QPushButton:hover { "
-      "background:#347cc3; }");
+      "background:%2; }").arg(darkAppearance ? "#168e8a" : "#438fda", darkAppearance ? "#1ca6a0" : "#347cc3"));
   choiceLayout->addWidget(signIn);
   auto *decline = new QPushButton("Don't Sign In", choicePanel);
   decline->setObjectName("declineSignInButton");
@@ -528,6 +531,8 @@ void EditorWindow::ServiceUiRequests() {
     ShowProjectPointWarning();
   } else if (m_State.projectAttachPrompt.kind != AppCommandState::ProjectAttachPrompt::Kind::None) {
     ShowProjectAttachPrompt();
+  } else if (m_State.pdfAttachDialogOpen) {
+    ShowPdfAttachDialog();
   } else if (m_State.pastePrompt.active) {
     ShowPasteWarning();
   } else if (m_State.showLayerManagerWindow) {
@@ -601,7 +606,10 @@ void EditorWindow::ShowViewManager() {
   auto* layout = new QVBoxLayout(&dialog);
   auto* current = new QLabel(&dialog);
   current->setObjectName("viewManagerCurrentView");
-  current->setStyleSheet("background:#243a53;color:#f4f7fb;padding:10px 12px;font-weight:600;border-radius:5px;");
+  const bool darkViews = palette().color(QPalette::Window).lightness() < 128;
+  current->setStyleSheet(darkViews
+      ? "background:#30373c;color:#f4f7fb;border-left:3px solid #55d8d0;padding:10px 12px;font-weight:600;border-radius:5px;"
+      : "background:#243a53;color:#f4f7fb;padding:10px 12px;font-weight:600;border-radius:5px;");
   layout->addWidget(current);
 
   auto* tabs = new QTabWidget(&dialog);
@@ -610,7 +618,9 @@ void EditorWindow::ShowViewManager() {
   views->setObjectName("viewManagerSavedViews");
   views->setSelectionMode(QAbstractItemView::SingleSelection);
   views->setSpacing(6);
-  views->setStyleSheet("QListWidget{border:0;background:transparent} QListWidget::item{background:#f3f6f8;border:1px solid #d7dee5;border-radius:5px;padding:10px;color:#202a33} QListWidget::item:selected{background:#e4eff7;border:1px solid #3879a2;color:#172d3b}");
+  views->setStyleSheet(darkViews
+      ? "QListWidget{border:0;background:transparent} QListWidget::item{background:#292f34;border:1px solid #3c444a;border-radius:5px;padding:10px;color:#e7ecee} QListWidget::item:selected{background:#244846;border:1px solid #55d8d0;color:#ffffff}"
+      : "QListWidget{border:0;background:transparent} QListWidget::item{background:#f3f6f8;border:1px solid #d7dee5;border-radius:5px;padding:10px;color:#202a33} QListWidget::item:selected{background:#e4eff7;border:1px solid #3879a2;color:#172d3b}");
   auto* ucsList = new QListWidget(tabs);
   ucsList->setObjectName("viewManagerSavedUcs");
   ucsList->setSelectionMode(QAbstractItemView::SingleSelection);

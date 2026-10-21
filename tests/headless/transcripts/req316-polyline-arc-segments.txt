@@ -1,5 +1,5 @@
 # REQ-316 / ADR-047 — a polyline may contain circular arc segments (per-vertex bulge), POLYLINE
-# draws them with the ARC / LINE sub-modes, and they survive a DXF and a .gs round trip.
+# draws them with the ARC / LINE sub-modes, and they survive a DXF and a document JSON payload round trip.
 #
 # D-2026-09-02-f: the sub-mode keywords are the full words ARC and LINE — `A` / `ANGLE` are the
 # existing segment-bearing lock. RADIUS and CANGLE set the next arc segment.
@@ -67,7 +67,7 @@ EXPECT POLYBULGE 0 0 0.414214
 EXPORT DXF %OUT%/arc-b.dxf
 EXPECT SAMEFILE %OUT%/arc-a.dxf %OUT%/arc-b.dxf
 
-# ── 3. .gs round trip ─────────────────────────────────────────────────────────────────────────
+# ── 3. document JSON payload round trip ─────────────────────────────────────────────────────────────────────────
 SAVEAS %OUT%/arc.dwg
 NEW
 OPEN %OUT%/arc.dwg
@@ -75,7 +75,7 @@ CHECK ALL
 EXPECT POLYLINES 1
 EXPECT POLYBULGE 0 0 0.414214
 
-# ── 4. A straight polyline is unaffected — no group 42, byte-stable, .gs has no bulge key ──────
+# ── 4. A straight polyline is unaffected — no group 42, byte-stable, document JSON payload has no bulge key ──────
 NEW
 CMD RECT
 CMD 0,0

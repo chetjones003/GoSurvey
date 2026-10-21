@@ -278,10 +278,10 @@ struct Camera {
     }
   }
 
-  /// Project a world point to a pixel inside the viewport (origin at its TOP-LEFT, ImGui
+  /// Project a world point to a pixel inside the viewport (origin at its TOP-LEFT, screen
   /// convention). The inverse of \ref ScreenRay, and the function every overlay-drawn thing —
   /// text, dimensions, survey labels, grips, snap glyphs — must go through once the camera can
-  /// rotate. Those are drawn by ImGui, not GL, so they do not inherit the renderer's MVP: without
+  /// rotate. Those are drawn in screen space, not GL, so they do not inherit the renderer's MVP: without
   /// this they would stay in plan positions while the linework tilts.
   ///
   /// In plan view this reduces exactly to the pre-3D linear mapping
@@ -354,7 +354,7 @@ struct Camera {
 
   /// The ray a screen pixel casts into the world (REQ-058 picking and drawing).
   ///
-  /// \param px,py      pixel position inside the viewport, origin at its TOP-LEFT (ImGui convention).
+  /// \param px,py      pixel position inside the viewport, origin at its TOP-LEFT.
   /// \param widthPx,heightPx  viewport size in pixels.
   ///
   /// Under an orthographic projection every ray shares the view direction and differs only in
@@ -365,7 +365,7 @@ struct Camera {
     if (!(widthPx > 0.f) || !(heightPx > 0.f))
       return Ray{};
     const float aspect = widthPx / heightPx;
-    // Normalised device coords: x right, y UP (so flip ImGui's downward y).
+    // Normalised device coords: x right, y UP (so flip screen-space downward y).
     const double ndcX = (2.0 * static_cast<double>(px) / static_cast<double>(widthPx)) - 1.0;
     const double ndcY = 1.0 - (2.0 * static_cast<double>(py) / static_cast<double>(heightPx));
 

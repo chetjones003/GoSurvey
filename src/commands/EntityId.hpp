@@ -22,7 +22,7 @@ inline constexpr std::uint64_t kEntityIdSweepNever = ~static_cast<std::uint64_t>
 /// Raise \p nextId above every id already present, then assign it to every entity whose id is 0.
 ///
 /// \param arraysInSweepOrder the drawing's attribute arrays, in a **fixed** order. The order is what
-///        makes assignment deterministic, which is what lets a legacy `.gs` load with the same ids
+///        makes assignment deterministic, which is what lets a legacy `internal document payload` load with the same ids
 ///        every time (REQ-076). Null entries are skipped.
 /// \param nextId the drawing's counter.
 /// \return the counter after assignment — always >= \p nextId, never less.

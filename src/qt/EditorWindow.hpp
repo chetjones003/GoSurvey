@@ -127,13 +127,19 @@ private:
   void ShowToolspaceContextMenu(const QPoint& position);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
+  void ShowPdfAttachDialog();
   void AddPdfToProjectFromDisk();
+  // Issue #916: point-cloud attach / export dialogs and the background-import progress window.
+  void ShowPointCloudAttach();
+  void ShowPointCloudExport(int formatIndex = 0);
+  void ServicePointCloudImport();
   void ShowSettings();
   void ShowSurveyPointDisplay();
   void ShowDrawingContextMenu(const QPoint& globalPosition);
   void ShowRightClickCustomization();
   void ShowSelectionList();
   void ShowBlockAuthoringPalette();
+  void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();
   void ShowSignInGate();

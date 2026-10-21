@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-// Pure layout + caret math for the WYSIWYG MTEXT editor (ADR-023). No ImGui, no fonts: the caller
+// Pure layout + caret math for the WYSIWYG MTEXT editor (ADR-023). No UI or font dependency: the caller
 // measures each character and fills in \c Cell::w, then wraps. That split is what makes the tricky parts —
 // word wrapping, the visible-index ↔ raw-byte-offset mapping, and caret hit-testing — unit-testable, with
 // the font-dependent drawing left in RichTextEdit.cpp.

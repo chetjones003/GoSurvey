@@ -1,11 +1,13 @@
-# Qt / Win32 migration status
+# Qt migration history
+
+> Historical migration record. GitHub issue #966 completed the retirement of the ImGui frontend; Qt is now the only supported desktop frontend. This document records the migration path and prior verification, not current build instructions.
 
 Branch: `test/win32UI`. Authorized by the user on 2026-10-16.
 
 This is an executable migration baseline, **not a production replacement** for
 GoSurvey. The existing executable remains available during parity work.
 
-## Ongoing parity work
+## Historical parity work
 
 The user requested autonomous iteration to full production parity. Fetched and
 merged `origin/master` at `90aa196d34692562effa18502c9b8ad0197e9e80`.
@@ -39,10 +41,10 @@ Alternatively configure with `-DGOSURVEY_BUILD_QT=ON` and
 `windeployqt` from that kit deploys runtime plugins beside the executable.
 The Qt option defaults to OFF, so existing build workflows do not require Qt.
 
-The current appearance uses Qt Fusion with a compact neutral-gray CAD treatment:
-flat grouped command tools, restrained borders, gray dock/header gradients, dense
-property rows, Segoe UI and a black drawing viewport. Logo menu > View > Appearance
-switches between Neutral gray and Classic light without reopening the drawing;
+The current Dark appearance uses Qt Fusion with graphite surfaces, aqua interaction
+states, restrained amber emphasis, dense property rows, Segoe UI and a black drawing viewport.
+Logo menu > View > Appearance
+switches between Graphite and Classic light without reopening the drawing;
 the choice is saved. `--light-style` starts with the light appearance. The title-bar/ribbon/dock/
 floating-command layout is retained. `--default-style` remains an accepted alias.
 The current comparison build is at `build/ribbon-v072/GoSurveyQt.exe`; configure
@@ -67,24 +69,32 @@ workflow evidence, and linked open gaps, is maintained in the
 | Editor chrome | Custom title bar with logo application menu, integrated quick access, window controls and native resize/work-area handling; v0.7.2 ribbon catalog, responsive panels and contextual tabs; dock layout persistence; viewport-floating command line with draggable position/resizable width, fading history, F2 console, Ctrl+9 and clickable command hints | Remaining native dialog adapters, advanced contextual widget parity, remaining shortcut parity and multi-monitor/DPI checks |
 | Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close; successful opens/saves update the recent drawings list | Export-loss disclosures, full import/export UI, template workflow |
 | Viewport | Existing renderer, point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter; 3D gizmo axes/planes/hover/drag ghosts, section-plane clip indicator/hatch/grips/preview and Qt pointer routing (issue #900) | Exact graphics parity, paper-space rendering, tables, map tiles, annotation scale/isolation and perspective verification |
+| Documents | New/open DWG, save/save as, document switching, undo/redo, dirty markers, save/discard/cancel on close | Export-loss disclosures, full import/export UI, template workflow, recent-file recording |
+| Viewport | Perspective/orthographic selector with validated FOV command; annotation-scale selector and selected-text annotation properties; model annotation scale visibility/rendering; stable-ID object isolation supplied to the renderer and annotation overlay; point-cloud inputs, dimension strokes, rich MTEXT wrapping/attachment/colors, SHX stroke adapter | Exact graphics parity, paper-space rendering, tables, map tiles, gizmo/section overlays |
 | Input | Shared command dispatch, basic picking, Shift selection, two-corner selection boxes, object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Full gesture and selection-cycle parity, grip editing, UCS-aware ORTHO/POLAR mouse constraints, advanced 3D selection, keyboard focus routing and transient tool UI |
 | Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids; Surface Create / Properties / Surfaces manager / Surface Style dialogs, the Toolspace surface and style menus and the read-only Surface properties section (#893) | Complete geometry properties, context menus |
+| Input | Shared visibility-aware click/hover resolver; Shift removal; Multi Selection overlap marker and layer-aware candidate menu; click-drag and two-corner window/crossing selection with translucent preview and Escape/right-click cancel that restores the prior selection; line/circle/polyline/bulge/arc/ellipse/dynamic-block, aligned-dimension and MTEXT grips; live grip preview, commit, undo and cancel; Ctrl+click 3D sub-object hover/pick and whole-solid selection; modeless Selection… snapshot list for entities and survey points; object snaps, UCS construction-plane intersection, wheel zoom, middle-button pan/orbit, clickable cube faces and orientation controls | Advanced selection edge cases and full keyboard focus/DPI parity |
+| Properties/Toolspace | Drawing navigation; point/surface/block inventory; selected layer/color edits; native layer manager and units/scale dialog; drawing/project point grids | Complete geometry properties, context menus, surface/style dialogs |
 | Survey points | Modeless creation controls, viewport placement, existing-marker selection, numbering and duplicate policies, validated/undoable JSON load and staged save; read-only protection; sortable/filterable drawing/project grids with source/group/visibility columns, edits, selection, database number conflict resolution and local undo; native CSV/TXT import/export with full-file validation, preview and column/header controls; generated report tabs with copy/save | full point-marker visibility/style parity, other project dialogs |
 | Projects | Native create/open, lock acquisition, stale-lock detection and the read-only / take-over / cancel choice, join detection on drawing open, shared point sync, settings enforcement, tracked-file restoration/save, shared-point conflict/delete/hide/cancel prompts, Copy / Link / Cancel attach question (point cloud import, Add PDF to project), cross-project/unit/coordinate clipboard prompts with convert/paste/cancel choices, point-save checks on close, lock release | Project settings UI; add/convert drawing; health/pack/turnover UI |
-| PDF viewer | Async page rendering, navigation/zoom, thumbnail strip, text search (new in Qt, REQ-429), text/line/rectangle/ellipse annotations, scaled measurements, Set scale / calibrate / scale checks / robust calibration / Snap (REQ-430), undo/redo, Save As, close protection, page extraction, coordinate extraction with selectable-text review and accept/deny (REQ-399, #907; user-approved deep navy style) | Dimension handles and the Length dimension-line third click (#910), compare/audit, underlay attachment, editable persisted annotations, rotated-page/high-DPI parity, async file operations |
-| Adjustment | Lossless `.gstrav` load/save, command text, raw-data imports, async solve, instrument weights, result acceptance, station commits, report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, plotting, cancellation, merge-import and command-editor parity |
-
+| PDF viewer | Async page rendering, navigation/zoom, thumbnail strip, text search (new in Qt, REQ-429), text/line/rectangle/ellipse annotations, style and text editing, selection/move/resize/delete, Length dimension-line third click, undo/redo, Save As, close protection, asynchronous open/save, rotated-page and high-DPI alignment, scaled measurements, Set scale / calibrate / scale checks / robust calibration / Snap (REQ-430), revision compare/alignment, change detection and Save As markups, automatic scale audit (REQ-392/393/395, #908), page extraction, and coordinate extraction with selectable-text review and accept/deny (REQ-399, #907; user-approved deep navy style) | Underlay attachment |
+| Adjustment | Lossless `.gstrav` load/save, command text with colours, line numbers and inline errors and fuzzy directive typo suggestions, plan preview with error ellipses, Files/Summary panel (REQ-431, #912; user-approved navy), raw-data import and merge including JobXML (#913), async solve with cooperative Stop and partial-result discard (#914), instrument weights, result acceptance, station commits (refusal explained), report TXT/RTF/PDF export, unsaved-close protection | Full form/raw-set editor, complete project settings, report plotting, command-name autocomplete and live-apply parity |
 Commands that request an existing ImGui-only modal still need a Qt adapter. Sharing
 the command dispatcher does not establish UI parity for those commands.
 Native Quick Select now exposes object/property filters, include/exclude, current
 selection scope and append through the shared selection service. Numeric input
 is validated before applying; Cancel preserves the selection and saved filter.
 Native command typing routes from editor controls and floating docks to command
-entry while preserving editable fields and dialogs. Tabs reserve space before
+entry while preserving editable fields and dialogs. Selection/grip additions are
+tracked in REQ-439; focused Qt tests cover the selection snapshot, overlap chooser,
+grip commit/undo/cancel, and crossing-drag workflows. Tabs reserve space before
 the first viewport paint. Named orientations are under View rather than a toolbar
 row. History, autocomplete and Escape are connected; pan/zoom
 uses the camera plane, and completed surface/cloud workers are serviced by Qt's
-event loop. Exact annotation and all selection/gesture parity remain release gates.
+event loop. Qt selection cycling, gestures, grips, and the modeless Selection…
+list are implemented and recorded in REQ-439. The Qt test target builds, and
+the focused selection workflows pass on Qt 6.8.3. Exact annotation parity and
+advanced selection edge cases remain separate release gates.
 
 ## Version 0.7.2 ribbon inventory
 
@@ -133,11 +143,24 @@ Context destruction and viewport destruction release renderer resources while
 the context is current, following [Qt's QOpenGLWidget lifecycle](https://doc.qt.io/qt-6/qopenglwidget.html).
 
 Legacy font loading was moved from `CadCommands.cpp` into
-`src/ui/LegacyApplicationFonts.cpp`. The shared domain library **still links
-ImGui core**, because legacy font measurement, SHX draw-list paths and ribbon
-measurement still reference it. Those dependencies must be extracted before an
-ImGui-free binary can be claimed. The Qt target no longer compiles AppIcon.cpp or
-links GLFW; icons and windows are managed by Qt.
+`src/ui/LegacyApplicationFonts.cpp`. Issue #917 then moved every remaining
+ImGui-only shared API out of `gosurvey_domain`: the font registry and legacy font
+loading, the MTEXT wrapped layout (`MtextRichImGui`), the SHX draw-list emitter and
+the ribbon measure pass now live in the `gosurvey_imgui_text` library
+(`GOSURVEY_IMGUI_TEXT_SOURCES`), linked only by the ImGui app, the headless driver
+and the ImGui tests. `gosurvey_domain` no longer links ImGui core, and CMake fails
+the configure step if it ever does again. Survey-label boxes are measured through
+the `AppCommandState::measureAnnotationText` seam (ImGui font in the ImGui app and
+headless driver, `MeasureQtText` in Qt). The Qt target no longer compiles
+AppIcon.cpp or links GLFW; icons and windows are managed by Qt.
+
+Issue #918 guards the whole Qt link graph: `gosurvey_assert_no_imgui_in_link_graph`
+(`cmake/GoSurveyQt.cmake`) fails the configure step if `GoSurveyQt` or `GoSurveyQtTests`
+reaches ImGui, GLFW, `gosurvey_imgui_text` or the ImGui executable through any library.
+The ctest `qt.deployment` check (`tools/verify-qt-deployment.ps1`) confirms the deployed
+Qt set has no ImGui/GLFW file or library code and that a copy holding only that set starts
+and passes `GoSurveyQt.exe --smoke-test` on the hidden desktop. Both frontends still build
+side by side into `build/`; the ImGui executable is not part of the Qt set.
 
 ## Latest verified iteration
 
@@ -192,6 +215,12 @@ flows, Unicode paths, undo/redo, full-file counts, invalid exports, failed final
 replacement cleanup, read-only rejection, report copy, blocked paste cancellation,
 and Copy/Paste menu routing plus clipboard unit conversion before placement. These checks do not establish all
 CSV dialect or project/clipboard parity.
+
+## Issue #901: annotation scale, object isolation, and perspective
+
+`REQ-438` is the parity gate for these three workflows. The status bar selects the current annotation scale; the View ribbon selects projection. Its FOV control submits the validated `FOV` command. The Properties dock exposes annotative flags and visible SCALE entries for selected text/dimensions, filled regions, block references, and multileaders; changes create one undo step and retain the empty-list-means-all rule. Qt passes the stable hidden-ID set and current annotation-scale state into the existing renderer, and the Qt annotation overlay applies hidden-ID and per-scale visibility filters. Qt isolate/hide/end-isolation actions use the shared command and picking paths.
+
+Focused `QtEditorTests [issue901]` coverage verifies the status-bar scale selector, ribbon projection/FOV controls, invalid projection/FOV refusal, named perspective view save/reopen, per-scale visibility and hidden annotation rendering, annotative-property undo, and isolate/hide/unisolate commands. The complete `GoSurveyQtTests.exe` run recorded 41 passed and one unrelated failure: `tabsAppearInitiallyAndTypingRoutesFromEditorChrome` failed its focus assertion at `tests/QtEditorTests.cpp:411`; the focused #901 cases pass. The chosen UI direction is status-bar scale selection, the existing Properties section, and the existing ribbon isolation menu.
 
 ## Initial baseline verification (superseded by the iteration above)
 

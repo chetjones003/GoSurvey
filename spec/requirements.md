@@ -4,6 +4,12 @@
 > a reviewer can render a clear **pass/fail** judgment by pointing at an
 > artifact (output, log, test, profile, or code structure).
 
+> **Drawing-format terminology (D-2026-10-20-d):** DWG is the only standalone GoSurvey drawing
+> format. Older requirements may refer to `.gs` serialization when describing the legacy JSON
+> document tree; those references mean the internal payload embedded in DWG (or template JSON),
+> not a supported `.gs` file. Retain such references only where they define legacy-schema
+> compatibility or historical decisions, and make that purpose explicit.
+
 ---
 
 ## How to write a requirement
@@ -59,7 +65,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: `<A file imported and re-exported reproduces source geometry within tolerance.>`
 - Acceptance: `<round-trip of the reference dataset matches within CON tolerance.>`
 - Owner-layer: `<IO>`
-- Status: proposed
+- Status: accepted
 - Revisions: `<date>` — initial.
 
 > Add functional requirements until the in-scope list in `project.md` is fully
@@ -3558,7 +3564,7 @@ requirements is a planning failure, not a sign of rigor.
   - deleting the feature line removes it from the surface's definition (REQ-069's rule);
   - a legacy `.gs` with no feature lines loads unchanged.
 - Owner-layer: Domain, IO, Renderer, UI, Commands
-- Status:      proposed
+- Status: accepted
 - Revisions:   2026-08-19 — initial. Reverses ADR-028 alternative (5), which deferred feature lines
                as "a separate milestone once surfaces are trustworthy"; this is that milestone.
                2026-08-20 — TASK-079 landed the "moves" clause: MOVE, COPY, ROTATE and SCALE, with
@@ -3605,55 +3611,11 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
-### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
-- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
-           drive the **real** ImGui UI from code — without shipping any of that in Release
-- Priority: must
-- Type: functional
-- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
-  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
-  for Release (and for any configuration that builds the shipped installer). It is a compile-time
-  gate, not a runtime hide.
-
-  When ON, the windowed `GoSurvey` binary:
-
-  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
-    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
-    colours change **this frame** with no rebuild;
-  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
-    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
-    output / log lines;
-  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
-    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
-    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
-    the live UI (full GUI driver).
-
-  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
-  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
-  that executable links; there is no Developer Shell menu/window.
-
-  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
-  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
-  fonts through ImGui **core without** Test Engine hooks.
-
-  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
-  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
-- Acceptance:
-  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
-    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
-    proven by a ctest that fails if those symbols are present;
-  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
-    changes on-screen chrome the same session;
-  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
-    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
-  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
-    done by hand (entity counts / command log), without requiring a human at the mouse;
-  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
-- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
-- Status: accepted (2026-08-29)
-- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
-  anti-requirement for **Debug only**.
-
+### REQ-161 — Retired: Dear ImGui Developer Shell
+- Status: retired on 2026-10-19 by D-2026-10-19-k / REQ-440 (GitHub issue #966).
+- Rationale: the ImGui frontend and its Debug-only Test Engine shell were removed when Qt became the sole supported frontend.
+- Replacement: Qt is the supported desktop frontend; its UI tests run through `GoSurveyQtTests.exe` and the hidden-desktop Qt test workflow.
+- Historical acceptance details are retained in D-2026-08-29-f and ADR-040; they no longer impose implementation or build requirements.
 ### REQ-170 — LibreDWG is the DXF and DWG codec
 - Purpose: File Format Specs — open and save DWG/DXF in-process with no ODA/AutoCAD converter on
   the customer machine; write DWG through R2018 where LibreDWG encode is verified (D-2026-10-01-f)
@@ -3836,19 +3798,20 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-29 — D-2026-08-29-g, ADR-042.
 
 ### REQ-175 — DWG is the drawing document; GoSurvey state is preserved in the file
-- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing, without dropping
-  survey-specific data that today lives in `.gs`
+- Purpose: File → Open/Save and headless OPEN/SAVEAS treat DWG as the drawing while preserving
+  GoSurvey survey-specific data in the drawing file.
 - Priority: must
 - Type: functional
 - Statement: The **drawing document** is a `.dwg`. File → Open, Save, and Save As default to DWG
   and do not list `.gs` as a drawing type. Headless `OPEN` and `SAVEAS` use DWG the same way.
-  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the existing GoSurvey
-  JSON document (the same tree `.gs` writes) so survey points, traverse, layouts, text/surface
+  A GoSurvey save writes LibreDWG CAD entities (REQ-170) **and** embeds the GoSurvey document
+  JSON payload so survey points, traverse, layouts, text/surface
   styles, `worldDocumentOrigin`, and the rest of that tree survive Open → Save → Open.
   A DWG without that payload is a **foreign** drawing and imports through REQ-170 CAD mapping.
-  `.gs` read/write remains in the tree (workspace template, explicit `.gs` paths, future
-  project file) and is not the File drawing chooser. Existing `.gs` files still open when a
-  path ending in `.gs` is given (command line, template, transcript `OPEN samples/…`).
+  Standalone `.gs` drawings are retired: they are not a supported drawing format, are not listed
+  by drawing dialogs, and must not be opened through explicit paths or command-line routes. The
+  historical GoSurvey JSON serializer may remain as an internal payload implementation detail;
+  it does not define a user-facing file extension. Drawing templates use `.gst`.
   This does **not** claim unknown-object preservation (DM-08).
 - Acceptance:
   - a new drawing, File → Save, writes a `.dwg` (not `.gs`);
@@ -3858,12 +3821,15 @@ requirements is a planning failure, not a sign of rigor.
   - opening an existing GoSurvey `.dwg` and Save updates that DWG, not a sidecar `.gs`;
   - a survey point (id, N/E/elev, description) survives Export DWG / Open DWG within REQ-101;
   - a foreign DWG with no GoSurvey payload still imports model-space LINE/CIRCLE as REQ-170;
-  - `SaveGoSurveyFile` / `LoadGoSurveyFile` remain callable;
+  - a standalone `.gs` path is not accepted as a drawing by File Open or headless OPEN;
   - headless `SAVEAS`/`OPEN` of `%OUT%/*.dwg` round-trips that document.
 - Owner-layer: IO (payload + LibreDWG), UI (dialogs), Commands/headless (OPEN/SAVEAS)
 - Status: accepted
+- Decision: D-2026-10-20-d (clarifies retirement of standalone `.gs` drawing paths; DWG behavior
+  was established by D-2026-08-29-j / ADR-044).
 - Revisions: 2026-08-29 — D-2026-08-29-j, ADR-044 (renumbered from D-2026-08-29-h / ADR-043 on the
-  beta merge; those identifiers were taken by the REQ-107 block-editor decision).
+  beta merge; those identifiers were taken by the REQ-107 block-editor decision); 2026-10-20 —
+  standalone `.gs` drawing paths explicitly retired, D-2026-10-20-d.
 
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
@@ -4102,7 +4068,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Toggling a layer Off or Frozen hides its entities from the viewport and any plot; Frozen also excludes it from selection, snapping, and drawing extents; Locked entities stay visible and snappable but reject move/erase/grip/property edits.
 - Acceptance (sketch): Off/Frozen layers don't render on screen or in a plot; Frozen layers are excluded from selection, snap and extents; Locked entities are visible/snappable but reject edits; unlocking/thawing restores prior behavior with no data loss; composes correctly with the existing per-viewport layer freeze (REQ-028).
 - Owner-layer: Domain/Renderer/Commands/UI
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-103 — Modify-command completeness
@@ -4396,8 +4362,8 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Add the commands above, each stored, selectable, snappable, undoable, and round-tripping through `.gs` and DXF like existing entities.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -4533,7 +4499,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: (a) POLAR shows angle guide lines from the last point at a configured increment and snaps the typed/dragged distance to that angle; (b) object-snap tracking lets a hovered snap point become a temporary tracking reference to move along; (c) `@distance<angle` is accepted anywhere a relative point can be typed, alongside the existing bearing-lock (`A <angle>` then distance) workflow.
 - Acceptance (sketch): polar guides snap the cursor within a small pixel tolerance at the configured increment; tracking references clear when a command ends; `@100<45` and the equivalent bearing-lock sequence commit the identical point within REQ-101.
 - Owner-layer: UI/Commands
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-17 — angle presets (the configured increment plus any user-added extra angles) now persist in `gosurvey-user.json` across sessions, not only for the life of the process (D-2026-09-17-a).
 
 ### REQ-109 — Lit shading for TIN surfaces
@@ -4543,7 +4509,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Extend REQ-064's visual-style/lighting pipeline (triangle shader, depth buffer, camera-following light) to TIN surfaces.
 - Acceptance (sketch): a TIN surface captured at `2D`/`Hidden`/`Shaded` is no longer pixel-identical across styles; `Hidden` occludes correctly; `Shaded` lighting follows the camera per REQ-064's existing rule; REQ-100's surface frame-budget profile still holds with shading on.
 - Owner-layer: Renderer
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-110 — Annotative rescale of existing text
@@ -4553,7 +4519,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Existing text/MTEXT can optionally be marked annotative so a plot-scale or viewport-scale change resizes it to hold a constant plotted height, matching what REQ-050 already does for MTEXT drawn live through a viewport.
 - Acceptance (sketch): a non-annotative object's height is unchanged by a scale change (today's behavior, preserved); an annotative object's on-screen size changes to hold plotted height constant; the flag persists in DXF/`.gs`; REQ-101 fidelity on stored coordinates is untouched.
 - Owner-layer: Domain/UI/Renderer
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-111 — Associative DIMENSION entity
@@ -4563,7 +4529,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Add a DIMENSION entity (at minimum linear/aligned) that stores its definition points, updates its displayed measurement when the dimensioned geometry moves, and round-trips as a real DXF `DIMENSION`.
 - Acceptance (sketch): dragging dimensioned geometry updates the displayed value and leader within REQ-101; DXF round-trip preserves it as a `DIMENSION`, not exploded geometry; erasing the dimensioned geometry is handled per REQ-201, not silently.
 - Owner-layer: Domain/Commands/IO/Renderer
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i) 2026-09-03 — Purpose corrected (issue #252, TASK-193); the requirement itself is unchanged and stays proposed.
 
 ### REQ-112 — Binary DXF import
@@ -4584,10 +4550,11 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
 - Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
-- Not in this requirement: hatch/fill, leader, table, spline, image and point in paper space; paper size and orientation; viewport view direction, frozen layers, lock and on/off; DWG export of the full set (issue #753 I3). Each needs its own decision.
+- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image and point, each with its own paper store in paper inches (REQ-037, ADR-009). DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
+- Acceptance (additional): (5) each of hatch, leader, table, spline, image and point drawn on a sheet survives DWG save then open on the same layout; (6) paper size, orientation and each viewport's view direction, frozen layers, lock and on/off survive DWG save then open; (7) AutoCAD opens our DWG sheet showing the paper text, arcs, polylines and fills (checked with the local AutoCAD oracle); (8) the same holds for DXF in a later increment.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768).
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -4596,7 +4563,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Periodically autosave the working drawing to a recovery location at a configurable interval, keep the previous save as a `.bak`, and on next launch after an unclean shutdown offer to recover the autosaved state.
 - Acceptance (sketch): autosave fires at the configured interval with no modal/perceptible hitch; a normal `Ctrl+S` still writes the real file and rotates the `.bak`; killing the process mid-session and relaunching offers recovery of the newer state; declining recovery leaves the last manual save untouched.
 - Owner-layer: IO/UI/Platform
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-115 — Recent files list
@@ -4606,7 +4573,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: The File menu lists the N most recently opened/saved `.gs`/DXF/DWG paths, persisted in user preferences.
 - Acceptance (sketch): opening or saving a file adds/moves it to the top of the list; the list persists across restarts; a since-moved/deleted path fails gracefully per REQ-201 rather than crashing; clearing empties it.
 - Owner-layer: UI/Platform
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-116 — Customizable keyboard shortcuts and command aliases
@@ -4616,7 +4583,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Extend REQ-084's customization precedent to keyboard accelerators and typed-command aliases, persisted in user preferences.
 - Acceptance (sketch): a user can rebind a shortcut and define/edit a typed alias; a conflicting rebind is flagged, not silently overwritten (REQ-201); a reset action restores defaults; unrebound shortcuts keep working.
 - Owner-layer: UI/Platform
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-117 — Real snap-to-grid
@@ -4626,7 +4593,7 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: When grid snap is enabled (mirroring AutoCAD's SNAP/GRID pairing), point entry and dragging snap to the nearest grid intersection at the current spacing, composable with object snaps the way ORTHO already composes with them.
 - Acceptance (sketch): with grid snap on and no nearby object-snap candidate, a click lands exactly on the nearest grid intersection; an active object snap still takes priority; toggling grid snap off restores today's free-cursor behavior; the setting persists like other display preferences (REQ-020-style).
 - Owner-layer: UI/Commands
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
 ### REQ-118 — A polyline closes by clicking its start, and ends on Enter
@@ -5100,6 +5067,7 @@ requirements is a planning failure, not a sign of rigor.
   drawings after Start and focus them (REQ-055 is unchanged for drawing tabs).
 
   The Start tab follows the supplied Qt GoSurvey Start reference:
+  Its original navy styling is superseded by REQ-436; the composition and actions below remain in force.
 
   1. In Start mode the application keeps the shared GoSurvey shell visible: brand title bar, ribbon,
      Start/drawing tab strip, and drawing status bar. The Properties/Toolspace/Map docks and command
@@ -11048,10 +11016,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
                the ground at all, because the ground falls away at least as fast as the fill slope
                descends, is reported the same way rather than searched indefinitely.
 
-               The daylight line is **baked** geometry, not a live object: it is produced once from
-               the inputs as they stand, following the EXTRACT precedent set for contours by
-               decision D-2026-08-12 (D2), and does not track later edits to the baseline or the
-               surface. Re-running the command is how it is refreshed.
+               **Issue #997 extension (D-2026-10-20-j):** the daylight feature line
+               retains an editable grading definition: stable baseline and target-surface entity
+               ids, separate cut/fill slopes, and the side for an open baseline. Selecting that
+               result and running GRADING restores its definition for editing. Enter rebuilds
+               the same result in place, preserving its entity id; cancellation or a failed
+               calculation leaves the previous definition and geometry intact. The definition
+               survives DWG save/reopen through the existing GoSurvey payload and participates in
+               undo and document switching as feature-line metadata. Missing sources are reported
+               rather than substituted. Existing drawings without this metadata remain ordinary
+               feature lines. Rebuilding is explicit; automatic tracking of later source edits
+               remains outside this increment. The Qt **Grading** controls (Home → Create Ground
+               Data and Create Design, Survey → Grading Creation Tools, TIN Surface → Grading Tools)
+               start GRADING; Grading Optimization stays a placeholder (#813).
 - Acceptance:
   - on a surface of known plane, a fill baseline of known height above it daylights at the offset
     computed by hand, within REQ-101, and the daylight point's elevation equals the surface's there;
@@ -11065,12 +11042,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
     and the command terminates;
   - the reported slope wording matches REQ-074's exactly, in both conventions;
   - a closed baseline's daylight line encloses the baseline, and an open baseline requires a side;
-  - the daylight line survives a `.gs` round trip as ordinary geometry;
+  - the daylight line and editable grading definition survive DWG save/reopen; selecting it and
+    changing a slope or target rebuilds the same object, and undo restores the previous result;
+  - editing a result whose baseline is gone reports it and changes nothing; a result whose target
+    surface is gone asks for one rather than grading to another, and a cancelled or failed rebuild
+    leaves the previous geometry and definition;
+  - the Qt Grading ribbon controls start GRADING;
   - every offset above holds at survey coordinate magnitudes (E 2,196,000 / N 1,400,000) within
     REQ-101, which ADR-054's `double` stores make reachable.
 - Owner-layer: Domain, Commands, IO
-- Status:      proposed
-- Revisions:   2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
+- Status:      accepted
+- Revisions:   2026-10-20 — D-2026-10-20-j: issue #997 extends baked output with a persistent
+               editable definition attached to the existing daylight feature line, without a new
+               geometry store or entity kind; acceptance's `.gs` round trip restated as DWG
+               (D-2026-10-20-d); Status corrected to accepted, matching D-2026-10-05-b.
+               2026-10-05 — initial. Reverses the **grading design objects** exclusion carried by
                ADR-028 and restated in `roadmap.md`'s M-Surfaces out-of-scope list, by decision
                **D-2026-10-05-b**. That exclusion has already been reversed once in exactly this
                shape: feature lines sat on the same list until D-2026-08-19-a moved them off it, and
@@ -11085,8 +11071,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
                  which is what Civil 3D's grading groups produce, and which would give volumes,
                  contours and statistics for free from tools already built. The larger and more
                  valuable follow-on;
-               - **linking** the daylight line to its baseline or surface so it updates when they
-                 change. Baked-only is deliberate for the first increment, per the Statement;
+               - **automatically rebuilding** the daylight line when its baseline or surface
+                 changes; #997 retains the inputs and supports explicit editing/rebuilding;
                - **intermediate slope breaks** (a bench or berm part-way down the slope).
 - Known limit: the outward projection advances in finite steps before bisecting the bracketed
                crossing, so ground detail finer than one step can hide a second crossing and the
@@ -12378,6 +12364,79 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted.
 - Revisions: 2026-10-12 — initial (D-2026-10-12-a). 2026-10-12 — accepted.
 
+### REQ-404 — Grading groups and cut/fill volumes
+
+- Purpose:     combine several REQ-398 side-slope gradings into one proposed-ground surface so a
+               design can be judged by the cut/fill number it actually produces — the "larger and
+               more valuable follow-on" REQ-398 itself named as deliberately NOT included in its
+               own first increment, reusing REQ-073's existing volume engine rather than building a
+               second one
+- Priority:    should
+- Type:        functional
+- Statement:   A **grading group** is a named collection of REQ-398 side-slope gradings (each a
+               baseline feature line, a cut/fill slope pair, and a target surface, producing a
+               daylight line). GoSurvey builds one TIN surface (REQ-068) from the ground bounded by
+               each grading's baseline and its own daylight line, merged into a single
+               triangulation covering the group's union — a **graded design surface**, in the
+               terms REQ-398 itself used to describe this follow-on.
+
+               A grading group's surface is built the same way REQ-069 builds any surface, and
+               participates in surface machinery the same way: it is selectable as either side of a
+               REQ-073 surface-to-surface volume comparison (against an existing-ground surface, to
+               report cut/fill/net), it can be picked for REQ-074 spot elevation/grade, and it
+               appears in the REQ-075 Surface Manager. No new volume-computation code is written —
+               REQ-404's only new work is assembling the group surface from its member gradings'
+               baked output; REQ-073 does the rest.
+
+               Consistent with REQ-398's own "baked, not live" decision for the daylight line, a
+               grading group's surface is built **once from its members' current (baked) output**
+               and is rebuilt only when the group's membership changes or a member grading is
+               explicitly re-run — it does **not** silently track a later edit to a member's
+               baseline or target surface, for the same reason REQ-398 gives: linking the daylight
+               line to live edits was deliberately deferred, and a grading group surface cannot be
+               more live than the gradings it is built from.
+
+               A grading belongs to at most one grading group at a time; moving it between groups
+               removes its daylight-line output from the old group's surface and adds it to the new
+               one's, each rebuilding per the rule above.
+- Acceptance:
+  - a grading group containing one REQ-398 grading's baseline/daylight-line output produces a
+    surface whose triangulation covers the ground between them, within REQ-101 tolerance;
+  - a grading group of several non-overlapping gradings produces one merged surface covering their
+    union, with no triangulation gap at a shared edge between two adjoining gradings;
+  - running a REQ-073 volume comparison between a grading group's surface and an existing-ground
+    surface reports cut/fill/net using REQ-073's existing computation and reporting, with no
+    grading-specific volume logic;
+  - re-running a member grading (REQ-398, producing fresh baked output) and re-adding it to the
+    group rebuilds the group surface; merely editing the member's baseline or target surface
+    WITHOUT re-running REQ-398 does NOT change the group surface, matching REQ-398's baked-only
+    rule;
+  - moving a grading to a different group removes it from the first group's surface and adds it to
+    the second's, both surfaces rebuilding correctly;
+  - a grading group round-trips a `.gs` save/load byte-identically, including its membership list;
+  - a legacy `.gs` with no grading groups loads unchanged.
+- Owner-layer: Domain, Commands, UI, IO
+- Status:      accepted
+- Revisions:   2026-10-20 — restored to beta after the spec was lost from it (commit 306acf52 era). Renumbered ADR-068 → ADR-070 because ADR-068 is now the admin dashboard. "withdrawn-REQ-403" names the retired grading-object draft; REQ-403 is now the Traverse Editor. Status set to accepted to match D-2026-10-09-b.
+               2026-10-09 — initial. Scoped from issue #802 (the Home ribbon's "Grading" and
+               "Grading Creation Tools"/"Grading Tools" placeholders). **Superseded same day
+               (2026-10-09): an earlier version of this REQ, plus a companion withdrawn-REQ-403 "grading
+               object", was written without first finding that REQ-398 ("Side slope grading to a
+               surface: the daylight line", accepted 2026-10-05, `GRADING`/`grd` command) already
+               exists and already implements a baseline/slopes/surface-target grading computation —
+               discovered while researching an unrelated issue (#766). withdrawn-REQ-403 is WITHDRAWN
+               entirely: it duplicated REQ-398's "grading object" with a conflicting design (withdrawn-REQ-403
+               was dynamic/live-rebuilding; REQ-398 is explicitly baked/one-shot, by deliberate
+               decision). This REQ-404 is kept, rewritten to build on REQ-398's actual output rather
+               than withdrawn-REQ-403's withdrawn one, since it is exactly the follow-on REQ-398's own
+               Statement already named. The Home ribbon's "Grading" placeholder is wired directly to
+               the existing `GRADING` command (no new REQ needed for that — see REQ-398's own
+               revision note); REQ-404 covers only the grading-GROUP surface/volumes layer, which
+               remains unimplemented. Grading Optimization (Home → Explore/Optimize) stays tracked
+               separately (issue #813) and depends on REQ-404 landing first — there is no group
+               volume to optimize before then.
+
+
 ### REQ-417 — Traverse Editor: fold GPS vectors into the least-squares adjustment (GitHub issue #857)
 
 - Purpose: GPS vectors (REQ-416, GitHub issue #847) are modeled and resolved into local coordinates (ECEF → geodetic → local ENU), but `ComputeTraverseLeastSquares` treated a resolved vector's coordinate the same way as a side shot — computed directly, not folded into the weighted adjustment alongside conventional angle/distance observations. How a GPS vector's a-priori covariance should enter the adjustment's weight matrix is an architecturally significant decision (correlated 3D error vs. the existing independent 2D angle/distance model), not a guess.
@@ -12683,6 +12742,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-18) — D-2026-10-18-g, GitHub issue #905.
 - Revisions: 2026-10-18 — initial, D-2026-10-18-g, GitHub issue #905. 2026-10-19 — clause 2: F3 / Shift+F3 no longer step through matches (REQ-430 uses F3 for Snap; the user chose "F3 = Snap everywhere", D-2026-10-19-b).
 
+### REQ-432 — Qt traverse import merging and Trimble Access JobXML workflows (GitHub issue #913)
+
+- Status: accepted.
+- Decision: D-2026-10-19-d; the user chose “Full Qt parity” on 2026-10-19. The complete beta 0.7.4 workflows are the behavior baseline; this adds Qt presentation and interaction only.
+- Purpose: Complete the Qt Traverse Editor's raw-data import merging and Trimble Access JobXML workflows. A command route or ribbon button without a usable end-to-end workflow does not satisfy this requirement.
+- Depends on: REQ-015, REQ-016, REQ-403, REQ-417–REQ-423, REQ-201, REQ-300, REQ-301.
+- Acceptance:
+  1. **Raw-data import merge.** In Qt, a user can select multiple supported raw traverse files (FBK, STAR*NET DAT, RW5, and JobXML) and import them into the current traverse. As in beta 0.7.4, the first import into an empty traverse initializes it; subsequent imports append as one continuous traverse with station ids remapped to avoid collisions. Preserve selection order, per-file success/failure reporting, the existing merged observation types, and source-file records.
+  2. **Trimble Access JobXML.** In Qt, a user can select one or more `.jxl` / `.xml` files and import them through the existing JobXML importer. Preserve the observations the shared importer supports and report unsupported or invalid files as beta 0.7.4 does.
+  3. **Safety and parity.** Preserve beta 0.7.4 behavior for cancellation, validation, import failure, undo, and read-only projects wherever applicable. Failed or cancelled operations do not partially alter the traverse or drawing.
+  4. **Focused evidence.** Add Qt workflow coverage for the completed paths and relevant cancellation, validation, failure, undo, and read-only cases. Update `docs/qt-074-parity-ledger.md` with behavior, evidence, and remaining gaps.
+  5. **Visual review.** Present 2–3 integrated screenshot options for each major affected surface. Apply the user's selected direction, then capture the resulting affected surfaces and meaningful states for review before marking the issue complete.
+- Constraints: Keep parsing, merge semantics, and adjustment behavior in the existing shared services; do not duplicate the importer or change the ImGui frontend. No new dependency or abstraction without two current uses.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-d, GitHub issue #913.
+
 ### REQ-430 — Qt PDF viewer: calibration, scale checks and snapping (GitHub issue #906)
 
 - Purpose: bring the 0.7.4 PDF scale workflows to the Qt viewer, so a Qt user can set a sheet's scale by clicking two known points, test that scale against dimensions the drawing prints, correct it, and have clicks land exactly on the drawing's own line ends and corners.
@@ -12698,7 +12772,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. **Scale checks dialog.** A **Scale checks (n)** button, coloured by the worst verdict on the page, opens a dialog with the page's checks (kind, stated, reads, difference, %, verdict, Outlier flag, Delete), the two verdict limits (settings), the best fit and the outlier note, the honest-limits note (REQ-394 clause 6), the **Correct scale** choices (match a check, best fit, best fit without the outlier, a typed percentage, leave it) with a preview of every check's new difference, **Apply correction** (one undo step) and **Copy report** (REQ-394 clause 3).
   6. **Robust calibration.** The same dialog's second tab takes at least the minimum number of known dimensions (picked on the sheet; each can be unticked or removed), with the pick-error, drawing-error and minimum settings; it shows the adjusted scale with its uncertainty, per-dimension residuals, standardised residuals and **Suspect** flags, offers nothing to apply when there are too few, and **Apply** is one undo step (Close changes nothing).
   7. **Snap.** A **Snap** toggle (button and F3, off by default; F3 is Snap everywhere in the Qt PDF window, so it no longer steps through find matches, which Enter / Shift+Enter and the Next / Previous buttons still do) makes the points taken by the Qt viewer's click tools (text, line, rectangle, ellipse, the four measure tools, calibrate and check) land on the nearest end or corner, round-shape centre or quadrant point of the page's vector line work within about 10 screen pixels, marked on screen (REQ-391 clause 5 "calm snapping": points within about 6 screen pixels merge into the strongest, and the marker stays on its point unless another is clearly closer). The page is read in the background the first time; a scanned page says it has nothing to snap to. Snap points are in the viewer's page coordinates. Changing page discards points picked so far by the calibrate and check tools, so both points of a pick are always on one page.
-  8. **Out of scope** (left to their own issues): coordinate extraction (#907), compare and the automatic Audit scale (#908), selecting/dragging dimension handles and the Length dimension-line third click (#910), and any change to REQ-390/391/394.
+  8. **Out of scope** (left to their own issues): coordinate extraction (#907), compare and the automatic Audit scale (#908), selecting/dragging dimension handles and the Length dimension-line third click (REQ-433, #910), and any change to REQ-390/391/394.
 - Acceptance:
   - `GoSurveyQtTests` coverage: Set scale applies a preset and a typed ratio to this page, every page and a page list (undo restores each); a bad list or non-positive ratio changes nothing; Clear scale; Cancel changes nothing; the scale label follows the page and shows "Unscaled" / the unusable reason.
   - `GoSurveyQtTests` coverage: calibration by two clicks (including changing page mid-pick, Esc, Cancel, and a zero distance) gives the REQ-390 scale to within 0.01 %, counts as the first check, and the freehand/snapped message and nearest-standard-scale offer appear.
@@ -12711,6 +12785,396 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfScale*`) over the shared `src/pdf/` services (`PdfMeasure`, `PdfScaleCheck`, `PdfSnap`, `PdfAnnotate`).
 - Status: accepted (2026-10-19) - D-2026-10-19-b, GitHub issue #906.
 - Revisions: 2026-10-19 - initial, D-2026-10-19-b, GitHub issue #906.
+
+### REQ-435 — Qt PDF underlay attachment (GitHub issue #909)
+
+- Purpose: complete the Qt drawing workflow for attaching a PDF page as a raster underlay, matching the existing 0.7.4 behavior.
+- Priority: must
+- Type: functional (Qt UI/commands)
+- Decision: D-2026-10-19-g; user approved recording this requirement on 2026-10-19. Its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs.
+- Depends on: REQ-201 (honest failure), REQ-300 (no new PDF dependency), existing PDF underlay and project-file behavior.
+- Statement:
+  1. **Complete Qt workflow.** A user can start PDFATTACH, choose a PDF and page/options, resolve Copy / Link / Cancel when a project requires it, and place the underlay in the drawing. The Qt workflow must be usable end to end; a command route or ribbon button without the dialog is insufficient.
+  2. **Parity.** Preserve the existing 0.7.4 behavior and validation, including page selection, raster options and snapping options, preview/failure reporting, project Copy / Link semantics, and placement. Cancel at any stage leaves no underlay and no partial drawing change. A successful placement is one undoable drawing edit. A read-only drawing refuses attachment without changing it.
+  3. **Failure handling.** Invalid or unreadable PDFs, invalid page/options and rasterization failures show a useful reason, leave the drawing unchanged, and let the user recover or cancel. No failure is silently treated as success.
+  4. **Boundaries.** Reuse the existing PDF attachment builder, command state, project attach flow and drawing undo path. Do not add a PDF dependency or alter ImGui behavior.
+- Acceptance:
+  - Qt workflow coverage verifies a successful attach (including page/options and placement), cancellation before placement, Copy / Link / Cancel project choices, invalid input or rasterization failure, read-only refusal, and undo removing the newly placed underlay.
+  - The Qt UI is presented as 2–3 integrated screenshot options for each major affected surface; the user's selected direction is applied before the issue is marked complete.
+  - Update `docs/qt-074-parity-ledger.md` with the verified behavior and evidence.
+- Owner-layer: Qt presentation and command routing over existing `PdfAttach` and project-file services.
+- Status: accepted (2026-10-19) — D-2026-10-19-g, GitHub issue #909.
+
+### REQ-436 — Qt Dark appearance uses graphite with aqua and amber accents
+- Purpose: keep the Qt application visually coherent while making its dark appearance easier to distinguish from the existing navy direction.
+- Priority: should
+- Type: non-functional (appearance)
+- Decision: D-2026-10-19-h; user selected graphite with aqua and amber accents for the whole app on 2026-10-19. Its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs.
+- Statement: The Qt **Dark** appearance uses graphite surfaces throughout the application, aqua for active and interactive states, and restrained amber for secondary emphasis. This applies to the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels. The Classic light appearance and ImGui frontend are unchanged. Drawing entities, entity colors, and persisted drawing data are unchanged.
+- Acceptance:
+  - Start, drawing workspace, menus, and representative Qt dialogs render the graphite palette with aqua active states and amber secondary emphasis.
+  - The Dark drawing canvas ground is graphite with a subtle aqua-tinted grid.
+  - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
+  - Switching between Dark and Classic light leaves neither palette behind in the other appearance.
+  - Drawing content and behavior remain unchanged when appearance changes.
+- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction.
+
+### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
+
+- Purpose: bring the 0.7.4 least-squares adjustment (LSA) editor's reading aids to the Qt window, so a Qt user sees the command text coloured and numbered, sees exactly which line is wrong and why while typing, and sees a plan of the survey with each station's error ellipse once an adjustment has run.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-19-c; the user approved "Yes, full REQ-431". This is a Qt parity port of what the ImGui Traverse editor does today: the command language (REQ-419..421), the solver (REQ-417..422) and the report (REQ-423) remain the behaviour authority, and nothing is added to them. The ImGui editor is unchanged. The ImGui editor's command-name autocomplete and its live-apply of every keystroke are not part of this REQ.
+- Depends on: REQ-201 (honest failure), REQ-403 (save and reload), REQ-417..423, REQ-081 (Qt appearance).
+- Statement:
+  1. **Colours.** In the Qt adjustment window's command editor, each line is coloured by what it holds: `#` options and the command keywords and their ON/OFF/ZENITH/ELEV/SIDE/CHECK/COMBINED/GRID words, numbers, whole-line `//` comments, and the field code or description that follows a `'` or a backtick each get their own colour; other words keep the normal text colour. Colours only change how the text looks: the text, its copy/paste, undo and the saved file are exactly what was typed, and every colour is readable on the editor's background in the Dark and Light appearances.
+  2. **Line numbers.** A gutter beside the text numbers every line. It scrolls with the text, widens when the line count gains a digit, and marks the line of an error (clause 3).
+  3. **Inline errors.** A short moment after the text stops changing, the editor checks it with the same reader that Run adjustment, Save and Settings use. A malformed line is underlined, its reason is shown on that line, its number is marked in the gutter, and the status line says the text has a problem. Fixing the line clears all of this. Checking never changes the working traverse, the results, the drawing or any file: Run adjustment, Save, Save As, Settings and Accept still refuse with the same "line N: reason" message, and Import still replaces nothing when the file is bad.
+  4. **Plan preview.** A left panel shows a plan (north up) of the traverse as the text now reads: stations with their numbers, the legs between them (a closing leg to the start for a closed loop), side shots and check shots as thin lines with their labels, and, for a network, its control and adjusted stations. The mouse wheel zooms about the cursor, a middle-button drag pans, and a middle double-click zooms to everything. It fits to the survey the first time and again when the survey moves somewhere the view does not cover. With fewer than two plottable stations it says so instead of drawing.
+  5. **Error ellipses.** After a successful adjustment that is still current for the text (any edit makes it stale), each adjusted station is drawn with its 1-sigma error ellipse (semi-major, semi-minor, azimuth from the result). An ellipse too small to see at the current zoom is drawn larger, by a factor the preview states, while hovering still gives the true values. Hovering a station, or the inside of its ellipse, shows its number and those three values, or says an adjustment must be run first. A failed adjustment shows no ellipses and its reason stays in the Output tab.
+  6. **Files and Summary.** The same left panel lists the saved `.gstrav` and `.gsdat` paths (or "unsaved") and a summary: stations, misclosure and precision (when the traverse closes), and, after an adjustment, the standard deviation of unit weight and the redundancy, or the reason it could not be adjusted.
+  7. **Existing semantics are preserved.** Cancel (a picker, a Save prompt, closing), validation, failure without mutation, undo of a commit, read-only projects (saving into one still writes the file but never changes the project's file list) and the unsaved-close prompt behave as before. A commit that places nothing (read-only project, no drawing, invalid result) now says why in a message instead of only the status bar saying "Committed 0 points".
+  8. **Out of scope** (their own issues): ground-to-grid scale and units (#911), merge import and JobXML (#913), the open-traverse and command-editor workflows (#914), adjustment project settings and report plotting (#915).
+- Acceptance:
+  - `GoSurveyQtTests` coverage: the highlighter gives each of keyword, option, number, comment and field-code a distinct colour and leaves other words and the document text unchanged; the colours differ from the background in both appearances.
+  - `GoSurveyQtTests` coverage: the gutter shows one number per line, follows scrolling, widens at 10/100 lines, and marks an error line.
+  - `GoSurveyQtTests` coverage: a malformed line shows its reason and line number after the pause without changing the traverse, results, session or files; fixing it clears the error; Run adjustment and Save refuse with the same message; a bad import file changes nothing.
+  - `GoSurveyQtTests` coverage: the plan preview builds stations, legs, closing leg and side shots from a traverse, shows ellipses only for a current successful adjustment, drops them on edit, reports too few stations, and zoom/pan/zoom-extents change the view.
+  - `GoSurveyQtTests` coverage: saving inside a writable project tracks the file, inside a read-only project does not; the Files and Summary panel follows save and adjustment; a commit refused for a read-only project says why and places no point; a normal commit still undoes.
+  - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md`.
+  - Present 2-3 integrated screenshot options for each major affected surface (the editor and the plan preview), apply the user's selected direction, and show the final screenshots before the issue is closed.
+- Owner-layer: Qt UI (`src/qt/AdjustmentWindow`, new `src/qt/AdjustmentEditor`) over the shared `src/traverse/` services (`TraverseCommandLang`, `TraverseCalc`, `TraverseLeastSquares`).
+- Status: accepted (2026-10-19) - D-2026-10-19-c, GitHub issue #912.
+- Revisions: 2026-10-19 - initial, D-2026-10-19-c, GitHub issue #912.
+
+### REQ-433 — Qt PDF annotation and file workflow parity (GitHub issue #910)
+
+- Purpose: complete the Qt PDF annotation workflow and close the rotated-page, high-DPI, and asynchronous file-operation gaps while preserving the shipped 0.7.4 behavior.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-19-e; the user selected full Qt parity for issue #910.
+- Depends on: REQ-201 (honest failures), REQ-300 (no new dependencies), REQ-387 (PDF viewer), REQ-388 (annotation semantics and Save As), REQ-390/391/394 (scale and measurement behavior), REQ-429/430 (Qt PDF workflows).
+- Statement:
+  1. **Annotation parity.** The Qt PDF window provides the complete REQ-388 annotation workflow: text, line, rectangle, ellipse; style controls; selection, move, resize, delete; undo/redo; Save As; and an unsaved-changes prompt. It preserves the source PDF, stores interoperable PDF annotations, and uses the same validation and scale semantics as the existing PDF workflow. Incomplete or invalid operations report a reason and leave the annotation session unchanged.
+  2. **Rotated pages.** All PDF viewer tools use one consistent mapping between screen positions and the PDF page's coordinate space. On pages with any supported page rotation, rendering, annotation display, picking, placement, moving, resizing, snapping, measurement, and saving align with the visible page. Changing page or cancelling a multi-click operation does not commit partial work.
+  3. **High-DPI displays.** Pointer input, rendering, hit testing, annotation grips, text, and snap feedback remain aligned and usable at device pixel ratios other than 1. Coordinates persisted to PDF remain in page points and do not change with display scale.
+  4. **Asynchronous file work.** Opening/rendering pages and saving annotations do not block the Qt UI while file work is in progress. Completion and errors are shown; cancellation/window closure and switching documents cannot apply stale results to another document or lose confirmed edits. A failed save leaves the source and destination unchanged and preserves the unsaved session for retry.
+  5. **Compatibility and boundaries.** REQ-388 remains the authority for annotation content, serialization, Save As-only behavior, source preservation and undo. Existing shared PDF services remain authoritative for scale and measurement rules. No new PDF engine, sidecar format, or change to ImGui behavior is introduced.
+- Acceptance:
+  - `GoSurveyQtTests` covers creating, styling, selecting, moving, resizing, deleting, undoing and redoing each applicable annotation type; invalid input, cancel, undo and read-only/failure paths preserve the session as specified; Save As reopens with matching annotations and leaves source bytes unchanged.
+  - `GoSurveyQtTests` exercises rotated pages end to end: visible page corners map to the correct page coordinates; annotations and grips render and pick at their visible positions; multi-click tools cancel safely; saved annotations reopen in the same positions.
+  - `GoSurveyQtTests` exercises the same placement, selection and resize workflow with a non-1 device pixel ratio, proving screen alignment and unchanged page-point coordinates.
+  - `GoSurveyQtTests` verifies that open/render/save work remains responsive, reports failures, preserves edits after save failure, and discards stale completion after cancellation, document switching or window closure.
+  - Update `docs/qt-074-parity-ledger.md` and `docs/qt-ui-migration.md` with the completed workflows and evidence.
+  - Present 2–3 integrated screenshot options for each major affected surface, apply the user's selected direction, and show final screenshots before closing the issue.
+- Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas`) over existing shared `src/pdf/` services; no new ownership or concurrency mechanism beyond the architecture's one-shot worker pattern.
+- Status: accepted (2026-10-19) — D-2026-10-19-e, GitHub issue #910.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-e, GitHub issue #910.
+
+### REQ-438 — Qt parity for annotation scale, object isolation, and perspective (GitHub issue #901)
+- Purpose: Qt migration issue #901. The existing 0.7.4 executable already defines these workflows in REQ-084 (object isolation), REQ-309 (perspective projection and FOV), and the annotation-scale requirements. A Qt ribbon action or shared command handler alone does not make a workflow usable: the user must be able to complete it through Qt and observe the same outcomes and safeguards.
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-18-h (user confirmed full Qt parity scope for issue #901).
+- Depends on: REQ-084, REQ-309, REQ-201.
+- Statement: The Qt editor provides full workflow parity with the beta 0.7.4 executable for annotation-scale controls, object isolation, and perspective controls. For each feature, Qt exposes the complete user workflow and preserves the behavior already specified by the governing requirement or, for annotation-scale controls, the beta 0.7.4 executable, including validation, cancel, failure, undo, and read-only semantics wherever that behavior applies. Object isolation remains session-only and hidden objects remain unpickable as defined in REQ-084. Perspective and field of view retain REQ-309's model-view persistence and validation rules. Annotation-scale controls retain the beta 0.7.4 scale list, current-scale selection, annotative visibility, and entity/style editing behavior. No change to drawing data, command semantics, or the production executable's default is introduced by this parity port.
+- Acceptance:
+  - The Qt editor can select the current entry from the available annotation SCALE list and complete the beta 0.7.4 annotative visibility and property workflows for supported entities/styles; invalid input is refused without changing the prior value, and Cancel restores the pre-dialog state wherever a dialog offers Cancel.
+  - The Qt editor can isolate selected objects, hide selected objects, and end isolation. Hidden objects are not drawn, hovered, snapped, or selectable; isolation survives array compaction correctly, does not persist to `.gs`, and undo/redo and read-only behavior match the legacy workflow.
+  - The Qt editor can switch between orthographic and perspective, set and report field of view, reject invalid values without mutation, save/reopen the model view and named perspective views, and preserve coordinates and picking behavior as required by REQ-309.
+  - Each workflow's validation, cancellation, failure, undo, and read-only cases applicable in beta 0.7.4 have focused Qt workflow coverage. Tests exercise Qt-facing interaction and resulting document/view state, not merely command dispatch.
+  - The 0.7.4 Qt parity ledger records the implemented and tested behavior for all three areas; a shared command route or visible ribbon control by itself is not marked complete.
+- Owner-layer: Qt editor UI and interaction; existing command, document, renderer, and IO services remain authoritative for domain behavior.
+- Status: accepted (2026-10-18).
+- Revisions: 2026-10-18 — initial; user confirmed full Qt parity for issue #901.
+
+### REQ-439 — Qt selection cycling and model-space grips (GitHub issue #902)
+
+- Purpose: the Qt editor currently has basic picking, while the beta editor also lets users choose
+  among overlapping picks and edit selected geometry directly from its grips. Those workflows must
+  remain available during the additive Qt migration.
+- Priority: must
+- Type: functional
+- Depends on: REQ-039, REQ-047, REQ-054, REQ-060, REQ-121, REQ-318, REQ-370, and migration tracker #878.
+- Statement:
+  1. **Existing selection rules remain authoritative.** Qt selection gestures follow REQ-039,
+     REQ-121, REQ-318, and REQ-370 where applicable. Selection math and hit testing stay in the
+     existing Commands/Viewport services; Qt owns event routing and presentation.
+  2. **Multi Selection.** The existing Multi Selection toggle controls disambiguation of overlapping
+     linework picks. With it off, a click selects the resolver's nearest visible candidate. With it
+     on, an ambiguous hover shows the overlap marker and clicking opens a cursor-adjacent list of
+     candidates with their type labels and color swatches. Choosing a row applies the click's
+     existing Shift behavior; dismissing the list changes no selection.
+  3. **Selection list.** The existing right-click Selection… action remains available when a
+     selection exists. Its modeless list reflects a snapshot of the current entity and survey-point
+     selection; Refresh takes a new snapshot, row checkboxes add/remove listed items, and Select All /
+     Deselect All affect the listed snapshot only.
+  4. **Model-space grips.** Qt presents and routes every model-space grip family already supported by
+     the beta editor: line endpoints; circle center/radius; polyline vertices and arc-segment bulge
+     grips; arc and ellipse grips where the shared helpers permit them; dynamic-block grips; and the
+     existing dimension and MTEXT grip workflows. A drag previews the edit while held and commits on
+     release as one undoable change. Escape or the beta grip-cancel gesture restores the original
+     geometry. A refused or read-only edit leaves the drawing unchanged. ORTHO, direct-distance
+     entry, and object snaps retain REQ-047 and the existing grip behavior.
+  5. **Advanced 3D selection.** Qt routes whole-solid picks through the camera ray and sub-object
+     picks through REQ-318. Ctrl+click names a solid face, edge, or vertex without entering a sticky
+     mode; while Ctrl is held, the candidate under the cursor is pre-highlighted. Shift and the
+     mutually exclusive whole-object/sub-object selection stores follow REQ-318. A miss or an
+     occluded sub-object is not selected.
+  6. **Migration boundary.** This requirement does not change the existing beta editor, switch the
+     production default, remove ImGui, or add new geometry/edit operations. The 3D gizmo and
+     section-plane overlay work remains under issue #900.
+- Acceptance:
+  - Qt tests prove ordinary click/Shift selection and left-to-right window / right-to-left crossing
+    drags, including live preview and cancellation without a selection change, in line with
+    REQ-370.
+  - With Multi Selection off, an overlapping pick chooses the nearest visible candidate. With it
+    on, the overlap marker and candidate list appear; choosing each listed candidate selects that
+    entity, Shift behavior is preserved, and dismissing the list leaves selection unchanged.
+  - The Selection… panel refreshes its snapshot and its row, Select All, and Deselect All actions
+    produce the corresponding entity and survey-point selection without changing drawing geometry.
+  - Qt exercises every model-space grip family listed in item 4. Each supported drag previews and
+    commits the expected geometry; one undo restores the original; Escape and the grip-cancel gesture
+    restore the original without committing; a refused or read-only edit leaves geometry unchanged.
+  - In an orbited 3D view, Qt selects the nearest visible solid, Ctrl+click selects each supported
+    face/edge/vertex kind, and Shift toggles those sub-objects. A far-side occluded sub-object and a
+    miss are not selected; switching between whole-object and sub-object selection follows
+    REQ-318's exclusivity rule.
+  - The parity ledger records the completed selection workflows and their focused Qt coverage.
+  - Before issue #902 is marked complete, the user reviews 2–3 integrated screenshot options for
+    each major affected UI surface and the selected visual direction is applied.
+- Owner-layer: Qt UI (`src/qt/EditorViewport.*`, `src/qt/EditorWindow.*`) / existing Commands and
+  Viewport services.
+- Decision: D-2026-10-18-i.
+- Status: accepted.
+- Revisions: 2026-10-18 — initial proposal; accepted by user.
+
+### REQ-440 — Qt is the sole supported frontend; remove ImGui (GitHub issue #966)
+
+- Purpose: maintain one supported desktop frontend and remove the maintenance and build cost of the retired ImGui application.
+- Priority: must
+- Type: quality (architecture/build)
+- Decision: D-2026-10-19-k; the user requested complete ImGui removal in GitHub issue #966.
+- Statement: GoSurvey supports the Qt desktop application as its sole frontend. Remove the ImGui application, UI code, tests and helpers, vendored ImGui/Test Engine/GLFW dependencies used only by that frontend, and frontend-specific build, packaging, CI, resource and documentation references. Preserve shared domain behavior and any code or dependency still used by Qt, headless tools or other supported targets. Rework ImGui-only functionality that remains required by supported workflows into the appropriate existing shared or Qt layer; do not silently drop supported user workflows.
+- Acceptance:
+  - The repository contains no ImGui application/UI implementation, ImGui Test Engine, or ImGui-only GLFW/GLEW dependency.
+  - The standard configure/build/test/packaging/CI workflows produce and validate the Qt app and required headless tools without configuring or linking ImGui components.
+  - Every removed ImGui-only code path is either deleted as unsupported UI behavior or its required behavior is retained through an existing supported Qt/shared workflow, with focused coverage.
+  - Dependency and source searches confirm no stale ImGui target, source, package, resource, artifact, or workflow references remain, except historical decision records that explain the migration.
+  - The complete supported Release build and CTest suite pass; the Qt app launches and output-layout checks match the Qt-only product.
+- Owner-layer: Qt UI and build/packaging; shared domain APIs remain frontend-independent.
+- Constraints: REQ-200, REQ-201, REQ-300, CON-06.
+- Status: accepted (2026-10-19) — D-2026-10-19-k, GitHub issue #966.
+- Revisions: 2026-10-19 — initial, D-2026-10-19-k, GitHub issue #966.
+
+### REQ-441 — Maintain a human-facing major-release feature acceptance checklist
+
+- Purpose: give a release reviewer a repeatable way to exercise the supported GoSurvey product before a major version release.
+- Priority: should
+- Type: quality
+- Decision: D-2026-10-20-b, revised by D-2026-10-20-c.
+- Statement: The repository maintains a concise Markdown checklist for a human to run against the release candidate. It covers the supported product surfaces and their end-to-end workflows, including drawing/file lifecycle, drafting and editing, survey data and calculations, surfaces and 3D, settings, import/export, and release-critical failure/cancellation/data-preservation paths. Coverage is at the major-workflow level; individual commands are not separate checklist items. The source audit reconciles the Command Reference and manual navigation against those workflows and flags meaningful uncovered workflows. The checklist distinguishes supported behavior from known limitations and deferred or unavailable features, and gives the reviewer a place to record version, build, environment, results, and findings.
+- Acceptance:
+  - The checklist is written for a human operator, with actionable steps and observable pass/fail outcomes rather than implementation-only checks.
+  - Every checklist workflow gives prerequisites, numbered test steps, and an expected observable result; a title-only checkbox is insufficient.
+  - Its feature areas are cross-checked against the user manual navigation and the current supported Qt UI/command surfaces; each major area has an end-to-end check and applicable failure/cancel/data-preservation checks. Command Reference entries are reconciled against workflow coverage, but commands do not each require a standalone test item.
+  - Known limitations and deferred/unavailable features are identified as such, so their absence is not mistaken for a release regression or a shipped capability.
+  - The checklist includes release-candidate identification, environment/result fields, and a findings section, and instructs the reviewer to record failures rather than silently skip them.
+  - The major-release gate links to this checklist and requires a PASS for a major-version release.
+  - The document states its coverage sources and coverage limits; it does not claim automated validation.
+- Owner-layer: Documentation / product verification.
+- Constraints: REQ-200, REQ-201, REQ-440.
+- Status: accepted (2026-10-20) — D-2026-10-20-b.
+- Revisions: 2026-10-20 — accepted for the major-release human feature walkthrough checklist; 2026-10-20 — narrowed to major-workflow coverage by D-2026-10-20-c after the initial command-by-command checklist proved too long for timely manual execution.
+
+
+### REQ-443 — Spline command (GitHub issue #803)
+
+- Purpose: GoSurvey can draw straight, circular and elliptical curves but not a smooth free-form
+  curve, and a SPLINE in an imported DXF/DWG drawing is lost. Surveyors and designers use splines
+  for contours, road edges and creek banks.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-101, REQ-057, REQ-047.
+- Statement:
+  1. A typed `SPLINE` command and the Home → Draw → Spline ribbon button create one spline entity.
+  2. **Two creation methods**, chosen by an option on the command line: **Fit** (the default — the
+     curve passes exactly through every point the user clicks) and **CV** (control vertices — the
+     curve is pulled toward, but does not touch, the clicked points). Both methods are
+     degree 3 and open or closed (`Close` option; Enter ends an open spline).
+  3. The spline is a new entity kind stored in its own store in model space (3D points per
+     REQ-057), with layer, colour and linetype like every other entity. It is shown as a smooth
+     curve whose deviation from the true curve never exceeds REQ-101's tolerance.
+  4. Live preview while picking, committing on the snapped point (the preview-vs-commit invariant).
+  5. **Editing.** The spline can be selected, erased, moved, copied, rotated, scaled and mirrored;
+     it appears in the Properties panel (method, degree, closed, point count, length); its
+     points show as grips and dragging one reshapes the curve as one undoable change.
+  6. **Snapping.** Endpoint, fit/control point, nearest and perpendicular snaps work on a
+     spline; it takes part in extents and zoom-extents.
+  7. **Files.** A spline saves to and loads from DXF and DWG as a standard `SPLINE`
+     entity, including its degree, knots, control points, fit points and closed flag. Importing a
+     DXF/DWG `SPLINE` creates a real spline entity instead of dropping it.
+  8. Paper space, TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
+     requirement; a command that cannot act on a spline says so in the command log (REQ-201)
+     and changes nothing.
+- Acceptance:
+  - A Fit spline through four clicked points passes within REQ-101's tolerance of all four; a CV
+    spline does not pass through its interior control points; both can be closed.
+  - Preview matches the committed curve; Esc cancels with nothing added; one UNDO removes the
+    spline and one REDO restores it.
+  - Select, erase, move, copy, rotate, scale, mirror and a grip drag each act on the spline;
+    each is one undo step.
+  - Fit/control point, nearest and perpendicular snaps report the expected positions; the spline
+    is inside zoom-extents.
+  - Save to DXF and to DWG, reopen: the spline is a spline with the same points (within
+    REQ-101). A DXF `SPLINE` produced by another CAD tool imports as a spline.
+  - TRIM/EXTEND/OFFSET/FILLET/JOIN/EXPLODE on a spline log a refusal naming the command and
+    leave the drawing unchanged.
+  - The Qt ribbon button is enabled and runs `SPLINE`; the "not implemented yet" tooltip is gone.
+- Frontend: **Qt only.** The command, entity and file logic lives in the shared Commands / Domain /
+  IO layers, but the ribbon button, prompts, preview and grips are built in the Qt editor
+  (`src/qt/`). The ImGui editor is not changed.
+- Owner-layer: Commands/Domain/IO/Qt UI
+- Decision: D-2026-10-20-e.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+
+
+### REQ-444 — Revision Cloud command (GitHub issue #803)
+
+- Purpose: reviewers circle changed areas with a scalloped outline; GoSurvey has no tool for it.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-316 (curved polyline segments), REQ-057.
+- Statement:
+  1. A typed `REVCLOUD` command and the Home → Draw → Revision Cloud and Annotate → Markup →
+     Revision Cloud ribbon buttons create a revision cloud.
+  2. **Two creation methods:** (a) **Click path** — the user clicks points around the area and
+     closes the cloud (click the start point, or Enter); (b) **Object** — the user picks an
+     existing closed polyline, rectangle or circle, which is converted, with an option to keep or
+     delete the original.
+  3. An **Arc length** option sets the size of each scallop (default 0.5 drawing unit, remembered
+     for the session; a value at or below zero is refused with a log message). A **Reverse
+     direction** option flips which way the scallops bulge.
+  4. **A revision cloud is stored as an ordinary closed polyline whose segments are all arcs**
+     (REQ-316). It introduces no new entity kind, so selection, snapping, grips, layer, undo,
+     DXF and DWG already apply to it unchanged. Its arcs are evenly spaced along the path; each
+     path edge is divided into whole scallops no longer than the Arc length.
+  5. Live preview while clicking, committing on the snapped point.
+- Acceptance:
+  - A cloud drawn around a 10 x 6 area with Arc length 1 closes on itself, every segment is an arc
+    no longer than 1, and the shape contains the clicked area.
+  - Object mode on a rectangle and on a circle each produce a closed cloud; "delete original"
+    removes the source, "keep" leaves it; one UNDO reverses either.
+  - Reverse direction flips the bulge side; an Arc length at or below zero is refused with a
+    logged reason and creates nothing.
+  - The result round-trips through DXF and DWG as a closed polyline with bulges.
+  - Both Qt ribbon buttons are enabled and run `REVCLOUD`; the "not implemented yet" tooltips are
+    gone.
+  - Esc cancels with nothing added.
+- Frontend: **Qt only.** The command logic lives in the shared Commands layer, but the ribbon
+  buttons, prompts and preview are built in the Qt editor (`src/qt/`). The ImGui editor is not
+  changed.
+- Owner-layer: Commands/Qt UI
+- Decision: D-2026-10-20-e.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+
+
+### REQ-442 — Wipeout command (GitHub issue #803)
+
+- Purpose: a wipeout masks the linework beneath it so a note or title block stays readable.
+- Priority: should
+- Type: functional
+- Depends on: REQ-104, REQ-057, REQ-029 (PDF plot output).
+- Statement:
+  1. A typed `WIPEOUT` command and the Home → Draw → Wipeout and Annotate → Markup → Wipeout
+     ribbon buttons create a wipeout.
+  2. **Two creation methods:** (a) **Polygon** — click corner points (at least 3) and close; (b)
+     **Polyline** — pick an existing closed polyline whose segments are straight, with an option to
+     keep or delete it. A closed polyline with arcs is refused with a logged reason.
+  3. A wipeout is a new entity kind: a closed flat polygon filled with the drawing background,
+     with its own layer. It hides every entity drawn **before** it (earlier in draw order) that
+     lies beneath it, and does not hide anything drawn after it.
+  4. A `Frames` option (on/off, system setting) shows or hides the wipeout's outline; with frames
+     off the wipeout can still be selected by clicking its area.
+  5. The mask appears both in the viewport and in PDF plot output (REQ-029).
+  6. Wipeouts can be selected, erased, moved, copied, rotated, scaled, mirrored and corner-grip
+     edited; each is one undo step. Snapping uses the polygon corners.
+  7. **Files.** A wipeout saves to and loads from DXF and DWG as an AutoCAD `WIPEOUT` entity. If
+     the writer cannot produce a file AutoCAD itself accepts (checked with the AutoCAD oracle,
+     `accoreconsole`), this is a SPEC GAP to raise, never a silent drop.
+- Acceptance:
+  - A wipeout over a line hides the part beneath it; a line drawn after the wipeout stays
+    visible on top of it.
+  - The same drawing plotted to PDF shows the same mask.
+  - Frames off hides the outline but the area still picks; frames on shows it.
+  - A closed arc-containing polyline is refused with a log message and creates nothing.
+  - Save to DXF and DWG, reopen: the wipeout is a wipeout with the same corners (within REQ-101),
+    and AutoCAD opens the DWG without an error.
+  - Both Qt ribbon buttons are enabled and run `WIPEOUT`; the "not implemented yet" tooltips are
+    gone.
+  - Esc cancels with nothing added; one UNDO removes the wipeout.
+- Frontend: **Qt only.** The command, entity, file and PDF-plot logic lives in the shared layers,
+  but the ribbon buttons, prompts, preview, masking in the viewport and grips are built in the Qt
+  editor (`src/qt/`). The ImGui editor is not changed.
+- Owner-layer: Commands/Domain/IO/Render/Qt UI
+- Decision: D-2026-10-20-e.
+- Status: accepted
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+
+
+### REQ-448 — LandXML export (GitHub issue #1002, part of #802)
+
+- Purpose: surveyors hand ground data to engineers and to other software; LandXML is the common
+  interchange file for points, surfaces and linework, and the Output → Export → Export to LandXML
+  ribbon button has been a placeholder.
+- Priority: should
+- Type: functional
+- Depends on: REQ-068 (TIN surfaces), REQ-087 (feature lines), REQ-022 and REQ-357 (drawing unit and
+  foot definition), REQ-101 (coordinate precision), REQ-201 (failures are observable), REQ-300
+  (no new dependency).
+- Statement:
+  1. A typed `EXPORTLANDXML "<file>"` command and the Output → Export → Export to LandXML ribbon
+     button write the **current drawing** to a LandXML 1.2 file. Typed without a file, the Qt editor
+     opens a save dialog and then runs the same command; headless runs always name the file.
+  2. **Contents.** Every survey point (`CgPoint`: point number as `name`, description as `desc`,
+     field code as `code`), every built TIN surface (`Surfaces/Surface`: name, description, points,
+     triangular faces) and every feature line (`PlanFeatures/PlanFeature`: name, description, one
+     `Line` per segment, plus the closing segment of a closed line).
+  3. **Coordinates** are written as world coordinates, northing first: the drawing's stored local X/Y
+     get the document origin added back in double (REQ-101), and Z is the absolute elevation.
+  4. **Units.** The file declares the drawing's unit (feet as US survey or international foot per
+     Drawing Settings, inches, meters or millimeters) and does not rescale any value. A unitless
+     drawing writes no `Units` element rather than naming a unit it does not have.
+  5. **Failure is visible (REQ-201).** An empty drawing writes no file. An unwritable destination
+     logs why and leaves any earlier file at that path untouched. An item LandXML cannot hold here
+     (a grid surface, a surface with no built triangulation, a feature line under two vertices, a
+     non-finite coordinate) is skipped and named in the log. Names and descriptions are written as
+     valid XML text; characters XML cannot hold are replaced and counted in the log.
+  6. **Out of scope** (separate requirements if wanted): importing LandXML (GitHub #1003), grid
+     surfaces, the coordinate-system/zone element, surface source data (breaklines, boundaries,
+     point files), feature-line elevation-point flags, and alignments, profiles or corridors.
+- Acceptance:
+  - A drawing with survey points, a built TIN and a feature line exports a file that contains all
+    three, with names and descriptions intact, including names containing `& < > "`.
+  - A drawing whose document origin is far from zero exports world coordinates (origin added
+    back) that equal the stored value plus the origin exactly in double.
+  - US-survey-foot, international-foot, inch, meter and millimeter drawings declare the matching
+    `Units`; a unitless drawing declares none.
+  - The file is accepted by an independent reader: it validates against the official
+    LandXML 1.2 schema (`tools/validate-landxml.ps1`).
+  - An empty drawing, an unwritable path and a skipped item each log a reason; no partial file is
+    left behind.
+  - The Output → Export → Export to LandXML button is enabled and runs `EXPORTLANDXML`; its "not
+    implemented yet" tooltip is gone.
+- Frontend: **Qt only.** The writer and command live in the shared IO and Commands layers
+  (`src/io/LandXmlIo.*`); the save dialog and ribbon button are in the Qt editor (`src/qt/`).
+- Owner-layer: IO/Commands/Qt UI
+- Decision: D-2026-10-20-i.
+- Status: accepted
+- Revisions: 2026-10-20 — proposed from GitHub #1002 as implemented; accepted by the user the same day (D-2026-10-20-i).
+
 
 ### REQ-100 — Frame budget
 - Purpose: interactive responsiveness (desktop/OpenGL)
@@ -13038,6 +13502,68 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+### REQ-445 — PDF plot honours the Page Setup options (GitHub issue #769)
+
+- Purpose: a control in the Page Setup dialog must change the printed sheet as the dialog says
+- Priority: should
+- Type: functional
+- Depends on: REQ-029 (single-layout PDF plot), REQ-101 (tolerance)
+- Statement: The PDF plot of a paper layout honours four Page Setup options, each read from the
+  layout's saved settings: (a) **plot offset X and Y**, which move the sheet content by the stated
+  amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
+  scales the content to fill the printable area; (d) **plot scale**, which sets the scale of the
+  content on the sheet. A Page Setup control that the plot does not honour is a defect, not an
+  accepted limitation.
+- Acceptance:
+  1. with each option set on its own, the PDF differs from the same layout plotted with no option
+     set, and a measured offset, centre position, fitted extent or plotted scale matches the stated
+     value within REQ-101 tolerance;
+  2. with all four options at their defaults, the PDF is identical to the current plot (no
+     regression);
+  3. a test exists for each of the four options.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1).
+
+### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
+
+- Purpose: the printed sheet must show line thickness and dash patterns as the drawing sets them
+- Priority: should
+- Type: functional
+- Depends on: REQ-049 (plot of native sheet geometry), REQ-048 (plot colour), REQ-029
+- Statement: The PDF plot draws each plotted line at the thickness of its lineweight and with the dash
+  pattern of its linetype (continuous, dashed, hidden, centre and the other drawing linetypes), for
+  model geometry shown through viewports and for native paper-space geometry (REQ-049). A line with a
+  continuous linetype and the default lineweight is plotted as it is today.
+- Acceptance:
+  1. a line with a 2 mm lineweight plots at a stroke width measurably thicker than the default line;
+  2. a line with a dashed linetype plots with a dash pattern (gaps present), and a continuous line
+     plots solid;
+  3. a plot with only default lineweights and continuous linetypes is identical to today's plot;
+  4. a test exists for lineweight and for linetype.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-g, GitHub issue #770, audit #751 P2/P3).
+
+### REQ-447 — One undo history across model and paper space (GitHub issue #771)
+
+- Purpose: undo must match what the user did, in the order they did it
+- Priority: should
+- Type: functional
+- Depends on: REQ-038, REQ-039 (paper-space edits are undoable)
+- Statement: There is one undo history for the drawing. Every undoable action, in model space or in
+  paper space, is one step in the order it was performed. Undo and Redo follow that order whatever
+  space is active, so an undo may change a space the user is not currently viewing. The active space
+  never splits the history.
+- Acceptance:
+  1. draw a model line, then a paper line, then a paper circle; Undo removes the circle, then the paper
+     line, then the model line, in that order, whichever space is active between steps;
+  2. Redo restores the same steps in the same order;
+  3. a test covers the cross-space order.
+- Owner-layer: Commands / Domain
+- Status: accepted
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-h, GitHub issue #771, audit #751 N1).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -13153,6 +13679,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
+
+  2026-10-20 — **the PR-time `/analyze` check is now blocking** (D-2026-10-20-a, GitHub #977). The backlog was triaged: real findings were fixed, and the justified suppressions are listed in `spec/coding-standards.md` section 11. `pr-checks.yml`'s `lint / msvc-analyze` job builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`), so any new `/W4` or `/analyze` warning in our own targets fails the PR. The `release.yml` build is unchanged and still not failed by findings. There are no accepted baseline findings: the baseline is zero.
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
@@ -13532,7 +14060,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     or any existing call site.
 - Owner-layer: Domain (`ray3d.hpp`), Commands (`CadCommands.cpp`: `RotateSelectionAboutAxis`,
   `CommitArrayPolar`, the Polar-tilted-UCS refusal in `HandleArrayText`).
-- Status: proposed
+- Status: accepted
 - Revisions: 2026-09-07 — catalogued from the scope note on GitHub issue #400 (comment following
   increments 1-3): two independent refusals (Polar ARRAY under a tilted UCS; ROTATE/SCALE/solid
   rotation) were found to share one missing primitive while implementing issue #400 increments 1 and
@@ -13896,6 +14424,23 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
 | REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |
 | REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
+| REQ-431 | Qt UI | `GoSurveyQtTests`: `issue912HighlighterColoursEachTokenKindAndKeepsText`, `issue912GutterNumbersLinesWidensScrollsAndMarksError`, `issue912InlineErrorShowsReasonWithoutChangingAnything`, `issue912PlanPreviewBuildsLegsClosingLegShotsAndEllipses`, `issue912FilesSummaryFollowSolveAndEditsAndRefusedCommitSaysWhy`, `issue912SaveInsideProjectTracksOnlyWhenWritable` | accepted |
+| REQ-432 | Qt UI | GoSurveyQtTests: issue913RawImportsMergeAndReportPerFileFailures, issue913JobXmlImportsThroughQtAndCancelKeepsTheSession | accepted |
+| REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
+| REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
+| REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
+| REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
+| REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
+| REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
+| REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
+| REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
+| REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
+| REQ-448 | IO/Commands/Qt UI | `LandXmlExportTests` (points, TIN, feature lines, units, failures, XML text), `QtEditorTests` `issue1002RibbonExportsLandXmlThroughTheCommand`, transcript `issue1002-landxml-export`, schema check `tools/validate-landxml.ps1` | accepted |
+| REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
+| REQ-446 | IO/Renderer | `PdfPlot` tests for lineweight stroke width and linetype dash pattern; default plot unchanged — to be added with the implementing PR | accepted |
+| REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -13965,26 +14510,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
 | REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half was run and confirmed by the user in the application 2026-08-18**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
-| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step | accepted |
+| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step; Qt: `issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy` (decline remains unresolved if preference persistence fails, then resolves after a successful save) | accepted |
+| REQ-382 | IO/Domain/UI | Qt: `issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved` (typed geometry survives a refused save and the undo snapshot remains usable); existing `[req382]` project-lock tests | accepted |
 | REQ-092 | Platform/backend | `accounts-worker/test.mjs` **green 2026-08-23** (offline, real RSA keypair generated in-process: missing/malformed/tampered/expired/wrong-issuer/wrong-audience/alg-none/missing-subject tokens all rejected 401 before any D1 query; valid token for a new user returns the default tier and issues exactly one insert; valid token for an existing user returns their stored tier with no insert; D1 outage is 503; missing `AUTH0_DOMAIN` binding is 500, not misreported as unauthorized; email upsert/preserve-tier/malformed-dropped cases added when email wiring landed) + **live, 2026-08-23**: deployed Worker confirmed live (401/404 as expected), a real sign-in's `users` row confirmed via direct D1 query (`auth0_sub`, `tier: 'free'`, and — after the email wiring landed — a populated `email`) | accepted |
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
-| REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Two further GUI-only defects then surfaced and were fixed: LENGTHEN refused any pick made before its sub-mode had a value, making the ribbon button a dead end (TASK-100 — the pick now latches the object, reports its length and prompts, with Total as the new default sub-mode), and BREAK gained a live preview of the material a break removes, on its own opaque render channel because the shared translucent preview batch is invisible when painted over the object it describes (TASK-101). Both amendments recorded as D-2026-08-24-e / D-2026-08-24-f. **Steps 1-5 are complete**: 573/573 regression green, and the user confirmed the manual GUI pass on 2026-08-24, closing TASK-094..101. **Step 6 (FILLET/CHAMFER) is complete**: TASK-102 (FILLET, step 6a) and TASK-103 (CHAMFER, step 6b) both self-verified 2026-08-24 — full model+paper-space parity for both, tangent-arc/corner-point geometry unit-tested (8 + 3 cases), four headless transcripts (two CLICK-driven), two real bugs found and fixed during TASK-102's self-verification (triple undo-snapshot per apply; pick-based rather than computed-point-based near/far endpoint selection) — both fixes live in shared code, so CHAMFER's own transcripts passed on the first run rather than repeating either mistake. 588/588 regression green; manual GUI pass pending for both (this project's own no-UI-automation constraint). Steps 7-8 (ARRAY/EXPLODE) not started | accepted |
-| REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-105 | Commands/UI | **DIST accepted and built** (GitHub issue #382): two-point slope distance + delta X/Y/Z in the active UCS, `DistCommandTests [req105]`. Amended 2026-09-09 (D-2026-09-09-f, TASK-235) to add the surveyor's other two numbers — horizontal distance and grade — in REQ-074's own wording, so SURFELEV and DIST cannot describe one slope two ways; the vertical and level cases are refusals with a stated reason (REQ-201) rather than divisions by a zero run or rise, covered by `DistCommandTests` and `headless.req105-dist-horiz-grade`. This row said "proposed — not yet scoped" until 2026-09-09, two days after the body was accepted — the summary table and the requirement text sit ~4,500 lines apart and drifted. AREA/LIST/MASSPROP remain proposed and unbuilt **GitHub #149 acceptance 8 closed 2026-09-11 (TASK-257).** DIST had no survey-magnitude case at all — before this, no coordinate in `DistCommandTests.cpp` exceeded about 83,000 — while `AppCommandState::distFromX/Y/Z` are `float`, whose resolution at 2.2e6 is about **0.25 ft, 125x REQ-101**. Four `[req149]` cases now measure it at **E 2,196,000 / N 1,400,000**: the 3-4-5 deltas and slope; a **0.010 ft** delta, which is the one a raw float loses entirely; horizontal distance and grade, a RATIO, so quantization shows as a wrong percentage rather than a small absolute error; and small work near the origin followed by a survey-magnitude measurement, with a **fractional** delta, because 2,196,000 and 2,196,003 are both under 2^24 and therefore exact as floats even unabsorbed — an integer delta would have passed whatever the origin did and proved nothing. Each case asserts the OUTCOME and the MECHANISM together: `MaybeEstablishDocumentOriginFromTypedPoint` rebases the document origin once a typed point passes `kLargeCoordinateRebaseThreshold`, so the floats never hold a survey coordinate. That third configuration also **corrected an assumption** — the origin re-establishes when work moves out, rather than staying where earlier small work put it. **Proven to bite:** disabling the rebase fails 3 of the 4 cases and 9 assertions, with `distFromX` reported as `2196000.0` | accepted (DIST only) |
-| REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-109 | Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-109 | Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765) | accepted |
-| REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
+| REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
@@ -14037,7 +14583,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
 | REQ-154 | Commands/Renderer/UI/IO | done (TASK-140) — `UcsTests` (33 cases); `req154-ucs-plan` transcript; `UCS` / `PLAN` / `UCSFOLLOW` (GitHub issue #126). 2026-09-10 (TASK-243, D-2026-09-10-a, GitHub #156): `Object` now aligns to a planar face of a B-rep solid — deferred item 4 partially lifted, thin consumer of the REQ-318 sub-object pick; `headless.issue156-ucs-object-solid-face` | accepted |
 | REQ-155 | Commands/Renderer/UI/IO | done (TASK-157) — `ViewportUcsTests` T1–T6: point typed while floating resolves in the viewport frame; `UCSFOLLOW=1` re-plans only the active viewport (sibling + model-view camera unchanged); viewport-UCS field independence; `.gs` round-trip + legacy load all-World; readout resolves in the viewport frame; save-while-floating records the drawing frame. Manual GUI spot-check (float a viewport, `UCS`, grid/crosshair rotate in that viewport only) pending — headless cannot render. (GitHub issue #155, D-2026-08-31-c) | accepted |
-| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
+| REQ-161 | Application/UI/Build | retired 2026-10-19 by REQ-440; historical record only | retired |
 | REQ-170 | IO/Domain/UI/Build | planned — LibreDWG DXF/DWG; R2000 default write (D-2026-09-30-c); no converter on happy-path open; AutoCAD opens emit without Recover; GPL-3 | accepted |
 | REQ-171 | Domain/Renderer/IO | planned — point cloud entity; shared immutable payload; logged DXF/DWG exclusion | accepted |
 | REQ-172 | IO/Domain/UI | planned — PTS→PTX→LAS→LAZ→E57 read+write; malformed refuse | accepted |
@@ -14054,8 +14600,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-329 | Commands/Survey/Viewport | accepted, sliced per command (GitHub issue #402, D-2026-09-08-b). Increment 1 (MOVE/COPY 3D + active-UCS picks and typed input) done — TASK-218, `issue402-move-copy-ucs` transcript. Increment 2 (ROTATE about the UCS Z axis; `RotateSelectionInPlaceAboutAxis`; in-plane picked angle) done — TASK-219, `issue402-rotate-ucs` transcript. Increment 3 (SCALE uniform on every axis about the UCS-resolved base; `ScaleSelectionZAboutBase`) done — TASK-220, `issue402-scale-ucs` transcript. Increment 4 (STRETCH crossing box + displacement in the UCS plane; `stretchRectInUcsPlane`) done — TASK-221, `issue402-stretch-ucs` transcript. Increment 5 (MIRROR across the plane containing the mirror line; `ray3d::ReflectPointAcrossPlane`, `DuplicateCadSelectionReflectedAcrossPlane`) done — TASK-222, `issue402-mirror-ucs` transcript. Increment 6 (ALIGN) closed no-change (D-2026-09-08-c). Increment 7 (OFFSET in-plane perpendicular + plane-frame side pick; `OffsetPlaneLocal`) done — TASK-223, `issue402-offset-ucs` transcript. **REQ-329 fully delivered.** ROTATE is UCS-Z-only (REQ-328 primitive), a full ROTATE3D is a separate future issue. | accepted |
 | REQ-331 | Domain/Commands | increments 1 and 2 delivered 2026-09-08 (D-2026-09-08-f, ADR-046 amendment (k), TASK-222) — kernel + the `CHAMFER` verb on a sub-object edge selection, in one task because the delta over REQ-323 is small and entirely mechanical. `ChamferEdgeTests` (15 cases: a box against the single-edge closed forms volume **1560** / area **796+40*sqrt(2)**, topology 10/15/7, and every face planar and every edge straight; ALL TWELVE edges against the bevelled-box forms **1344** and **368+232*sqrt(2)** with topology **32/48/18** — 6 quads + 12 HEXAGONS, no corner face, and every vertex of degree 3; a WEDGE proving the setback does NOT move with the dihedral where REQ-323's proves that it does; the three-edge corner landing one vertex at the meet of the three bevel planes; every refusal by name including the partial and non-orthogonal corners, the oblique end face, NaN, and the same edge twice) + `headless.req331-chamfer-solid` (Ctrl+click edges then `CHAMFER 2`, a three-edge corner at **1530** / **734+67*sqrt(2)**, all twelve edges end-to-end through the pick, the selection cleared, UNDO, four refusals leaving the solid untouched, a .gs round-trip, the prompted form with ESC and with a bad then a refused answer, edges gathered from INSIDE the running command, and a bare CHAMFER with nothing selected still being the 2D command). **#148 acceptance 5 now closed for BOTH halves**, which closes the last of the seven slices #148's own pre-implementation survey listed. **The cross-check is the finding worth keeping:** the bevelled box's inner-box-plus-slabs term is **1120** and its planar-face total is **368** — the identical constants in REQ-323's rounded box `1120 + 344*pi/3` and `368 + 120*pi`, because a fillet and a chamfer share their inner box and slabs exactly and differ only in what fills the twelve edge channels and the eight corners. Two independently derived acceptances confirming each other; neither could do that alone. Also discharges **TASK-221 DEBT-1** — the sub-object pre-highlight now reaches CHAMFER, which that task deferred in as many words until a solid chamfer existed. **Deferred by decision, each by name:** the AutoCAD two-distance / base-face form (D-2026-09-08-f item 13 — and the coupling is stated: with `D1 != D2` the corner stays a point but the cut-vertex solve changes and the increment-2 closed forms are replaced), a concave edge, an oblique or curved end face, a curved edge, a partial corner and a non-orthogonal corner. **TASK-224** (same review, Finding 2): a value the kernel REFUSED was followed by "Could not parse CHAMFER input", contradicting the refusal one line above it — `Handle*Text`'s return value was being read as "did the command advance" when the caller's only use of it is the trailer decision, so it now means "was this input understood" and is documented as such. FILLET had the same defect and both were fixed together; the driver gains `EXPECT NOLOG` (scoped to the last command, because nothing resets the log) and it was proven to bite. **Item 4 AMENDED 2026-09-08 as item 4b** (D-2026-09-08-g, ADR-046 amendment (l), TASK-223) after `/code-review high` found the precondition was per-EDGE and read the ORIGINAL solid: `CHAMFER 6` on two opposite top edges was ACCEPTED and returned a self-intersecting solid reporting volume 880. REQ-323 had the same defect and both were fixed together through ONE shared implementation, on the user's instruction. 4 new `ChamferEdgeTests` cases assert the refusals and the largest value that still fits. Full suite 1333/1333. **TASK-229** (2026-09-09): driving the real GUI with the Developer Shell (REQ-161) found that only the HOVER half of the mid-command Ctrl+click had been added - `CadUi.cpp` routed the pick to the sub-object path for `Kind::Fillet` alone, so during CHAMFER an edge lit up under the cursor and clicking it did NOTHING. Invisible to every existing test: the transcripts drive the pick with the `SUBOBJECT` verb, which calls `SubmitSubObjectPick` DIRECTLY and never passes through that routing, so `headless.req331-chamfer-solid` ran green straight across the gap. Fixed, and covered by `--devshell-run req331-chamfer-viewport` - the first devshell test to reach the VIEWPORT, which also supplies the pre-highlight MEASUREMENT that TASK-221 DEBT-2 and TASK-222 had both stood in for with an argument from similarity | accepted |
 | REQ-326 | Domain/Commands, UI | done (GitHub issue #395, D-2026-09-07-a). `CadSnapTests.cpp` `[CadSnap][issue395]` (7 cases: Vertex + F4 master gate, Midpoint-on-edge, Nearest-to-face regression, Center-of-face on a planar box face, Center-of-face on a cylinder end-cap landing on the axis rather than a vertex average, Perpendicular's foot on a planar face, Knot enumeration against a hand-built `nurbs::Patch`) plus the 3 pre-existing `[req313]` solid-snap cases updated to the new per-mode flags. Full suite 1277/1278 (the one failure, `a missing or corrupt store loads as an empty list`, is pre-existing on `beta` and unrelated — reproduced against `beta` directly). |
-| REQ-332 | Domain | proposed, kernel delivered 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) — `brep::Rotate` (rigid, arbitrary axis) and `brep::Scale` (uniform), plus `nurbs::Rotate` / `nurbs::Scale` on a control net. **Slice 1 of the three GitHub issue #148 acceptance 4 needs**; the typed ROTATE/SCALE commands and the gizmo handles are slices 2 and 3. **The root cause it removes:** `brep.hpp` declared exactly four operations touching an existing solid — `Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)` — and none turned or resized one, so `DropSolidsFromSelectionForTransform` (9 call sites) was covering for a missing capability rather than enforcing a policy. **The finding worth keeping is what a wrong version looks like.** Deleting the three axis lines from the frame rotation — the exact defect a per-field sweep at a call site produces — splits by axis: about world Z `Validate` catches it and the rotation is refused, but about a **tilted** axis it does not, returning a closed, manifold, positive-volume solid that `Validate` calls `Ok` and that reports volume **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces where it faced before the solid turned under it. Measured by rebuilding, not argued. The second decision is the **recipe**: a push (REQ-319 item 9) and a fillet (REQ-323 item 9) both DROP it because the solid is no longer what it describes, but a rotated box is still a box and a uniformly scaled box is a box with scaled dimensions, so here the recipe FOLLOWS the solid — the precedent `Translate` set — and dropping it would discard a true description rather than a false one. A degenerate rotation axis is refused rather than normalized because the failure is silent: a zero axis reduces Rodrigues to `v * cos(angle)`, a shrink wearing a rotation's name. | `RotateSolidTests` (14 cases: the isometry about world Z and about a tilted off-origin axis; four quarter turns returning every vertex to 1e-12; a cylinder's own axis landing where the rotation puts it; `IsRightHandedOrthonormal` across EVERY stored frame; `k^3`/`k^2` on a flat-faced and a curved solid; scale-then-inverse returning to 1e-12; every frame axis bit-for-bit unchanged under a scale; the recipe turned, and resized so that it agrees with the geometry; a NURBS patch reproducing both transforms at every evaluated parameter with weights and knots untouched; the zero-axis shrink measured on the primitive; and every refusal by name). Full suite **1373/1373**, up from 1359. See also **REQ-333**, which closes issue #148 criterion 3's other two thirds. **Increment 2 (D-2026-09-09-b, TASK-231)** — the typed commands: `RotateSelectedSolids` / `ScaleSelectedSolids` replace 4 of the 9 `DropSolidsFromSelectionForTransform` sites, `ApplyScaleToSelection` gains `bz`, and REQ-322 item 6 becomes item 6b. Covered by `headless.req332-rotate-scale-solid` (ROTATE 90 in plan with the extents swapped and `EXPECT NOLOG` on the old refusal; UNDO restoring exactly; ROTATE under a **tilted UCS** landing at bounds `(0,-5,-10)-(8,5,10)` where world Z would give `(-5,-10,0)-(5,10,8)` — the single line that separates a correct axis from a hard-coded one; the plan-view Z asymmetry with a solid scaling `1600 -> 12800` beside a line holding `z = 5`; the scale base's own Z threaded through at elevation 4; a `.gs` round trip; and MIRROR still refusing). **Both new assertions were proven to bite**: hard-coding world Z fails the tilted case at `mnX -5 vs 0`, and hard-coding `bz = 0` fails the elevation case at `mnZ 8 vs 4`. `req322-move-3d`'s ROTATE-refusal assertion was rewritten onto MIRROR rather than deleted. Full suite **1374/1374**. | proposed |
-| REQ-333 | Domain | proposed, delivered 2026-09-09 (D-2026-09-09-d, ADR-046 amendment (n), TASK-233) — `brep::MoveVertex` and `brep::MoveEdge`, closing **GitHub issue #148 criterion 3's** other two thirds (faces were REQ-319). **The requirement is a DEFINITION, and it is forced rather than chosen:** moving a box corner and leaving everything else alone is not representable — the three quads meeting there would each end up with four non-coplanar points and `SurfaceKind` has nowhere to store that, so the result would be faces that do not contain their own boundaries, the exact failure REQ-319's precondition exists for and one `Validate` cannot see. A planar face has one degree of freedom that keeps it planar (sliding along its normal), three planes at a corner are exactly a point and two along an edge are exactly a line — so the move IS "offset the adjacent planes, re-solve every affected corner", which is amendment (i)'s algorithm with its one-face assumption lifted. Exact, not approximate: each offset plane reads `dot(n,x) = d + dot(n,delta)`, which `p + delta` satisfies identically. **Two things that look like shortfalls and are not:** every other corner of those faces moves too (the faces moved and their boundaries came with them), and the along-the-edge component of a drag is annihilated (the edge direction lies in both faces, and an edge slid along its own line is the same edge) — so a drag entirely along an edge is refused as no motion rather than reported as a move that did nothing. Recipe DROPPED, where REQ-332's rotate/scale keep it, under amendment (m)'s one rule. `PushPullFace` deliberately not routed through the shared core yet (its planar path is entangled with two curved paths); the core takes its failure codes as a parameter so that stays a wiring change. | `MoveSubObjectTests` (7 cases: a box corner landing EXACTLY at `p + delta` with the box still 8/12/6, every face planar, and volume 22x11x9 in closed form; the same corner dragged inward to 17x8x6; a box edge moving its two faces to 20x13x10; the along-edge drag refused AND a diagonal drag proven identical to its perpendicular component alone — the same claim as a refusal and as an equality; a WEDGE, whose corner planes are not mutually perpendicular, landing exactly too, so the three-plane solve is general rather than three independent coordinates; every refusal by name including a pyramid apex's four planes and a cylinder rim's curved neighbour; and every new refusal having a readable sentence). **Proven to bite:** replacing the per-plane projection `dot(delta, n)` with a uniform offset fails 3 of the 7. **A real defect this found in the writing:** `CollectFaceVertices` APPENDS rather than clears, so a reused buffer made every face after the first look as though it used the vertex — caught because the box case refused with `MoveVertexNotThreePlanes` while the vertex demonstrably had three faces. Full suite **1391/1391**. **Increment 2 (D-2026-09-09-e, TASK-234)** — the grips: `CadGizmoMode::SubObjectEdge` / `SubObjectVertex`, `CadSubObjectVertexGrip` / `CadSubObjectEdgeGrip`, `CadApplyMoveVertex` / `CadApplyMoveEdge`, and `brep::FacesAtVertex` / `FacesAlongEdge` made public so the UI can ask what meets where before offering a handle. Covered by `GizmoSubObjectMoveTests` (5 cases: three handles on a vertex anchored ON it and two on an edge anchored at its MIDPOINT with neither axis along the edge; no gizmo at all on a pyramid apex or a cylinder rim; a grip drag matching `brep::MoveVertex` called directly, vertex for vertex; the selection surviving so a SECOND drag compounds without a re-pick; and a refused drag leaving the document untouched) + `headless.req333-vertex-edge-grips` (a camera-driven vertex drag growing the box to 1840/988 with the selection still live, one UNDO restoring it, a `.gs` round trip, and a pyramid apex showing no handle). **Proven to bite:** deleting the three-planes guard makes the pyramid apex sprout a handle, failing both the unit case and the transcript. **A second stale assertion corrected, and it had been passing for the wrong reason:** `req148-gizmo-subobject`'s "a VERTEX gets no gizmo" block actually held TWO sub-objects, because a second pick ADDS rather than replaces — the pre-REQ-333 code returned None for any non-face selection and so could not tell a lone vertex from a pair. Split into a fresh-drawing vertex case and a separate two-sub-objects case, which are now different claims. Full suite **1397/1397**. | proposed |
+| REQ-332 | Domain | proposed, kernel delivered 2026-09-09 (D-2026-09-09-a, ADR-046 amendment (m), TASK-230) — `brep::Rotate` (rigid, arbitrary axis) and `brep::Scale` (uniform), plus `nurbs::Rotate` / `nurbs::Scale` on a control net. **Slice 1 of the three GitHub issue #148 acceptance 4 needs**; the typed ROTATE/SCALE commands and the gizmo handles are slices 2 and 3. **The root cause it removes:** `brep.hpp` declared exactly four operations touching an existing solid — `Translate`, `PushPullFace`, `FilletEdge(s)`, `ChamferEdge(s)` — and none turned or resized one, so `DropSolidsFromSelectionForTransform` (9 call sites) was covering for a missing capability rather than enforcing a policy. **The finding worth keeping is what a wrong version looks like.** Deleting the three axis lines from the frame rotation — the exact defect a per-field sweep at a call site produces — splits by axis: about world Z `Validate` catches it and the rotation is refused, but about a **tilted** axis it does not, returning a closed, manifold, positive-volume solid that `Validate` calls `Ok` and that reports volume **1142.5693570452 against a true 1600, 28.6% wrong**, because every face still faces where it faced before the solid turned under it. Measured by rebuilding, not argued. The second decision is the **recipe**: a push (REQ-319 item 9) and a fillet (REQ-323 item 9) both DROP it because the solid is no longer what it describes, but a rotated box is still a box and a uniformly scaled box is a box with scaled dimensions, so here the recipe FOLLOWS the solid — the precedent `Translate` set — and dropping it would discard a true description rather than a false one. A degenerate rotation axis is refused rather than normalized because the failure is silent: a zero axis reduces Rodrigues to `v * cos(angle)`, a shrink wearing a rotation's name. | `RotateSolidTests` (14 cases: the isometry about world Z and about a tilted off-origin axis; four quarter turns returning every vertex to 1e-12; a cylinder's own axis landing where the rotation puts it; `IsRightHandedOrthonormal` across EVERY stored frame; `k^3`/`k^2` on a flat-faced and a curved solid; scale-then-inverse returning to 1e-12; every frame axis bit-for-bit unchanged under a scale; the recipe turned, and resized so that it agrees with the geometry; a NURBS patch reproducing both transforms at every evaluated parameter with weights and knots untouched; the zero-axis shrink measured on the primitive; and every refusal by name). Full suite **1373/1373**, up from 1359. See also **REQ-333**, which closes issue #148 criterion 3's other two thirds. **Increment 2 (D-2026-09-09-b, TASK-231)** — the typed commands: `RotateSelectedSolids` / `ScaleSelectedSolids` replace 4 of the 9 `DropSolidsFromSelectionForTransform` sites, `ApplyScaleToSelection` gains `bz`, and REQ-322 item 6 becomes item 6b. Covered by `headless.req332-rotate-scale-solid` (ROTATE 90 in plan with the extents swapped and `EXPECT NOLOG` on the old refusal; UNDO restoring exactly; ROTATE under a **tilted UCS** landing at bounds `(0,-5,-10)-(8,5,10)` where world Z would give `(-5,-10,0)-(5,10,8)` — the single line that separates a correct axis from a hard-coded one; the plan-view Z asymmetry with a solid scaling `1600 -> 12800` beside a line holding `z = 5`; the scale base's own Z threaded through at elevation 4; a `.gs` round trip; and MIRROR still refusing). **Both new assertions were proven to bite**: hard-coding world Z fails the tilted case at `mnX -5 vs 0`, and hard-coding `bz = 0` fails the elevation case at `mnZ 8 vs 4`. `req322-move-3d`'s ROTATE-refusal assertion was rewritten onto MIRROR rather than deleted. Full suite **1374/1374**. | accepted |
+| REQ-333 | Domain | proposed, delivered 2026-09-09 (D-2026-09-09-d, ADR-046 amendment (n), TASK-233) — `brep::MoveVertex` and `brep::MoveEdge`, closing **GitHub issue #148 criterion 3's** other two thirds (faces were REQ-319). **The requirement is a DEFINITION, and it is forced rather than chosen:** moving a box corner and leaving everything else alone is not representable — the three quads meeting there would each end up with four non-coplanar points and `SurfaceKind` has nowhere to store that, so the result would be faces that do not contain their own boundaries, the exact failure REQ-319's precondition exists for and one `Validate` cannot see. A planar face has one degree of freedom that keeps it planar (sliding along its normal), three planes at a corner are exactly a point and two along an edge are exactly a line — so the move IS "offset the adjacent planes, re-solve every affected corner", which is amendment (i)'s algorithm with its one-face assumption lifted. Exact, not approximate: each offset plane reads `dot(n,x) = d + dot(n,delta)`, which `p + delta` satisfies identically. **Two things that look like shortfalls and are not:** every other corner of those faces moves too (the faces moved and their boundaries came with them), and the along-the-edge component of a drag is annihilated (the edge direction lies in both faces, and an edge slid along its own line is the same edge) — so a drag entirely along an edge is refused as no motion rather than reported as a move that did nothing. Recipe DROPPED, where REQ-332's rotate/scale keep it, under amendment (m)'s one rule. `PushPullFace` deliberately not routed through the shared core yet (its planar path is entangled with two curved paths); the core takes its failure codes as a parameter so that stays a wiring change. | `MoveSubObjectTests` (7 cases: a box corner landing EXACTLY at `p + delta` with the box still 8/12/6, every face planar, and volume 22x11x9 in closed form; the same corner dragged inward to 17x8x6; a box edge moving its two faces to 20x13x10; the along-edge drag refused AND a diagonal drag proven identical to its perpendicular component alone — the same claim as a refusal and as an equality; a WEDGE, whose corner planes are not mutually perpendicular, landing exactly too, so the three-plane solve is general rather than three independent coordinates; every refusal by name including a pyramid apex's four planes and a cylinder rim's curved neighbour; and every new refusal having a readable sentence). **Proven to bite:** replacing the per-plane projection `dot(delta, n)` with a uniform offset fails 3 of the 7. **A real defect this found in the writing:** `CollectFaceVertices` APPENDS rather than clears, so a reused buffer made every face after the first look as though it used the vertex — caught because the box case refused with `MoveVertexNotThreePlanes` while the vertex demonstrably had three faces. Full suite **1391/1391**. **Increment 2 (D-2026-09-09-e, TASK-234)** — the grips: `CadGizmoMode::SubObjectEdge` / `SubObjectVertex`, `CadSubObjectVertexGrip` / `CadSubObjectEdgeGrip`, `CadApplyMoveVertex` / `CadApplyMoveEdge`, and `brep::FacesAtVertex` / `FacesAlongEdge` made public so the UI can ask what meets where before offering a handle. Covered by `GizmoSubObjectMoveTests` (5 cases: three handles on a vertex anchored ON it and two on an edge anchored at its MIDPOINT with neither axis along the edge; no gizmo at all on a pyramid apex or a cylinder rim; a grip drag matching `brep::MoveVertex` called directly, vertex for vertex; the selection surviving so a SECOND drag compounds without a re-pick; and a refused drag leaving the document untouched) + `headless.req333-vertex-edge-grips` (a camera-driven vertex drag growing the box to 1840/988 with the selection still live, one UNDO restoring it, a `.gs` round trip, and a pyramid apex showing no handle). **Proven to bite:** deleting the three-planes guard makes the pyramid apex sprout a handle, failing both the unit case and the transcript. **A second stale assertion corrected, and it had been passing for the wrong reason:** `req148-gizmo-subobject`'s "a VERTEX gets no gizmo" block actually held TWO sub-objects, because a second pick ADDS rather than replaces — the pre-REQ-333 code returned None for any non-face selection and so could not tell a lone vertex from a pair. Split into a fresh-drawing vertex case and a separate two-sub-objects case, which are now different claims. Full suite **1397/1397**. | accepted |
 | REQ-334 | Domain | accepted, increment 1 delivered (GitHub issue #149 acceptance 4, D-2026-09-09-h, ADR-055, TASK-237). The volume **centroid**, the first of #120's mass properties that needed a genuinely new integrand — the first moments of volume, with no closed form previously written for any surface kind. Integrated by 16-point Gauss-Legendre over the **exact analytic** surfaces (never the display mesh), in **world axes** because the integrand `1/2 r_k^2 n_k` is not frame-covariant, about a **solid-local** reference point because otherwise it loses its low bits at survey magnitude. Planar faces go through Green's theorem along the boundary with quadrature per edge, which is what makes one path cover a straight-edged face and an **arc-bounded** cap alike. Reported through its own `centroidValid` flag: a `Nurbs` face, a general trim loop, a face with holes or an `Ellipse`/`Intersection` boundary edge is **refused by name** (increment 2's work) while the volume and surface area stay untouched. Two errors were measured out during development and are now pinned by tests that would otherwise pass: a per-face-frame moment rotated into world is exact for every axis-aligned solid and **3.2 ft wrong on a tilted box**, and a symmetric primitive's centroid comes out right even from a badly wrong integrand, so the wedge, pyramid and frustum carry the load. `BrepTests [req334]` — 8 cases: seven primitives against closed forms, a tilted frame, survey magnitudes (tilted included), translation covariance, a Boolean result against the composite of its parts, the two refusals, and the uncovered-face case that keeps its volume | accepted |
 | REQ-335 | Domain/Commands | accepted, increment 1 delivered (GitHub issue #149 acceptance 5, D-2026-09-09-i, TASK-238). `SECTION` — the cross-section of the selected solids by the **active UCS plane**, as a closed polyline, leaving the solids alone. `brep::SectionLoop` returns the section as a closed `brep::Path` of lines and arcs — the kernel's existing vocabulary, so no new type and no knowledge of document entities (ADR-048 (a)) — and arcs reach the drawing as **bulges** (REQ-316/ADR-047), so a cylinder's circular section is a circle and not a polygon. **The cut is `Slice`'s, unchanged**: sectioning asks the same question and keeps a different answer, so the accepted set is inherited rather than restated and a refusal carries `Slice`'s own `Problem` — asserted by a test that reads the reason off `Slice` and compares. Non-destructive is structural (const reference in, pieces discarded) and asserted byte-for-byte anyway. Refused by name: an oblique cylinder cut (`Ellipse` boundary), a section with holes, a plane that misses, a degenerate normal. `BrepTests [req335]` — 9 cases incl. the `A/cos θ` oblique-area check that a plan projection would fail, and `headless.req335-section`, which pins the command's one-undo-step behaviour and that a refusal leaves the document unchanged. **Increment 2**: a three-point plane form matching SLICE's, elliptical boundaries, sections with holes | accepted |
 | REQ-336 | UI/IO/Build | planned (D-2026-09-10-d, ADR-056). What's New billboard: `resources/whats-new.md` + vendored md4c + ImGui draw layer; auto-open once per launch from Start unless prefs dismiss version matches; Help → About reopens same window without clearing dismiss; releases-list URL; missing-file fallback; CI presence gate; agent rule + git hook authoring lock | accepted |
@@ -14074,7 +14620,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 **BEDIT isolation fix (2026-09-17, TASK-264 follow-up):** `cadPipeRuns`/`cadPipeRunAttrs` were never added to BEDIT's model-array swap (`DrawingGeometrySnapshot`/`CaptureGeometrySnapshot`/`RestoreGeometrySnapshot`, CadCommands.hpp/.cpp), unlike `cadTables`/`cadBlockRefs` beside them — a pipe run drawn in the main drawing kept rendering inside the block editor's own viewport (user-reported, with a screenshot). Fixed the same way those two already are: added to the snapshot struct, both capture/restore functions, and cleared in `LoadBlockPrimitivesIntoDrawing` (CadBlocks.cpp) alongside `cadTables`/`cadSurfaces`. `CadPipeRunCommandTests` gains a 12th case driving `CadBlocksEnterNamedEditor` directly: a run committed before BEDIT opens is invisible inside it, and `CadRestoreGeometrySnapshot` (BCLOSE's own restore call) brings it back.
 
-| REQ-346 | UI/Commands | proposed — not yet scoped (D-2026-09-17-a, GitHub issue #486 follow-up). **Piping ortho/polar compass for `PIPERUN`.** While `PIPERUN` is between vertices (a start point already placed, the next one pending), the rubber-band preview from the last committed vertex snaps its direction to a configurable set of preset angles — extending REQ-108's existing polar-tracking angle set (the configured increment plus any user-added extra angles) to also drive `PIPERUN`'s own preview, rather than a second, piping-only angle list. Snapping engages within a small pixel/angular tolerance of a preset, exactly as REQ-108's polar guides already snap the cursor; outside that tolerance the vertex is placed at the raw cursor/osnap position as today. A typed numeric distance while a direction is snapped commits a segment of that exact length along the snapped direction (REQ-108's existing `@distance<angle` typed-entry path already covers the equivalent case for ordinary polyline drawing; this is the same mechanism reached from the compass instead of the keyboard). The compass can be toggled off for the duration of the command (mirroring POLAR's own on/off toggle), and REQ-108's angle presets now persist in `gosurvey-user.json` (see REQ-108's 2026-09-17 revision) so a configured piping increment survives a restart. **Explicitly out of scope for this requirement:** a roll-angle prompt (rotating a pipe segment about its own longitudinal axis) — `CadPipeRun`'s swept solid is a circular profile (REQ-345), which looks identical at any roll, and no fitting/flange-orientation concept exists yet for roll to attach to; deferred until a future increment gives a fitting a rotational reference. | proposed |
+| REQ-346 | UI/Commands | proposed — not yet scoped (D-2026-09-17-a, GitHub issue #486 follow-up). **Piping ortho/polar compass for `PIPERUN`.** While `PIPERUN` is between vertices (a start point already placed, the next one pending), the rubber-band preview from the last committed vertex snaps its direction to a configurable set of preset angles — extending REQ-108's existing polar-tracking angle set (the configured increment plus any user-added extra angles) to also drive `PIPERUN`'s own preview, rather than a second, piping-only angle list. Snapping engages within a small pixel/angular tolerance of a preset, exactly as REQ-108's polar guides already snap the cursor; outside that tolerance the vertex is placed at the raw cursor/osnap position as today. A typed numeric distance while a direction is snapped commits a segment of that exact length along the snapped direction (REQ-108's existing `@distance<angle` typed-entry path already covers the equivalent case for ordinary polyline drawing; this is the same mechanism reached from the compass instead of the keyboard). The compass can be toggled off for the duration of the command (mirroring POLAR's own on/off toggle), and REQ-108's angle presets now persist in `gosurvey-user.json` (see REQ-108's 2026-09-17 revision) so a configured piping increment survives a restart. **Explicitly out of scope for this requirement:** a roll-angle prompt (rotating a pipe segment about its own longitudinal axis) — `CadPipeRun`'s swept solid is a circular profile (REQ-345), which looks identical at any roll, and no fitting/flange-orientation concept exists yet for roll to attach to; deferred until a future increment gives a fitting a rotational reference. | accepted |
 
 **Automatic bend filleting (2026-09-17, user-specified follow-up):** a `CadPipeRun`'s swept solid is no longer one raw cylinder per straight segment with a sharp (and, for a round profile, geometrically UNBUILDABLE — `brep::Sweep`'s mitre path is polygonal-profile only) corner at each interior vertex. `CadBuildPipeRunSweptSolid` (cadpiperun.hpp) now builds the WHOLE run as one `brep::Sweep` solid (REQ-315/ADR-048), auto-filleting every direction change over 1° with a **long-radius elbow takeoff** bend — radius = 1.5x the nominal pipe size (the user-specified, industry-standard formula) — whose SWEEP ANGLE is snapped to the nearest of `{90°, 60°, 45°, 30°, 22.5°, 11.25°}` (`CadPipeSnapFilletAngleRad`; the angle set itself was a recorded product decision, user-selected over a narrower {90,45,22.5} option) rather than the corner's own exact clicked angle — routing to the nearest AVAILABLE catalog fitting, the way a pipefitter actually would. **The geometry is built by marching forward from the run's actual start**, not by a full path re-solve: each corner turns from the direction the pipe is CURRENTLY travelling (already carrying any upstream snapping drift) toward the original next-vertex direction, by the snapped amount — this is what keeps every joint tangent-continuous (and therefore buildable) even through several consecutive bends, at the stated cost that a route with close-together corners can drift visibly from the clicked polyline and the run's own endpoint may not land exactly on the last click. A corner whose tangent setback cannot fit within roughly half of either adjoining leg is CLAMPED to a smaller effective radius, not silently ignored; a corner with essentially no room at all (clamped tangent length under 1e-6 ft) refuses the WHOLE run (REQ-201) rather than build a broken bend. `CadPipeRunTests` grows from 7 to 13 cases: the angle-snap function against six raw angles including a tie (equidistant between two standard entries resolves to the array's first/larger one), the radius formula, a straight two-vertex run (unchanged — still one plain cylinder, `Sweep` of a single straight segment provably reproducing `Extrude`), a true 90° bend (`Validate` `Ok`, volume bounded below twice two straight legs' volume — the bend REPLACES straight pipe rather than adding to it), a sub-1° kink passing straight through unfilleted, a short-leg corner still building via the radius clamp, a corner with no room at all refusing, and a two-bend run. **Behavior change from B1, stated**: a coincident-vertex segment anywhere in the path now refuses the WHOLE run rather than silently skipping just that segment (B1's per-segment-cylinder approach could skip one bad segment and keep the rest; one whole-run swept solid cannot). Full suite green: `GoSurveyTests` 1166/1166 (up from 1160), `GoSurveySnapTests` 311/311, no regressions.
 

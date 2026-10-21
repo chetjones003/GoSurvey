@@ -17,6 +17,7 @@
 #include <QOpenGLContext>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QPalette>
 #include <QSurfaceFormat>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -32,9 +33,11 @@ QFont ReportFont() {
 }
 
 void StylePrimary(QPushButton* button) {
-  button->setStyleSheet(
-      "QPushButton { background:#438fda; color:white; font-weight:600; padding:6px 18px; "
-      "border:0; border-radius:4px; } QPushButton:hover { background:#347cc3; }");
+  const bool dark = button->palette().color(QPalette::Window).lightness() < 128;
+  button->setStyleSheet(QString(
+      "QPushButton { background:%1; color:white; font-weight:600; padding:6px 18px; "
+      "border:0; border-radius:4px; } QPushButton:hover { background:%2; }")
+                            .arg(dark ? "#168e8a" : "#438fda", dark ? "#1ca6a0" : "#347cc3"));
 }
 
 QLabel* Explanation(QWidget* parent) {
@@ -79,7 +82,10 @@ QDialog* CreateFailureReportDialog(const QString& title, const QString& report, 
   outer->setSpacing(0);
   auto* banner = new QWidget(dialog);
   banner->setFixedHeight(76);
-  banner->setStyleSheet("QWidget { background:#243a53; }");
+  const bool darkAppearance = qApp->palette().color(QPalette::Window).lightness() < 128;
+  banner->setStyleSheet(darkAppearance
+      ? "QWidget { background:#30373c; border-bottom:2px solid #55d8d0; }"
+      : "QWidget { background:#243a53; }");
   auto* bannerLayout = new QHBoxLayout(banner);
   bannerLayout->setContentsMargins(26, 10, 26, 10);
   auto* logo = new QLabel(banner);
@@ -135,14 +141,14 @@ bool ProbeStartupGraphics(startupFailure::Stage& stage, std::string& detail) {
   QOpenGLContext context;
   context.setFormat(format);
   if (!context.create() || !surface.isValid() || !context.makeCurrent(&surface)) {
-    stage = startupFailure::Stage::GlfwCreateWindow;
+    stage = startupFailure::Stage::GraphicsContext;
     detail = "Qt could not create an OpenGL 3.3 core context.";
     return false;
   }
   const auto version = context.format().version();
   if (version < qMakePair(3, 3)) {
     context.doneCurrent();
-    stage = startupFailure::Stage::GlfwCreateWindow;
+    stage = startupFailure::Stage::GraphicsContext;
     detail = "The graphics driver offers OpenGL " + std::to_string(version.first) + "." +
              std::to_string(version.second) + "; GoSurvey needs 3.3.";
     return false;

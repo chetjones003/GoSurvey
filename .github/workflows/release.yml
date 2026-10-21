@@ -2,7 +2,7 @@
 #
 # Two jobs, three publish outcomes, decided by which branch the run targets:
 #
-#   build             compile GoSurvey.exe only (no headless driver, no test suite — this
+#   build             compile GoSurvey.exe (Qt frontend) and supporting checks — this
 #                     pipeline ships the app, it does not verify it), run only on manual
 #                     dispatch (REQ-202 (d))
 #   package           Inno installer from the build artifacts; then:
@@ -65,6 +65,14 @@ jobs:
         # Visual Studio generator does — so without this, configure fails outright rather than
         # quietly picking up some other compiler. That loud failure is deliberate (see below).
         uses: ilammy/msvc-dev-cmd@v1
+
+      # Install the supported Qt frontend's pinned MSVC kit before configure.
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
 
       - name: Ensure Ninja
         # The repo's CMakePresets.json uses the Ninja generator. windows-latest already ships
@@ -176,7 +184,7 @@ jobs:
         # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
         # scoped to our own targets only. It does not fail the build unless paired with /WX,
         # which is deliberately NOT set — the existing codebase has never been triaged against it.
-        # This pipeline ships GoSurvey.exe only.
+        # This pipeline ships the Qt application only.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
@@ -219,7 +227,9 @@ jobs:
           name: gosurvey-bin
           path: |
             build/GoSurvey.exe
-            build/pdfium.dll
+            build/*.dll
+            build/qt.conf
+            build/qt-plugins/
             build/resources/
           if-no-files-found: error
           retention-days: 1
@@ -241,8 +251,8 @@ jobs:
 
       - name: Download binaries
         # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
-        # paths, so the archive contains GoSurvey.exe at its root. Unpack into
-        # build/ so installer/GoSurvey.iss still finds {#BuildDir}\GoSurvey.exe.
+        # paths, so the archive contains the app/runtime files at its root. Unpack into
+        # build/ so installer/GoSurvey.iss finds the Qt deployment tree.
         uses: actions/download-artifact@v4
         with:
           name: gosurvey-bin
@@ -351,7 +361,8 @@ jobs:
           # correct at the moment it is written rather than depending on a later redirect.
           $url = "https://github.com/$repo/releases/download/$tag/$($installer.Name)"
 
-          # The .gs format version this build writes, read from the one place that defines it.
+          # This schema version belongs to the JSON payload embedded in DWG. The manifest key
+          # remains gsFormatVersion for compatibility with already deployed updater clients.
           # The CLIENT compares it against its own compiled-in value, so no release history has to
           # be consulted here and the comparison happens where the truth is actually known.
           $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
@@ -363,7 +374,8 @@ jobs:
           # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
           # are written for developers and are full of things an end user should never be shown --
           # file paths, requirement numbers, compiler behaviour. Piping them straight through put
-          # "the installer registers .gs with shell\open\command..." in front of users, which is
+          # "the installer registers .gs with shell\open\command..." is a historical phrase
+          # denied from release notes; it is not current file-association guidance.
           # how this was caught.
           #
           # The section key is the plain three-part version, so every beta in a cycle shows the

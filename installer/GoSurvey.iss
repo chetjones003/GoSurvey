@@ -90,9 +90,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [InstallDelete]
 ; Sweep the version-stamped executables shipped up to 0.4.0 (ADR-029 (b)). Without this an
-; upgraded install keeps a stale GoSurvey-0.4.0.exe beside the new GoSurvey.exe, and any
+; upgraded install keeps the stable GoSurvey.exe path, now backed by the Qt application.
 ; shortcut still pointing at it would launch a version that can never update itself again.
 Type: files; Name: "{app}\GoSurvey-*.exe"
+Type: files; Name: "{app}\GoSurvey.exe"
 ; Clear the bundled resource trees before laying down the new payload so an icon/hatch/block
 ; that was renamed or removed between releases does not linger in the installed copy. These are
 ; app assets only — user data lives in %APPDATA%\GoSurvey and is untouched.
@@ -104,6 +105,9 @@ Type: filesandordirs; Name: "{app}\resources\blocks"
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 #ifdef VcRedistBundled
 ; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
 Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
@@ -163,7 +167,8 @@ Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Flags: 
 [UninstallRun]
 ; Clear Windows icon cache to ensure new icon is displayed on reinstall
 Filename: "cmd.exe"; Parameters: "/c ""del /f /q %LocalAppData%\IconCache.db"""; Flags: runhidden
-; issue #264: the .gs file association was removed. Clear the leftover Explorer registry cache
+; issue #264 retired standalone .gs drawings. This only clears the stale per-user Explorer cache;
+; the installer does not register or advertise that extension.
 ; entry on uninstall/upgrade so an older install's association doesn't linger.
 Filename: "reg.exe"; Parameters: "delete ""HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.gs"" /f"; Flags: runhidden
 ; Delete user application data (history, layout files, preferences).

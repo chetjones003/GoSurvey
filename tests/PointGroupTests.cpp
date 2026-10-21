@@ -214,9 +214,9 @@ TEST_CASE("A rule that matches nothing resolves to an empty group, not an error"
   REQUIRE(Resolve(rule, Sample()).empty());  // ...it simply matches no points
 }
 
-// ---------------------------------------------------------------- .gs shape
+// ---------------------------------------------------------------- document JSON payload shape
 
-TEST_CASE("A point group's rule survives .gs serialization", "[pointgroup][gs]") {
+TEST_CASE("A point group's rule survives document JSON payload serialization", "[pointgroup][payload]") {
   // GsIo.cpp is not linkable here (it pulls the whole command layer), so this pins the JSON shape
   // the saver writes and the reader reads — including the explicit-id array, which is the only
   // non-string field and the one a sloppy round trip would mangle.
@@ -241,7 +241,7 @@ TEST_CASE("A point group's rule survives .gs serialization", "[pointgroup][gs]")
   REQUIRE(back["explicitIds"].get<std::vector<int>>() == rule.explicitIds);
 }
 
-TEST_CASE("A legacy .gs with no group or rawDescription keys loads as absent", "[pointgroup][gs][req066]") {
+TEST_CASE("A legacy document JSON payload with no group or rawDescription keys loads as absent", "[pointgroup][payload][req066]") {
   // Mirrors the reader defaults. rawDescription must load EMPTY — never defaulted to a copy of the
   // description, which would make a raw-description rule silently match edited text.
   const json legacyPoint = json::parse(R"({"id":1,"description":"Existing ground","layer":"0"})");

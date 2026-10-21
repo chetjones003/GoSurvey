@@ -1135,7 +1135,7 @@ TEST_CASE("BLOCKFITTING refuses without an open block editor", "[issue486][block
   CHECK(log.back().find("BEDIT") != std::string::npos);
 }
 
-TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip through .gs JSON",
+TEST_CASE("Fitting metadata and connection role/engagement/compat round-trip through document JSON payload JSON",
           "[issue486][block][fitting][connector][gsio]") {
   AppCommandState st;
   CadBlockDefinition def;
@@ -1795,7 +1795,7 @@ TEST_CASE("SUBTRACT bores axially through a composite coaxial target (issue #495
   // r1.0 — this is the same short-cylinder-through-hole-fallback shape TryGetCylinderInfo already
   // recognises (see the "SUBTRACT short PRESSPULL cylinder" test in BrepTests.cpp).
   ucs::Ucs nubFrame;
-  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  REQUIRE(ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame));
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
 
@@ -1839,7 +1839,7 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the narrow section
   brep::Solid target = std::move(unioned[0]);
 
   ucs::Ucs nubFrame;
-  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  REQUIRE(ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame));
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
 
@@ -1880,7 +1880,7 @@ TEST_CASE("SUBTRACT cuts a bolt-circle of holes in one command (issue #495 338b)
     const double cx = 3.5 * std::cos(ang);
     const double cy = 3.5 * std::sin(ang);
     ucs::Ucs cf;
-    ucs::FromNormal(brep::Vec3{cx, cy, 1.0}, brep::Vec3{0, 0, 1}, &cf);
+    REQUIRE(ucs::FromNormal(brep::Vec3{cx, cy, 1.0}, brep::Vec3{0, 0, 1}, &cf));
     brep::Solid hole;
     REQUIRE(brep::MakeCylinder(cf, 0.4, 1.0, &hole, &why));  // short PRESSPULL-style nub
     st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole)));
@@ -1940,14 +1940,14 @@ TEST_CASE("SUBTRACT with one unresolvable cutter refuses the whole command (issu
   std::vector<int> subIdx;
 
   ucs::Ucs cf1;
-  ucs::FromNormal(brep::Vec3{-2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf1);
+  REQUIRE(ucs::FromNormal(brep::Vec3{-2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf1));
   brep::Solid hole1;
   REQUIRE(brep::MakeCylinder(cf1, 0.4, 1.0, &hole1, &why));
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole1)));
   subIdx.push_back(static_cast<int>(st.cadSolids.size()) - 1);
 
   ucs::Ucs cf2;
-  ucs::FromNormal(brep::Vec3{2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf2);
+  REQUIRE(ucs::FromNormal(brep::Vec3{2.5, -2.5, 1.0}, brep::Vec3{0, 0, 1}, &cf2));
   brep::Solid hole2;
   REQUIRE(brep::MakeCylinder(cf2, 0.4, 1.0, &hole2, &why));
   st.cadSolids.push_back(std::make_shared<const brep::Solid>(std::move(hole2)));
@@ -2201,7 +2201,7 @@ TEST_CASE("SUBTRACT bores axially through a composite target that includes a tap
 
   // A drill well under the narrowest radius anywhere on the taper (r1 at the cone's top).
   ucs::Ucs nubFrame;
-  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  REQUIRE(ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame));
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 0.5, 1.0, &nub, &why));
 
@@ -2240,7 +2240,7 @@ TEST_CASE("SUBTRACT still refuses when the bore is wider than the cone's narrow 
   brep::Solid target = std::move(unioned[0]);
 
   ucs::Ucs nubFrame;
-  ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame);
+  REQUIRE(ucs::FromNormal(brep::Vec3{0.0, 0.0, 3.5}, brep::Vec3{0.0, 0.0, 1.0}, &nubFrame));
   brep::Solid nub;
   REQUIRE(brep::MakeCylinder(nubFrame, 1.3, 1.0, &nub, &why));
 

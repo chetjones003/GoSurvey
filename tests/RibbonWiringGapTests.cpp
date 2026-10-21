@@ -1,60 +1,44 @@
-// GitHub issue #762 — ribbon "wiring gaps": commands that exist elsewhere must stay wired on
-// Home/Insert. Static guard on CadUi.cpp so the inventory does not drift back to NYI placeholders.
-
+// GitHub issue #762 — keep the supported Qt ribbon actions wired to their command handlers.
 #include <catch2/catch_test_macros.hpp>
 
-#include <filesystem>
-#include <fstream>
-#include <sstream>
+#include "../src/qt/RibbonCatalog.hpp"
+
 #include <string>
 
 namespace {
+const qtribbon::Button* FindButton(const char* id) {
+  for (const auto& button : qtribbon::kButtons)
+    if (std::string(button.id) == id)
+      return &button;
+  return nullptr;
+}
+}  // namespace
 
-std::string ReadCadUiSource() {
-  const std::filesystem::path path =
-      std::filesystem::path(GOSURVEY_SAMPLES_DIR).parent_path() / "src" / "ui" / "CadUi.cpp";
-  std::ifstream in(path, std::ios::binary);
-  REQUIRE(in.good());
-  std::ostringstream ss;
-  ss << in.rdbuf();
-  return ss.str();
+TEST_CASE("Issue #762 Qt ribbon actions remain connected", "[ribbon][issue762]") {
+  const auto* array = FindButton("##RibbonArray");
+  REQUIRE(array != nullptr);
+  CHECK(std::string(array->command) == "ARRAY");
+  CHECK_FALSE(array->placeholder);
+
+  const auto* properties = FindButton("##PalProps");
+  REQUIRE(properties != nullptr);
+  CHECK(std::string(properties->command) == "@properties");
+  CHECK_FALSE(properties->placeholder);
+
+  const auto* points = FindButton("##RibbonInsPointsFile");
+  REQUIRE(points != nullptr);
+  CHECK(std::string(points->command) == "IMPORTPOINTS");
+  CHECK_FALSE(points->placeholder);
 }
 
-bool Contains(const std::string& hay, const std::string& needle) {
-  return hay.find(needle) != std::string::npos;
+TEST_CASE("Issue #1002 Export to LandXML is wired to its command", "[ribbon][issue1002]") {
+  const auto* landXml = FindButton("##RibbonExpLandXml");
+  REQUIRE(landXml != nullptr);
+  CHECK(std::string(landXml->command) == "EXPORTLANDXML");
+  CHECK_FALSE(landXml->placeholder);
 }
 
-std::string FirstLineContaining(const std::string& src, const std::string& needle) {
-  const size_t pos = src.find(needle);
-  REQUIRE(pos != std::string::npos);
-  const size_t lineStart = src.rfind('\n', pos);
-  const size_t begin = lineStart == std::string::npos ? 0 : lineStart + 1;
-  const size_t lineEnd = src.find('\n', pos);
-  return src.substr(begin, lineEnd == std::string::npos ? std::string::npos : lineEnd - begin);
-}
-
-} // namespace
-
-TEST_CASE("Issue #762 wiring gaps stay connected in CadUi.cpp", "[ribbon][issue762]") {
-  const std::string src = ReadCadUiSource();
-
-  CHECK(FirstLineContaining(src, "iconBtn(\"##RibbonArray\"").find("not implemented yet") ==
-        std::string::npos);
-  REQUIRE(Contains(src, "else if (id == \"##RibbonArray\") StartArrayCommand"));
-
-  CHECK(FirstLineContaining(src, "iconBtn2Row(\"##PalProps\"").find("not implemented yet") ==
-        std::string::npos);
-  REQUIRE(Contains(src, "else if (id == \"##PalProps\") cmd.pendingPropertiesFocus = true"));
-
-  CHECK(FirstLineContaining(src, "rowBtn(\"##RibbonInsPointsFile\"").find("not implemented yet") ==
-        std::string::npos);
-  REQUIRE(Contains(src, "else if (id == \"##RibbonInsPointsFile\")"));
-  REQUIRE(Contains(src, "StartImportPointsCommand(cmd, log);  // issue #762"));
-}
-
-TEST_CASE("Issue #762 Manage tab uses placeholder panel not NYI button grid", "[ribbon][issue762]") {
-  const std::string src = ReadCadUiSource();
-  REQUIRE(Contains(src, "RibbonSecMgPlaceholder"));
-  CHECK_FALSE(Contains(src, "##MgCreateDS"));
-  CHECK_FALSE(Contains(src, "##MgDynamoPlayer"));
+TEST_CASE("Issue #762 Qt ribbon does not create an unsupported Manage panel", "[ribbon][issue762]") {
+  for (const auto& button : qtribbon::kButtons)
+    CHECK(std::string(button.tab) != "Manage");
 }

@@ -1,9 +1,8 @@
 // The drawing's right-click: shortcut menu, Right-click Customization and the Selection list
 // (issue #891; REQ-054, REQ-084).
 //
-// Which verdict a right-click gets is `CadClassifyRightClick`, shared with the ImGui frontend; this
-// file builds the Qt menu and dialogs that verdict opens. Every item runs the same Start*/Apply*
-// command the ImGui menu runs.
+// Which verdict a right-click gets is `CadClassifyRightClick`; this file builds the Qt menu and
+// dialogs that verdict opens. Every item runs the matching Start*/Apply* command.
 #include "EditorWindow.hpp"
 
 #include "EditorViewport.hpp"
@@ -20,6 +19,7 @@
 #include <QMenu>
 #include <QMessageBox>
 #include <QPushButton>
+#include <QPalette>
 #include <QRadioButton>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -38,6 +38,7 @@ QString EntityLabel(const AppCommandState& st, const SelectedEntity& e) {
   case T::Circle: return "Circle " + n;
   case T::Arc: return "Arc " + n;
   case T::Ellipse: return "Ellipse " + n;
+  case T::Spline: return "Spline " + n;
   case T::Polyline: return "Polyline " + n;
   case T::Annotation:
     if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
@@ -256,11 +257,13 @@ void EditorWindow::ShowRightClickCustomization() {
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->setWindowTitle("Right-Click Customization");
   auto* layout = new QVBoxLayout(dialog);
-  {  // navy banner over bordered cards
+  {  // graphite banner over bordered cards
     layout->setContentsMargins(0, 0, 0, 12);
     auto* banner = new QLabel("<b style='font-size:15px'>Right-Click Customization</b><br>Choose what right-click does, and whether a quick click means ENTER.", dialog);
     banner->setObjectName("rightClickBanner");
-    banner->setStyleSheet("background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
+    banner->setStyleSheet(palette().color(QPalette::Window).lightness() < 128
+        ? "background:#30373c; color:#ffffff; border-bottom:2px solid #55d8d0; padding:12px 16px; font-size:13px;"
+        : "background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
     layout->addWidget(banner);
   }
   // Everything is staged in the widgets; nothing reaches the preferences until Apply & Close.

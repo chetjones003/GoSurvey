@@ -149,7 +149,7 @@ EXPECT SOLIDS 7
 ESC
 EXPECT SOLIDS 7
 
-# --- The whole set survives .gs save and reopen ----------------------------------------------------
+# --- The whole set survives document JSON payload save and reopen ----------------------------------------------------
 # Topology, not the recipe: what is written is the faces and edges, so a shape with no recipe (a
 # Phase 4 boolean) will save the same way (ADR-045 (a)). If the reload rebuilt from the recipe
 # instead, every count below would still pass and the claim would be untested - which is why the

@@ -172,6 +172,13 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     CheckFiniteScalar(out, (p + "ratio").c_str(), e.ratio, static_cast<int>(i));
     CheckFiniteScalar(out, (p + "z").c_str(), e.z, static_cast<int>(i));
   }
+  // REQ-443: a spline that is not a usable curve (a knot out of order, a NaN control point, a weight
+  // that is not positive) would tessellate to nothing and vanish without a word.
+  for (size_t i = 0; i < st.cadSplines.size(); ++i) {
+    const std::string why = spline::Validate(st.cadSplines[i]);
+    if (!why.empty())
+      Add(out, docinv::kFiniteCoords, "cadSplines[" + std::to_string(i) + "]: " + why, static_cast<int>(i));
+  }
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
     const CadAnnotation& a = st.cadAnnotations[i];
     const std::string p = "cadAnnotations[" + std::to_string(i) + "].";
@@ -192,6 +199,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
                  st.userCircleNormals.size() / 3);   // REQ-312 side-car (D-2026-08-31-f)
   CheckAttrCount(out, "arcs", st.userArcs.size(), st.userArcAttrs.size());
   CheckAttrCount(out, "ellipses", st.userEllipses.size(), st.userEllAttrs.size());
+  CheckAttrCount(out, "splines", st.cadSplines.size(), st.cadSplineAttrs.size());  // REQ-443
   CheckAttrCount(out, "annotations", st.cadAnnotations.size(), st.cadAnnotationAttrs.size());
   CheckAttrCount(out, "filled regions", st.cadFilledRegions.size(), st.cadFilledRegionAttrs.size());
   CheckAttrCount(out, "meshes", st.cadMeshes.size(), st.cadMeshAttrs.size());
@@ -227,7 +235,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     // or long — so it is checked rather than assumed.
     if (!st.userPolylineOffsets.empty()) {
       // A one-entry table is not a valid CSR array: it describes zero polylines while claiming a
-      // table exists, and "zero polylines" is spelled EMPTY. This is the .gs reader's own rule
+      // table exists, and "zero polylines" is spelled EMPTY. This is the internal document payload reader's own rule
       // (GsIo: "expected empty or at least two entries"), lifted here so the corruption is caught at
       // the moment it is created rather than at the load that refuses the file. Issue #60 slipped
       // through the three checks around it — {0} with zero vertices starts at 0, never goes
@@ -235,7 +243,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       if (st.userPolylineOffsets.size() == 1) {
         Add(out, docinv::kPolylineOffsets,
             "userPolylineOffsets holds 1 entry; 0 polylines is spelled as an EMPTY table and the "
-            ".gs reader rejects a single entry");
+            "internal document payload reader rejects a single entry");
       }
       if (st.userPolylineOffsets.front() != 0) {
         Add(out, docinv::kPolylineOffsets,
@@ -341,6 +349,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     sweep("userCircleAttrs", st.userCircleAttrs);
     sweep("userArcAttrs", st.userArcAttrs);
     sweep("userEllAttrs", st.userEllAttrs);
+    sweep("cadSplineAttrs", st.cadSplineAttrs);  // REQ-443
     sweep("userPolylineAttrs", st.userPolylineAttrs);
     sweep("cadAnnotationAttrs", st.cadAnnotationAttrs);
     sweep("cadFilledRegionAttrs", st.cadFilledRegionAttrs);
@@ -363,6 +372,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Polyline:     return PolylineCount(st);
       case T::Arc:          return st.userArcs.size();
       case T::Ellipse:      return st.userEllipses.size();
+      case T::Spline:       return st.cadSplines.size();  // REQ-443
       case T::PdfUnderlay:  return st.pdfAttachments.size();
       case T::FilledRegion: return st.cadFilledRegions.size();
       case T::Mesh:         return st.cadMeshes.size();

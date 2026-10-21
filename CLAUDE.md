@@ -38,6 +38,12 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Issues and pull request labels
+
+All agents creating a GitHub issue or pull request must apply the appropriate repository labels as part of creation. Choose labels that match the work's type and status from the repository's existing label set. Add the labels during creation when the tool supports it; otherwise, apply them immediately afterward and confirm they are present. If no existing label fits, use the repository's established label conventions when creating a suitable label.
+
+Keep status labels current on the issue and its linked pull request as work progresses: apply `in progress` while implementation is underway, `needs review` when the work is ready for review, and `in review` while a review is underway. Remove the previous status label when moving to the next stage so each item reflects its current state. When work returns to implementation after review, change the status back to `in progress`.
+
 **Branch cleanup (after every merge into `beta`):**
 
 * Only `master` and `beta` should exist, locally and on `origin`.
@@ -56,35 +62,29 @@ The authoritative build system is:
 * `build.bat`
 * `CMakePresets.json`
 
-### Build and test ImGui and Qt
+### Build and test Qt
 
 Run these commands from the repository root in PowerShell. Install MSVC C++ build tools,
-CMake and Ninja; `build.bat` loads the MSVC environment. Qt builds also require an installed
+CMake and Ninja; `build.bat` loads the MSVC environment. The Qt application requires an installed
 MSVC x64 Qt 6.8+ kit. Set `$env:GOSURVEY_QT_ROOT` to its root when it differs from
 `C:\Qt\6.8.3\msvc2022_64`.
 
 | Task | Command |
 | --- | --- |
-| Build both frontends and all test/helper targets (Release) | `.\build.bat` |
-| Build ImGui and its Catch2 tests (Release) | `.\build.bat imgui` |
-| Build Qt and its GUI tests (Release) | `.\build.bat qt` |
-| Run ImGui/domain Catch2 tests after the ImGui build | `.\build\GoSurveyTestImGui.exe` |
-| Run Qt tests on the hidden desktop after the Qt build | `ctest --preset ninja-release -R "^qt[.]editor$"` |
-| Run the complete suite, including headless transcripts, after building both frontends | `ctest --preset ninja-release` |
-| Check the four-executable output layout after building both frontends | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
-| Clean rebuild of both frontends | `.\build.bat release --clean-first` |
+| Build Qt and all test/helper targets (Release) | `.\build.bat` |
+| Run Qt tests on the hidden desktop | `ctest --preset ninja-release -R "^qt[.]editor$"` |
+| Run the complete suite, including headless transcripts | `ctest --preset ninja-release` |
+| Check the Qt output layout | `ctest --preset ninja-release -R "^build[.]output-layout$"` |
+| Clean Release rebuild | `.\build.bat release --clean-first` |
 
-The frontend selectors reconfigure the same Release tree. Run `.\build.bat` before the full
-suite: the `imgui` and `qt` selectors build only their frontend and test executable, not all
-headless helpers. Report failing tests and their evidence; do not describe a partially passing
-suite as green.
+`build.bat` configures and builds the Qt application, domain test suite and headless helpers.
+Report failures explicitly; do not describe a partially passing suite as green.
 
-For Debug, use `.\build.bat imgui debug` or `.\build.bat qt debug`, then
-`.\build\debug\GoSurveyTestImGui.exe` or `ctest --preset ninja-debug -R "^qt[.]editor$"`.
-Build all Debug targets with `.\build.bat debug` before `ctest --preset ninja-debug`.
-The Debug ImGui Developer Shell requires the vendored `third_party/imgui_test_engine`.
+For Debug, use `.\build.bat debug`, then run
+`ctest --preset ninja-debug -R "^qt[.]editor$"`. Build all Debug targets before
+`ctest --preset ninja-debug`.
 
-`build-qt.bat` forwards to `build.bat qt`. For direct CMake builds, use
+`build-qt.bat` forwards to `build.bat`. For direct CMake builds, use
 `cmake --build --preset ninja-release` (or `ninja-debug`) from an MSVC developer shell;
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows
@@ -92,9 +92,8 @@ CMake/CTest and `gh` executables. Keep the Windows-native toolchain.
 
 ### Keep build output clean
 
-Release application output consists of `GoSurvey.exe` (ImGui), `GoSurveyTestImGui.exe`,
-`GoSurveyQt.exe` and `GoSurveyQtTests.exe` under `build/`. Debug applications use
-`build/debug/`; Visual Studio builds use `build/<Configuration>/`.
+Release application output consists of the Qt application `GoSurvey.exe` and `GoSurveyQtTests.exe` under `build/`.
+Debug applications use `build/debug/`; Visual Studio builds use `build/<Configuration>/`.
 
 - Keep CMake caches, generated headers, static libraries, symbols and helper executables under
   `build/.cmake/<preset>/`.
@@ -201,7 +200,7 @@ The result must be:
 
 **PASS**, **FAIL**, or **SPEC GAP**.
 
-**Qt UI changes: show screenshots in chat.**
+**Qt UI changes: present screenshots in the T3 visualizer.**
 When the work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
 tweak, a restyle), running the tests is not enough. Before calling the work done:
 
@@ -209,10 +208,9 @@ tweak, a restyle), running the tests is not enough. Before calling the work done
   busy, error, empty, disabled). Use the Qt test run on the hidden desktop
   (`tools/run-qt-tests-hidden.ps1`, used by `ctest --preset ninja-release -R qt.editor`) with
   `widget->grab()` or, for the 3D viewport, `grabFramebuffer()`. Save the PNGs under `build/artifacts/`; never commit them.
-* Paste them **inline in the chat reply** as Markdown images with absolute forward-slash paths, for
-  example `![Settings](C:/Users/<user>/source/repos/GoSurvey/build/artifacts/qt-shot.png)`. Do **not** publish
-  them as an HTML page, and do not put them inside a question popup or other tool call: the user could
-  not see images shown that way. Crop or split wide captures so text is readable at chat width.
+* Present them together in one labeled, clickable T3 visualizer. Use a self-contained HTML page
+  when needed, check it with `html_preview`, then publish it with `html_render`. Embed the screenshot
+  captures in the visualizer and make wide captures readable at chat width.
 * Label each image, say what changed, then **stop and wait** for the user to approve or ask for tweaks.
   Apply the requested changes and show new screenshots until they approve. Only then commit and open
   the PR.

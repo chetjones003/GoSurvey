@@ -459,7 +459,6 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   const double py = ux;
   const double dma = static_cast<double>(ma);
   const double dmb = dma * static_cast<double>(el.ratio);
-  constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
   // A tilted ellipse (GitHub #531) leaves the XY plane, so no single elevation describes it: each
   // sample carries its own Z, exactly as the tilted-arc branch above does, and is taken through
@@ -486,6 +485,30 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
   CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
+}
+
+/// REQ-443: a spline as a chain of chords no further than \p chordTolerance from the curve, dashed to its
+/// linetype exactly as an ellipse is. A spline has an elevation per point, so every sample carries its own Z
+/// (the same per-vertex-Z chain a tilted arc uses) and the chain is never closed here: a periodic spline's
+/// tessellation already returns to its first point.
+void AppendSplineVcDashed(std::vector<float>& out, const CadSpline& sp, double chordTolerance, float dashPatScale,
+                          const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG,
+                          float defB, double viewAnchorX, double viewAnchorY) {
+  std::vector<ray3d::Vec3> pts;
+  spline::Tessellate(sp, chordTolerance, &pts);
+  if (pts.size() < 2)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  std::vector<float> xy(pts.size() * 2), zs(pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) {
+    xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+    xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+    zs[i] = static_cast<float>(pts[i].z);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba, &out,
+                               zs.data());
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
@@ -717,6 +740,9 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     // A small filled-looking dot (REQ-348) — the snap answers with an actual scanned point, not a
     // computed feature, so the glyph reads as "a point" rather than borrowing another kind's shape.
     AppendSnapCircle(out, f, mh * 0.3f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Nearest:
+    AppendSnapCircle(out, f, mh * 0.42f, snapCircSegs);
     break;
   }
 }
@@ -1229,7 +1255,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glClearStencil(0);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-  // Paper space: the ImGui overlay in CadUi::DrawDrawingViewport renders the sheet, viewport rects,
+  // Paper space: the Qt overlay renders the sheet, viewport rectangles,
   // and model geometry clipped+scaled inside each viewport, all pan/zoom-aware (via its w2s transform).
   // We leave the GL texture as the cleared background and let that overlay draw on top.
   //
@@ -1306,7 +1332,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float model[16];
   // Vertices arrive with XY relative to the view anchor but Z ABSOLUTE, so the camera's target
   // elevation has to be subtracted here — the anchoring only ever covered X and Y. Without it the
-  // GL geometry and the ImGui overlay (which projects through Camera::WorldToScreen, and that DOES
+  // GL geometry and the Qt overlay (which projects through Camera::WorldToScreen, and that DOES
   // subtract targetZ) drift apart vertically as soon as the view is panned while orbited, so the
   // crosshair and snap glyph stop landing on the lines they belong to.
   const float panZf = static_cast<float>(cam.targetZ);
@@ -2407,7 +2433,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
       if (!fr.isSolid())
-        continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
+        continue;  // line-pattern hatches are drawn as clipped lines in the viewport overlay (REQ-043)
       // REQ-084 (d): a fill isolated out is not drawn.
       if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
           CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
@@ -2677,6 +2703,25 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                                    tuning.arcCircleSmoothnessCap));
             AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, e.z, dashPatScale, attr, lr,
                                    kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
+        // REQ-443 splines: sampled to a quarter of a pixel at this zoom (never coarser than the 0.002 ft
+        // REQ-101 holds the curve to), so a zoomed-in spline is smooth and a zoomed-out one is cheap.
+        if (extended->splines) {
+          const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
+          const double splineTol = std::min(kSplineSampleTolerance, std::max(1e-6, 0.25 * pixelWorld));
+          for (size_t i = 0; i < extended->splines->size(); ++i) {
+            EntityAttributes attr{};
+            if (extended->splineAttrs && i < extended->splineAttrs->size())
+              attr = (*extended->splineAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+            AppendSplineVcDashed(cpuVcLines_, (*extended->splines)[i], splineTol, dashPatScale, attr, lr,
+                                 kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -3015,7 +3060,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- Window selection preview (semi-transparent fill + outline) ---
   // The selection box used to be drawn here, as a world-space rectangle on the XY plane. It moved to
-  // a screen-space ImGui overlay in CadUi (TASK-047): world geometry projects to a parallelogram
+  // a screen-space viewport overlay (TASK-047): world geometry projects to a parallelogram
   // once the view is orbited, and the hit test forms an axis-aligned SCREEN rectangle from the two
   // drag corners — so the drawn box and the region that selects disagreed in every non-plan view.
 
@@ -3496,7 +3541,7 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
-  // REQ-341: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // REQ-341: the clip must not outlive this call. The UI draws immediately afterward with
   // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
   // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
   // arbitrary parts of the interface. Unconditional, and outside the geometry block so the

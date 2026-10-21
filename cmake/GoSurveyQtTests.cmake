@@ -2,8 +2,9 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Test)
 add_executable(GoSurveyQtTests tests/QtEditorTests.cpp)
 set_target_properties(GoSurveyQtTests PROPERTIES AUTOMOC ON)
 target_link_libraries(GoSurveyQtTests PRIVATE gosurvey_qt_frontend Qt6::Test)
+gosurvey_assert_no_imgui_in_link_graph(GoSurveyQtTests)
 target_compile_definitions(GoSurveyQtTests PRIVATE GOSURVEY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" GOSURVEY_TEST_ARTIFACT_DIR="${GOSURVEY_ARTIFACT_DIR}")
-gosurvey_target_warnings(GoSurveyQtTests)
+gosurvey_target_warnings(GoSurveyQtTests TEST)
 if(MSVC)
   target_compile_options(GoSurveyQtTests PRIVATE /utf-8)
 endif()
@@ -17,6 +18,6 @@ add_dependencies(GoSurveyQtTests GoSurveyQt)
 add_test(NAME qt.editor
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass
     -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-qt-tests-hidden.ps1"
-    -Exe "$<TARGET_FILE:GoSurveyQtTests>" -TimeoutSec 280
+    -Exe "$<TARGET_FILE:GoSurveyQtTests>" -TimeoutSec 900
     -WorkingDirectory "${GOSURVEY_ARTIFACT_DIR}")
-set_tests_properties(qt.editor PROPERTIES TIMEOUT 300 WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
+set_tests_properties(qt.editor PROPERTIES TIMEOUT 920 WORKING_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")

@@ -39,8 +39,8 @@ EXPECT LINES 1
 CHECK ALL
 
 # --- both survive the drawing's own file, and DXF --------------------------------------------------
-SAVEAS %OUT%/section-arc.gs
-OPEN %OUT%/section-arc.gs
+SAVEAS %OUT%/section-arc.dwg
+OPEN %OUT%/section-arc.dwg
 EXPECT ELLIPSES 1
 EXPECT LINES 1
 CHECK ALL

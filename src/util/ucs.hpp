@@ -7,7 +7,7 @@
 
 /// The User Coordinate System: one authoritative WCS <-> UCS implementation (REQ-154, GitHub #126).
 ///
-/// Pure and dependency-free — no GL, no ImGui, no CAD session state — so every transform, every
+/// Pure and dependency-free — no GL, no UI, no CAD session state — so every transform, every
 /// construction rule and the PLAN camera derivation are unit-testable without a window (the same
 /// ADR-002 layering pressure that put `ray3d` here).
 ///
@@ -39,7 +39,7 @@ struct Ucs {
 
 /// True when \p u is the World Coordinate System within \p tol.
 ///
-/// Used for the status readout and for the "is this worth saving to `.gs`?" test, so it compares
+/// Used for the status readout and for the "is this worth saving to `internal document payload`?" test, so it compares
 /// the whole frame rather than just the origin — a UCS rotated in place is emphatically not World.
 [[nodiscard]] inline bool IsWorld(const Ucs& u, double tol = 1e-9) {
   auto near = [tol](double a, double b) { return std::fabs(a - b) <= tol; };

@@ -1,6 +1,6 @@
 // REQ-308 — the pure parts of the Start-screen feature: the drawing-tab index sentinel invariant,
 // the tab-close guard, and the thumbnail-cache naming + eviction rules. The three-column panel
-// itself is ImGui and manual-verify (project norm — no ImGui automation).
+// itself is Qt UI and is covered by the Qt editor tests.
 
 #include "CadCommands.hpp"
 #include "ThumbnailCache.hpp"

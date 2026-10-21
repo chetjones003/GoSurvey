@@ -1,5 +1,48 @@
 find_package(Qt6 6.8 REQUIRED COMPONENTS Widgets OpenGLWidgets)
 
+# Issue #918: the Qt frontend must carry no ImGui or GLFW. Walks every library `target` links, directly
+# or through another library, and fails the configure step on any ImGui/GLFW target or on a source file
+# named for ImGui. Issue #917 guards gosurvey_domain alone; this covers the whole Qt link closure, so a
+# dependency added to a Qt target (or to anything it links) cannot reintroduce ImGui unnoticed.
+function(gosurvey_assert_no_imgui_in_link_graph target)
+  set(_pending "${target}")
+  set(_seen "")
+  while(_pending)
+    list(POP_FRONT _pending _current)
+    if(_current IN_LIST _seen)
+      continue()
+    endif()
+    list(APPEND _seen "${_current}")
+    if(_current MATCHES "^(imgui|glfw|gosurvey_imgui_text|GoSurvey$)")
+      message(FATAL_ERROR "${target} links ${_current}; the Qt frontend must not link ImGui or GLFW (issue #918)")
+    endif()
+    get_target_property(_imported "${_current}" IMPORTED)
+    if(NOT _imported)
+      get_target_property(_sources "${_current}" SOURCES)
+      foreach(_source IN LISTS _sources)
+        if(_source MATCHES "[Ii]m[Gg]ui")
+          message(FATAL_ERROR "${target} compiles ${_source} through ${_current}; ImGui sources do not belong in the Qt link graph (issue #918)")
+        endif()
+      endforeach()
+    endif()
+    foreach(_property LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+      get_target_property(_dependencies "${_current}" ${_property})
+      foreach(_dependency IN LISTS _dependencies)
+        if(_dependency MATCHES "^\\$<LINK_ONLY:(.*)>$")
+          set(_dependency "${CMAKE_MATCH_1}")
+        endif()
+        if(TARGET "${_dependency}")
+          get_target_property(_aliased "${_dependency}" ALIASED_TARGET)
+          if(_aliased)
+            set(_dependency "${_aliased}")
+          endif()
+          list(APPEND _pending "${_dependency}")
+        endif()
+      endforeach()
+    endforeach()
+  endwhile()
+endfunction()
+
 add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorWindow.cpp
   src/qt/EditorInput.cpp
@@ -12,6 +55,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorProjects.cpp
   src/qt/EditorProjectSettings.cpp
   src/qt/EditorProjectAttach.cpp
+  src/qt/EditorPointClouds.cpp
   src/qt/EditorUpdate.cpp
   src/qt/EditorDialogs.cpp
   src/qt/EditorPoints.cpp
@@ -24,12 +68,16 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
   src/qt/AdjustmentWindow.cpp
+  src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp
   src/pdf/PdfAttach.cpp
   src/pdf/PdfDocument.cpp
+  src/pdf/PdfDimAudit.cpp
+  src/pdf/PdfAlign.cpp
+  src/pdf/PdfDiff.cpp
   src/pdf/PdfViewerCore.cpp
   src/pdf/PdfAnnotate.cpp
   src/pdf/PdfMeasure.cpp
@@ -64,7 +112,9 @@ target_include_directories(gosurvey_qt_frontend PRIVATE "${CMAKE_CURRENT_SOURCE_
 target_compile_definitions(gosurvey_qt_frontend PUBLIC NOMINMAX QT_NO_KEYWORDS)
 gosurvey_target_warnings(gosurvey_qt_frontend)
 add_executable(GoSurveyQt WIN32 src/qt/main.cpp resources/icons/app.rc)
+set_target_properties(GoSurveyQt PROPERTIES OUTPUT_NAME GoSurvey)
 target_link_libraries(GoSurveyQt PRIVATE gosurvey_qt_frontend)
+gosurvey_assert_no_imgui_in_link_graph(GoSurveyQt)
 gosurvey_target_warnings(GoSurveyQt)
 if(MSVC)
   target_compile_options(GoSurveyQt PRIVATE /utf-8)
@@ -74,6 +124,7 @@ endif()
 # Use the same installed kit for runtime deployment; no downloads or guessed DLL paths.
 get_target_property(_qt_qmake Qt6::qmake IMPORTED_LOCATION)
 get_filename_component(_qt_bin "${_qt_qmake}" DIRECTORY)
+get_filename_component(_qt_root "${_qt_bin}/.." ABSOLUTE)
 find_program(GOSURVEY_WINDEPLOYQT windeployqt HINTS "${_qt_bin}" REQUIRED NO_DEFAULT_PATH)
 add_custom_command(TARGET GoSurveyQt POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different

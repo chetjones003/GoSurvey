@@ -2,7 +2,7 @@
 //
 // What each field means, what is refused and what one undo step covers live in the shared
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
-// the ImGui panel also uses. This file is only the Qt widgets around them.
+// This file contains the Qt widgets around those shared services.
 #include "EditorWindow.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
@@ -16,6 +16,7 @@
 #include "util/NumFormat.hpp"
 
 #include <QColorDialog>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QFocusEvent>
@@ -27,6 +28,7 @@
 #include <QPlainTextEdit>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -97,6 +99,7 @@ void EditorWindow::RefreshProperties() {
   for (int i : st.selectedSurveyPointIndices) mix(static_cast<std::uint64_t>(i) + 977);
   mix(st.cadGpuRevision); mix(static_cast<std::uint64_t>(st.displayLinearPrecision));
   mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginX * 1000))); mix(static_cast<std::uint64_t>(std::llround(st.worldDocumentOriginY * 1000)));
+  mix(st.annotationScales.size());
   mix(st.drawingLayerTable.size()); mix(static_cast<std::uint64_t>(st.activeDrawingIdx));
   mix(qHash(m_PropertiesNote));
   if (fp == m_PropertiesFingerprint && m_PropertiesScroll->widget()) return;
@@ -161,7 +164,9 @@ void EditorWindow::RefreshProperties() {
     auto* heading = new QLabel(title, box);
     heading->setObjectName("propertiesSectionHeading");
     QFont f = heading->font(); f.setBold(true); heading->setFont(f);
-    heading->setStyleSheet("background:#1f3a5f; color:#ffffff; padding:3px 8px;");
+    heading->setStyleSheet(qApp->property("cadLightTheme").toBool()
+        ? "background:#1f3a5f; color:#ffffff; padding:3px 8px;"
+        : "background:#30373c; color:#f4f7f8; border-left:3px solid #55d8d0; padding:3px 8px;");
     layout->addWidget(heading);
     auto* rows = new QWidget(box);
     auto* grid = new QVBoxLayout(rows);
@@ -324,6 +329,79 @@ void EditorWindow::RefreshProperties() {
       (void)CadApplyTransparencyToSelection(m_State, kUiTransparencyPresets[index]);
       finish({});
     }));
+  }
+
+  // --- Annotation scale (issue #901): the annotative flag and per-object visible scales ----
+  if (st.selection.size() == 1) {
+    const auto selected = st.selection.front();
+    const int index = selected.index;
+    bool* annotativeFlag = nullptr;
+    std::vector<std::string>* visibleScaleNames = nullptr;
+    auto bind = [&](auto& items) {
+      if (index < 0 || index >= static_cast<int>(items.size())) return;
+      annotativeFlag = &items[static_cast<size_t>(index)].annotative;
+      visibleScaleNames = &items[static_cast<size_t>(index)].annotativeVisibleScaleNames;
+    };
+    switch (selected.type) {
+      case SelectedEntity::Type::Annotation: bind(m_State.cadAnnotations); break;
+      case SelectedEntity::Type::FilledRegion: bind(m_State.cadFilledRegions); break;
+      case SelectedEntity::Type::BlockRef: bind(m_State.cadBlockRefs); break;
+      case SelectedEntity::Type::Multileader: bind(m_State.cadMultileaders); break;
+      default: break;
+    }
+    if (annotativeFlag && visibleScaleNames) {
+      auto* annotationRows = section("Annotation scale", "propertiesAnnotationScale");
+      auto* annotative = new QCheckBox("Annotative", body);
+      annotative->setObjectName("propertyAnnotative");
+      annotative->setChecked(*annotativeFlag);
+      addRow(annotationRows, "Annotative", annotative);
+      connect(annotative, &QCheckBox::toggled, this, [this, annotativeFlag](bool enabled) {
+        if (*annotativeFlag == enabled) return;
+        PushUndoSnapshot(m_State, "Annotative property");
+        *annotativeFlag = enabled;
+        BumpCadGpuCache(m_State);
+        Refresh();
+      });
+      auto* scales = new QComboBox(body);
+      scales->setObjectName("propertyAnnotationScales");
+      auto* scaleModel = new QStandardItemModel(scales);
+      for (const auto& scale : st.annotationScales) {
+        auto* item = new QStandardItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+        item->setData(QString::fromUtf8(scale.name.c_str()), Qt::UserRole);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        const bool visible = visibleScaleNames->empty() ||
+            std::find(visibleScaleNames->begin(), visibleScaleNames->end(), scale.name) != visibleScaleNames->end();
+        item->setCheckState(visible ? Qt::Checked : Qt::Unchecked);
+        scaleModel->appendRow(item);
+      }
+      scales->setModel(scaleModel);
+      scales->setEnabled(*annotativeFlag && !st.annotationScales.empty());
+      addRow(annotationRows, "Visible scales", scales);
+      // Unticking the last visible scale is refused: an annotative object must show at some scale.
+      connect(scaleModel, &QStandardItemModel::itemChanged, this, [this, visibleScaleNames, scaleModel](QStandardItem* changed) {
+        std::vector<std::string> visibleNames;
+        int visibleCount = 0;
+        for (int row = 0; row < scaleModel->rowCount(); ++row) {
+          const auto* item = scaleModel->item(row);
+          if (item->checkState() == Qt::Checked) {
+            visibleNames.push_back(item->data(Qt::UserRole).toString().toUtf8().toStdString());
+            ++visibleCount;
+          }
+        }
+        if (!scaleModel->rowCount()) return;
+        if (!visibleCount) {
+          const QSignalBlocker block(scaleModel);
+          changed->setCheckState(Qt::Checked);
+          return;
+        }
+        if (visibleCount == scaleModel->rowCount()) visibleNames.clear();
+        if (*visibleScaleNames == visibleNames) return;
+        PushUndoSnapshot(m_State, "Annotative scale visibility");
+        *visibleScaleNames = std::move(visibleNames);
+        BumpCadGpuCache(m_State);
+        Refresh();
+      });
+    }
   }
 
   // --- Geometry ---------------------------------------------------------------------------------
@@ -516,6 +594,18 @@ void EditorWindow::RefreshProperties() {
     hint->setObjectName("propSurfaceNote");
     hint->setWordWrap(true);
     rows->addWidget(hint);
+  }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Spline) {
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.cadSplines.size()) {
+      const CadSpline& sp = st.cadSplines[static_cast<size_t>(index)];
+      auto* rows = section("Spline", "propertiesSpline");
+      readOnly(rows, "Method", sp.isFit() ? "Fit points" : "Control vertices", "propSplineMethod");
+      readOnly(rows, "Degree", QString::number(sp.degree), "propSplineDegree");
+      readOnly(rows, "Closed", sp.periodic ? "Yes" : "No", "propSplineClosed");
+      readOnly(rows, "Point count", QString::number(spline::EditablePointCount(sp)), "propSplinePointCount");
+      readOnly(rows, "Length", fmt(spline::Length(sp)), "propSplineLength");
+    }
   }
   if (!st.selectedSurveyPointIndices.empty()) {
     auto* points = new QLabel(QString("%1 survey point%2 selected. Bulk editing: VIEWPOINTS.").arg(st.selectedSurveyPointIndices.size()).arg(st.selectedSurveyPointIndices.size() == 1 ? "" : "s"), body);

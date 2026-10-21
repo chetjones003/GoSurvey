@@ -1,6 +1,6 @@
 // REQ-350 / TASK-275 — the Pipe Fittings palette's pure filtering and grouping layer.
 //
-// No GL and no ImGui here on purpose: everything that decides WHICH parts a tab shows is a function
+// No GL or UI here on purpose: everything that decides WHICH parts a tab shows is a function
 // over `CadBlockLibraryEntry`, so the rules can be pinned without a window. What the thumbnail LOOKS
 // like is not testable here (and `project.md`'s anti-requirements rule out framebuffer goldens) —
 // that is a by-eye check.

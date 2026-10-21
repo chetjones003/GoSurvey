@@ -17,31 +17,9 @@
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
 
-#include <imgui.h>
 
 namespace {
 
-// Survey-point labels are measured through ImGui::GetFont() while a point is placed or imported
-// (EnsureSurveyPointLabelMtext) — the same fixture as LibreDwgCadTests.cpp (ADR-031 (c')).
-struct HeadlessImGuiScope {
-  HeadlessImGuiScope() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(1920.f, 1080.f);
-    io.DeltaTime = 1.0f / 60.0f;
-    io.IniFilename = nullptr;
-    io.Fonts->AddFontDefault();
-    unsigned char* pixels = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    ImGui::NewFrame();
-  }
-  ~HeadlessImGuiScope() {
-    ImGui::EndFrame();
-    ImGui::DestroyContext();
-  }
-};
 
 void Submit(AppCommandState& st, const std::string& text, std::vector<std::string>& log) {
   char buf[256];
@@ -98,7 +76,6 @@ TEST_CASE("The layer name: row layer, Prefix / Suffix, the object's name for * (
 
 TEST_CASE("A new survey point and its label land on V-NODE / V-NODE-TEXT; one UNDO removes all (REQ-361)",
           "[req361]") {
-  HeadlessImGuiScope imgui;
   AppCommandState st;
   std::vector<std::string> log;
   st.currentColor = "#FF0000";
@@ -128,7 +105,6 @@ TEST_CASE("A new survey point and its label land on V-NODE / V-NODE-TEXT; one UN
 }
 
 TEST_CASE("Create Points: a typed layer wins unless the row is Locked (REQ-361 item 4)", "[req361]") {
-  HeadlessImGuiScope imgui;
   AppCommandState st;
   std::vector<std::string> log;
   st.createPointsOpts.layer = "MY-POINTS";
@@ -141,7 +117,6 @@ TEST_CASE("Create Points: a typed layer wins unless the row is Locked (REQ-361 i
 }
 
 TEST_CASE("CSV-imported survey points land on the Survey point row's layer (REQ-361)", "[req361]") {
-  HeadlessImGuiScope imgui;
   const auto path = (std::filesystem::temp_directory_path() / "gosurvey-req361-points.csv").string();
   {
     std::ofstream f(path);

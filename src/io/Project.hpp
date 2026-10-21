@@ -5,7 +5,7 @@
 //
 // Pure by design, like RecentDrawings: <filesystem> + nlohmann::json only, every path and the wall
 // clock / process-liveness check passed in by the caller, so GoSurveyTests drives it against a temp
-// folder. Nothing here knows about ImGui or the app state. Failures are returned as a message for the
+// folder. Nothing here knows about UI or app state. Failures are returned as a message for the
 // caller to log (REQ-201); nothing throws.
 
 #include <cstdint>

@@ -1,4 +1,4 @@
-// `.gs` fidelity for B-rep solids (REQ-313 / REQ-314 / REQ-315), through exactly the serializer the
+// `document JSON payload` fidelity for B-rep solids (REQ-313 / REQ-314 / REQ-315), through exactly the serializer the
 // saver runs (`gsio::SolidToJson` / `gsio::SolidFromJson` in BrepJson.hpp).
 //
 // The acceptance conditions this pins:
@@ -65,7 +65,7 @@ void RequireRoundTrips(const brep::Solid& s) {
 
 }  // namespace
 
-TEST_CASE("An analytic solid round-trips through .gs unchanged", "[brepjson][req313]") {
+TEST_CASE("An analytic solid round-trips through document JSON payload unchanged", "[brepjson][req313]") {
   brep::Solid box;
   brep::Solid cyl;
   brep::Solid tor;
@@ -87,7 +87,7 @@ TEST_CASE("A solid with no NURBS face serializes without the patch key", "[brepj
   REQUIRE(dumped.find("Nurbs") == std::string::npos);
 }
 
-TEST_CASE("A swept solid round-trips through .gs with topology and volume intact", "[brepjson][req315]") {
+TEST_CASE("A swept solid round-trips through document JSON payload with topology and volume intact", "[brepjson][req315]") {
   brep::Solid swept;
   brep::Problem why = brep::Problem::Ok;
   brep::SweepSegment seg;
@@ -153,7 +153,7 @@ TEST_CASE("A lofted solid with NURBS faces round-trips with topology and volume 
   }
 }
 
-TEST_CASE("A hand-built general trim loop round-trips through .gs (ADR-052, issue #306)",
+TEST_CASE("A hand-built general trim loop round-trips through document JSON payload (ADR-052, issue #306)",
           "[brepjson][req306][adr052]") {
   brep::Solid box;
   brep::Problem why = brep::Problem::Ok;

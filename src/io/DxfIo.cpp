@@ -1530,6 +1530,70 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       continue;
     }
 
+    if (typ == "SPLINE") {
+      EntityBase base;
+      int flags = 0, degree = 0;
+      int declaredKnots = -1, declaredCtrl = -1, declaredFit = -1;
+      std::vector<double> knots, cx, cy, cz, weights, fx, fy, fz;
+      for (size_t k = i + 1; k < j; ++k) {
+        const int c = t[k].code;
+        const std::string& v = t[k].value;
+        base.parse(c, v);
+        double d = 0.0;
+        if (c == 70) { ParseIntFlexible(v, &flags); }
+        else if (c == 71) { ParseIntFlexible(v, &degree); }
+        else if (c == 72) { ParseIntFlexible(v, &declaredKnots); }
+        else if (c == 73) { ParseIntFlexible(v, &declaredCtrl); }
+        else if (c == 74) { ParseIntFlexible(v, &declaredFit); }
+        else if (c == 40 && ParseDouble(v, &d)) knots.push_back(d);
+        else if (c == 10 && ParseDouble(v, &d)) cx.push_back(d);
+        else if (c == 20 && ParseDouble(v, &d)) cy.push_back(d);
+        else if (c == 30 && ParseDouble(v, &d)) cz.push_back(d);
+        else if (c == 41 && ParseDouble(v, &d)) weights.push_back(d);
+        else if (c == 11 && ParseDouble(v, &d)) fx.push_back(d);
+        else if (c == 21 && ParseDouble(v, &d)) fy.push_back(d);
+        else if (c == 31 && ParseDouble(v, &d)) fz.push_back(d);
+      }
+      bool accepted = false;
+      if (degree > 0 && static_cast<size_t>(degree) < cx.size() && cy.size() == cx.size() &&
+          (cz.empty() || cz.size() == cx.size()) && knots.size() == cx.size() + static_cast<size_t>(degree) + 1 &&
+          (((flags & 4) == 0 && weights.empty()) || weights.size() == cx.size()) &&
+          (declaredKnots < 0 || static_cast<size_t>(declaredKnots) == knots.size()) &&
+          (declaredCtrl < 0 || static_cast<size_t>(declaredCtrl) == cx.size()) &&
+          (declaredFit < 0 || static_cast<size_t>(declaredFit) == fx.size()) &&
+          fx.size() == fy.size() && (fz.empty() || fz.size() == fx.size())) {
+        CadSpline s;
+        s.degree = degree;
+        s.periodic = (flags & 3) != 0;
+        s.knots = std::move(knots);
+        for (size_t n = 0; n < cx.size(); ++n) {
+          double wx = 0.0, wy = 0.0;
+          xf.apply(cx[n], cy[n], &wx, &wy);
+          s.ctrl.push_back({wx - st.worldDocumentOriginX, wy - st.worldDocumentOriginY,
+                            cz.empty() ? 0.0 : cz[n]});
+        }
+        if (weights.size() == s.ctrl.size()) s.weights = std::move(weights);
+        for (size_t n = 0; n < fx.size(); ++n) {
+          double wx = 0.0, wy = 0.0;
+          xf.apply(fx[n], fy[n], &wx, &wy);
+          s.fit.push_back({wx - st.worldDocumentOriginX, wy - st.worldDocumentOriginY,
+                           fz.empty() ? 0.0 : fz[n]});
+        }
+        if (spline::Validate(s).empty()) {
+          st.cadSplines.push_back(std::move(s));
+          st.cadSplineAttrs.push_back(base.makeAttr(layerRgb));
+          accepted = true;
+        }
+      }
+      if (!accepted) {
+        ++*skippedUnknown;
+        if (skipCounts)
+          ++(*skipCounts)["SPLINE (malformed or unsupported)"];
+      }
+      i = j;
+      continue;
+    }
+
     if (typ == "ELLIPSE") {
       EntityBase base;
       double cx = 0, cy = 0, cz = 0, mx = 1, my = 0, mz = 0, ratio = 0.5, t0 = 0, t1 = 2.0 * kPi;
@@ -2182,6 +2246,307 @@ std::string DxfExportEntityLtype6(const EntityAttributes& at) {
   return CadCanonicalLinetypeNameForDxf(at.linetype);
 }
 
+// Issue #768 / REQ-113: paper space on DXF import. Layouts come from the OBJECTS section's LAYOUT records
+// (name, tab order, paper size and rotation); each paper-space entity (group 67, or inside a *Paper_Space
+// block) lands on the layout named by its group 410, or the layout that owns its block. The entity itself
+// is read by ParseEntityRegion into a scratch state at origin 0, so every number is already paper inches,
+// then moved into the layout's own stores. Returns the number of paper entities read.
+struct DxfLayoutRec {
+  std::string name;
+  int tab = 0;
+  double w = 0.0, h = 0.0;
+  int units = 0, rotation = 0;
+};
+
+int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
+                        const std::unordered_map<std::string, uint32_t>& layerRgb,
+                        const std::unordered_map<std::string, std::pair<size_t, size_t>>& blockDefs,
+                        const std::unordered_map<std::string, DxfTextStyle>& textStyles, bool hasEntitiesSec,
+                        size_t eb, size_t ee, std::vector<std::string>& log) {
+  constexpr double kPiD = 3.14159265358979323846;
+  // --- layouts
+  std::vector<DxfLayoutRec> recs;
+  size_t ob = 0, oe = 0;
+  if (FindSectionBounds(t, "OBJECTS", &ob, &oe)) {
+    for (size_t i = ob; i < oe; ++i) {
+      if (!(t[i].code == 0 && EqCiNorm(t[i].value, "LAYOUT")))
+        continue;
+      size_t j = i + 1;
+      while (j < oe && t[j].code != 0)
+        ++j;
+      DxfLayoutRec r;
+      bool inLayout = false;
+      for (size_t k = i + 1; k < j; ++k) {
+        const int c = t[k].code;
+        const std::string& v = t[k].value;
+        if (c == 100) {
+          inLayout = (v == "AcDbLayout");
+          continue;
+        }
+        if (inLayout) {
+          if (c == 1)
+            r.name = Trim(v);
+          else if (c == 71)
+            ParseIntFlexible(v, &r.tab);
+        } else if (c == 44) {
+          ParseDouble(v, &r.w);
+        } else if (c == 45) {
+          ParseDouble(v, &r.h);
+        } else if (c == 72) {
+          ParseIntFlexible(v, &r.units);
+        } else if (c == 73) {
+          ParseIntFlexible(v, &r.rotation);
+        }
+      }
+      if (!r.name.empty() && !EqCiStr(r.name, "Model"))
+        recs.push_back(r);
+      i = j - 1;
+    }
+  }
+  std::stable_sort(recs.begin(), recs.end(),
+                   [](const DxfLayoutRec& a, const DxfLayoutRec& b) { return a.tab < b.tab; });
+
+  std::vector<PaperLayout> layouts;
+  for (const DxfLayoutRec& r : recs) {
+    PaperLayout pl;
+    pl.name = r.name;
+    const double toIn = r.units == 0 ? 1.0 : (r.units == 1 ? 1.0 / 25.4 : 0.0);
+    const double rw = r.w * toIn, rh = r.h * toIn;
+    if (rw > 1.0 && rh > 1.0) {
+      const bool rotated = (r.rotation & 1) != 0;
+      const double sheetW = rotated ? rh : rw, sheetH = rotated ? rw : rh;
+      pl.portraitWidthIn = static_cast<float>(std::min(sheetW, sheetH));
+      pl.portraitHeightIn = static_cast<float>(std::max(sheetW, sheetH));
+      pl.landscape = sheetW > sheetH;
+      pl.presetIdx = -1;
+      for (int pi = 0; pi < kPaperSizePresetCount; ++pi)
+        if (std::fabs(kPaperSizePresets[pi].widthIn - pl.portraitWidthIn) < 0.02f &&
+            std::fabs(kPaperSizePresets[pi].heightIn - pl.portraitHeightIn) < 0.02f)
+          pl.presetIdx = pi;
+    }
+    layouts.push_back(std::move(pl));
+  }
+
+  // --- frozen-layer handles -> layer names
+  std::unordered_map<std::string, std::string> layerNameByHandle;
+  {
+    size_t tb = 0, te = 0;
+    if (FindSectionBounds(t, "TABLES", &tb, &te)) {
+      for (size_t i = tb; i < te; ++i) {
+        if (!(t[i].code == 0 && EqCiNorm(t[i].value, "LAYER")))
+          continue;
+        std::string handle, name;
+        for (size_t k = i + 1; k < te && t[k].code != 0; ++k) {
+          if (t[k].code == 5)
+            handle = Trim(t[k].value);
+          else if (t[k].code == 2)
+            name = Trim(t[k].value);
+        }
+        if (!handle.empty() && !name.empty())
+          layerNameByHandle[handle] = name;
+      }
+    }
+  }
+
+  // --- entity records
+  struct Rec {
+    size_t lo, hi;
+    int layout;
+  };
+  std::vector<Rec> found;
+  auto layoutByName = [&](const std::string& n) {
+    for (size_t i = 0; i < layouts.size(); ++i)
+      if (EqCiStr(layouts[i].name, n))
+        return static_cast<int>(i);
+    return -1;
+  };
+  auto ensureLayout = [&](size_t idx) {
+    while (layouts.size() <= idx) {
+      PaperLayout pl;
+      pl.name = "Layout" + std::to_string(layouts.size() + 1);
+      layouts.push_back(std::move(pl));
+    }
+  };
+  // Splits [lo, hi) into entity records (a POLYLINE runs through its SEQEND).
+  auto forEachRecord = [&](size_t lo, size_t hi, auto&& fn) {
+    size_t i = lo;
+    while (i < hi) {
+      if (t[i].code != 0) {
+        ++i;
+        continue;
+      }
+      size_t j = i + 1;
+      while (j < hi && t[j].code != 0)
+        ++j;
+      if (EqCiNorm(t[i].value, "POLYLINE")) {
+        size_t k = j;
+        while (k < hi && !(t[k].code == 0 && EqCiNorm(t[k].value, "SEQEND")))
+          ++k;
+        if (k < hi) {
+          ++k;
+          while (k < hi && t[k].code != 0)
+            ++k;
+          j = k;
+        }
+      }
+      fn(i, j);
+      i = j;
+    }
+  };
+  if (hasEntitiesSec) {
+    forEachRecord(eb, ee, [&](size_t lo, size_t hi) {
+      if (!EntityRangeIsPaperSpace(t, lo + 1, hi))
+        return;
+      std::string layoutName;
+      for (size_t k = lo + 1; k < hi; ++k)
+        if (t[k].code == 410) {
+          layoutName = Trim(t[k].value);
+          break;
+        }
+      int idx = layoutName.empty() ? 0 : layoutByName(layoutName);
+      if (idx < 0) {
+        PaperLayout pl;
+        pl.name = layoutName;
+        layouts.push_back(std::move(pl));
+        idx = static_cast<int>(layouts.size()) - 1;
+      }
+      ensureLayout(static_cast<size_t>(idx));
+      found.push_back({lo, hi, idx});
+    });
+  }
+  // Later layouts' entities live in their own *Paper_Space block: "" = layout 0, "N" = layout N + 1.
+  for (const auto& kv : blockDefs) {
+    if (!IsPaperSpaceBlockName(kv.first))
+      continue;
+    std::string lower = Trim(kv.first);
+    for (char& ch : lower)
+      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    const std::string suffix = lower.substr(lower.find("*paper_space") + std::strlen("*paper_space"));
+    size_t idx = 0;
+    if (!suffix.empty()) {
+      int n = 0;
+      if (!ParseIntFlexible(suffix, &n) || n < 0)
+        continue;
+      idx = static_cast<size_t>(n) + 1;
+    }
+    forEachRecord(kv.second.first, kv.second.second, [&](size_t lo, size_t hi) {
+      if (EqCiNorm(t[lo].value, "BLOCK") || EqCiNorm(t[lo].value, "ENDBLK"))
+        return;
+      ensureLayout(idx);  // only a block that holds entities makes a layout; an empty one is just the DXF skeleton
+      found.push_back({lo, hi, static_cast<int>(idx)});
+    });
+  }
+  if (layouts.empty())
+    return 0;
+
+  int nRead = 0, nBulge = 0, nOther = 0;
+  const Affine2D xfRoot{};
+  for (const Rec& r : found) {
+    PaperLayout& L = layouts[static_cast<size_t>(r.layout)];
+    if (EqCiNorm(t[r.lo].value, "VIEWPORT")) {
+      Viewport vp;
+      double cx = 0, cy = 0, w = 0, h = 0, vcx = 0, vcy = 0, vh = 0, dx = 0, dy = 0, dz = 1, twist = 0;
+      int id = 0, flags = 32768, onOff = 1;
+      bool hasFlags = false;
+      for (size_t k = r.lo + 1; k < r.hi; ++k) {
+        const int c = t[k].code;
+        const std::string& v = t[k].value;
+        if (c == 10)
+          ParseDouble(v, &cx);
+        else if (c == 20)
+          ParseDouble(v, &cy);
+        else if (c == 40)
+          ParseDouble(v, &w);
+        else if (c == 41)
+          ParseDouble(v, &h);
+        else if (c == 68)
+          ParseIntFlexible(v, &onOff);
+        else if (c == 69)
+          ParseIntFlexible(v, &id);
+        else if (c == 12)
+          ParseDouble(v, &vcx);
+        else if (c == 22)
+          ParseDouble(v, &vcy);
+        else if (c == 16)
+          ParseDouble(v, &dx);
+        else if (c == 26)
+          ParseDouble(v, &dy);
+        else if (c == 36)
+          ParseDouble(v, &dz);
+        else if (c == 45)
+          ParseDouble(v, &vh);
+        else if (c == 51)
+          ParseDouble(v, &twist);
+        else if (c == 90) {
+          ParseIntFlexible(v, &flags);
+          hasFlags = true;
+        } else if (c == 8)
+          vp.layer = Trim(v);
+        else if (c == 331) {
+          const auto it = layerNameByHandle.find(Trim(v));
+          if (it != layerNameByHandle.end())
+            vp.frozenLayers.push_back(it->second);
+        }
+      }
+      // AutoCAD's own sheet-spanning viewport is chrome, not a user viewport.
+      if (id == 1 || (L.sheetWidthIn() > 1.f && w >= L.sheetWidthIn() * 0.99 && h >= L.sheetHeightIn() * 0.99))
+        continue;
+      vp.paperWIn = static_cast<float>(w);
+      vp.paperHIn = static_cast<float>(h);
+      vp.paperXIn = static_cast<float>(cx - w * 0.5);
+      vp.paperYIn = static_cast<float>(cy - h * 0.5);
+      if (h > 1e-6 && vh > 0.0)
+        vp.scaleModelPerPaperIn = static_cast<float>(vh / h);
+      vp.modelCenterX = vcx - st.worldDocumentOriginX;
+      vp.modelCenterY = vcy - st.worldDocumentOriginY;
+      vp.on = onOff != 0 && (!hasFlags || (flags & 32768) != 0);
+      vp.locked = hasFlags && (flags & 16384) != 0;
+      const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+      if (len > 1e-9) {
+        vp.camElevationDeg = static_cast<float>(std::asin(std::clamp(dz / len, -1.0, 1.0)) * (180.0 / kPiD));
+        vp.camAzimuthDeg = (std::fabs(dx) + std::fabs(dy) < 1e-9)
+                               ? 0.f
+                               : static_cast<float>(std::atan2(-dx, -dy) * (180.0 / kPiD));
+      }
+      vp.camRollDeg = static_cast<float>(twist * (180.0 / kPiD));
+      L.viewports.push_back(std::move(vp));
+      ++nRead;
+      continue;
+    }
+    // Everything else: read it with the model-space reader, with the paper-space tags removed so the
+    // reader does not skip it, into a scratch state at origin 0 and one unit per plotted inch.
+    std::vector<DxfPair> sub;
+    sub.reserve(r.hi - r.lo);
+    for (size_t k = r.lo; k < r.hi; ++k)
+      if (!(t[k].code == 67 || t[k].code == 410))
+        sub.push_back(t[k]);
+    AppCommandState scratch;
+    scratch.worldDocumentOriginX = 0.0;
+    scratch.worldDocumentOriginY = 0.0;
+    scratch.modelUnitsPerPlottedInch = 1.f;
+    double mag = 0;
+    int skPaper = 0, skVp = 0, skUnknown = 0, degenerate = 0;
+    std::unordered_map<std::string, int> skipCounts;
+    ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
+                      &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate);
+    if (AppendScratchToPaperLayout(L, scratch))
+      ++nBulge;
+    if (skUnknown > 0 || degenerate > 0)
+      ++nOther;
+    ++nRead;
+  }
+  if (nBulge > 0)
+    log.push_back("DXF import — paper-space polyline arc segments drawn straight (no bulge store) in " +
+                  std::to_string(nBulge) + " polyline(s).");
+  if (nOther > 0)
+    log.push_back("DXF import — " + std::to_string(nOther) + " paper-space entit" + (nOther == 1 ? "y" : "ies") +
+                  " of an unsupported type skipped.");
+  st.paperLayouts = std::move(layouts);
+  log.push_back("DXF import — " + std::to_string(st.paperLayouts.size()) + " paper layout(s), " +
+                std::to_string(nRead) + " paper-space entit" + (nRead == 1 ? "y" : "ies") + " (REQ-113).");
+  return nRead;
+}
+
 bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF import — no path.");
@@ -2287,7 +2652,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       const bool headerSane = std::max(spanX, spanY) < 1e6;
       // Only rebase when the coordinates are actually large enough to need it (#94).
       //
-      // `.gs` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
+      // `internal document payload` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
       // `kLargeCoordinateRebaseThreshold`. DXF import was not, and rebased on EVERY import, so a
       // drawing spanning 150 units had its origin moved to the extents centre and every stored
       // float re-rounded — buying no precision whatsoever, since local storage only helps when the
@@ -2365,7 +2730,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // arcs would otherwise be judged empty and read a SECOND time from the *MODEL_SPACE block —
   // duplicating every entity in it.
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
-                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty();
+                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty() &&
+                      st.cadSplines.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -2383,6 +2749,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   os << "DXF import — " << nLines << " line segment(s), " << nCirc << " circle(s), " << nPoly
      << " polyline(s).";
   log.push_back(os.str());
+  if (ImportDxfPaperSpace(pairs, st, layerRgb, blockDefs, textStyles, hasEntitiesSec, eb, ee, log) > 0)
+    skippedPaper = 0;  // read onto their layouts instead (issue #768)
   if (skippedPaper > 0)
     log.push_back("DXF import — skipped " + std::to_string(skippedPaper) +
                   " paper-space-only ENTITIES (group 67); layouts/title blocks not imported.");
@@ -2427,7 +2795,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   // #94: was an UNCONDITIONAL RebaseDrawingToLocalOrigin. `MaybeRebaseLargeCoordinates`
-  // is the same call behind `.gs` load's two guards — it no-ops when the origin is already set (the
+  // is the same call behind `internal document payload` load's two guards — it no-ops when the origin is already set (the
   // large-coordinate case, where the header block above just established it) and no-ops below
   // `kLargeCoordinateRebaseThreshold` (the small-drawing case, which is #94). So the composition is:
   //   small drawing            -> header skipped, this skips  -> origin stays (0,0), nothing re-rounds
@@ -2501,8 +2869,19 @@ std::string DxfPaperBlockName(size_t layoutIdx) {
 // cannot drift apart (a degenerate polyline is counted but not written: a gap in handles is legal).
 uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
   const size_t nPoly = L.paperPolyOffsets.size() > 0 ? L.paperPolyOffsets.size() - 1 : 0;
+  // Issue #768: a fill is a HATCH; a multileader is written as its leader LINE segments plus its label.
+  uint64_t nLeaderParts = 0;
+  for (const CadMultileader& ml : L.paperMultileaders) {
+    nLeaderParts += ml.pathXyz.size() / 3 + 1;
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      nLeaderParts += branch.size() / 3;
+  }
+  // A table is written as its outline and dividers (LINEs) plus one text per cell.
+  for (const CadTable& tb : L.paperTables)
+    nLeaderParts += 4 + static_cast<uint64_t>(std::max(tb.cols - 1, 0) + std::max(CadTableRowCount(tb) - 1, 0)) +
+                    tb.cells.size();
   return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
-         nPoly + L.paperTexts.size() + L.viewports.size();
+         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts;
 }
 
 std::string DxfHex(uint64_t v) {
@@ -2528,6 +2907,7 @@ void DxfTagPaperSpace(std::vector<DxfOutPair>* v, const std::string& layoutName)
 // either), so an INSERT would name a block the file does not contain. The caller logs them (REQ-201).
 void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& L, const std::string& ownerHex,
                                   const std::unordered_map<std::string, uint32_t>& layerRgbHint,
+                                  const std::unordered_map<std::string, std::string>& layerHandleHex,
                                   uint64_t* nextHandle, std::vector<DxfOutPair>* out, size_t* nWritten) {
   constexpr double kPiD = 3.14159265358979323846;
   auto num = [](double v) { return std::to_string(v); };
@@ -2709,6 +3089,44 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
       flush(v);
     }
   }
+  // Issue #768: fills as solid HATCH, one boundary path per loop (the same shape model space writes).
+  for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
+    const CadFilledRegion& fr = L.paperFilledRegions[fi];
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+      continue;
+    std::vector<DxfOutPair> v;
+    begin(v, "HATCH", commonOf(attrAt(L.paperFilledRegionAttrs, fi)));
+    v.push_back({100, "AcDbHatch"});
+    v.push_back({10, "0.0"});
+    v.push_back({20, "0.0"});
+    v.push_back({30, "0.0"});
+    flat(v);
+    v.push_back({2, "SOLID"});
+    v.push_back({70, "1"});
+    v.push_back({71, "0"});
+    v.push_back({91, std::to_string(fr.loopStart.size())});
+    for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+      const int b0 = fr.loopStart[li];
+      const int cnt = fr.loopCount(li);
+      if (cnt < 3)
+        continue;
+      v.push_back({92, "3"});
+      v.push_back({72, "0"});
+      v.push_back({73, "1"});
+      v.push_back({93, std::to_string(cnt)});
+      for (int k = 0; k < cnt; ++k) {
+        v.push_back({10, num(fr.vertsXyz[static_cast<size_t>(b0 + k) * 3])});
+        v.push_back({20, num(fr.vertsXyz[static_cast<size_t>(b0 + k) * 3 + 1])});
+      }
+      v.push_back({97, "0"});
+    }
+    v.push_back({75, "0"});
+    v.push_back({76, "1"});
+    v.push_back({98, "1"});
+    v.push_back({10, num(fr.vertsXyz[0])});
+    v.push_back({20, num(fr.vertsXyz[1])});
+    flush(v);
+  }
   int vpId = 2;  // id 1 is the sheet's own viewport
   for (const Viewport& gv : L.viewports) {
     EntityAttributes la;
@@ -2721,21 +3139,101 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     v.push_back({30, "0.0"});
     v.push_back({40, num(gv.paperWIn)});
     v.push_back({41, num(gv.paperHIn)});
-    v.push_back({68, "1"});  // on
+    v.push_back({68, gv.on ? "1" : "0"});  // on / off
     v.push_back({69, std::to_string(vpId++)});
     const double cx = gv.modelCenterX + st.worldDocumentOriginX;
     const double cy = gv.modelCenterY + st.worldDocumentOriginY;
     v.push_back({12, num(cx)});
     v.push_back({22, num(cy)});
-    v.push_back({16, "0.0"});
-    v.push_back({26, "0.0"});
-    v.push_back({36, "1.0"});
+    {
+      // Issue #768: the camera as VIEWDIR (target -> camera); plan view is (0, 0, 1).
+      const double az = static_cast<double>(gv.camAzimuthDeg) * (kPiD / 180.0);
+      const double el = static_cast<double>(gv.camElevationDeg) * (kPiD / 180.0);
+      v.push_back({16, num(-std::sin(az) * std::cos(el))});
+      v.push_back({26, num(-std::cos(az) * std::cos(el))});
+      v.push_back({36, num(std::sin(el))});
+    }
     v.push_back({17, num(cx)});
     v.push_back({27, num(cy)});
     v.push_back({37, "0.0"});
     v.push_back({42, "50.0"});
     v.push_back({45, num(static_cast<double>(gv.paperHIn) * static_cast<double>(gv.safeScale()))});
+    v.push_back({51, num(static_cast<double>(gv.camRollDeg) * (kPiD / 180.0))});  // view twist
+    // Status flags: 32768 = on, 16384 = display locked, 32 = UCS icon visible (the same bits the DWG keeps).
+    v.push_back({90, std::to_string(32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0))});
+    for (const std::string& frozen : gv.frozenLayers) {
+      const auto it = layerHandleHex.find(frozen);
+      if (it != layerHandleHex.end())
+        v.push_back({331, it->second});  // frozen layer in this viewport
+    }
     flush(v);
+  }
+  // Issue #768: DXF has no multileader writer, so each one is written as its leader LINEs plus its label
+  // text. The content and position survive; the multileader identity does not (reported by the caller).
+  if (!L.paperMultileaders.empty() || !L.paperTables.empty()) {
+    PaperLayout parts;
+    parts.name = L.name;
+    for (size_t ti = 0; ti < L.paperTables.size(); ++ti) {
+      const CadTable& tb = L.paperTables[ti];
+      const EntityAttributes at = attrAt(L.paperTableAttrs, ti);
+      auto seg = [&](float ax, float ay, float bx, float by) {
+        parts.paperLines.insert(parts.paperLines.end(), {ax, ay, 0.f, bx, by, 0.f});
+        parts.paperLineAttrs.push_back(at);
+      };
+      float cx[4], cy[4];
+      for (int c = 0; c < 4; ++c)
+        CadTableWorldCorner(tb, c, &cx[c], &cy[c]);
+      for (int c = 0; c < 4; ++c)
+        seg(cx[c], cy[c], cx[(c + 1) % 4], cy[(c + 1) % 4]);
+      const float tw = std::max(tb.width, 1.e-3f), th = std::max(tb.height, 1.e-3f);
+      const int rows = CadTableRowCount(tb);
+      for (int c = 1; c < tb.cols; ++c) {
+        float ax, ay, bx, by;
+        const float lx = tw * static_cast<float>(c) / static_cast<float>(tb.cols);
+        CadTableLocalToWorld(tb, lx, 0.f, &ax, &ay);
+        CadTableLocalToWorld(tb, lx, th, &bx, &by);
+        seg(ax, ay, bx, by);
+      }
+      for (int r = 1; r < rows; ++r) {
+        float ax, ay, bx, by;
+        const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
+        CadTableLocalToWorld(tb, 0.f, ly, &ax, &ay);
+        CadTableLocalToWorld(tb, tw, ly, &bx, &by);
+        seg(ax, ay, bx, by);
+      }
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(tb, &cells);
+      for (size_t ci = 0; ci < cells.size() && ci < tb.cells.size(); ++ci) {
+        if (tb.cells[ci].empty())
+          continue;
+        CadAnnotation cell;
+        cell.kind = CadAnnotation::Kind::Text;
+        cell.text = tb.cells[ci];
+        cell.fontFamily = tb.fontFamily;
+        cell.plottedHeightInches = tb.plottedHeightInches;
+        cell.rotationRad = tb.rotationRad;
+        cell.insX = cells[ci].x0 + 0.02f;
+        cell.insY = cells[ci].y1 - 0.02f;
+        parts.paperTexts.push_back(std::move(cell));
+        parts.paperTextAttrs.push_back(at);
+      }
+    }
+    for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
+      const CadMultileader& ml = L.paperMultileaders[mi];
+      const EntityAttributes at = attrAt(L.paperMultileaderAttrs, mi);
+      auto addPath = [&](const std::vector<float>& pts) {
+        for (size_t k = 0; k + 5 < pts.size(); k += 3) {
+          parts.paperLines.insert(parts.paperLines.end(), {pts[k], pts[k + 1], 0.f, pts[k + 3], pts[k + 4], 0.f});
+          parts.paperLineAttrs.push_back(at);
+        }
+      };
+      addPath(ml.pathXyz);
+      for (const std::vector<float>& branch : ml.extraLeaderPaths)
+        addPath(branch);
+      parts.paperTexts.push_back(ml.label);
+      parts.paperTextAttrs.push_back(at);
+    }
+    DxfAppendPaperLayoutEntities(st, parts, ownerHex, layerRgbHint, layerHandleHex, nextHandle, out, nWritten);
   }
 }
 
@@ -2776,11 +3274,15 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userEllAttrs[i].layer);
   for (const PaperLayout& pl : st.paperLayouts) {
     for (const auto* attrs : {&pl.paperLineAttrs, &pl.paperCircleAttrs, &pl.paperArcAttrs, &pl.paperEllAttrs,
-                              &pl.paperPolyAttrs, &pl.paperTextAttrs})
+                              &pl.paperPolyAttrs, &pl.paperTextAttrs, &pl.paperFilledRegionAttrs,
+                              &pl.paperMultileaderAttrs, &pl.paperTableAttrs})
       for (const EntityAttributes& at : *attrs)
         addLayerName(at.layer);
-    for (const Viewport& gv : pl.viewports)
+    for (const Viewport& gv : pl.viewports) {
       addLayerName(gv.layer);
+      for (const std::string& frozen : gv.frozenLayers)
+        addLayerName(frozen);
+    }
   }
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
@@ -2834,7 +3336,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                                static_cast<uint64_t>(nPoly) +
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
-                               static_cast<uint64_t>(st.userEllipses.size());
+                               static_cast<uint64_t>(st.userEllipses.size()) +
+                               static_cast<uint64_t>(st.cadSplines.size());
   // Dimension geometry comes from CadDimStroke.hpp - the same module the viewport (CadUi) and the
   // plot (PdfPlot) already use - rather than being rebuilt here. The block this replaces handled
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
@@ -3097,6 +3600,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
     accExtZ(static_cast<double>(el.z));
   }
+  // Match ComputeWorldExtents' adaptive sampling so importing the header does not trigger a lossy
+  // rebase of the spline or of neighboring geometry.
+  {
+    std::vector<spline::Vec3> points;
+    for (const CadSpline& sp : st.cadSplines) {
+      points.clear();
+      spline::Tessellate(sp, kSplineSampleTolerance, &points);
+      for (const auto& p : points) {
+        accExt(q6lx(p.x), q6ly(p.y));
+        accExtZ(p.z);
+      }
+    }
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -3141,7 +3657,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // group 40 alone, by 1e-6, with every other byte identical. Deriving from the snapped extents
   // removes the amplifier — the view this file states is exactly the view a reader derives from
   // the extents the same file states — so the FIRST export is already a fixed point (REQ-204
-  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `internal document payload`.
   const auto snapToWritePrecision = [](double v) {
     return std::isfinite(v) ? std::stod(std::to_string(v)) : v;
   };
@@ -3168,6 +3684,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
 
   auto emitPair = [&](int code, const std::string& val) {
     out << code << "\r\n" << val << "\r\n";
+  };
+  auto emitDoublePair = [&](int code, double val) {
+    std::ostringstream formatted;
+    formatted << std::setprecision(16) << val;
+    emitPair(code, formatted.str());
   };
 
   auto dxfEmitTransparency440IfNeeded = [&](float transparency01) {
@@ -3789,13 +4310,21 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // Entity records are built here, once: the first layout's go in ENTITIES (as AutoCAD writes them),
   // every later layout's go inside its own BLOCK definition (AutoCAD puts them on the wrong sheet if
   // they are all in ENTITIES — measured with accoreconsole).
+  // Layer name -> handle, in the order the LAYER table below numbers its rows (0x10 up, layerNames order),
+  // so a viewport's frozen-layer references (group 331) name the right layer record.
+  std::unordered_map<std::string, std::string> layerHandleHex;
+  {
+    uint64_t lh = 0x10;
+    for (const std::string& lyr : layerNames)
+      layerHandleHex[lyr] = DxfHex(lh++);
+  }
   std::vector<std::vector<DxfOutPair>> paperPairs(st.paperLayouts.size());
   size_t nPaperWritten = 0;
   size_t nPaperBlockRefsSkipped = 0;
   for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
     uint64_t h = paperH[li].ent;
-    DxfAppendPaperLayoutEntities(st, st.paperLayouts[li], DxfHex(paperH[li].br), layerRgbHint, &h, &paperPairs[li],
-                                 &nPaperWritten);
+    DxfAppendPaperLayoutEntities(st, st.paperLayouts[li], DxfHex(paperH[li].br), layerRgbHint, layerHandleHex, &h,
+                                 &paperPairs[li], &nPaperWritten);
     nPaperBlockRefsSkipped += st.paperLayouts[li].paperBlockRefs.size();
   }
   if (!paperH.empty())
@@ -4065,6 +4594,40 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(100, "AcDbArc");
     emitPair(50, aw.startDeg);
     emitPair(51, aw.endDeg);
+  }
+
+  // Native SPLINE entities preserve the standard degree, knot, control, weight and fit arrays.
+  for (size_t si = 0; si < st.cadSplines.size(); ++si) {
+    const CadSpline& s = st.cadSplines[si];
+    if (!spline::Validate(s).empty()) continue;
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    EntityAttributes at{};
+    if (si < st.cadSplineAttrs.size()) at = st.cadSplineAttrs[si];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+    emitPair(0, "SPLINE");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbSpline");
+    emitPair(70, std::to_string((s.periodic ? 3 : 0) | (!s.weights.empty() ? 4 : 0)));
+    emitPair(71, std::to_string(s.degree));
+    emitPair(72, std::to_string(s.knots.size()));
+    emitPair(73, std::to_string(s.ctrl.size()));
+    emitPair(74, std::to_string(s.fit.size()));
+    for (double knot : s.knots) emitDoublePair(40, knot);
+    for (size_t i = 0; i < s.ctrl.size(); ++i) {
+      emitDoublePair(10, worldX(s.ctrl[i].x));
+      emitDoublePair(20, worldY(s.ctrl[i].y));
+      emitDoublePair(30, s.ctrl[i].z);
+    }
+    if (!s.weights.empty()) for (double weight : s.weights) emitDoublePair(41, weight);
+    for (const auto& p : s.fit) {
+      emitDoublePair(11, worldX(p.x));
+      emitDoublePair(21, worldY(p.y));
+      emitDoublePair(31, p.z);
+    }
   }
 
   // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis
@@ -4933,6 +5496,20 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       log.push_back("DXF export — wrote " + std::to_string(nPaperWritten) + " paper-space entit" +
                     (nPaperWritten == 1 ? "y" : "ies") + " on " + std::to_string(st.paperLayouts.size()) +
                     " layout(s) (REQ-113).");
+    {
+      size_t nLeaders = 0;
+      for (const PaperLayout& pl : st.paperLayouts)
+        nLeaders += pl.paperMultileaders.size();
+      size_t nTables = 0;
+      for (const PaperLayout& pl : st.paperLayouts)
+        nTables += pl.paperTables.size();
+      if (nTables > 0)
+        log.push_back("DXF export — " + std::to_string(nTables) +
+                      " paper-space table(s) written as LINE segments plus text: DXF has no table writer here (REQ-113).");
+      if (nLeaders > 0)
+        log.push_back("DXF export — " + std::to_string(nLeaders) +
+                      " paper-space multileader(s) written as LINE segments plus text: DXF has no multileader here (REQ-113).");
+    }
     if (nPaperBlockRefsSkipped > 0)
       log.push_back("DXF export — " + std::to_string(nPaperBlockRefsSkipped) +
                     " paper-space block reference(s) not written: DXF export has no block definitions yet (REQ-113).");

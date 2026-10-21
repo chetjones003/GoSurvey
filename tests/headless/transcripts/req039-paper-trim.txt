@@ -1,0 +1,115 @@
+# REQ-039 / issue #974 — TRIM edits only the active paper layout, remains undoable, and round-trips.
+
+NEW
+SPACE PAPER
+
+# A control line on layout 0 must remain untouched when layout 1 is edited.
+CMD LINE
+CMD 100,0
+CMD 110,0
+ESC
+LAYOUT NEW
+
+# Layout 1: horizontal targets and a vertical cutting edge.
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 5,-5
+CMD 5,5
+ESC
+CMD LINE
+CMD 20,20
+CMD 30,20
+ESC
+CMD CIRCLE
+CMD 50,50
+CMD 5
+ESC
+EXPECT PAPERLINES 4
+EXPECT PAPERCIRCLES 1
+EXPECT LINES 0
+
+CMD TRIMSTATE 1
+CMD TRIM
+TRIMPICK 5 -4
+CMD
+TRIMPICK 8 0
+EXPECT LOG TRIM — segment shortened.
+EXPECT PAPERLINE 1 0 0 0 5 0
+EXPECT PAPERLINE 0 0 100 0 110 0
+EXPECT LINES 0
+
+# Unsupported circle targets and empty-space picks refuse without modifying geometry.
+TRIMPICK 55 50
+EXPECT LOG TRIM — only a paper line or polyline segment can be trimmed.
+TRIMPICK 90 90
+EXPECT LOG TRIM — no object at pick.
+EXPECT PAPERLINE 1 0 0 0 5 0
+EXPECT PAPERCIRCLES 1
+
+# One undo restores the shortened target without reaching into another layout or model space.
+UNDO
+EXPECT PAPERLINE 1 0 0 0 10 0
+EXPECT PAPERLINE 0 0 100 0 110 0
+EXPECT LINES 0
+
+# Undo exits TRIM, so start a fresh classic pass and pick its cutting edge again.
+CMD TRIM
+TRIMPICK 5 -4
+CMD
+TRIMPICK 8 0
+EXPECT LOG TRIM — segment shortened.
+EXPECT PAPERLINE 1 0 0 0 5 0
+
+# A non-crossing target is refused and remains unchanged.
+TRIMPICK 25 20
+EXPECT LOG TRIM — segment does not cross a cutting edge.
+EXPECT PAPERLINE 1 2 20 20 30 20
+
+SAVEAS %OUT%/req039-paper-trim.dwg
+NEW
+OPEN %OUT%/req039-paper-trim.dwg
+EXPECT PAPERLINE 1 0 0 0 5 0
+EXPECT PAPERLINE 0 0 100 0 110 0
+EXPECT LINES 0
+
+# TRIMSTATE 0 uses the same paper solver through the drawn-line mode.
+LAYOUT NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 5,-5
+CMD 5,5
+ESC
+CMD TRIMSTATE 0
+CMD TRIM
+TRIMPICK 8 -1
+TRIMPICK 8 1
+EXPECT LOG TRIM — segment shortened.
+EXPECT PAPERLINE 2 0 0 0 5 0
+EXPECT PAPERLINE 1 0 0 0 5 0
+EXPECT PAPERLINE 0 0 100 0 110 0
+EXPECT LINES 0
+
+# A paper polyline target uses the same picking side rule as a paper line.
+LAYOUT NEW
+CMD POLYLINE
+CMD 0,10
+CMD 10,10
+CMD END
+CMD LINE
+CMD 5,5
+CMD 5,15
+ESC
+CMD TRIMSTATE 1
+CMD TRIM
+TRIMPICK 5 6
+CMD
+TRIMPICK 8 10
+EXPECT LOG TRIM — segment shortened.
+EXPECT PAPERPOLYLINE 3 0 0 10 5 10
+EXPECT LINES 0

@@ -106,8 +106,9 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
     value->setMinimumHeight(34);
     if (primary) {
       value->setDefault(true);
-      value->setStyleSheet("QPushButton { background:#438fda; color:white; font-weight:600; padding:6px 18px; "
-                           "border:0; border-radius:4px; } QPushButton:hover { background:#347cc3; }");
+      value->setStyleSheet(QString("QPushButton { background:%1; color:white; font-weight:600; padding:6px 18px; "
+                                   "border:0; border-radius:4px; } QPushButton:hover { background:%2; }")
+                               .arg(dark ? "#168e8a" : "#438fda", dark ? "#1ca6a0" : "#347cc3"));
     }
     return value;
   };
@@ -136,7 +137,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
     auto* frame = new QFrame(&dialog);
     frame->setObjectName(name);
     frame->setStyleSheet(QString("QFrame#%1 { background:%2; border:%3; border-radius:6px; }")
-                             .arg(name, cardFill, recommended ? "2px solid #438fda" : "1px solid " + border));
+                             .arg(name, cardFill, recommended ? QString("2px solid %1").arg(dark ? "#55d8d0" : "#438fda") : "1px solid " + border));
     auto* box = new QVBoxLayout(frame);
     box->setContentsMargins(14, 12, 14, 12);
     box->setSpacing(8);
@@ -144,7 +145,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
     titleLabel->setStyleSheet("font-size:14px;font-weight:600;");
     box->addWidget(titleLabel);
     auto* tagLabel = new QLabel(tag, frame);
-    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? "#438fda" : amber));
+    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? (dark ? "#55d8d0" : "#438fda") : amber));
     box->addWidget(tagLabel);
     return box;
   };

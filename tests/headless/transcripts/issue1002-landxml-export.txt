@@ -1,0 +1,29 @@
+# Issue #1002 / sub-issue of #802 - EXPORTLANDXML written from a real drawing, driven entirely from the
+# command line: survey points and a built TIN come from samples/surface-demo.dwg, the feature line is
+# drawn here. The unit tests (tests/LandXmlExportTests.cpp) read the file back with an XML parser; this
+# transcript runs the same command the Qt window submits and leaves the file under %OUT% so it can be
+# validated against the LandXML 1.2 schema (tools/validate-landxml.ps1).
+
+OPEN samples/surface-demo.dwg
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT LOG "Test EG"
+
+CMD FEATURELINE Top of curb
+PICK 10 20
+CMD 100
+PICK 60 20
+CMD 101
+CMD END
+EXPECT LOG "FEATURELINE"
+
+CMD EXPORTLANDXML "%OUT%/site.xml"
+EXPECT LOG "EXPORTLANDXML"
+EXPECT LOG "surface(s) and 1 feature line(s) to"
+
+# a destination is required on the command line (the Qt window asks for one with a save dialog)
+CMD EXPORTLANDXML
+EXPECT LOG "type a destination"
+
+# an unwritable destination is reported, not silent
+CMD EXPORTLANDXML "%OUT%/no-such-folder/site.xml"
+EXPECT LOG "could not write"
