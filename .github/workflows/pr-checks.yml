@@ -160,7 +160,7 @@ jobs:
         env:
           QT_OPENGL: desktop
           GALLIUM_DRIVER: llvmpipe
-        run: ctest --preset ninja-release
+        run: ctest --preset ninja-release --parallel 4
 
       - name: sccache stats
         if: always()

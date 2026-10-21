@@ -1461,7 +1461,16 @@ if(GOSURVEY_BUILD_TESTS)
   list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
   list(REMOVE_DUPLICATES _test_sources)
   set_property(TARGET GoSurveyTests PROPERTY SOURCES "${_test_sources}")
-  catch_discover_tests(GoSurveyTests WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
+  # Catch2's 2,500+ cases are deterministic and sequential within the runner. Register the suite
+  # as one CTest process to avoid paying process startup for every case; Catch still reports the
+  # failing case and supports direct filters (`GoSurveyTests "test name"`). The full runner was
+  # verified locally before batching (all cases pass in one process).
+  add_test(NAME unit.catch COMMAND GoSurveyTests)
+  set_tests_properties(unit.catch PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
+
+  # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
+  # groups at once instead of letting the faster headless list postpone the GUI work.
+  include(cmake/GoSurveyQtTests.cmake)
 
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
@@ -1531,7 +1540,6 @@ if(GOSURVEY_BUILD_TESTS)
 endif()
 
 if(GOSURVEY_BUILD_TESTS)
-  include(cmake/GoSurveyQtTests.cmake)
   add_test(NAME build.output-layout COMMAND "${CMAKE_COMMAND}"
     "-DRUNTIME_DIR=$<TARGET_FILE_DIR:GoSurveyQt>"
     -P "${CMAKE_SOURCE_DIR}/tests/cmake/BuildOutputLayout.cmake")
