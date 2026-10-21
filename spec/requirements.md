@@ -1529,8 +1529,13 @@ requirements is a planning failure, not a sign of rigor.
     DWG, Settings, Export DXF/DWG, and Plot/Batch Plot all work correctly from their new ribbon
     locations, Home's paper-space Layout section still renders correctly with only Rect VP/Poly VP,
     and no scrollbar/clipping is introduced at any width already covered by increment 2.
-- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`) / IO (`src/io/UserPrefs.cpp`,
-  preference persistence)
+- Acceptance — Qt ribbon caption spacing (GitHub issue #1030; accepted 2026-10-21, D-2026-10-21-a):
+  - ribbon group captions have visible bottom breathing room;
+  - the ribbon may grow slightly to provide that space while command button sizes and behavior stay
+    unchanged;
+  - supported window widths retain no horizontal or vertical ribbon scrollbars.
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`, Qt ribbon
+  `src/qt/EditorRibbon.cpp`) / IO (`src/io/UserPrefs.cpp`, preference persistence)
 - Status: accepted
 - Revisions: 2026-08-25 — initial (GitHub issue #83, D-2026-08-25-c). Sequenced into 3 increments;
   increment 1's acceptance fully specified, increments 2-3 deferred until reached (REQ-103 precedent).
@@ -1547,6 +1552,9 @@ requirements is a planning failure, not a sign of rigor.
   not Manage; Plot/Batch Plot → Output, moved off Home, not duplicated).
   2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
   delivered, all 3 increments complete, issue #83 closed.
+  2026-10-21 (D-2026-10-21-a) — user accepted the issue #1030 Qt caption-spacing addition:
+  visible bottom breathing room, a slight ribbon height increase if needed, unchanged command button
+  sizing/behavior, and no horizontal or vertical ribbon scrollbars at supported widths.
 
 ### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
 - **Duplication note (found merging `master` into `beta` for REQ-304/issue #82, D-2026-08-25-l):**
@@ -14431,7 +14439,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
-| REQ-437 | Repository governance/CI | (D-2026-10-19-i, D-2026-10-21-a/b/c) A PR labeled `docs-only` skips CI only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow confirms it inspected every changed file and runs CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. Required checks include the PR gate, Gitleaks, Trivy, full Windows build and CTest, changed-line clang-tidy, and blocking MSVC `/analyze` scoped to changed translation units and consumers of changed headers, with fail-closed full-project fallback when classification is uncertain or build inputs change. All block merge on non-docs PRs. The label never waives the protected branch's required approving review. | accepted |
+| REQ-437 | Repository governance/CI | (D-2026-10-19-i, D-2026-10-21-e/b/c) A PR labeled `docs-only` skips CI only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow confirms it inspected every changed file and runs CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. Required checks include the PR gate, Gitleaks, Trivy, full Windows build and CTest, changed-line clang-tidy, and blocking MSVC `/analyze` scoped to changed translation units and consumers of changed headers, with fail-closed full-project fallback when classification is uncertain or build inputs change. All block merge on non-docs PRs. The label never waives the protected branch's required approving review. | accepted |
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
