@@ -1529,8 +1529,13 @@ requirements is a planning failure, not a sign of rigor.
     DWG, Settings, Export DXF/DWG, and Plot/Batch Plot all work correctly from their new ribbon
     locations, Home's paper-space Layout section still renders correctly with only Rect VP/Poly VP,
     and no scrollbar/clipping is introduced at any width already covered by increment 2.
-- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`) / IO (`src/io/UserPrefs.cpp`,
-  preference persistence)
+- Acceptance — Qt ribbon caption spacing (GitHub issue #1030; accepted 2026-10-21, D-2026-10-21-a):
+  - ribbon group captions have visible bottom breathing room;
+  - the ribbon may grow slightly to provide that space while command button sizes and behavior stay
+    unchanged;
+  - supported window widths retain no horizontal or vertical ribbon scrollbars.
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`, Qt ribbon
+  `src/qt/EditorRibbon.cpp`) / IO (`src/io/UserPrefs.cpp`, preference persistence)
 - Status: accepted
 - Revisions: 2026-08-25 — initial (GitHub issue #83, D-2026-08-25-c). Sequenced into 3 increments;
   increment 1's acceptance fully specified, increments 2-3 deferred until reached (REQ-103 precedent).
@@ -1547,6 +1552,9 @@ requirements is a planning failure, not a sign of rigor.
   not Manage; Plot/Batch Plot → Output, moved off Home, not duplicated).
   2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
   delivered, all 3 increments complete, issue #83 closed.
+  2026-10-21 (D-2026-10-21-a) — user accepted the issue #1030 Qt caption-spacing addition:
+  visible bottom breathing room, a slight ribbon height increase if needed, unchanged command button
+  sizing/behavior, and no horizontal or vertical ribbon scrollbars at supported widths.
 
 ### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
 - **Duplication note (found merging `master` into `beta` for REQ-304/issue #82, D-2026-08-25-l):**
@@ -13694,7 +13702,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   | Check | Where | Trigger | Blocking? |
   |---|---|---|---|
   | MSVC `/analyze` | extends the existing `build` job's Configure/Build steps in `release.yml` | every manual dispatch of `release.yml` (REQ-202 (d) — no longer on every push) | no — findings are surfaced as build annotations; the job does not fail on them |
-  | CodeQL (`cpp` query suite) | new workflow, its own build of the CMake/Ninja/MSVC project | pull requests + a weekly schedule | governed by CodeQL's own default (Security tab alerts; does not fail the PR check by default) |
+  | CodeQL (`cpp` query suite) | new workflow, its own build of the CMake/Ninja/MSVC project | daily scans of `master` and `beta`, plus manual dispatch; no PR trigger | separate from the PR gate; error-severity findings fail the CodeQL run |
 
   Both are additive: `/analyze` is a flag added to compiler invocations already running in
   `release.yml`'s `build` job, and CodeQL runs in a separate workflow so a slow or flaky analysis run
@@ -13707,14 +13715,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
     `/analyze` finding still completes the `build` job successfully;
   - a new CodeQL workflow builds the project via the existing CMake/Ninja/MSVC toolchain and runs
     the `cpp` query suite;
-  - the CodeQL workflow triggers on `pull_request` and a weekly `schedule`, not on every branch push;
+  - the CodeQL workflow triggers daily and manually, scanning both `master` and `beta`; it does not trigger on pull requests or branch pushes;
   - REQ-202's existing build/test/package/publish behavior (dispatch-target routing, version gate,
     manifest, publish steps) is unchanged.
 - Owner-layer: Build/Platform
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
 
-  2026-10-20 — **the PR-time `/analyze` check is now blocking** (D-2026-10-20-a, GitHub #977). The backlog was triaged: real findings were fixed, and the justified suppressions are listed in `spec/coding-standards.md` section 11. `pr-checks.yml`'s `lint / msvc-analyze` job builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`), so any new `/W4` or `/analyze` warning in our own targets fails the PR. The `release.yml` build is unchanged and still not failed by findings. There are no accepted baseline findings: the baseline is zero.
+  2026-10-20 — **the PR-time `/analyze` check was made blocking** (D-2026-10-20-a, GitHub #977); the backlog was triaged and justified suppressions are listed in `spec/coding-standards.md` section 11.
+
+  2026-10-21 — **full PR validation remains blocking** (D-2026-10-21-b/c). `full-validation.yml` runs the complete build and CTest, changed-line clang-tidy, and blocking MSVC `/analyze`. The analyzer selects changed translation units and all consumers of changed headers; uncertain include graphs, analyzer-affecting CMake changes, and source-generation changes fall back to the full analyzed project. Every status is required for `master` and `beta`, along with the PR gate and security scans. The separate workflow improves visibility and concurrency but does not make results optional. `release.yml` remains unchanged.
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
@@ -14463,7 +14473,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
-| REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
+| REQ-437 | Repository governance/CI | (D-2026-10-19-i, D-2026-10-21-e/b/c) A PR labeled `docs-only` skips CI only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow confirms it inspected every changed file and runs CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. Required checks include the PR gate, Gitleaks, Trivy, full Windows build and CTest, changed-line clang-tidy, and blocking MSVC `/analyze` scoped to changed translation units and consumers of changed headers, with fail-closed full-project fallback when classification is uncertain or build inputs change. All block merge on non-docs PRs. The label never waives the protected branch's required approving review. | accepted |
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
@@ -14538,7 +14548,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-077 | util/Platform/UI/IO | `UpdateCheckTests` (17 cases / 101 assertions, green 2026-08-15: ordering incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; release outranks its own prereleases but not the next version's; malformed versions refused not coerced; manifest parse of good/malformed/missing-field documents; channel → URL) — remaining conditions (no delay offline, 24 h throttle, disabled = no request) written but **not yet exercised**; needs a published manifest. Was: planned — `UpdateCheckTests` (version ordering across the prerelease boundary incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; equal/older yields no update; manifest parse of a good document, a malformed one, and one missing required fields; channel → URL selection; stable never selects a prerelease) + manual (network unplugged = no dialog, no delay, no error; second launch inside 24 h issues no request; setting off issues no request) | accepted |
 | REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
 | REQ-202 | Build/Platform | **six of seven conditions observed against the live pipeline, 2026-08-20** — evidence per condition in TASK-049 §9, which cites the run ids: feature branch → artifact only, no release, no tag (run `31912058476`); repeated `beta` pushes → exactly one `channel-beta` prerelease across ~20 pushes; unchanged version on master → publishes nothing, fails nothing (run `32049139096`); bumped version → `v<version>` tag + release (`v0.5.0`, `v0.5.1`, `v0.5.2`); tag == AppVersion == manifest version (v0.5.2 checked three ways); manifest SHA-256 matches the asset (re-derived from the downloaded installer, byte-identical, `size` too). **Outstanding: failing ctest → no release has never been observed** — no run has failed at Test; the nearest evidence is run `31910767883`, which failed at Build and published nothing, so the gate is confirmed only in the negative (TASK-049 debt (5)). Status stays `accepted` rather than MET for that reason. Was: planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset). **2026-09-06 (d): trigger changed to manual `workflow_dispatch` only** — the push-driven evidence above predates this change and remains valid for what each dispatch target does; "no CI job runs on a plain push" not yet separately observed against a live push. | accepted |
-| REQ-324 | Build/Platform | planned — verify `/analyze` flags present in Configure step and `build` job succeeds with a build containing an `/analyze` finding; `codeql.yml` builds via CMake/Ninja/MSVC and runs on `pull_request`+`schedule` only, not on push; REQ-202's push-target routing/version-gate/publish steps re-verified unchanged | accepted |
+| REQ-324 | Build/Platform | planned — verify `/analyze` flags present in Configure step and `build` job succeeds with a build containing an `/analyze` finding; `codeql.yml` builds via CMake/Ninja/MSVC and runs daily for `master` and `beta`, plus manual dispatch, not on pull requests or pushes; REQ-202's push-target routing/version-gate/publish steps re-verified unchanged | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
 | REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |
