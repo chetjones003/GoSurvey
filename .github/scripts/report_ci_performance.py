@@ -56,6 +56,7 @@ def test_timings(build_dir: Path, output_dir: Path) -> tuple[list[dict], list[st
     incomplete = []
     reports = list(output_dir.glob("**/*.xml"))
     reports.extend((build_dir.parent.parent / "artifacts" / "qt-editor").glob("**/qt-tests.xml"))
+    reports.extend((build_dir.parent.parent / "artifacts" / "catch").glob("**/results.xml"))
     for report in reports:
         try:
             tree = ET.parse(report)
@@ -66,6 +67,13 @@ def test_timings(build_dir: Path, output_dir: Path) -> tuple[list[dict], list[st
         for case in tree.iter("testcase"):
             cases.append({"name": case.get("name", ""), "seconds": float(case.get("time", 0)),
                           "report": str(report)})
+        if tree.getroot().tag == "Catch2TestRun":
+            for case in tree.getroot().findall("TestCase"):
+                result = case.find("OverallResult")
+                if result is not None:
+                    cases.append({"name": case.get("name", ""),
+                                  "seconds": float(result.get("durationInSeconds", 0)),
+                                  "report": str(report)})
     log = build_dir / "Testing" / "Temporary" / "LastTest.log"
     if log.exists():
         for line in log.read_text(encoding="utf-8", errors="replace").splitlines():

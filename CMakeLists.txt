@@ -1468,12 +1468,23 @@ if(GOSURVEY_BUILD_TESTS)
   list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
   list(REMOVE_DUPLICATES _test_sources)
   set_property(TARGET GoSurveyTests PROPERTY SOURCES "${_test_sources}")
-  # Catch2's 2,500+ cases are deterministic and sequential within the runner. Register the suite
-  # as one CTest process to avoid paying process startup for every case; Catch still reports the
-  # failing case and supports direct filters (`GoSurveyTests "test name"`). The full runner was
-  # verified locally before batching (all cases pass in one process).
-  add_test(NAME unit.catch COMMAND GoSurveyTests --durations yes)
-  set_tests_properties(unit.catch PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
+  # Keep process startup amortized while running independent cases concurrently.
+  # Each wrapper isolates mutable paths and saves discovery/execution evidence.
+  set(GOSURVEY_CATCH_TEST_SHARDS 2 CACHE STRING "Number of isolated Catch2 test processes")
+  if(NOT GOSURVEY_CATCH_TEST_SHARDS MATCHES "^[1-9][0-9]*$" OR GOSURVEY_CATCH_TEST_SHARDS GREATER 16)
+    message(FATAL_ERROR "GOSURVEY_CATCH_TEST_SHARDS must be between 1 and 16")
+  endif()
+  math(EXPR _catch_last_shard "${GOSURVEY_CATCH_TEST_SHARDS} - 1")
+  foreach(_shard RANGE 0 ${_catch_last_shard})
+    add_test(NAME unit.catch.shard-${_shard}
+      COMMAND powershell -NoProfile -ExecutionPolicy Bypass
+        -File "${CMAKE_CURRENT_SOURCE_DIR}/tools/run-catch-test-shard.ps1"
+        -Exe "$<TARGET_FILE:GoSurveyTests>"
+        -ShardIndex ${_shard} -ShardCount ${GOSURVEY_CATCH_TEST_SHARDS}
+        -WorkingDirectory "$<TARGET_FILE_DIR:GoSurveyQt>"
+        -OutputDirectory "${CMAKE_BINARY_DIR}/../../artifacts/catch")
+    set_tests_properties(unit.catch.shard-${_shard} PROPERTIES TIMEOUT 900 COST 100)
+  endforeach()
 
   # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
   # groups at once instead of letting the faster headless list postpone the GUI work.

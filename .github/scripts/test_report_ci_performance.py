@@ -46,6 +46,19 @@ class PerformanceEvidenceTests(unittest.TestCase):
         self.assertAlmostEqual(summary["wall_seconds"], 2.2)
         self.assertEqual(summary["longest_commands"][0]["output"], "b.obj")
 
+    def test_catch_shard_retains_case_duration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "build/artifacts/catch/run/shard-0/results.xml"
+            report.parent.mkdir(parents=True)
+            report.write_text('<Catch2TestRun><TestCase name="slow case">'
+                              '<OverallResult durationInSeconds="12.5"/></TestCase></Catch2TestRun>',
+                              encoding="utf-8")
+            cases, incomplete = test_timings(root / "build/.cmake/release", root / "reports")
+        self.assertEqual(incomplete, [])
+        self.assertEqual(cases[0]["name"], "slow case")
+        self.assertEqual(cases[0]["seconds"], 12.5)
+
 
 if __name__ == "__main__":
     unittest.main()

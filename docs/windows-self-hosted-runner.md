@@ -30,14 +30,23 @@ with its actual location. If WinGet is missing, install/update Microsoft's
 [App Installer](https://apps.microsoft.com/detail/9nblggh4nns1) first.
 
 The script installs Git, CMake, Ninja, PowerShell 7, Python 3.13, LLVM/clang-tidy,
-sccache, GitHub CLI, and 7-Zip using WinGet. It uses an existing MSVC C++ toolchain
-or installs Visual Studio 2022 Build Tools with the C++ workload and Windows SDK.
+sccache, GitHub CLI, and 7-Zip using WinGet. It requires MSVC 14.50 or newer,
+using an existing Visual Studio 2026 C++ installation or installing stable
+`Microsoft.VisualStudio.BuildTools` with the C++ workload and Windows SDK.
 It installs the same Qt 6.8.3 MSVC x64 kit used in CI through an isolated aQt
 environment. Existing package installations are checked before installing.
 
 Defaults: helper files under `C:\GoSurveyCI`, Qt under `C:\Qt`. Override with
 `-InstallRoot` and `-QtDirectory` if needed. If an installer requests a restart,
 restart Windows and rerun the script. The script never restarts Windows itself.
+
+For machines prepared by the earlier VS 2022 setup, stop the runner, download
+the updated setup script and rerun it as administrator. This also refreshes the
+environment helper to select the newer tools explicitly. Then restart the runner
+from a normal PowerShell window. The bundled E57/CS-MAP libraries need STL
+functions absent from MSVC 14.44; updating only the VC++ Redistributable will
+not fix their link errors. Benchmark preflight now checks those exact runtime
+references with a tiny compile/link probe before the project build.
 
 `-PreventSleep` changes plugged-in sleep and hibernate timeouts. Check Windows'
 lid-close setting separately if the laptop will run with its lid closed, and
@@ -99,6 +108,32 @@ headless VPS may need the pinned Mesa deployment already used in the hosted CI
 workflow. The setup script does not deploy a replacement system graphics driver.
 
 ## 4. Route trusted jobs deliberately
+
+The initial `gosurvey-victus-ci` laptop is validated separately by
+`.github/workflows/self-hosted-benchmark.yml`. Its bootstrap push trigger is
+limited to `chore/self-hosted-runner-benchmark`, and the job accepts only the
+repository owner's actor in this repository. It never runs on a PR event.
+The job checks normal interactive execution before checkout, uses the uniquely
+labeled laptop, and uploads preflight/build/cache/CTest evidence. A future manual
+dispatch becomes available when the workflow reaches the default branch.
+
+`tools/benchmark-windows-runner.ps1` can also be run locally from a normal
+PowerShell 7 session. It times an initial build and a `--clean-first` rebuild with
+the local cache, then runs the complete CTest suite using native graphics and
+audits exact case coverage across two Catch2 and six Qt shards. It also measures
+clang-tidy and MSVC analysis against the same PR base used by hosted checks.
+Supply `-BaseSha <PR-base-commit>` (or set `BASE_SHA`); the benchmark workflow
+resolves that commit automatically. Reports retain analyzer scope and versions.
+Default CTest concurrency is eight. It preserves the external compiler
+cache and writes reports under `build/artifacts/runner-benchmark/`. Treat the first
+build as cold only when its actual cache counters show that. Keep separate
+checkout/build trees for simultaneous runner instances.
+
+The benchmark explicitly starts its own sccache server on an OS-selected
+loopback port before querying statistics, then stops that server afterward.
+All compiler clients inherit the selected port; the disk cache remains outside
+the checkout. Cache-control calls have a 30-second deadline and retain separate
+stdout/stderr diagnostics on failure.
 
 A runner with the additional label above can be selected with:
 
