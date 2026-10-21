@@ -43,7 +43,14 @@ jobs:
     outputs:
       docs_only: ${{ steps.classify.outputs.docs_only }}
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
+      self_hosted: ${{ steps.route.outputs.self_hosted }}
     steps:
+      - name: Select trusted Windows worker pool
+        id: route
+        env:
+          SELF_HOSTED: ${{ vars.GOSURVEY_PR_RUNNERS == 'self-hosted' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner }}
+        run: echo "self_hosted=$SELF_HOSTED" >> "$GITHUB_OUTPUT"
+
       - name: Check out classifier
         uses: actions/checkout@v4
         with:
@@ -93,7 +100,7 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: windows-latest
+    runs-on: ${{ fromJSON(needs.classify-docs-only.outputs.self_hosted == 'true' && '["self-hosted","Windows","X64","gosurvey-pr-build"]' || '["windows-latest"]') }}
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -101,14 +108,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Load installed laptop tools and owned build cache
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role build
 
       - name: Set up MSVC
+        if: runner.environment != 'self-hosted'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
+        if: runner.environment != 'self-hosted'
         uses: ./.github/actions/setup-qt
 
       - name: Set up Mesa OpenGL for hosted tests
+        if: runner.environment != 'self-hosted'
         shell: pwsh
         run: |
           # Qt 6.8.3 ships an llvmpipe opengl32sw.dll that only reports OpenGL 3.0. The
@@ -154,6 +170,7 @@ jobs:
         run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Run sccache
+        if: runner.environment != 'self-hosted'
         uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure
@@ -162,6 +179,7 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_USE_PCH=OFF
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+          -DGOSURVEY_QT_TEST_SHARDS=${{ runner.environment == 'self-hosted' && '4' || '6' }}
 
       - name: Build
         # Build the application and every executable referenced by this job's CTest cases.
@@ -169,6 +187,7 @@ jobs:
         run: cmake --build --preset ninja-release --target GoSurveyQt GoSurveyTests gosurvey_headless GoSurveyQtTests
 
       - name: Stage Mesa runtime dependencies for test deployment
+        if: runner.environment != 'self-hosted'
         shell: pwsh
         run: |
           # Keep Mesa's test-only driver dependencies beside the app so qt.deployment's isolated
@@ -185,20 +204,19 @@ jobs:
           }
 
       - name: Test (CTest)
-        # Use Mesa's app-local opengl32.dll so Qt and GLEW share a driver; the hosted system driver
-        # only exposes OpenGL 3.0, below the application's OpenGL 3.3 core requirement.
+        # Hosted jobs use app-local Mesa; the laptop uses its validated native graphics driver.
         env:
           QT_OPENGL: desktop
-          GALLIUM_DRIVER: llvmpipe
+          GALLIUM_DRIVER: ${{ runner.environment != 'self-hosted' && 'llvmpipe' || '' }}
         run: |
           $env:GOSURVEY_TEST_RUN_ID = "ci-${{ github.run_id }}-${{ github.run_attempt }}"
-          ctest --preset ninja-release --parallel 8 --output-junit "${{ github.workspace }}/build/artifacts/ci/ctest.xml"
+          ctest --preset ninja-release --parallel ${{ runner.environment == 'self-hosted' && '6' || '8' }} --output-junit "${{ github.workspace }}/build/artifacts/ci/ctest.xml"
           if ($LASTEXITCODE -ne 0) { throw 'CTest failed.' }
           python tools/verify-test-coverage.py --artifacts build/artifacts --run-id $env:GOSURVEY_TEST_RUN_ID
           if ($LASTEXITCODE -ne 0) { throw 'Test shard coverage is incomplete.' }
 
       - name: Summarize CI performance
-        if: always()
+        if: always() && (runner.environment != 'self-hosted' || env.GOSURVEY_CI_CACHE_STARTED == 'true')
         run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
 
       - name: Upload CI performance evidence
@@ -219,6 +237,11 @@ jobs:
             build/artifacts/qt-editor/**/qt-tests.xml
             build/artifacts/qt-editor/**/qt-tests.log
 
+      - name: Stop this job's compiler-cache server
+        if: always() && runner.environment == 'self-hosted' && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        shell: pwsh
+        run: ./tools/ci-compiler-cache.ps1 -Action stop
+
   # ---------------------------------------------------------------------------
   # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
   # -line-filter), not whole files. (Amended 2026-10-11, issue #824 follow-up: the original
@@ -232,7 +255,7 @@ jobs:
   # where that header is the direct target — otherwise a header's own genuinely-new lines would
   # only be checked when it happens to be the file passed on the command line.
   #
-  # Runs natively on windows-latest rather than via a container action (e.g.
+  # Runs natively on a Windows worker rather than via a container action (e.g.
   # ZedThree/clang-tidy-review): GitHub Actions container actions require a Linux runner,
   # and compile_commands.json here only resolves against the MSVC toolchain (Windows-only),
   # so a container-based reviewer can't see real compile flags anyway. windows-latest ships
@@ -247,17 +270,25 @@ jobs:
       (needs.classify-docs-only.result != 'success' ||
        (needs.classify-docs-only.outputs.docs_only != 'true' &&
         needs.classify-docs-only.outputs.has_cpp_changes != 'false'))
-    runs-on: windows-latest
+    runs-on: ${{ fromJSON(needs.classify-docs-only.outputs.self_hosted == 'true' && '["self-hosted","Windows","X64","gosurvey-pr-clang-tidy"]' || '["windows-latest"]') }}
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Load installed laptop analysis tools
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role clang-tidy
 
       - name: Set up MSVC
+        if: runner.environment != 'self-hosted'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
+        if: runner.environment != 'self-hosted'
         uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
@@ -323,7 +354,7 @@ jobs:
       always() &&
       (needs.classify-docs-only.result != 'success' ||
        needs.classify-docs-only.outputs.docs_only != 'true')
-    runs-on: windows-latest
+    runs-on: ${{ fromJSON(needs.classify-docs-only.outputs.self_hosted == 'true' && '["self-hosted","Windows","X64","gosurvey-pr-msvc-analyze"]' || '["windows-latest"]') }}
     env:
       SCCACHE_GHA_ENABLED: "true"
     steps:
@@ -331,11 +362,19 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          persist-credentials: false
+
+      - name: Load installed laptop tools and owned analysis cache
+        if: runner.environment == 'self-hosted'
+        shell: pwsh
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role msvc-analyze
 
       - name: Set up MSVC
+        if: runner.environment != 'self-hosted'
         uses: ilammy/msvc-dev-cmd@v1
 
       - name: Set up Qt
+        if: runner.environment != 'self-hosted'
         uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
@@ -355,6 +394,7 @@ jobs:
         run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Run sccache
+        if: runner.environment != 'self-hosted'
         uses: mozilla-actions/sccache-action@v0.0.11
 
       - name: Configure
@@ -397,9 +437,10 @@ jobs:
           --selection build/.cmake/release/msvc-analyze-selection.json
           --build-dir build/.cmake/release
           --compiler-launcher sccache
+          --jobs ${{ runner.environment == 'self-hosted' && '1' || '4' }}
 
       - name: Summarize CI performance
-        if: always()
+        if: always() && (runner.environment != 'self-hosted' || env.GOSURVEY_CI_CACHE_STARTED == 'true')
         run: python .github/scripts/report_ci_performance.py --build-dir build/.cmake/release --output-dir build/artifacts/ci --sccache
 
       - name: Upload CI performance evidence
@@ -416,3 +457,8 @@ jobs:
             build/.cmake/release/Testing/Temporary/LastTestsFailed.log
             build/artifacts/qt-editor/**/qt-tests.xml
             build/artifacts/qt-editor/**/qt-tests.log
+
+      - name: Stop this job's compiler-cache server
+        if: always() && runner.environment == 'self-hosted' && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        shell: pwsh
+        run: ./tools/ci-compiler-cache.ps1 -Action stop

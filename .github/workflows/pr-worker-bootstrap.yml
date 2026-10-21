@@ -1,0 +1,55 @@
+name: PR worker registration
+on:
+  push:
+    branches: [chore/self-hosted-pr-workers]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gosurvey-pr-worker-registration
+  cancel-in-progress: false
+jobs:
+  register:
+    name: laptop / register PR workers
+    if: github.repository == 'chetjones003/GoSurvey' && github.actor == 'chetjones003' && github.ref == 'refs/heads/chore/self-hosted-pr-workers'
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Register and start independent analyzer workers
+        shell: pwsh
+        env:
+          GOSURVEY_REGISTRATION_TOKEN: ${{ secrets.GOSURVEY_RUNNER_BOOTSTRAP_TOKEN }}
+        run: ./tools/register-windows-pr-workers.ps1 -Start
+
+  inspect-clang:
+    name: laptop / clang worker tools
+    needs: register
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-clang-tidy]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect the registered worker environment
+        shell: pwsh
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role clang-tidy
+
+  inspect-msvc:
+    name: laptop / MSVC worker tools
+    needs: register
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-msvc-analyze]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect the registered worker environment
+        shell: pwsh
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role msvc-analyze
+      - name: Stop the inspection job's cache server
+        if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        shell: pwsh
+        run: ./tools/ci-compiler-cache.ps1 -Action stop

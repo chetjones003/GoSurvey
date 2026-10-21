@@ -1,9 +1,6 @@
 name: self-hosted benchmark
 
 on:
-  # Bootstrap the new workflow without modifying the default/release branch.
-  push:
-    branches: [chore/self-hosted-runner-benchmark]
   workflow_dispatch:
 
 permissions:

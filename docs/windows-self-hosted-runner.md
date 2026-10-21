@@ -4,9 +4,9 @@ GitHub's runner makes an outbound HTTPS connection to receive jobs. The laptop
 does not need a public IP, router port forwarding, or a public RDP server.
 Tailscale is optional for remote administration.
 
-This guide prepares a machine; the repository's required jobs continue to use
-GitHub-hosted runners until their routing and cache handling are adapted and
-validated. Installing the runner alone does not move jobs onto it.
+This guide prepares the machine and its dedicated PR workers. Production routing
+is controlled by the repository variable `GOSURVEY_PR_RUNNERS`; installing the
+runner alone does not move jobs onto it.
 
 ## 1. Install the build environment
 
@@ -107,15 +107,78 @@ the laptop's graphics driver; OpenGL viewport tests need working graphics. A
 headless VPS may need the pinned Mesa deployment already used in the hosted CI
 workflow. The setup script does not deploy a replacement system graphics driver.
 
-## 4. Route trusted jobs deliberately
+## 4. Register the production PR workers
+
+The laptop has three independent Windows runner instances:
+
+| Job | Role label | Runner/work directory | Initial concurrency |
+|---|---|---|---|
+| Build and full tests | `gosurvey-pr-build` | Existing `C:\actions-runner` | 3 build workers; 6 CTest processes |
+| clang-tidy | `gosurvey-pr-clang-tidy` | `%USERPROFILE%\GoSurveyCI\pr-workers\clang-tidy` | 2 analyzer processes |
+| MSVC `/analyze` | `gosurvey-pr-msvc-analyze` | `%USERPROFILE%\GoSurveyCI\pr-workers\msvc-analyze` | 1 analyzer/build worker |
+
+All share the laptop's CPU/RAM and installed Qt/MSVC. Every instance has its own
+checkout and CMake tree. The build job keeps its existing warm external sccache;
+MSVC analysis uses a separate external cache. Each cache job owns a separate
+endpoint and stops only its own daemon. Production jobs do one normal build,
+not the benchmark's duplicate clean rebuild. The laptop's full suite runs four
+Qt shards and two Catch2 shards; exact case coverage is still audited.
+
+The owner-only `pr-worker-bootstrap.yml` provisions the two analyzer workers
+through the already-running build listener. A short-lived registration token
+is supplied as an encrypted Actions secret and removed after registration.
+The official runner ZIP is checksum-verified. The script never copies another
+runner's credential files. New listeners do not inherit the bootstrap job's
+credentials, workspace variables or process-tracking identity.
+
+For manual provisioning, use a normal PowerShell 7 window in the repository.
+Obtain the one-hour registration token using GitHub's runner registration page
+and supply it privately in `GOSURVEY_REGISTRATION_TOKEN`, then run:
+
+```powershell
+.\tools\register-windows-pr-workers.ps1 -Start
+```
+
+The existing build runner must additionally have the `gosurvey-pr-build` label
+in GitHub runner settings. Repeating registration validates existing instances
+and starts listeners only when needed; it does not replace live registrations.
+The generated `workers.json` lists non-secret installation information.
+
+After a Windows restart, sign into the same normal account and start all three:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\GoSurveyCI\pr-workers\start-windows-pr-workers.ps1"
+```
+
+The existing build listener is reused if already running. Each role launcher
+holds a mutex to prevent duplicates. Listener output/error logs are under
+`%USERPROFILE%\GoSurveyCI\pr-workers\`. Keep the user session available; service
+session 0 remains unsupported for the GUI test launcher.
+
+## 5. Select production routing
+
+After all three role labels are online, set `GOSURVEY_PR_RUNNERS=self-hosted` in
+the repository's Actions variables. `full-validation.yml` then routes
+owner-authored same-repository PRs to the role workers. Other PRs, including
+forks, use hosted Windows runners. The lightweight gate and Linux security jobs
+use hosted Ubuntu. This policy selects trusted work for the configured workflow;
+it is not isolation against arbitrary code or a compromised repository writer.
+
+Set `GOSURVEY_PR_RUNNERS=hosted` to select hosted Windows workers for new runs,
+then rerun validation when necessary. An offline matching self-hosted worker
+queues its job; GitHub does not automatically choose a hosted fallback. Existing
+required check names/failure behavior and the explicit `docs-only` label gate
+are preserved. The initial concurrency limits need observation under combined
+load; additional runner registrations do not add CPU or RAM.
+
+## 6. Optional benchmark
 
 The initial `gosurvey-victus-ci` laptop is validated separately by
-`.github/workflows/self-hosted-benchmark.yml`. Its bootstrap push trigger is
-limited to `chore/self-hosted-runner-benchmark`, and the job accepts only the
-repository owner's actor in this repository. It never runs on a PR event.
+`.github/workflows/self-hosted-benchmark.yml`. It is manual-only and accepts only
+the repository owner's actor in this repository. It never runs on a PR event.
 The job checks normal interactive execution before checkout, uses the uniquely
-labeled laptop, and uploads preflight/build/cache/CTest evidence. A future manual
-dispatch becomes available when the workflow reaches the default branch.
+labeled laptop, and uploads preflight/build/cache/CTest evidence. Production
+checks use `full-validation.yml` and do not invoke the benchmark helper.
 
 `tools/benchmark-windows-runner.ps1` can also be run locally from a normal
 PowerShell 7 session. It times an initial build and a `--clean-first` rebuild with
@@ -146,11 +209,11 @@ arbitrary commands and compromise a persistent machine. Use an isolated runner
 for trusted work and retain hosted or freshly isolated execution for untrusted
 PRs; keeping secrets out of a workflow alone is insufficient protection.
 
-Migration also needs to reuse the installed Qt, use local compiler caching,
-preserve or deliberately restore incremental build trees despite checkout's
-default cleanup, and tune the workflow's explicit worker limits. Each registered
-runner accepts one job at a time; multiple instances require separate workspaces
-and a shared CPU/RAM budget. All required checks must continue to block merge.
+Production jobs reuse installed Qt and the external compiler cache. Checkout
+keeps its normal cleanup so untracked build files cannot contaminate another PR;
+cached compiler outputs still survive. Each registered runner accepts one job
+at a time; independent instances share the CPU/RAM budget above. All required
+checks continue to block merge.
 
 ### References
 

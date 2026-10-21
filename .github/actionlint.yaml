@@ -1,3 +1,6 @@
 self-hosted-runner:
   labels:
     - gosurvey-victus-ci
+    - gosurvey-pr-build
+    - gosurvey-pr-clang-tidy
+    - gosurvey-pr-msvc-analyze

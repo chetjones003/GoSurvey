@@ -1,0 +1,83 @@
+# TASK-1006 — Register dedicated Windows workers for PR validation
+
+- Type: feature / CI tooling
+- Status: plan
+- Opened: 2026-10-21
+
+## Request and authority
+
+The user wants the validated Windows laptop in production, without automatic
+benchmark runs, and requests a worker for each PR workflow after learning that
+one runner instance only accepts one job at a time. Context supplies the request:
+three Windows jobs (build/test, clang-tidy and MSVC), separate worker workspaces,
+shared hardware limits, all checks blocking, existing docs-only label policy.
+The Ubuntu gate/security jobs use hosted Linux; they cannot run their existing
+container actions on this Windows laptop.
+
+Authority: accepted REQ-205 (CI/build performance tooling) and REQ-437 (required
+full tests, changed-line clang-tidy, blocking diff-scoped /analyze with fail-closed
+fallback, and label-gated docs skip). The user explicitly authorizes registration
+and production routing. No new application behavior, dependency or ownership layer.
+
+Acceptance:
+
+- GitHub shows separate online workers for build/test, clang-tidy and MSVC.
+- Each Windows job selects its role label and has an independent checkout/tree.
+- Installed Qt/native graphics and local compiler caches serve production jobs;
+  no timed duplicate build is required. Automatic benchmark push runs stop.
+- Owner-authored same-repository PRs use the laptop when the production pool is
+  enabled; forks/other PRs use hosted runners. A repository variable can select
+  hosted execution. The existing required check names and failure policies remain.
+- Concurrent workers share conservative caps: build 3, CTest 6 (4 Qt + 2 Catch
+  shards), clang-tidy 2 and MSVC 1. These are initial limits, not a promised speedup.
+- Provisioning verifies the official runner archive hash, never copies runner
+  credentials, and keeps registration credentials out of logs and child workers.
+
+## Verified implementation plan
+
+Verification APPROVE: changes belong in CI/provisioning tooling. Reuse the current
+online runner as build worker by adding a role label. Register two more instances
+under the normal user's profile, with independent runner/work directories. The
+existing interactive runner can run an owner-only bootstrap workflow using a
+short-lived registration token supplied as an encrypted GitHub Actions secret.
+The process launch must clear inherited job credentials/context before starting
+the persistent listeners; each role launcher holds a mutex to avoid duplicates.
+
+Files: worker registration/launch helpers; production environment/cache helpers;
+full-validation.yml; manual-only self-hosted-benchmark.yml; temporary owner-only
+bootstrap workflow; Windows runner guide. Enable production routing only after
+all three role workers are online. Preserve the current explicit docs-only gate.
+
+Risks: RAM contention on the 15.7 GiB laptop; competing compiler-cache daemons;
+runner cleanup terminating newly launched listeners; inherited job credentials;
+offline workers queuing checks. Separate cache endpoints/directories for analysis,
+bounded cache commands, scoped child environment cleanup, and a hosted override
+address these within the existing tooling boundary. The build worker keeps its
+already-warm external disk cache. No product UI changes or screenshots required.
+
+Verification scope: inspect script/workflow syntax and registration metadata;
+observe actual runner online state and normal required CI results. The user did
+not request new test cases or a further benchmark experiment for this rollout.
+Do not add or independently run a new test suite for provisioning.
+
+## Implementation / outcomes
+
+Pending.
+
+### Implementation ready for laptop provisioning
+
+Added separate-role registration and mutex-protected interactive launchers. The
+bootstrap uses the checksum-pinned official 2.337.0 package and a short-lived
+registration secret. Its child listeners clear inherited Actions credentials and
+context. Existing registration files are validated instead of copied/replaced.
+
+Production Windows routing uses role labels for owner-authored same-repository
+PRs when `GOSURVEY_PR_RUNNERS=self-hosted`; otherwise it selects hosted Windows.
+Installed tool setup preserves the build's warm external cache and gives MSVC its
+own disk cache/endpoint. Cache control has a 30-second deadline and job-owned
+cleanup. Benchmark is manual-only. Documented startup and hosted override.
+
+Actionlint (including new custom labels), PowerShell syntax, diff whitespace,
+manual code/ownership/security review: PASS. No new tests added/run; normal CI
+and worker tool inspections will provide remote execution evidence. Registration
+and production activation are pending online worker confirmation.
