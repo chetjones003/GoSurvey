@@ -488,6 +488,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/WikiHelp.cpp
   src/util/WhatsNewLogic.cpp
   src/io/SurveyCsv.cpp
+  src/io/LandXmlIo.cpp
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
   src/io/DwgProbe.cpp
@@ -1309,6 +1310,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/DrapeCommandTests.cpp
     # Issue #916: shared point-cloud export and import-progress behavior.
     tests/PointCloudExportTests.cpp
+    tests/LandXmlExportTests.cpp
     # PADSOLID needs the surface stores, the brep kernel and ProcessCommandLineSubmit, so it rides
     # with GoSurveyTests like the other command tests above.
     tests/PadSolidCommandTests.cpp

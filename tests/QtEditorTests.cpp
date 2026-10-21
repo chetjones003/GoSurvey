@@ -5451,6 +5451,26 @@ private Q_SLOTS:
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
   }
 
+  void issue1002RibbonExportsLandXmlThroughTheCommand() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto* action = window.findChild<QAction*>("ribbon_RibbonExpLandXml"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QCOMPARE(action->property("ribbonCommand").toString(), QString("EXPORTLANDXML"));
+
+    SurveyPoint point; point.id = 5; point.easting = 10; point.northing = 20; point.elevation = 30; point.description = "Hub";
+    window.State().surveyPoints.push_back(point);
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString path = directory.filePath("exported.xml");
+    // The typed form carries its destination, so no file dialog opens; the ribbon's bare form asks first.
+    window.Submit("EXPORTLANDXML \"" + QDir::toNativeSeparators(path) + "\"");
+    QFile file(path); QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray xml = file.readAll();
+    QVERIFY(xml.contains("LandXML-1.2"));
+    QVERIFY(xml.contains("<CgPoint name=\"5\""));
+    QVERIFY(xml.contains("desc=\"Hub\""));
+  }
+
   // Issue #997 / REQ-398: a flat surface at 100 and a closed 120 ft pad at 105, so every station is
   // 5 ft of FILL and the daylight offset is 5 x the fill run - 15 ft at 3:1, 10 ft at 2:1.
   static void BuildGradingSite(EditorWindow& window, const char* secondSurface = nullptr) {

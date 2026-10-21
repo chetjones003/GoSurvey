@@ -35,6 +35,7 @@
 #include "util/surfacequery.hpp"   // REQ-137
 #include "util/daylight.hpp"       // REQ-398 side slope grading — the daylight solver
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
+#include "io/LandXmlIo.hpp"  // issue #1002: EXPORTLANDXML
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
@@ -6965,6 +6966,7 @@ const CmdEntry kRegistry[] = {
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
     {"exportpoints", "exppts", "Export survey points"},
+    {"exportlandxml", "", "Export survey points, TIN surfaces and feature lines to LandXML 1.2: EXPORTLANDXML [<path>]"},
     {"traverse", "trav, traverseeditor", "Open the LSA Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
@@ -45208,6 +45210,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "exportlaz") {
       ExportSelectedPointClouds(st, PointCloudExportFormat::Laz, log);
+      return;
+    }
+    // `EXPORTLANDXML "<path>"` (issue #1002). The destination is part of the command so it runs the
+    // same headless as in the Qt window; the window's own handler asks for it with a save dialog
+    // when none is typed, then submits this form.
+    if (plotTok == "exportlandxml") {
+      std::string path;
+      std::getline(issIdle, path);
+      path = StringUtil::trimCopy(path);
+      if (path.size() >= 2 && path.front() == '"' && path.back() == '"')
+        path = path.substr(1, path.size() - 2);
+      if (path.empty())
+        log.push_back("EXPORTLANDXML — type a destination, e.g. EXPORTLANDXML \"site.xml\".");
+      else
+        ExportLandXmlFile(st, path.c_str(), log);
       return;
     }
     // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,

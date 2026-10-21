@@ -1189,6 +1189,16 @@ void EditorWindow::Submit(const QString& command) {
   else if (verb == "EXPORTPTX") ShowPointCloudExport(1);
   else if (verb == "EXPORTLAS") ShowPointCloudExport(2);
   else if (verb == "EXPORTLAZ") ShowPointCloudExport(3);
+  else if (verb == "EXPORTLANDXML") {
+    if (m_State.activeDrawingIdx == 0) QMessageBox::information(this, "Export to LandXML", "Open a drawing to export first.");
+    else {
+      QString path = QFileDialog::getSaveFileName(this, "Export to LandXML", {}, "LandXML (*.xml)");
+      if (!path.isEmpty()) {
+        if (QFileInfo(path).suffix().isEmpty()) path += ".xml";
+        Submit("EXPORTLANDXML \"" + QDir::toNativeSeparators(path) + "\"");
+      }
+    }
+  }
   else if (verb == "PROJECTHEALTH" || verb == "PACKPROJECT" || verb == "TURNOVER" || verb == "REFRESH") {
     const auto idx = m_State.activeDrawingIdx;
     const std::uint32_t uid = idx > 0 && idx < static_cast<int>(m_State.drawingTabs.size())
