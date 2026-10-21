@@ -94,3 +94,38 @@ Implementation complete; hardware verification pending.
   standalone LLVM 21.1.8 executable passes the same probe. PowerShell syntax,
   actionlint and patch whitespace pass. This does not establish the laptop's
   installed LLVM version or underlying packaging cause; hardware rerun pending.
+
+## Second laptop run: cache-control hang
+
+- Run 39670013936 on 7ad97b90 exceeded the 45-minute job deadline. Its only
+  benchmark stage was preflight (2516.332 seconds); no compilation or tests ran.
+  The last completed command was `sccache --version`; execution then blocked in
+  the first `sccache --show-stats --stats-format=json` capture, with no deadline.
+- Standalone LLVM 20.1.4 starts correctly. The previous PATH selected Chocolatey's
+  `winlibs/tools/mingw64/bin/clang-tidy.exe`, rather than standalone LLVM.
+- Hardware recorded: Intel i5-12450H, 12 logical processors, 15.7 GiB RAM,
+  Intel UHD / NVIDIA GTX 1650, MSVC 14.44.35207, six build/test workers.
+- Ranked unresolved hypotheses: an unresponsive listener on sccache's local
+  endpoint; cache-backend initialization; or captured-output completion. No
+  evidence yet supports reinstalling tools, deleting caches or killing daemons.
+- Plan verification APPROVE under REQ-205: bound cache-control client processes
+  to 30 seconds, retain separate stdout/stderr files, record only cache process
+  paths/PIDs and endpoint ownership on failure, and enable narrowly scoped
+  client/command traces during preflight. Do not record environment secrets,
+  silently disable caching, extend the job timeout, or alter required checks.
+  The laptop rerun is the diagnostic feedback loop, not proof of resolution.
+- Validation plan: reproduce a real sccache client waiting on a silent loopback
+  listener, verify the bounded call fails and retains diagnostics, and verify a
+  healthy local cache response still parses. Check syntax and whitespace.
+  Source reference: mozilla/sccache v0.18.0 `src/commands.rs` ShowStats dispatch
+  and `docs/Configuration.md` (client logging and local endpoint configuration).
+- Local verification PASS: unbounded v0.18.0 `--show-stats` stays blocked against
+  a silent TCP listener; the actual bounded helper fails that same client after
+  one second, stops only its client PID, and retains stderr/report evidence.
+  A separate healthy daemon returns valid JSON and text statistics and is shut
+  down by the fixture. This reproduces the missing-deadline failure mechanism;
+  it does not prove which laptop listener/backend caused the original hang.
+- PowerShell parser, workflow actionlint and patch whitespace PASS. Tooling-only
+  architecture/code review PASS: no product changes, skipped tests, cache deletion,
+  daemon termination, secret dumps, or change to blocking validation. Laptop
+  cache diagnosis and actual build/test measurements remain pending.

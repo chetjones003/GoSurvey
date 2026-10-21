@@ -26,10 +26,12 @@ Set-Location -LiteralPath (Split-Path -Parent $PSScriptRoot)
 $outputDir = Join-Path (Get-Location) 'build\artifacts\runner-benchmark'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $stages = [Collections.Generic.List[object]]::new()
+$cacheCommands = [Collections.Generic.List[object]]::new()
 $report = [ordered]@{ startedUtc = [DateTime]::UtcNow.ToString('o'); passed = $false; stages = @() }
 
 function Save-BenchmarkReport {
   $report.stages = @($stages.ToArray())
+  $report.cacheCommands = @($cacheCommands.ToArray())
   $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $outputDir 'benchmark.json')
 }
 
@@ -54,13 +56,60 @@ function Measure-BenchmarkStage {
   }
 }
 
+function Invoke-CompilerCacheCommand {
+  param([string[]]$ArgumentList, [string]$LogName,
+    [ValidateRange(1, 60)][int]$TimeoutSeconds = 30)
+  $exe = (Get-Command sccache -CommandType Application).Source
+  $stdout = Join-Path $outputDir "$LogName.stdout.log"
+  $stderr = Join-Path $outputDir "$LogName.stderr.log"
+  $entry = [ordered]@{ arguments = $ArgumentList; passed = $false; timedOut = $false }
+  $cacheCommands.Add($entry)
+  $clock = [Diagnostics.Stopwatch]::StartNew()
+  $process = $null
+  Write-Host "sccache $($ArgumentList -join ' ') (limit: ${TimeoutSeconds}s)"
+  try {
+    # Files avoid an unbounded wait for EOF on a pipe inherited by another process.
+    $process = Start-Process -FilePath $exe -ArgumentList $ArgumentList -PassThru -WindowStyle Hidden `
+      -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $entry.processId = $process.Id
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+      $entry.timedOut = $true
+      # Terminate only this client; the daemon may serve another local checkout.
+      $process.Kill()
+      throw "sccache $($ArgumentList -join ' ') timed out after ${TimeoutSeconds}s. See $LogName logs."
+    }
+    $entry.exitCode = $process.ExitCode
+    if ($process.ExitCode -ne 0) { throw "sccache failed (exit $($process.ExitCode)). See $LogName logs." }
+    $entry.passed = $true
+    return [IO.File]::ReadAllText($stdout)
+  } catch {
+    $entry.error = $_.Exception.Message
+    try {
+      $port = if ($env:SCCACHE_SERVER_PORT) { [int]$env:SCCACHE_SERVER_PORT } else { 4226 }
+      $report.cacheDiagnostics = [ordered]@{
+        port = $port
+        processes = @(Get-CimInstance Win32_Process -Filter "Name='sccache.exe'" |
+          Select-Object ProcessId, ParentProcessId, ExecutablePath)
+        listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop |
+          Where-Object LocalPort -EQ $port | Select-Object LocalAddress, LocalPort, OwningProcess)
+      }
+    } catch { Write-Warning "Could not collect cache process diagnostics: $($_.Exception.Message)" }
+    throw $entry.error
+  } finally {
+    $clock.Stop()
+    $entry.seconds = [Math]::Round($clock.Elapsed.TotalSeconds, 3)
+    if (Test-Path -LiteralPath $stderr) { Get-Content -LiteralPath $stderr | Out-Host }
+    Save-BenchmarkReport
+    if ($process) { $process.Dispose() }
+  }
+}
+
 function Save-CompilerCacheStats {
   param([string]$Name)
-  $json = & sccache --show-stats --stats-format=json
-  if ($LASTEXITCODE -ne 0) { throw 'Could not collect compiler cache statistics.' }
-  $null = ($json -join "`n") | ConvertFrom-Json
+  $json = Invoke-CompilerCacheCommand @('--show-stats', '--stats-format=json') "cache-$Name-json"
+  $null = $json | ConvertFrom-Json
   $json | Set-Content -LiteralPath (Join-Path $outputDir "sccache-$Name.json")
-  Invoke-BenchmarkCommand sccache @('--show-stats')
+  Invoke-CompilerCacheCommand @('--show-stats') "cache-$Name-text" | Out-Host
 }
 
 function Find-WorkingClangTidy {
@@ -125,12 +174,18 @@ try {
       @(Get-Command clang-tidy.exe -All -CommandType Application | ForEach-Object Source)
     $report.clangTidy = Find-WorkingClangTidy $tidyCandidates
     $env:Path = (Split-Path -Parent $report.clangTidy.path) + ';' + $env:Path
-    foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'python', 'sccache') {
+    foreach ($tool in 'git', 'cmake', 'ctest', 'ninja', 'python') {
       Invoke-BenchmarkCommand $tool @('--version')
     }
     # This benchmark reuses the local disk cache, with no hosted cache downloads.
     $env:SCCACHE_GHA_ENABLED = 'false'
-    Save-CompilerCacheStats before
+    Invoke-CompilerCacheCommand @('--version') cache-version | Out-Host
+    $previousCacheLog = $env:SCCACHE_LOG
+    try {
+      # Trace command dispatch/IPC only, not backend configuration or credentials.
+      $env:SCCACHE_LOG = 'sccache::commands=trace,sccache::client=trace'
+      Save-CompilerCacheStats before
+    } finally { $env:SCCACHE_LOG = $previousCacheLog }
   }
   Measure-BenchmarkStage configure {
     Invoke-BenchmarkCommand cmake @('--preset', 'ninja-release', '-DGOSURVEY_BUILD_TESTS=ON',
@@ -139,13 +194,13 @@ try {
       "-DCMAKE_PREFIX_PATH=$env:GOSURVEY_QT_ROOT")
   }
   $targets = @('--target', 'GoSurveyQt', 'GoSurveyTests', 'gosurvey_headless', 'GoSurveyQtTests')
-  Invoke-BenchmarkCommand sccache @('--zero-stats')
+  Invoke-CompilerCacheCommand @('--zero-stats') cache-zero-initial | Out-Host
   Measure-BenchmarkStage initial_build {
     Invoke-BenchmarkCommand cmake (@('--build', '--preset', 'ninja-release') + $targets)
   }
   Save-CompilerCacheStats initial
   Copy-Item -LiteralPath build/.cmake/release/.ninja_log -Destination (Join-Path $outputDir 'initial.ninja_log')
-  Invoke-BenchmarkCommand sccache @('--zero-stats')
+  Invoke-CompilerCacheCommand @('--zero-stats') cache-zero-warm | Out-Host
   Measure-BenchmarkStage cached_clean_rebuild {
     Invoke-BenchmarkCommand cmake (@('--build', '--preset', 'ninja-release', '--clean-first') + $targets)
   }
