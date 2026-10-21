@@ -27,6 +27,7 @@ $outputDir = Join-Path (Get-Location) 'build\artifacts\runner-benchmark'
 New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
 $stages = [Collections.Generic.List[object]]::new()
 $cacheCommands = [Collections.Generic.List[object]]::new()
+$previousCachePort = $env:SCCACHE_SERVER_PORT
 $report = [ordered]@{ startedUtc = [DateTime]::UtcNow.ToString('o'); passed = $false; stages = @() }
 
 function Save-BenchmarkReport {
@@ -112,6 +113,19 @@ function Save-CompilerCacheStats {
   Invoke-CompilerCacheCommand @('--show-stats') "cache-$Name-text" | Out-Host
 }
 
+function Start-BenchmarkCompilerCache {
+  # Own a separate endpoint, retaining the persistent disk cache. Do not contact
+  # an absent/shared daemon first: a filtered closed-port connect can block.
+  $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+  try {
+    $listener.Start()
+    $env:SCCACHE_SERVER_PORT = [string]$listener.LocalEndpoint.Port
+  } finally { $listener.Stop() }
+  $report.cacheServer = [ordered]@{ port = [int]$env:SCCACHE_SERVER_PORT; started = $false }
+  Invoke-CompilerCacheCommand @('--start-server') cache-start | Out-Host
+  $report.cacheServer.started = $true
+}
+
 function Find-WorkingClangTidy {
   param([string[]]$Candidates)
   $attempts = [Collections.Generic.List[object]]::new()
@@ -184,6 +198,7 @@ try {
     try {
       # Trace command dispatch/IPC only, not backend configuration or credentials.
       $env:SCCACHE_LOG = 'sccache::commands=trace,sccache::client=trace'
+      Start-BenchmarkCompilerCache
       Save-CompilerCacheStats before
     } finally { $env:SCCACHE_LOG = $previousCacheLog }
   }
@@ -214,6 +229,19 @@ try {
   $report.error = $_.Exception.Message
   throw
 } finally {
+  $cleanupError = $null
+  if ($report.cacheServer.started) {
+    try {
+      Invoke-CompilerCacheCommand @('--stop-server') cache-stop | Out-Host
+      $report.cacheServer.stopped = $true
+    } catch {
+      $cleanupError = $_.Exception.Message
+      $report.cacheServer.cleanupError = $cleanupError
+      $report.passed = $false
+      Write-Warning "Could not stop the benchmark cache server: $cleanupError"
+    }
+  }
+  $env:SCCACHE_SERVER_PORT = $previousCachePort
   $report.completedUtc = [DateTime]::UtcNow.ToString('o')
   Save-BenchmarkReport
   $lines = @('## Laptop benchmark', '', "Passed: $($report.passed)", '', '| Stage | Seconds | Passed |', '|---|---:|---|')
@@ -223,4 +251,5 @@ try {
     'Raw Ninja logs may contain multiple invocations; use these per-stage wall-clock measurements.')
   $lines | Set-Content -LiteralPath (Join-Path $outputDir 'benchmark.md')
   if ($env:GITHUB_STEP_SUMMARY) { $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY }
+  if ($cleanupError -and -not $report.error) { throw $cleanupError }
 }

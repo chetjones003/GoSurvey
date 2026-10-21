@@ -116,6 +116,12 @@ cache and writes reports under `build/artifacts/runner-benchmark/`. Treat the fi
 build as cold only when its actual cache counters show that. Keep separate
 checkout/build trees for simultaneous runner instances.
 
+The benchmark explicitly starts its own sccache server on an OS-selected
+loopback port before querying statistics, then stops that server afterward.
+All compiler clients inherit the selected port; the disk cache remains outside
+the checkout. Cache-control calls have a 30-second deadline and retain separate
+stdout/stderr diagnostics on failure.
+
 A runner with the additional label above can be selected with:
 
 ```yaml

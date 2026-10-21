@@ -129,3 +129,33 @@ Implementation complete; hardware verification pending.
   architecture/code review PASS: no product changes, skipped tests, cache deletion,
   daemon termination, secret dumps, or change to blocking validation. Laptop
   cache diagnosis and actual build/test measurements remain pending.
+
+## Third laptop run: connect before server startup
+
+- Run 39677022219 on 8185b3e0 failed preflight in 38.697 seconds, as intended
+  by the new deadline. Trace stops at `connect_to_server(127.0.0.1:4226)`;
+  there is no `request_stats` or sent request. Process and socket inspection
+  confirms no sccache process or listener exists after the client is stopped.
+  This rules out a cache server waiting to answer, backend work after connection,
+  and output-pipe completion as causes of this particular stall.
+- Mechanism: the benchmark queries statistics before starting a server, causing
+  sccache's blocking TCP connect to an absent endpoint on this laptop. Why Windows
+  delays/refuses no connection response remains unknown; firewall/security
+  configuration is a hypothesis, not an established diagnosis. No firewall,
+  antivirus, system network or inbound access changes are justified.
+- Plan verification APPROVE: explicitly start a benchmark-owned server before
+  the first stats request. Allocate a free OS-selected loopback port, propagate
+  it through SCCACHE_SERVER_PORT to all build clients, retain the existing disk
+  cache, and stop only that server afterward. Preserve the command deadlines;
+  fail if server startup, statistics, compilation or tests fail. There is a
+  small bind race between allocating and starting; startup failure stays visible.
+- Regression plan: the real sccache silent-listener fixture remains failing with
+  a deadline. Exercise the actual startup helper against a fresh local endpoint,
+  then query JSON/text stats and stop that owned server. The laptop rerun must
+  prove that connections to a running server work on that host.
+- Local verification PASS: actual startup helper launches v0.18.0 on its selected
+  endpoint, records/propagates the port, and JSON/text stats parse successfully.
+  The silent-listener timeout check still passes. PowerShell parser, actionlint
+  and patch whitespace PASS. Review confirms startup/stat errors remain failures,
+  only the owned endpoint is stopped, and no test/protection behavior changes.
+  Hardware validation remains pending; no performance claim is made.
