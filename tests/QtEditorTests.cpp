@@ -122,6 +122,11 @@
 #include <limits>
 
 namespace {
+QString QtTestArtifactDirectory() {
+  const QString override = qEnvironmentVariable("GOSURVEY_QT_TEST_ARTIFACT_DIR");
+  return override.isEmpty() ? QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) : override;
+}
+
 struct QtPdfFileWriter { FPDF_FILEWRITE api{}; QFile file; };
 int WriteQtPdf(FPDF_FILEWRITE* writer, const void* data, unsigned long size) {
   auto* output = reinterpret_cast<QtPdfFileWriter*>(writer);
@@ -181,7 +186,7 @@ QString OpenTraverseCommands() {
       "HDIST 2 3 100\n");
 }
 QString Issue914Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
@@ -287,7 +292,7 @@ QPushButton* UpdateButton(QDialog* dialog, const char* name) {
   return dialog->findChild<QPushButton*>(name);
 }
 QString Issue886Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   const QString path = QDir(directory).filePath(QString::fromLatin1(name));
   QDir().mkpath(QFileInfo(path).path());
@@ -323,7 +328,7 @@ void Issue893Fixture(AppCommandState& st, bool buildSurfaces = true) {
   }
 }
 QString Issue912Shot(const QString& name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(name);
 }
@@ -342,27 +347,27 @@ std::unique_ptr<AppCommandState> Issue912State(bool withShots) {
   return state;
 }
 QString Issue893Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QString Issue897Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QString Issue905Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QString Issue907Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
 QString Issue908Shot(const char* name) {
-  const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+  const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
@@ -1300,7 +1305,7 @@ private Q_SLOTS:
     QVERIFY(viewportWidget);
     auto* viewport = static_cast<EditorViewport*>(viewportWidget);
     QTest::qWait(100);
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-974-paper-trim-cutter-highlight.png"));
     state.paperHoverValid = true;
     state.paperHover = {PaperEntityRef::Type::Line, 0};
@@ -1560,7 +1565,7 @@ private Q_SLOTS:
     viewport->update();
     QTest::qWait(100);
     const QImage rendered = viewport->grabFramebuffer();
-    const QString evidenceDir = QCoreApplication::applicationDirPath() + "/artifacts";
+    const QString evidenceDir = QtTestArtifactDirectory();
     QVERIFY(QDir().mkpath(evidenceDir));
     QVERIFY(rendered.save(evidenceDir + "/req039-paper-offset-layout.png"));
     float viewportX = 0.f, viewportY = 0.f;
@@ -1661,7 +1666,7 @@ private Q_SLOTS:
     window.State().cadPipeRuns.push_back(CadPipeRun{});
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-loss-r2018.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-884-dwg-loss-r2018.png")));
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       auto* details = dialog->findChild<QLabel*>("dwgExportLossDetails"); QVERIFY(details);
       QVERIFY(details->text().contains("existing.dwg already exists"));
@@ -1680,7 +1685,7 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("dwgExportWarning"); QVERIFY(dialog);
       auto* version = dialog->findChild<QComboBox*>("dwgExportVersion"); QVERIFY(version);
       version->setCurrentIndex(0);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-884-dwg-overwrite-r2000.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-884-dwg-overwrite-r2000.png")));
       dialog->findChild<QPushButton*>("confirmDwgExport")->click();
     });
     QVERIFY(window.ConfirmDwgExport(path));
@@ -1743,7 +1748,7 @@ private Q_SLOTS:
     QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
     QTRY_COMPARE(action->text(), QString("Sign Out"));
     const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
+    QVERIFY(accountShot.save(QtTestArtifactDirectory() +
                              "/qt-880-account-final.png"));
     QTest::mouseClick(action, Qt::LeftButton);
     QVERIFY(window.State().authSignOutRequested);
@@ -1843,8 +1848,8 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("projectHealthDialog"); QVERIFY(dialog);
       healthShown = dialog->findChild<QLabel*>("projectHealthStatus")->text().contains("issue(s)") &&
           dialog->findChild<QPlainTextEdit*>("projectHealthDetails")->toPlainText().contains("unsaved", Qt::CaseInsensitive);
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-health.png");
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-health.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-a-health.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-final-health.png");
       dialog->reject();
     });
     window.ShowProjectHealth(uid);
@@ -1853,7 +1858,7 @@ private Q_SLOTS:
     ApplyQtAppearance(*qApp, true);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectHealthDialog"); if (!dialog) return;
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-health.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-b-health.png");
       dialog->reject();
     });
     window.ShowProjectHealth(uid);
@@ -1863,8 +1868,8 @@ private Q_SLOTS:
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectPackDialog"); if (!dialog) return;
       packShown = dialog->findChild<QLabel*>("projectPackSummary")->text().contains("file");
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-pack.png");
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-pack.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-a-pack.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-final-pack.png");
       dialog->reject();
     });
     window.ShowProjectPack(uid);
@@ -1874,7 +1879,7 @@ private Q_SLOTS:
     ApplyQtAppearance(*qApp, true);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectPackDialog"); if (!dialog) return;
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-pack.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-b-pack.png");
       dialog->reject();
     });
     window.ShowProjectPack(uid);
@@ -1884,8 +1889,8 @@ private Q_SLOTS:
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectTurnoverDialog"); if (!dialog) return;
       turnoverShown = dialog->findChild<QLineEdit*>("projectTurnoverRecipient") != nullptr;
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-turnover.png");
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-turnover.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-a-turnover.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-final-turnover.png");
       dialog->reject();
     });
     window.ShowProjectTurnover(uid);
@@ -1895,7 +1900,7 @@ private Q_SLOTS:
     ApplyQtAppearance(*qApp, true);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectTurnoverDialog"); if (!dialog) return;
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-turnover.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-b-turnover.png");
       dialog->reject();
     });
     window.ShowProjectTurnover(uid);
@@ -1907,8 +1912,8 @@ private Q_SLOTS:
       auto* dialog = window.findChild<QDialog*>("projectRefreshDialog"); if (!dialog) return;
       auto* list = dialog->findChild<QListWidget*>("projectRefreshFiles");
       if (!list || list->count() != 1) { dialog->reject(); return; }
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-a-refresh.png");
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-final-refresh.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-a-refresh.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-final-refresh.png");
       dialog->findChild<QPushButton*>("projectRefreshAddSelected")->click();
     });
     window.RefreshProjectFiles();
@@ -1923,7 +1928,7 @@ private Q_SLOTS:
     ApplyQtAppearance(*qApp, true);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("projectRefreshDialog"); if (!dialog) return;
-      dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-889-option-b-refresh.png");
+      dialog->grab().save(QtTestArtifactDirectory() + "/qt-889-option-b-refresh.png");
       dialog->reject();
     });
     window.RefreshProjectFiles();
@@ -2206,7 +2211,7 @@ private Q_SLOTS:
     QVERIFY(logo);
     QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
     const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) +
+    QVERIFY(startupShot.save(QtTestArtifactDirectory() +
                              "/qt-880-startup-final.png"));
     gate->close();
     QVERIFY(gate->isVisible());
@@ -2478,7 +2483,7 @@ private Q_SLOTS:
     QCOMPARE(loaded.surveyLabelOffsetEastPlottedIn, .8f);
     QCOMPARE(loaded.surveyLabelOffsetNorthPlottedIn, .6f);
     QCOMPARE(loaded.surveyLabelLeaderArrowPx, 30.f);
-    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-saved-read-only.png"));
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-904-saved-read-only.png"));
     QTest::keyClick(dialog, Qt::Key_Escape);
     QCOMPARE(st.surveyPointShowIdInViewport, false);
     QCOMPARE(CadActiveUndoStackSize(st), undoCount);
@@ -2506,7 +2511,7 @@ private Q_SLOTS:
     auto* status = dialog->findChild<QLabel*>("surveyDisplaySaveStatus");
     QVERIFY(status->height() >= status->heightForWidth(status->width()));
     QVERIFY(dialog->isVisible()); QCOMPARE(window.State().surveyPointCrossSpanPlottedInches, .4f);
-    QVERIFY(dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-904-save-error.png"));
+    QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-904-save-error.png"));
   }
 
   void surveyDisplayRenderingHonorsSizeIdsLayerAndLeader() {
@@ -2608,7 +2613,7 @@ private Q_SLOTS:
     window.Refresh(); window.ShowSurveyPointDisplay();
     auto* dialog = window.findChild<QDialog*>("surveyPointDisplay"); QVERIFY(dialog);
     QTest::qWait(200);
-    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    const QString dir = QtTestArtifactDirectory();
     QVERIFY(dialog->grab().save(dir + "/qt-904-option-a.png"));
     // Alternative integrated layout of the same working controls, for user selection.
     auto* groups = dialog->findChild<QBoxLayout*>("surveyDisplayGroups"); QVERIFY(groups);
@@ -2633,7 +2638,7 @@ private Q_SLOTS:
   }
 
   void failureReportAndUsageNoticeScreenshots() {
-    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    const QString dir = QtTestArtifactDirectory();
     std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
                                                               SampleCrashReport()));
     dialog->resize(dialog->minimumSize());
@@ -3109,7 +3114,7 @@ private Q_SLOTS:
     QCoreApplication::processEvents();
     auto* filesPanel = window.findChild<QWidget*>("adjustmentLeftPanel");
     QVERIFY(filesPanel);
-    QVERIFY(filesPanel->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-success.png")));
+    QVERIFY(filesPanel->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-913-files-success.png")));
 
     QCOMPARE(window.ImportFiles({bad.fileName()}, failures), 0);
     QCOMPARE(failures.size(), 1);
@@ -3141,7 +3146,7 @@ private Q_SLOTS:
 
     QCoreApplication::processEvents();
     QVERIFY(!files->item(2)->toolTip().isEmpty());
-    QVERIFY(filesPanel->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-files-error.png")));
+    QVERIFY(filesPanel->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-913-files-error.png")));
     window.hide();
   }
 
@@ -3158,7 +3163,7 @@ private Q_SLOTS:
     window.show();
     QCoreApplication::processEvents();
     QVERIFY(window.findChild<QWidget*>("adjustmentLeftPanel")->grab().save(
-        QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-913-jobxml-import.png")));
+        QDir(QtTestArtifactDirectory()).filePath("qt-913-jobxml-import.png")));
     const QString beforeCancel = window.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText();
     const int filesBeforeCancel = window.findChild<QListWidget*>("issue913ImportedFiles")->count();
     QCOMPARE(window.ImportFiles({}, failures), 0);
@@ -3656,7 +3661,7 @@ private Q_SLOTS:
   // Issue #911: screenshots of the chosen layout (options bar under the toolbar) for review; they are
   // written to build/artifacts and never committed.
   void issue911CaptureTraverseOptionsBarScreenshots() {
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     auto capture = [&](const QString& name, bool texas, bool solve, double refraction) {
       auto state = StateWithTraverse();
       for (auto& leg : state->traverseData.legs) { leg.hasVertAngle = true; leg.isZenithAngle = true; leg.vertAngleDeg = 89.5; }
@@ -4280,7 +4285,7 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 850);
     window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
     QTRY_VERIFY(window.m_Viewport->IsRendererReady());
-    const QString directory = QCoreApplication::applicationDirPath() + "/artifacts/issue903";
+    const QString directory = QtTestArtifactDirectory() + "/issue903";
     QVERIFY(QDir().mkpath(directory));
     window.Submit("LINE");
     const QPoint cursorPoint(240, 200);
@@ -4676,7 +4681,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage gizmo = viewport->grabFramebuffer();
     QVERIFY(gizmo != base);
-    QVERIFY(gizmo.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-a.png"));
+    QVERIFY(gizmo.save(QtTestArtifactDirectory() + "/qt-viewport-option-a.png"));
 
     state.viewportSectionClip = true;
     state.gizmoPersistent = false;
@@ -4685,7 +4690,7 @@ private Q_SLOTS:
     QTest::qWait(30);
     const QImage sectionGrips = viewport->grabFramebuffer();
     QVERIFY(sectionGrips != gizmo);
-    QVERIFY(sectionGrips.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-b.png"));
+    QVERIFY(sectionGrips.save(QtTestArtifactDirectory() + "/qt-viewport-option-b.png"));
 
     state.gizmoPersistent = true;
     state.viewportSectionClipOffset = 0.0;
@@ -4697,7 +4702,7 @@ private Q_SLOTS:
     CadGizmoOverlay combinedOverlay;
     BuildGizmoOverlay(state, &combinedOverlay);
     QVERIFY(!combinedOverlay.empty());
-    QVERIFY(combined.save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-viewport-option-c.png"));
+    QVERIFY(combined.save(QtTestArtifactDirectory() + "/qt-viewport-option-c.png"));
   }
 
   void qtViewportGizmoDragCommitsOneUndoableTransform() {
@@ -4833,11 +4838,11 @@ private Q_SLOTS:
       QTimer::singleShot(20000, dialog, &QDialog::reject);
       auto* matches = dialog->findChild<QLabel*>("pointGroupMatchCount"); QVERIFY(matches);
       QVERIFY(matches->text().contains("No point group selected"));
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-empty.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-894-point-groups-empty.png")));
       auto* create = dialog->findChild<QPushButton*>("pointGroupNew"); QVERIFY(create); create->click();
       QCOMPARE(window.State().pointGroups.size(), std::size_t(1));
       QCOMPARE(window.State().pointGroups.front().name, std::string("Point Group"));
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-new.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-894-point-groups-new.png")));
       dialog->findChild<QPushButton*>("pointGroupDelete")->click();
       QVERIFY(window.State().pointGroups.empty());
       dialog->findChild<QPushButton*>("pointGroupClose")->click();
@@ -4875,7 +4880,7 @@ private Q_SLOTS:
       QTRY_VERIFY(matches->text().contains("2 matched"));
       auto* preview = dialog->findChild<QListWidget*>("pointGroupMemberPreview"); QVERIFY(preview);
       QCOMPARE(preview->count(), 2);
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-populated.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-894-point-groups-populated.png")));
 
       auto* name = dialog->findChild<QLineEdit*>("pointGroupName"); QVERIFY(name);
       name->setText("Curb Shots");
@@ -4883,7 +4888,7 @@ private Q_SLOTS:
       QCOMPARE(state.pointGroups.front().name, std::string("Existing Ground"));
       auto* validation = dialog->findChild<QLabel*>("pointGroupValidation"); QVERIFY(validation);
       QVERIFY(validation->text().contains("already exists"));
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-validation.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-894-point-groups-validation.png")));
 
       auto* ranges = dialog->findChild<QLineEdit*>("pointGroupRanges"); QVERIFY(ranges);
       ranges->setFocus(); ranges->selectAll(); QTest::keyClicks(ranges, "bad-range");
@@ -4909,7 +4914,7 @@ private Q_SLOTS:
       QVERIFY(QMetaObject::invokeMethod(description, "editingFinished", Qt::DirectConnection));
       QVERIFY(validation->text().isEmpty());
       QTRY_VERIFY(matches->text().contains("Matches 0 of 3"));
-      QVERIFY(dialog->grab().save(QDir(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR)).filePath("qt-894-point-groups-no-match.png")));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-894-point-groups-no-match.png")));
       QTest::keyClick(dialog, Qt::Key_Escape);
     });
     window.RunRibbonAction("@pointGroups");
@@ -5325,7 +5330,7 @@ private Q_SLOTS:
     window.CreateDrawingFromTemplate();
     auto& state = window.State();
     state.drawingSettings.transform.apply = false;
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
 
     QTimer::singleShot(0, &window, [&] {
       auto* settings = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(settings);
@@ -5372,7 +5377,7 @@ private Q_SLOTS:
     if (auto* viewPage = window.findChild<QWidget*>("ribbonPage_View")) {
       if (auto* ribbon = window.findChild<QTabWidget*>("ribbon")) ribbon->setCurrentWidget(viewPage);
       QApplication::processEvents();
-      const QString artifact = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+      const QString artifact = QtTestArtifactDirectory() + "/";
       for (const auto& panelName : {QString("View"), QString("Named Views"), QString("Coordinates")}) {
         auto* panel = viewPage->findChild<QWidget*>("ribbonPanel_View_" + panelName);
         QVERIFY(panel);
@@ -5424,7 +5429,7 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
     QTest::qWait(100);
     auto& state = window.State();
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     auto* groundPanel = window.findChild<QWidget*>("ribbonPanel_Home_Create Ground Data"); QVERIFY(groundPanel);
     auto* designPanel = window.findChild<QWidget*>("ribbonPanel_Home_Create Design"); QVERIFY(designPanel);
     QVERIFY(groundPanel->grab().save(artifacts + "qt-896-create-ground-data.png"));
@@ -5735,7 +5740,7 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
     QTest::qWait(100);
     auto& state = window.State();
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     for (const char* id : {"ribbon_CgdGrading", "ribbon_CdGrading", "ribbon_SvyGrading", "ribbon_TsGrade"}) {
       auto* action = window.findChild<QAction*>(id); QVERIFY2(action, id);
       QCOMPARE(action->property("ribbonCommand").toString(), QString("GRADING"));
@@ -5820,7 +5825,7 @@ private Q_SLOTS:
   // REQ-444 / GitHub #803: screenshots of the Revision Cloud work for the user's review, written to
   // build/artifacts and never committed.
   void revisionCloudScreenshotsForReview() {
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     QDir().mkpath(artifacts);
     {
       EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
@@ -5865,7 +5870,7 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
     QTest::qWait(100);
     auto& state = window.State();
-    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    const QString artifacts = QtTestArtifactDirectory() + "/";
     auto* groundAction = window.findChild<QAction*>("ribbon_CgdFeatureLine"); QVERIFY(groundAction);
     auto* designAction = window.findChild<QAction*>("ribbon_CdFeatureLine"); QVERIFY(designAction);
     QVERIFY(groundAction->isEnabled()); QVERIFY(designAction->isEnabled());
@@ -5969,7 +5974,7 @@ private Q_SLOTS:
       auto* frames = dialog->findChild<QListWidget*>("viewManagerSavedUcs");
       auto* tabs = dialog->findChild<QTabWidget*>("viewManagerTabs");
       if (!views || !frames || !tabs) { dialog->accept(); return; }
-      viewsShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-views.png");
+      viewsShot = dialog->grab().save(QtTestArtifactDirectory() + "/qt-892-view-manager-views.png");
       views->setCurrentRow(0);
       if (auto* restore = dialog->findChild<QPushButton*>("viewManagerRestore")) restore->click();
       state.viewportPanX = 31.0;
@@ -5982,7 +5987,7 @@ private Q_SLOTS:
       if (auto* save = dialog->findChild<QPushButton*>("viewManagerNewView")) save->click();
 
       tabs->setCurrentIndex(1);
-      ucsShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-ucs.png");
+      ucsShot = dialog->grab().save(QtTestArtifactDirectory() + "/qt-892-view-manager-ucs.png");
       frames->setCurrentRow(0);
       if (auto* restore = dialog->findChild<QPushButton*>("viewManagerRestore")) restore->click();
       if (auto* remove = dialog->findChild<QPushButton*>("viewManagerDelete")) remove->click();
@@ -6013,7 +6018,7 @@ private Q_SLOTS:
       auto* views = dialog->findChild<QListWidget*>("viewManagerSavedViews");
       auto* frames = dialog->findChild<QListWidget*>("viewManagerSavedUcs");
       sawEmptyLists = views && frames && views->count() == 0 && frames->count() == 0;
-      emptyShot = dialog->grab().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-892-view-manager-empty.png");
+      emptyShot = dialog->grab().save(QtTestArtifactDirectory() + "/qt-892-view-manager-empty.png");
       dialog->reject();
     });
     window.Submit("VIEW");
@@ -6588,7 +6593,7 @@ private Q_SLOTS:
         if (surface.rect().contains(x, y) && surface.pixelColor(x, y) == QColor("#8dd7ff")) visibleGrip = true;
     QVERIFY(visibleGrip);
 #ifdef GOSURVEY_TEST_ARTIFACT_DIR
-    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-910";
+    const QString dir = QtTestArtifactDirectory() + "/qt-910";
 #else
     const QString dir = directory.path();
 #endif
@@ -8117,7 +8122,9 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto& st = window.State();
     st.rightClickTimeSensitive = true;
-    st.rightClickLongerClickMs = 150;
+    // Keep the quick-click threshold above a heavily loaded test runner's scheduling jitter;
+    // the exact boundary behavior is covered by CadRightClickHoldIsMenu unit tests.
+    st.rightClickLongerClickMs = 1000;
     st.rightClickDefaultMode = AppCommandState::RightClickDefaultMode::RepeatLastCommand;
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(st, log);
@@ -8240,7 +8247,7 @@ private Q_SLOTS:
     st.userLinesFlat[5] = 1.5;
     CadAnnotation text; text.kind = CadAnnotation::Kind::Text; text.text = "MH-1"; text.insX = 3.f; text.insY = 4.f;
     st.cadAnnotations.push_back(text); EnsureAttrCounts(st);
-    const QString dir = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+    const QString dir = QtTestArtifactDirectory();
     QDir().mkpath(dir);
     auto save = [&](const QImage& image, const char* name) { QVERIFY(image.save(QDir(dir).filePath(name))); };
     struct Shot { const char* name; std::vector<SelectedEntity> selection; };
@@ -8470,7 +8477,7 @@ private Q_SLOTS:
     auto* palette = window.findChild<QDialog*>("blockAuthoringPalette");
     QVERIFY(palette);
     auto save = [](QWidget* widget, const char* name) {
-      const QString directory = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR);
+      const QString directory = QtTestArtifactDirectory();
       QDir().mkpath(directory);
       QVERIFY(widget->grab().save(QDir(directory).filePath(QString::fromLatin1(name))));
     };
@@ -9381,7 +9388,9 @@ int main(int argc, char** argv) {
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
   QSurfaceFormat::setDefaultFormat(format);
   QApplication app(argc, argv);
-  app.setOrganizationName("GoSurveyTests"); app.setApplicationName("QtEditorTests");
+  app.setOrganizationName("GoSurveyTests");
+  const QString shard = qEnvironmentVariable("GOSURVEY_QT_TEST_SHARD");
+  app.setApplicationName(shard.isEmpty() ? "QtEditorTests" : "QtEditorTests-" + shard);
   QtEditorTests tests;
   return QTest::qExec(&tests, argc, argv);
 }

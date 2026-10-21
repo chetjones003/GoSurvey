@@ -29,17 +29,18 @@ def github_get(url):
         return json.load(response)
 
 
-def classify_docs_only():
+def classify_docs_only_result():
     labels = json.loads(os.environ["PR_LABELS"])
     if "docs-only" not in labels:
-        return False
+        return False, "the docs-only label is absent"
 
     repository = os.environ["REPOSITORY"]
     pr_number = os.environ["PR_NUMBER"]
     api_base = f"https://api.github.com/repos/{repository}/pulls/{pr_number}"
-    remaining_files = int(github_get(api_base)["changed_files"])
-    if remaining_files == 0 or remaining_files > 3000:
-        return False
+    expected_files = int(github_get(api_base)["changed_files"])
+    remaining_files = expected_files
+    if expected_files == 0 or expected_files > 3000:
+        return False, f"changed-file count {expected_files} is outside the supported range 1..3000"
 
     saw_file = False
     page = 1
@@ -48,24 +49,39 @@ def classify_docs_only():
         saw_file = saw_file or bool(files)
         for item in files:
             if not is_documentation_path(item["filename"]):
-                return False
+                return False, f"non-documentation path: {item['filename']}"
             old_path = item.get("previous_filename")
             if old_path and not is_documentation_path(old_path):
-                return False
+                return False, f"rename includes non-documentation path: {old_path}"
 
         remaining_files -= len(files)
         if len(files) < 100:
             break
         page += 1
 
-    return saw_file and remaining_files == 0
+    if not saw_file:
+        return False, "GitHub returned no changed files"
+    if remaining_files != 0:
+        listed_files = expected_files - remaining_files
+        return False, f"changed-file listing count did not match the PR count ({listed_files} listed, expected {expected_files})"
+    return True, "docs-only label and all changed paths validated"
+
+
+def classify_docs_only():
+    """Return only the policy result for callers that do not need diagnostics."""
+    return classify_docs_only_result()[0]
 
 
 def main():
-    docs_only = classify_docs_only()
+    try:
+        docs_only, reason = classify_docs_only_result()
+    except Exception as error:  # fail closed: run CI and explain why the label was not trusted
+        docs_only = False
+        reason = f"classification failed ({type(error).__name__}: {error})"
     with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
         output.write(f"docs_only={str(docs_only).lower()}\n")
-    print(f"Validated docs-only classification: {docs_only}")
+    decision = "skip CI" if docs_only else "run CI"
+    print(f"Docs-only classification: {docs_only}; {decision}: {reason}")
 
 
 if __name__ == "__main__":

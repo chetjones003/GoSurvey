@@ -34,6 +34,8 @@ GoSurvey is licensed under **GPL-3.0-or-later** (LibreDWG linkage). See [`instal
 
 GoSurvey is built with CMake, MSVC, and Ninja on Windows. See [`dev/README.md`](dev/README.md) for the full build adapter reference (`./dev/build`, `./dev/run`, `./dev/test`, etc.).
 
+For a spare Windows 11 build machine, see the [self-hosted runner setup guide](docs/windows-self-hosted-runner.md) and its PowerShell toolchain installer.
+
 ### Project workflow
 
 This repo follows a three-layer governance model — **SPEC → VERIFICATION → WORKSHOP** — defined in full in [`CLAUDE.md`](CLAUDE.md):

@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.20)
 cmake_policy(SET CMP0091 NEW)  # let CMAKE_MSVC_RUNTIME_LIBRARY (below) control /MD vs /MDd
+
+# sccache requires embedded MSVC debug information instead of the default /Zi PDB format.
+# CMP0141 must be NEW before project() initializes compiler flags; the launcher is passed by CI.
+if(POLICY CMP0141)
+  if(CMAKE_C_COMPILER_LAUNCHER OR CMAKE_CXX_COMPILER_LAUNCHER)
+    cmake_policy(SET CMP0141 NEW)
+    set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+  endif()
+endif()
+
 project(GoSurvey VERSION 0.7.4 LANGUAGES CXX C RC)
 
 if(MSVC)
@@ -33,13 +43,6 @@ if(CMAKE_CONFIGURATION_TYPES)
 endif()
 set(GOSURVEY_ARTIFACT_DIR "${CMAKE_BINARY_DIR}/../../artifacts/${CMAKE_BUILD_TYPE}")
 file(MAKE_DIRECTORY "${GOSURVEY_ARTIFACT_DIR}")
-
-# sccache cannot hash MSVC's default /Zi PDB. CI passes CMAKE_CXX_COMPILER_LAUNCHER=sccache;
-# local builds leave the launcher unset and keep the default debug format.
-if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
-  cmake_policy(SET CMP0141 NEW)
-  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
-endif()
 
 # ---------------------------------------------------------------------------
 # MSVC exception + RTTI model (GitHub issue #375).
@@ -594,6 +597,10 @@ set(GOSURVEY_DOMAIN_SOURCES
 # One static library so CadCommands.cpp (and the rest of the domain list) is compiled
 # once per configuration rather than once per executable that needs it.
 add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
+# CadCommands.cpp exceeds MSVC's default COFF section limit on current hosted toolchains.
+if(MSVC)
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/src/commands/CadCommands.cpp" PROPERTIES COMPILE_OPTIONS "/bigobj")
+endif()
 target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
@@ -1461,7 +1468,16 @@ if(GOSURVEY_BUILD_TESTS)
   list(REMOVE_ITEM _test_sources ${GOSURVEY_DOMAIN_SOURCES})
   list(REMOVE_DUPLICATES _test_sources)
   set_property(TARGET GoSurveyTests PROPERTY SOURCES "${_test_sources}")
-  catch_discover_tests(GoSurveyTests WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
+  # Catch2's 2,500+ cases are deterministic and sequential within the runner. Register the suite
+  # as one CTest process to avoid paying process startup for every case; Catch still reports the
+  # failing case and supports direct filters (`GoSurveyTests "test name"`). The full runner was
+  # verified locally before batching (all cases pass in one process).
+  add_test(NAME unit.catch COMMAND GoSurveyTests --durations yes)
+  set_tests_properties(unit.catch PROPERTIES WORKING_DIRECTORY "$<TARGET_FILE_DIR:GoSurveyQt>")
+
+  # Register the independent, isolated Qt shards before the transcript cases so CTest can run both
+  # groups at once instead of letting the faster headless list postpone the GUI work.
+  include(cmake/GoSurveyQtTests.cmake)
 
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
@@ -1531,7 +1547,6 @@ if(GOSURVEY_BUILD_TESTS)
 endif()
 
 if(GOSURVEY_BUILD_TESTS)
-  include(cmake/GoSurveyQtTests.cmake)
   add_test(NAME build.output-layout COMMAND "${CMAKE_COMMAND}"
     "-DRUNTIME_DIR=$<TARGET_FILE_DIR:GoSurveyQt>"
     -P "${CMAKE_SOURCE_DIR}/tests/cmake/BuildOutputLayout.cmake")
