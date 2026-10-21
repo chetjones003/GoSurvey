@@ -8,13 +8,13 @@
 ## 1. Authority
 - Goal:         User-approved CI performance improvement; no product goal applies.
 - Requirements: REQ-205 (accepted), REQ-437 (accepted).
-- Constraints:  Keep all blocking checks for ordinary PRs; remove no test unless its coverage is demonstrably redundant; docs-only skip requires the explicit `docs-only` label and fully validated documentation paths; approval remains required.
+- Constraints:  Keep all validation coverage on ordinary PRs; allow full C++ checks to run asynchronously behind a fast required gate; remove no test unless its coverage is demonstrably redundant; docs-only skip requires the explicit `docs-only` label and fully validated documentation paths; approval remains required.
 - Acceptance:   REQ-205: "The build is kept within a budget so the edit → build → test loop stays usable." REQ-437: a labeled PR skips only when every changed path qualifies; absent label, paths, incomplete listings, limit, count mismatch, or classifier failure runs CI; approval remains required.
 - Owning subsystem: Repository governance and GitHub Actions (`.github/workflows/`, `.github/scripts/`).
 
 ## 2. Scope
 - In scope: Reduce avoidable PR-check wall time and make docs-only classifier fallback reasons visible.
-- Out of scope: Remove or weaken checks, change docs-only label policy, alter branch protection, or change application behavior.
+- Out of scope: Remove test coverage, change docs-only label policy, or change application behavior. User-approved scope includes splitting required and asynchronous checks and updating branch protection.
 - Smallest change: Parallelize independent clang-tidy work conservatively, skip unnecessary Qt MOC generation and the unused CTest-unreferenced fixture executable, remove redundant setup, and report classifier fallback reason.
 
 ## 3. Architectural boundary check
@@ -41,7 +41,7 @@
   - [x] Refresh the CI visualizer and statically review the diff.
 
 ## 7. Workflow-specific notes
-- Workflow: ordinary PRs continue to run every existing blocking check. Label events already trigger classification again.
+- Workflow: PRs run the required fast gate plus security scans; full build, CTest, clang-tidy, and MSVC analysis run in a parallel non-required workflow. Docs-only label events re-run classification in both workflows.
 
 ## 8. Implementation log
 - 2026-10-21 — Confirmed REQ-437 policy: no label returns false before the changed-files API call. The workflow already includes `labeled` and `unlabeled` pull request events, so label changes re-run classification.
@@ -73,3 +73,6 @@
 - Refactors: CTest batching and isolated Qt sharding
 - Docs updated: `ci-cd-visualizer.html`
 - Done: pending
+
+- 2026-10-21 — User selected the fast-gate architecture after reviewing the latest hosted timings. Added `full-validation.yml` for the full build/test and static-analysis jobs; retained docs-only fail-closed classification and both security scans in required `pr-checks.yml`. The required gate runs patch whitespace checks and Python syntax compilation.
+- 2026-10-21 — Queried live branch protection: `master` and `beta` require build/test, clang-tidy, Gitleaks, and Trivy; MSVC analysis was not in the required context list. Updated both branches to require `PR gate`, retaining both security contexts and the existing review requirement. Verified the GitHub Actions app ID is bound to all three required checks.

@@ -1,0 +1,379 @@
+# Full asynchronous validation (REQ-437). The required PR gate lives in pr-checks.yml; this
+# workflow runs the complete build, CTest suite, clang-tidy, and MSVC analysis without blocking
+# merge. A validated `docs-only` PR skips the work; approval remains governed by branch rules.
+#
+# Deliberately split into separate, independently-named jobs rather than one monolithic job: the
+# PR checks list in GitHub's UI shows one line per job, so a failure is attributable at a glance
+# (`full / clang-tidy` failed) instead of digging through one big log. Nothing here publishes
+# anything — that stays in release.yml (REQ-202/ADR-029), which is manual-dispatch only.
+#
+# MSVC analysis remains enforced here as a complete asynchronous validation. release.yml stays
+# unchanged and manual-dispatch only (REQ-202/ADR-029).
+
+name: full-validation
+
+on:
+  pull_request:
+    branches: [master, beta]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+
+concurrency:
+  group: full-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  security-events: write
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # docs-only classification — fail closed: an API/classification error leaves the output empty,
+  # causing every validation job below to run. Shared with CodeQL via a repository script. Only
+  # the `docs-only` label plus documentation-only paths can skip CI.
+  # ---------------------------------------------------------------------------
+  classify-docs-only:
+    name: full / docs-only policy
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - name: Check out classifier
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate docs-only label against changed paths
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/classify_docs_only.py
+
+  # ---------------------------------------------------------------------------
+  # Build and test the supported Qt application and headless helpers.
+  # ---------------------------------------------------------------------------
+  build-and-test:
+    name: full / build and test
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: windows-latest
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Set up Mesa OpenGL for hosted tests
+        shell: pwsh
+        run: |
+          # Qt 6.8.3 ships an llvmpipe opengl32sw.dll that only reports OpenGL 3.0. The
+          # application needs 3.3 core, so use a pinned Mesa build with a modern llvmpipe.
+          $version = '26.2.4'
+          $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$version-release-msvc.7z"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/mesa3d-$version-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $expectedHash = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Mesa archive SHA256 mismatch: $actualHash" }
+
+          $sevenZipPath = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZipPath) { $sevenZipPath = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path -LiteralPath $sevenZipPath)) { throw '7-Zip was not found on this Windows runner' }
+          $extractDir = Join-Path $env:RUNNER_TEMP "mesa3d-$version"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          & $sevenZipPath x $archive "-o$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract Mesa (exit $LASTEXITCODE)" }
+
+          $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
+          # GoSurvey/GLEW links directly to opengl32.dll. Deploy Mesa's normal opengl32.dll
+          # alongside the test executable so Qt and GLEW resolve the same implementation.
+          Add-Content -Path $env:GITHUB_ENV -Value "GOSURVEY_MESA_BIN=$($mesaOpenGl.DirectoryName)"
+          Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Run sccache
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      - name: Configure
+        run: >
+          cmake --preset ninja-release
+          -DCMAKE_C_COMPILER_LAUNCHER=sccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        # Build the application and every executable referenced by this job's CTest cases.
+        # GsJsonDwgFixture is a developer fixture-authoring tool with no CTest consumers.
+        run: cmake --build --preset ninja-release --target GoSurveyQt GoSurveyTests gosurvey_headless GoSurveyQtTests
+
+      - name: Stage Mesa runtime dependencies for test deployment
+        shell: pwsh
+        run: |
+          # Keep Mesa's test-only driver dependencies beside the app so qt.deployment's isolated
+          # copy can exercise the same software OpenGL path with a minimal PATH.
+          $mesaBin = $env:GOSURVEY_MESA_BIN
+          # CMake emits the app and its runtime DLLs under build/; .cmake/release only
+          # contains generator files and isolated helper executables.
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $mesaBin $dependency
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination $runtime -Force
+            }
+          }
+
+      - name: Test (CTest)
+        # Use Mesa's app-local opengl32.dll so Qt and GLEW share a driver; the hosted system driver
+        # only exposes OpenGL 3.0, below the application's OpenGL 3.3 core requirement.
+        env:
+          QT_OPENGL: desktop
+          GALLIUM_DRIVER: llvmpipe
+        run: ctest --preset ninja-release --parallel 4
+
+      - name: sccache stats
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
+          else { sccache --show-stats }
+
+  # ---------------------------------------------------------------------------
+  # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
+  # -line-filter), not whole files. (Amended 2026-10-11, issue #824 follow-up: the original
+  # whole-file scoping still left a PR on the hook for every pre-existing warning anywhere in
+  # any file it touched — on a file the size of CadCommands.hpp that is tens of thousands of
+  # unrelated, untriaged warnings, which made the check unpassable for any PR touching that file
+  # regardless of what the PR itself changed. PR #829 hit this: 0 findings on its own diff, ~95
+  # pre-existing ones elsewhere in the same files.) HeaderFilterRegex below means a .cpp's
+  # included headers are analyzed too, so the SAME combined line-filter (one {name, lines} entry
+  # per changed file) is reused for every clang-tidy invocation in this job, not just the one
+  # where that header is the direct target — otherwise a header's own genuinely-new lines would
+  # only be checked when it happens to be the file passed on the command line.
+  #
+  # Runs natively on windows-latest rather than via a container action (e.g.
+  # ZedThree/clang-tidy-review): GitHub Actions container actions require a Linux runner,
+  # and compile_commands.json here only resolves against the MSVC toolchain (Windows-only),
+  # so a container-based reviewer can't see real compile flags anyway. windows-latest ships
+  # LLVM's clang-tidy.exe (C:\Program Files\LLVM\bin), which is used directly against the
+  # MSVC-generated compile database instead.
+  # ---------------------------------------------------------------------------
+  lint-clang-tidy:
+    name: full / clang-tidy
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Configure (compile_commands.json only, no build)
+        # GOSURVEY_USE_PCH=OFF: this step deliberately never builds, so no cmake_pch.cxx.pch
+        # is ever produced. Leaving PCH on left compile_commands.json referencing a .pch that
+        # does not exist, failing clang-tidy on ANY PCH-covered file with a PCH-not-found
+        # compiler error (unrelated to the file's own content) rather than a real finding.
+        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
+
+      - name: clang-tidy (lines changed in this PR only)
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          $clangTidy = Get-Command clang-tidy -ErrorAction SilentlyContinue
+          if (-not $clangTidy) {
+            $candidate = 'C:\Program Files\LLVM\bin\clang-tidy.exe'
+            if (-not (Test-Path $candidate)) { throw "clang-tidy.exe not found on this runner image." }
+            $clangTidy = $candidate
+          } else {
+            $clangTidy = $clangTidy.Source
+          }
+          Write-Host "Using $clangTidy ($(& $clangTidy --version | Select-Object -First 1))"
+
+          git fetch --depth=1 origin $env:BASE_SHA
+          $changed = git diff --name-only --diff-filter=ACMR "$env:BASE_SHA" HEAD |
+            Where-Object { $_ -match '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' } |
+            Where-Object { $_ -notmatch '^third_party/' } |
+            Where-Object { Test-Path $_ }
+
+          if (-not $changed) {
+            Write-Host "No changed C/C++ files to lint."
+            exit 0
+          }
+          Write-Host "Linting (changed lines only):`n$($changed -join "`n")"
+
+          # One combined {name, lines} entry per changed file, reused for every invocation below
+          # (see the job header comment for why: a header's diagnostics can surface while a
+          # DIFFERENT .cpp is the file clang-tidy was invoked on). "name" uses backslashes because
+          # clang-tidy's line-filter matches the diagnostic's file path as the compiler reports it,
+          # which on this MSVC/Windows runner is a backslash-separated absolute path — a
+          # forward-slash "name" (git's own path spelling) never matches that suffix at all.
+          $filterEntries = @()
+          $lintFiles = @()
+          foreach ($file in $changed) {
+            $hunkStarts = git diff -U0 "$env:BASE_SHA" HEAD -- $file |
+              Select-String -Pattern '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
+            $ranges = @()
+            foreach ($m in $hunkStarts) {
+              $start = [int]$m.Matches[0].Groups[1].Value
+              $countGroup = $m.Matches[0].Groups[2]
+              $count = if ($countGroup.Success) { [int]$countGroup.Value } else { 1 }
+              if ($count -eq 0) { continue }  # pure deletion: no new lines in this hunk to check
+              $ranges += "[$start,$($start + $count - 1)]"
+            }
+            if ($ranges.Count -eq 0) { continue }  # file touched only by deletions; nothing new to lint
+            # Two backslashes, not one: this string is embedded directly into JSON text below, and
+            # JSON requires a literal backslash to be written as \\ — a single backslash here would
+            # make the JSON invalid (a Windows path backslash followed by certain letters, e.g. the
+            # "\u" in "CadCommands.hpp", parses as a bad unicode escape, not a path separator).
+            $name = $file -replace '/', '\\'
+            $filterEntries += "{`"name`":`"$name`",`"lines`":[$($ranges -join ',')]}"
+            $lintFiles += $file
+          }
+
+          if ($filterEntries.Count -eq 0) {
+            Write-Host "No added/modified lines in any changed C/C++ file (deletions only)."
+            exit 0
+          }
+
+          # This generated MOC include is needed only when clang-tidy analyzes the Qt test TU.
+          # Building it on unrelated C++ changes previously spent about ten minutes for no benefit.
+          if ($lintFiles -contains 'tests/QtEditorTests.cpp') {
+            cmake --build --preset ninja-release --target GoSurveyQtTests_autogen
+            if ($LASTEXITCODE -ne 0) { throw "Qt test MOC generation failed (exit $LASTEXITCODE)" }
+          }
+
+          $lineFilter = "[$($filterEntries -join ',')]"
+          Write-Host "Line filter:`n$lineFilter"
+
+          # Each invocation reads the same compile database and writes no shared files. A cap of
+          # two uses the hosted runner's cores without multiplying peak memory across a large PR.
+          $results = $lintFiles | ForEach-Object -Parallel {
+            $file = $_
+            $tool = $using:clangTidy
+            $filter = $using:lineFilter
+            # --warnings-as-errors=* makes a Checks: match fail the run (the exit code is 0 on
+            # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
+            # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
+            # local editor integration), where warnings-not-errors is the more useful default.
+            # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
+            # the exit code), so this also cuts the run time and log size on a large header.
+            $output = & $tool --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$filter" -p build/.cmake/release $file 2>&1
+            $exitCode = $LASTEXITCODE
+            [PSCustomObject]@{ File = $file; ExitCode = $exitCode; Output = @($output) }
+          } -ThrottleLimit 2
+
+          $failed = $false
+          foreach ($result in $results) {
+            Write-Host "clang-tidy: $($result.File) (exit $($result.ExitCode))"
+            foreach ($line in $result.Output) { Write-Host $line }
+            if ($result.ExitCode -ne 0) { $failed = $true }
+          }
+          if ($failed) {
+            Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
+            exit 1
+          }
+
+  # ---------------------------------------------------------------------------
+  # lint / msvc-analyze — blocking (see header comment). Findings surface as build annotations via
+  # the existing problem matcher and fail the job through /WX.
+  # ---------------------------------------------------------------------------
+  lint-msvc-analyze:
+    name: full / msvc-analyze
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: windows-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Ensure Ninja
+        shell: pwsh
+        run: |
+          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
+          $ver = '1.12.1'
+          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
+          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
+          Expand-Archive -Path $zip -DestinationPath $dir -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
+
+      - name: Configure
+        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON -DGOSURVEY_ANALYZE_WERROR=ON
+
+      - name: Register MSVC /analyze problem matcher
+        run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
+
+      - name: Build (findings become annotations and fail the build)
+        run: cmake --build --preset ninja-release

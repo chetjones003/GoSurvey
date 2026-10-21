@@ -13680,7 +13680,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-09-06)
 - Revisions: 2026-09-06 — initial.
 
-  2026-10-20 — **the PR-time `/analyze` check is now blocking** (D-2026-10-20-a, GitHub #977). The backlog was triaged: real findings were fixed, and the justified suppressions are listed in `spec/coding-standards.md` section 11. `pr-checks.yml`'s `lint / msvc-analyze` job builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`), so any new `/W4` or `/analyze` warning in our own targets fails the PR. The `release.yml` build is unchanged and still not failed by findings. There are no accepted baseline findings: the baseline is zero.
+  2026-10-20 — **the PR-time `/analyze` check was made blocking** (D-2026-10-20-a, GitHub #977); the backlog was triaged and justified suppressions are listed in `spec/coding-standards.md` section 11.
+
+  2026-10-21 — **full PR validation runs asynchronously** (D-2026-10-21-a). `full-validation.yml` builds with `GOSURVEY_ANALYZE_WERROR=ON` (`/WX`) and runs the complete CTest and clang-tidy checks for each PR. These results no longer block merge; the required fast gate and security scans do. The `release.yml` build remains unchanged.
 
   2026-09-22 — **a polyline that lies in ONE plane exports as one `LWPOLYLINE` in that plane**
   (D-2026-09-22-a, ADR-053 amendment (f), TASK-274, GitHub issue #521). Increment 4 above splits a
@@ -14429,7 +14431,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
 | REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
-| REQ-437 | Repository governance/CI | (D-2026-10-19-i) A PR labeled `docs-only` skips build/test, lint, and security analysis (including CodeQL) only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow must confirm it inspected every changed file and run CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The label never waives the protected branch's required approving review. | accepted |
+| REQ-437 | Repository governance/CI | (D-2026-10-19-i, D-2026-10-21-a) A PR labeled `docs-only` skips CI only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow confirms it inspected every changed file and runs CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. The required PR gate contains docs-only classification, patch/Python syntax checks, Gitleaks, and Trivy. Full Windows build, CTest, clang-tidy, and MSVC `/analyze` run asynchronously on every non-docs PR and do not block merge. The label never waives the protected branch's required approving review. | accepted |
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
