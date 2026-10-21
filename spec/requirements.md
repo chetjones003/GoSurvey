@@ -13572,6 +13572,40 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-h, GitHub issue #771, audit #751 N1).
 
+### REQ-449 — Comprehensive Qt application Settings window (GitHub issue #1032)
+
+- Purpose: one place to find and change every app-wide preference
+- Priority: should
+- Type: functional
+- Depends on: REQ-077 (update check), REQ-080 (usage reporting notice), REQ-084 (right-click
+  customization), REQ-091 (account), REQ-346 (polar tracking), REQ-201 (failures are observable)
+- Statement:
+  1. `OPTIONS` (aliases `OP`, `SETTINGS`), View → Settings and the shortcut menu's Options open one
+     application Settings window, organised into navigable categories: Account, Updates and Privacy,
+     Display, Drafting and Survey Points.
+  2. Every app-wide preference that a Qt feature honours is reachable there, either as a control or
+     through a clearly labelled button to a focused page (Survey point display, Right-click
+     Customization, Polar tracking). Controls are staged: **Apply** saves and keeps the window open,
+     **OK** saves and closes, **Cancel** discards unapplied edits. Saved values survive a restart.
+  3. The preferences are: update check, beta channel, skipped version; arc/circle smoothness,
+     mouse-wheel zoom speed, linear precision, angle format/precision/direction/zero direction, text,
+     MTEXT and dimension screen sizes; snap aperture, solid ISOLINES, undo depth, TRIMSTATE, FILLET and
+     CHAMFER defaults. Mouse-wheel zoom speed takes effect in the viewport.
+  4. Drawing, project and traverse settings stay in their own windows. Navigation and transient state
+     (active tab, window positions, command-bar anchors) are not exposed.
+  5. **Out of scope:** preferences for features the Qt app does not have (Xref/in-place fade, GPU
+     caching options, floating command-bar dock/opacity/fade, MTEXT floating panel) and the viewport
+     cursor controls (the separate cursor ticket). They remain in `gosurvey-user.json` untouched.
+- Acceptance:
+  1. every preference in statement 3 is reachable from the Settings window or a page linked from it;
+  2. Apply persists without closing, OK persists and closes, Cancel discards, verified by reading the
+     saved file back;
+  3. the wheel-zoom setting changes the zoom step;
+  4. `OPTIONS` and View → Settings open the same window.
+- Owner-layer: Qt UI
+- Status: accepted
+- Revisions: 2026-10-21 — catalogued and accepted (D-2026-10-21-a, GitHub issue #1032).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -14451,6 +14485,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
 | REQ-446 | IO/Renderer | `PdfPlot` tests for lineweight stroke width and linetype dash pattern; default plot unchanged — to be added with the implementing PR | accepted |
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
+| REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
