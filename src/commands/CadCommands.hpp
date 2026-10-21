@@ -1983,6 +1983,10 @@ struct AppCommandState {
     /// named dimensions, so it has different state and a different state machine, and folding it
     /// into `Solid` would mean a table with a variable-length entry no other row uses.
     Polysolid,
+    /// REQ-444 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
+    /// closed polyline / circle. Its own Kind because it has a path-building state machine like
+    /// POLYSOLID, but it commits an ordinary closed bulge polyline (REQ-316), not a new entity.
+    Revcloud,
     /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
     /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
     /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
@@ -2127,6 +2131,7 @@ struct AppCommandState {
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
+    case Kind::Revcloud:           return "REVCLOUD";   // REQ-444
     case Kind::PressPull:          return "PRESSPULL";
     case Kind::BConnectMode:       return "BCONNECTMODE";
     case Kind::BConnect:           return "BCONNECT";
@@ -3037,6 +3042,26 @@ struct AppCommandState {
   /// A letter typed on its own, waiting for its value on the next line (`H` then `4`, as well as
   /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
   char polysolidPending = 0;
+
+  // --- REQ-444 REVCLOUD: a scalloped closed outline ----------------------------------------------
+
+  enum class RevcloudPhase : std::uint8_t {
+    WaitFirstPoint,  ///< the first corner, or `O` to convert a closed shape already drawn
+    WaitObject,      ///< `O` was given: the next click names the closed polyline or circle
+    WaitNextPoint    ///< a path is under way; each further point adds a corner
+  } revcloudPhase = RevcloudPhase::WaitFirstPoint;
+
+  /// The corners picked so far, as x,y pairs in storage coordinates.
+  std::vector<double> revcloudDraft;
+  /// Elevation the cloud commits at: the work plane's, read when the first corner is picked.
+  double revcloudZ = 0.0;
+  /// Remembered between invocations (REQ-444 item 3): the size of each scallop, whether they bulge
+  /// the other way, and whether Object mode erases the shape it converted.
+  double revcloudArcLength = 0.5;
+  bool revcloudReverse = false;
+  bool revcloudDeleteOriginal = false;
+  /// A letter typed on its own, waiting for its value on the next line (`A` then `1`). 0 = none.
+  char revcloudPending = 0;
 
   /// Remembered between invocations, the way AutoCAD remembers PSOLWIDTH and PSOLHEIGHT: a wall is
   /// almost always drawn at the same size as the last one, and re-typing it every time is the
@@ -6289,6 +6314,22 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// The frame a polysolid is built in: the active UCS anchored at the first picked point. Exposed so
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
+
+// --- REQ-444 REVCLOUD ----------------------------------------------------------------------------
+/// Open the command: pick a first corner, or `O` to convert a closed shape already drawn.
+void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, echoing the arc length and options in force.
+[[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
+void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Drop the draft path, keeping the remembered arc length and options.
+void CancelRevcloudCommand(AppCommandState& st);
+/// The cloud the cursor currently proposes (the draft plus \p cursor, closed), built by the SAME
+/// function the commit uses. Empty when the draft is too short for one.
+[[nodiscard]] std::vector<double> CadRevcloudPreviewPolyline(const AppCommandState& st, double curX, double curY,
+                                                             std::vector<float>* outBulge);
 
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).

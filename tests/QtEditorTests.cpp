@@ -5702,6 +5702,88 @@ private Q_SLOTS:
     state.selection.clear(); window.Submit("ZOOMEXTENTS");
     QApplication::processEvents(); QTest::qWait(100);
     QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts + "qt-997-grading-result-viewport.png"));
+  }
+
+  // REQ-444 / GitHub #803: both Revision Cloud buttons are live, run REVCLOUD, and the cloud they
+  // make is an ordinary closed polyline of arcs that one UNDO removes.
+  void ribbonRevisionCloudButtonsDrawACloud() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    for (const char* name : {"ribbon_RibbonRevcloud", "ribbon_AnnRevcloud"}) {
+      auto* action = window.findChild<QAction*>(name); QVERIFY2(action, name);
+      QVERIFY(action->isEnabled());
+      QVERIFY(!action->property("releasePlaceholder").toBool());
+      QCOMPARE(action->property("ribbonCommand").toString(), QString("REVCLOUD"));
+    }
+    const auto polylinesBefore = state.userPolylineClosed.size();
+    window.findChild<QAction*>("ribbon_RibbonRevcloud")->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::Revcloud);
+    for (const char* line : {"A 1", "0,0", "10,0", "10,6", "0,6", ""}) window.Submit(line);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.userPolylineClosed.size(), polylinesBefore + 1);
+    QCOMPARE(state.userPolylineClosed.back(), uint8_t(1));
+    // 12 + 7 + 12 + 7 scallops, each a real arc.
+    QCOMPARE(state.userPolylineVertsBulge.size(), state.userPolylineVerts.size() / 3);
+    QCOMPARE(state.userPolylineOffsets.back() - state.userPolylineOffsets[state.userPolylineOffsets.size() - 2], 38);
+    for (int i = state.userPolylineOffsets[state.userPolylineOffsets.size() - 2]; i < state.userPolylineOffsets.back(); ++i)
+      QVERIFY(state.userPolylineVertsBulge[static_cast<std::size_t>(i)] != 0.f);
+    window.Submit("UNDO");
+    QCOMPARE(state.userPolylineClosed.size(), polylinesBefore);
+    // Esc leaves nothing behind.
+    window.findChild<QAction*>("ribbon_AnnRevcloud")->trigger();
+    QCOMPARE(state.active, AppCommandState::Kind::Revcloud);
+    window.Submit("0,0"); window.Submit("5,0");
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.userPolylineClosed.size(), polylinesBefore);
+  }
+
+  // REQ-444 / GitHub #803: screenshots of the Revision Cloud work for the user's review, written to
+  // build/artifacts and never committed.
+  void revisionCloudScreenshotsForReview() {
+    const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
+    QDir().mkpath(artifacts);
+    {
+      EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+      QTest::qWait(150);
+      auto& state = window.State();
+      auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+      const QImage ribbonShot = ribbon->grab().toImage();
+      QVERIFY(ribbonShot.copy(1090, 35, 250, 115).scaled(750, 345, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                  .save(artifacts + "qt-803-ribbon-draw-panel.png"));
+
+      for (const char* line : {"REVCLOUD", "A 1", "0,0", "10,0", "10,6", "0,6", ""}) window.Submit(line);
+      window.Submit("CIRCLE"); window.Submit("20,3"); window.Submit("3");
+      window.Submit("REVCLOUD"); window.Submit("A 0.8"); window.Submit("O");
+      SubmitRevcloudViewportPick(state, 23.f, 3.f, window.m_Log);
+      QCOMPARE(state.active, AppCommandState::Kind::None);
+      window.Submit("ZOOMEXTENTS");
+      QTest::qWait(300);
+      // The drawing is small in the extents view, so the capture is cropped to it and enlarged.
+      const QImage frame = window.m_Viewport->grabFramebuffer();
+      const QPoint mid(frame.width() / 2 + 95, frame.height() / 2 - 15);
+      QVERIFY(frame.copy(QRect(mid.x() - 145, mid.y() - 48, 290, 96)).scaled(1450, 480, Qt::KeepAspectRatio, Qt::SmoothTransformation)
+                  .save(artifacts + "qt-803-two-clouds-viewport.png"));
+    }
+    {
+      EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+      QTest::qWait(150);
+      const auto logCrop = [&](const char* name) {
+        QTest::qWait(150);
+        const QImage shot = window.grab().toImage();
+        const double f = shot.width() / 1440.0;
+        QVERIFY(shot.copy(QRect(int(385 * f), int(715 * f), int(700 * f), int(85 * f))).save(artifacts + name));
+      };
+      for (const char* line : {"REVCLOUD", "A 0"}) window.Submit(line);
+      logCrop("qt-803-refusal-arclength.png");
+      for (const char* line : {"A 1", "0,0", "5,0", "C"}) window.Submit(line);
+      logCrop("qt-803-refusal-corners.png");
+      window.Submit("");
+    }
   }
 
   void releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow() {
