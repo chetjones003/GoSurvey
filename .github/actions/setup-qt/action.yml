@@ -3,18 +3,27 @@ description: Restore the Windows Qt kit before bootstrapping Python or aQt.
 runs:
   using: composite
   steps:
+    - name: Resolve Qt paths
+      id: qt-paths
+      shell: pwsh
+      run: |
+        # The cache action rejects patterns containing '..', even in absolute paths.
+        $parent = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE '..'))
+        "install_parent=$parent" | Add-Content $env:GITHUB_OUTPUT
+        "cache_dir=$(Join-Path $parent 'Qt')" | Add-Content $env:GITHUB_OUTPUT
+
     - name: Restore Qt kit
       id: qt-cache
       uses: actions/cache@v4
       with:
-        path: ${{ github.workspace }}/../Qt
+        path: ${{ steps.qt-paths.outputs.cache_dir }}
         key: gosurvey-qt-v1-${{ runner.os }}-${{ runner.arch }}-${{ github.workspace }}-6.8.3-msvc2022_64
 
     - name: Install Qt on a cache miss
       if: steps.qt-cache.outputs.cache-hit != 'true'
       uses: jurplel/install-qt-action@v4
       with:
-        dir: ${{ github.workspace }}/..
+        dir: ${{ steps.qt-paths.outputs.install_parent }}
         version: '6.8.3'
         arch: win64_msvc2022_64
         cache: false
@@ -22,7 +31,7 @@ runs:
     - name: Restore and validate Qt environment
       shell: pwsh
       env:
-        QT_INSTALL_PARENT: ${{ github.workspace }}/..
+        QT_INSTALL_PARENT: ${{ steps.qt-paths.outputs.install_parent }}
       run: |
         $ErrorActionPreference = 'Stop'
         $root = [IO.Path]::GetFullPath((Join-Path $env:QT_INSTALL_PARENT 'Qt/6.8.3/msvc2022_64'))
