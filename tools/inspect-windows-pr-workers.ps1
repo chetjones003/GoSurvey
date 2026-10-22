@@ -13,7 +13,7 @@ $missing = @()
 foreach ($role in 'clang-tidy', 'msvc-analyze') {
   $exe = Join-Path $WorkersRoot "$role\bin\Runner.Listener.exe"
   $listening = @($processes | Where-Object { $_.ExecutablePath -eq $exe })
-  # Microsoft Store PowerShell can expose a different process view through CIM.
+  # The observed CIM snapshot did not show the briefly connected child listeners.
   # The role launcher holds this mutex until run.cmd exits, independent of CIM.
   $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
   $probe = [Threading.Mutex]::new($false, "Local\GoSurveyPrWorker-$($identity.User.Value)-$role")

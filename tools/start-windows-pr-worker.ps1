@@ -15,6 +15,7 @@ $runnerDir = (Resolve-Path -LiteralPath $RunnerDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $runnerDir '.runner'))) { throw 'Register this worker first.' }
 $mutex = [Threading.Mutex]::new($false, "Local\GoSurveyPrWorker-$($identity.User.Value)-$Role")
 $owned = $false
+Write-Host "Worker launcher: role=$Role; PID=$PID; session=$([Diagnostics.Process]::GetCurrentProcess().SessionId); user=$($identity.User.Value); executable=$([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName); trackingPresent=$([bool]$env:RUNNER_TRACKING_ID)"
 try {
   try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
   if (-not $owned) { Write-Host "$Role worker launcher is already running."; return }
@@ -27,4 +28,5 @@ try {
 } finally {
   if ($owned) { $mutex.ReleaseMutex() }
   $mutex.Dispose()
+  Write-Host "Worker launcher ended: role=$Role; PID=$PID; UTC=$([DateTime]::UtcNow.ToString('o'))"
 }

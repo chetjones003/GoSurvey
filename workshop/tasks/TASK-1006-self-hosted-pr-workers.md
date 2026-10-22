@@ -116,3 +116,16 @@ no speedup is claimed until a production run completes.
 
 Plan/code review APPROVE under the existing task authority: do not alter product
 behavior or blocking checks. Keep production routing hosted until role jobs pass.
+
+### Startup lifetime probe after 8a2871c
+
+Run 39697414642 again connects both analyzers, but neither process nor launcher
+mutex is visible in the following step, and GitHub reports both offline after
+the job. This disproves the earlier conclusion that the local check alone was
+false: startup succeeds briefly but does not survive. Root cause remains open.
+The next bounded probe records child PID/session/executable, presence (not value)
+of runner tracking, launcher finalization and parent Process.HasExited/exit code
+while the spawning step remains alive. This distinguishes activation-path exits,
+normal launcher exits and termination at parent-step/job cleanup. No provisioning
+behavior is changed and no new test suite is added. Diagnostic plan APPROVE under
+REQ-205/437; production stays hosted pending actual role-job success.
