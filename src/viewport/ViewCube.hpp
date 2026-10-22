@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace viewcube {
 
@@ -76,7 +77,7 @@ struct Scene {
 /// Top-left corner of the widget in a viewport \p viewportWidthPx wide.
 [[nodiscard]] inline Point OriginFor(float viewportWidthPx) { return {viewportWidthPx - kSizePx - kPadPx, kPadPx}; }
 
-[[nodiscard]] inline bool Contains(const Scene& s, float x, float y) {
+[[nodiscard]] inline bool Contains(const Scene& s, double x, double y) {
   return x >= s.originX && x <= s.originX + s.sizePx && y >= s.originY && y <= s.originY + s.sizePx;
 }
 
@@ -183,7 +184,7 @@ inline float WrapDeg(float deg) {
 
   // Compass letters on the ring; when two collapse onto one spot (edge-on) the nearer one wins.
   const char* const names[4] = {"N", "E", "S", "W"};
-  struct Item { CompassLabel label; float depth; } items[4];
+  struct Item { CompassLabel label; float depth = 0.f; } items[4];
   for (int i = 0; i < 4; ++i) {
     const float a = ucsRad + static_cast<float>(i) * 90.f * kDeg;
     items[i].label.text = names[i];
@@ -203,7 +204,7 @@ inline float WrapDeg(float deg) {
   return s;
 }
 
-enum class Part { None, Face, TurnCcw, TurnCw, Home };
+enum class Part : std::uint8_t { None, Face, TurnCcw, TurnCw, Home };
 
 struct Hit {
   Part part = Part::None;
@@ -211,7 +212,8 @@ struct Hit {
 };
 
 /// Which control sits under (\p x, \p y). Home and the arrows win over the cube they overlap.
-[[nodiscard]] inline Hit HitTest(const Scene& s, float x, float y) {
+[[nodiscard]] inline Hit HitTest(const Scene& s, double px, double py) {
+  const float x = static_cast<float>(px), y = static_cast<float>(py);
   if (!Contains(s, x, y)) return {};
   const float hdx = x - s.home.x, hdy = y - s.home.y;
   const float homeReach = s.homeRadius * 1.7f;
