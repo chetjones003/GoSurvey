@@ -128,3 +128,9 @@ None.
 - Change: cache ribbon panel priority order; rebuild overflow menu actions only when collapsed panel membership changes; rebuild hamburger actions only when visible tabs change; avoid reapplying unchanged ribbon visibility; stop raising the resize-preview overlay on every resize event; remove the resize-triggered recent-file refresh timer; call `showMaximized()` on application startup.
 - Verification: Release build PASS. The compact-ribbon regression passes; `customTitleBarAndFloatingCommandLineWork` passes with resize hit zones, restored grip, maximize/restore visibility, and resize-preview checks. Running GoSurvey confirms Windows reports the startup window maximized. `git diff --check` passes.
 - Status: user approved this state and requested a PR to `beta`.
+
+## 17. CI follow-up for PR #1055
+- CI on `0b7d0f8f`: the full Release job had one failed assertion in `drawingSettingsFileMenuLoadsCoordinateSystemCategories` because the dropdown popup was not visible at the first event-loop pass; `msvc-analyze` reported C6011 for the Layers button null check.
+- Change: make the test wait up to two seconds for each popup window to become visible, and split the required Layers button/menu checks into explicit fatal-and-return branches before dereferencing either pointer.
+- Verification: Release build PASS; the focused coordinate-system Qt test passed three consecutive hidden-desktop runs (3 cases per run); `git diff --check` passes. New CI run will verify the analyzer and full suite.
+- Status: follow-up is ready for review and CI monitoring.

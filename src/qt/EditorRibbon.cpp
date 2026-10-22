@@ -461,11 +461,18 @@ void EditorWindow::BuildRibbonPages() {
     ribbon->addTab(page, name);
   }
   auto* layerButton = layerPage->findChild<QToolButton*>("collapsed_ribbonPanel_Home_Layers");
-  Q_ASSERT(layerButton && layerButton->menu());
-  if (!layerButton || !layerButton->menu()) qFatal("Ribbon Layers panel was not constructed");
+  if (!layerButton) {
+    qFatal("Ribbon Layers panel was not constructed");
+    return;
+  }
+  QMenu* layerMenu = layerButton->menu();
+  if (!layerMenu) {
+    qFatal("Ribbon Layers menu was not constructed");
+    return;
+  }
   auto* compactLayers = new QToolButton(header); compactLayers->setObjectName("ribbonCompactLayers");
   compactLayers->setText("Layers"); compactLayers->setAccessibleName("Layer and color controls");
-  compactLayers->setPopupMode(QToolButton::InstantPopup); compactLayers->setMenu(layerButton->menu());
+  compactLayers->setPopupMode(QToolButton::InstantPopup); compactLayers->setMenu(layerMenu);
   headerLayout->insertWidget(1, compactLayers);
   QObject::connect(ribbon, &QTabWidget::currentChanged, tabMenu, [wrapper] {
     UpdateRibbonTabButton(wrapper);

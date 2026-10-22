@@ -5898,7 +5898,8 @@ private Q_SLOTS:
       QVERIFY(!category->view()->hasAutoScroll());
       QCOMPARE(category->view()->verticalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
       category->showPopup(); QApplication::processEvents();
-      auto* categoryPopup = category->view()->window(); QVERIFY(categoryPopup->isVisible());
+      auto* categoryPopup = category->view()->window();
+      QTRY_VERIFY_WITH_TIMEOUT(categoryPopup->isVisible(), 2000);
       QVERIFY(categoryPopup->frameGeometry().top() >= category->mapToGlobal(QPoint(0, category->height())).y() - 2);
       QVERIFY(categoryPopup->frameGeometry().left() == category->mapToGlobal(QPoint(0, 0)).x());
       QVERIFY(categoryPopup->height() <= 240);
@@ -5913,7 +5914,7 @@ private Q_SLOTS:
       const int central = systems->findData("HARN/TX.TX-C"); QVERIFY(central >= 0);
       systems->showPopup(); QApplication::processEvents();
       auto* systemsPopup = systems->view()->window();
-      QVERIFY(systemsPopup->isVisible());
+      QTRY_VERIFY_WITH_TIMEOUT(systemsPopup->isVisible(), 2000);
       QVERIFY(systemsPopup->frameGeometry().top() >= systems->mapToGlobal(QPoint(0, systems->height())).y() - 2);
       QVERIFY(systemsPopup->frameGeometry().left() == systems->mapToGlobal(QPoint(0, 0)).x());
       QVERIFY(systemsPopup->height() <= 240);
