@@ -81,3 +81,19 @@ Actionlint (including new custom labels), PowerShell syntax, diff whitespace,
 manual code/ownership/security review: PASS. No new tests added/run; normal CI
 and worker tool inspections will provide remote execution evidence. Registration
 and production activation are pending online worker confirmation.
+
+### Startup diagnosis after user report
+
+BUG REPORT: registration succeeded but analyzer jobs remain queued. Expected:
+registered role workers must stay online before production routing is enabled.
+Live GitHub evidence after run 39695342537: build runner online; clang/MSVC
+workers registered as IDs 22/23 but offline. `GOSURVEY_PR_RUNNERS` is still hosted,
+so the current build/test job is not a laptop performance measurement.
+
+Root cause of the misleading successful provisioning result: the launcher only
+reported Start-Process PIDs; it did not verify listener startup. The reason the
+new launchers exited is not yet established. Ranked diagnostic hypotheses:
+PowerShell startup/path failure; MSVC environment initialization failure; runner
+connection/parent cleanup. Capture existing startup logs before relaunch and
+require listener processes afterwards. This is targeted instrumentation and a
+startup gate, not a speculative environment fix. REQ-205/437 plan APPROVE.
