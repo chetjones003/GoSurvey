@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://chetjones003.github.io/GoSurvey/sitemap.xml
+Sitemap: https://gosurveycad.com/sitemap.xml
