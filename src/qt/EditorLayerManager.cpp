@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <numeric>
 #include <string>
@@ -41,7 +42,7 @@
 
 namespace {
 
-enum Column { Name, On, Frozen, Locked, Color, Linetype, Lineweight, VpFreeze, VpColor, ColumnCount };
+enum Column : std::uint8_t { Name, On, Frozen, Locked, Color, Linetype, Lineweight, VpFreeze, VpColor, ColumnCount };
 constexpr const char* kHeaders[ColumnCount] = {"Name", "On", "Frozen", "Locked", "Color", "Linetype",
                                                "Lineweight (mm)", "VP Freeze", "VP Color"};
 constexpr int kColumnWidth[ColumnCount] = {200, 56, 70, 70, 130, 170, 130, 90, 130};

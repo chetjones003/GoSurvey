@@ -5157,6 +5157,7 @@ private Q_SLOTS:
     QVERIFY(CadAddDrawingLayer(state, "Alpha", &error));
     state.currentLayer = "Survey";
     std::vector<std::string> storedOrder;
+    storedOrder.reserve(state.drawingLayerTable.size());
     for (const auto& layer : state.drawingLayerTable) storedOrder.push_back(layer.name);
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
