@@ -1857,6 +1857,81 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   event->accept();
 }
 
+// The Toolspace tree is rebuilt only when what it lists changes. Refresh() runs on every viewport click,
+// and rebuilding the tree (icons and all) took ~100 ms of each one.
+void EditorWindow::RefreshToolspace() {
+  QStringList key;
+  for (const auto& session : m_State.openProjects) {
+    key << QString::fromUtf8(session.project.name.c_str()) + (session.readOnly ? "|ro" : "|rw");
+    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str());
+  }
+  key << "#drawings";
+  for (std::size_t i = 1; i < m_State.drawingTabs.size(); ++i) key << QString::fromUtf8(m_State.drawingTabs[i].name.c_str());
+  key << "#points" + QString::number(m_State.surveyPoints.size()) << "#surfaces";
+  for (const auto& surface : m_State.cadSurfaces) key << QString::fromUtf8(surface.name.c_str());
+  key << "#styles";
+  for (const auto& surfaceStyle : m_State.surfaceStyles) key << QString::fromUtf8(surfaceStyle.name.c_str());
+  key << "#blocks";
+  for (const auto& block : m_State.blockDefs) key << QString::fromUtf8(block.name.c_str());
+  if (m_ToolspaceKey == key && m_Toolspace->topLevelItemCount() > 0) return;
+  m_ToolspaceKey = key;
+  auto itemPath = [](QTreeWidgetItem* item) {
+    QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
+    return parts.join(QChar(0x1f));
+  };
+  const bool initialTree = m_Toolspace->topLevelItemCount() == 0;
+  QSet<QString> expanded;
+  QString currentItem;
+  for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
+    if ((*it)->isExpanded()) expanded.insert(itemPath(*it));
+    if ((*it) == m_Toolspace->currentItem()) currentItem = itemPath(*it);
+  }
+  m_Toolspace->clear();
+  auto* projects = new QTreeWidgetItem(m_Toolspace, {"Projects"});
+  projects->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
+  for (const auto& session : m_State.openProjects) {
+    auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
+        (session.readOnly ? " (read-only)" : "")});
+    project->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+    for (const auto& item : session.project.items)
+      new QTreeWidgetItem(project, {QString::fromUtf8(item.path.c_str())});
+  }
+  projects->setExpanded(true);
+  auto* drawings = new QTreeWidgetItem(m_Toolspace, {"Drawings"});
+  drawings->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
+    auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
+    drawing->setData(0, Qt::UserRole, i);
+    drawing->setIcon(0, CadCommandIcon("Active_File.png"));
+  }
+  drawings->setExpanded(true);
+  auto* points = new QTreeWidgetItem(m_Toolspace, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
+  points->setIcon(0, CadCommandIcon("Point.png"));
+  auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
+  surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
+  for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
+    auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
+    surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
+    surface->setData(0, Qt::UserRole + 2, i);
+  }
+  auto* surfaceStyles = new QTreeWidgetItem(m_Toolspace, {"Surface Styles"});
+  surfaceStyles->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
+  for (const auto& surfaceStyle : m_State.surfaceStyles) {
+    auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
+    entry->setData(0, Qt::UserRole + 1, "style");
+    entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
+  }
+  auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
+  blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
+  for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
+  if (!initialTree) for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
+    (*it)->setExpanded(expanded.contains(itemPath(*it)));
+    if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
+  }
+}
+
 void EditorWindow::Refresh() {
   if (m_Refreshing) return;
   m_Refreshing = true;
@@ -1961,61 +2036,7 @@ void EditorWindow::Refresh() {
     }
   }
   RefreshProperties();
-  auto itemPath = [](QTreeWidgetItem* item) {
-    QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
-    return parts.join(QChar(0x1f));
-  };
-  const bool initialTree = m_Toolspace->topLevelItemCount() == 0;
-  QSet<QString> expanded;
-  QString currentItem;
-  for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
-    if ((*it)->isExpanded()) expanded.insert(itemPath(*it));
-    if ((*it) == m_Toolspace->currentItem()) currentItem = itemPath(*it);
-  }
-  m_Toolspace->clear();
-  auto* projects = new QTreeWidgetItem(m_Toolspace, {"Projects"});
-  projects->setIcon(0, style()->standardIcon(QStyle::SP_DirHomeIcon));
-  for (const auto& session : m_State.openProjects) {
-    auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
-        (session.readOnly ? " (read-only)" : "")});
-    project->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-    for (const auto& item : session.project.items)
-      new QTreeWidgetItem(project, {QString::fromUtf8(item.path.c_str())});
-  }
-  projects->setExpanded(true);
-  auto* drawings = new QTreeWidgetItem(m_Toolspace, {"Drawings"});
-  drawings->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
-    auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
-    drawing->setData(0, Qt::UserRole, i);
-    drawing->setIcon(0, CadCommandIcon("Active_File.png"));
-  }
-  drawings->setExpanded(true);
-  auto* points = new QTreeWidgetItem(m_Toolspace, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
-  points->setIcon(0, CadCommandIcon("Point.png"));
-  auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
-  surfaces->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
-  for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
-    auto* surface = new QTreeWidgetItem(surfaces, {QString::fromUtf8(m_State.cadSurfaces[static_cast<size_t>(i)].name.c_str())});
-    surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
-    surface->setData(0, Qt::UserRole + 2, i);
-  }
-  auto* surfaceStyles = new QTreeWidgetItem(m_Toolspace, {"Surface Styles"});
-  surfaceStyles->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
-  for (const auto& surfaceStyle : m_State.surfaceStyles) {
-    auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
-    entry->setData(0, Qt::UserRole + 1, "style");
-    entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
-  }
-  auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
-  blocks->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
-  for (const auto& block : m_State.blockDefs) new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
-  if (!initialTree) for (QTreeWidgetItemIterator it(m_Toolspace); *it; ++it) {
-    (*it)->setExpanded(expanded.contains(itemPath(*it)));
-    if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
-  }
+  RefreshToolspace();
   RefreshRibbon();
   m_Viewport->update();
   m_Refreshing = false;
