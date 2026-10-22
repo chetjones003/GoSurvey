@@ -4,6 +4,7 @@
 // Which verdict a right-click gets is `CadClassifyRightClick`; this file builds the Qt menu and
 // dialogs that verdict opens. Every item runs the matching Start*/Apply* command.
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 
 #include "EditorViewport.hpp"
 #include "UserPrefs.hpp"
@@ -262,7 +263,7 @@ void EditorWindow::ShowRightClickCustomization() {
     auto* banner = new QLabel("<b style='font-size:15px'>Right-Click Customization</b><br>Choose what right-click does, and whether a quick click means ENTER.", dialog);
     banner->setObjectName("rightClickBanner");
     banner->setStyleSheet(palette().color(QPalette::Window).lightness() < 128
-        ? "background:#30373c; color:#ffffff; border-bottom:2px solid #55d8d0; padding:12px 16px; font-size:13px;"
+        ? QtApplyAccent("background:#30373c; color:#ffffff; border-bottom:2px solid @strong@; padding:12px 16px; font-size:13px;", true)
         : "background:#1f3a5f; color:#ffffff; padding:12px 16px; font-size:13px;");
     layout->addWidget(banner);
   }

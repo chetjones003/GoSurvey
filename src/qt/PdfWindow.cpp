@@ -1,4 +1,5 @@
 #include "PdfWindow.hpp"
+#include "QtAccent.hpp"
 #include "PdfCanvas.hpp"
 #include "EditorWindow.hpp"
 #include "PdfSplit.hpp"
@@ -219,12 +220,12 @@ public:
   }
 };
 
-// PDF viewer chrome follows the app-wide graphite appearance; the current thumbnail keeps a blue frame.
+// PDF viewer chrome follows the app-wide graphite appearance; the current thumbnail keeps an amber frame.
 constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so the dialogs it opens keep the application theme
     "QMainWindow{background:#1c2024;} QToolBar{background:#242a2f;border:0;spacing:6px;padding:3px;}"
-    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;} QToolBar QToolButton:checked{background:#164d4b;}"
+    "QToolBar QToolButton{color:#e8eef9;padding:4px 8px;border-radius:4px;} QToolBar QToolButton:hover{background:#343c41;} QToolBar QToolButton:checked{background:@tint@;}"
     "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#292f34;padding:6px;}"
-    "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:#244846;selection-color:white;}"
+    "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:@tint@;selection-color:white;}"
     "#pdfFindEdit{background:#15191c;color:#fff;border:1px solid #424b51;border-radius:4px;padding:3px 6px;}"
     "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}";
 
@@ -237,21 +238,21 @@ constexpr const char* kPdfExtractReviewStyle =
 constexpr const char* kPdfWorkflowDialogStyle =
     "QDialog{background:#1c2024;color:#e8eef9;} QLabel{color:#e8eef9;} QLabel:disabled{color:#89979a;}"
     "QCheckBox{color:#e8eef9;} QCheckBox::indicator{width:15px;height:15px;border:2px solid #576469;border-radius:3px;background:#15191c;}"
-    "QCheckBox::indicator:checked{background:#168e8a;border-color:#168e8a;}"
+    "QCheckBox::indicator:checked{background:@fill@;border-color:@fill@;}"
     "QPushButton{background:#2a3035;border:1px solid #41494e;border-radius:5px;padding:6px 12px;color:#e8eef9;}"
     "QPushButton:hover{background:#343c41;} QPushButton:disabled{color:#89979a;background:#242a2f;}"
     "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:3px 6px;color:#fff;}"
-    "QComboBox QAbstractItemView{background:#15191c;color:#fff;selection-background-color:#168e8a;}"
-    "QTableWidget{background:#202529;alternate-background-color:#242a2f;border:1px solid #41494e;color:#cfd8da;selection-background-color:#164d4b;selection-color:white;}"
+    "QComboBox QAbstractItemView{background:#15191c;color:#fff;selection-background-color:@fill@;}"
+    "QTableWidget{background:#202529;alternate-background-color:#242a2f;border:1px solid #41494e;color:#cfd8da;selection-background-color:@tint@;selection-color:white;}"
     "QHeaderView::section{background:#292f34;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
     "QProgressBar{background:#15191c;border:1px solid #424b51;border-radius:4px;color:#e8eef9;text-align:center;}"
-    "QProgressBar::chunk{background:#168e8a;border-radius:3px;}";
+    "QProgressBar::chunk{background:@fill@;border-radius:3px;}";
 
 PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setObjectName("pdfViewerWindow");
   setAttribute(Qt::WA_DeleteOnClose);
   setWindowTitle("GoSurvey | PDF viewer");
-  setStyleSheet(QString::fromLatin1(kPdfWindowStyle));
+  setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWindowStyle), true));
   resize(1000, 800);
   auto* tools = addToolBar("PDF");
   tools->setMovable(false);
@@ -469,7 +470,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_AuditDialog = new QDialog(this);
   m_AuditDialog->setObjectName("pdfScaleAuditDialog");
   m_AuditDialog->setWindowTitle("Audit scale");
-  m_AuditDialog->setStyleSheet(QString::fromLatin1(kPdfWorkflowDialogStyle));
+  m_AuditDialog->setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWorkflowDialogStyle), true));
   m_AuditDialog->resize(920, 560);
   auto* auditLayout = new QVBoxLayout(m_AuditDialog);
   m_AuditSummary = new QLabel("Audit reads dimension text and line work on one page. It never changes the scale unless you apply the consensus.", m_AuditDialog);
@@ -538,7 +539,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   m_CompareDialog = new QDialog(this);
   m_CompareDialog->setObjectName("pdfCompareDialog");
   m_CompareDialog->setWindowTitle("Compare PDF revisions");
-  m_CompareDialog->setStyleSheet(QString::fromLatin1(kPdfWorkflowDialogStyle));
+  m_CompareDialog->setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWorkflowDialogStyle), true));
   m_CompareDialog->resize(1100, 680);
   auto* compareLayout = new QVBoxLayout(m_CompareDialog);
   m_CompareStatus = new QLabel("Choose a revision PDF to begin. The open PDF remains the base and is never modified.", m_CompareDialog);
@@ -1102,7 +1103,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     const auto& annotation = m_DragPreview && static_cast<int>(itemIndex) == m_SelectedAnnotation ? *m_DragPreview : m_Annotations.Items()[itemIndex];
     if (annotation.page != page) continue;
     const bool selected = static_cast<int>(itemIndex) == m_SelectedAnnotation;
-    painter.setPen(QPen(selected ? QColor("#45a8df") : QColor::fromRgb(annotation.color), std::max(1.0, annotation.thickness * factor)));
+    painter.setPen(QPen(selected ? QColor(QtAccentFor(false).strong) : QColor::fromRgb(annotation.color), std::max(1.0, annotation.thickness * factor)));
     painter.setBrush(annotation.fill ? QBrush(QColor::fromRgb(annotation.color)) : Qt::NoBrush);
     const QPointF first = map(annotation.x0, annotation.y0), last = map(annotation.x1, annotation.y1);
     const QRectF rect = QRectF(first, last).normalized();
@@ -1130,11 +1131,11 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
         }
       } else if (annotation.kind == pdfview::Annot::Kind::Line) grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1)};
       else grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1),map(annotation.x0,annotation.y1),map(annotation.x1,annotation.y0)};
-      painter.setPen(QPen(QColor("#0d1521"), 1)); painter.setBrush(QColor("#8dd7ff"));
+      painter.setPen(QPen(QColor("#0d1521"), 1)); painter.setBrush(QColor(QtAccentFor(true).strong));
       for (const auto& grip : grips) painter.drawRect(QRectF(grip.x()-4,grip.y()-4,8,8));
     }
   }
-  painter.setPen(QPen(QColor("#45a8df"), 2));
+  painter.setPen(QPen(QColor(QtAccentFor(false).strong), 2));
   for (std::size_t i = 0; m_Tool != kToolCalibrate && m_Tool != kToolCheck && i < m_Draft.size(); ++i) {
     const auto pt = map(m_Draft[i].first, m_Draft[i].second);
     painter.drawEllipse(pt, 3, 3);
