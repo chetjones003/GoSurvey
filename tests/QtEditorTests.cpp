@@ -62,6 +62,7 @@
 #include <QDockWidget>
 #include <QListView>
 #include <QToolBar>
+#include <QToolButton>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -78,6 +79,7 @@
 #include <QTextLayout>
 #include <QTextBrowser>
 #include <QLineEdit>
+#include <QSplitter>
 #include <QInputDialog>
 #include <QLabel>
 #include <QCompleter>
@@ -3548,7 +3550,7 @@ private Q_SLOTS:
     run->trigger();
     QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 15000);
     QVERIFY(!state->traverseLsaResult.ok);
-    QVERIFY(output->toPlainText().contains("known end-point"));
+    QVERIFY(output->toPlainText().contains("complete CHECK shot with known coordinates"));
     QVERIFY(run->isEnabled());
     QVERIFY(window.grab().save(Issue914Shot("qt-914-open-traverse-failure.png")));
 
@@ -3594,7 +3596,9 @@ private Q_SLOTS:
     QVERIFY(!state->traverseLsaAccepted);
     QCOMPARE(state->traverseData.legs.front().horizDist, originalDistance);
     QVERIFY(window.findChild<QTableWidget*>("adjustmentCoordinates")->rowCount() == 0);
-    QVERIFY(window.findChild<QTableWidget*>("adjustmentResiduals")->rowCount() == 0);
+    for (const auto* name : {"adjustmentResidualsAngle", "adjustmentResidualsDistance", "adjustmentResidualsVertical",
+                             "adjustmentResidualsGps", "adjustmentResidualsCoordinate"})
+      QVERIFY(window.findChild<QTableWidget*>(name)->rowCount() == 0);
     QVERIFY(run->isEnabled());
   }
 
@@ -3839,7 +3843,7 @@ private Q_SLOTS:
     std::vector<std::string> log;
     AdjustmentWindow window(*state, log, nullptr);
     Action(window, "Settings")->trigger();
-    auto* settings = window.findChild<QScrollArea*>("adjustmentSettingsPane");
+    auto* settings = window.findChild<QWidget*>("adjustmentSettingsPane");
     QVERIFY(settings);
     QVERIFY(window.findChild<QDoubleSpinBox*>("issue915DistanceConstant"));
     QVERIFY(window.findChild<QDoubleSpinBox*>("issue915ElevationConstant"));
@@ -3920,7 +3924,7 @@ private Q_SLOTS:
     QCOMPARE(loadedWeights.refractionCoefficient, .21);
   }
 
-  void issue915ReportExportsAndStationPlotFollowSuccessfulAdjustment() {
+  void issue915ReportExportsAndSessionPreviewFollowsSuccessfulAdjustment() {
     auto state = StateWithTraverse();
     state->traverseData.importedFiles = {"survey-a.dat", "survey-b.rw5"};
     std::vector<std::string> log;
@@ -3930,7 +3934,7 @@ private Q_SLOTS:
     QTRY_VERIFY(window.isVisible());
     SolveAdjustment(window);
     auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
-    auto* plotWidget = window.findChild<QWidget*>("adjustmentResultPlan");
+    auto* plotWidget = window.findChild<QWidget*>("adjustmentPlan");
     auto* plot = static_cast<AdjustmentPlanView*>(plotWidget);
     auto* results = window.findChild<QTabWidget*>("adjustmentResults");
     QVERIFY(output); QVERIFY(plotWidget); QVERIFY(plot); QVERIFY(results);
@@ -3945,7 +3949,7 @@ private Q_SLOTS:
     QCOMPARE(plot->StationCount(), 4);
     QCOMPARE(plot->LegCount(), 4);
     QVERIFY(plot->EllipseCount() > 0);
-    QVERIFY(results->grab().save(Issue914Shot("qt-915-report-and-plot.png")));
+    QVERIFY(results->grab().save(Issue914Shot("qt-915-report.png")));
 
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -4038,6 +4042,395 @@ private Q_SLOTS:
       QCOMPARE(formatColour(3, 17), palette.fieldCode);
       QVERIFY(!formatColour(0, 3).isValid());  // plain space keeps the text colour
     }
+  }
+
+  void issue1038AdjustmentSessionEditorAndResultsStayVisibleAndResizable() {
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      auto state = Issue912State(true);
+      std::vector<std::string> log;
+      AdjustmentWindow window(*state, log, nullptr);
+      window.resize(1280, 800);
+      window.show();
+      QCoreApplication::processEvents();
+
+      auto* codeEditor = dynamic_cast<AdjustmentCodeEdit*>(window.findChild<QPlainTextEdit*>("adjustmentCommands"));
+      auto* plan = window.findChild<QWidget*>("adjustmentPlan");
+      QVERIFY(codeEditor);
+      QVERIFY(plan);
+      const QColor windowSurface = QApplication::palette().color(QPalette::Window);
+      QCOMPARE(codeEditor->Palette().background, windowSurface);
+      QCOMPARE(plan->grab().toImage().pixelColor(0, 0), windowSurface);
+
+      auto* splitter = window.findChild<QSplitter*>("adjustmentWorkspaceSplitter");
+      QVERIFY(splitter);
+      QCOMPARE(splitter->count(), 3);
+      QVERIFY(splitter->handleWidth() > 0);
+      const auto paneSizes = splitter->sizes();
+      QCOMPARE(paneSizes.size(), 3);
+      QVERIFY(paneSizes[0] > 0);
+      QVERIFY(paneSizes[1] > 0);
+      QVERIFY(paneSizes[2] > 0);
+      QVERIFY(splitter->handle(1)->isVisible());
+      QVERIFY(splitter->handle(2)->isVisible());
+      splitter->setSizes({paneSizes[0] + 60, paneSizes[1] - 30, paneSizes[2] - 30});
+      QCoreApplication::processEvents();
+      const auto resizedPanes = splitter->sizes();
+      QVERIFY(resizedPanes[0] > paneSizes[0]);
+      QVERIFY(resizedPanes[1] < paneSizes[1]);
+      QVERIFY(resizedPanes[2] < paneSizes[2]);
+      for (const auto* paneName : {"adjustmentSessionPane", "adjustmentEditorPane", "adjustmentResultsPane"}) {
+        auto* pane = window.findChild<QWidget*>(paneName);
+        QVERIFY(pane);
+        QVERIFY(pane->isVisible());
+        QVERIFY(pane->width() > 100);
+      }
+      for (const auto* contentName : {"adjustmentFiles", "adjustmentSummary", "adjustmentPlan",
+                                      "adjustmentCommands", "adjustmentOutput", "adjustmentCoordinates",
+                                      "adjustmentResidualsAngle", "adjustmentResidualsDistance",
+                                      "adjustmentResidualsVertical", "adjustmentResidualsGps",
+                                      "adjustmentResidualsCoordinate"})
+        QVERIFY2(window.findChild<QWidget*>(contentName), contentName);
+      auto* fileMenu = window.findChild<QMenu*>("adjustmentFileMenu");
+      QVERIFY(fileMenu);
+      auto* settingsAction = window.findChild<QAction*>("adjustmentSettingsAction");
+      QVERIFY(settingsAction);
+      QVERIFY(fileMenu->actions().contains(settingsAction));
+      QVERIFY(!window.findChild<QToolBar*>("adjustmentToolbar")->widgetForAction(settingsAction));
+      auto* resultTabs = window.findChild<QTabWidget*>("adjustmentResults");
+      QVERIFY(resultTabs);
+      QCOMPARE(resultTabs->count(), 3);
+      const QStringList resultLabels{"Report", "Adjusted coordinates", "Residuals"};
+      for (int i = 0; i < resultTabs->count(); ++i) {
+        QCOMPARE(resultTabs->tabText(i), resultLabels[i]);
+        resultTabs->setCurrentIndex(i);
+        QCoreApplication::processEvents();
+        QVERIFY(resultTabs->currentWidget()->isVisible());
+        if (i == 0) {
+          QVERIFY(window.findChild<QPlainTextEdit*>("adjustmentOutput")->isVisible());
+          QVERIFY(!window.findChild<QWidget*>("adjustmentResultPlan"));
+        } else if (i == 1) {
+          QVERIFY(window.findChild<QTableWidget*>("adjustmentCoordinates")->isVisible());
+        } else {
+          QVERIFY(window.findChild<QTableWidget*>("adjustmentResidualsAngle"));
+        }
+      }
+      for (const auto* actionName : {"runAdjustmentAction", "stopAdjustmentAction", "acceptAdjustmentAction", "commitAdjustmentAction"}) {
+        auto* action = window.findChild<QAction*>(actionName);
+        QVERIFY2(action, actionName);
+        QVERIFY(action->isVisible());
+        auto* toolbar = window.findChild<QToolBar*>("adjustmentToolbar");
+        QVERIFY(toolbar);
+        auto* button = qobject_cast<QToolButton*>(toolbar->widgetForAction(action));
+        QVERIFY2(button, actionName);
+        QVERIFY(button->isVisible());
+        QVERIFY(!button->text().isEmpty());
+        QVERIFY(toolbar->rect().contains(button->geometry()));
+      }
+      const QString mode = light ? "light" : "dark";
+      QVERIFY(window.grab().save(Issue912Shot(QString("qt-1038-workspace-%1.png").arg(mode))));
+      QVERIFY(codeEditor->grab().save(Issue912Shot(QString("qt-1038-editor-%1.png").arg(mode))));
+      QVERIFY(plan->grab().save(Issue912Shot(QString("qt-1038-plan-preview-%1.png").arg(mode))));
+      if (!light) {
+        fileMenu->popup(window.mapToGlobal(QPoint(0, 28)));
+        QCoreApplication::processEvents();
+        QVERIFY(fileMenu->isVisible());
+        QVERIFY(fileMenu->grab().save(Issue912Shot("qt-1038-file-settings-menu.png")));
+        fileMenu->close();
+        settingsAction->trigger();
+        auto* settingsWindow = window.findChild<QDialog*>("adjustmentSettingsWindow");
+        QVERIFY(settingsWindow);
+        QVERIFY(settingsWindow->isVisible());
+        QVERIFY(settingsWindow->windowFlags().testFlag(Qt::Window));
+        auto* adjustmentType = window.findChild<QComboBox*>("issue915AdjustmentType");
+        QVERIFY(adjustmentType);
+        QVERIFY(adjustmentType->isVisible());
+        auto* applySettings = window.findChild<QWidget*>("issue915ApplySettings");
+        QVERIFY(applySettings);
+        QVERIFY(applySettings->isVisible());
+        QVERIFY(window.grab().save(Issue912Shot("qt-1038-workspace-with-settings.png")));
+        QVERIFY(settingsWindow->grab().save(Issue912Shot("qt-1038-settings-window.png")));
+      }
+    }
+    ApplyQtAppearance(*qApp, false);
+  }
+
+  void issue1038EditorCommandsGenerateReportAndTables() {
+    auto state = Issue912State(true);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.resize(1440, 900);
+    window.show();
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* coordinates = window.findChild<QTableWidget*>("adjustmentCoordinates");
+    auto* angleResiduals = window.findChild<QTableWidget*>("adjustmentResidualsAngle");
+    auto* distanceResiduals = window.findChild<QTableWidget*>("adjustmentResidualsDistance");
+    auto* verticalResiduals = window.findChild<QTableWidget*>("adjustmentResidualsVertical");
+    auto* resultTabs = window.findChild<QTabWidget*>("adjustmentResults");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(coordinates); QVERIFY(angleResiduals); QVERIFY(distanceResiduals);
+    QVERIFY(verticalResiduals); QVERIFY(resultTabs);
+    const QString commands = R"(STATION 1 6561.679790 6561.679790 328.083990
+BEARING 0.000000
+#LOOP OFF
+#SCALE OFF COMBINED
+#ERRORS 5.000 0.0200 2.000
+
+STN 1 2
+HANG REF 1 2 260.649684
+SDIST 1 2 507.910203
+VANG 1 2 90.968390 ZENITH
+DESC 1 2 102
+STN 2 3
+HANG 1 2 3 187.608954
+SDIST 2 3 323.720970
+VANG 2 3 91.067937 ZENITH
+DESC 2 3 104
+STN 3 4
+HANG 2 3 4 177.482266
+SDIST 3 4 342.745773
+VANG 3 4 91.634614 ZENITH
+DESC 3 4 105
+STN 4 5
+HANG 3 4 5 90.812170
+SDIST 4 5 408.618504
+VANG 4 5 91.529076 ZENITH
+DESC 4 5 106
+STN 5 6
+HANG 4 5 6 138.503783
+SDIST 5 6 590.306715
+VANG 5 6 90.053161 ZENITH
+DESC 5 6 107
+STN 1 7 CHECK 6365.001172 6497.495495
+HANG REF 1 7 251.926373
+SDIST 1 7 206.971211
+VANG 1 7 90.950785 ZENITH
+DESC 1 7 200
+STN 2 8 CHECK 6298.360450 6285.842762
+HANG REF 2 8 48.472384
+SDIST 2 8 306.794100
+VANG 2 8 92.644562 ZENITH
+DESC 2 8 103
+STN 2 9 CHECK 5861.776870 6400.438407
+HANG REF 2 9 167.749239
+SDIST 2 9 213.952805
+VANG 2 9 90.442098 ZENITH
+DESC 2 9 201
+STN 2 10 CHECK 6150.140211 6445.303748
+HANG REF 2 10 30.083644
+SDIST 2 10 95.818192
+VANG 2 10 90.955209 ZENITH
+DESC 2 10 301
+STN 2 11 CHECK 6167.396444 6350.688752
+HANG REF 2 11 59.630532
+SDIST 2 11 167.323316
+VANG 2 11 92.918552 ZENITH
+DESC 2 11 202
+)";
+    editor->setPlainText(commands);
+    QCOMPARE(output->toPlainText(), QString("Import observations or enter GoSurvey traverse commands, then run adjustment."));
+    Action(window, "Run adjustment")->trigger();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 30000);
+    QVERIFY2(!output->toPlainText().contains("Imported 1 file(s)"), qPrintable(output->toPlainText()));
+    QVERIFY2(output->toPlainText().contains("Adjustment Results"), qPrintable(output->toPlainText()));
+    QVERIFY2(output->toPlainText().contains("Measurement Residuals"), qPrintable(output->toPlainText()));
+    QVERIFY2(!output->toPlainText().contains("ENDPOINT"), qPrintable(output->toPlainText()));
+    QVERIFY(coordinates->rowCount() > 0);
+    QVERIFY(angleResiduals->rowCount() > 0);
+    QVERIFY(distanceResiduals->rowCount() > 0);
+    QCOMPARE(resultTabs->tabText(0), QString("Report"));
+    resultTabs->setCurrentIndex(0);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-populated-report.png")));
+  }
+
+  void issue1038NetworkEditorCommandsSolveLiveWithoutRun() {
+    auto state = Issue912State(true);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.resize(1280, 800);
+    window.show();
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* output = window.findChild<QPlainTextEdit*>("adjustmentOutput");
+    auto* coordinates = window.findChild<QTableWidget*>("adjustmentCoordinates");
+    auto* angleResiduals = window.findChild<QTableWidget*>("adjustmentResidualsAngle");
+    auto* distanceResiduals = window.findChild<QTableWidget*>("adjustmentResidualsDistance");
+    auto* verticalResiduals = window.findChild<QTableWidget*>("adjustmentResidualsVertical");
+    auto* gpsResiduals = window.findChild<QTableWidget*>("adjustmentResidualsGps");
+    auto* coordinateResiduals = window.findChild<QTableWidget*>("adjustmentResidualsCoordinate");
+    auto* resultTabs = window.findChild<QTabWidget*>("adjustmentResults");
+    QVERIFY(editor); QVERIFY(output); QVERIFY(coordinates); QVERIFY(angleResiduals); QVERIFY(distanceResiduals);
+    QVERIFY(verticalResiduals); QVERIFY(gpsResiduals); QVERIFY(coordinateResiduals); QVERIFY(resultTabs);
+    QString commands = R"(STATION 1 0 0 0
+#LOOP ON
+CTRL 1 0 0 ! !
+CTRL 2 100 0 ! !
+CTRL 3 50 86.6025403784 * *
+AZIMUTH 1 2 90 0.010
+DIR 0 1 2 90
+DIR 0 1 3 30
+DIST 1 2 100.2
+DIST 1 3 100
+DIST 2 3 100
+)";
+    editor->setPlainText(commands);
+    QTRY_VERIFY_WITH_TIMEOUT(state->traverseLsaComputed, 10000);
+    QVERIFY2(state->traverseLsaResult.ok, qPrintable(QString::fromUtf8(state->traverseLsaResult.message.c_str())));
+    QVERIFY2(output->toPlainText().contains("Adjustment Results"), qPrintable(output->toPlainText()));
+    QVERIFY(output->toPlainText().contains("Measurement Residuals"));
+    QVERIFY(coordinates->rowCount() > 0);
+    QVERIFY(angleResiduals->rowCount() > 0);
+    QVERIFY(distanceResiduals->rowCount() > 0);
+    const QStringList groupIds{"Angle", "Distance", "Vertical", "Gps", "Coordinate"};
+    const QList<QTableWidget*> familyTables{angleResiduals, distanceResiduals, verticalResiduals, gpsResiduals, coordinateResiduals};
+    for (int i = 0; i < familyTables.size(); ++i) {
+      auto* group = window.findChild<QGroupBox*>("adjustmentResidualGroup" + groupIds[i]);
+      QVERIFY(group);
+      QCOMPARE(group->isHidden(), familyTables[i]->rowCount() == 0);
+    }
+    for (int row = 0; row < angleResiduals->rowCount(); ++row) {
+      const QString kind = angleResiduals->item(row, 0)->text();
+      QVERIFY(kind == "Angle" || kind == "Direction" || kind == "Zenith");
+    }
+    for (int row = 0; row < distanceResiduals->rowCount(); ++row)
+      QCOMPARE(distanceResiduals->item(row, 0)->text(), QString("Distance"));
+    for (int row = 0; row < verticalResiduals->rowCount(); ++row)
+      QVERIFY(verticalResiduals->item(row, 0)->text() == "Vertical" || verticalResiduals->item(row, 0)->text() == "GPS up" ||
+              verticalResiduals->item(row, 0)->text() == "Coordinate up");
+    for (int row = 0; row < gpsResiduals->rowCount(); ++row)
+      QVERIFY(gpsResiduals->item(row, 0)->text() == "GPS east" || gpsResiduals->item(row, 0)->text() == "GPS north");
+    for (int row = 0; row < coordinateResiduals->rowCount(); ++row)
+      QVERIFY(coordinateResiduals->item(row, 0)->text() == "Coordinate east" || coordinateResiduals->item(row, 0)->text() == "Coordinate north");
+    QCOMPARE(angleResiduals->item(0, 3)->text(), QString("0.000000"));
+    QCOMPARE(distanceResiduals->item(0, 3)->text(), QString("-0.2000"));
+    bool hasNonzeroResidual = false;
+    for (int row = 0; row < distanceResiduals->rowCount(); ++row) {
+      bool parsed = false;
+      auto* residualCell = distanceResiduals->item(row, 3);
+      QVERIFY(residualCell);
+      const double residual = residualCell->text().toDouble(&parsed);
+      hasNonzeroResidual |= parsed && std::abs(residual) > 1e-6;
+    }
+    QVERIFY(hasNonzeroResidual);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-live-network-report.png")));
+    QVERIFY(output->find("Measurement Residuals"));
+    auto reportCursor = output->textCursor();
+    reportCursor.movePosition(QTextCursor::Down, QTextCursor::MoveAnchor, 8);
+    output->setTextCursor(reportCursor);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-live-network-report-values.png")));
+    int residualTab = -1;
+    for (int i = 0; i < resultTabs->count(); ++i)
+      if (resultTabs->tabText(i) == "Residuals") residualTab = i;
+    QVERIFY(residualTab >= 0);
+    resultTabs->setCurrentIndex(residualTab);
+    QVERIFY(angleResiduals->isVisible());
+    QVERIFY(angleResiduals->rowCount() > 0);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-live-network-residuals.png")));
+    resultTabs->setCurrentIndex(0);
+
+    double initialEasting = 0.0;
+    for (size_t i = 0; i < state->traverseLsaResult.stationIds.size(); ++i)
+      if (state->traverseLsaResult.stationIds[i] == 3) initialEasting = state->traverseLsaResult.adjEasting[i];
+    commands.replace("DIST 1 3 100", "DIST 1 3 101");
+    editor->setPlainText(commands);
+    QTRY_VERIFY_WITH_TIMEOUT(state->traverseLsaComputed, 10000);
+    double updatedEasting = initialEasting;
+    for (size_t i = 0; i < state->traverseLsaResult.stationIds.size(); ++i)
+      if (state->traverseLsaResult.stationIds[i] == 3) updatedEasting = state->traverseLsaResult.adjEasting[i];
+    QVERIFY(std::abs(updatedEasting - initialEasting) > 1e-3);
+
+    editor->setPlainText("INVALID COMMAND\n");
+    QTRY_VERIFY_WITH_TIMEOUT(output->toPlainText().contains("Parse error"), 10000);
+    QCOMPARE(coordinates->rowCount(), 0);
+    QCOMPARE(angleResiduals->rowCount(), 0);
+    QCOMPARE(distanceResiduals->rowCount(), 0);
+    QCOMPARE(verticalResiduals->rowCount(), 0);
+    QCOMPARE(gpsResiduals->rowCount(), 0);
+    QCOMPARE(coordinateResiduals->rowCount(), 0);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-live-parse-error.png")));
+  }
+
+  void issue1038RecordsMenuCoversParserCommandsAndInsertsAtCaret() {
+    auto state = Issue912State(true);
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    window.resize(1280, 800);
+    window.show();
+    QCoreApplication::processEvents();
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* menu = window.findChild<QMenu*>("adjustmentRecordsMenu");
+    QVERIFY(editor);
+    QVERIFY(menu);
+    const QStringList directives{"IMPORT", "STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS", "STN", "HANG",
+                                 "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR", "CTRL", "ANGLE", "DIST",
+                                 "AZIMUTH", "EDIF", "ZENITH", "DIR"};
+    menu->popup(window.mapToGlobal(QPoint(40, 28)));
+    QCoreApplication::processEvents();
+    QVERIFY(menu->isVisible());
+    auto* recordsPopup = QApplication::activePopupWidget();
+    QVERIFY(recordsPopup);
+    QVERIFY(recordsPopup->grab().save(Issue912Shot("qt-1038-records-menu.png")));
+    menu->close();
+    for (const auto& directive : directives) {
+      const auto matches = menu->findChildren<QAction*>("adjustmentRecordAction_" + directive);
+      QCOMPARE(matches.size(), 1);
+      QCOMPARE(matches.front()->data().toString(), directive);
+      const QString expectedGroup = directive == "IMPORT" ? "adjustmentRecordGroup_Import" :
+          (QStringList{"STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS"}.contains(directive)
+              ? "adjustmentRecordGroup_Setup" :
+           QStringList{"STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR"}.contains(directive)
+              ? "adjustmentRecordGroup_Traverse" : "adjustmentRecordGroup_Network");
+      QCOMPARE(matches.front()->parent()->objectName(), expectedGroup);
+      matches.front()->trigger();
+      auto* recordDialog = window.findChild<QDialog*>("adjustmentRecordDialog");
+      QVERIFY(recordDialog);
+      QVERIFY(recordDialog->findChild<QPushButton*>("recordSubmitButton"));
+      QVERIFY(recordDialog->findChild<QPushButton*>("recordCancelButton"));
+      QVERIFY(!recordDialog->findChildren<QWidget*>(QRegularExpression("^recordField_")).isEmpty());
+      recordDialog->findChild<QPushButton*>("recordCancelButton")->click();
+      QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("adjustmentRecordDialog") == nullptr, 1000);
+    }
+
+    editor->setPlainText("STATION 1 0 0 0\n");
+    QTextCursor cursor = editor->textCursor();
+    cursor.movePosition(QTextCursor::Start);
+    cursor.setPosition(7, QTextCursor::KeepAnchor);
+    editor->setTextCursor(cursor);
+    const QString original = editor->toPlainText();
+    menu->findChild<QAction*>("adjustmentRecordAction_IMPORT")->trigger();
+    auto* importDialog = window.findChild<QDialog*>("adjustmentRecordDialog");
+    QVERIFY(importDialog);
+    window.findChild<QPushButton*>("recordCancelButton")->click();
+    QCOMPARE(editor->toPlainText(), original);
+    QCOMPARE(editor->textCursor().selectedText(), QString("STATION"));
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QDialog*>("adjustmentRecordDialog") == nullptr, 1000);
+    cursor = editor->textCursor();
+    cursor.clearSelection();
+    cursor.movePosition(QTextCursor::Start);
+    editor->setTextCursor(cursor);
+
+    menu->findChild<QAction*>("adjustmentRecordAction_STATION")->trigger();
+    auto* stationDialog = window.findChild<QDialog*>("adjustmentRecordDialog");
+    QVERIFY(stationDialog);
+    auto* submit = stationDialog->findChild<QPushButton*>("recordSubmitButton");
+    auto* error = stationDialog->findChild<QLabel*>("recordValidationError");
+    QVERIFY(submit);
+    QVERIFY(error);
+    submit->click();
+    QVERIFY(stationDialog->isVisible());
+    QVERIFY(!error->text().isEmpty());
+    stationDialog->findChild<QLineEdit*>("recordField_id")->setText("not-an-id");
+    stationDialog->findChild<QLineEdit*>("recordField_e")->setText("not-a-number");
+    submit->click();
+    QVERIFY(stationDialog->isVisible());
+    QVERIFY(error->text().contains("whole number"));
+    QVERIFY(stationDialog->grab().save(Issue912Shot("qt-1038-record-entry-validation.png")));
+    stationDialog->findChild<QLineEdit*>("recordField_id")->setText("2");
+    stationDialog->findChild<QLineEdit*>("recordField_e")->setText("10.5");
+    stationDialog->findChild<QLineEdit*>("recordField_n")->setText("20.25");
+    stationDialog->findChild<QLineEdit*>("recordField_z")->setText("30.75");
+    submit->click();
+    QCOMPARE(editor->toPlainText(), QString("STATION 2 10.5 20.25 30.75\n") + original);
+    QVERIFY(window.grab().save(Issue912Shot("qt-1038-record-inserted-at-caret.png")));
   }
 
   void issue912GutterNumbersLinesWidensScrollsAndMarksError() {

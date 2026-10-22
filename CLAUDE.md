@@ -328,3 +328,13 @@ If the SPEC is unclear, ask.
 If the implementation conflicts with the SPEC, fix the implementation.
 If the SPEC must change, get a recorded decision first.**
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues for `chetjones003/GoSurvey`; use the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Use the single-context domain layout. Read `GLOSSARY.md` and relevant ADRs in `docs/adr/` when present; existing project decisions also live in `spec/architecture.md` and `spec/project.md`. See `docs/agents/domain.md`.
+

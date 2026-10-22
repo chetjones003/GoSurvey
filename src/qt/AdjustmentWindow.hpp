@@ -7,9 +7,11 @@
 #include <functional>
 #include <memory>
 #include <QStringList>
+#include <array>
 #include <vector>
 class QPlainTextEdit;
 class QTableWidget;
+class QGroupBox;
 class QLabel;
 class QTimer;
 class QAction;
@@ -55,9 +57,11 @@ private:
   void ApplySettingsDraft();
   void ResetSettingsDraft();
   void ShowSettings();
+  void OpenRecordDialog(const QString& directive);
   void SetBusy(bool busy);
   void RefreshImportedFiles();
   void RefreshPreview();
+  void ClearResidualTables();
   void RefreshFilesAndSummary();
   void BuildOptionsBar(QWidget* parent);
   void InvalidateResult();
@@ -75,12 +79,13 @@ private:
   QLabel* m_Summary;
   QLabel* m_TextStatus;
   QTimer* m_ValidateTimer;
+  QTimer* m_LiveSolveTimer;
+  bool m_LiveSolvePending = false;
   TraverseData m_PreviewData;  ///< the text as last read without error, solved for the plan only
   QPlainTextEdit* m_Output;
   QTableWidget* m_Coordinates;
-  QTableWidget* m_Residuals;
-  AdjustmentPlanView* m_ResultPlan = nullptr;
-  QTabWidget* m_ContextTabs = nullptr;
+  std::array<QTableWidget*, 5> m_ResidualTables{};
+  std::array<QGroupBox*, 5> m_ResidualGroups{};
   std::vector<QDoubleSpinBox*> m_SettingsWeightEditors;
   QComboBox* m_SettingsAdjustmentType = nullptr;
   QSpinBox* m_SettingsMaxIterations = nullptr;

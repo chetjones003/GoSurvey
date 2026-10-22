@@ -16,13 +16,13 @@
 AdjustmentEditorPalette AdjustmentPalette(bool dark) {
   AdjustmentEditorPalette p;
   if (!dark) {
-    p.background = "#ffffff"; p.text = "#1e2430"; p.keyword = "#003db3"; p.option = "#7a3e9d";
+    p.background = "#f0f0f0"; p.text = "#1e2430"; p.keyword = "#003db3"; p.option = "#7a3e9d";
     p.number = "#0a6b57"; p.comment = "#6b766b"; p.fieldCode = "#8c470d";
     p.gutterBackground = "#eef1f5"; p.gutterText = "#8a94a3"; p.error = "#c9302c";
     p.planLeg = "#3c64b4"; p.planPoint = "#1e1e1e"; p.planEllipse = "#d24628";
     p.planSide = "#8c8c91"; p.planCheck = "#3c965a";
-  } else {  // the navy of the Qt Dark chrome (REQ-081)
-    p.background = "#0f1b2d"; p.text = "#d6e2f0"; p.keyword = "#5bc0eb"; p.option = "#e3b04b";
+  } else {  // the graphite-gray surface of the Qt Dark appearance (REQ-431)
+    p.background = "#1c2024"; p.text = "#d6e2f0"; p.keyword = "#5bc0eb"; p.option = "#e3b04b";
     p.number = "#7fd6a8"; p.comment = "#7088a0"; p.fieldCode = "#e08f62";
     p.gutterBackground = "#0b1524"; p.gutterText = "#6f86a0"; p.error = "#ff6b6b";
     p.planLeg = "#4fa3e0"; p.planPoint = "#e6eef7"; p.planEllipse = "#f28f5c";

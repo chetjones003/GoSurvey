@@ -840,22 +840,13 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     LsaResult r;
 
     // ---- Preconditions (REQ-017: surface, never absorb) -------------------
-    // Issue #848 follow-up: an OPEN traverse can be adjusted too, but only if
-    // it's tied to a second known point (ENDPOINT) — a plain open chain tied
-    // to just the start consumes exactly 2 unknowns per leg with nothing left
-    // over (zero redundancy), so there's nothing for least squares to do.
-    if (!td.isClosedLoop && !td.hasEndCoordinates) {
-        r.message = "Least squares requires either a closed loop or known end-point "
-                    "coordinates (ENDPOINT) for an open traverse.";
+    const int m = static_cast<int>(td.legs.size());
+    if (m < 3) {
+        r.message = "The traverse needs at least 3 legs to adjust.";
         return r;
     }
     if (!td.hasStartBearing) {
         r.message = "Least squares requires a start reference bearing.";
-        return r;
-    }
-    const int m = static_cast<int>(td.legs.size());
-    if (m < 3) {
-        r.message = "The traverse needs at least 3 legs to adjust.";
         return r;
     }
     for (int k = 0; k < m; ++k) {
@@ -867,13 +858,36 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
         }
     }
 
+    struct CheckControl {
+        const TraverseSideShot* shot;
+        int occupiedPosition;
+    };
+    std::vector<CheckControl> checkControls;
+    if (!td.isClosedLoop) {
+        for (const TraverseSideShot& shot : td.sideShots) {
+            if (!shot.isCheckShot || !shot.hasKnownCoords || !shot.computed) continue;
+            for (int position = 0; position < m; ++position) {
+                if ((position == 0 ? td.startStationId : td.legs[static_cast<size_t>(position - 1)].stationId)
+                    == shot.atStationId) {
+                    checkControls.push_back({&shot, position});
+                    break;
+                }
+            }
+        }
+    }
+    // A plain open chain has no redundant observations. A complete known CHECK
+    // contributes two weighted observations and fixes its target coordinates.
+    if (!td.isClosedLoop && !td.hasEndCoordinates && checkControls.empty()) {
+        r.message = "Least squares requires a closed loop, ENDPOINT coordinates, or a "
+                    "complete CHECK shot with known coordinates for an open traverse.";
+        return r;
+    }
+
     // ---- Topology -----------------------------------------------------
     // Station id at loop position 0..m: position 0 is always the fixed start.
-    // Position m is the last leg's own foresight — for a closed loop that's
-    // literally the start station again (aliased to the same id on import),
-    // for an open traverse (hasEndCoordinates, guaranteed by the precondition
-    // above) it's the separate ENDPOINT station, fixed below alongside the
-    // start instead of being re-derived from the same id.
+    // Position m is the last leg's foresight: the start for a closed loop, a
+    // fixed ENDPOINT when supplied, or a free station for a CHECK-controlled
+    // open traverse.
     std::vector<int> posId(m + 1);
     posId[0] = td.startStationId;
     for (int k = 1; k <= m; ++k) posId[k] = td.legs[k - 1].stationId;
@@ -893,18 +907,46 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     const int dim = hasGps ? 3 : 2;  // E,N[,Up] per free station.
     r.usedGpsVectors = hasGps;
 
+    std::unordered_map<int, Coord> checkControlCoords;
+    for (const CheckControl& control : checkControls) {
+        const TraverseSideShot& shot = *control.shot;
+        const auto [it, inserted] = checkControlCoords.emplace(
+            shot.stationId, Coord{shot.knownEasting, shot.knownNorthing, 0.0});
+        if (!inserted && (std::abs(it->second.e - shot.knownEasting) > 1e-6 ||
+                          std::abs(it->second.n - shot.knownNorthing) > 1e-6)) {
+            r.message = "CHECK shots give conflicting known coordinates for station " +
+                        std::to_string(shot.stationId) + ".";
+            return r;
+        }
+    }
+    auto conflictsWithFixed = [&](int id, double easting, double northing) {
+        const auto it = checkControlCoords.find(id);
+        return it != checkControlCoords.end() &&
+               (std::abs(it->second.e - easting) > 1e-6 || std::abs(it->second.n - northing) > 1e-6);
+    };
+    if (conflictsWithFixed(td.startStationId, td.startEasting, td.startNorthing)) {
+        r.message = "CHECK control coordinates conflict with the start station.";
+        return r;
+    }
+    if (td.hasEndCoordinates && conflictsWithFixed(td.legs.back().stationId, td.endEasting, td.endNorthing)) {
+        r.message = "CHECK control coordinates conflict with ENDPOINT coordinates.";
+        return r;
+    }
+
     // Approximate coordinates, keyed by station id. Loop stations come from
     // ComputeTraverse's leg chain; a GPS-only station (tied in by a vector but
     // not part of the loop) comes from ComputeTraverse's GPS resolution pass.
     std::unordered_map<int, Coord> coord;
     coord[td.startStationId] = {td.startEasting, td.startNorthing, td.startElevation};
     if (td.hasEndCoordinates) coord[posId[m]] = {td.endEasting, td.endNorthing, td.endElevation};
-    for (int k = 1; k < m; ++k) {
+    const int lastApproximatePosition = td.hasEndCoordinates ? m - 1 : m;
+    for (int k = 1; k <= lastApproximatePosition; ++k) {
         if (coord.find(posId[k]) == coord.end()) {
             const auto& leg = td.legs[k - 1];
             coord[posId[k]] = {leg.computedEasting, leg.computedNorthing, leg.computedElevation};
         }
     }
+    for (const auto& [id, known] : checkControlCoords) coord[id] = known;
     if (hasGps) {
         for (int gi : usableGps) {
             const auto& gv = td.gpsVectors[gi];
@@ -921,14 +963,13 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     auto addFree = [&](int id) {
         if (id == td.startStationId) return;
         if (td.hasEndCoordinates && id == posId[m]) return;  // the open traverse's fixed far end.
+        if (checkControlCoords.find(id) != checkControlCoords.end()) return;
         if (colOfId.find(id) != colOfId.end()) return;
         colOfId[id] = dim * static_cast<int>(freeIds.size());
         freeIds.push_back(id);
     };
-    // Position m is only ever free when it's the closed-loop case (where it's
-    // aliased to the start id and addFree's first check already excludes it);
-    // the open case always has hasEndCoordinates by the precondition above, so
-    // this is safe to run over the full 1..m range uniformly.
+    // Position m is free only when an open traverse has no ENDPOINT. In that
+    // case, CHECK controls provide the redundant observations needed to solve.
     for (int k = 1; k <= m; ++k) addFree(posId[k]);
     if (hasGps) {
         for (int gi : usableGps) {
@@ -947,7 +988,7 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
     if (dim == 3)
         for (int k = 0; k < m; ++k)
             if (td.legs[k].hasVertAngle) ++vertObsCount;
-    const int nObsConventional = 2 * m + vertObsCount;  // dist + angle per leg, + vert where measured.
+    const int nObsConventional = 2 * m + vertObsCount + 2 * static_cast<int>(checkControls.size());
 
     // GPS vector weight blocks (3x3, 1/ft²) and observed ENU delta (ft), fixed
     // before iteration: a direct rotation of the raw ECEF baseline (REQ-417).
@@ -1132,6 +1173,78 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
                 addObs(row, weight, l);
             }
         }
+        for (const CheckControl& control : checkControls) {
+            if (IsCancelled(cancelRequested)) return CancelledResult();
+            const TraverseSideShot& shot = *control.shot;
+            const int occupiedId = shot.atStationId;
+            const int controlId = shot.stationId;
+            const Coord& occupied = coord[occupiedId];
+            const Coord& known = coord[controlId];
+            const double dE = known.e - occupied.e;
+            const double dN = known.n - occupied.n;
+            const double d2 = dE * dE + dN * dN;
+            const double distance = std::sqrt(d2);
+            if (distance < 1e-9) {
+                r.message = "Degenerate CHECK control geometry (zero-length sight).";
+                degenerate = true;
+                break;
+            }
+
+            // The known check coordinates are fixed; each shot contributes a
+            // weighted distance and angle observation from its occupied setup.
+            const double observedDistance = shot.computedHorizDist;
+            const double baseDistSigma = w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * observedDistance;
+            const double distSigma = std::sqrt(baseDistSigma * baseDistSigma +
+                w.centeringInstrumentFt * w.centeringInstrumentFt +
+                w.centeringTargetFt * w.centeringTargetFt);
+            {
+                std::vector<Term> row;
+                if (colOf(occupiedId) >= 0) {
+                    row.push_back({colOf(occupiedId) + 0, -dE / distance});
+                    row.push_back({colOf(occupiedId) + 1, -dN / distance});
+                }
+                addObs(row, 1.0 / (distSigma * distSigma), observedDistance - distance);
+            }
+
+            const double observedAngle = shot.horizAngleDeg * kDeg2Rad;
+            const double azimuthToControl = Azimuth(occupied.e, occupied.n, known.e, known.n);
+            const int backsightId = control.occupiedPosition == 0 ? -1 : posId[control.occupiedPosition - 1];
+            const double azimuthToBacksight = control.occupiedPosition == 0
+                ? startBrgRad
+                : Azimuth(occupied.e, occupied.n, coord[backsightId].e, coord[backsightId].n);
+            const double computedAngle = azimuthToControl - azimuthToBacksight;
+            const double lAngle = WrapPi(observedAngle - computedAngle);
+            const double angleSigmaSec = std::sqrt(
+                w.sigmaAngleSec * w.sigmaAngleSec +
+                CenteringSec(w.centeringInstrumentFt, observedDistance) * CenteringSec(w.centeringInstrumentFt, observedDistance) +
+                CenteringSec(w.centeringTargetFt, observedDistance) * CenteringSec(w.centeringTargetFt, observedDistance));
+            const double angleSigmaRad = (angleSigmaSec / 3600.0) * kDeg2Rad;
+            std::vector<Term> angleRow;
+            if (control.occupiedPosition == 0) {
+                if (colOf(occupiedId) >= 0) {
+                    angleRow.push_back({colOf(occupiedId) + 0, -dN / d2});
+                    angleRow.push_back({colOf(occupiedId) + 1,  dE / d2});
+                }
+            } else {
+                const Coord& backsight = coord[backsightId];
+                const double backE = backsight.e - occupied.e;
+                const double backN = backsight.n - occupied.n;
+                const double backD2 = backE * backE + backN * backN;
+                if (backD2 <= 1e-12) {
+                    r.message = "Least squares CHECK control has a zero-length backsight.";
+                    return r;
+                }
+                if (colOf(occupiedId) >= 0) {
+                    angleRow.push_back({colOf(occupiedId) + 0, -dN / d2 + backN / backD2});
+                    angleRow.push_back({colOf(occupiedId) + 1,  dE / d2 - backE / backD2});
+                }
+                if (colOf(backsightId) >= 0) {
+                    angleRow.push_back({colOf(backsightId) + 0, -backN / backD2});
+                    angleRow.push_back({colOf(backsightId) + 1,  backE / backD2});
+                }
+            }
+            addObs(angleRow, 1.0 / (angleSigmaRad * angleSigmaRad), lAngle);
+        }
         if (degenerate) return r;
 
         // --- GPS vector observations (REQ-417) ---
@@ -1237,6 +1350,54 @@ LsaResult ComputeTraverseLeastSquares(const TraverseData& td, const LsaWeights& 
             vertRow.stdError = sigmaV;
             PushMeas(r.measResiduals, vertRow);
         }
+    }
+
+    for (const CheckControl& control : checkControls) {
+        if (IsCancelled(cancelRequested)) return CancelledResult();
+        const TraverseSideShot& shot = *control.shot;
+        const Coord& occupied = coord[shot.atStationId];
+        const Coord& known = coord[shot.stationId];
+        const double dE = known.e - occupied.e;
+        const double dN = known.n - occupied.n;
+        const double distance = std::sqrt(dE * dE + dN * dN);
+        const double observedDistance = shot.computedHorizDist;
+        const double distResidual = distance - observedDistance;
+        const double baseDistSigma = w.sigmaDistConstFt + w.sigmaDistPpm * 1e-6 * observedDistance;
+        const double distSigma = std::sqrt(baseDistSigma * baseDistSigma +
+            w.centeringInstrumentFt * w.centeringInstrumentFt +
+            w.centeringTargetFt * w.centeringTargetFt);
+        vtWv += (distResidual * distResidual) / (distSigma * distSigma);
+
+        const int backsightId = control.occupiedPosition == 0 ? -1 : posId[control.occupiedPosition - 1];
+        const double azimuthToBacksight = control.occupiedPosition == 0
+            ? startBrgRad
+            : Azimuth(occupied.e, occupied.n, coord[backsightId].e, coord[backsightId].n);
+        const double computedAngle = Azimuth(occupied.e, occupied.n, known.e, known.n) - azimuthToBacksight;
+        const double angleResidualSec = WrapPi(computedAngle - shot.horizAngleDeg * kDeg2Rad) * kRad2Sec;
+        const double angleSigmaSec = std::sqrt(
+            w.sigmaAngleSec * w.sigmaAngleSec +
+            CenteringSec(w.centeringInstrumentFt, observedDistance) * CenteringSec(w.centeringInstrumentFt, observedDistance) +
+            CenteringSec(w.centeringTargetFt, observedDistance) * CenteringSec(w.centeringTargetFt, observedDistance));
+        vtWv += (angleResidualSec * angleResidualSec) / (angleSigmaSec * angleSigmaSec);
+
+        LsaMeasResidual angleRow;
+        angleRow.kind = LsaMeasKind::Angle;
+        angleRow.atStationId = shot.atStationId;
+        angleRow.fromStationId = backsightId;
+        angleRow.toStationId = shot.stationId;
+        angleRow.adjusted = shot.horizAngleDeg + angleResidualSec / 3600.0;
+        angleRow.residual = angleResidualSec;
+        angleRow.stdError = angleSigmaSec;
+        PushMeas(r.measResiduals, angleRow);
+
+        LsaMeasResidual distanceRow;
+        distanceRow.kind = LsaMeasKind::Distance;
+        distanceRow.fromStationId = shot.atStationId;
+        distanceRow.toStationId = shot.stationId;
+        distanceRow.adjusted = observedDistance + distResidual;
+        distanceRow.residual = distResidual;
+        distanceRow.stdError = distSigma;
+        PushMeas(r.measResiduals, distanceRow);
     }
 
     // GPS vector residuals.

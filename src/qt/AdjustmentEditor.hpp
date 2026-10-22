@@ -18,7 +18,7 @@ struct AdjustmentEditorPalette {
   QColor planLeg, planPoint, planEllipse, planSide, planCheck;
 };
 
-/// Navy on the Dark appearance (REQ-081), white paper on the Light appearance.
+/// Graphite-gray on the Dark appearance (REQ-431), neutral light surface on Light.
 AdjustmentEditorPalette AdjustmentPalette(bool dark);
 
 enum class AdjustmentToken : std::uint8_t { Keyword, Option, Number, Comment, FieldCode };
