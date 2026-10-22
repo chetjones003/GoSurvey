@@ -293,6 +293,20 @@ update::Manifest OfferedManifest(const std::string& version = "99.0.0") {
 QPushButton* UpdateButton(QDialog* dialog, const char* name) {
   return dialog->findChild<QPushButton*>(name);
 }
+// The Windows clipboard is shared with every other program in the session, and another program (a clipboard
+// manager, a remote session) can hold it open so Qt's setText is silently dropped. A copy-to-clipboard check
+// only means something when a probe round-trips, so those assertions are gated on this and the skip is reported.
+bool ClipboardRoundTrips() {
+  QClipboard* clipboard = QGuiApplication::clipboard();
+  const QString probe = QStringLiteral("gosurvey-clipboard-probe");
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    clipboard->setText(probe);
+    if (clipboard->text() == probe) return true;
+    QTest::qWait(100);
+  }
+  qWarning("The clipboard does not round-trip in this session; copy-to-clipboard assertions are skipped.");
+  return false;
+}
 QString Issue886Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
@@ -2360,11 +2374,12 @@ private Q_SLOTS:
     QCOMPARE(send->text(), QString("Send This Report"));
     QVERIFY(close->isDefault());
 
+    const bool clipboardWorks = ClipboardRoundTrips();
     QApplication::clipboard()->clear();
     QString message;
     CaptureNextMessage(message);
     QTest::mouseClick(send, Qt::LeftButton);
-    QCOMPARE(QApplication::clipboard()->text(), report);
+    if (clipboardWorks) QCOMPARE(QApplication::clipboard()->text(), report);
     QCOMPARE(opened.size(), 1);
     const QUrl url = opened.front();
     QCOMPARE(url.host(), QString("github.com"));
@@ -2373,14 +2388,14 @@ private Q_SLOTS:
     QCOMPARE(query.queryItemValue("title", QUrl::FullyDecoded),
              QString("GoSurvey report (") + GOSURVEY_VERSION_FULL + ")");
     QVERIFY(query.queryItemValue("body", QUrl::FullyDecoded).contains("Exception code: 0xC0000005"));
-    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(true, true).c_str()));
+    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(clipboardWorks, true).c_str()));
     QVERIFY2(dialog->isVisible(), "Send This Report leaves the window open");
 
     // A browser that cannot be opened is reported, with the address to use by hand.
     browserWorks = false;
     CaptureNextMessage(message);
     QTest::mouseClick(send, Qt::LeftButton);
-    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(true, false).c_str()));
+    QCOMPARE(message, QString::fromUtf8(failureReportUi::SendOutcomeMessage(clipboardWorks, false).c_str()));
     QVERIFY(message.contains("github.com/chetjones003/GoSurvey/issues/new"));
 
     // Close is the cancel: the window goes and nothing more is opened or sent.
@@ -5420,8 +5435,9 @@ private Q_SLOTS:
     QVERIFY(exported.readAll().contains("200.25"));
     auto* reports = window.findChild<QDockWidget*>("surveyReports"); QVERIFY(reports);
     QCOMPARE(reports->findChild<QTabWidget*>("surveyReportTabs")->count(), 1);
+    const bool clipboardWorks = ClipboardRoundTrips();
     reports->findChild<QPushButton*>("copySurveyReport")->click();
-    QVERIFY(QApplication::clipboard()->text().contains("200.25"));
+    if (clipboardWorks) QVERIFY(QApplication::clipboard()->text().contains("200.25"));
     window.Submit("UNDO"); QVERIFY(window.State().surveyPoints.empty());
     window.Submit("REDO"); QCOMPARE(window.State().surveyPoints.size(), std::size_t(2));
   }
@@ -7506,8 +7522,9 @@ private Q_SLOTS:
       QTRY_COMPARE(table->item(0, 6)->text(), QString("Blunder"));
 
       // The report is copied and names the checks.
+      const bool clipboardWorks = ClipboardRoundTrips();
       dialog->findChild<QPushButton*>("pdfChecksCopyReport")->click();
-      QVERIFY(QGuiApplication::clipboard()->text().contains("40"));
+      if (clipboardWorks) QVERIFY(QGuiApplication::clipboard()->text().contains("40"));
 
       // Delete a check.
       dialog->findChild<QPushButton*>("pdfCheckDelete0")->click();
