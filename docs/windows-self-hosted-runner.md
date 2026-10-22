@@ -151,8 +151,12 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\GoSurveyCI\pr-wo
 ```
 
 The existing build listener is reused if already running. Each role launcher
-holds a mutex to prevent duplicates. Listener output/error logs are under
-`%USERPROFILE%\GoSurveyCI\pr-workers\`. Keep the user session available; service
+holds a mutex to prevent duplicates. Combined listener output/error logs are
+`%USERPROFILE%\GoSurveyCI\pr-workers\<role>-listener.log`. Windows ShellExecute
+starts hidden, independent processes; each child opens its own log. Do not add
+parent-side Start-Process output redirection: inherited CI pipe handles cause
+the Actions runner to kill the child tree when the provisioning step exits.
+Keep the user session available; service
 session 0 remains unsupported for the GUI test launcher.
 
 ## 5. Select production routing

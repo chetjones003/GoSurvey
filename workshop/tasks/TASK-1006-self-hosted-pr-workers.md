@@ -1,7 +1,7 @@
 # TASK-1006 — Register dedicated Windows workers for PR validation
 
 - Type: feature / CI tooling
-- Status: plan
+- Status: verified; ready for review
 - Opened: 2026-10-21
 
 ## Request and authority
@@ -62,7 +62,8 @@ Do not add or independently run a new test suite for provisioning.
 
 ## Implementation / outcomes
 
-Pending.
+Provisioning and production routing verified on commit 3d624a6; PR merge into
+beta still requires an approving review. Measurements and limits are below.
 
 ### Implementation ready for laptop provisioning
 
@@ -148,3 +149,46 @@ step's pipes. Preserve normal-user checks, credential stripping and role mutexes
 Remove temporary lifetime probes. Validate syntax, repeat the same remote
 registration run and require subsequent role jobs to execute before activation.
 No new test cases; existing workflow is the before/after reproduction.
+
+### Rollout verification — 3d624a6
+
+PASS: bootstrap run 39698895743 registers/reuses all three workers, passes the
+post-step liveness gate, and executes tool inspections on the actual dedicated
+clang and MSVC workers. All three remain online after those jobs finish. This
+is the same startup reproduction that failed before the handle-detachment fix.
+
+Enabled GOSURVEY_PR_RUNNERS=self-hosted, deleted the temporary bootstrap secret,
+and disabled the temporary bootstrap workflow. Full-validation run 39698900805,
+attempt 2, passes on the actual laptop role workers: gosurvey-victus-ci for the
+full build/CTest and gosurvey-victus-msvc-analyze for the MSVC selector/job.
+The six required checks are satisfied. This CI/tooling-only PR has no changed
+C++ files; clang-tidy is skipped by its existing classifier and MSVC selects zero
+of 380 candidate units. Tool inspection proves the clang worker has LLVM 20.1.4,
+but this rollout is not a measurement of real C++ analysis under combined load.
+
+Same-commit normal production results (not a duplicate benchmark):
+
+| Measure | Hosted attempt 1 | Laptop attempt 2 |
+| --- | ---: | ---: |
+| Build/test job | 6m37s | 3m44s |
+| Build step | 92s | 55s |
+| CTest step (rounded timestamps) | 227s | 136s |
+| Full validation execution span, including classifier | 6m52s | 3m57s |
+
+Laptop CTest reports 134.77s, all 189 CTest entries pass. Compiler cache reports
+428 hits / 428 requests, zero misses. CPU cap 3 and CTest cap 6 were active on
+12 logical processors / 15.7 GiB. Qt/MSVC downloads and Mesa deployment are
+correctly skipped in favor of installed tools/native graphics. MSVC job takes
+38s including setup, with no affected translation units. The three-minute goal
+is not achieved: tests remain the largest measured stage, and real C++ analysis
+may extend the gate. Do not interpret this configuration-only run as evidence
+that all future PRs finish in 3m57s.
+
+Verification: existing remote startup reproduction fails before/passes after;
+normal full CTest passes; PowerShell syntax and whitespace checks pass; earlier
+actionlint passes (workflow syntax unchanged by the final launch fix). Manual
+architecture/code/dependency review PASS: no application behavior or dependency
+changes. Hosted override and normal-session startup remain documented. No new
+test cases or extra benchmark workflow runs added. Rollback remains setting the
+repository variable to hosted and rerunning validation. All production workflow
+changes become the default for new PRs after this PR merges into beta.
