@@ -1082,31 +1082,38 @@ void ViewportRenderer::DestroyFramebuffer() {
     fbo_ = 0;
   }
   fbW_ = fbH_ = 0;
+  renderedW_ = renderedH_ = 0;
 }
 
 bool ViewportRenderer::EnsureFramebuffer(int w, int h) {
   if (w <= 0 || h <= 0)
     return false;
-  if (fbo_ && w == fbW_ && h == fbH_)
+  if (fbo_ && w <= fbW_ && h <= fbH_)
     return true;
 
+  const auto roundUp = [](int value) {
+    constexpr int allocationBlock = 256;
+    return ((value + allocationBlock - 1) / allocationBlock) * allocationBlock;
+  };
+  const int allocationWidth = roundUp(std::max(w, fbW_));
+  const int allocationHeight = roundUp(std::max(h, fbH_));
   DestroyFramebuffer();
-  fbW_ = w;
-  fbH_ = h;
+  fbW_ = allocationWidth;
+  fbH_ = allocationHeight;
 
   glGenFramebuffers(1, &fbo_);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
 
   glGenTextures(1, &colorTex_);
   glBindTexture(GL_TEXTURE_2D, colorTex_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocationWidth, allocationHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex_, 0);
 
   glGenRenderbuffers(1, &rbo_);
   glBindRenderbuffer(GL_RENDERBUFFER, rbo_);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, allocationWidth, allocationHeight);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo_);
 
   GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -1114,7 +1121,17 @@ bool ViewportRenderer::EnsureFramebuffer(int w, int h) {
   return status == GL_FRAMEBUFFER_COMPLETE;
 }
 
+void ViewportRenderer::BlitRenderedFrame(unsigned int destinationFramebuffer, int width, int height) const {
+  if (!fbo_ || !HasRenderedFrame() || width <= 0 || height <= 0) return;
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destinationFramebuffer);
+  glBlitFramebuffer(0, 0, renderedW_, renderedH_, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
+}
+
 void ViewportRenderer::SetSize(int width, int height) {
+  viewW_ = width;
+  viewH_ = height;
   EnsureFramebuffer(width, height);
 }
 
@@ -1206,7 +1223,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
                                    const std::vector<EntityAttributes>* pointCloudAttrs,
                                    const PointCloudDisplaySettings* pointCloudDisplay) {
-  if (!EnsureFramebuffer(fbWidth, fbHeight))
+  viewW_ = fbWidth;
+  viewH_ = fbHeight;
+  if (!EnsureFramebuffer(viewW_, viewH_))
     return;
 
   // MSAA path is gated by "Hardware Acceleration" + "Smooth line display" (Settings → System → Graphics Performance).
@@ -1223,7 +1242,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDisable(GL_LINE_SMOOTH);
   }
   glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
-  glViewport(0, 0, fbW_, fbH_);
+  glViewport(0, 0, viewW_, viewH_);
 
   // --- Visual style (REQ-064 / ADR-026 (e)) ------------------------------------------------------
   // 2D Wireframe takes exactly the path it always took: depth test off, depth writes off, draw order
@@ -1278,7 +1297,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // legal for both. The epilogue reads only `useMsaa`, `fbo_`, `msFbo_`, `fbW_`, `fbH_`, all
   // declared above the jump, so nothing it needs lives inside this block.
   {
-  const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
+  const float aspect = static_cast<float>(viewW_) / static_cast<float>(std::max(viewH_, 1));
   // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
   // without quantizing halfHd at extreme zooms.
   // Pan and zoom are carried by the camera now: the target is the pan point and orthoHalfH is the
@@ -3224,7 +3243,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // Midpoint, Perpendicular) shared between both.
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
-    BuildSnapOverlayLines(*snapOverlay, cam, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
+    BuildSnapOverlayLines(*snapOverlay, cam, halfH, viewH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       if (snapOverlay->solid)
@@ -3551,12 +3570,14 @@ finish_render:
   if (useMsaa && msFbo_ && fbo_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_);
-    glBlitFramebuffer(0, 0, fbW_, fbH_, 0, 0, fbW_, fbH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, viewW_, viewH_, 0, 0, viewW_, viewH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  renderedW_ = viewW_;
+  renderedH_ = viewH_;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3860,8 +3881,8 @@ bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThu
   glUseProgram(0);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   // Leave the viewport as the scene pass left it, so nothing downstream inherits a 64 px viewport.
-  if (fbW_ > 0 && fbH_ > 0)
-    glViewport(0, 0, fbW_, fbH_);
+  if (viewW_ > 0 && viewH_ > 0)
+    glViewport(0, 0, viewW_, viewH_);
   return true;
 }
 
@@ -3871,11 +3892,11 @@ bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThu
 // RenderScene for the drawing it wants pictured. Best-effort: returns false on any failure and
 // writes nothing. This is the only gl* path for the feature; keeping it here holds invariant §11.6.
 bool ViewportRenderer::CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const {
-  if (!pathUtf8 || !pathUtf8[0] || fbo_ == 0 || fbW_ < 4 || fbH_ < 4 || maxDim < 8)
+  if (!pathUtf8 || !pathUtf8[0] || fbo_ == 0 || viewW_ < 4 || viewH_ < 4 || maxDim < 8)
     return false;
 
-  const int srcW = fbW_;
-  const int srcH = fbH_;
+  const int srcW = viewW_;
+  const int srcH = viewH_;
   std::vector<unsigned char> src(static_cast<size_t>(srcW) * static_cast<size_t>(srcH) * 4u);
   glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
   glReadBuffer(GL_COLOR_ATTACHMENT0);

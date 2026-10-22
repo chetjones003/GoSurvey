@@ -198,6 +198,10 @@ public:
                    const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
+  [[nodiscard]] bool HasRenderedFrame() const { return renderedW_ > 0 && renderedH_ > 0; }
+  [[nodiscard]] int RenderedWidth() const { return renderedW_; }
+  [[nodiscard]] int RenderedHeight() const { return renderedH_; }
+  void BlitRenderedFrame(unsigned int destinationFramebuffer, int width, int height) const;
 
   /// REQ-363 / ADR-064 (d): an online map tile's texture from top-row-first RGBA — linear filtered,
   /// clamped at the edges so neighbouring tiles meet without a seam. 0 on failure. Static: tiles are
@@ -280,8 +284,15 @@ private:
   unsigned int fbo_ = 0;
   unsigned int colorTex_ = 0;
   unsigned int rbo_ = 0;
+  // Allocation size is retained while the live viewport shrinks or grows within
+  // this capacity, avoiding renderbuffer destruction/recreation on each resize step.
   int fbW_ = 0;
   int fbH_ = 0;
+  // Current drawing area within the retained allocation.
+  int viewW_ = 0;
+  int viewH_ = 0;
+  int renderedW_ = 0;
+  int renderedH_ = 0;
 
   /// Multisampled pass → blit to \p colorTex_ (reduces aliasing / "sparkle" when zoomed).
   unsigned int msFbo_ = 0;

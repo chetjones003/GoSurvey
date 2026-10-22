@@ -20,6 +20,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -34,7 +35,9 @@
 #include <QSignalBlocker>
 #include <QSet>
 #include <QSpinBox>
+#include <QStyle>
 #include <QTabWidget>
+#include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -62,11 +65,13 @@ int SelectedSurface(const AppCommandState& state) {
 constexpr int kRibbonPanelHeight = 98;
 constexpr int kRibbonPageHeight = 102;
 constexpr int kRibbonHeight = 130;
+constexpr int kRibbonCompactHeaderHeight = 26;
 constexpr int kRibbonCaptionBottomSpace = 4;
-
 class RibbonPage final : public QWidget {
   struct Panel { QWidget* expanded; QToolButton* collapsed; QMenu* menu; int priority; };
   std::vector<Panel> m_Panels;
+  std::vector<int> m_PriorityOrder;
+  std::vector<int> m_OverflowPanelIndices;
   QHBoxLayout* m_Row;
   QToolButton* m_More;
   QMenu* m_Overflow;
@@ -87,6 +92,8 @@ public:
     collapsed->setText(title); collapsed->setToolTip(title); collapsed->setAutoRaise(true);
     collapsed->setFixedSize(std::clamp(fontMetrics().horizontalAdvance(title) + 22, 66, 155), 92);
     collapsed->setIconSize(QSize(26, 26)); collapsed->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    // Make the full collapsed panel button open its menu; a split button leaves the
+    // tiny, style-dependent arrow as the only reliable target at minimum width.
     collapsed->setPopupMode(QToolButton::InstantPopup);
     auto* menu = new QMenu(title, collapsed); menu->setToolTipsVisible(true); collapsed->setMenu(menu);
     if (!actions.empty()) { collapsed->setIcon(actions.front()->icon()); menu->setIcon(actions.front()->icon()); }
@@ -125,50 +132,160 @@ public:
       connect(mirror, &QSpinBox::valueChanged, source, &QSpinBox::setValue);
     }
     m_Row->insertWidget(m_Row->count() - 2, panel); m_Row->insertWidget(m_Row->count() - 2, collapsed);
-    m_Panels.push_back({panel, collapsed, menu, priority}); Fit();
+    m_Panels.push_back({panel, collapsed, menu, priority});
+    m_PriorityOrder.push_back(static_cast<int>(m_Panels.size() - 1));
+    std::stable_sort(m_PriorityOrder.begin(), m_PriorityOrder.end(), [this](int a, int b) {
+      return m_Panels[a].priority > m_Panels[b].priority;
+    });
+    Fit();
   }
   void Fit() {
     if (m_Panels.empty()) return;
     int used = 6;
     for (const auto& p : m_Panels) used += p.collapsed->width() + 2;
-    std::vector<int> order(m_Panels.size()); std::iota(order.begin(), order.end(), 0);
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return m_Panels[a].priority > m_Panels[b].priority; });
     std::vector<bool> shown(m_Panels.size(), true);
     if (used > width()) {
       std::fill(shown.begin(), shown.end(), false); used = 6 + m_More->width() + 2;
-      for (const int i : order) if (used + m_Panels[i].collapsed->width() + 2 <= width()) {
+      for (const int i : m_PriorityOrder) if (used + m_Panels[i].collapsed->width() + 2 <= width()) {
         shown[i] = true; used += m_Panels[i].collapsed->width() + 2;
       }
     }
-    m_Overflow->clear(); bool overflow = false;
+    std::vector<int> overflowPanels;
     for (int i = 0; i < static_cast<int>(m_Panels.size()); ++i) {
-      auto& p = m_Panels[i]; p.expanded->hide(); p.collapsed->setVisible(shown[i]);
-      if (!shown[i]) { m_Overflow->addMenu(p.menu); overflow = true; }
+      if (!shown[i]) overflowPanels.push_back(i);
     }
-    m_More->setVisible(overflow);
-    order.erase(std::remove_if(order.begin(), order.end(), [&](int i) { return !shown[i]; }), order.end());
-    for (const int i : order) {
+    if (overflowPanels != m_OverflowPanelIndices) {
+      m_Overflow->clear();
+      for (const int i : overflowPanels) m_Overflow->addMenu(m_Panels[i].menu);
+      m_OverflowPanelIndices = std::move(overflowPanels);
+    }
+    if (m_More->isHidden() == !m_OverflowPanelIndices.empty())
+      m_More->setVisible(!m_OverflowPanelIndices.empty());
+    std::vector<bool> expanded(m_Panels.size(), false);
+    for (const int i : m_PriorityOrder) {
+      if (!shown[i]) continue;
       auto& p = m_Panels[i]; const int extra = p.expanded->width() - p.collapsed->width();
-      if (used + extra <= width()) { p.expanded->show(); p.collapsed->hide(); used += extra; }
+      if (used + extra <= width()) { expanded[i] = true; used += extra; }
+    }
+    for (int i = 0; i < static_cast<int>(m_Panels.size()); ++i) {
+      auto& p = m_Panels[i];
+      if (p.expanded->isHidden() == expanded[i]) p.expanded->setVisible(expanded[i]);
+      const bool collapsedVisible = shown[i] && !expanded[i];
+      if (p.collapsed->isHidden() == collapsedVisible) p.collapsed->setVisible(collapsedVisible);
     }
   }
 protected:
   void resizeEvent(QResizeEvent* event) override { QWidget::resizeEvent(event); Fit(); }
   void showEvent(QShowEvent* event) override { QWidget::showEvent(event); Fit(); }
 };
+
+void UpdateRibbonTabButton(QWidget* wrapper) {
+  auto* button = wrapper->findChild<QToolButton*>("ribbonTabMenu");
+  Q_ASSERT(button);
+  if (!button) return;
+  button->setText(QString::fromUtf8("☰  Tabs"));
+}
+
+void UpdateRibbonTabMenu(QWidget* wrapper) {
+  UpdateRibbonTabButton(wrapper);
+  auto* ribbon = wrapper->findChild<QTabWidget*>("ribbon");
+  auto* button = wrapper->findChild<QToolButton*>("ribbonTabMenu");
+  if (!ribbon || !button) return;
+  const int current = ribbon->currentIndex();
+  auto* menu = button->menu();
+  if (!menu) return;
+  QString signature;
+  for (int i = 0; i < ribbon->count(); ++i) {
+    if (!ribbon->isTabVisible(i)) continue;
+    signature += QString::number(i) + QLatin1Char(':') + ribbon->tabText(i) + QLatin1Char(';');
+  }
+  if (menu->property("ribbonTabSignature").toString() == signature) return;
+  menu->clear();
+  for (int i = 0; i < ribbon->count(); ++i) {
+    if (!ribbon->isTabVisible(i)) continue;
+    auto* action = menu->addAction(ribbon->tabText(i));
+    action->setCheckable(true);
+    action->setChecked(i == current);
+    action->setProperty("ribbonIndex", i);
+    action->setObjectName("ribbonTabMenuAction_" + ribbon->widget(i)->property("ribbonTab").toString());
+    QObject::connect(action, &QAction::triggered, ribbon, [ribbon, i] { ribbon->setCurrentIndex(i); });
+  }
+  menu->setProperty("ribbonTabSignature", signature);
+}
+
+void FitRibbonChrome(QWidget* wrapper) {
+  auto* ribbonColumn = wrapper->findChild<QWidget*>("ribbonColumn");
+  auto* ribbon = wrapper->findChild<QTabWidget*>("ribbon");
+  auto* shared = wrapper->findChild<QWidget*>("ribbonSharedArea");
+  auto* header = wrapper->findChild<QWidget*>("ribbonTabMenuHeader");
+  auto* tabMenu = wrapper->findChild<QToolButton*>("ribbonTabMenu");
+  auto* compactLayers = wrapper->findChild<QToolButton*>("ribbonCompactLayers");
+  Q_ASSERT(ribbonColumn && ribbon && shared && header && tabMenu && compactLayers);
+  if (!ribbonColumn || !ribbon || !shared || !header || !tabMenu || !compactLayers) return;
+
+  auto* tabs = ribbon->tabBar();
+  int needed = 0;
+  int visibleCount = 0;
+  for (int i = 0; i < ribbon->count(); ++i) if (tabs->isTabVisible(i)) {
+    needed += tabs->tabRect(i).width();
+    ++visibleCount;
+  }
+  if (visibleCount > 1) needed += (visibleCount - 1) * tabs->style()->pixelMetric(QStyle::PM_TabBarTabHSpace);
+  if (needed <= 0) needed = tabs->sizeHint().width();
+
+  const int sharedWidth = shared->sizeHint().width();
+  const int gap = 2;
+  const bool sharedFits = wrapper->width() >= needed + sharedWidth + gap;
+  const bool compact = !sharedFits;
+  if (shared->isHidden() == sharedFits) shared->setVisible(sharedFits);
+  if (header->isHidden() == compact) header->setVisible(compact);
+  if (compactLayers->isHidden() == compact) compactLayers->setVisible(compact);
+  if (tabs->isHidden() == !compact) tabs->setVisible(!compact);
+  if (wrapper->property("ribbonChromeCompact").toBool() != compact) {
+    ribbon->setFixedHeight(compact ? kRibbonHeight - kRibbonCompactHeaderHeight : kRibbonHeight);
+    wrapper->setProperty("ribbonChromeCompact", compact);
+  }
+  UpdateRibbonTabMenu(wrapper);
+}
+
+class RibbonResizeFilter final : public QObject {
+  QWidget* m_Wrapper;
+  bool m_Queued = false;
+public:
+  RibbonResizeFilter(QWidget* wrapper) : QObject(wrapper), m_Wrapper(wrapper) {}
+  void Schedule() {
+    if (m_Queued) return;
+    m_Queued = true;
+    QTimer::singleShot(0, this, [this] { m_Queued = false; FitRibbonChrome(m_Wrapper); });
+  }
+protected:
+  bool eventFilter(QObject* watched, QEvent* event) override {
+    if (watched == m_Wrapper && (event->type() == QEvent::Resize || event->type() == QEvent::Show)) Schedule();
+    return false;
+  }
+};
 }
 
 void EditorWindow::BuildRibbonPages() {
   auto* toolbar = addToolBar("Ribbon"); toolbar->setObjectName("ribbonBar");
   toolbar->setMovable(false); toolbar->setFloatable(false); toolbar->setContentsMargins(0, 0, 0, 0);
-  auto* wrapper = new QWidget(toolbar); wrapper->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  auto* wrapper = new QWidget(toolbar); wrapper->setObjectName("ribbonWrapper"); wrapper->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
   auto* strip = new QHBoxLayout(wrapper); strip->setContentsMargins(0, 0, 0, 0); strip->setSpacing(2);
-  auto* ribbon = new QTabWidget(wrapper); ribbon->setObjectName("ribbon"); strip->addWidget(ribbon, 1);
-  auto* shared = new QWidget(wrapper); shared->setFixedWidth(228);
+  auto* ribbonColumn = new QWidget(wrapper); ribbonColumn->setObjectName("ribbonColumn"); ribbonColumn->setMinimumWidth(0);
+  auto* ribbonLayout = new QVBoxLayout(ribbonColumn); ribbonLayout->setContentsMargins(0, 0, 0, 0); ribbonLayout->setSpacing(0);
+  auto* header = new QWidget(ribbonColumn); header->setObjectName("ribbonTabMenuHeader"); header->setFixedHeight(kRibbonCompactHeaderHeight);
+  auto* headerLayout = new QHBoxLayout(header); headerLayout->setContentsMargins(4, 0, 4, 0); headerLayout->setSpacing(0);
+  auto* tabMenu = new QToolButton(header); tabMenu->setObjectName("ribbonTabMenu"); tabMenu->setText(QString::fromUtf8("☰  Tabs"));
+  tabMenu->setAccessibleName("Ribbon tabs"); tabMenu->setToolTip("Choose a ribbon tab"); tabMenu->setPopupMode(QToolButton::InstantPopup); tabMenu->setAutoRaise(false); tabMenu->setFixedHeight(24);
+  auto* tabMenuItems = new QMenu(tabMenu); tabMenu->setMenu(tabMenuItems);
+  headerLayout->addWidget(tabMenu); headerLayout->addStretch(); header->hide(); ribbonLayout->addWidget(header);
+  auto* ribbon = new QTabWidget(ribbonColumn); ribbon->setObjectName("ribbon"); ribbonLayout->addWidget(ribbon, 1);
+  strip->addWidget(ribbonColumn, 1);
+  auto* shared = new QWidget(wrapper); shared->setObjectName("ribbonSharedArea"); shared->setFixedWidth(228);
   auto* sharedColumn = new QVBoxLayout(shared); sharedColumn->setContentsMargins(0, 26, 0, 0); sharedColumn->setSpacing(0);
   auto* layerPage = new RibbonPage(shared); layerPage->setObjectName("ribbonSharedLayers"); sharedColumn->addWidget(layerPage);
   strip->addWidget(shared);
-  ribbon->setUsesScrollButtons(true); ribbon->setElideMode(Qt::ElideNone);
+  ribbon->setUsesScrollButtons(false); ribbon->setElideMode(Qt::ElideNone);
   ribbon->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed); ribbon->setMinimumWidth(0);
   ribbon->setFixedHeight(kRibbonHeight);
   const QStringList names = {"Home", "Insert", "Annotate", "View", "Manage", "Output", "Survey", "Modeling",
@@ -343,6 +460,28 @@ void EditorWindow::BuildRibbonPages() {
     }
     ribbon->addTab(page, name);
   }
+  auto* layerButton = layerPage->findChild<QToolButton*>("collapsed_ribbonPanel_Home_Layers");
+  if (!layerButton) {
+    qFatal("Ribbon Layers panel was not constructed");
+    return;
+  }
+  QMenu* layerMenu = layerButton->menu();
+  if (!layerMenu) {
+    qFatal("Ribbon Layers menu was not constructed");
+    return;
+  }
+  auto* compactLayers = new QToolButton(header); compactLayers->setObjectName("ribbonCompactLayers");
+  compactLayers->setText("Layers"); compactLayers->setAccessibleName("Layer and color controls");
+  compactLayers->setPopupMode(QToolButton::InstantPopup); compactLayers->setMenu(layerMenu);
+  headerLayout->insertWidget(1, compactLayers);
+  QObject::connect(ribbon, &QTabWidget::currentChanged, tabMenu, [wrapper] {
+    UpdateRibbonTabButton(wrapper);
+    auto* menu = wrapper->findChild<QToolButton*>("ribbonTabMenu")->menu();
+    const int current = wrapper->findChild<QTabWidget*>("ribbon")->currentIndex();
+    for (auto* action : menu->actions()) action->setChecked(action->property("ribbonIndex").toInt() == current);
+  });
+  QObject::connect(tabMenuItems, &QMenu::aboutToShow, wrapper, [wrapper] { UpdateRibbonTabMenu(wrapper); });
+  auto* resizeFilter = new RibbonResizeFilter(wrapper); wrapper->installEventFilter(resizeFilter); resizeFilter->Schedule();
   toolbar->addWidget(wrapper);
 }
 
@@ -407,6 +546,7 @@ void EditorWindow::RefreshRibbon() {
       action->setText(Text(map.label)); action->setProperty("cadIcon", Text(map.icon) + ".png"); action->setIcon(CadCommandIcon(Text(map.icon) + ".png"));
     }
   }
+  if (auto* wrapper = findChild<QWidget*>("ribbonWrapper")) FitRibbonChrome(wrapper);
   auto syncCombo = [&](const char* name, const QStringList& values, const QString& selected) {
     if (auto* combo = findChild<QComboBox*>(name)) {
       if (combo->hasFocus() || combo->view()->isVisible()) return;

@@ -6,7 +6,8 @@ gosurvey_assert_no_imgui_in_link_graph(GoSurveyQtTests)
 target_compile_definitions(GoSurveyQtTests PRIVATE GOSURVEY_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}" GOSURVEY_TEST_ARTIFACT_DIR="${GOSURVEY_ARTIFACT_DIR}")
 gosurvey_target_warnings(GoSurveyQtTests TEST)
 if(MSVC)
-  target_compile_options(GoSurveyQtTests PRIVATE /utf-8)
+  # The single Qt test translation unit exceeds MSVC's default COFF section limit.
+  target_compile_options(GoSurveyQtTests PRIVATE /utf-8 /bigobj)
 endif()
 add_custom_command(TARGET GoSurveyQtTests POST_BUILD
   COMMAND "${CMAKE_COMMAND}" -E copy_if_different "$<TARGET_FILE:Qt6::Test>" "$<TARGET_FILE_DIR:GoSurveyQtTests>"

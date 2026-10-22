@@ -15,8 +15,10 @@
 
 class ViewportRenderer;
 class QPainter;
+class QLabel;
 
 class EditorViewport final : public QOpenGLWidget {
+  friend class QtEditorTests;
 public:
   EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent);
   ~EditorViewport() override;
@@ -38,6 +40,9 @@ public:
   void CancelSelectionBox();
   bool CancelGripEdit();
   bool IsRendererReady() const { return m_Ready; }
+  void BeginWindowResizePreview();
+  void EndWindowResizePreview();
+  void UpdateWindowResizePreviewGeometry();
   QPoint CursorPosition() const { return m_Last.toPoint(); }
 protected:
   void initializeGL() override;
@@ -78,6 +83,10 @@ private:
   ray3d::Vec3 m_Cursor;
   CadSnap::Hit m_Snap;
   bool m_Ready = false;
+  bool m_ResizePreview = false;
+  QLabel* m_ResizePreviewOverlay = nullptr;
+  QSize m_ResizePreviewMinimumSize;
+  QSize m_ResizePreviewMaximumSize;
   bool m_PointerInside = false;
   bool m_Grid = true;
   bool m_LeftDragSelection = false;
