@@ -11,6 +11,7 @@
 #include "CadCommands.hpp"
 #include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
+#include "ViewCube.hpp"
 
 class ViewportRenderer;
 class QPainter;
@@ -28,6 +29,10 @@ public:
   std::function<void(const QPoint& globalPosition)> snapMenuRequested;
   std::function<bool()> submitLockedInput;
   void SetOrientation(float azimuth, float elevation);
+  /// Eases the view to an orientation over a fraction of a second (REQ-059); SetOrientation snaps.
+  void AnimateToOrientation(float azimuth, float elevation);
+  /// A press at 'point' on the ViewCube (face, arrow or home) sets the view it stands for.
+  void ClickViewCube(QPointF point);
   void SetGrid(bool enabled) { m_Grid = enabled; update(); }
   void InvalidateGeometry();
   void CancelSelectionBox();
@@ -48,6 +53,9 @@ protected:
   void leaveEvent(QEvent* event) override;
 private:
   void DrawCursor(QPainter& painter);
+  viewcube::Scene CubeScene() const;
+  void StartViewAnimationClock();
+  void StepViewAnimation();
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
@@ -60,6 +68,9 @@ private:
   std::unique_ptr<ViewportRenderer> m_Renderer;
   std::unique_ptr<OnlineMapController> m_OnlineMap;
   QTimer m_MapTimer;
+  QTimer m_ViewAnimTimer;
+  QElapsedTimer m_ViewAnimClock;
+  bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;
   int m_LastCaptureGathered = -1;
   int m_LastCaptureTotal = -1;

@@ -125,6 +125,13 @@
 #include <limits>
 
 namespace {
+// REQ-059 / #1034: the ViewCube as laid out for the viewport's current camera and UCS.
+viewcube::Scene ViewCubeSceneOf(EditorViewport* viewport, const AppCommandState& state) {
+  const viewcube::Point origin = viewcube::OriginFor(static_cast<float>(viewport->width()));
+  return viewcube::BuildScene(CadViewCamera(state), origin.x, origin.y, CadUcsViewAzimuthOffsetDeg(state));
+}
+QPoint Px(const viewcube::Point& p) { return QPoint(qRound(p.x), qRound(p.y)); }
+
 QString QtTestArtifactDirectory() {
   const QString override = qEnvironmentVariable("GOSURVEY_QT_TEST_ARTIFACT_DIR");
   return override.isEmpty() ? QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) : override;
@@ -4900,9 +4907,22 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
     const auto image = viewport->grabFramebuffer();
     QVERIFY(!image.isNull());
+    // Plan view (the startup default) must stay legible (REQ-059): the TOP face is drawn light and
+    // carries its dark label, and the compass ring around it is drawn too.
     const qreal ratio = viewport->devicePixelRatioF();
-    const auto face = image.pixelColor(qRound((viewport->width() - 55) * ratio), qRound(91 * ratio));
-    QVERIFY2(face.blue() > 60 && face.red() > 40, qPrintable(face.name()));
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, window.State());
+    const viewcube::QuadFace* top = nullptr;
+    for (const auto& q : scene.quads) if (q.visible) top = &q;
+    QVERIFY(top && top->labelled);
+    const QPoint corner(qRound((top->pts[0].x * 0.8 + top->pts[2].x * 0.2) * ratio),
+                        qRound((top->pts[0].y * 0.8 + top->pts[2].y * 0.2) * ratio));
+    QVERIFY2(image.pixelColor(corner).red() > 100, qPrintable(image.pixelColor(corner).name()));
+    int darkLabelPixels = 0;
+    const int cx = qRound(top->labelAt.x * ratio), cy = qRound(top->labelAt.y * ratio);
+    for (int dy = -6; dy <= 6; ++dy)
+      for (int dx = -12; dx <= 12; ++dx)
+        if (image.pixelColor(cx + dx, cy + dy).red() < 90) ++darkLabelPixels;
+    QVERIFY2(darkLabelPixels > 15, qPrintable(QString::number(darkLabelPixels)));
   }
 
   void qtViewportRendersGizmoAndSectionPlaneOverlays() {
@@ -5396,7 +5416,7 @@ private Q_SLOTS:
     QVERIFY(!state.selection.empty());
     QVERIFY(!state.selBoxWaitingSecond);
     const auto selected = state.selection;
-    const QPointF blank = screenPoint(30, 20);
+    const QPointF blank = screenPoint(-30, -20);  // clear of the ViewCube, which owns the top-right corner
     sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
     sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
@@ -6862,6 +6882,195 @@ private Q_SLOTS:
 #ifdef GOSURVEY_TEST_ARTIFACT_DIR
     qInfo() << "Issue 910 screenshot options:" << dir;
 #endif
+  }
+
+  // ---- GitHub #1034 / REQ-059: the ViewCube -------------------------------------------------------
+  void issue1034ViewCubeControlsAnimateAndSettleWithinHalfASecond() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+
+    // Settles within the 0.5 s the requirement allows, and does not snap: the click only starts it.
+    const auto clickAndSettle = [&](const QPoint& at, float azimuth, float elevation, const char* what) {
+      QElapsedTimer clock;
+      clock.start();
+      QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, at);
+      QVERIFY2(state.viewAnimActive, what);
+      QTRY_VERIFY_WITH_TIMEOUT(!state.viewAnimActive, 2000);
+      QVERIFY2(clock.elapsed() < 600, what);
+      QVERIFY2(std::fabs(Camera::ShortestAzimuthDelta(state.viewportAzimuthDeg, azimuth)) < 0.01f, what);
+      QVERIFY2(std::fabs(state.viewportElevationDeg - elevation) < 0.01f, what);
+    };
+
+    // Home -> SW isometric.
+    clickAndSettle(Px(ViewCubeSceneOf(viewport, state).home), 45.f, 35.26439f, "home");
+    // From the isometric view, clicking FRONT, LEFT and TOP sets each standard view.
+    for (const char* label : {"FRONT", "LEFT", "TOP"}) {
+      viewport->SetOrientation(45.f, 35.26439f);
+      const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+      const viewcube::QuadFace* quad = nullptr;
+      for (const auto& q : scene.quads)
+        if (q.visible && std::string(viewcube::kFaces[q.face].label) == label) quad = &q;
+      QVERIFY2(quad, label);
+      const viewcube::Face& face = viewcube::kFaces[quad->face];
+      const QPoint centre(qRound((quad->pts[0].x + quad->pts[1].x + quad->pts[2].x + quad->pts[3].x) / 4),
+                          qRound((quad->pts[0].y + quad->pts[1].y + quad->pts[2].y + quad->pts[3].y) / 4));
+      clickAndSettle(centre, face.azimuthDeg, face.elevationDeg, label);
+    }
+    // The arrow turns a quarter turn even though the view is already square, keeping the elevation.
+    viewport->SetOrientation(0.f, 25.f);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    const float bearing = (viewcube::kArrowMidDeg - viewcube::kArrowGapDeg - 10.f) * 3.14159265f / 180.f;
+    clickAndSettle(QPoint(qRound(scene.center.x + std::cos(bearing) * scene.arrowRadius),
+                          qRound(scene.center.y - std::sin(bearing) * scene.arrowRadius)), 90.f, 25.f, "arrow");
+  }
+
+  void issue1034ViewCubeClicksNeverReachTheViewportBehindIt() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+
+    // A line across the whole viewport at the pixel row of the widget's bottom-right corner, which
+    // is inside the widget but is no control.
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    const int cornerX = qRound(scene.originX + scene.sizePx - 3), cornerY = qRound(scene.originY + scene.sizePx - 3);
+    QVERIFY(viewcube::Contains(scene, cornerX, cornerY));
+    QCOMPARE(viewcube::HitTest(scene, cornerX, cornerY).part, viewcube::Part::None);
+    const auto ray = CadViewCamera(state).ScreenRay(static_cast<float>(cornerX), static_cast<float>(cornerY),
+        static_cast<float>(viewport->width()), static_cast<float>(viewport->height()));
+    ray3d::Vec3 world;
+    QVERIFY(ray3d::RayPlaneIntersect(ray, CadActiveWorkPlane(state), &world));
+    state.userLinesFlat = {world.x - 100000.0, world.y, 0.0, world.x + 100000.0, world.y, 0.0};
+    state.userLineAttrs.push_back(EntityAttributes{});
+    window.Refresh();
+
+    // Outside the widget the line picks as normal ...
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(viewport->width() / 2, cornerY));
+    QCOMPARE(state.selection.size(), std::size_t{1});
+    state.selection.clear();
+    // ... and a click on the widget, on a control or off one, never starts a selection or a pick.
+    for (const QPoint& at : {QPoint(cornerX, cornerY), Px(scene.home), Px(scene.center)}) {
+      QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, at);
+      QVERIFY(!state.selBoxWaitingSecond);
+      QVERIFY(state.selection.empty());
+    }
+    QTest::mouseClick(viewport, Qt::RightButton, Qt::NoModifier, QPoint(cornerX, cornerY));
+    QVERIFY(state.selection.empty());
+  }
+
+  void issue1034ManualOrbitCancelsAnimationAndTheCubeTracksTheCamera() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, Px(ViewCubeSceneOf(viewport, state).home));
+    QVERIFY(state.viewAnimActive);
+
+    // Shift + middle drag is the hand orbit: it takes over at once.
+    const QPoint start(viewport->width() / 3, viewport->height() / 2), finish = start + QPoint(30, 20);
+    QTest::mousePress(viewport, Qt::MiddleButton, Qt::ShiftModifier, start);
+    QMouseEvent move(QEvent::MouseMove, finish, viewport->mapToGlobal(finish), Qt::NoButton, Qt::MiddleButton,
+                     Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &move);
+    QTest::mouseRelease(viewport, Qt::MiddleButton, Qt::ShiftModifier, finish);
+    QVERIFY(!state.viewAnimActive);
+    const float azimuth = state.viewportAzimuthDeg, elevation = state.viewportElevationDeg;
+    QTest::qWait(450);  // longer than the animation: nothing may keep pulling the view toward home
+    QCOMPARE(state.viewportAzimuthDeg, azimuth);
+    QCOMPARE(state.viewportElevationDeg, elevation);
+
+    // After the orbit the cube is laid out for the camera as it now is.
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    QCOMPARE(scene.cameraAzimuthDeg, azimuth);
+    QCOMPARE(scene.cameraElevationDeg, elevation);
+  }
+
+  void issue1034ViewCubeScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    state.userLinesFlat = {-30, -20, 0, 30, -20, 0, 30, -20, 0, 30, 20, 0, 30, 20, 0, -30, 20, 0};
+    for (int i = 0; i < 3; ++i) state.userLineAttrs.push_back(EntityAttributes{});
+    window.Refresh();
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    struct Shot { const char* name; float azimuth, elevation; };
+    for (const Shot& shot : {Shot{"plan", 0.f, 90.f}, Shot{"sw-isometric", 45.f, 35.26439f},
+                             Shot{"front", 0.f, 0.f}, Shot{"back", 180.f, 0.f}, Shot{"bottom", 0.f, -90.f}}) {
+      viewport->SetOrientation(shot.azimuth, shot.elevation);
+      QCoreApplication::processEvents();
+      QVERIFY(viewport->grabFramebuffer().save(artifacts + QString("qt-1034-viewcube-%1.png").arg(shot.name)));
+    }
+    // Hovering a control highlights it.
+    viewport->SetOrientation(45.f, 35.26439f);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    QTest::mouseMove(viewport, Px(scene.home));
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-1034-viewcube-home-hover.png"));
+    // Under a rotated UCS the compass follows the UCS.
+    state.activeUcs = ucs::RotatedAboutZ(ucs::Ucs{}, 30.0);
+    viewport->SetOrientation(CadUcsViewAzimuthOffsetDeg(state), 90.f);
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-1034-viewcube-rotated-ucs.png"));
+  }
+
+  // GitHub #1034 follow-ups: the painted crosshair replaces the native cursor, and a viewport click must not
+  // rebuild the Toolspace tree (that rebuild cost ~100 ms per click).
+  void issue1034ViewportHidesNativeCursorAndClicksDoNotRebuildTheToolspace() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    const auto moveTo = [viewport](const QPoint& at) {  // delivered directly: a synthetic cursor move may not arrive on the hidden desktop
+      QMouseEvent move(QEvent::MouseMove, at, viewport->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &move);
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    moveTo(QPoint(200, 300));
+    QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, window.State());
+    moveTo(Px(scene.center));
+    QCOMPARE(viewport->cursor().shape(), Qt::ArrowCursor);  // the ViewCube keeps a normal pointer
+    moveTo(QPoint(200, 300));
+    QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
+
+    auto* tree = window.findChild<QTreeWidget*>();
+    QVERIFY(tree && tree->topLevelItemCount() > 0);
+    const QTreeWidgetItem* first = tree->topLevelItem(0);
+    window.Refresh();
+    QCOMPARE(tree->topLevelItem(0), first);  // unchanged contents: same items
+    window.State().blockDefs.push_back({});
+    window.State().blockDefs.back().name = "BLK1034";
+    window.Refresh();
+    QVERIFY(!tree->findItems("BLK1034", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());  // a change still shows
   }
 
   // ---- Issue #1028 / REQ-093: the Qt splash progress bar and phase label advance ----

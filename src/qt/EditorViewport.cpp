@@ -10,6 +10,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"
 #include "SectionClip.hpp"
+#include "QtViewCube.hpp"
 #include "ViewportPickPolicy.hpp"
 #include "util/gizmooverlay.hpp"
 #include "AppPaths.hpp"
@@ -42,6 +43,8 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   setMinimumSize(240, 180);
   setCursor(Qt::CrossCursor);
   m_RightTimer.setSingleShot(true);
+  m_ViewAnimTimer.setInterval(16);
+  connect(&m_ViewAnimTimer, &QTimer::timeout, this, [this] { StepViewAnimation(); });
   m_MapTimer.setInterval(100);
   connect(&m_MapTimer, &QTimer::timeout, this, [this] {
     const bool needed = m_State.drawingSettings.Geolocated() &&
@@ -74,6 +77,7 @@ EditorViewport::~EditorViewport() { Cleanup(); }
 void EditorViewport::Cleanup() {
   if (!m_Ready || !context()) return;
   m_MapTimer.stop();
+  m_ViewAnimTimer.stop();
   makeCurrent();
   m_OnlineMap.reset();
   m_Renderer->Shutdown();
@@ -158,6 +162,9 @@ void EditorViewport::paintGL() {
   const int w = qRound(width() * devicePixelRatioF());
   const int h = qRound(height() * devicePixelRatioF());
   if (w <= 0 || h <= 0) return;
+  // A named-view restore starts an orientation animation without going through this widget; make
+  // sure something is ticking it (REQ-059).
+  if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
@@ -789,21 +796,9 @@ void EditorViewport::paintGL() {
   if (!m_Ready) painter.drawText(rect(), Qt::AlignCenter, m_Error);
   painter.setPen(QColor("#7593ad"));
   if (!paperSpace) painter.drawText(18, height() - 20, "WCS");
-  const QPointF c(width() - 80, 76);
-  const QPolygonF top({c + QPointF(0, -34), c + QPointF(42, -12), c + QPointF(0, 10), c + QPointF(-42, -12)});
-  const QPolygonF front({c + QPointF(-42, -12), c + QPointF(0, 10), c + QPointF(0, 56), c + QPointF(-42, 32)});
-  const QPolygonF right({c + QPointF(0, 10), c + QPointF(42, -12), c + QPointF(42, 32), c + QPointF(0, 56)});
-  painter.setRenderHint(QPainter::Antialiasing);
-  painter.setPen(QColor("#8ca5ba"));
-  for (const auto& face : {top, front, right}) {
-    painter.setBrush(face.containsPoint(m_Last, Qt::OddEvenFill) ? QColor("#4e7d9e") : QColor("#384753"));
-    painter.drawPolygon(face);
-  }
-  painter.setPen(QColor("#e1e9ef"));
-  painter.drawText(QRectF(c.x() - 30, c.y() - 23, 60, 24), Qt::AlignCenter, "TOP");
-  painter.drawText(QRectF(c.x() - 42, c.y() + 13, 42, 24), Qt::AlignCenter, "FRONT");
-  painter.drawText(QRectF(c.x(), c.y() + 13, 42, 24), Qt::AlignCenter, "RIGHT");
-  if (m_Ready && m_PointerInside) DrawCursor(painter);
+  const viewcube::Scene cube = CubeScene();
+  PaintViewCube(painter, cube, m_PointerInside ? viewcube::HitTest(cube, m_Last.x(), m_Last.y()) : viewcube::Hit{});
+  if (m_Ready && m_PointerInside && !viewcube::Contains(cube, m_Last.x(), m_Last.y())) DrawCursor(painter);
 }
 
 // REQ-450: crosshair arms plus a central pickbox; an object-selection step keeps the pickbox only.
@@ -835,6 +830,7 @@ void EditorViewport::enterEvent(QEnterEvent* event) {
 }
 
 void EditorViewport::leaveEvent(QEvent* event) {
+  setCursor(m_Ready ? Qt::BlankCursor : Qt::CrossCursor);  // the painted crosshair stands in for the native one
   m_PointerInside = false;
   update();
   QOpenGLWidget::leaveEvent(event);
@@ -862,20 +858,20 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     return uid != 0 && std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
         [uid](const auto& project) { return project.uid == uid && project.readOnly; });
   };
+  // REQ-059: a press anywhere on the ViewCube (face, arrow, home or the gaps between) belongs to the
+  // widget and never reaches the viewport behind it. Middle stays navigation (pan / orbit).
+  if (event->button() != Qt::MiddleButton && viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y())) {
+    m_CubePressed = true;
+    if (event->button() == Qt::LeftButton) ClickViewCube(m_Last);
+    event->accept();
+    update();
+    return;
+  }
   if (event->button() == Qt::LeftButton &&
       (m_State.entityGripMoveActive || m_State.dimGripMoveActive || m_State.mtextGripMoveActive)) {
     ClearEntityGripInteraction(m_State); ClearDimGripInteraction(m_State); ClearMtextGripInteraction(m_State);
     m_GripMovedWithButton = false;
     if (changed) changed(); update(); return;
-  }
-  if (event->button() == Qt::LeftButton) {
-    const QPointF c(width() - 80, 76);
-    const QPolygonF top({c + QPointF(0, -34), c + QPointF(42, -12), c + QPointF(0, 10), c + QPointF(-42, -12)});
-    const QPolygonF front({c + QPointF(-42, -12), c + QPointF(0, 10), c + QPointF(0, 56), c + QPointF(-42, 32)});
-    const QPolygonF right({c + QPointF(0, 10), c + QPointF(42, -12), c + QPointF(42, 32), c + QPointF(0, 56)});
-    if (top.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(0, 90); return; }
-    if (front.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(0, 0); return; }
-    if (right.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(90, 0); return; }
   }
   if (event->button() == Qt::RightButton) {
     if ((event->modifiers() & Qt::ShiftModifier) && snapMenuRequested) {
@@ -1200,6 +1196,11 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
+  // Qt delivers a quick second press as a double click; over the ViewCube it is just another click.
+  if (viewcube::Contains(CubeScene(), event->position().x(), event->position().y())) {
+    mousePressEvent(event);
+    return;
+  }
   if (m_State.activeSpaceIndex >= 0 && m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
       !InFloatingModelSpace(m_State)) {
     ray3d::Vec3 point;
@@ -1248,6 +1249,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
   if (event->buttons() & Qt::MiddleButton) {
     if (event->modifiers() & Qt::ShiftModifier) {
+      m_State.viewAnimActive = false;  // a manual orbit takes over from any ViewCube animation (REQ-059)
       m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
       m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg + static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
     } else {
@@ -1260,6 +1262,15 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     }
   }
   m_Last = event->position();
+  // Over the ViewCube the pointer is the widget's, not the drawing's: arrow cursor, hover highlight on
+  // the control, and nothing picked or snapped behind it. A held button (box select, grip drag) keeps
+  // tracking so a gesture that started in the drawing is not interrupted.
+  const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  setCursor(overCube ? Qt::ArrowCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor));
+  if (overCube && event->buttons() == Qt::NoButton) {
+    update();
+    return;
+  }
   ClearTransientInput();
   if (WorldPoint(m_Last, m_Cursor)) {
     const Camera camera = CadViewCamera(m_State);
@@ -1408,6 +1419,11 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
+  if (m_CubePressed && event->button() != Qt::MiddleButton) {  // the press was the ViewCube's
+    m_CubePressed = false;
+    event->accept();
+    return;
+  }
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.entityGripMoveActive) {
     ClearEntityGripInteraction(m_State);
   }
@@ -1575,4 +1591,36 @@ void EditorViewport::SetOrientation(float azimuth, float elevation) {
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
   update();
+}
+
+// REQ-059: the widget's orientation changes ease to the target instead of snapping.
+void EditorViewport::AnimateToOrientation(float azimuth, float elevation) {
+  CadStartViewAnimation(m_State, azimuth, elevation);
+  StartViewAnimationClock();
+  update();
+}
+
+void EditorViewport::StartViewAnimationClock() {
+  m_ViewAnimClock.start();
+  m_ViewAnimTimer.start();
+}
+
+void EditorViewport::StepViewAnimation() {
+  if (!m_State.viewAnimActive) { m_ViewAnimTimer.stop(); return; }
+  CadTickViewAnimation(m_State, static_cast<float>(m_ViewAnimClock.restart()) / 1000.f);
+  if (!m_State.viewAnimActive) m_ViewAnimTimer.stop();
+  update();
+}
+
+viewcube::Scene EditorViewport::CubeScene() const {
+  const viewcube::Point origin = viewcube::OriginFor(static_cast<float>(width()));
+  return viewcube::BuildScene(CadViewCamera(m_State), origin.x, origin.y, CadUcsViewAzimuthOffsetDeg(m_State));
+}
+
+void EditorViewport::ClickViewCube(QPointF point) {
+  const viewcube::Scene scene = CubeScene();
+  viewcube::Target target;
+  if (viewcube::TargetFor(viewcube::HitTest(scene, point.x(), point.y()), CadViewCamera(m_State),
+                          scene.ucsAzimuthOffsetDeg, &target))
+    AnimateToOrientation(target.azimuthDeg, target.elevationDeg);
 }

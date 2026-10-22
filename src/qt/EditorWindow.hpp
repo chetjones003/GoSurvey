@@ -62,6 +62,7 @@ private:
   void BuildRibbon();
   void BuildRibbonPages();
   void RefreshRibbon();
+  void RefreshToolspace();
   void RunRibbonAction(const QString& id);
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
@@ -153,6 +154,7 @@ private:
   AppCommandState m_State;
   std::vector<std::string> m_Log;
   std::size_t m_LogShown = 0;
+  QStringList m_ToolspaceKey;  ///< What the Toolspace tree last listed; see RefreshToolspace().
   EditorViewport* m_Viewport = nullptr;
   QTabBar* m_Tabs = nullptr;
   QTabBar* m_SpaceTabs = nullptr;
