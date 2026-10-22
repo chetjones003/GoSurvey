@@ -146,6 +146,7 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights);
 /// Parses GoSurvey traverse command-language text into \p td and \p weights.
 /// Returns false with a 1-based "line N: ..." message in \p errorMsg on the first
 /// malformed line; \p td and \p weights are left unchanged on failure.
+/// Graph comments populate project layout but never create solver observations.
 bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::string& errorMsg);
 
 /// Pads each command's fields so the same word lines up in columns. Comments,
@@ -173,6 +174,8 @@ struct StationAnchor {
 };
 
 struct CommandDocument {
+    std::vector<TraverseGraphGroup> groups;
+    std::vector<TraverseRawSource> sources;
     std::vector<CommandNode> commands;
     std::vector<StationAnchor> stations;
     std::vector<std::string> trailingComments;
@@ -200,6 +203,7 @@ bool Project(const std::string& text, CommandDocument& document, std::string& er
 CommandOrder Order(const CommandDocument& document);
 
 /// Serializes ordered command blocks with their IDs, metadata and comments.
+/// Group/source declarations are emitted separately from attached node comments.
 std::string Serialize(const CommandDocument& document);
 
 }  // namespace travcmd

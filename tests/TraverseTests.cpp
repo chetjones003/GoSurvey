@@ -49,6 +49,46 @@ TEST_CASE("RAWSET preserves a single face and source identity", "[traverse][raws
     REQUIRE(restored.rawSources.front().path == "C:/raw/one.fbk");
 }
 
+TEST_CASE("GSTC group frames and source paths survive ordered block serialization", "[traverse][metadata][REQ-452]") {
+    const std::string input = "// @GSTC-GROUP field -25.5 30 450.25 200 1 \"North \\\"field\\\"\\nDay 1\"\n"
+        "// @GSTC-SOURCE survey \"C:\\\\raw\\\\first file.fbk\"\n"
+        "// distance notes\n// @GSTC-NODE distance 10.5 -4 field 99\nHDIST 1 2 20\n"
+        "// @GSTC-NODE leg 0 0 - -\nSTN 1 2\n"
+        "// @GSTC-NODE origin 5 6 - -\nSTATION 1 0 0 0\n";
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project(input, document, error));
+    REQUIRE(document.groups.size() == 1);
+    CHECK(document.groups[0].id == "field");
+    CHECK(document.groups[0].x == Approx(-25.5));
+    CHECK(document.groups[0].y == Approx(30));
+    CHECK(document.groups[0].width == Approx(450.25));
+    CHECK(document.groups[0].height == Approx(200));
+    CHECK(document.groups[0].collapsed);
+    CHECK(document.groups[0].label == "North \"field\"\nDay 1");
+    REQUIRE(document.sources.size() == 1);
+    CHECK(document.sources[0].path == "C:\\raw\\first file.fbk");
+    document.groups[0].collapsed = false;
+    document.groups[0].label = "Edited frame";
+    document.sources[0].path = "D:/archive/renamed.fbk";
+    const std::string saved = travcmd::Serialize(document);
+    CHECK(saved.find("// @GSTC-NODE distance 10.5 -4 field 99\nHDIST 1 2 20") != std::string::npos);
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(saved, restored, error));
+    REQUIRE(restored.groups.size() == 1);
+    CHECK_FALSE(restored.groups[0].collapsed);
+    CHECK(restored.groups[0].label == "Edited frame");
+    CHECK(restored.sources[0].path == "D:/archive/renamed.fbk");
+    CHECK(restored.commands[2].id == "distance");
+    CHECK(restored.commands[2].comments == std::vector<std::string>{"// distance notes"});
+    CHECK(travcmd::Serialize(restored) == saved);
+    TraverseData data;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(saved, data, weights, error));
+    CHECK(data.rawSources[0].path == "D:/archive/renamed.fbk");
+    CHECK(data.legs.size() == 1);
+}
+
 TEST_CASE("GSTC projection orders dependencies before stable unrelated ties", "[traverse][rawset][REQ-452]") {
     travcmd::CommandDocument document;
     std::string error;
@@ -1093,6 +1133,321 @@ LsaWeights MakeRoundTripWeights() {
 }
 
 }  // namespace
+
+TEST_CASE("TraverseIo preserves distinct project raw sets and source provenance", "[io][metadata][REQ-452]") {
+    const std::string path = (TraverseIoTestDir() / "raw-provenance.gstrav").string();
+    TraverseData original;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse("// @GSTC-SOURCE a \"C:/raw/first file.fbk\"\n"
+        "// @GSTC-SOURCE b \"C:/raw/second.fbk\"\n"
+        "RAWSET 1 2 3 F1 12.345678901234 91.25 100.125 SOURCE a\n"
+        "RAWSET 1 2 3 F2 192.345678901234 268.75 100.25 SOURCE b\n"
+        "RAWSET 1 2 4 F1 14.5 90 99 F2 194.5 270 99.5 SOURCE a\n",
+        original, weights, error));
+    REQUIRE(traverseio::Save(path, original, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    REQUIRE(loaded.rawSources.size() == 2);
+    REQUIRE(loaded.rawSources[0].id == "a");
+    REQUIRE(loaded.rawSources[0].path == "C:/raw/first file.fbk");
+    REQUIRE(loaded.rawSources[1].path == "C:/raw/second.fbk");
+    REQUIRE(loaded.rawSets.size() == 3);
+    for (size_t i = 0; i < original.rawSets.size(); ++i) {
+        const auto& expected = original.rawSets[i];
+        const auto& actual = loaded.rawSets[i];
+        CHECK(actual.atStationId == 1);
+        CHECK(actual.toStationId == 2);
+        CHECK(actual.sourceId == expected.sourceId);
+        CHECK(actual.sourceOrder == expected.sourceOrder);
+        CHECK(actual.measurements.setNo == expected.measurements.setNo);
+        CHECK(actual.measurements.hasF1 == expected.measurements.hasF1);
+        CHECK(actual.measurements.hasF2 == expected.measurements.hasF2);
+        CHECK(actual.measurements.f1HzDec == Approx(expected.measurements.f1HzDec).margin(1e-12));
+        CHECK(actual.measurements.f1VaDec == Approx(expected.measurements.f1VaDec).margin(1e-12));
+        CHECK(actual.measurements.f1Sd == Approx(expected.measurements.f1Sd).margin(1e-12));
+        CHECK(actual.measurements.f2HzDec == Approx(expected.measurements.f2HzDec).margin(1e-12));
+        CHECK(actual.measurements.f2VaDec == Approx(expected.measurements.f2VaDec).margin(1e-12));
+        CHECK(actual.measurements.f2Sd == Approx(expected.measurements.f2Sd).margin(1e-12));
+    }
+}
+
+TEST_CASE("TraverseIo round trips graph node association and visual frames", "[io][metadata][REQ-452]") {
+    TraverseData original;
+    original.graphNodes.push_back({"distance", "HDIST 1 2 20", 7, 10.125, -4.5, "field", 99});
+    original.graphNodes.push_back({"origin", "STATION 1 0 0 0", 0, 5, 6, "", std::nullopt});
+    original.graphGroups.push_back({"field", -25.5, 30, 450.25, 200, true, "North \"field\"\nDay 1"});
+    LsaWeights weights;
+    std::string error;
+    const auto path = (TraverseIoTestDir() / "graph-layout.gstrav").string();
+    REQUIRE(traverseio::Save(path, original, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    REQUIRE(loaded.graphNodes.size() == 2);
+    const auto& node = loaded.graphNodes[0];
+    CHECK(node.id == "distance");
+    CHECK(node.command == "HDIST 1 2 20");
+    CHECK(node.sourceOrder == 7);
+    CHECK(node.x == Approx(10.125));
+    CHECK(node.y == Approx(-4.5));
+    CHECK(node.groupId == "field");
+    CHECK(node.manualOrder == 99);
+    CHECK(loaded.graphNodes[1].groupId.empty());
+    CHECK_FALSE(loaded.graphNodes[1].manualOrder.has_value());
+    REQUIRE(loaded.graphGroups.size() == 1);
+    const auto& group = loaded.graphGroups[0];
+    CHECK(group.id == "field");
+    CHECK(group.x == Approx(-25.5));
+    CHECK(group.y == Approx(30));
+    CHECK(group.width == Approx(450.25));
+    CHECK(group.height == Approx(200));
+    CHECK(group.collapsed);
+    CHECK(group.label == "North \"field\"\nDay 1");
+}
+
+TEST_CASE("Graph metadata survives gsdat to gstrav to regenerated commands", "[io][metadata][REQ-452]") {
+    const std::string input = "// @GSTC-GROUP field 1 2 300 200 0 \"Field\"\n"
+        "// @GSTC-SOURCE a \"C:/raw/original.fbk\"\n"
+        "// @GSTC-NODE origin 5 6 - -\nSTATION 1 0 0 0\n"
+        "// @GSTC-NODE leg 7 8 field -\nSTN 1 2\n"
+        "// @GSTC-NODE distance 9 10 field 42\nHDIST 1 2 20\n"
+        "// @GSTC-NODE raw 11 12 field -\nRAWSET 1 2 1 F1 12 90 20 SOURCE a\n";
+    TraverseData data;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse(input, data, weights, error));
+    const auto path = (TraverseIoTestDir() / "cross-format.gstrav").string();
+    REQUIRE(traverseio::Save(path, data, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    REQUIRE(loaded.graphGroups.size() == 1);
+    loaded.legs[0].horizDist = 25; // Regeneration must use current project measurements.
+    const auto saved = travcmd::Serialize(loaded, weights);
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(saved, restored, error));
+    REQUIRE(restored.groups.size() == 1);
+    CHECK(restored.groups[0].label == "Field");
+    const auto distance = std::find_if(restored.commands.begin(), restored.commands.end(),
+        [](const auto& node) { return node.id == "distance"; });
+    REQUIRE(distance != restored.commands.end());
+    CHECK(distance->x == Approx(9));
+    CHECK(distance->y == Approx(10));
+    CHECK(distance->groupId == "field");
+    CHECK(distance->manualOrder == 42);
+    TraverseData reparsed;
+    REQUIRE(travcmd::Parse(saved, reparsed, weights, error));
+    REQUIRE(reparsed.legs.size() == 1);
+    CHECK(reparsed.legs[0].horizDist == Approx(25));
+    REQUIRE(reparsed.rawSources.size() == 1);
+    CHECK(reparsed.rawSources[0].path == "C:/raw/original.fbk");
+    REQUIRE(reparsed.rawSets.size() == 1);
+}
+
+TEST_CASE("TraverseIo rejects malformed optional raw and graph fields atomically", "[io][metadata][REQ-452]") {
+    const std::vector<std::string> fields = {
+        R"("rawSources":{})",
+        R"("rawSources":[{"id":"a","path":"one"},{"id":"a","path":"two"}])",
+        R"("rawSources":[{"id":"bad id","path":"one"}])",
+        R"("rawSets":[{"at":1,"to":2,"sourceId":"missing","measurements":{"setNo":1,"hasF1":true}}])",
+        R"("rawSources":[{"id":"a","path":"one"}],"rawSets":[{"at":1,"to":2,"sourceId":"a","measurements":{"setNo":1}}])",
+        R"("rawSources":[{"id":"a","path":"one"}],"rawSets":[{"at":0,"to":2,"sourceId":"a","measurements":{"setNo":1,"hasF1":true}}])",
+        R"("rawSources":[{"id":"a","path":"one"}],"rawSets":[{"at":1,"to":2,"sourceId":"a","measurements":{"setNo":1,"hasF1":true,"f1Sd":null}}])",
+        R"("graphLayout":[])",
+        R"("graphLayout":{"nodes":{}})",
+        R"("graphLayout":{"nodes":[{"id":"n","command":"DIST 1 2 10","sourceOrder":0,"x":null,"y":0}]})",
+        R"("graphLayout":{"nodes":[{"id":"n","command":"DIST 1 2 10","sourceOrder":0,"x":0,"y":0,"manualOrder":1.5}]})",
+        R"("graphLayout":{"nodes":[{"id":"n","command":"DIST 1 2 10","sourceOrder":-1,"x":0,"y":0}]})",
+        R"("graphLayout":{"groups":[{"id":"g","x":0,"y":0,"width":-1,"height":2,"collapsed":true,"label":"x"}]})",
+        R"("graphLayout":{"groups":[{"id":"g","x":0,"y":0,"width":1,"height":2,"collapsed":true,"label":[]}]})"
+    };
+    const auto path = (TraverseIoTestDir() / "bad-optional.gstrav").string();
+    for (const auto& field : fields) {
+        INFO(field);
+        { std::ofstream file(path); file << R"({"format":"gstrav","version":1,)" << field << "}"; }
+        TraverseData data;
+        data.startStationId = 77;
+        LsaWeights weights;
+        weights.sigmaAngleSec = 12;
+        std::string error;
+        bool loaded = true;
+        REQUIRE_NOTHROW(loaded = traverseio::Load(path, data, weights, error));
+        CHECK_FALSE(loaded);
+        CHECK_FALSE(error.empty());
+        CHECK(data.startStationId == 77);
+        CHECK(weights.sigmaAngleSec == Approx(12));
+    }
+}
+
+TEST_CASE("TraverseIo loads original version one files without optional metadata", "[io][metadata][REQ-452]") {
+    const auto path = (TraverseIoTestDir() / "legacy-v1.gstrav").string();
+    { std::ofstream file(path); file << R"({"format":"gstrav","version":1,
+        "startStationId":5,"startEasting":1000.25,"startNorthing":2000.5,
+        "hasStartBearing":true,"startBearingDeg":45,"isClosedLoop":true,
+        "legs":[{"stationId":6,"hasHorizDist":true,"horizDist":150,
+        "rawSets":[{"setNo":1,"hasF1":true,"f1HzDec":90.125,"f1Sd":150.01}]}],
+        "weights":{"sigmaAngleSec":3.5}})"; }
+    TraverseData data;
+    data.graphNodes.push_back({"old", "DIST 1 2 3"});
+    data.rawSources.push_back({"old", "old.fbk"});
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(traverseio::Load(path, data, weights, error));
+    CHECK(data.startStationId == 5);
+    CHECK(data.startEasting == Approx(1000.25));
+    CHECK(data.startNorthing == Approx(2000.5));
+    CHECK(data.hasStartBearing);
+    CHECK(data.isClosedLoop);
+    REQUIRE(data.legs.size() == 1);
+    CHECK(data.legs[0].horizDist == Approx(150));
+    REQUIRE(data.legs[0].rawSets.size() == 1);
+    CHECK(data.legs[0].rawSets[0].f1HzDec == Approx(90.125));
+    CHECK(weights.sigmaAngleSec == Approx(3.5));
+    CHECK(data.rawSources.empty());
+    CHECK(data.rawSets.empty());
+    CHECK(data.graphNodes.empty());
+    CHECK(data.graphGroups.empty());
+}
+
+TEST_CASE("Graph comments and raw provenance do not add solver observations", "[traverse][metadata][REQ-452]") {
+    const std::string plain = "CTRL 1 0 0 ! !\nCTRL 2 100 0 ! !\n"
+        "CTRL 3 50 86.6025403784 * *\nDIST 1 2 100\nDIST 2 3 100\n"
+        "DIST 1 3 100\nANGLE 1 2 3 -60\n";
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project(plain, document, error));
+    for (size_t i = 0; i < document.commands.size(); ++i) {
+        auto& node = document.commands[i];
+        node.x = static_cast<double>(i) * -1000;
+        node.y = static_cast<double>(i) * 500;
+        node.groupId = "field";
+        node.manualOrder = 100 - static_cast<int>(i);
+    }
+    document.groups.push_back({"field", 50, 60, 900, 800, true, "Survey"});
+    document.sources.push_back({"a", "C:/raw/one.fbk"});
+    const auto annotated = travcmd::Serialize(document) +
+        "RAWSET 1 3 1 F1 12 90 100 F2 192 270 100 SOURCE a\n";
+    TraverseData baseline, data;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(plain, baseline, weights, error));
+    REQUIRE(travcmd::Parse(annotated, data, weights, error));
+    REQUIRE(data.graphGroups.size() == 1);
+    CHECK(data.networkStations.size() == 3);
+    CHECK(data.networkDists.size() == 3);
+    CHECK(data.networkAngles.size() == 1);
+    CHECK(data.rawSets.size() == 1);
+    const auto expected = ComputeTraverseLeastSquares(baseline, weights);
+    REQUIRE(expected.ok);
+    auto verify = [&](const TraverseData& candidate) {
+        const auto result = ComputeTraverseLeastSquares(candidate, weights);
+        REQUIRE(result.ok);
+        CHECK(result.observations == 4);
+        CHECK(result.observations == expected.observations);
+        CHECK(result.unknowns == expected.unknowns);
+        CHECK(result.redundancy == expected.redundancy);
+        CHECK(result.stationIds == expected.stationIds);
+        REQUIRE(result.adjEasting.size() == expected.adjEasting.size());
+        for (size_t i = 0; i < result.adjEasting.size(); ++i) {
+            CHECK(result.adjEasting[i] == Approx(expected.adjEasting[i]).margin(1e-10));
+            CHECK(result.adjNorthing[i] == Approx(expected.adjNorthing[i]).margin(1e-10));
+        }
+        CHECK(result.refStdDev == Approx(expected.refStdDev).margin(1e-10));
+    };
+    verify(data);
+    const auto path = (TraverseIoTestDir() / "ignored-layout.gstrav").string();
+    REQUIRE(traverseio::Save(path, data, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    verify(loaded);
+    TraverseData regenerated;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(loaded, weights), regenerated, weights, error));
+    verify(regenerated);
+}
+
+TEST_CASE("GSTC malformed group frames are rejected with physical line numbers", "[traverse][metadata][REQ-452]") {
+    for (const std::string& frame : {
+        "g 0 0 -1 10 0 \"negative\"", "g 0 0 10 20 2 \"collapsed\"",
+        "g 0 0 10 20 0 missing-quotes", "g nan 0 10 20 0 \"nan\"",
+        "g 0 0 10 20 0 \"label\" extra"}) {
+        travcmd::CommandDocument document;
+        std::string error;
+        REQUIRE(travcmd::Project("DIST 1 2 10\n", document, error));
+        CHECK_FALSE(travcmd::Project("// header\n// @GSTC-GROUP " + frame + "\nDIST 1 2 10\n", document, error));
+        CHECK(error.find("line 2:") == 0);
+        REQUIRE(document.commands.size() == 1);
+        CHECK(document.commands[0].text == "DIST 1 2 10");
+    }
+}
+
+TEST_CASE("TraverseIo rejects invalid project metadata before overwriting a saved session", "[io][metadata][REQ-452]") {
+    const auto path = (TraverseIoTestDir() / "invalid-save.gstrav").string();
+    TraverseData data;
+    data.startStationId = 77;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(traverseio::Save(path, data, weights, error));
+    data.graphGroups.push_back({"g", 0, 0, -1, 10, false, "Invalid"});
+    REQUIRE_FALSE(traverseio::Save(path, data, weights, error));
+    CHECK_FALSE(error.empty());
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    CHECK(loaded.startStationId == 77);
+    CHECK(loaded.graphGroups.empty());
+}
+
+TEST_CASE("Gstrav retains stable command source order across observation kinds", "[io][metadata][REQ-452]") {
+    const std::string input = "// @GSTC-SOURCE a \"one.fbk\"\n"
+        "CTRL 1 0 0\nCTRL 2 10 0\nCTRL 3 10 10\n"
+        "// @GSTC-NODE first 0 0 - -\nDIST 1 2 10\n"
+        "// @GSTC-NODE angle 0 0 - -\nANGLE 1 2 3 90\n"
+        "// @GSTC-NODE second 0 0 - -\nDIST 1 2 20\n"
+        "// @GSTC-NODE raw 0 0 - -\nRAWSET 1 2 1 F1 12 90 20 SOURCE a\n"
+        "// @GSTC-NODE last 0 0 - -\nDIST 1 2 30\n";
+    TraverseData data;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse(input, data, weights, error));
+    const auto path = (TraverseIoTestDir() / "stable-order.gstrav").string();
+    REQUIRE(traverseio::Save(path, data, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(loaded, weights), restored, error));
+    std::vector<std::string> ids;
+    for (const auto& node : restored.commands)
+        if (node.id == "first" || node.id == "angle" || node.id == "second" || node.id == "raw" || node.id == "last")
+            ids.push_back(node.id);
+    CHECK(ids == std::vector<std::string>{"first", "angle", "second", "raw", "last"});
+}
+
+TEST_CASE("RAWSET metadata identity survives normalized numeric identifiers", "[traverse][metadata][REQ-452]") {
+    TraverseData data;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse("// @GSTC-SOURCE a \"one.fbk\"\n"
+        "// @GSTC-NODE raw 1 2 - -\nRAWSET 01 02 003 F1 12 90 20 SOURCE a\n", data, weights, error));
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(data, weights), restored, error));
+    const auto node = std::find_if(restored.commands.begin(), restored.commands.end(),
+        [](const auto& command) { return command.id == "raw"; });
+    REQUIRE(node != restored.commands.end());
+    CHECK(node->x == Approx(1));
+    CHECK(node->y == Approx(2));
+}
+
+TEST_CASE("First leg HANG metadata survives informational backsight normalization", "[traverse][metadata][REQ-452]") {
+    TraverseData data;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse("STATION 1 0 0 0\nSTN 1 2\n"
+        "// @GSTC-NODE angle 1 2 - -\nHANG 99 1 2 90\n", data, weights, error));
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(data, weights), restored, error));
+    const auto node = std::find_if(restored.commands.begin(), restored.commands.end(),
+        [](const auto& command) { return command.id == "angle"; });
+    REQUIRE(node != restored.commands.end());
+    CHECK(node->x == Approx(1));
+    CHECK(node->y == Approx(2));
+}
 
 TEST_CASE("TraverseIo: save/load round-trips every input field", "[io][REQ-403]") {
     const TraverseData original = MakeRoundTripFixture();
