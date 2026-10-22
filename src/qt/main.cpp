@@ -57,7 +57,7 @@ int main(int argc, char** argv) {
   const bool previewSignIn = app.arguments().contains("--preview-sign-in");
   const QPixmap splashBackdrop = qtsplash::MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
   QSplashScreen splash(qtsplash::MakeFrame(splashBackdrop, 0.0, qtsplash::PhaseLabelAt(0)));
-  // REQ-093: the bar and phase label follow wall-clock time since the splash first appeared.
+  // REQ-093: the bar and phase label follow wall-clock time on splashClock (restarted once the window is built).
   QElapsedTimer splashClock;
   const auto advanceSplash = [&] {
     const qint64 elapsed = splashClock.elapsed();
