@@ -134,3 +134,5 @@ None.
 - Change: make the test wait up to two seconds for each popup window to become visible, and split the required Layers button/menu checks into explicit fatal-and-return branches before dereferencing either pointer.
 - Verification: Release build PASS; the focused coordinate-system Qt test passed three consecutive hidden-desktop runs (3 cases per run); `git diff --check` passes. New CI run will verify the analyzer and full suite.
 - Status: follow-up is ready for review and CI monitoring.
+- CI on `7e75a66b`: MSVC then rejected the now-large `QtEditorTests.cpp` object with C1128 (COFF section limit) before running CTest. Added `/bigobj` to the Qt test target's MSVC options, consistent with the existing large `CadCommands.cpp` handling.
+- Verification: Release build PASS with `/bigobj` enabled for `GoSurveyQtTests`; the next CI run will verify the no-PCH hosted build and full suite.
