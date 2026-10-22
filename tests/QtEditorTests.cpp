@@ -81,6 +81,7 @@
 #include <QDialogButtonBox>
 #include <QListWidget>
 #include <QDoubleSpinBox>
+#include <QSlider>
 #include <QSpinBox>
 #include <QComboBox>
 #include <QTableWidget>
@@ -3084,6 +3085,139 @@ private Q_SLOTS:
     AppCommandState afterOk;
     LoadUserStartupPrefSettings(afterOk);
     QCOMPARE(afterOk.displayWheelZoomFactor, 1.25f);
+  }
+
+  // REQ-450 / issue #1033: cursor controls preview live, Cancel restores, Apply/OK keep and persist.
+  void issue1033CursorSettingsPreviewAndCancel() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    AppCommandState& state = window.State();
+    // Defaults from the requirement.
+    QCOMPARE(state.displayCrosshairSizePct, 5);
+    QCOMPARE(state.viewportCrosshairPickHalfPxX, 4.f);
+    QCOMPARE(state.objectSnapAperturePx, 14.f);
+    window.ShowSettings();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    auto* arm = dialog->findChild<QSlider*>("settingsCrosshairSize");
+    auto* pickbox = dialog->findChild<QSpinBox*>("settingsPickboxSize");
+    auto* aperture = dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture");
+    auto* colorButton = dialog->findChild<QPushButton*>("settingsCrosshairColor");
+    QVERIFY(colorButton);
+    QCOMPARE(colorButton->text(), QString("#FFA800"));   // default: amber (255, 168, 0)
+    QVERIFY(arm && pickbox && aperture);
+    QCOMPARE(arm->minimum(), 1); QCOMPARE(arm->maximum(), 100);
+    QCOMPARE(pickbox->minimum(), 2); QCOMPARE(pickbox->maximum(), 20);
+    QCOMPARE(aperture->minimum(), 4.0); QCOMPARE(aperture->maximum(), 64.0);
+
+    // Live preview: the viewport state changes before Apply.
+    arm->setValue(30);
+    pickbox->setValue(9);
+    QCOMPARE(state.displayCrosshairSizePct, 30);
+    QCOMPARE(state.viewportCrosshairPickHalfPxX, 9.f);
+    QCOMPARE(state.viewportCrosshairPickHalfPxY, 9.f);
+    // Cancel restores the values the window opened with, and saves nothing.
+    dialog->findChild<QPushButton*>("settingsCancel")->click();
+    QCOMPARE(state.displayCrosshairSizePct, 5);
+    QCOMPARE(state.viewportCrosshairPickHalfPxX, 4.f);
+    AppCommandState afterCancel;
+    LoadUserStartupPrefSettings(afterCancel);
+    QCOMPARE(afterCancel.displayCrosshairSizePct, 5);
+
+    // Apply keeps the preview and persists; a later Cancel only undoes edits made after the Apply.
+    window.ShowSettings();
+    dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    dialog->findChild<QSlider*>("settingsCrosshairSize")->setValue(40);
+    dialog->findChild<QSpinBox*>("settingsPickboxSize")->setValue(7);
+    dialog->findChild<QDoubleSpinBox*>("settingsSnapAperture")->setValue(20);
+    QCOMPARE(state.objectSnapAperturePx, 14.f);   // the aperture is staged until Apply
+    dialog->findChild<QPushButton*>("settingsApply")->click();
+    AppCommandState applied;
+    LoadUserStartupPrefSettings(applied);
+    QCOMPARE(applied.displayCrosshairSizePct, 40);
+    QCOMPARE(applied.viewportCrosshairPickHalfPxX, 7.f);
+    QCOMPARE(applied.objectSnapAperturePx, 20.f);
+    dialog->findChild<QSlider*>("settingsCrosshairSize")->setValue(60);
+    dialog->findChild<QPushButton*>("settingsCancel")->click();
+    QCOMPARE(state.displayCrosshairSizePct, 40);
+    QCOMPARE(state.viewportCrosshairPickHalfPxX, 7.f);
+
+    // A new drawing from a template keeps the user's cursor, not the template's copy of it.
+    state.viewportCrosshairR = 0.1f; state.viewportCrosshairG = 0.2f; state.viewportCrosshairB = 0.3f;
+    state.objectSnapAperturePx = 33.f;
+    window.CreateDrawingFromTemplate(0, QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/resources/default-template.gst");
+    QCOMPARE(state.viewportCrosshairR, 0.1f);
+    QCOMPARE(state.viewportCrosshairG, 0.2f);
+    QCOMPARE(state.viewportCrosshairB, 0.3f);
+    QCOMPARE(state.viewportCrosshairPickHalfPxX, 7.f);
+    QCOMPARE(state.objectSnapAperturePx, 33.f);
+  }
+
+  // REQ-450: the viewport paints the configured crosshair + pickbox, and only the pickbox while selecting.
+  void issue1033ViewportDrawsCrosshairAndPickbox() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    AppCommandState& state = window.State();
+    state.viewportCrosshairR = 1.f; state.viewportCrosshairG = 0.f; state.viewportCrosshairB = 1.f;
+    state.displayCrosshairSizePct = 20;
+    state.viewportCrosshairPickHalfPxX = state.viewportCrosshairPickHalfPxY = 6.f;
+    window.resize(1280, 820); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTest::qWait(250);
+    EditorViewport* viewport = window.m_Viewport;
+    QVERIFY(viewport->IsRendererReady());
+    const QPoint p(viewport->width() / 2, viewport->height() / 2);
+    QEnterEvent enter(QPointF(p), QPointF(p), QPointF(viewport->mapToGlobal(p)));
+    QApplication::sendEvent(viewport, &enter);
+    const int arm = static_cast<int>(0.2f * static_cast<float>(std::min(viewport->width(), viewport->height())) / 2.f);
+    QVERIFY(viewport->grabFramebuffer().save(QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/qt-1033-cursor-normal.png"));
+    // The grab is in device pixels (the display may scale), and a small neighbourhood absorbs how a
+    // one-pixel line on a half-pixel position is rasterised.
+    auto drawn = [&](int dx, int dy) {
+      const QImage frame = viewport->grabFramebuffer();
+      const double scale = frame.devicePixelRatio();
+      for (int y = -2; y <= 2; ++y)
+        for (int x = -2; x <= 2; ++x)
+          if (const QColor c = frame.pixelColor(static_cast<int>((p.x() + dx) * scale) + x, static_cast<int>((p.y() + dy) * scale) + y); c.red() > 180 && c.green() < 60 && c.blue() > 180)
+            return true;  // the grab is not fully opaque, so match "clearly magenta" rather than exact bytes
+      return false;
+    };
+    // Normal use: arm tips and the pickbox edge are drawn in the configured colour.
+    QVERIFY(drawn(arm - 3, 0));
+    QVERIFY(drawn(0, arm - 3));
+    QVERIFY(drawn(-6, 2));
+    // Selection step: pickbox only.
+    state.active = AppCommandState::Kind::Move;
+    state.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+    viewport->update();
+    QVERIFY(!drawn(arm - 3, 0));
+    QVERIFY(!drawn(0, arm - 3));
+    QVERIFY(drawn(-6, 2));
+    // The step ends: the arms return.
+    state.active = AppCommandState::Kind::None;
+    viewport->update();
+    QVERIFY(drawn(arm - 3, 0));
+  }
+
+  void issue1033StoredCursorValuesAreClamped() {
+    IsolatedUserData userData;
+    AppCommandState state;
+    state.displayCrosshairSizePct = 500;
+    state.viewportCrosshairPickHalfPxX = 99.f;
+    state.viewportCrosshairPickHalfPxY = 0.f;
+    state.objectSnapAperturePx = 1000.f;
+    state.viewportCrosshairR = 0.25f; state.viewportCrosshairG = 0.5f; state.viewportCrosshairB = 0.75f;
+    QVERIFY(SaveUserStartupPrefs(state));
+    AppCommandState loaded;
+    LoadUserStartupPrefSettings(loaded);
+    QCOMPARE(loaded.displayCrosshairSizePct, 100);
+    QCOMPARE(loaded.viewportCrosshairPickHalfPxX, 20.f);
+    QCOMPARE(loaded.viewportCrosshairPickHalfPxY, 2.f);
+    QCOMPARE(loaded.objectSnapAperturePx, 64.f);
+    QCOMPARE(loaded.viewportCrosshairR, 0.25f);
+    QCOMPARE(loaded.viewportCrosshairB, 0.75f);
   }
 
   void issue1032WheelZoomUsesPreference() {

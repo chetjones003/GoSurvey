@@ -90,6 +90,9 @@ void EditorViewport::initializeGL() {
   while (glGetError() != GL_NO_ERROR) {}
   std::string error;
   m_Ready = m_Renderer->Init(&error);
+  // REQ-450: the viewport draws its own cursor, so the operating-system one is hidden - but only
+  // once drawing works, so a failed renderer still leaves a visible pointer.
+  if (m_Ready) setCursor(Qt::BlankCursor);
   if (m_Ready) {
     m_OnlineMap = std::make_unique<OnlineMapController>(
         std::make_unique<MapTileService>(MapTileCacheDirectory(), FetchMapTileOverWinHttp, 6),
@@ -800,6 +803,41 @@ void EditorViewport::paintGL() {
   painter.drawText(QRectF(c.x() - 30, c.y() - 23, 60, 24), Qt::AlignCenter, "TOP");
   painter.drawText(QRectF(c.x() - 42, c.y() + 13, 42, 24), Qt::AlignCenter, "FRONT");
   painter.drawText(QRectF(c.x(), c.y() + 13, 42, 24), Qt::AlignCenter, "RIGHT");
+  if (m_Ready && m_PointerInside) DrawCursor(painter);
+}
+
+// REQ-450: crosshair arms plus a central pickbox; an object-selection step keeps the pickbox only.
+void EditorViewport::DrawCursor(QPainter& painter) {
+  const ViewportCursorShape shape = ViewportCursorShapeFor(m_State, static_cast<float>(width()), static_cast<float>(height()));
+  const QColor color = QColor::fromRgbF(std::clamp(m_State.viewportCrosshairR, 0.f, 1.f),
+                                        std::clamp(m_State.viewportCrosshairG, 0.f, 1.f),
+                                        std::clamp(m_State.viewportCrosshairB, 0.f, 1.f));
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing, false);
+  painter.setPen(QPen(color, 1.0));
+  painter.setBrush(Qt::NoBrush);
+  const double x = std::floor(m_Last.x()) + 0.5, y = std::floor(m_Last.y()) + 0.5;
+  const double half = static_cast<double>(shape.pickHalfPx);
+  if (shape.arms) {
+    const double arm = static_cast<double>(shape.armLengthPx) * 0.5;
+    painter.drawLine(QPointF(x - arm, y), QPointF(x + arm, y));
+    painter.drawLine(QPointF(x, y - arm), QPointF(x, y + arm));
+  }
+  painter.drawRect(QRectF(x - half, y - half, half * 2.0, half * 2.0));
+  painter.restore();
+}
+
+void EditorViewport::enterEvent(QEnterEvent* event) {
+  m_PointerInside = true;
+  m_Last = event->position();
+  update();
+  QOpenGLWidget::enterEvent(event);
+}
+
+void EditorViewport::leaveEvent(QEvent* event) {
+  m_PointerInside = false;
+  update();
+  QOpenGLWidget::leaveEvent(event);
 }
 
 bool EditorViewport::WorldPoint(QPointF point, ray3d::Vec3& world) const {

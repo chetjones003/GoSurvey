@@ -97,6 +97,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   num("viewportCrosshairG",      &st.viewportCrosshairG,      0.f, 1.f);
   num("viewportCrosshairB",      &st.viewportCrosshairB,      0.f, 1.f);
   num("viewportCrosshairHairPx", &st.viewportCrosshairHairPx, 0.75f, 4.f);
+  // REQ-450: the pickbox half-size is one setting; X and Y are kept equal.
+  num("viewportCrosshairPickHalfPxX", &st.viewportCrosshairPickHalfPxX, 2.f, 20.f);
+  num("viewportCrosshairPickHalfPxY", &st.viewportCrosshairPickHalfPxY, 2.f, 20.f);
 
   // --- Viewport background (Display → Window Elements) ---
   num("viewportBgR", &st.viewportBgR, 0.f, 1.f);
@@ -382,6 +385,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportCrosshairG"]          = st.viewportCrosshairG;
   s["viewportCrosshairB"]          = st.viewportCrosshairB;
   s["viewportCrosshairHairPx"]     = st.viewportCrosshairHairPx;
+  s["viewportCrosshairPickHalfPxX"] = st.viewportCrosshairPickHalfPxX;
+  s["viewportCrosshairPickHalfPxY"] = st.viewportCrosshairPickHalfPxY;
 
   // Viewport background
   s["viewportBgR"]                 = st.viewportBgR;

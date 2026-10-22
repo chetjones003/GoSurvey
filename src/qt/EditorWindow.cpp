@@ -1615,7 +1615,17 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
   LoadBundledBlockLibrary(m_State, m_Log);
   if (!templatePath.isEmpty()) {
     const QByteArray pathUtf8 = templatePath.toUtf8();
-    if (!LoadGoSurveyTemplateFile(m_State, pathUtf8.constData(), m_Log)) {
+    // REQ-450: the cursor and snap aperture are app-wide preferences; the template's copy must not win.
+    const float crosshairR = m_State.viewportCrosshairR, crosshairG = m_State.viewportCrosshairG,
+                crosshairB = m_State.viewportCrosshairB;
+    const float pickHalfX = m_State.viewportCrosshairPickHalfPxX, pickHalfY = m_State.viewportCrosshairPickHalfPxY;
+    const float snapAperture = m_State.objectSnapAperturePx;
+    const bool loaded = LoadGoSurveyTemplateFile(m_State, pathUtf8.constData(), m_Log);
+    m_State.objectSnapAperturePx = snapAperture;
+    m_State.viewportCrosshairR = crosshairR; m_State.viewportCrosshairG = crosshairG;
+    m_State.viewportCrosshairB = crosshairB;
+    m_State.viewportCrosshairPickHalfPxX = pickHalfX; m_State.viewportCrosshairPickHalfPxY = pickHalfY;
+    if (!loaded) {
       m_State.drawingTabs.pop_back();
       m_State.documents.pop_back();
       RestoreDocumentFromSnapshot(m_State, previous);

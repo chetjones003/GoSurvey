@@ -16,6 +16,9 @@
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QMessageBox>
+#include <QColorDialog>
+#include <QPixmap>
+#include <QSlider>
 #include <QPushButton>
 #include <QPalette>
 #include <QSignalBlocker>
@@ -426,6 +429,73 @@ void EditorWindow::ShowSettings() {
   angleBase->setValue(m_State.angleDisplayBaseDeg);
   displayForm->addRow("Zero direction (clockwise from north)", angleBase);
   commits->push_back([this, angleBase] { m_State.angleDisplayBaseDeg = angleBase->value(); });
+  // REQ-450: viewport cursor. Colour, arm length and pickbox size preview live in the viewport and
+  // are put back by Cancel; the snap aperture is staged like every other control here.
+  addHeading(layout, "Cursor", "displayCursorHeading");
+  auto *cursorForm = new QFormLayout();
+  layout->addLayout(cursorForm);
+  struct CursorLook { float r, g, b, pickHalfPx; int sizePct; };
+  const auto readCursorLook = [this] {
+    return CursorLook{m_State.viewportCrosshairR, m_State.viewportCrosshairG, m_State.viewportCrosshairB,
+                      m_State.viewportCrosshairPickHalfPxX, m_State.displayCrosshairSizePct};
+  };
+  auto savedLook = std::make_shared<CursorLook>(readCursorLook());
+  auto *colorButton = new QPushButton(dialog);
+  colorButton->setObjectName("settingsCrosshairColor");
+  auto paintSwatch = [this, colorButton] {
+    const QColor color = QColor::fromRgbF(m_State.viewportCrosshairR, m_State.viewportCrosshairG, m_State.viewportCrosshairB);
+    QPixmap swatch(28, 16);
+    swatch.fill(color);
+    colorButton->setIcon(QIcon(swatch));
+    colorButton->setIconSize(swatch.size());
+    colorButton->setText(color.name().toUpper());
+  };
+  paintSwatch();
+  cursorForm->addRow("Crosshair color", colorButton);
+  connect(colorButton, &QPushButton::clicked, dialog, [this, dialog, paintSwatch] {
+    const QColor start = QColor::fromRgbF(m_State.viewportCrosshairR, m_State.viewportCrosshairG, m_State.viewportCrosshairB);
+    const QColor picked = QColorDialog::getColor(start, dialog, "Crosshair color");
+    if (!picked.isValid()) return;
+    m_State.viewportCrosshairR = static_cast<float>(picked.redF());
+    m_State.viewportCrosshairG = static_cast<float>(picked.greenF());
+    m_State.viewportCrosshairB = static_cast<float>(picked.blueF());
+    paintSwatch();
+    m_Viewport->update();
+  });
+  auto *armLength = new QSlider(Qt::Horizontal, dialog);
+  armLength->setObjectName("settingsCrosshairSize");
+  armLength->setRange(1, 100); armLength->setValue(m_State.displayCrosshairSizePct);
+  auto *armText = new QLabel(QString("%1%").arg(armLength->value()), dialog);
+  armText->setObjectName("settingsCrosshairSizeText");
+  armText->setMinimumWidth(40);
+  auto *armRow = new QHBoxLayout();
+  armRow->addWidget(armLength, 1);
+  armRow->addWidget(armText);
+  cursorForm->addRow("Crosshair arm length (% of viewport)", armRow);
+  connect(armLength, &QSlider::valueChanged, dialog, [this, armText](int value) {
+    armText->setText(QString("%1%").arg(value));
+    m_State.displayCrosshairSizePct = value;
+    m_Viewport->update();
+  });
+  auto *pickbox = new QSpinBox(dialog);
+  pickbox->setObjectName("settingsPickboxSize");
+  pickbox->setRange(2, 20); pickbox->setValue(static_cast<int>(std::lround(m_State.viewportCrosshairPickHalfPxX)));
+  pickbox->setSuffix(" px"); pickbox->setKeyboardTracking(false);
+  cursorForm->addRow("Pickbox size (half-width)", pickbox);
+  connect(pickbox, &QSpinBox::valueChanged, dialog, [this](int value) {
+    m_State.viewportCrosshairPickHalfPxX = m_State.viewportCrosshairPickHalfPxY = static_cast<float>(value);
+    m_Viewport->update();
+  });
+  floatField(cursorForm, "settingsSnapAperture", "Snap aperture", &m_State.objectSnapAperturePx, 4, 64, 1, 0, " px");
+  // Apply/OK keep what is on screen; Cancel (or closing the window) restores the last saved look.
+  commits->push_back([savedLook, readCursorLook] { *savedLook = readCursorLook(); });
+  connect(dialog, &QDialog::rejected, this, [this, savedLook] {
+    m_State.viewportCrosshairR = savedLook->r; m_State.viewportCrosshairG = savedLook->g;
+    m_State.viewportCrosshairB = savedLook->b;
+    m_State.viewportCrosshairPickHalfPxX = m_State.viewportCrosshairPickHalfPxY = savedLook->pickHalfPx;
+    m_State.displayCrosshairSizePct = savedLook->sizePct;
+    m_Viewport->update();
+  });
   addHeading(layout, "Text and dimension sizes on screen", "displaySizesHeading");
   auto *sizeForm = new QFormLayout();
   layout->addLayout(sizeForm);
@@ -441,7 +511,6 @@ void EditorWindow::ShowSettings() {
   addHeading(layout, "Drafting", "draftingSettingsHeading");
   auto *draftForm = new QFormLayout();
   layout->addLayout(draftForm);
-  floatField(draftForm, "settingsSnapAperture", "Object snap aperture", &m_State.objectSnapAperturePx, 4, 64, 1, 0, " px");
   intField(draftForm, "settingsIsolines", "Solid ISOLINES", &m_State.viewportSolidIsolines, 0, kSolidMaxIsolines);
   intField(draftForm, "settingsUndoHistory", "Undo steps kept per drawing", &m_State.undoHistoryMaxSize, 1, 200);
   auto *trimState = new QComboBox(dialog);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "CadCommands.hpp"
@@ -594,4 +595,24 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
 /// at each of REQ-121's three call sites).
 inline bool PaperIsObjectSelectionStep(const AppCommandState& cmd) {
   return cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection;
+}
+
+/// What the viewport cursor looks like right now (REQ-450).
+///
+/// Normal use is a crosshair with a central pickbox; an object-selection step (REQ-121, model or
+/// paper space) shows the pickbox alone. Kept as a pure function of the command state so the rule
+/// is testable without a window. Lengths are in screen pixels.
+struct ViewportCursorShape {
+  bool  arms = true;       ///< False in an object-selection step: pickbox only.
+  float armLengthPx = 0.f; ///< Total length of each arm line, centred on the pointer.
+  float pickHalfPx = 4.f;  ///< Half the pickbox square's width.
+};
+
+inline ViewportCursorShape ViewportCursorShapeFor(const AppCommandState& cmd, float viewW, float viewH) {
+  ViewportCursorShape shape;
+  shape.arms = !(ViewportIsObjectSelectionStep(cmd) || PaperIsObjectSelectionStep(cmd));
+  const float pct = std::clamp(static_cast<float>(cmd.displayCrosshairSizePct), 1.f, 100.f);
+  shape.armLengthPx = pct * std::min(viewW, viewH) / 100.f;
+  shape.pickHalfPx = std::clamp(cmd.viewportCrosshairPickHalfPxX, 2.f, 20.f);
+  return shape;
 }
