@@ -135,9 +135,9 @@ struct TraverseSideShot {
     double horizDist = 0.0;
     double slopeDist = 0.0;
     double vertAngleDeg = 0.0;
-    /// The known coordinates to check against, if given (e.g. the backsight's,
-    /// or another control point's). Comparison is skipped when not supplied —
-    /// the shot still computes and displays normally.
+    /// Known coordinates for a check shot. In an open-traverse adjustment,
+    /// these coordinates hold the target as a control and the shot's angle and
+    /// distance become observations. Otherwise they support the displayed check.
     double knownEasting = 0.0;
     double knownNorthing = 0.0;
 

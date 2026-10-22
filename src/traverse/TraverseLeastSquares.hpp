@@ -210,9 +210,8 @@ double LsaChiSquareCritical(double probability, int degreesOfFreedom);
 /// Preconditions (each failure yields ok == false and a message — REQ-017):
 ///   - td.isClosedLoop is true (the closing foresight is the start monument,
 ///     possibly re-observed under a suffixed name — it is treated as the start)
-///     OR td.hasEndCoordinates is true (an open traverse tied to a second
-///     known point — td.endEasting/endNorthing/endElevation — for the
-///     redundancy a plain open chain tied to only the start doesn't have),
+///     OR td.hasEndCoordinates is true OR a complete known-coordinate CHECK
+///     shot ties the open traverse to a fixed control point,
 ///   - a start reference bearing is set,
 ///   - every leg has a resolved horizontal angle and horizontal distance
 ///     (run ComputeTraverse first),

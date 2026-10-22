@@ -59,9 +59,10 @@
 //       HANG's FROM is never validated (a side shot has no "previous leg").
 //   STN <at> <to> CHECK [known-e known-n]
 //       Declares a check shot: a side shot flagged as a repeat/verification
-//       observation. The optional known-e/known-n are the already-known
-//       coordinates to compare the shot's computed position against; GoSurvey
-//       reports the discrepancy. Everything else is identical to SIDE.
+//       observation. In an open-traverse least-squares adjustment, known-e and
+//       known-n hold the target as a control and the shot's angle and distance
+//       contribute observations. Otherwise GoSurvey compares the computed
+//       position with those coordinates. Everything else is identical to SIDE.
 //   HANG <from> <at> <to> <angle-deg>
 //       The horizontal angle turned, backsighting FROM through AT to TO.
 //       FROM is informational only (it has no effect on the computed bearing,

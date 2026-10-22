@@ -35,15 +35,19 @@
 #include <QDoubleSpinBox>
 #include <QDebug>
 #include <QDialogButtonBox>
+#include <QDialog>
+#include <QDoubleValidator>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QColor>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QEvent>
+#include <QIntValidator>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QTextBlock>
@@ -75,6 +79,77 @@ int ScaleInsertLine(const QStringList& lines) {
   return after + 1;
 }
 constexpr double kTypicalRefractionLimit = 2.0;  // 0.7.4 warns outside -2..+2.
+
+std::size_t ResidualGroupFor(LsaMeasKind kind) {
+  switch (kind) {
+    case LsaMeasKind::Angle:
+    case LsaMeasKind::Direction:
+    case LsaMeasKind::Zenith: return 0;
+    case LsaMeasKind::Distance: return 1;
+    case LsaMeasKind::Vertical:
+    case LsaMeasKind::GpsUp:
+    case LsaMeasKind::CoordUp: return 2;
+    case LsaMeasKind::GpsEast:
+    case LsaMeasKind::GpsNorth: return 3;
+    case LsaMeasKind::CoordEast:
+    case LsaMeasKind::CoordNorth: return 4;
+  }
+  Q_ASSERT_X(false, "ResidualGroupFor", "Unhandled measurement residual kind");
+  return 0;
+}
+
+const std::array<const char*, 5> kResidualGroupNames = {"Angle", "Distance", "Vertical", "GPS", "Coordinate"};
+const std::array<const char*, 5> kResidualGroupIds = {"Angle", "Distance", "Vertical", "Gps", "Coordinate"};
+
+struct RecordFieldSpec {
+  enum class Kind : std::uint8_t { Text, Integer, Number, Choice };
+  QString key;
+  QString label;
+  Kind kind = Kind::Text;
+  QStringList choices;
+  bool optional = false;
+};
+
+std::vector<RecordFieldSpec> RecordFields(const QString& directive) {
+  using Kind = RecordFieldSpec::Kind;
+  auto text = [](const char* key, const char* label, bool optional = false) {
+    return RecordFieldSpec{key, label, Kind::Text, {}, optional};
+  };
+  auto integer = [](const char* key, const char* label) {
+    return RecordFieldSpec{key, label, Kind::Integer, {}, false};
+  };
+  auto number = [](const char* key, const char* label, bool optional = false) {
+    return RecordFieldSpec{key, label, Kind::Number, {}, optional};
+  };
+  auto choice = [](const char* key, const char* label, QStringList choices, bool optional = false) {
+    return RecordFieldSpec{key, label, Kind::Choice, std::move(choices), optional};
+  };
+  if (directive == "IMPORT") return {text("path", "Imported file path")};
+  if (directive == "STATION") return {integer("id", "Station number"), number("e", "Easting"), number("n", "Northing"), number("z", "Elevation")};
+  if (directive == "BEARING") return {number("deg", "Bearing (degrees)")};
+  if (directive == "ENDPOINT") return {number("e", "Easting"), number("n", "Northing"), number("z", "Elevation")};
+  if (directive == "LOOP") return {choice("mode", "Loop", {"ON", "OFF"})};
+  if (directive == "SCALE") return {choice("mode", "Scale factor", {"ON", "OFF"}), choice("kind", "Factor type", {"COMBINED", "GRID"})};
+  if (directive == "ERRORS") return {number("angle", "Angle error (arc-seconds)"), number("distance", "Distance error"), number("ppm", "Distance error (ppm)")};
+  if (directive == "STN") return {integer("at", "Occupied station"), integer("to", "Target station"),
+      choice("kind", "Record type", {"Leg", "SIDE", "CHECK"}), number("e", "Known easting", true), number("n", "Known northing", true)};
+  if (directive == "HANG") return {text("from", "Backsight station (or REF)"), integer("at", "Occupied station"), integer("to", "Target station"), number("deg", "Horizontal angle (degrees)")};
+  if (directive == "HDIST" || directive == "SDIST") return {integer("at", "Occupied station"), integer("to", "Target station"), number("distance", "Distance")};
+  if (directive == "VANG") return {integer("at", "Occupied station"), integer("to", "Target station"), number("deg", "Vertical angle (degrees)"), choice("type", "Vertical angle type", {"ZENITH", "ELEV"})};
+  if (directive == "DESC") return {integer("at", "Occupied station"), integer("to", "Target station"), text("description", "Description", true)};
+  if (directive == "PRISM") return {integer("at", "Occupied station"), integer("to", "Target station"), number("constant", "Prism constant"), number("error", "Prism error")};
+  if (directive == "POLE") return {integer("at", "Occupied station"), integer("to", "Target station"), number("error", "Pole centering error")};
+  if (directive == "TSERR") return {integer("at", "Occupied station"), integer("to", "Target station"), number("angle", "Angle error (arc-seconds)"), number("distance", "Distance error"), number("ppm", "Distance error (ppm)")};
+  if (directive == "CTRL") return {integer("id", "Station number"), number("e", "Approximate easting"), number("n", "Approximate northing"),
+      choice("mode", "Control type", {"Fixed 2D", "Component fixes 2D", "3D control"}), number("z", "Approximate elevation", true),
+      text("efix", "Easting fix (!, *, or sigma)", true), text("nfix", "Northing fix (!, *, or sigma)", true), text("zfix", "Elevation fix (!, *, or sigma)", true)};
+  if (directive == "ANGLE") return {integer("at", "Occupied station"), integer("from", "From station"), integer("to", "To station"), number("deg", "Angle (degrees)"), number("error", "Standard error (arc-seconds)", true)};
+  if (directive == "DIST") return {integer("from", "From station"), integer("to", "To station"), number("distance", "Distance"), number("error", "Standard error", true)};
+  if (directive == "AZIMUTH" || directive == "ZENITH") return {integer("from", "From station"), integer("to", "To station"), number("deg", directive == "AZIMUTH" ? "Azimuth (degrees)" : "Zenith angle (degrees)"), number("error", "Standard error (arc-seconds)", true)};
+  if (directive == "EDIF") return {integer("from", "From station"), integer("to", "To station"), number("elevation", "Elevation difference"), number("error", "Standard error", true)};
+  if (directive == "DIR") return {integer("set", "Direction set"), integer("at", "Occupied station"), integer("to", "Target station"), number("deg", "Direction (degrees)"), number("error", "Standard error (arc-seconds)", true)};
+  return {};
+}
 
 int DirectiveEditDistance(const QString& left, const QString& right) {
   const QString a = left.toUpper();
@@ -119,12 +194,14 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   setWindowTitle("GoSurvey | Least-squares adjustment[*]");
   resize(1200, 800);
   auto* toolbar = addToolBar("Adjustment");
+  toolbar->setObjectName("adjustmentToolbar");
   toolbar->setMovable(false);
+  toolbar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
   toolbar->addAction(QIcon(QtAsset("icons/Open.png")), "Import observations...", this, [this] { Import(); });
   toolbar->addAction(QIcon(QtAsset("icons/Save.png")), "Save", this, [this] { Save(); });
-  toolbar->addAction("Settings", this, [this] { ShowSettings(); });
   toolbar->addSeparator();
   m_RunAction = toolbar->addAction(QIcon(QtAsset("icons/Adjust.png")), "Run adjustment", this, [this] { Calculate(); });
+  m_RunAction->setObjectName("runAdjustmentAction");
   m_RunAction->setShortcut(QKeySequence(Qt::Key_F5));
   m_StopAction = toolbar->addAction("Stop", this, [this] {
     if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
@@ -136,17 +213,45 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_AcceptAction = toolbar->addAction("Accept result", this, [this] {
     QString error; if (!AcceptResult(error)) QMessageBox::warning(this, "Accept result", error);
   });
+  m_AcceptAction->setObjectName("acceptAdjustmentAction");
   m_CommitAction = toolbar->addAction("Commit to drawing", this, [this] { CommitToDrawing(); });
+  m_CommitAction->setObjectName("commitAdjustmentAction");
   auto* file = menuBar()->addMenu("&File");
+  file->setObjectName("adjustmentFileMenu");
   file->addAction("Open / Import...", QKeySequence::Open, this, [this] { Import(); });
   file->addAction("Save", QKeySequence::Save, this, [this] { Save(); });
   file->addAction("Save As...", QKeySequence::SaveAs, this, [this] { Save(true); });
   file->addAction("Export report...", this, [this] { ExportReport(); });
+  file->addSeparator();
+  auto* settingsAction = file->addAction("Settings", this, [this] { ShowSettings(); });
+  settingsAction->setObjectName("adjustmentSettingsAction");
+  auto* recordsMenu = menuBar()->addMenu("&Records");
+  recordsMenu->setObjectName("adjustmentRecordsMenu");
+  auto addRecords = [this, recordsMenu](const QString& groupName, const QStringList& directives) {
+    auto* group = recordsMenu->addMenu(groupName);
+    QString groupId = groupName;
+    groupId.remove(' ');
+    group->setObjectName("adjustmentRecordGroup_" + groupId);
+    for (const auto& directive : directives) {
+      const QString caption = directive == "IMPORT" ? "Import marker (#IMPORT)" :
+          (directive == "LOOP" || directive == "SCALE" || directive == "ERRORS" ? "#" + directive : directive);
+      auto* action = group->addAction(caption);
+      action->setObjectName("adjustmentRecordAction_" + directive);
+      action->setData(directive);
+      action->setStatusTip("Add a " + caption + " record at the editor cursor");
+      connect(action, &QAction::triggered, this, [this, directive] { OpenRecordDialog(directive); });
+    }
+  };
+  addRecords("Import", {"IMPORT"});
+  addRecords("Setup", {"STATION", "BEARING", "ENDPOINT", "LOOP", "SCALE", "ERRORS"});
+  addRecords("Traverse", {"STN", "HANG", "HDIST", "SDIST", "VANG", "DESC", "PRISM", "POLE", "TSERR"});
+  addRecords("Network", {"CTRL", "ANGLE", "DIST", "AZIMUTH", "EDIF", "ZENITH", "DIR"});
   auto* splitter = new QSplitter(this);
-  // REQ-431: left panel (Files, Summary, plan preview) | command editor | results.
+  splitter->setObjectName("adjustmentWorkspaceSplitter");
+  splitter->setChildrenCollapsible(false);
+  // REQ-431: keep Session, Editor, and Results visible together as three resizable panes.
   auto* contextTabs = new QTabWidget(splitter);
   contextTabs->setObjectName("adjustmentContextTabs");
-  m_ContextTabs = contextTabs;
   auto* left = new QWidget(contextTabs);
   left->setObjectName("adjustmentLeftPanel");
   auto* leftLayout = new QVBoxLayout(left);
@@ -176,7 +281,9 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_ImportedFiles = new QListWidget(files);
   m_ImportedFiles->setObjectName("issue913ImportedFiles");
   m_ImportedFiles->setWordWrap(true);
-  filesLayout->addWidget(m_ImportedFiles, 1);
+  m_ImportedFiles->setMinimumHeight(60);
+  m_ImportedFiles->setMaximumHeight(72);
+  filesLayout->addWidget(m_ImportedFiles);
   RefreshImportedFiles();
   auto* summary = new QGroupBox("Summary", left);
   auto* summaryLayout = new QVBoxLayout(summary);
@@ -185,19 +292,45 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Summary->setWordWrap(true);
   summaryLayout->addWidget(m_Summary);
   auto* preview = new QGroupBox("Preview", left);
+  preview->setMaximumHeight(210);
   auto* previewLayout = new QVBoxLayout(preview);
   m_Plan = new AdjustmentPlanView(preview);
+  m_Plan->setObjectName("adjustmentPlan");
   m_Plan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawingInsUnits)));
   previewLayout->addWidget(m_Plan);
   leftLayout->addWidget(files);
   leftLayout->addWidget(summary);
   leftLayout->addWidget(preview, 1);
-  m_Editor = new AdjustmentCodeEdit(splitter);
+  auto* editorPane = new QWidget(splitter);
+  editorPane->setObjectName("adjustmentEditorPane");
+  auto* editorLayout = new QVBoxLayout(editorPane);
+  editorLayout->setContentsMargins(8, 8, 8, 8);
+  editorLayout->setSpacing(6);
+  auto* editorHeading = new QLabel("Editor", editorPane);
+  editorHeading->setObjectName("adjustmentEditorHeading");
+  QFont editorHeadingFont = editorHeading->font();
+  editorHeadingFont.setBold(true);
+  editorHeading->setFont(editorHeadingFont);
+  editorLayout->addWidget(editorHeading);
+  m_Editor = new AdjustmentCodeEdit(editorPane);
   m_Editor->setObjectName("adjustmentCommands");
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(state.traverseData, state.traverseLsaWeights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
-  auto* results = new QTabWidget(splitter);
+  editorLayout->addWidget(m_Editor, 1);
+  auto* resultsPane = new QWidget(splitter);
+  resultsPane->setObjectName("adjustmentResultsPane");
+  auto* resultsLayout = new QVBoxLayout(resultsPane);
+  resultsLayout->setContentsMargins(8, 8, 8, 8);
+  resultsLayout->setSpacing(6);
+  auto* resultsHeading = new QLabel("Results", resultsPane);
+  resultsHeading->setObjectName("adjustmentResultsHeading");
+  QFont resultsHeadingFont = resultsHeading->font();
+  resultsHeadingFont.setBold(true);
+  resultsHeading->setFont(resultsHeadingFont);
+  resultsLayout->addWidget(resultsHeading);
+  auto* results = new QTabWidget(resultsPane);
   results->setObjectName("adjustmentResults");
+  resultsLayout->addWidget(results, 1);
   auto* reportPage = new QWidget(results);
   auto* reportLayout = new QVBoxLayout(reportPage);
   reportLayout->setContentsMargins(0, 0, 0, 0);
@@ -214,23 +347,14 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   reportActions->addWidget(exportRtf);
   reportActions->addWidget(exportPdf);
   reportLayout->addLayout(reportActions);
-  auto* reportSplit = new QSplitter(Qt::Horizontal, reportPage);
-  m_Output = new QPlainTextEdit(reportSplit);
+  m_Output = new QPlainTextEdit(reportPage);
   m_Output->setObjectName("adjustmentOutput");
   m_Output->setReadOnly(true);
   m_Output->setLineWrapMode(QPlainTextEdit::NoWrap);
   m_Output->setFont(QFont("Consolas", 10));
   m_Output->setPlainText("Import observations or enter GoSurvey traverse commands, then run adjustment.");
-  m_ResultPlan = new AdjustmentPlanView(reportSplit);
-  m_ResultPlan->setObjectName("adjustmentResultPlan");
-  m_ResultPlan->SetUnitLabel(QString::fromUtf8(CadDrawingInsUnitsAbbrev(state.drawingInsUnits)));
-  reportSplit->addWidget(m_Output);
-  reportSplit->addWidget(m_ResultPlan);
-  reportSplit->setSizes({720, 240});
-  reportSplit->setStretchFactor(0, 3);
-  reportSplit->setStretchFactor(1, 1);
-  reportLayout->addWidget(reportSplit, 1);
-  results->addTab(reportPage, "Report & plot");
+  reportLayout->addWidget(m_Output, 1);
+  results->addTab(reportPage, "Report");
   connect(exportTxt, &QPushButton::clicked, this, [this] { ExportReportAs("txt"); });
   connect(exportRtf, &QPushButton::clicked, this, [this] { ExportReportAs("rtf"); });
   connect(exportPdf, &QPushButton::clicked, this, [this] { ExportReportAs("pdf"); });
@@ -238,11 +362,7 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Coordinates->setObjectName("adjustmentCoordinates");
   m_Coordinates->setColumnCount(4);
   m_Coordinates->setHorizontalHeaderLabels({"Station", "Easting", "Northing", "Elevation"});
-  m_Residuals = new QTableWidget(results);
-  m_Residuals->setObjectName("adjustmentResiduals");
-  m_Residuals->setColumnCount(6);
-  m_Residuals->setHorizontalHeaderLabels({"Measurement", "From", "To", "Residual", "Std. residual", "Flag"});
-  for (auto* table : {m_Coordinates, m_Residuals}) {
+  for (auto* table : {m_Coordinates}) {
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
   }
@@ -254,13 +374,52 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_ResidualNote->setObjectName("adjustmentResidualNote");
   m_ResidualNote->setWordWrap(true);
   residualsLayout->addWidget(m_ResidualNote);
-  residualsLayout->addWidget(m_Residuals, 1);
+  auto* residualsScroll = new QScrollArea(residualsPage);
+  residualsScroll->setObjectName("adjustmentResidualGroupsScroll");
+  residualsScroll->setWidgetResizable(true);
+  auto* residualGroups = new QWidget(residualsScroll);
+  auto* residualGroupsLayout = new QVBoxLayout(residualGroups);
+  residualGroupsLayout->setContentsMargins(4, 4, 4, 4);
+  residualGroupsLayout->setSpacing(8);
+  for (std::size_t i = 0; i < m_ResidualTables.size(); ++i) {
+    auto* group = new QGroupBox(kResidualGroupNames[i], residualGroups);
+    group->setObjectName(QString("adjustmentResidualGroup%1").arg(kResidualGroupIds[i]));
+    auto* groupLayout = new QVBoxLayout(group);
+    auto* table = new QTableWidget(group);
+    table->setObjectName(QString("adjustmentResiduals%1").arg(kResidualGroupIds[i]));
+    table->setColumnCount(6);
+    table->setHorizontalHeaderLabels({"Measurement", "From", "To", "Residual", "Std. residual", "Flag"});
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    groupLayout->addWidget(table);
+    residualGroupsLayout->addWidget(group);
+    m_ResidualTables[i] = table;
+    m_ResidualGroups[i] = group;
+    group->hide();
+  }
+  residualGroupsLayout->addStretch(1);
+  residualsScroll->setWidget(residualGroups);
+  residualsLayout->addWidget(residualsScroll, 1);
   results->addTab(residualsPage, "Residuals");
-  contextTabs->addTab(left, "Session");
-  auto* settingsScroll = new QScrollArea(contextTabs);
-  settingsScroll->setObjectName("adjustmentSettingsPane");
+  auto* sessionScroll = new QScrollArea(contextTabs);
+  sessionScroll->setObjectName("adjustmentSessionPane");
+  sessionScroll->setWidgetResizable(true);
+  sessionScroll->setWidget(left);
+  contextTabs->addTab(sessionScroll, "Session");
+  auto* settingsDialog = new QDialog(this);
+  settingsDialog->setObjectName("adjustmentSettingsWindow");
+  settingsDialog->setWindowTitle("Adjustment Settings");
+  settingsDialog->resize(720, 820);
+  auto* settingsDialogLayout = new QVBoxLayout(settingsDialog);
+  auto* settingsScroll = new QScrollArea(settingsDialog);
+  settingsScroll->setObjectName("adjustmentSettingsScroll");
   settingsScroll->setWidgetResizable(true);
-  auto* settingsPage = new QWidget(settingsScroll);
+  auto* settingsGroup = new QGroupBox("Settings");
+  settingsGroup->setObjectName("adjustmentSettingsGroup");
+  auto* settingsGroupLayout = new QVBoxLayout(settingsGroup);
+  auto* settingsPage = new QWidget(settingsGroup);
+  settingsPage->setObjectName("adjustmentSettingsPane");
   auto* settingsLayout = new QVBoxLayout(settingsPage);
   settingsLayout->setContentsMargins(8, 8, 8, 8);
   m_SettingsStatus = new QLabel(settingsPage);
@@ -324,14 +483,16 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   settingsButtons->addWidget(applySettings);
   settingsLayout->addLayout(settingsButtons);
   settingsLayout->addStretch(1);
-  settingsScroll->setWidget(settingsPage);
-  contextTabs->addTab(settingsScroll, "Settings");
+  settingsGroupLayout->addWidget(settingsPage);
+  settingsScroll->setWidget(settingsGroup);
+  settingsDialogLayout->addWidget(settingsScroll);
   connect(discardSettings, &QPushButton::clicked, this, [this] { ResetSettingsDraft(); });
   connect(applySettings, &QPushButton::clicked, this, [this] { ApplySettingsDraft(); });
   ResetSettingsDraft();
-  splitter->insertWidget(0, contextTabs);
-  splitter->setSizes({430, 400, 600});
+  splitter->setSizes({320, 450, 510});
+  splitter->setStretchFactor(0, 1);
   splitter->setStretchFactor(1, 1);
+  splitter->setStretchFactor(2, 1);
   auto* central = new QWidget(this);
   auto* centralLayout = new QVBoxLayout(central);
   centralLayout->setContentsMargins(0, 0, 0, 0);
@@ -347,10 +508,29 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_ValidateTimer->setSingleShot(true);
   m_ValidateTimer->setInterval(300);
   connect(m_ValidateTimer, &QTimer::timeout, this, [this] { ValidateNow(); });
-  const auto palette = AdjustmentPalette(QApplication::palette().color(QPalette::Window).lightness() < 128);
+  m_LiveSolveTimer = new QTimer(this);
+  m_LiveSolveTimer->setSingleShot(true);
+  m_LiveSolveTimer->setInterval(600);
+  connect(m_LiveSolveTimer, &QTimer::timeout, this, [this] {
+    m_LiveSolvePending = false;
+    ValidateNow();
+    if (!m_TextStatus->text().startsWith("Command text is valid")) {
+      m_Output->setPlainText(m_TextStatus->text());
+      m_Coordinates->setRowCount(0);
+      ClearResidualTables();
+      return;
+    }
+    if (IsBusy()) {
+      m_LiveSolvePending = true;
+      if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
+      return;
+    }
+    Calculate();
+  });
+  auto palette = AdjustmentPalette(QApplication::palette().color(QPalette::Window).lightness() < 128);
+  palette.background = QApplication::palette().color(QPalette::Window);
   m_Editor->SetPalette(palette);
   m_Plan->SetPalette(palette);
-  m_ResultPlan->SetPalette(palette);
   m_Poll = new QTimer(this);
   // Results are derived and tied to a particular drawing/session. Reopening the
   // editor requires a fresh solve before accepting or committing them.
@@ -361,8 +541,11 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   connect(m_Editor, &QPlainTextEdit::textChanged, this, [this] {
     SyncOptionsFromText();
     InvalidateResult();
+    if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
+    m_LiveSolvePending = true;
     setWindowModified(HasUnsavedChanges());
     m_ValidateTimer->start();  // REQ-431 clause 3: check once the typing pauses
+    m_LiveSolveTimer->start();  // REQ-431: solve current commands after the typing pause
     RefreshPreview();          // any earlier result no longer matches the text
   });
   SyncOptionsFromText();
@@ -401,8 +584,14 @@ void AdjustmentWindow::ValidateNow() {
 void AdjustmentWindow::RefreshPreview() {
   const bool current = m_State.traverseLsaComputed && m_State.traverseLsaResult.ok;
   m_Plan->SetTraverse(m_PreviewData, current ? &m_State.traverseLsaResult : nullptr);
-  m_ResultPlan->SetTraverse(m_PreviewData, current ? &m_State.traverseLsaResult : nullptr);
   RefreshFilesAndSummary();
+}
+
+void AdjustmentWindow::ClearResidualTables() {
+  for (std::size_t i = 0; i < m_ResidualTables.size(); ++i) {
+    m_ResidualTables[i]->setRowCount(0);
+    m_ResidualGroups[i]->hide();
+  }
 }
 
 void AdjustmentWindow::RefreshFilesAndSummary() {
@@ -569,7 +758,7 @@ void AdjustmentWindow::RefreshOptionsBar() {
   m_UnitsLabel->setText(QString("Units: ") + kDrawingUnitNames[unitIndex]);
   const QString unit = UnitSuffix();
   m_Coordinates->setHorizontalHeaderLabels({"Station", "Easting (" + unit + ")", "Northing (" + unit + ")", "Elevation (" + unit + ")"});
-  m_ResidualNote->setText("Angle residuals are in arc-seconds; distance, vertical and GPS residuals are in " + unit +
+  m_ResidualNote->setText("Angle residuals are in arc-seconds; distance, vertical, GPS and coordinate residuals are in " + unit +
                           ". A flag appears when the standardized residual exceeds 3.");
   m_RefractionK->setEnabled(m_CurvRefr->isChecked());
   m_RefractionWarning->setVisible(m_CurvRefr->isChecked() && std::fabs(m_RefractionK->value()) > kTypicalRefractionLimit);
@@ -608,6 +797,12 @@ QString AdjustmentWindow::ApplyResolvedScale() {
 
 void AdjustmentWindow::changeEvent(QEvent* event) {
   QMainWindow::changeEvent(event);
+  if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange) {
+    auto palette = AdjustmentPalette(QApplication::palette().color(QPalette::Window).lightness() < 128);
+    palette.background = QApplication::palette().color(QPalette::Window);
+    m_Editor->SetPalette(palette);
+    m_Plan->SetPalette(palette);
+  }
   // The drawing's units or coordinate system may have changed while another window was in front.
   if (event->type() == QEvent::ActivationChange && isActiveWindow()) RefreshOptionsBar();
 }
@@ -656,7 +851,7 @@ bool AdjustmentWindow::LoadFile(const QString& path, QString& reason) {
   m_Imported = m_Path.isEmpty();
   if (suffix == "gstrav") m_State.traverseFilePath = path.toUtf8().toStdString();
   else if (suffix == "gsdat") m_State.traverseGsdatFilePath = path.toUtf8().toStdString();
-  m_Coordinates->setRowCount(0); m_Residuals->setRowCount(0);
+  m_Coordinates->setRowCount(0); ClearResidualTables();
   m_Output->setPlainText("Loaded " + path + "\nSave as .gstrav to retain raw measurement sets.");
   RefreshImportedFiles();
   setWindowModified(HasUnsavedChanges());
@@ -713,7 +908,7 @@ int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failure
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(m_Data, m_Weights).c_str()));
   m_SourceText = m_Editor->toPlainText();
   m_Coordinates->setRowCount(0);
-  m_Residuals->setRowCount(0);
+  ClearResidualTables();
   m_Output->setPlainText(QString("Imported %1 file(s), %2 leg(s).\nSave as .gstrav to retain raw measurement sets.")
       .arg(importedCount).arg(totalLegs));
   setWindowModified(HasUnsavedChanges());
@@ -731,6 +926,9 @@ void AdjustmentWindow::RefreshImportedFiles() {
 }
 
 void AdjustmentWindow::Calculate() {
+  m_ValidateTimer->stop();
+  m_LiveSolveTimer->stop();
+  m_LiveSolvePending = false;
   if (IsBusy()) return;
   QString error;
   if (!ParseEditor(error)) { m_Output->setPlainText(error); return; }
@@ -766,6 +964,10 @@ void AdjustmentWindow::PollCalculation() {
       m_Log.push_back("TRAVERSE: adjustment cancelled; no partial results were kept.");
       SetBusy(false);
       ValidateNow();
+      if (m_LiveSolvePending) {
+        m_LiveSolvePending = false;
+        m_LiveSolveTimer->start();
+      }
       return;
     }
     m_Data = std::move(completed.first);
@@ -800,17 +1002,28 @@ void AdjustmentWindow::PresentResult() {
           QString::number(result.adjElevation[row], 'f', 6) : "--"};
     for (int col = 0; col < cells.size(); ++col) m_Coordinates->setItem(row, col, new QTableWidgetItem(cells[col]));
   }
-  m_Residuals->setRowCount(static_cast<int>(result.measResiduals.size()));
-  for (int row = 0; row < static_cast<int>(result.measResiduals.size()); ++row) {
-    const auto& residual = result.measResiduals[row];
+  ClearResidualTables();
+  std::array<int, 5> groupRows{};
+  for (const auto& residual : result.measResiduals) ++groupRows[ResidualGroupFor(residual.kind)];
+  for (std::size_t group = 0; group < groupRows.size(); ++group) {
+    m_ResidualTables[group]->setRowCount(groupRows[group]);
+    m_ResidualGroups[group]->setVisible(groupRows[group] > 0);
+  }
+  std::array<int, 5> nextRows{};
+  for (const auto& residual : result.measResiduals) {
+    const std::size_t group = ResidualGroupFor(residual.kind);
+    const int row = nextRows[group]++;
+    auto* table = m_ResidualTables[group];
+    const bool angular = residual.kind == LsaMeasKind::Angle || residual.kind == LsaMeasKind::Zenith ||
+                         residual.kind == LsaMeasKind::Direction;
     const QStringList cells = {QString::fromUtf8(LsaMeasKindName(residual.kind)),
         QString::number(residual.fromStationId), QString::number(residual.toStationId),
-        QString::number(residual.residual, 'g', 10), QString::number(residual.stdResidual, 'f', 4),
+        QString::number(residual.residual, 'f', angular ? 6 : 4), QString::number(residual.stdResidual, 'f', 4),
         residual.flagged ? "> 3 sigma" : ""};
     for (int col = 0; col < cells.size(); ++col) {
       auto* item = new QTableWidgetItem(cells[col]);
       if (residual.flagged) item->setForeground(QColor("#f2ab64"));
-      m_Residuals->setItem(row, col, item);
+      table->setItem(row, col, item);
     }
   }
 }
@@ -1004,7 +1217,147 @@ void AdjustmentWindow::ExportReportAs(const QString& extension) {
 }
 
 void AdjustmentWindow::ShowSettings() {
-  if (m_ContextTabs) m_ContextTabs->setCurrentIndex(1);
+  auto* settingsDialog = findChild<QDialog*>("adjustmentSettingsWindow");
+  if (!settingsDialog) return;
+  settingsDialog->show();
+  settingsDialog->raise();
+  settingsDialog->activateWindow();
+}
+
+void AdjustmentWindow::OpenRecordDialog(const QString& directive) {
+  const auto specs = RecordFields(directive);
+  if (specs.empty()) return;
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("adjustmentRecordDialog");
+  dialog->setWindowTitle("Add " + (directive == "IMPORT" ? QString("import marker") : directive + " record"));
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->setWindowModality(Qt::WindowModal);
+  dialog->setMinimumWidth(520);
+  auto* layout = new QVBoxLayout(dialog);
+  auto* heading = new QLabel("Enter the values for this command record.", dialog);
+  heading->setObjectName("recordDialogHeading");
+  layout->addWidget(heading);
+  auto* form = new QFormLayout();
+  form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  QMap<QString, QWidget*> inputs;
+  for (const auto& spec : specs) {
+    QWidget* input = nullptr;
+    if (spec.kind == RecordFieldSpec::Kind::Choice) {
+      auto* combo = new QComboBox(dialog);
+      combo->addItems(spec.choices);
+      input = combo;
+    } else {
+      auto* edit = new QLineEdit(dialog);
+      edit->setClearButtonEnabled(true);
+      edit->setPlaceholderText(spec.optional ? "Optional" : "Enter a value");
+      if (spec.kind == RecordFieldSpec::Kind::Integer) edit->setValidator(new QIntValidator(edit));
+      else if (spec.kind == RecordFieldSpec::Kind::Number) {
+        auto* validator = new QDoubleValidator(edit);
+        validator->setNotation(QDoubleValidator::ScientificNotation);
+        edit->setValidator(validator);
+      }
+      input = edit;
+    }
+    input->setObjectName("recordField_" + spec.key);
+    form->addRow(spec.label, input);
+    inputs.insert(spec.key, input);
+  }
+  layout->addLayout(form);
+  auto* error = new QLabel(dialog);
+  error->setObjectName("recordValidationError");
+  error->setWordWrap(true);
+  error->setStyleSheet("color:#c83d35;");
+  error->hide();
+  layout->addWidget(error);
+  auto* buttons = new QDialogButtonBox(dialog);
+  auto* submit = buttons->addButton("Submit", QDialogButtonBox::AcceptRole);
+  submit->setObjectName("recordSubmitButton");
+  auto* cancel = buttons->addButton("Cancel", QDialogButtonBox::RejectRole);
+  cancel->setObjectName("recordCancelButton");
+  layout->addWidget(buttons);
+  connect(cancel, &QPushButton::clicked, dialog, &QDialog::reject);
+  connect(submit, &QPushButton::clicked, this, [this, dialog, directive, specs, inputs, error] {
+    auto value = [&inputs](const QString& key) {
+      QWidget* field = inputs.value(key);
+      if (auto* edit = qobject_cast<QLineEdit*>(field)) return edit->text().trimmed();
+      if (auto* combo = qobject_cast<QComboBox*>(field)) return combo->currentText();
+      return QString{};
+    };
+    auto fail = [error](const QString& reason) {
+      error->setText(reason);
+      error->show();
+    };
+    for (const auto& spec : specs) {
+      const QString fieldValue = value(spec.key);
+      if (spec.kind == RecordFieldSpec::Kind::Choice || (spec.optional && fieldValue.isEmpty())) continue;
+      if (fieldValue.isEmpty()) { fail(spec.label + " is required."); return; }
+      if (spec.kind == RecordFieldSpec::Kind::Integer) {
+        bool valid = false;
+        fieldValue.toInt(&valid);
+        if (!valid) { fail(spec.label + " must be a whole number."); return; }
+      } else if (spec.kind == RecordFieldSpec::Kind::Number) {
+        bool valid = false;
+        const double parsed = fieldValue.toDouble(&valid);
+        if (!valid || !std::isfinite(parsed)) { fail(spec.label + " must be a finite number."); return; }
+      }
+    }
+    if (directive == "STN" && value("kind") == "CHECK" &&
+        (value("e").isEmpty() != value("n").isEmpty())) {
+      fail("Enter both known coordinates, or leave both blank.");
+      return;
+    }
+    if (directive == "CTRL") {
+      const QStringList fixes = value("mode") == "3D control"
+          ? QStringList{value("efix"), value("nfix"), value("zfix")}
+          : value("mode") == "Component fixes 2D" ? QStringList{value("efix"), value("nfix")} : QStringList{};
+      if (value("mode") == "3D control" && value("z").isEmpty()) { fail("Approximate elevation is required for a 3D control."); return; }
+      for (const auto& fix : fixes) {
+        bool validSigma = false;
+        const double sigma = fix.toDouble(&validSigma);
+        if (fix != "!" && fix != "*" && (!validSigma || !std::isfinite(sigma) || sigma <= 0.0)) {
+          fail("Each coordinate fix must be !, *, or a positive standard error.");
+          return;
+        }
+      }
+    }
+    QString record;
+    if (directive == "IMPORT") {
+      QString escapedPath = value("path");
+      escapedPath.replace('"', "\\\"");
+      record = "#IMPORT \"" + escapedPath + "\"";
+    } else {
+      const bool option = directive == "LOOP" || directive == "SCALE" || directive == "ERRORS";
+      record = option ? "#" + directive : directive;
+      if (directive == "STN") {
+        record += " " + value("at") + " " + value("to");
+        if (value("kind") != "Leg") record += " " + value("kind");
+        if (value("kind") == "CHECK" && !value("e").isEmpty()) record += " " + value("e") + " " + value("n");
+      } else if (directive == "CTRL") {
+        record += " " + value("id") + " " + value("e") + " " + value("n");
+        if (value("mode") == "Component fixes 2D") record += " " + value("efix") + " " + value("nfix");
+        else if (value("mode") == "3D control")
+          record += " " + value("z") + " " + value("efix") + " " + value("nfix") + " " + value("zfix");
+      } else {
+        for (const auto& spec : specs) {
+          if ((spec.kind == RecordFieldSpec::Kind::Choice &&
+               ((directive == "STN" && spec.key == "kind") || (directive == "CTRL" && spec.key == "mode"))) ||
+              value(spec.key).isEmpty()) continue;
+          record += " " + value(spec.key);
+        }
+      }
+    }
+
+    QTextCursor cursor = m_Editor->textCursor();
+    QTextCursor insertionStart = cursor;
+    insertionStart.setPosition(cursor.selectionStart());
+    if (insertionStart.positionInBlock() > 0) record.prepend('\n');
+    record.append('\n');
+    cursor.insertText(record);
+    m_Editor->setTextCursor(cursor);
+    m_Editor->setFocus();
+    dialog->accept();
+  });
+  dialog->open();
 }
 
 void AdjustmentWindow::ResetSettingsDraft() {
@@ -1058,7 +1411,9 @@ bool AdjustmentWindow::RunSmokeChecks(QString& error) {
   if (m_Work.valid()) m_Work.wait();
   PollCalculation();
   const auto& result = m_State.traverseLsaResult;
-  if (!result.ok || result.adjClosureLinear >= 0.001 || m_Coordinates->rowCount() == 0 || m_Residuals->rowCount() == 0) {
+  bool hasResiduals = false;
+  for (const auto* table : m_ResidualTables) hasResiduals |= table->rowCount() > 0;
+  if (!result.ok || result.adjClosureLinear >= 0.001 || m_Coordinates->rowCount() == 0 || !hasResiduals) {
     error = "Qt adjustment editor failed its closed-loop solve: " + QString::fromUtf8(result.message.c_str());
     return false;
   }

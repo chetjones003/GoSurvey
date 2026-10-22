@@ -347,6 +347,64 @@ TEST_CASE("Least squares: open traverse with a known ENDPOINT adjusts", "[lsa][R
     }
 }
 
+TEST_CASE("Least squares: known CHECK coordinates control an open traverse", "[lsa][req418][req1038]") {
+    TraverseData td = MakeOpenSquareThreeLegs();
+    td.hasEndCoordinates = false;
+    td.legs[0].horizDist += 0.05;
+    ComputeTraverse(td);
+
+    auto addCheck = [&](int stationId, int atStationId, double easting, double northing) {
+        TraverseSideShot shot;
+        shot.stationId = stationId;
+        shot.atStationId = atStationId;
+        shot.isCheckShot = true;
+        shot.hasKnownCoords = true;
+        shot.knownEasting = easting;
+        shot.knownNorthing = northing;
+        shot.hasHorizAngle = true;
+        shot.horizAngleDeg = 90.0;
+        shot.hasHorizDist = true;
+        shot.horizDist = 100.0;
+        td.sideShots.push_back(shot);
+    };
+    addCheck(10, 1, 100.0, 100.0);
+    addCheck(11, 2, 0.0, 100.0);
+    ComputeTraverse(td);
+
+    REQUIRE(td.sideShots[0].computed);
+    REQUIRE(td.sideShots[1].computed);
+    LsaResult result = ComputeTraverseLeastSquares(td, LsaWeights{});
+    REQUIRE(result.ok);
+    CHECK(result.observations == 10);
+    CHECK(result.unknowns == 6);
+    CHECK(result.redundancy == 4);
+    CHECK(result.stationIds.size() == 3);
+
+    for (size_t i = 0; i < result.stationIds.size(); ++i) {
+        if (result.stationIds[i] == 1) {
+            CHECK(result.adjEasting[i] == Approx(100.0).margin(0.05));
+            CHECK(result.adjNorthing[i] == Approx(0.0).margin(0.05));
+        } else if (result.stationIds[i] == 2) {
+            CHECK(result.adjEasting[i] == Approx(100.0).margin(0.05));
+            CHECK(result.adjNorthing[i] == Approx(100.0).margin(0.05));
+        } else if (result.stationIds[i] == 3) {
+            CHECK(result.adjEasting[i] == Approx(0.0).margin(0.05));
+            CHECK(result.adjNorthing[i] == Approx(100.0).margin(0.05));
+        }
+    }
+
+    int checkAngles = 0;
+    int checkDistances = 0;
+    for (const LsaMeasResidual& row : result.measResiduals) {
+        if (row.kind == LsaMeasKind::Angle && row.toStationId >= 10) ++checkAngles;
+        if (row.kind == LsaMeasKind::Distance && row.toStationId >= 10) ++checkDistances;
+        if (row.toStationId >= 10 && row.stdError > 0.0)
+            CHECK(row.stdResidual == Approx(row.residual / row.stdError).margin(1e-8));
+    }
+    CHECK(checkAngles == 2);
+    CHECK(checkDistances == 2);
+}
+
 TEST_CASE("Least squares: open traverse adjustment drives ENDPOINT misclosure to zero",
          "[lsa][REQ-017]") {
     TraverseData td = MakeOpenSquareThreeLegs();
@@ -2936,6 +2994,40 @@ TEST_CASE("Report text lists files, then settings, then the residual listing, in
     // A distance's "At" column has no station (REQ-424-ish readability fix): "-", not -1.
     CHECK(report.find(" -1 ") == std::string::npos);
     CHECK(report.find("Distance") != std::string::npos);
+}
+
+TEST_CASE("Report rounds angular residuals to six places and linear residuals to four", "[req423]") {
+    TraverseData td;
+    LsaWeights weights;
+    LsaResult result;
+    result.ok = true;
+
+    LsaMeasResidual distance;
+    distance.kind = LsaMeasKind::Distance;
+    distance.fromStationId = 1;
+    distance.toStationId = 2;
+    distance.adjusted = 100.123456;
+    distance.residual = 0.123456;
+    distance.stdError = 0.02;
+    distance.stdResidual = 6.1728;
+    result.measResiduals.push_back(distance);
+
+    LsaMeasResidual angle;
+    angle.kind = LsaMeasKind::Angle;
+    angle.atStationId = 2;
+    angle.fromStationId = 1;
+    angle.toStationId = 3;
+    angle.adjusted = 123.1234567;
+    angle.residual = 0.1234567;
+    angle.stdError = 0.7;
+    angle.stdResidual = 0.1764;
+    result.measResiduals.push_back(angle);
+
+    const std::string report = traverserpt::BuildReportText(td, weights, result, "", "ft");
+    CHECK(report.find("100.1235 ") != std::string::npos);
+    CHECK(report.find("0.1235 ") != std::string::npos);
+    CHECK(report.find("123.123457") != std::string::npos);
+    CHECK(report.find("0.123457") != std::string::npos);
 }
 
 TEST_CASE("A case with no imported files still produces a report", "[req423]") {

@@ -27,6 +27,10 @@ std::string Line(char fillChar, int width) { return std::string(static_cast<size
 // bearing rather than a station).
 std::string IdOrDash(int id) { return id < 0 ? std::string("-") : std::to_string(id); }
 
+bool IsAngularMeasurement(LsaMeasKind kind) {
+    return kind == LsaMeasKind::Angle || kind == LsaMeasKind::Zenith || kind == LsaMeasKind::Direction;
+}
+
 template <typename T>
 std::string Field(const char* label, const T& value, const char* unit = "") {
     char buf[160];
@@ -103,8 +107,10 @@ std::string BuildReportText(const TraverseData& td, const LsaWeights& w, const L
     out << hdr;
     for (const LsaMeasResidual& row : result.measResiduals) {
         char line[200];
-        std::snprintf(line, sizeof(line), "  %-10s %6s %6s %6s %12.5f %12.5f %10.4f %10.2f %s\n",
-                     LsaMeasKindName(row.kind), IdOrDash(row.atStationId).c_str(),
+        const char* format = IsAngularMeasurement(row.kind)
+            ? "  %-10s %6s %6s %6s %12.6f %12.6f %10.6f %10.2f %s\n"
+            : "  %-10s %6s %6s %6s %12.4f %12.4f %10.4f %10.2f %s\n";
+        std::snprintf(line, sizeof(line), format, LsaMeasKindName(row.kind), IdOrDash(row.atStationId).c_str(),
                      IdOrDash(row.fromStationId).c_str(), IdOrDash(row.toStationId).c_str(), row.adjusted,
                      row.residual, row.stdError, row.stdResidual, row.flagged ? "*" : "");
         out << line;
