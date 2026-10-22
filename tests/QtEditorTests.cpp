@@ -6854,15 +6854,15 @@ private Q_SLOTS:
     QCOMPARE(ProgressAt(0), 0.0);
     QCOMPARE(ProgressAt(kMinimumDisplayMs / 2), 0.5);
     QCOMPARE(ProgressAt(kMinimumDisplayMs), 1.0);
-    QCOMPARE(ProgressAt(kMinimumDisplayMs * 4), 1.0);
+    QCOMPARE(ProgressAt(qint64{kMinimumDisplayMs} * 4), 1.0);
     QCOMPARE(ProgressAt(-250), 0.0);
     // Six neutral phases share the display time evenly, in order, and the last one holds.
     const QStringList phases{"Starting GoSurvey…", "Gathering resources…", "Preparing workspace…",
                              "Setting up drawing tools…", "Loading your settings…", "Almost ready…"};
     for (int phase = 0; phase < phases.size(); ++phase)
-      QCOMPARE(PhaseLabelAt(kMinimumDisplayMs * phase / phases.size() + 10), phases[phase]);
+      QCOMPARE(PhaseLabelAt(qint64{kMinimumDisplayMs} * phase / phases.size() + 10), phases[phase]);
     QCOMPARE(PhaseLabelAt(kMinimumDisplayMs), phases.last());
-    QCOMPARE(PhaseLabelAt(kMinimumDisplayMs * 4), phases.last());
+    QCOMPARE(PhaseLabelAt(qint64{kMinimumDisplayMs} * 4), phases.last());
     QCOMPARE(PhaseLabelAt(-250), phases.first());
 
     const QPixmap backdrop = MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
@@ -6889,7 +6889,7 @@ private Q_SLOTS:
     const QRect wordmarkRow(46, 190, 400, 80);
     QList<QImage> frames;
     for (int phase = 0; phase < phases.size(); ++phase)
-      frames << frameAt(kMinimumDisplayMs * phase / phases.size() + 10);
+      frames << frameAt(qint64{kMinimumDisplayMs} * phase / phases.size() + 10);
     for (int phase = 1; phase < frames.size(); ++phase) {
       QVERIFY(frames[phase - 1].copy(labelRow) != frames[phase].copy(labelRow));
       QVERIFY(filledPixels(frames[phase - 1]) <= filledPixels(frames[phase]));
