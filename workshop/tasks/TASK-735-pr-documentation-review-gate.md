@@ -1,7 +1,7 @@
 # TASK-735 — Require product documentation review before pull requests (REQ-453)
 
 - Type:    docs
-- Status:  done
+- Status:  submitted (PR #1057)
 - Opened:  2026-10-22
 - Owner:   workshop
 
@@ -51,6 +51,7 @@
 - 2026-10-22 — Verification: APPROVE. The requirement is measurable from the task log or PR description; the change stays within repository documentation ownership and introduces no architectural or runtime risks.
 - 2026-10-22 — Added the gate to both governance files; checked each requirement source and completion condition in the final diff.
 - 2026-10-22 — Completed REQ-453's four-source review for this change; the README, privacy policy, and both user manuals need no content change for a contributor-workflow rule.
+- 2026-10-22 — Opened [PR #1057](https://github.com/chetjones003/GoSurvey/pull/1057) targeting `beta`; labeled `documentation`, `docs-only`, and `needs review`.
 
 ## 9. Self-verification
 - [x] build-project — n/a (documentation only)
