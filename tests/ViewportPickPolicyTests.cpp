@@ -543,4 +543,3 @@ TEST_CASE("REQ-450: configured size and pickbox are honoured within their ranges
   CHECK(clamped.armLengthPx == 5.f);
   CHECK(clamped.pickHalfPx == 20.f);
 }
-
