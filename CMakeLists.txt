@@ -660,6 +660,7 @@ set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.pn
 set(GOSURVEY_WHATS_NEW_IMG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new")
 file(GLOB GOSURVEY_WHATS_NEW_IMAGES CONFIGURE_DEPENDS "${GOSURVEY_WHATS_NEW_IMG_DIR}/*.png")
 set(GOSURVEY_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/splash-bg.png")
+set(GOSURVEY_QT_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/qt-splash-bg.png")
 # REQ-336: the billboard content must exist at configure time so a missing file fails the build,
 # not only a packaged installer.
 if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
@@ -670,6 +671,9 @@ if(NOT EXISTS "${GOSURVEY_WHATS_NEW_BG}")
 endif()
 if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
   message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
+endif()
+if(NOT EXISTS "${GOSURVEY_QT_SPLASH_BG}")
+  message(FATAL_ERROR "REQ-093: resources/qt-splash-bg.png is required (Qt startup splash backdrop).")
 endif()
 set(GOSURVEY_WIKI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki")
 if(NOT EXISTS "${GOSURVEY_WIKI_DIR}/Home.md")
@@ -691,6 +695,7 @@ set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_WHATS_NEW_MD}"
   "${GOSURVEY_WHATS_NEW_BG}"
   "${GOSURVEY_SPLASH_BG}"
+  "${GOSURVEY_QT_SPLASH_BG}"
   ${GOSURVEY_WHATS_NEW_IMAGES}
   ${GOSURVEY_RESOURCE_DIR_FILES})
 set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources-$<CONFIG>.stamp")
@@ -722,6 +727,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_SPLASH_BG}"
           "$<TARGET_FILE_DIR:GoSurveyQt>/resources/splash-bg.png"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_QT_SPLASH_BG}"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/qt-splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurveyQt>/resources/icons"

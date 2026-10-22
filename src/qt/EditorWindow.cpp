@@ -44,6 +44,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QComboBox>
 #include <QCompleter>
 #include <QStringListModel>
@@ -57,12 +58,12 @@
 #include <QFormLayout>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
-#include <QRadioButton>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QImage>
 #include <QKeyEvent>
 #include <QShortcut>
+#include <QSizeGrip>
 #include <QTimer>
 #include <QLabel>
 #include <QLineEdit>
@@ -71,8 +72,6 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QProgressBar>
-#include <QRadioButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -102,11 +101,13 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFrame>
-#include <QRadioButton>
 #include <exception>
 #include <cstring>
 #include <array>
 #include <cmath>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 QString QtAsset(const QString& relative) {
   QString resolved = relative;
@@ -120,6 +121,26 @@ QString QtAsset(const QString& relative) {
 }
 
 namespace {
+class VisibleSizeGrip final : public QSizeGrip {
+public:
+  explicit VisibleSizeGrip(QWidget* parent) : QSizeGrip(parent) {
+    setObjectName("editorResizeGrip");
+    setFixedSize(24, 24);
+    setCursor(Qt::SizeFDiagCursor);
+    setToolTip("Drag to resize window");
+  }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor("#9aabb8"), 1.6, Qt::SolidLine, Qt::RoundCap));
+    for (int offset : {0, 5, 10})
+      painter.drawLine(width() - 4 - offset, height() - 3,
+                       width() - 3, height() - 4 - offset);
+  }
+};
+
 class TopographicTreeWidget final : public QTreeWidget {
  public:
   explicit TopographicTreeWidget(bool rightCorner, QWidget* parent = nullptr)
@@ -152,21 +173,6 @@ class TopographicTreeWidget final : public QTreeWidget {
 
  private:
   bool m_RightCorner;
-};
-
-class TopographicMapPanel final : public QWidget {
- public:
-  explicit TopographicMapPanel(QWidget* parent = nullptr) : QWidget(parent) {}
-
- protected:
-  void paintEvent(QPaintEvent* event) override {
-    QWidget::paintEvent(event);
-    if (qApp->property("cadLightTheme").toBool()) return;
-    QPainter painter(this);
-    const qreal artWidth = width() * .9;
-    qtArtwork::DrawRisingContours(painter,
-        QRectF(width() * .54, height() * .30, artWidth, artWidth * 120.0 / 220.0), .58);
-  }
 };
 
 class TopographicStartBody final : public QWidget {
@@ -708,6 +714,8 @@ EditorWindow::EditorWindow() {
   BuildDocks();
   UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
+  statusBar()->setSizeGripEnabled(false);
+  statusBar()->addPermanentWidget(new VisibleSizeGrip(this));
   statusBar()->addPermanentWidget(m_Coordinates, 1);
   BuildDraftingInput();
   auto* grid = new QToolButton(this);
@@ -962,6 +970,8 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
   file->addSeparator();
+  file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
+  file->addSeparator();
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
   file->addAction(CommandAction("Project Settings...", "settings.png", "PROJECTSETTINGS"));
@@ -1044,73 +1054,10 @@ void EditorWindow::BuildDocks() {
   toolSettingsLayout->addStretch();
   connect(settingsButton, &QPushButton::clicked, this, [this] { ShowSettings(); });
   toolspaceTabs->addTab(toolSettings, "Settings");
-  auto* toolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
+  makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
   BuildPropertiesPanel();
   auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
-  auto* mapPanel = new TopographicMapPanel(this);
-  mapPanel->setObjectName("mapTaskPanel");
-  auto* mapLayout = new QVBoxLayout(mapPanel);
-  mapLayout->setContentsMargins(10, 10, 10, 10);
-  auto* mapIntro = new QLabel("Choose a USGS base map for this drawing. Captured areas remain available offline.", mapPanel);
-  mapIntro->setWordWrap(true);
-  mapLayout->addWidget(mapIntro);
-  auto* providerTitle = new QLabel("Map provider", mapPanel);
-  providerTitle->setStyleSheet("font-weight:600;");
-  mapLayout->addWidget(providerTitle);
-  auto* providerGroup = new QButtonGroup(mapPanel);
-  providerGroup->setExclusive(true);
-  for (const auto& info : kOnlineMaps) {
-    auto* option = new QRadioButton(QString::fromUtf8(info.label), mapPanel);
-    option->setObjectName(QString("mapProvider_%1").arg(static_cast<int>(info.map)));
-    option->setIcon(CadCommandIcon(QString::fromUtf8(info.icon) + ".png"));
-    option->setIconSize(QSize(24, 24));
-    option->setMinimumHeight(34);
-    providerGroup->addButton(option, static_cast<int>(info.map));
-    mapLayout->addWidget(option);
-    connect(option, &QRadioButton::clicked, this, [this, info] {
-      SetOnlineMap(m_State, info.map, m_Log);
-      Refresh();
-    });
-  }
-  auto* mapAttribution = new QLabel("Map: USGS The National Map", mapPanel);
-  mapAttribution->setObjectName("mapAttribution");
-  mapAttribution->setWordWrap(true);
-  mapAttribution->setStyleSheet("color:#65727e;");
-  mapLayout->addWidget(mapAttribution);
-  auto* captureTitle = new QLabel("Capture area", mapPanel);
-  captureTitle->setStyleSheet("font-weight:600;");
-  mapLayout->addWidget(captureTitle);
-  auto* captureView = new QPushButton("Capture visible map", mapPanel);
-  captureView->setObjectName("mapCaptureVisible");
-  mapLayout->addWidget(captureView);
-  auto* capturePick = new QPushButton("Pick area", mapPanel);
-  capturePick->setObjectName("mapCapturePick");
-  mapLayout->addWidget(capturePick);
-  auto* removeCapture = new QPushButton("Remove captured areas", mapPanel);
-  removeCapture->setObjectName("mapRemoveCaptures");
-  mapLayout->addWidget(removeCapture);
-  auto* captureStatus = new QLabel(mapPanel);
-  captureStatus->setObjectName("mapCaptureStatus");
-  captureStatus->setWordWrap(true);
-  mapLayout->addWidget(captureStatus);
-  auto* captureProgress = new QProgressBar(mapPanel);
-  captureProgress->setObjectName("mapCaptureProgress");
-  captureProgress->setTextVisible(true);
-  mapLayout->addWidget(captureProgress);
-  mapLayout->addStretch(1);
-  auto* mapDock = makeDock("Map", "mapTaskDock", Qt::RightDockWidgetArea, mapPanel);
-  mapDock->setMinimumWidth(250);
-  splitDockWidget(toolspaceDock, mapDock, Qt::Vertical);
   propertiesDock->raise();
-  connect(captureView, &QPushButton::clicked, this, [this] {
-    StartCaptureMapArea(m_State, false, m_Log); Refresh();
-  });
-  connect(capturePick, &QPushButton::clicked, this, [this] {
-    StartCaptureMapArea(m_State, true, m_Log); Refresh();
-  });
-  connect(removeCapture, &QPushButton::clicked, this, [this] {
-    RemoveCapturedMapAreas(m_State, m_Log); Refresh();
-  });
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
@@ -1558,6 +1505,18 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
 
 void EditorWindow::showEvent(QShowEvent* event) {
   QMainWindow::showEvent(event);
+#ifdef _WIN32
+  // Qt reapplies the frameless flag while first showing the native window, so
+  // restore the shell-facing styles after that transition.
+  const HWND hwnd = reinterpret_cast<HWND>(winId());
+  const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+      WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#endif
+  if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
+    grip->setVisible(!isMaximized() && !isFullScreen());
   m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
@@ -1565,19 +1524,36 @@ void EditorWindow::showEvent(QShowEvent* event) {
   RefreshRecentDrawings();
 }
 
+void EditorWindow::changeEvent(QEvent* event) {
+  QMainWindow::changeEvent(event);
+  if (event->type() == QEvent::WindowStateChange) {
+    if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
+      grip->setVisible(!isMaximized() && !isFullScreen());
+  }
+}
+
 void EditorWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
+  if (m_Viewport) m_Viewport->UpdateWindowResizePreviewGeometry();
   const bool compact = width() < 1120;
-  if (auto* columns = findChild<QBoxLayout*>("startContentColumns"))
-    columns->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-  if (auto* sidePanel = findChild<QWidget*>("startRightColumn")) {
-    sidePanel->setMaximumWidth(compact ? QWIDGETSIZE_MAX : 560);
-    sidePanel->setMinimumWidth(compact ? 0 : 430);
+  if (auto* columns = findChild<QBoxLayout*>("startContentColumns")) {
+    const auto direction = compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
+    if (columns->direction() != direction) columns->setDirection(direction);
   }
-  QTimer::singleShot(0, this, [this] {
-    RefreshRecentProjects();
-    RefreshRecentDrawings();
-  });
+  if (auto* sidePanel = findChild<QWidget*>("startRightColumn")) {
+    const int maximum = compact ? QWIDGETSIZE_MAX : 560;
+    const int minimum = compact ? 0 : 430;
+    if (sidePanel->maximumWidth() != maximum) sidePanel->setMaximumWidth(maximum);
+    if (sidePanel->minimumWidth() != minimum) sidePanel->setMinimumWidth(minimum);
+  }
+}
+
+void EditorWindow::BeginInteractiveResize() {
+  if (m_Viewport) m_Viewport->BeginWindowResizePreview();
+}
+
+void EditorWindow::EndInteractiveResize() {
+  if (m_Viewport) m_Viewport->EndWindowResizePreview();
 }
 
 void EditorWindow::SwitchDrawing(int index) {
@@ -1899,6 +1875,8 @@ void EditorWindow::Refresh() {
   m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   const bool drawingActive = m_State.activeDrawingIdx > 0;
+  if (auto* drawingSettings = findChild<QAction*>("command_DRAWINGSETTINGS"))
+    drawingSettings->setEnabled(drawingActive);
   if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(true);
   m_Tabs->setVisible(true);
   statusBar()->setVisible(true);
@@ -1908,32 +1886,6 @@ void EditorWindow::Refresh() {
     toolspaceDock->setVisible(drawingActive);
   if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
     propertiesDock->setVisible(drawingActive);
-  if (auto* mapDock = findChild<QDockWidget*>("mapTaskDock"))
-    mapDock->setVisible(drawingActive);
-  const bool mapEnabled = drawingActive && m_State.drawingSettings.Geolocated() &&
-      m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off;
-  for (const auto& info : kOnlineMaps) {
-    if (auto* option = findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(info.map)))) {
-      const QSignalBlocker block(option);
-      option->setChecked(m_State.drawingSettings.onlineMap == info.map);
-    }
-  }
-  if (auto* capture = findChild<QPushButton*>("mapCaptureVisible")) capture->setEnabled(mapEnabled);
-  if (auto* capture = findChild<QPushButton*>("mapCapturePick")) capture->setEnabled(mapEnabled);
-  if (auto* remove = findChild<QPushButton*>("mapRemoveCaptures"))
-    remove->setEnabled(drawingActive && !m_State.drawingSettings.capturedAreas.empty());
-  if (auto* status = findChild<QLabel*>("mapCaptureStatus")) {
-    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
-    status->setText(capturing ? QString::fromUtf8(m_State.mapCapture.prompt.c_str())
-                              : QString("%1 captured area(s) stored in this drawing.").arg(m_State.drawingSettings.capturedAreas.size()));
-  }
-  if (auto* progress = findChild<QProgressBar*>("mapCaptureProgress")) {
-    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
-    progress->setVisible(capturing);
-    progress->setRange(0, capturing ? std::max(1, m_State.mapCapture.total) : 1);
-    progress->setValue(capturing ? m_State.mapCapture.gathered : 0);
-    if (capturing) progress->setFormat(QString("%1 / %2 tiles").arg(m_State.mapCapture.gathered).arg(m_State.mapCapture.total));
-  }
   while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
   QString commandHint;
   for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),

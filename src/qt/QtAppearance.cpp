@@ -40,6 +40,7 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #windowClose:hover { background:#c42b1c; color:white; border-color:#c42b1c; }
     #ribbon::pane { border:1px solid #afb4bc; background:#e9ebee; }
     #ribbon QToolButton { padding:2px 5px; }
+    #ribbonTabMenu { border:1px solid #b0b5bd; padding:2px 8px; }
     #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #b9bec5; }
     #ribbonPanelLabel { color:#555e69; font-size:10px; border-top:1px solid #d2d5da; padding-top:1px; }
     QTabBar::tab { background:#dce0e5; color:#30353b; border:1px solid #b0b5bd; padding:3px 12px; margin-right:1px; }
@@ -106,6 +107,7 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #ribbonBar { background:#191d20; border-top:1px solid #30373c; border-bottom:1px solid #333b40; }
     #ribbon::pane { border:1px solid #363e43; background:#202529; }
     #ribbon QToolButton { padding:2px 5px; border-radius:4px; }
+    #ribbonTabMenu { border:1px solid #353d42; padding:2px 8px; }
     #ribbon QToolButton:hover { background:#343c41; border-color:@edge@; }
     #ribbon QToolButton:pressed, #ribbon QToolButton:checked { background:@tint@; border-color:@strong@; }
     #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #3a4247; }

@@ -31,6 +31,8 @@
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QPixmap>
+#include <QLabel>
+#include <QLayout>
 #include <QWheelEvent>
 #include <algorithm>
 
@@ -154,6 +156,47 @@ void EditorViewport::ClearTransientInput() {
   m_State.resolvedPointZValid = false;
 }
 
+void EditorViewport::BeginWindowResizePreview() {
+  if (!m_Ready || m_ResizePreview || m_State.activeSpaceIndex != kModelSpaceIndex || !parentWidget()) return;
+  const QImage frame = grabFramebuffer();
+  if (frame.isNull()) return;
+
+  m_ResizePreviewMinimumSize = minimumSize();
+  m_ResizePreviewMaximumSize = maximumSize();
+  m_ResizePreview = true;
+  setUpdatesEnabled(false);
+  setFixedSize(size());
+
+  m_ResizePreviewOverlay = new QLabel(parentWidget());
+  m_ResizePreviewOverlay->setObjectName("viewportResizePreview");
+  m_ResizePreviewOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+  m_ResizePreviewOverlay->setScaledContents(true);
+  m_ResizePreviewOverlay->setPixmap(QPixmap::fromImage(frame));
+  UpdateWindowResizePreviewGeometry();
+  m_ResizePreviewOverlay->show();
+  m_ResizePreviewOverlay->raise();
+}
+
+void EditorViewport::EndWindowResizePreview() {
+  if (!m_ResizePreview) return;
+  m_ResizePreview = false;
+  delete m_ResizePreviewOverlay;
+  m_ResizePreviewOverlay = nullptr;
+  setUpdatesEnabled(true);
+  setMinimumSize(m_ResizePreviewMinimumSize);
+  setMaximumSize(m_ResizePreviewMaximumSize);
+  if (parentWidget() && parentWidget()->layout()) parentWidget()->layout()->activate();
+  updateGeometry();
+  update();
+}
+
+void EditorViewport::UpdateWindowResizePreviewGeometry() {
+  if (!m_ResizePreviewOverlay || !parentWidget()) return;
+  const QRect geometry = parentWidget()->rect();
+  if (m_ResizePreviewOverlay->geometry() != geometry)
+    m_ResizePreviewOverlay->setGeometry(geometry);
+}
+
 void EditorViewport::paintGL() {
   const int w = qRound(width() * devicePixelRatioF());
   const int h = qRound(height() * devicePixelRatioF());
@@ -162,7 +205,10 @@ void EditorViewport::paintGL() {
   m_State.uiViewportHeightPx = static_cast<float>(height());
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
-  if (m_Ready && !paperSpace) {
+  const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
+  if (useResizePreview) {
+    m_Renderer->BlitRenderedFrame(defaultFramebufferObject(), w, h);
+  } else if (m_Ready && !paperSpace) {
     const Camera camera = CadViewCamera(m_State);
     std::vector<float> rubber, preview, previewCircles, highlight, highlightCircles;
     AppendCadDraftRubberLines(m_State, m_Cursor.x, m_Cursor.y, m_State.orthoMode,

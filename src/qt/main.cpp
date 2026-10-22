@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
       window.EnableTelemetry();
       window.StartAuth(previewSignIn);
     }
-    window.show();
+    window.showMaximized();
     splash.finish(&window);
     if (smoke) {
       QTimer::singleShot(800, &window, [&] {

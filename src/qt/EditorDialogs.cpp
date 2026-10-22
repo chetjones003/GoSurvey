@@ -6,12 +6,17 @@
 #include "CadColor.hpp"
 #include "NonDismissableDialog.hpp"
 #include "Version.hpp"
+#include "platform/AppPaths.hpp"
 #include "update/UpdateService.hpp"
 #include "UserPrefs.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "util/PlotScales.hpp"
 #include <QDialog>
+#include <QApplication>
 #include <QDialogButtonBox>
+#include <QDebug>
+#include <QAbstractItemView>
+#include <QGuiApplication>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -25,6 +30,7 @@
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QProxyStyle>
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
@@ -42,16 +48,64 @@
 #include <QKeyEvent>
 #include <QFrame>
 #include <QGroupBox>
+#include <QScreen>
 #include <QStyle>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <climits>
 #include <array>
+#include <filesystem>
 #include <cstdio>
 #include <functional>
 #include <memory>
 #include <vector>
+
+namespace {
+class CoordinateSystemPopupStyle final : public QProxyStyle {
+public:
+  explicit CoordinateSystemPopupStyle(const QString& baseStyle) : QProxyStyle(baseStyle) {}
+
+  int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
+                const QWidget* widget = nullptr, QStyleHintReturn* returnData = nullptr) const override {
+    // Menu-style combo popups create invisible hover scrollers at their top and bottom.
+    // Use the normal list popup so pointer proximity never changes the current scroll position.
+    if (hint == QStyle::SH_ComboBox_Popup) return 0;
+    return QProxyStyle::styleHint(hint, option, widget, returnData);
+  }
+};
+
+class CoordinateSystemComboBox final : public QComboBox {
+public:
+  explicit CoordinateSystemComboBox(QWidget* parent) : QComboBox(parent) {
+    auto* popupStyle = new CoordinateSystemPopupStyle(QApplication::style()->name());
+    popupStyle->setParent(this);
+    setStyle(popupStyle);
+    setMaxVisibleItems(8);
+    // SH_ComboBox_Popup can leave this scrollbar hidden from the style used during base
+    // construction, so select a normal viewport scrollbar explicitly for long lists.
+    view()->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    view()->setAutoScroll(false);
+    view()->setAutoScrollMargin(0);
+    view()->setMaximumHeight(220);
+  }
+
+  void showPopup() override {
+    QComboBox::showPopup();
+    QWidget* popup = view()->window();
+    QTimer::singleShot(0, this, [this, popup] {
+      if (!popup || !popup->isVisible()) return;
+      const QPoint topLeft = mapToGlobal(QPoint(0, height()));
+      QScreen* screen = QGuiApplication::screenAt(topLeft);
+      if (!screen) return;
+      const int availableBelow = screen->availableGeometry().bottom() + 1 - topLeft.y();
+      const int popupHeight = std::min({popup->height(), 220, availableBelow});
+      if (popupHeight <= 0) return;
+      popup->setGeometry(topLeft.x(), topLeft.y(), width(), popupHeight);
+    });
+  }
+};
+}  // namespace
 
 void EditorWindow::ShowSignInGate() {
   if (findChild<QDialog *>("signInGate"))
@@ -1225,6 +1279,16 @@ void EditorWindow::ShowUnits() {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     m_Log.push_back("DRAWINGSETTINGS — open or create a drawing first."); Refresh(); return;
   }
+  if (!geo::DictionariesLoaded()) {
+    std::string directory;
+    try {
+      directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+    } catch (const std::exception& error) {
+      qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
+    }
+    geo::LoadDictionaries(directory);
+  }
+  const bool coordinateSystemsAvailable = geo::DictionariesLoaded();
   auto* dialog = new QDialog(this);
   dialog->setObjectName("drawingSettingsDialog");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1286,14 +1350,19 @@ void EditorWindow::ShowUnits() {
   unitsForm->addRow("Imperial to Metric conversion", foot);
   unitsForm->addRow("Plot scale", scaleRow);
   unitsForm->addRow(scaleInserted); unitsForm->addRow(setVariables);
-  auto* zoneHeading = new QLabel("Coordinate system", unitsPage); zoneHeading->setStyleSheet("font-weight:600; font-size:15px;");
-  unitsForm->addRow(zoneHeading);
-  auto* category = new QComboBox(unitsPage); category->setObjectName("drawingZoneCategory");
+  auto* zoneGroup = new QGroupBox("Coordinate system", unitsPage);
+  auto* zoneForm = new QFormLayout(zoneGroup);
+  auto* category = new CoordinateSystemComboBox(zoneGroup); category->setObjectName("drawingZoneCategory");
   category->addItem(QString::fromUtf8(geo::kNoZoneCategory), QString());
   for (const auto& name : geo::Categories()) category->addItem(QString::fromUtf8(name.c_str()), QString::fromUtf8(name.c_str()));
-  auto* systems = new QComboBox(unitsPage); systems->setObjectName("drawingZoneSystem");
-  auto* zoneCode = new QLineEdit(unitsPage); zoneCode->setObjectName("drawingZoneCode");
-  auto* zoneDetails = new QLabel(unitsPage); zoneDetails->setObjectName("drawingZoneDetails"); zoneDetails->setWordWrap(true);
+  auto* systems = new CoordinateSystemComboBox(zoneGroup); systems->setObjectName("drawingZoneSystem");
+  auto* zoneCode = new QLineEdit(zoneGroup); zoneCode->setObjectName("drawingZoneCode");
+  auto* zoneDetails = new QLabel(zoneGroup); zoneDetails->setObjectName("drawingZoneDetails"); zoneDetails->setWordWrap(true);
+  auto* zoneError = new QLabel(unitsPage); zoneError->setObjectName("drawingZoneError");
+  zoneError->setWordWrap(true); zoneError->setStyleSheet("color:#b23b35;");
+  zoneError->setText(coordinateSystemsAvailable ? QString() : QString::fromUtf8(geo::DictionaryError().c_str()));
+  zoneError->setVisible(!coordinateSystemsAvailable);
+  zoneGroup->setEnabled(coordinateSystemsAvailable);
   auto updateDetails = [zoneDetails, &staged] {
     if (staged.zoneCode.empty()) { zoneDetails->setText("No Datum, No Projection\nProjection: Unknown projection\nDatum: Unknown Datum"); return; }
     const auto info = geo::FindCoordinateSystem(staged.zoneCode);
@@ -1341,8 +1410,9 @@ void EditorWindow::ShowUnits() {
     category->setCurrentIndex(category->findData(cat)); populateSystems(cat); systems->setCurrentIndex(systems->findData(QString::fromUtf8(info->code.c_str())));
     zoneCode->setText(QString::fromUtf8(info->code.c_str())); updateDetails();
   });
-  unitsForm->addRow("Categories", category); unitsForm->addRow("Available coordinate systems", systems);
-  unitsForm->addRow("Selected coordinate system code", zoneCode); unitsForm->addRow(zoneDetails);
+  zoneForm->addRow("Categories", category); zoneForm->addRow("Available coordinate systems", systems);
+  zoneForm->addRow("Selected coordinate system code", zoneCode); zoneForm->addRow(zoneDetails);
+  unitsForm->addRow(zoneGroup); unitsForm->addRow(zoneError);
   pages->addWidget(unitsPage);
 
   auto* transformPage = new QWidget(dialog); auto* transformForm = new QFormLayout(transformPage);

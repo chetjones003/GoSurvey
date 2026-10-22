@@ -15,6 +15,7 @@ class EditorViewport;
 class QTabBar;
 class QLineEdit;
 class QResizeEvent;
+class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
 class QScrollArea;
@@ -28,12 +29,15 @@ class QGridLayout;
 class QWidget;
 class FloatingCommandBar;
 class QFrame;
+class QTimer;
 
 class EditorWindow final : public QMainWindow {
 public:
   EditorWindow();
   ~EditorWindow() override;
   void Submit(const QString& command);
+  void BeginInteractiveResize();
+  void EndInteractiveResize();
   void StartAuth(bool previewSignIn = false);
   /// REQ-077: begins the unattended startup check. Called by the application entry
   /// point (not the constructor) so test windows never touch the network.
@@ -51,6 +55,7 @@ public:
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void changeEvent(QEvent* event) override;
   void showEvent(QShowEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;

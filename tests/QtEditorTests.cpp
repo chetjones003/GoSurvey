@@ -3,6 +3,7 @@
 #include "io/DwgIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
+#include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -32,6 +33,7 @@
 #include "ProjectPack.hpp"
 #include "ProjectTurnover.hpp"
 #include "ProjectSettings.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include "io/Project.hpp"
@@ -70,6 +72,7 @@
 #include <QDialog>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QSizeGrip>
 #include <QRegularExpression>
 #include <QTextBlock>
 #include <QTextLayout>
@@ -109,6 +112,12 @@
 #include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
@@ -4293,11 +4302,95 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.State().userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
+    ++window.State().cadGpuRevision;
+    window.m_Viewport->InvalidateGeometry();
+    window.resize(1200, 800);
     window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
+#ifdef _WIN32
+    const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+    const LONG_PTR nativeStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    QVERIFY(nativeStyle & WS_THICKFRAME);
+    QVERIFY(nativeStyle & WS_CAPTION);
+    auto* titleForHitTest = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(titleForHitTest);
+    const QPoint captionPoint = titleForHitTest->mapToGlobal(QPoint(titleForHitTest->width() / 2, titleForHitTest->height() / 2));
+    const qreal scale = window.devicePixelRatioF();
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(captionPoint.x() * scale), qRound(captionPoint.y() * scale))), static_cast<LRESULT>(HTCAPTION));
+    const QPoint leftEdge = window.mapToGlobal(QPoint(0, window.height() / 2));
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(leftEdge.x() * scale), qRound(leftEdge.y() * scale))), static_cast<LRESULT>(HTLEFT));
+    const auto hitAt = [&](QPoint local) {
+      const QPoint global = window.mapToGlobal(local);
+      return SendMessageW(hwnd, WM_NCHITTEST, 0,
+          MAKELPARAM(qRound(global.x() * scale), qRound(global.y() * scale)));
+    };
+    QCOMPARE(hitAt(QPoint(0, 0)), static_cast<LRESULT>(HTTOPLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, 0)), static_cast<LRESULT>(HTTOPRIGHT));
+    QCOMPARE(hitAt(QPoint(0, window.height() - 1)), static_cast<LRESULT>(HTBOTTOMLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, window.height() - 1)), static_cast<LRESULT>(HTBOTTOMRIGHT));
+    QCOMPARE(hitAt(QPoint(window.width() / 2, 0)), static_cast<LRESULT>(HTTOP));
+    QCOMPARE(hitAt(QPoint(window.width() / 2, window.height() - 1)), static_cast<LRESULT>(HTBOTTOM));
+    QCOMPARE(hitAt(QPoint(0, window.height() / 2)), static_cast<LRESULT>(HTLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, window.height() / 2)), static_cast<LRESULT>(HTRIGHT));
+#endif
+    QVERIFY(!window.statusBar()->isSizeGripEnabled());
+    auto* nativeSizeGrip = window.statusBar()->findChild<QSizeGrip*>(); QVERIFY(nativeSizeGrip);
+    QTRY_VERIFY(nativeSizeGrip->isVisible());
+    QVERIFY(nativeSizeGrip->width() >= 20 && nativeSizeGrip->height() >= 20);
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-restored-resize-grip.png"));
+    auto* viewport = window.m_Viewport; QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->m_Renderer->HasRenderedFrame(), 10000);
+    QSize lastFrame(viewport->m_Renderer->RenderedWidth(), viewport->m_Renderer->RenderedHeight());
+    const QSize startingSize = window.size();
+    const QSize viewportSize = viewport->size();
+#ifdef _WIN32
+    SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
+#else
+    window.BeginInteractiveResize();
+#endif
+    QVERIFY(viewport->m_ResizePreview);
+    auto* resizePreview = window.findChild<QLabel*>("viewportResizePreview"); QVERIFY(resizePreview);
+    QCOMPARE(viewport->size(), viewportSize);
+    QCOMPARE(viewport->m_Renderer->RenderedWidth(), lastFrame.width());
+    QCOMPARE(viewport->m_Renderer->RenderedHeight(), lastFrame.height());
+    const QSize previewParentSize = viewport->parentWidget()->size();
+    for (int sample = 0; sample < 30; ++sample) {
+      window.resize(startingSize + QSize(40 + (sample % 2) * 2, 32 + (sample % 2) * 2));
+      QApplication::processEvents(QEventLoop::AllEvents, 10);
+      QCOMPARE(viewport->size(), viewportSize);
+      QCOMPARE(resizePreview->geometry(), viewport->parentWidget()->rect());
+    }
+    QVERIFY(resizePreview->size() != previewParentSize);
+    window.resize(startingSize + QSize(40, 32));
+    QApplication::processEvents();
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-resize-preview.png"));
+#ifdef _WIN32
+    SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+#else
+    window.EndInteractiveResize();
+#endif
+    QTRY_VERIFY_WITH_TIMEOUT(!viewport->m_ResizePreview, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(viewport->m_Renderer->RenderedWidth(),
+        qRound(viewport->width() * viewport->devicePixelRatioF()), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(viewport->m_Renderer->RenderedHeight(),
+        qRound(viewport->height() * viewport->devicePixelRatioF()), 5000);
+    QVERIFY(window.width() >= startingSize.width() + 36);
+    QVERIFY(window.height() >= startingSize.height() + 28);
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-resized.png"));
+    window.showMaximized(); QApplication::processEvents();
+    QTRY_VERIFY(!nativeSizeGrip->isVisible());
+#ifdef _WIN32
+    const QPoint maximizedCaption = titleForHitTest->mapToGlobal(QPoint(titleForHitTest->width() / 2, titleForHitTest->height() / 2));
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(maximizedCaption.x() * scale), qRound(maximizedCaption.y() * scale))), static_cast<LRESULT>(HTCAPTION));
+#endif
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-maximized.png"));
+    window.showNormal(); QApplication::processEvents();
+    QTRY_VERIFY(nativeSizeGrip->isVisible());
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
+    QVERIFY(title->geometry().top() >= 0);
+    QVERIFY(title->geometry().bottom() < window.height());
     auto* logo = window.findChild<QToolButton*>("applicationMenu"); QVERIFY(logo); QVERIFY(logo->menu());
     QStringList categories; for (auto* action : logo->menu()->actions()) categories.append(QString(action->text()).remove('&'));
     QCOMPARE(categories, QStringList({"File", "Edit", "View", "Survey", "Help"}));
@@ -4310,9 +4403,9 @@ private Q_SLOTS:
       QVERIFY(title->isAncestorOf(button));
     }
     QVERIFY(!window.findChild<QDockWidget*>("commandDock"));
-    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
+    auto* viewportWidget = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewportWidget);
     auto* panel = dynamic_cast<FloatingCommandBar*>(window.findChild<QFrame*>("floatingCommandBar")); QVERIFY(panel);
-    QCOMPARE(panel->parentWidget(), viewport);
+    QCOMPARE(panel->parentWidget(), viewportWidget);
     auto* input = panel->Input();
     input->setFocus(); input->setText("LINE"); QTest::keyClick(input, Qt::Key_Return);
     QCOMPARE(window.State().active, AppCommandState::Kind::Line);
@@ -4331,11 +4424,11 @@ private Q_SLOTS:
     window.Submit("0,0");
     window.Submit("10,0");
     window.CancelDraftingInput();
-    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(12));
     window.findChild<QToolButton*>("quick_UNDO")->click();
-    QVERIFY(window.State().userLinesFlat.empty());
-    window.findChild<QToolButton*>("quick_REDO")->click();
     QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    window.findChild<QToolButton*>("quick_REDO")->click();
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(12));
     QTest::keyClick(input, Qt::Key_F2);
     QTRY_VERIFY(panel->Transcript()->isVisible());
     QVERIFY(panel->Transcript()->toPlainText().contains("LINE", Qt::CaseInsensitive));
@@ -5581,6 +5674,67 @@ private Q_SLOTS:
     auto* draw = window.findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->menu()->actions().contains(line));
   }
 
+  void compactRibbonDropdownButtonsOpenAtMinimumWindowWidth() {
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.resize(1200, 800); window.show(); QTest::qWait(100);
+    window.resize(window.minimumSize()); QTest::qWait(100);
+    auto* tabMenuButton = window.findChild<QToolButton*>("ribbonTabMenu"); QVERIFY(tabMenuButton);
+    QVERIFY(tabMenuButton->menu()); QVERIFY(!tabMenuButton->menu()->actions().empty());
+    QPointer<QAction> firstTabAction = tabMenuButton->menu()->actions().front();
+    // Repeated size changes inside the same compact state must not destroy and
+    // reconnect every tab action on each resize event.
+    window.resize(window.width() + 2, window.height()); QCoreApplication::processEvents();
+    QVERIFY(firstTabAction);
+    auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
+    QList<QToolButton*> visibleMenus;
+    for (auto* button : page->findChildren<QToolButton*>())
+      if (button->objectName().startsWith("collapsed_") && button->isVisible() && button->menu())
+        visibleMenus.append(button);
+    auto* more = page->findChild<QToolButton*>("ribbonMore");
+    if (more && more->isVisible() && more->menu()) visibleMenus.append(more);
+    QVERIFY(!visibleMenus.empty());
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-ribbon-minimum-width.png"));
+    for (auto* button : visibleMenus) {
+      QVERIFY(!button->menu()->actions().empty());
+      bool opened = false;
+      connect(button->menu(), &QMenu::aboutToShow, &window, [&opened] { opened = true; });
+      for (const QPoint position : {button->rect().center(), QPoint(button->width() / 2, button->height() - 5)}) {
+        opened = false;
+        const bool capture = button->objectName() == "collapsed_ribbonPanel_Home_Draw" &&
+                             position == button->rect().center();
+        QTimer::singleShot(0, button->menu(), [menu = button->menu(), capture] {
+          if (capture) menu->grab().save(QtTestArtifactDirectory() + "/qt-1035-ribbon-minimum-width-menu.png");
+          menu->hide();
+        });
+        QTest::mouseClick(button, Qt::LeftButton, Qt::NoModifier, position);
+        QVERIFY2(opened, qPrintable(button->objectName()));
+      }
+    }
+    auto* draw = page->findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->isVisible());
+    QAction* line = nullptr;
+    for (auto* action : draw->menu()->actions())
+      if (action->text().contains("Line", Qt::CaseInsensitive)) { line = action; break; }
+    QVERIFY(line);
+    bool drawMenuOpened = false;
+    connect(draw->menu(), &QMenu::aboutToShow, &window, [&drawMenuOpened] { drawMenuOpened = true; });
+    QTimer::singleShot(0, draw->menu(), [menu = draw->menu(), line] {
+      line->trigger();
+      menu->hide();
+    });
+    QTest::mouseClick(draw, Qt::LeftButton, Qt::NoModifier, draw->rect().center());
+    QVERIFY(drawMenuOpened);
+    QTRY_COMPARE(window.State().active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
+  }
+
   void ribbonPanelCaptionsHaveBottomSpaceWithoutResizingButtons() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1400, 800); window.show();
     QTest::qWait(100);
@@ -5622,10 +5776,12 @@ private Q_SLOTS:
     QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.
   }
 
-  void issue899DrawingSettingsAndMapTaskPanelUseSharedWorkflows() {
+  void issue899DrawingSettingsAndGeolocationRibbonUseSharedWorkflows() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
     auto& state = window.State();
+    if (!geo::DictionariesLoaded())
+      QVERIFY(geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string()));
     state.drawingSettings.transform.apply = false;
     const QString artifacts = QtTestArtifactDirectory() + "/";
 
@@ -5648,25 +5804,129 @@ private Q_SLOTS:
     });
     window.ShowUnits();
     QVERIFY(state.drawingSettings.objectLayers[0].locked);
+    window.show(); QTest::qWait(100);
 
-    state.drawingSettings.zoneCode = "TX83-CF";
+    state.drawingSettings.zoneCode.clear();
     state.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;
     window.Submit("");
-    auto* mapDock = window.findChild<QDockWidget*>("mapTaskDock"); QVERIFY(mapDock);
-    auto* panel = window.findChild<QWidget*>("mapTaskPanel"); QVERIFY(panel);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel.png"));
-    auto* imagery = window.findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(DrawingSettings::OnlineMap::UsgsImagery)));
+    QVERIFY(!window.findChild<QDockWidget*>("mapTaskDock"));
+    QVERIFY(!window.findChild<QWidget*>("mapTaskPanel"));
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    const int geoTab = ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_GeolocationCtx")); QVERIFY(geoTab >= 0);
+    QVERIFY(!ribbon->isTabVisible(geoTab));
+    QVERIFY(window.grab().save(artifacts + "qt-1035-no-geolocation-ribbon.png"));
+    state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+    window.Submit("");
+    QVERIFY(ribbon->isTabVisible(geoTab));
+    QVERIFY(geoTab > ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_Modeling")));
+    ribbon->setCurrentIndex(geoTab); QApplication::processEvents();
+    QVERIFY(window.grab().save(artifacts + "qt-1035-geolocation-ribbon.png"));
+    auto* wrapper = window.findChild<QWidget*>("ribbonWrapper"); QVERIFY(wrapper);
+    auto* nav = window.findChild<QWidget*>("ribbonTabMenuHeader"); QVERIFY(nav);
+    auto* tabMenu = window.findChild<QToolButton*>("ribbonTabMenu"); QVERIFY(tabMenu); QVERIFY(tabMenu->menu());
+    auto* sharedLayers = window.findChild<QWidget*>("ribbonSharedArea"); QVERIFY(sharedLayers);
+    wrapper->setFixedWidth(700); QTest::qWait(100);
+    QVERIFY(nav->isVisible()); QVERIFY(!ribbon->tabBar()->isVisible());
+    QVERIFY(!sharedLayers->isVisible());
+    auto* compactLayerButton = window.findChild<QToolButton*>("ribbonCompactLayers"); QVERIFY(compactLayerButton); QVERIFY(compactLayerButton->isVisible());
+    QVERIFY(compactLayerButton->menu());
+    compactLayerButton->menu()->show(); QApplication::processEvents();
+    QVERIFY(compactLayerButton->menu()->findChildren<QComboBox*>().size() >= 2);
+    QVERIFY(compactLayerButton->menu()->grab().save(artifacts + "qt-1035-contextual-tabs-layers-menu.png"));
+    compactLayerButton->menu()->hide();
+    ribbon->setCurrentIndex(ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_Home")));
+    tabMenu->menu()->show(); QApplication::processEvents();
+    auto* geoMenuAction = tabMenu->menu()->findChild<QAction*>("ribbonTabMenuAction_GeolocationCtx"); QVERIFY(geoMenuAction);
+    QCOMPARE(tabMenu->menu()->actions().last(), geoMenuAction);
+    geoMenuAction->trigger(); QCOMPARE(ribbon->currentIndex(), geoTab);
+    tabMenu->menu()->hide();
+    tabMenu->menu()->show(); QApplication::processEvents();
+    geoMenuAction = tabMenu->menu()->findChild<QAction*>("ribbonTabMenuAction_GeolocationCtx"); QVERIFY(geoMenuAction);
+    QVERIFY(geoMenuAction->isChecked());
+    QVERIFY(tabMenu->menu()->grab().save(artifacts + "qt-1035-contextual-tabs-menu-open.png"));
+    tabMenu->menu()->hide();
+    QVERIFY(wrapper->grab().save(artifacts + "qt-1035-contextual-tabs-compact-menu.png"));
+    wrapper->setMinimumWidth(0); wrapper->setMaximumWidth(QWIDGETSIZE_MAX);
+    window.resize(1600, 800); QTest::qWait(100);
+    QVERIFY(!nav->isVisible()); QVERIFY(ribbon->tabBar()->isVisible());
+    QCOMPARE(ribbon->currentIndex(), geoTab);
+    auto* mapAction = window.findChild<QAction*>("ribbon_GeoMap"); QVERIFY(mapAction);
+    auto* mapMenu = mapAction->menu(); QVERIFY(mapMenu);
+    QAction* imagery = nullptr;
+    for (auto* option : mapMenu->actions())
+      if (option->property("ribbonCommand").toString() == QString("@map:%1").arg(static_cast<int>(DrawingSettings::OnlineMap::UsgsImagery))) imagery = option;
     QVERIFY(imagery); QVERIFY(imagery->isEnabled());
-    imagery->click();
+    imagery->trigger();
     QCOMPARE(state.drawingSettings.onlineMap, DrawingSettings::OnlineMap::UsgsImagery);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel-active.png"));
-    auto* capture = window.findChild<QPushButton*>("mapCapturePick"); QVERIFY(capture);
-    capture->click();
+    auto* captureAction = window.findChild<QAction*>("ribbon_GeoCaptureArea"); QVERIFY(captureAction);
+    auto* captureMenu = captureAction->menu(); QVERIFY(captureMenu);
+    QAction* capture = nullptr;
+    for (auto* option : captureMenu->actions())
+      if (option->property("ribbonCommand").toString() == "@captureArea") capture = option;
+    QVERIFY(capture); QVERIFY(capture->isEnabled());
+    capture->trigger();
     QCOMPARE(state.active, AppCommandState::Kind::GeoCaptureArea);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-capture-prompt.png"));
+    QVERIFY(window.grab().save(artifacts + "qt-1035-geolocation-ribbon-capture.png"));
     std::vector<std::string> log;
     CancelActiveCommand(state, log);
     QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void drawingSettingsFileMenuLoadsCoordinateSystemCategories() {
+    EditorWindow window;
+    auto* fileMenu = window.findChild<QMenu*>("fileMenu"); QVERIFY(fileMenu);
+    auto* drawingSettings = window.findChild<QAction*>("command_DRAWINGSETTINGS"); QVERIFY(drawingSettings);
+    QVERIFY(fileMenu->actions().contains(drawingSettings));
+    QVERIFY(!drawingSettings->isEnabled());
+    window.CreateDrawingFromTemplate();
+    QVERIFY(drawingSettings->isEnabled());
+
+    QVERIFY(!geo::LoadDictionaries("C:/no/such/folder"));
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(dialog);
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      auto saveDropdown = [dialog](QWidget* popup, const QString& path) {
+        QPixmap capture = dialog->grab();
+        const QPoint offset = popup->mapToGlobal(QPoint(0, 0)) - dialog->mapToGlobal(QPoint(0, 0));
+        QPainter painter(&capture);
+        painter.drawPixmap(offset, popup->grab());
+        return capture.save(path);
+      };
+      auto* category = dialog->findChild<QComboBox*>("drawingZoneCategory"); QVERIFY(category);
+      QVERIFY(category->count() > 2);
+      QCOMPARE(category->style()->styleHint(QStyle::SH_ComboBox_Popup, nullptr, category), 0);
+      QVERIFY(!category->view()->hasAutoScroll());
+      QCOMPARE(category->view()->verticalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
+      category->showPopup(); QApplication::processEvents();
+      auto* categoryPopup = category->view()->window(); QVERIFY(categoryPopup->isVisible());
+      QVERIFY(categoryPopup->frameGeometry().top() >= category->mapToGlobal(QPoint(0, category->height())).y() - 2);
+      QVERIFY(categoryPopup->frameGeometry().left() == category->mapToGlobal(QPoint(0, 0)).x());
+      QVERIFY(categoryPopup->height() <= 240);
+      QVERIFY(saveDropdown(categoryPopup, QtTestArtifactDirectory() + "/qt-1035-coordinate-category-dropdown.png"));
+      category->hidePopup();
+      QApplication::processEvents();
+      const int texas = category->findData("USA, Texas"); QVERIFY(texas >= 0);
+      category->setCurrentIndex(texas);
+      auto* systems = dialog->findChild<QComboBox*>("drawingZoneSystem"); QVERIFY(systems);
+      QVERIFY(!systems->view()->hasAutoScroll());
+      QCOMPARE(systems->style()->styleHint(QStyle::SH_ComboBox_Popup, nullptr, systems), 0);
+      const int central = systems->findData("HARN/TX.TX-C"); QVERIFY(central >= 0);
+      systems->showPopup(); QApplication::processEvents();
+      auto* systemsPopup = systems->view()->window();
+      QVERIFY(systemsPopup->isVisible());
+      QVERIFY(systemsPopup->frameGeometry().top() >= systems->mapToGlobal(QPoint(0, systems->height())).y() - 2);
+      QVERIFY(systemsPopup->frameGeometry().left() == systems->mapToGlobal(QPoint(0, 0)).x());
+      QVERIFY(systemsPopup->height() <= 240);
+      QVERIFY(saveDropdown(systemsPopup, QtTestArtifactDirectory() + "/qt-1035-coordinate-system-dropdown.png"));
+      systems->hidePopup();
+      systems->setCurrentIndex(central);
+      auto* code = dialog->findChild<QLineEdit*>("drawingZoneCode"); QVERIFY(code);
+      QCOMPARE(code->text(), QString("HARN/TX.TX-C"));
+      const QString artifacts = QtTestArtifactDirectory() + "/";
+      QVERIFY(dialog->grab().save(artifacts + "qt-1035-drawing-settings-coordinate-systems.png"));
+      dialog->reject();
+    });
+    drawingSettings->trigger();
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
@@ -6929,7 +7189,9 @@ private Q_SLOTS:
     QCOMPARE(PhaseLabelAt(qint64{kMinimumDisplayMs} * 4), phases.last());
     QCOMPARE(PhaseLabelAt(-250), phases.first());
 
-    const QPixmap backdrop = MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
+    const QPixmap source(QtAsset("qt-splash-bg.png"));
+    QVERIFY(!source.isNull());
+    const QPixmap backdrop = MakeBackdrop(source);
     QCOMPARE(backdrop.size(), QSize(800, 450));
     const auto frameAt = [&](qint64 elapsedMs) {
       return MakeFrame(backdrop, ProgressAt(elapsedMs), PhaseLabelAt(elapsedMs)).toImage();
