@@ -50,6 +50,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorChrome.cpp
   src/qt/QtAppearance.cpp
   src/qt/QtText.cpp
+  src/qt/QtSplash.cpp
   src/qt/QtAnnotations.cpp
   src/qt/EditorViewport.cpp
   src/qt/EditorProjects.cpp
