@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
 #include "TopographicArtwork.hpp"
@@ -285,14 +286,14 @@ QIcon CadCommandIcon(const QString& icon) {
         image.setPixelColor(x, y, QColor(64, 64, 64, color.alpha()));
     }
   } else {
-    // Keep command artwork cool-toned in the navy workspace while preserving semantic colors
+    // Keep command artwork neutral-light on the graphite workspace while preserving semantic colors
     // such as the amber accents in the supplied icon set.
     for (int y = 0; y < image.height(); ++y) for (int x = 0; x < image.width(); ++x) {
       const auto color = image.pixelColor(x, y);
       const int high = std::max({color.red(), color.green(), color.blue()});
       const int low = std::min({color.red(), color.green(), color.blue()});
       if (color.alpha() && high > 150 && high - low < 32)
-        image.setPixelColor(x, y, QColor(180, 232, 244, color.alpha()));
+        image.setPixelColor(x, y, QColor(226, 230, 234, color.alpha()));
     }
   }
   return QIcon(QPixmap::fromImage(image));
@@ -339,8 +340,8 @@ EditorWindow::EditorWindow() {
   const QString edgeColor = darkStart ? "#3c444a" : "#c5c8cb";
   const QString textColor = darkStart ? "#f0f5fa" : "#303234";
   const QString mutedColor = darkStart ? "#a5bac9" : "#66696c";
-  const QString aquaColor = darkStart ? "#55d8d0" : "#0878c5";
-  const QString amberColor = darkStart ? "#e5b35c" : "#a96e0e";
+  const QString aquaColor = QtAccentFor(darkStart).strong;  // primary accent (REQ-436: topo-line amber)
+  const QString amberColor = QtAccentFor(darkStart).quiet;  // secondary emphasis is a calm neutral
 
   auto* pageScroll = new QScrollArea(start);
   pageScroll->setObjectName("startPageScroll");
@@ -381,8 +382,8 @@ EditorWindow::EditorWindow() {
         "QPushButton#%1:hover { background:%5; border-color:%6; }"
         "QPushButton#%1:pressed { background:%7; }")
         .arg(name, cardColor, edgeColor, accent,
-             darkStart ? "#363d42" : "#edf4fa", accent,
-             darkStart ? "#22272b" : "#e4edf5"));
+             darkStart ? "#363d42" : QtAccentFor(false).hoverTint, accent,
+             darkStart ? "#22272b" : QtAccentFor(false).tint));
     auto* cardLayout = new QVBoxLayout(card);
     cardLayout->setContentsMargins(16, 10, 16, 10);
     cardLayout->setSpacing(3);
@@ -439,7 +440,7 @@ EditorWindow::EditorWindow() {
   seeAllRecent->setObjectName("recentSeeAll");
   seeAllRecent->setText("See all  ›");
   seeAllRecent->setCursor(Qt::PointingHandCursor);
-  seeAllRecent->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:5px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  seeAllRecent->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:5px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
   recentHeader->addWidget(seeAllRecent);
   drawingsLayout->addLayout(recentHeader);
 
@@ -546,7 +547,7 @@ EditorWindow::EditorWindow() {
   projectsSeeAll->setObjectName("projectsSeeAll");
   projectsSeeAll->setText("View all  ›");
   projectsSeeAll->setCursor(Qt::PointingHandCursor);
-  projectsSeeAll->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:4px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  projectsSeeAll->setStyleSheet(QString("QToolButton { color:%1; font-weight:600; border:0; padding:4px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
   projectsHeader->addWidget(projectsSeeAll);
   projectsLayout->addLayout(projectsHeader);
   auto* projectSearch = new QLineEdit(projectsCard);
@@ -599,7 +600,7 @@ EditorWindow::EditorWindow() {
     link->setMinimumHeight(52);
     link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     link->setStyleSheet(QString("QToolButton { color:%1; background:%2; border:1px solid %3; border-left:3px solid %4; border-radius:6px; padding:4px 2px; font-size:9px; } QToolButton:hover { background:%5; border-color:%4; }")
-                            .arg(textColor, cardColor, edgeColor, accent, darkStart ? "#153247" : "#edf4fa"));
+                            .arg(textColor, cardColor, edgeColor, accent, darkStart ? "#30383d" : QtAccentFor(false).hoverTint));
     connect(link, &QToolButton::clicked, this, [action = std::move(action)] { action(); });
     quickGrid->addWidget(link, 0, column);
   };
@@ -627,7 +628,7 @@ EditorWindow::EditorWindow() {
   auto* resourcesSeeAll = new QToolButton(resourcesCard);
   resourcesSeeAll->setText("View all  ›");
   resourcesSeeAll->setCursor(Qt::PointingHandCursor);
-  resourcesSeeAll->setStyleSheet(QString("QToolButton { color:%1; border:0; padding:3px; } QToolButton:hover { color:#a2f2fb; }").arg(aquaColor));
+  resourcesSeeAll->setStyleSheet(QString("QToolButton { color:%1; border:0; padding:3px; } QToolButton:hover { color:%2; }").arg(aquaColor, QtAccentFor(darkStart).linkHover));
   resourcesHeader->addWidget(resourcesSeeAll);
   resourcesLayout->addLayout(resourcesHeader);
   auto addResourceLink = [&](const QString& title, const QString& detail, const QString& icon,
@@ -642,8 +643,8 @@ EditorWindow::EditorWindow() {
     link->setText(linkTitle + "\n" + detail + "    ›");
     link->setMinimumHeight(27);
     link->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    link->setStyleSheet(QString("QToolButton { text-align:left; color:%1; background:transparent; border:0; border-left:3px solid #d8a241; padding:1px 4px; font-size:10px; } QToolButton:hover { background:%2; }")
-                            .arg(textColor, darkStart ? "#132c3d" : "#edf4fa"));
+    link->setStyleSheet(QString("QToolButton { text-align:left; color:%1; background:transparent; border:0; border-left:3px solid %3; padding:1px 4px; font-size:10px; } QToolButton:hover { background:%2; }")
+                            .arg(textColor, darkStart ? "#30383d" : QtAccentFor(false).hoverTint, QtAccentFor(darkStart).quiet));
     connect(link, &QToolButton::clicked, this, [url] { QDesktopServices::openUrl(QUrl(url)); });
     resourcesLayout->addWidget(link);
   };
@@ -711,9 +712,9 @@ EditorWindow::EditorWindow() {
   BuildDraftingInput();
   auto* grid = new QToolButton(this);
   grid->setObjectName("draftGrid"); grid->setText("GRID"); grid->setCheckable(true); grid->setChecked(true);
-  grid->setStyleSheet("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
-      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:#4b7572; } "
-      "QToolButton:checked { color:#ffffff; background:#244846; border-color:#55d8d0; }");
+  grid->setStyleSheet(QtApplyAccent("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
+      "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:@edge@; } "
+      "QToolButton:checked { color:#ffffff; background:@tint@; border-color:@strong@; }", true));
   statusBar()->addWidget(grid);
   connect(grid, &QToolButton::toggled, this, [this](bool on) { m_Viewport->SetGrid(on); });
   auto* annotationScale = new QComboBox(this);
@@ -2154,7 +2155,7 @@ void EditorWindow::RefreshRecentDrawings() {
       thumbnail.fill(QColor(dark ? "#171b1e" : "#303234"));
       QPainter painter(&thumbnail);
       painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(QColor(dark ? "#20bfd6" : "#c8cbce"));
+      painter.setPen(QColor(dark ? QtAccentFor(true).strong : "#c8cbce"));
       painter.setFont(QFont("Segoe UI", 24, QFont::DemiBold));
       painter.drawText(thumbnail.rect(), Qt::AlignCenter, "DWG");
     }
@@ -2215,8 +2216,8 @@ void EditorWindow::RefreshRecentDrawings() {
       tile->setIcon(QIcon(thumbnail));
       tile->setIconSize(QSize(144, 58));
       tile->setFixedSize(170, 130);
-      tile->setStyleSheet(QString("QToolButton#recentDrawingTile { border:1px solid %1; border-radius:7px; background:%2; padding:7px; } QToolButton#recentDrawingTile:hover { border-color:#20bfd6; background:%3; }")
-                              .arg(cardEdge, cardBg, cardHover));
+      tile->setStyleSheet(QString("QToolButton#recentDrawingTile { border:1px solid %1; border-radius:7px; background:%2; padding:7px; } QToolButton#recentDrawingTile:hover { border-color:%4; background:%3; }")
+                              .arg(cardEdge, cardBg, cardHover, QtAccentFor(dark).strong));
       tile->setContextMenuPolicy(Qt::CustomContextMenu);
       connect(tile, &QWidget::customContextMenuRequested, this, [tile, showDrawingMenu](const QPoint& pos) {
         showDrawingMenu(tile, tile->mapToGlobal(pos));
@@ -2232,8 +2233,8 @@ void EditorWindow::RefreshRecentDrawings() {
     tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     tile->setMinimumHeight(64);
     tile->setMaximumHeight(68);
-    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; border:1px solid %1; border-radius:7px; background:%2; padding:0; } QToolButton#recentDrawingTile:hover { border-color:#20bfd6; background:%3; }")
-                            .arg(cardEdge, cardBg, cardHover));
+    tile->setStyleSheet(QString("QToolButton#recentDrawingTile { text-align:left; border:1px solid %1; border-radius:7px; background:%2; padding:0; } QToolButton#recentDrawingTile:hover { border-color:%4; background:%3; }")
+                            .arg(cardEdge, cardBg, cardHover, QtAccentFor(dark).strong));
     auto* row = new QHBoxLayout(tile);
     row->setContentsMargins(9, 4, 7, 4);
     row->setSpacing(9);
@@ -2353,7 +2354,7 @@ void EditorWindow::RefreshRecentProjects() {
     tile->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     const bool dark = qApp->palette().color(QPalette::Window).lightness() < 128;
     tile->setStyleSheet(dark
-        ? "QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid #e5b35c; border-bottom:1px solid #3c444a; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:#55d8d0; background:#30373c; }"
+        ? QtApplyAccent("QToolButton { text-align:left; padding:6px 8px; border:0; border-left:3px solid @quiet@; border-bottom:1px solid #3c444a; border-radius:0; background:transparent; } QToolButton:hover { border-left-color:@strong@; background:#30373c; }", true)
         : "QToolButton { text-align:left; padding:6px 8px; border:1px solid #c5c8cb; border-radius:6px; background:#ffffff; } QToolButton:hover { border-color:#92979c; background:#f0f1f2; }");
     tile->setToolTip(name + "\n" + projectFolder + "\n" + lastOpened);
     const auto openRecentProject = [this, path, recentProjectStore]() noexcept {

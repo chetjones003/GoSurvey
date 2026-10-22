@@ -4,6 +4,7 @@
 // EditorSurfaceManager.cpp and EditorSurfaceStyles.cpp.
 
 #include "CadUiStyleWidgets.hpp"
+#include "QtAccent.hpp"
 
 #include <QColor>
 #include <QComboBox>
@@ -88,12 +89,12 @@ inline QLabel* AddBanner(QVBoxLayout* root, QWidget* parent, const QString& titl
 }
 
 /// The look of every surface dialog: an accent bar beside the title, flat underlined tabs, ruled group
-/// headings and a primary button, all in GoSurvey blue (#438fda, the same blue as the other Qt dialogs).
+/// headings and a primary button, all in the topo-line amber (QtAccent.hpp, the same accent as the other Qt dialogs).
 inline void StyleDialog(QDialog* dialog) {
   const bool dark = dialog->palette().color(QPalette::Window).lightness() < 128;
-  const char* accent = dark ? "#55d8d0" : "#438fda";
-  const char* accentFill = dark ? "#168e8a" : "#438fda";
-  const char* hover = dark ? "#1ca6a0" : "#347cc3";
+  const char* accent = QtAccentFor(dark).strong;
+  const char* accentFill = QtAccentFor(dark).fill;
+  const char* hover = QtAccentFor(dark).fillHover;
   dialog->setStyleSheet(QString(
       "QLabel#surfaceBanner { border-left:5px solid %1; background:palette(alternate-base); padding:10px 14px; }"
       "QTabWidget::pane { border-top:2px solid %1; }"

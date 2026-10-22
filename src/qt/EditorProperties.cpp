@@ -4,6 +4,7 @@
 // `propedit` services (and CadApplyLayer/Color/Linetype/Lineweight/TransparencyToSelection), which
 // This file contains the Qt widgets around those shared services.
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
 #include <QPainter>
@@ -166,7 +167,7 @@ void EditorWindow::RefreshProperties() {
     QFont f = heading->font(); f.setBold(true); heading->setFont(f);
     heading->setStyleSheet(qApp->property("cadLightTheme").toBool()
         ? "background:#1f3a5f; color:#ffffff; padding:3px 8px;"
-        : "background:#30373c; color:#f4f7f8; border-left:3px solid #55d8d0; padding:3px 8px;");
+        : QtApplyAccent("background:#30373c; color:#f4f7f8; border-left:3px solid @strong@; padding:3px 8px;", true));
     layout->addWidget(heading);
     auto* rows = new QWidget(box);
     auto* grid = new QVBoxLayout(rows);
