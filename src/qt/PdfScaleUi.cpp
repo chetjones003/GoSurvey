@@ -2,6 +2,7 @@
 // (corrections, robust calibration, report) and Snap. Every number comes from the shared pdfview:: services
 // (PdfMeasure, PdfScaleCheck, PdfSnap, AnnotSession, PdfDocument::SnapPoints); this file presents them.
 #include "PdfWindow.hpp"
+#include "QtAccent.hpp"
 #include "PdfCanvas.hpp"
 #include "PdfScaleCheck.hpp"
 #include "PdfSplit.hpp"
@@ -60,9 +61,9 @@ QColor SheetColor(Verdict verdict) {
 QColor VerdictColor(Verdict verdict) {
   return verdict == Verdict::Good ? QColor(GoodText()) : verdict == Verdict::Check ? QColor(WarnText()) : QColor(BadText());
 }
-// The button behind "Scale checks (n)": the worst verdict on the page, blue when there are no checks yet.
+// The button behind "Scale checks (n)": the worst verdict on the page, amber when there are no checks yet.
 QString VerdictButtonStyle(bool haveVerdict, Verdict worst) {
-  const char* base = !haveVerdict ? "#168e8a" : worst == Verdict::Good ? "#2b8c47" : worst == Verdict::Check ? "#bd8014" : "#bd3833";
+  const char* base = !haveVerdict ? QtAccentFor(true).fill : worst == Verdict::Good ? "#2b8c47" : worst == Verdict::Check ? "#bd8014" : "#bd3833";
   return QString("QPushButton{background:%1;color:white;font-weight:600;border:1px solid rgba(255,255,255,140);"
                  "border-radius:4px;padding:3px 10px;} QPushButton:disabled{background:#59626f;color:#c5ccd6;}").arg(base);
 }
@@ -159,26 +160,26 @@ QTableWidget* MakeTable(QWidget* parent, const char* name, const QStringList& he
 
 // The look of the scale dialogs, using the application graphite palette.
 QString DialogStyle() {
-  return QString(
+  return QtApplyAccent(QString(
       "QRadioButton::indicator{width:14px;height:14px;border-radius:8px;border:2px solid #59646a;background:#171b1e;}"
-      "QRadioButton::indicator:checked{border:2px solid #55d8d0;background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
-      "stop:0 #55d8d0,stop:0.5 #55d8d0,stop:0.6 #171b1e,stop:1 #171b1e);}"
+      "QRadioButton::indicator:checked{border:2px solid @strong@;background:qradialgradient(cx:0.5,cy:0.5,radius:0.5,fx:0.5,fy:0.5,"
+      "stop:0 @strong@,stop:0.5 @strong@,stop:0.6 #171b1e,stop:1 #171b1e);}"
       "QCheckBox::indicator{width:15px;height:15px;border:2px solid #59646a;border-radius:3px;background:#171b1e;}"
-      "QCheckBox::indicator:checked{background:#55d8d0;border-color:#55d8d0;}"
+      "QCheckBox::indicator:checked{background:@strong@;border-color:@strong@;}"
       "QDialog{background:#22272b;} QLabel{color:#e8eef9;} QLabel:disabled{color:#9aa5aa;} QCheckBox,QRadioButton{color:#e8eef9;}"
       "QGroupBox{background:#292f34;border:1px solid #3c444a;border-radius:8px;margin-top:14px;padding:10px;color:#e8eef9;}"
-      "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;color:#55d8d0;font-weight:600;}"
+      "QGroupBox::title{subcontrol-origin:margin;left:12px;padding:0 6px;color:@strong@;font-weight:600;}"
       "QPushButton{background:#30373c;border:1px solid #41494e;border-radius:5px;padding:6px 14px;color:#e8eef9;}"
       "QPushButton:hover{background:#3a4247;} QPushButton:disabled{color:#899398;background:#242a2f;}"
-      "QPushButton:default{background:#168e8a;color:white;border-color:#55d8d0;font-weight:600;}"
+      "QPushButton:default{background:@fill@;color:white;border-color:@strong@;font-weight:600;}"
       "QLineEdit,QDoubleSpinBox,QSpinBox,QComboBox{background:#171b1e;border:1px solid #41494e;border-radius:4px;padding:3px 6px;color:#fff;}"
-      "QComboBox QAbstractItemView{background:#171b1e;color:#fff;selection-background-color:#168e8a;}"
+      "QComboBox QAbstractItemView{background:#171b1e;color:#fff;selection-background-color:@fill@;}"
       "QTableWidget{background:#22272b;alternate-background-color:#292f34;border:1px solid #3c444a;color:#cfd8da;"
-      "selection-background-color:#244846;selection-color:white;}"
+      "selection-background-color:@tint@;selection-color:white;}"
       "QHeaderView::section{background:#30373c;color:#e8eef9;padding:5px 8px;border:0;border-right:1px solid #41494e;font-weight:600;}"
       "QTabWidget::pane{border:1px solid #3c444a;background:#22272b;} QTabBar::tab{padding:7px 16px;background:#292f34;color:#cfd8da;"
       "border-top-left-radius:6px;border-top-right-radius:6px;margin-right:2px;}"
-      "QTabBar::tab:selected{background:#30373c;color:white;border-bottom:2px solid #55d8d0;font-weight:600;}");
+      "QTabBar::tab:selected{background:#30373c;color:white;border-bottom:2px solid @strong@;font-weight:600;}"), true);
 }
 
 void StyleDialog(QDialog& dialog, QVBoxLayout* layout) {

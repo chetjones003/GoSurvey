@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
 #include "CadCommands.hpp"
@@ -135,7 +136,7 @@ void EditorWindow::ShowSignInGate() {
   signIn->setStyleSheet(QString(
       "QPushButton { background:%1; color:white; font-weight:600; "
       "padding:9px; border:0; border-radius:4px; } QPushButton:hover { "
-      "background:%2; }").arg(darkAppearance ? "#168e8a" : "#438fda", darkAppearance ? "#1ca6a0" : "#347cc3"));
+      "background:%2; }").arg(QtAccentFor(darkAppearance).fill, QtAccentFor(darkAppearance).fillHover));
   choiceLayout->addWidget(signIn);
   auto *decline = new QPushButton("Don't Sign In", choicePanel);
   decline->setObjectName("declineSignInButton");
@@ -630,7 +631,8 @@ void EditorWindow::ShowSurveyPointDisplay() {
   layout->setContentsMargins(20, 18, 20, 16);
   layout->setSpacing(14);
   auto* heading = new QLabel("Survey point display", dialog);
-  heading->setStyleSheet("font-size:20px; font-weight:600; color:#79b6f2;");
+  heading->setStyleSheet(QString("font-size:20px; font-weight:600; color:%1;")
+                             .arg(QtAccentFor(palette().color(QPalette::Window).lightness() < 128).link));
   layout->addWidget(heading);
   auto* note = new QLabel("Changes appear immediately. Close keeps your changes.\n"
                          "Save Preferences remembers them for your next session.", dialog);
@@ -812,7 +814,7 @@ void EditorWindow::ShowViewManager() {
   current->setObjectName("viewManagerCurrentView");
   const bool darkViews = palette().color(QPalette::Window).lightness() < 128;
   current->setStyleSheet(darkViews
-      ? "background:#30373c;color:#f4f7fb;border-left:3px solid #55d8d0;padding:10px 12px;font-weight:600;border-radius:5px;"
+      ? QtApplyAccent("background:#30373c;color:#f4f7fb;border-left:3px solid @strong@;padding:10px 12px;font-weight:600;border-radius:5px;", true)
       : "background:#243a53;color:#f4f7fb;padding:10px 12px;font-weight:600;border-radius:5px;");
   layout->addWidget(current);
 
@@ -823,8 +825,8 @@ void EditorWindow::ShowViewManager() {
   views->setSelectionMode(QAbstractItemView::SingleSelection);
   views->setSpacing(6);
   views->setStyleSheet(darkViews
-      ? "QListWidget{border:0;background:transparent} QListWidget::item{background:#292f34;border:1px solid #3c444a;border-radius:5px;padding:10px;color:#e7ecee} QListWidget::item:selected{background:#244846;border:1px solid #55d8d0;color:#ffffff}"
-      : "QListWidget{border:0;background:transparent} QListWidget::item{background:#f3f6f8;border:1px solid #d7dee5;border-radius:5px;padding:10px;color:#202a33} QListWidget::item:selected{background:#e4eff7;border:1px solid #3879a2;color:#172d3b}");
+      ? QtApplyAccent("QListWidget{border:0;background:transparent} QListWidget::item{background:#292f34;border:1px solid #3c444a;border-radius:5px;padding:10px;color:#e7ecee} QListWidget::item:selected{background:@tint@;border:1px solid @strong@;color:#ffffff}", true)
+      : QtApplyAccent("QListWidget{border:0;background:transparent} QListWidget::item{background:#f3f6f8;border:1px solid #d7dee5;border-radius:5px;padding:10px;color:#202a33} QListWidget::item:selected{background:@tint@;border:1px solid @strong@;color:#202020}", false));
   auto* ucsList = new QListWidget(tabs);
   ucsList->setObjectName("viewManagerSavedUcs");
   ucsList->setSelectionMode(QAbstractItemView::SingleSelection);

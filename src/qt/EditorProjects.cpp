@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "update/UpdateService.hpp"
 #include "telemetry/TelemetryService.hpp"  // ~EditorWindow owns the in-flight ping
 #include "auth/AuthService.hpp"
@@ -80,7 +81,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
   const QString who = holder.user.empty() ? QString("someone") : QString::fromUtf8(holder.user.c_str());
   const QString where = holder.machine.empty() ? QString() : QString(" on %1").arg(QString::fromUtf8(holder.machine.c_str()));
   const bool dark = parent->palette().color(QPalette::Window).lightness() < 128;
-  const QString amber = dark ? "#f0b25a" : "#9a5b00";
+  const QString amber = QtAccentFor(dark).warn;
   const QString border = dark ? "#4b4e50" : "#c5d0da";
   const QString cardFill = dark ? "#2d2f31" : "#ffffff";
 
@@ -108,7 +109,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
       value->setDefault(true);
       value->setStyleSheet(QString("QPushButton { background:%1; color:white; font-weight:600; padding:6px 18px; "
                                    "border:0; border-radius:4px; } QPushButton:hover { background:%2; }")
-                               .arg(dark ? "#168e8a" : "#438fda", dark ? "#1ca6a0" : "#347cc3"));
+                               .arg(QtAccentFor(dark).fill, QtAccentFor(dark).fillHover));
     }
     return value;
   };
@@ -137,7 +138,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
     auto* frame = new QFrame(&dialog);
     frame->setObjectName(name);
     frame->setStyleSheet(QString("QFrame#%1 { background:%2; border:%3; border-radius:6px; }")
-                             .arg(name, cardFill, recommended ? QString("2px solid %1").arg(dark ? "#55d8d0" : "#438fda") : "1px solid " + border));
+                             .arg(name, cardFill, recommended ? QString("2px solid %1").arg(QtAccentFor(dark).strong) : "1px solid " + border));
     auto* box = new QVBoxLayout(frame);
     box->setContentsMargins(14, 12, 14, 12);
     box->setSpacing(8);
@@ -145,7 +146,7 @@ LockChoice AskLockedProject(QWidget* parent, const QString& projectName, const g
     titleLabel->setStyleSheet("font-size:14px;font-weight:600;");
     box->addWidget(titleLabel);
     auto* tagLabel = new QLabel(tag, frame);
-    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? (dark ? "#55d8d0" : "#438fda") : amber));
+    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? QString(QtAccentFor(dark).strong) : amber));
     box->addWidget(tagLabel);
     return box;
   };
@@ -402,9 +403,9 @@ void EditorWindow::ShowAddDrawing(std::uint32_t projectUid, const QString& selec
   root->addWidget(buttons);
   auto updateStep = [&] {
     const int page = stack->currentIndex();
-    steps->setText(page == 0 ? "1  Drawing     ›     <b><span style='color:#62b4e4'>2  Align</span></b>     ›     3  Points     ›     4  Confirm" :
-                   page == 1 ? "✓  Drawing     ›     ✓  Align     ›     <b><span style='color:#62b4e4'>3  Points</span></b>     ›     4  Confirm" :
-                               "✓  Drawing     ›     ✓  Align     ›     ✓  Points     ›     <b><span style='color:#62b4e4'>4  Confirm</span></b>");
+    steps->setText(page == 0 ? "1  Drawing     ›     <b><span style='color:#f5b06a'>2  Align</span></b>     ›     3  Points     ›     4  Confirm" :
+                   page == 1 ? "✓  Drawing     ›     ✓  Align     ›     <b><span style='color:#f5b06a'>3  Points</span></b>     ›     4  Confirm" :
+                               "✓  Drawing     ›     ✓  Align     ›     ✓  Points     ›     <b><span style='color:#f5b06a'>4  Confirm</span></b>");
     back->setVisible(page > 0); next->setText(page == 2 ? "Add Drawing" : "Continue");
     next->setEnabled(page != 0 || !plan.Blocked()); validation->clear();
     if (page == 2) updateConfirm();
@@ -489,12 +490,12 @@ QString HealthText(const projfiles::Health& health) {
 }
 
 void ApplyProjectWorkflowDarkStyle(QDialog& dialog) {
-  dialog.setStyleSheet(R"(
+  dialog.setStyleSheet(QtApplyAccent(R"(
     QDialog { background: #222426; color: #edf2f7; }
     QLabel, QCheckBox { color: #edf2f7; }
     QPlainTextEdit, QListWidget, QLineEdit {
       background: #252729; color: #edf2f7; border: 1px solid #4b4e50;
-      selection-background-color: #356f96; selection-color: #ffffff;
+      selection-background-color: @fill@; selection-color: #ffffff;
     }
     QPushButton {
       background: #383a3c; color: #edf2f7; border: 1px solid #4b4e50;
@@ -507,7 +508,7 @@ void ApplyProjectWorkflowDarkStyle(QDialog& dialog) {
     QScrollBar::handle:vertical { background: #505457; min-height: 24px; }
     QScrollBar:horizontal { background: #252729; height: 12px; }
     QScrollBar::handle:horizontal { background: #505457; min-width: 24px; }
-  )");
+  )", true));
 }
 }
 

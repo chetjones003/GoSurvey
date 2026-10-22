@@ -3171,7 +3171,8 @@ requirements is a planning failure, not a sign of rigor.
     irregular mountain ridges and valleys like the approved splash artwork rather than circular
     rings. They stay behind the content visually and never reduce control legibility. The Dark
     drawing canvas uses a deep navy ground with a fine, low-contrast blue grid. The Light theme
-    remains unchanged.
+    remains unchanged. *(Qt accent colours superseded by REQ-436: the primary accent is now
+    topo-line amber, D-2026-10-21-f.)*
 - Owner-layer: UI (`src/ui/CadUi.cpp`; Qt frontend `src/qt/QtAppearance.cpp`, `src/qt/EditorChrome.cpp`, and `src/qt/EditorWindow.cpp`)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
@@ -12813,19 +12814,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Qt presentation and command routing over existing `PdfAttach` and project-file services.
 - Status: accepted (2026-10-19) — D-2026-10-19-g, GitHub issue #909.
 
-### REQ-436 — Qt Dark appearance uses graphite with aqua and amber accents
-- Purpose: keep the Qt application visually coherent while making its dark appearance easier to distinguish from the existing navy direction.
+### REQ-436 — Qt appearance: graphite Dark surfaces with a topo-line amber primary accent
+- Purpose: keep the Qt application visually coherent, make its dark appearance easy to tell apart from the former navy direction, and tie the interface accent to the amber of GoSurvey's topographic contour artwork.
 - Priority: should
 - Type: non-functional (appearance)
-- Decision: D-2026-10-19-h; user selected graphite with aqua and amber accents for the whole app on 2026-10-19. Its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs.
-- Statement: The Qt **Dark** appearance uses graphite surfaces throughout the application, aqua for active and interactive states, and restrained amber for secondary emphasis. This applies to the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels. The Classic light appearance and ImGui frontend are unchanged. Drawing entities, entity colors, and persisted drawing data are unchanged.
+- Decision: D-2026-10-19-h (graphite surfaces; user selected graphite with aqua and amber accents for the whole app on 2026-10-19; its original ID was reassigned as later Qt parity issues used the original requirement and decision IDs); D-2026-10-21-f (GitHub issue #1031: the primary accent becomes topo-line amber, in Dark and Light).
+- Statement:
+  1. **Surfaces.** The Qt **Dark** appearance uses graphite surfaces throughout the application: the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels.
+  2. **Primary accent.** In both the **Dark** and **Light** appearances, the primary accent — the colour of active and interactive states in Qt application chrome (selected and hovered controls, pressed and checked buttons, focus rings, selected rows and tabs, links, the application-menu button, checked radio/check indicators, progress and highlight fills) — is the **topo-line amber**: the hue of the amber contours in the topographic artwork (`src/qt/TopographicArtwork.hpp`, RGB 185,100,12, hue about 30 degrees). Each appearance picks its own lightness and saturation of that hue so text on it and the control itself stay readable; the hue is the same in both. Aqua and the Light appearance's light-blue/Windows-blue accent no longer appear as a primary accent in Qt chrome.
+  3. **Secondary emphasis.** Secondary emphasis (informational notes, "recommended"/tag labels, secondary cards, quiet detail) uses a calm neutral tone (soft grey-blue in Dark, grey in Light), never the primary amber, so "active" and "secondary" remain distinguishable. Warnings keep a distinct warning look that is readable in both appearances and is not mistaken for an active state.
+  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged.
 - Acceptance:
-  - Start, drawing workspace, menus, and representative Qt dialogs render the graphite palette with aqua active states and amber secondary emphasis.
-  - The Dark drawing canvas ground is graphite with a subtle aqua-tinted grid.
+  - Start, drawing workspace, menus, and representative Qt dialogs render with the topo-line amber for active, hover, pressed, checked, focus and selected states in Dark and in Light; no aqua (`#55d8d0`/`#168e8a` family) or light/Windows blue (`#0078d7`/`#438fda`/`#0878c5` family) remains as a primary accent in `QtAppearance.cpp`, `EditorSurfaceUi.hpp`, the Start page, or the dialogs that carried their own accent colours.
+  - Primary text on an accent-filled control meets 4.5:1 contrast, and an accent border/indicator against its surface meets 3:1, in both appearances; hover, pressed, checked and disabled states are visibly distinct from one another.
+  - Secondary emphasis is neutral (clause 3) and is visibly different from the primary accent on the same screen.
   - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
-  - Switching between Dark and Classic light leaves neither palette behind in the other appearance.
-  - Drawing content and behavior remain unchanged when appearance changes.
-- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction.
+  - Switching between Dark and Light leaves neither palette behind in the other appearance.
+  - Drawing content, entity colors, the canvas ground/grid, and behavior remain unchanged when appearance changes.
+- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction. Amended (2026-10-21) — D-2026-10-21-f, GitHub issue #1031.
+- Revisions: 2026-10-21 — retitled and rewritten from "Qt Dark appearance uses graphite with aqua and amber accents". Primary accent aqua -> topo-line amber and extended to the Light appearance (previously "Classic light is unchanged"); the former amber secondary role became a neutral tone because one colour cannot be both the primary and the secondary accent. The Dark canvas grid tint is treated as drawing-area colour and stays as shipped.
 
 ### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
 
@@ -14516,7 +14523,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-432 | Qt UI | GoSurveyQtTests: issue913RawImportsMergeAndReportPerFileFailures, issue913JobXmlImportsThroughQtAndCancelKeepsTheSession | accepted |
 | REQ-433 | Qt UI/PDF | `GoSurveyQtTests`: annotation selection/edit/undo, async Save As failure preservation, rotated-page persistence, high-DPI rendering/input | accepted |
 | REQ-435 | Qt UI/Commands | `GoSurveyQtTests` PDF underlay attach/placement, cancellation, project choices, failure/read-only, undo | accepted |
-| REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching and representative Start/drawing/dialog captures | accepted |
+| REQ-436 | Qt UI | `GoSurveyQtTests` appearance palette switching, `issue1031*` amber primary accent in both appearances (no aqua/blue accent left, readable contrast, neutral secondary), and representative Start/drawing/dialog captures | accepted |
 | REQ-437 | Repository governance/CI | (D-2026-10-19-i, D-2026-10-21-e/b/c) A PR labeled `docs-only` skips CI only when every changed path is Markdown, MDX, reStructuredText, AsciiDoc, or `.text`, or a `.txt` file under `docs/`, `spec/`, `workshop/`, or `verification/`. For renames, both old and new paths must qualify. The workflow confirms it inspected every changed file and runs CI if the PR exceeds the API limit, counts differ, the label is absent, a path is not documentation, or classification fails. Required checks include the PR gate, Gitleaks, Trivy, full Windows build and CTest, changed-line clang-tidy, and blocking MSVC `/analyze` scoped to changed translation units and consumers of changed headers, with fail-closed full-project fallback when classification is uncertain or build inputs change. All block merge on non-docs PRs. The label never waives the protected branch's required approving review. | accepted |
 | REQ-438 | Qt editor | `QtEditorTests` `[issue901]` annotation-scale, object-isolation, and perspective workflows; beta 0.7.4 parity ledger | accepted |
 | REQ-439 | Qt UI/Commands/Viewport | `QtEditorTests` `[issue902]` selection, overlap-cycling, grip, and 3D-pick workflows | accepted |

@@ -5,6 +5,7 @@
 // answer to `CompleteProjectAttach`, which copies or links the file and goes on with the attach that
 // asked. The file rules and the follow-up live in commands/ProjectFiles, shared with the Qt application.
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "ProjectFiles.hpp"
 #include "pdf/PdfAttach.hpp"
 #include "pdf/PdfDocument.hpp"
@@ -62,7 +63,7 @@ QPushButton* Button(const char* name, const QString& text, QWidget* parent, bool
     button->setStyleSheet(QString(
         "QPushButton { background:%1; color:white; font-weight:600; padding:6px 18px; "
         "border:0; border-radius:4px; } QPushButton:hover { background:%2; }")
-                              .arg(dark ? "#168e8a" : "#438fda", dark ? "#1ca6a0" : "#347cc3"));
+                              .arg(QtAccentFor(dark).fill, QtAccentFor(dark).fillHover));
   }
   return button;
 }
@@ -81,7 +82,7 @@ void EditorWindow::ShowProjectAttachPrompt() {
   const QString destination = QString::fromUtf8(pending.destRel.c_str());
   const bool large = pending.sizeBytes >= projfiles::kLargeFileBytes;
   const bool dark = palette().color(QPalette::Window).lightness() < 128;
-  const QString amber = dark ? "#f0b25a" : "#9a5b00";
+  const QString amber = QtAccentFor(dark).warn;
 
   QDialog dialog(this);
   dialog.setObjectName("projectAttachDialog");
@@ -123,7 +124,7 @@ void EditorWindow::ShowProjectAttachPrompt() {
     auto* frame = new QFrame(&dialog);
     frame->setObjectName(name);
     frame->setStyleSheet(QString("QFrame#%1 { background:%2; border:%3; border-radius:6px; }")
-                             .arg(name, cardFill, recommended ? QString("2px solid %1").arg(dark ? "#55d8d0" : "#438fda") : "1px solid " + border));
+                             .arg(name, cardFill, recommended ? QString("2px solid %1").arg(QtAccentFor(dark).strong) : "1px solid " + border));
     auto* box = new QVBoxLayout(frame);
     box->setContentsMargins(14, 12, 14, 12);
     box->setSpacing(8);
@@ -131,7 +132,7 @@ void EditorWindow::ShowProjectAttachPrompt() {
     titleLabel->setStyleSheet("font-size:14px;font-weight:600;");
     box->addWidget(titleLabel);
     auto* tagLabel = new QLabel(tag, frame);
-    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? (dark ? "#55d8d0" : "#438fda") : amber));
+    tagLabel->setStyleSheet(QString("font-size:11px;font-weight:600;color:%1;").arg(recommended ? QString(QtAccentFor(dark).strong) : amber));
     box->addWidget(tagLabel);
     return std::pair{frame, box};
   };
@@ -293,8 +294,9 @@ void EditorWindow::ShowPdfAttachDialog() {
   auto* attach = buttons->addButton("Attach", QDialogButtonBox::AcceptRole);
   attach->setObjectName("pdfAttachConfirm");
   attach->setDefault(true);
-  attach->setStyleSheet("QPushButton { background:#168e8a; color:white; font-weight:600; padding:6px 18px; border:0; border-radius:4px; }"
-                        "QPushButton:hover { background:#1ca6a0; }");
+  attach->setStyleSheet(QtApplyAccent("QPushButton { background:@fill@; color:white; font-weight:600; padding:6px 18px; border:0; border-radius:4px; }"
+                                      "QPushButton:hover { background:@fillHover@; }",
+                                      dialog.palette().color(QPalette::Window).lightness() < 128));
   auto* cancel = buttons->addButton(QDialogButtonBox::Cancel);
   cancel->setObjectName("pdfAttachCancel");
   root->addWidget(buttons);

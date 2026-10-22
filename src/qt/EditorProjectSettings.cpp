@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 
 #include "ProjectSettings.hpp"
 #include "geo/CoordinateSystems.hpp"
@@ -58,7 +59,7 @@ void AddLabeledControl(QGridLayout* layout, QWidget* parent, int row, const QStr
     auto* status = new QLabel(statusText, parent);
     status->setObjectName("projectSettingStatus");
     const bool dark = parent->palette().color(QPalette::Window).lightness() < 128;
-    status->setStyleSheet(QString("color:%1;font-size:11px;").arg(dark ? "#81c6f0" : "#286b96"));
+    status->setStyleSheet(QString("color:%1;font-size:11px;").arg(QtAccentFor(dark).link));
     layout->addWidget(status, row, 2);
   }
 }
@@ -95,7 +96,7 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
   const std::string originalZone = staged.zoneCode;
   const bool darkTheme = palette().color(QPalette::Window).lightness() < 128;
   const QString secondaryText = darkTheme ? "#c3c7ca" : "#536273";
-  const QString accentText = darkTheme ? "#d0d3d5" : "#286b96";
+  const QString accentText = darkTheme ? "#d0d3d5" : QString(QtAccentFor(false).link);
   QDialog dialog(this);
   dialog.setObjectName("projectSettingsDialog");
   dialog.setWindowTitle("Project Settings — " + Utf8(session->project.name));
@@ -118,22 +119,22 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     QCheckBox { spacing:7px; }
     QPushButton { padding:5px 12px; }
     QWidget:disabled { color:#a9afb3; }
-  )" : R"(
+  )" : QtApplyAccent(R"(
     QDialog#projectSettingsDialog { background:#f0f3f6; color:#202b36; }
     QListWidget#projectSettingsNavigation { background:#e4eaf0; border:1px solid #bdc8d3; border-radius:6px; padding:5px; }
     QListWidget#projectSettingsNavigation::item { min-height:30px; padding:3px 7px; border-radius:4px; }
-    QListWidget#projectSettingsNavigation::item:selected { background:#356f96; color:#ffffff; }
+    QListWidget#projectSettingsNavigation::item:selected { background:@fill@; color:#ffffff; }
     QListWidget#projectSettingsNavigation::item:hover:!selected { background:#d3dde7; }
     QFrame#projectSettingsImpact, QFrame#projectSettingsDefaults { background:#ffffff; border:1px solid #c5d0da; border-radius:6px; }
-    QComboBox, QLineEdit, QDoubleSpinBox { background:#ffffff; color:#202b36; border:1px solid #aebbc8; border-radius:4px; padding:4px 7px; selection-background-color:#356f96; }
-    QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover { border-color:#356f96; }
-    QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus { border:2px solid #4b8db7; }
+    QComboBox, QLineEdit, QDoubleSpinBox { background:#ffffff; color:#202b36; border:1px solid #aebbc8; border-radius:4px; padding:4px 7px; selection-background-color:@fill@; }
+    QComboBox:hover, QLineEdit:hover, QDoubleSpinBox:hover { border-color:@edge@; }
+    QComboBox:focus, QLineEdit:focus, QDoubleSpinBox:focus { border:2px solid @strong@; }
     QComboBox:disabled, QLineEdit:disabled, QDoubleSpinBox:disabled { background:#e7ebef; color:#697786; border-color:#c5cdd5; }
     QTableWidget#projectObjectLayers { background:#ffffff; alternate-background-color:#f0f4f7; color:#202b36; gridline-color:#c5d0da; border:1px solid #bdc8d3; }
     QHeaderView::section { background:#e1e8ee; color:#202b36; border:0; border-right:1px solid #c5d0da; border-bottom:1px solid #bdc8d3; padding:6px; }
     QCheckBox { spacing:7px; }
     QPushButton { padding:5px 12px; }
-  )");
+  )", false));
 
   auto* outer = new QVBoxLayout(&dialog);
   outer->setContentsMargins(22, 18, 22, 16);

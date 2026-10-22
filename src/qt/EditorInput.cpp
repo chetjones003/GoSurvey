@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorChrome.hpp"
 #include "CadSnap.hpp"
@@ -40,9 +41,9 @@ void EditorWindow::BuildDraftingInput() {
     auto* button = new QToolButton(this);
     button->setObjectName(name); button->setText(label); button->setCheckable(true);
     const bool dark = palette().color(QPalette::Window).lightness() < 128;
-    if (dark) button->setStyleSheet("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
-        "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:#4b7572; } "
-        "QToolButton:checked { color:#ffffff; background:#244846; border-color:#55d8d0; }");
+    if (dark) button->setStyleSheet(QtApplyAccent("QToolButton { color:#edf1f3; background:#2a3035; border:1px solid #41494e; "
+        "border-radius:4px; padding:2px 8px; } QToolButton:hover { background:#343c41; border-color:@edge@; } "
+        "QToolButton:checked { color:#ffffff; background:@tint@; border-color:@strong@; }", true));
     button->setToolTip(QString("%1 (F%2)").arg(label).arg(key - Qt::Key_F1 + 1));
     button->setProperty("draftingKey", key);
     statusBar()->addWidget(button);
@@ -67,11 +68,11 @@ void EditorWindow::BuildDraftingInput() {
   m_DynamicInput = new QFrame(m_Viewport);
   m_DynamicInput->setObjectName("dynamicInput");
   if (palette().color(QPalette::Window).lightness() < 128) {
-    m_DynamicInput->setStyleSheet("QFrame#dynamicInput { background:transparent; border:none; }"
+    m_DynamicInput->setStyleSheet(QtApplyAccent("QFrame#dynamicInput { background:transparent; border:none; }"
         "QLabel { color:#dce2e5; background:transparent; }"
         "QLineEdit { color:#f1f4f5; background:#30373c; border:0; border-bottom:1px solid #4c575d; "
-        "border-radius:0; min-height:24px; padding:2px 4px; selection-background-color:#168e8a; }"
-        "QLineEdit:focus { border:0; border-bottom:2px solid #55d8d0; }");
+        "border-radius:0; min-height:24px; padding:2px 4px; selection-background-color:@fill@; }"
+        "QLineEdit:focus { border:0; border-bottom:2px solid @strong@; }", true));
   }
   auto* layout = new QVBoxLayout(m_DynamicInput);
   layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(3);
@@ -297,9 +298,9 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
 void EditorWindow::ShowSnapOverride(const QPoint& position) {
   QMenu menu(this); menu.setObjectName("snapOverrideMenu");
   if (palette().color(QPalette::Window).lightness() < 128)
-    menu.setStyleSheet("QMenu { background:#252b2f; color:#edf1f3; border:1px solid #454e53; padding:2px; }"
-        "QMenu::item { padding:4px 24px; background:transparent; } QMenu::item:selected { background:#244846; color:#ffffff; }"
-        "QMenu::separator { height:1px; background:#454e53; margin:4px 8px; }");
+    menu.setStyleSheet(QtApplyAccent("QMenu { background:#252b2f; color:#edf1f3; border:1px solid #454e53; padding:2px; }"
+        "QMenu::item { padding:4px 24px; background:transparent; } QMenu::item:selected { background:@tint@; color:#ffffff; }"
+        "QMenu::separator { height:1px; background:#454e53; margin:4px 8px; }", true));
   menu.addSection("Snap once — next pick");
   const std::pair<const char*, CadSnap::Kind> kinds[] = {
       {"Endpoint", CadSnap::Kind::Endpoint}, {"Midpoint", CadSnap::Kind::Midpoint},
@@ -323,14 +324,14 @@ void EditorWindow::ShowSnapOverride(const QPoint& position) {
 void EditorWindow::ShowPolarSettings() {
   QDialog dialog(this); dialog.setObjectName("polarSettingsDialog"); dialog.setWindowTitle("Polar tracking angles");
   if (palette().color(QPalette::Window).lightness() < 128)
-    dialog.setStyleSheet("QDialog#polarSettingsDialog { background:#22272b; color:#edf1f3; }"
+    dialog.setStyleSheet(QtApplyAccent("QDialog#polarSettingsDialog { background:#22272b; color:#edf1f3; }"
         "QLabel { color:#dce2e5; background:transparent; }"
         "QComboBox, QLineEdit { background:#171b1e; color:#edf1f3; border:1px solid #424b51; border-radius:5px; "
-        "padding:5px 8px; selection-background-color:#168e8a; }"
-        "QComboBox:focus, QLineEdit:focus { border-color:#55d8d0; }"
+        "padding:5px 8px; selection-background-color:@fill@; }"
+        "QComboBox:focus, QLineEdit:focus { border-color:@strong@; }"
         "QPushButton { background:#2a3035; color:#eaf0f2; border:1px solid #41494e; border-radius:5px; padding:6px 10px; }"
-        "QPushButton:hover { background:#343c41; border-color:#4b7572; }"
-        "QPushButton:pressed { background:#244846; border-color:#55d8d0; }");
+        "QPushButton:hover { background:#343c41; border-color:@edge@; }"
+        "QPushButton:pressed { background:@tint@; border-color:@strong@; }", true));
   auto* layout = new QVBoxLayout(&dialog);
   auto* summary = new QLabel("Angles follow the active UCS.\nThe pipe compass uses these same presets.", &dialog);
   summary->setObjectName("polarSettingsSummary"); layout->addWidget(summary);
@@ -404,7 +405,7 @@ void EditorWindow::ShowContextualHelp() {
   for (const auto& entry : m_WikiBundle.nav) {
     if (entry.isSection) {
       auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
-      item->setFlags(Qt::NoItemFlags); item->setForeground(QColor("#7ea7c0"));
+      item->setFlags(Qt::NoItemFlags); item->setForeground(QColor(QtAccentFor(true).quiet));
     } else {
       auto* item = new QListWidgetItem(QString::fromUtf8(entry.label.c_str()), pages);
       item->setData(Qt::UserRole, QString::fromUtf8(entry.slug.c_str()));
