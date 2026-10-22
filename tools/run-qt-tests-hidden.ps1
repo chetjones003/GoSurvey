@@ -63,8 +63,20 @@ public static class HiddenDesktop {
   [DllImport("kernel32.dll")] public static extern bool GetExitCodeProcess(IntPtr h, out uint code);
   [DllImport("kernel32.dll")] public static extern bool TerminateProcess(IntPtr h, uint code);
   [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr SendMessageTimeout(IntPtr hwnd, uint msg, UIntPtr wParam,
+      string lParam, uint flags, uint timeout, out UIntPtr result);
 }
 "@
+
+# Hidden-desktop tests can still trigger Windows notification tones. Temporarily blank only the
+# current user's Notification.* sound events, then restore every value and notify Windows when
+# the test process exits. This avoids changing the user's sound settings after the run.
+function Send-AppEventsSettingChange {
+  $result = [UIntPtr]::Zero
+  [void][HiddenDesktop]::SendMessageTimeout([IntPtr]0xffff, 0x001A, [UIntPtr]::Zero,
+      'AppEvents', 0x0002, 2000, [ref]$result)
+}
 
 $GENERIC_ALL = 0x10000000
 $desktopName = "gosurvey-qt-tests-$PID"
@@ -73,7 +85,29 @@ if ($desktop -eq [IntPtr]::Zero) {
   throw "CreateDesktop failed (Win32 error $([Runtime.InteropServices.Marshal]::GetLastWin32Error()))"
 }
 
+$notificationSounds = @()
 try {
+  $soundEvents = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('AppEvents\Schemes\Apps\.Default')
+  if ($soundEvents) {
+    try {
+      foreach ($eventName in $soundEvents.GetSubKeyNames() | Where-Object { $_ -like 'Notification.*' }) {
+        $eventKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey(
+            "AppEvents\Schemes\Apps\.Default\$eventName\.Current", $true)
+        if (-not $eventKey) { continue }
+        $hasValue = $eventKey.GetValueNames() -contains ''
+        $value = if ($hasValue) {
+          $eventKey.GetValue('', $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        } else { $null }
+        $kind = if ($hasValue) { $eventKey.GetValueKind('') } else {
+          [Microsoft.Win32.RegistryValueKind]::String
+        }
+        $notificationSounds += [pscustomobject]@{ Key = $eventKey; Value = $value; Kind = $kind }
+        $eventKey.SetValue('', '', [Microsoft.Win32.RegistryValueKind]::String)
+      }
+    } finally { $soundEvents.Dispose() }
+  }
+  if ($notificationSounds.Count -gt 0) { Send-AppEventsSettingChange }
+
   $quoted = ($TestArgs | ForEach-Object { '"' + $_ + '"' }) -join ' '
   $reportArgs = if ($JUnitLog) { " -o `"$JUnitLog,junitxml`"" } else { "" }
   $cmd = if ($PlainArguments) { "`"$exePath`" $quoted" } else { "`"$exePath`" -o `"$Log,txt`"$reportArgs $quoted" }
@@ -105,6 +139,13 @@ try {
     [void][HiddenDesktop]::CloseHandle($pi.hThread)
   }
 } finally {
+  foreach ($sound in $notificationSounds) {
+    try {
+      if ($null -eq $sound.Value) { $sound.Key.DeleteValue('', $false) }
+      else { $sound.Key.SetValue('', $sound.Value, $sound.Kind) }
+    } finally { $sound.Key.Dispose() }
+  }
+  if ($notificationSounds.Count -gt 0) { Send-AppEventsSettingChange }
   [void][HiddenDesktop]::CloseDesktop($desktop)
 }
 
