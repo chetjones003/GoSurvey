@@ -160,6 +160,31 @@ void IntField(const json& entry, const char* field, int minimum) {
 }
 
 void ValidateOptionalFields(const json& j) {
+  if (j.contains("sideShots")) {
+    Require(j.at("sideShots").is_array(), "sideShots must be an array");
+    for (const auto& entry : j.at("sideShots")) {
+      for (const auto* field : {"atStationId", "stationId", "sourceOrder"})
+        IntField(entry, field, std::numeric_limits<int>::min());
+      for (const auto* field : {"horizAngleDeg", "horizDist", "slopeDist", "vertAngleDeg",
+                               "knownEasting", "knownNorthing"})
+        FiniteField(entry, field);
+      for (const auto* field : {"description", "code", "horizAngleBuf", "vertAngleBuf"})
+        Require(entry.at(field).is_string(), "side shot text must be a string");
+      for (const auto* field : {"hasHorizAngle", "hasHorizDist", "hasSlopeDist", "isZenithAngle",
+                               "hasVertAngle", "isCheckShot", "hasKnownCoords"})
+        Require(entry.at(field).is_boolean(), "side shot flag must be a boolean");
+    }
+  }
+  if (j.contains("networkDirections")) {
+    Require(j.at("networkDirections").is_array(), "networkDirections must be an array");
+    for (const auto& entry : j.at("networkDirections")) {
+      for (const auto* field : {"set", "at", "to", "sourceOrder"})
+        IntField(entry, field, std::numeric_limits<int>::min());
+      FiniteField(entry, "deg");
+      FiniteField(entry, "std");
+      Require(entry.at("code").is_string(), "direction code must be a string");
+    }
+  }
   std::unordered_set<std::string> sources;
   if (j.contains("rawSources")) {
     Require(j.at("rawSources").is_array(), "rawSources must be an array");
@@ -262,6 +287,22 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
       legs.push_back(LegToJson(leg));
     j["legs"] = std::move(legs);
 
+    if (!td.sideShots.empty()) {
+      j["sideShots"] = json::array();
+      for (const auto& shot : td.sideShots)
+        j["sideShots"].push_back({
+            {"atStationId", shot.atStationId}, {"stationId", shot.stationId},
+            {"description", shot.description}, {"code", shot.code}, {"sourceOrder", shot.sourceOrder},
+            {"horizAngleBuf", shot.horizAngleBuf}, {"horizAngleDeg", shot.horizAngleDeg},
+            {"hasHorizAngle", shot.hasHorizAngle}, {"horizDist", shot.horizDist},
+            {"hasHorizDist", shot.hasHorizDist}, {"slopeDist", shot.slopeDist},
+            {"hasSlopeDist", shot.hasSlopeDist}, {"vertAngleBuf", shot.vertAngleBuf},
+            {"vertAngleDeg", shot.vertAngleDeg}, {"isZenithAngle", shot.isZenithAngle},
+            {"hasVertAngle", shot.hasVertAngle}, {"isCheckShot", shot.isCheckShot},
+            {"hasKnownCoords", shot.hasKnownCoords}, {"knownEasting", shot.knownEasting},
+            {"knownNorthing", shot.knownNorthing}});
+    }
+
     json stations = json::array();
     for (const NetworkStation& station : td.networkStations) {
       json sj;
@@ -296,6 +337,14 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
       zeniths.push_back(json{{"from", zenith.fromId}, {"to", zenith.toId}, {"deg", zenith.zenithDeg},
                              {"std", zenith.stdErrorSec}, {"sourceOrder", zenith.sourceOrder}});
     j["networkZeniths"] = std::move(zeniths);
+
+    if (!td.networkDirections.empty()) {
+      j["networkDirections"] = json::array();
+      for (const auto& direction : td.networkDirections)
+        j["networkDirections"].push_back({{"set", direction.setId}, {"at", direction.atId},
+            {"to", direction.toId}, {"deg", direction.directionDeg}, {"std", direction.stdErrorSec},
+            {"code", direction.code}, {"sourceOrder", direction.sourceOrder}});
+    }
 
     json w;
     w["sigmaAngleSec"] = weights.sigmaAngleSec;
@@ -411,6 +460,33 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
       for (const json& lj : j["legs"])
         out.legs.push_back(LegFromJson(lj));
 
+    if (j.contains("sideShots")) {
+      for (const auto& entry : j.at("sideShots")) {
+        TraverseSideShot shot;
+        shot.atStationId = entry.at("atStationId").get<int>();
+        shot.stationId = entry.at("stationId").get<int>();
+        shot.description = entry.at("description").get<std::string>();
+        shot.code = entry.at("code").get<std::string>();
+        shot.sourceOrder = entry.at("sourceOrder").get<int>();
+        shot.horizAngleBuf = entry.at("horizAngleBuf").get<std::string>();
+        shot.horizAngleDeg = entry.at("horizAngleDeg").get<double>();
+        shot.hasHorizAngle = entry.at("hasHorizAngle").get<bool>();
+        shot.horizDist = entry.at("horizDist").get<double>();
+        shot.hasHorizDist = entry.at("hasHorizDist").get<bool>();
+        shot.slopeDist = entry.at("slopeDist").get<double>();
+        shot.hasSlopeDist = entry.at("hasSlopeDist").get<bool>();
+        shot.vertAngleBuf = entry.at("vertAngleBuf").get<std::string>();
+        shot.vertAngleDeg = entry.at("vertAngleDeg").get<double>();
+        shot.isZenithAngle = entry.at("isZenithAngle").get<bool>();
+        shot.hasVertAngle = entry.at("hasVertAngle").get<bool>();
+        shot.isCheckShot = entry.at("isCheckShot").get<bool>();
+        shot.hasKnownCoords = entry.at("hasKnownCoords").get<bool>();
+        shot.knownEasting = entry.at("knownEasting").get<double>();
+        shot.knownNorthing = entry.at("knownNorthing").get<double>();
+        out.sideShots.push_back(std::move(shot));
+      }
+    }
+
     if (j.contains("networkStations") && j["networkStations"].is_array()) {
       for (const json& sj : j["networkStations"]) {
         NetworkStation station;
@@ -476,6 +552,20 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
         zenith.stdErrorSec = zj.value("std", 0.0);
         zenith.sourceOrder = zj.value("sourceOrder", 0);
         out.networkZeniths.push_back(zenith);
+      }
+    }
+
+    if (j.contains("networkDirections")) {
+      for (const auto& entry : j.at("networkDirections")) {
+        NetworkDirectionObs direction;
+        direction.setId = entry.at("set").get<int>();
+        direction.atId = entry.at("at").get<int>();
+        direction.toId = entry.at("to").get<int>();
+        direction.directionDeg = entry.at("deg").get<double>();
+        direction.stdErrorSec = entry.at("std").get<double>();
+        direction.code = entry.at("code").get<std::string>();
+        direction.sourceOrder = entry.at("sourceOrder").get<int>();
+        out.networkDirections.push_back(std::move(direction));
       }
     }
 
