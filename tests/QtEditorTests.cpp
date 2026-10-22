@@ -115,6 +115,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QImage>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -3262,14 +3263,35 @@ private Q_SLOTS:
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
 
     EditorWindow firstRun;
-    firstRun.State().authGateResolved = true;
+    // What's New follows the Start-screen conditions; an unresolved launch sign-in choice must
+    // not suppress its display.
     firstRun.State().whatsNewDismissedVersion.clear();
     firstRun.InitializeStartup();
     auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
     QVERIFY(whatsNew);
+    firstRun.show();
+    QApplication::processEvents();
+    QVERIFY(whatsNew->isVisible());
+    QDir().mkpath(QtTestArtifactDirectory());
+    QVERIFY(whatsNew->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-startup.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewHeading"));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewVersion"));
-    QVERIFY(whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes"));
+    auto* notes = whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes");
+    QVERIFY(notes);
+    const QStringList imageNames = {"projects.png", "maps.png", "pdf-viewer.png",
+                                    "point-clouds.png", "piping.png", "surfaces-3d.png"};
+    for (const auto& name : imageNames) {
+      QVERIFY(QFile::exists(QtAsset("whats-new/" + name)));
+      const QVariant resource = notes->document()->resource(
+          QTextDocument::ImageResource, QUrl("whats-new:" + name));
+      QVERIFY2(resource.canConvert<QImage>(), qPrintable(name));
+      QVERIFY2(!resource.value<QImage>().isNull(), qPrintable(name));
+    }
+    notes->verticalScrollBar()->setValue(450);
+    QApplication::processEvents();
+    QVERIFY(notes->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-projects-image.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewReleasesLink"));
     QVERIFY(whatsNew->findChild<QCheckBox*>("whatsNewDontShowAgain"));
     auto* about = firstRun.findChild<QAction*>("aboutGoSurveyAction");
@@ -3277,6 +3299,14 @@ private Q_SLOTS:
     about->trigger();
     QCOMPARE(firstRun.findChildren<QDialog*>("whatsNewDialog").size(), 1);
     whatsNew->hide();
+  }
+
+  void directDrawingStartupDoesNotAutoOpenWhatsNew() {
+    EditorWindow window;
+    window.State().authGateResolved = true;
+    window.CreateDrawingFromTemplate(0);
+    window.InitializeStartup();
+    QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
   }
 
   void updateOfferSuppressesWhatsNewForTheLaunch() {
@@ -3292,6 +3322,23 @@ private Q_SLOTS:
     window.ServiceUpdate();
     window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
+  }
+
+  void completedUpdateCheckDoesNotSuppressWhatsNewStartup() {
+    EditorWindow window;
+    window.State().whatsNewDismissedVersion.clear();
+    window.m_Update->phase = update::Phase::Checking;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.m_Update->task->ok = false;
+    window.m_Update->task->error = "0.7.4 is the latest";
+    window.m_Update->task->done.store(true, std::memory_order_release);
+
+    // This is the real launch ordering: the startup check has completed, then startup
+    // initialization must consume its result before deciding whether an offer has priority.
+    window.InitializeStartup();
+
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QVERIFY(window.findChild<QDialog*>("whatsNewDialog"));
   }
 
   void malformedOpenAndSavePreserveExistingSession() {

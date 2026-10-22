@@ -109,9 +109,6 @@ int main(int argc, char** argv) {
     }
     window.show();
     splash.finish(&window);
-    // Startup dialogs need a visible owner, and What's New is eligible only after the
-    // Start tab has been established by the initial Refresh().
-    if (!smoke) window.InitializeStartup();
     if (smoke) {
       QTimer::singleShot(800, &window, [&] {
         QString error;
@@ -125,6 +122,9 @@ int main(int argc, char** argv) {
       for (const auto& argument : app.arguments().mid(1))
         if (argument != "--default-style" && argument != "--light-style" &&
             argument != "--preview-sign-in") { window.OpenDrawing(argument); break; }
+      // Load a command-line drawing before deciding whether the Start screen should auto-open
+      // What's New. The window is visible now, so startup dialogs have a valid owner.
+      window.InitializeStartup();
     }
     result = app.exec();
   } // Release viewport resources and PDF worker windows before shutting down PDFium.
