@@ -13657,6 +13657,51 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-21 - catalogued and accepted (D-2026-10-21-b, GitHub issue #1033).
 
+### REQ-451 — Qt Layer Properties Manager: readable floating window with a complete data grid (GitHub issue #1036)
+
+- Purpose: layers are read and edited constantly; the manager should fit its content, show colours and
+  linetypes the way a drafter recognises them, and behave like the spreadsheet REQ-082 promises
+- Priority: should
+- Type: functional
+- Depends on: REQ-082 (data-grid behaviour), REQ-046 (per-viewport overrides), REQ-436 (Qt accent)
+- Statement:
+  1. **Window.** `LAYER` opens the Layer Properties Manager as a resizable floating window titled
+     "Layer Properties Manager", styled with the Qt application theme and accent (QtAccent.hpp).
+  2. **Layout.** The table's columns are sized to their content and the Name column takes the remaining
+     width, so no empty area is left to the right of the last column at any window size above the minimum.
+  3. **Swatches and samples.** The Color cell shows a colour swatch beside its value text and the
+     Linetype cell shows a short line sample drawn in the layer's own pattern beside its name. The stored
+     value text stays fully visible and editable by typing; clicking the swatch opens a colour chooser.
+  4. **Current layer.** The current layer's row is tinted and its name is bold, and a line under the
+     table names the current layer.
+  5. **Data grid (REQ-082).** Every column sorts by clicking its header (click again to reverse) with a
+     visible sort indicator, and equal keys keep a stable order; columns can be resized, reordered and
+     hidden (header context menu); the header stays visible while rows scroll; row height is uniform; the
+     check boxes of On, Frozen, Locked (and VP Freeze) are visible in both states; cells are editable.
+     Sorting changes the view only: an edit, delete or Set current acts on the record shown in that row,
+     and the saved layer order is unchanged.
+  6. **Viewport columns (REQ-046).** While a current viewport exists (floating viewport, else the single
+     selected paper-space viewport) the table also shows **VP Freeze** (check box) and **VP Color** (swatch
+     and value, empty = no override); they edit that viewport's frozen set and colour overrides. With no
+     current viewport those columns are not shown.
+  7. **Operations.** New layer, Delete layer, Set current and editing name, On, Frozen, Locked, Color,
+     Linetype and Lineweight keep their present behaviour, each as one undo step.
+- Acceptance:
+  1. the window is resizable and its Name column widens with it so the table fills the window width;
+  2. Color and Linetype cells display a swatch / pattern sample as well as the stored text;
+  3. the current layer is visibly marked;
+  4. clicking a header sorts the rows (reversing on a second click) and after sorting, editing,
+     deleting and Set current act on the layer shown in the row, while the stored layer order is unchanged;
+  5. columns can be reordered and hidden; every check box is visible checked and unchecked;
+  6. VP Freeze and VP Color appear only with a current viewport and change that viewport only;
+  7. create, delete, set current, rename, on/off, freeze, lock, colour, linetype and lineweight still update
+     the drawing and undo;
+  8. tests cover sorting-then-editing, the viewport columns, and screenshots of the window in its normal,
+     sorted and viewport states are saved under `build/artifacts/`.
+- Owner-layer: Qt UI (`src/qt/EditorLayerManager.cpp`)
+- Status: accepted (2026-10-22)
+- Revisions: 2026-10-22 — catalogued and accepted (D-2026-10-22-a, GitHub issue #1036).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -14538,6 +14583,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
+| REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
