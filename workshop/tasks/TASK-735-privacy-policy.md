@@ -51,6 +51,7 @@
 - 2026-10-22: Added `PRIVACY.md`, `site/about.html`, the main-site footer link, and the sitemap entry. Static required-content and link checks passed; `git diff --check` passed.
 - 2026-10-22: Added the user-supplied `chet@gosurveycad.com` contact to both policy copies; placeholder check and `git diff --check` passed.
 - 2026-10-22: Corrected the website hosting disclosure to Cloudflare in both policy copies and clarified the separate GitHub API and Google Fonts requests.
+- 2026-10-22: Identified `chetjones003/gosurveycad-site` as the live Cloudflare website source. Added the Privacy section to `about.html`, pushed to that repository's `master` at `816e897`, and confirmed the live `/about` page displays the disclosure.
 
 ## 9. Self-verification
 - [ ] build-project — n/a
@@ -69,5 +70,5 @@
 - Requirements satisfied: REQ-452 (Acceptance met: yes)
 - Tests added: none
 - Refactors: none
-- Docs updated: `PRIVACY.md`, `site/about.html`, `site/index.html`, `site/sitemap.xml`, `spec/requirements.md`, `spec/project.md`.
+- Docs updated: GoSurvey `PRIVACY.md`, legacy `site/` copy, `spec/requirements.md`, `spec/project.md`, and the live website's `gosurveycad-site/about.html`.
 - Done: 2026-10-22
