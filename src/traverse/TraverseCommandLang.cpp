@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -400,6 +401,8 @@ static void AppendOrderedBody(std::ostringstream& out, const TraverseData& td) {
     for (const Piece& piece : pieces) out << piece.text;
 }
 
+static std::string WithGraphMetadata(const std::string& text, const TraverseData& td);
+
 std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
     std::ostringstream out;
     out << "// GoSurvey Traverse Command (GSTC) \xe2\x80\x94 edit and re-apply.\n";
@@ -429,7 +432,7 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
 
     if (UsesSourceOrder(td)) {
         AppendOrderedBody(out, td);
-        return AlignColumns(out.str());
+        return WithGraphMetadata(AlignColumns(out.str()), td);
     }
 
     for (size_t i = 0; i < td.legs.size(); ++i) {
@@ -558,11 +561,12 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
         AppendCode(out, dir.code);
         out << "\n";
     }
-    return AlignColumns(out.str());
+    return WithGraphMetadata(AlignColumns(out.str()), td);
 }
 
 bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::string& errorMsg) {
     TraverseData newTd;
+    bool hasGraphMetadata = false;
     newTd.hasStartBearing = false;
     LsaWeights newWeights;
     bool sawStation = false;
@@ -612,6 +616,10 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             std::istringstream sourceLine(metadata);
             std::string marker;
             sourceLine >> marker;
+            if (marker == "@GSTC-NODE" || marker == "@GSTC-GROUP") {
+                hasGraphMetadata = true;
+                continue;
+            }
             if (marker == "@GSTC-SOURCE") {
                 TraverseRawSource source;
                 sourceLine >> source.id;
@@ -1113,6 +1121,14 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
     flushNotes(nextSourceOrder);
     newTd.legs = std::move(newLegs);
     newTd.sideShots = std::move(newSideShots);
+    if (hasGraphMetadata) {
+        CommandDocument document;
+        if (!Project(text, document, errorMsg)) return false;
+        newTd.graphGroups = document.groups;
+        for (const auto& node : document.commands)
+            newTd.graphNodes.push_back({node.id, node.text, node.sourceOrder,
+                node.x, node.y, node.groupId, node.manualOrder});
+    }
     td = std::move(newTd);
     weights = newWeights;
     errorMsg.clear();
@@ -1189,6 +1205,44 @@ bool Project(const std::string& text, CommandDocument& document, std::string& er
         const size_t first = line.find_first_not_of(" \t");
         if (first != std::string::npos && line.compare(first, 2, "//") == 0) {
             const auto fields = Tokenize(line.substr(first + 2));
+            if (!fields.empty() && fields[0] == "@GSTC-GROUP") {
+                if (metadata) return fail("node metadata must immediately precede a command");
+                TraverseGraphGroup group;
+                std::string marker, label;
+                int collapsed = 0;
+                std::istringstream values(line.substr(first + 2));
+                if (!(values >> marker >> group.id >> group.x >> group.y >> group.width >> group.height >> collapsed) ||
+                    !std::isfinite(group.x) || !std::isfinite(group.y) ||
+                    !std::isfinite(group.width) || !std::isfinite(group.height) ||
+                    group.width < 0 || group.height < 0 || (collapsed != 0 && collapsed != 1))
+                    return fail("invalid group metadata");
+                std::getline(values, label);
+                const auto value = nlohmann::json::parse(label, nullptr, false);
+                if (!value.is_string()) return fail("invalid group label");
+                if (std::any_of(result.groups.begin(), result.groups.end(),
+                    [&](const TraverseGraphGroup& old) { return old.id == group.id; }))
+                    return fail("duplicate group ID " + group.id);
+                group.collapsed = collapsed != 0;
+                group.label = value.get<std::string>();
+                result.groups.push_back(std::move(group));
+                continue;
+            }
+            if (!fields.empty() && fields[0] == "@GSTC-SOURCE") {
+                if (metadata) return fail("node metadata must immediately precede a command");
+                TraverseRawSource source;
+                std::string marker, path;
+                std::istringstream values(line.substr(first + 2));
+                values >> marker >> source.id;
+                std::getline(values, path);
+                const auto value = nlohmann::json::parse(path, nullptr, false);
+                if (source.id.empty() || !value.is_string() ||
+                    std::any_of(result.sources.begin(), result.sources.end(),
+                        [&](const TraverseRawSource& old) { return old.id == source.id; }))
+                    return fail("invalid or duplicate source metadata");
+                source.path = value.get<std::string>();
+                result.sources.push_back(std::move(source));
+                continue;
+            }
             if (!fields.empty() && fields[0] == "@GSTC-NODE") {
                 if (metadata) return fail("node metadata must immediately precede a command");
                 CommandNode node;
@@ -1440,6 +1494,13 @@ CommandOrder Order(const CommandDocument& document) {
 std::string Serialize(const CommandDocument& document) {
     const CommandOrder order = Order(document);
     std::ostringstream out;
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    for (const auto& source : document.sources)
+        out << "// @GSTC-SOURCE " << source.id << " " << nlohmann::json(source.path).dump() << "\n";
+    for (const auto& group : document.groups)
+        out << "// @GSTC-GROUP " << group.id << " " << group.x << " " << group.y << " "
+            << group.width << " " << group.height << " " << (group.collapsed ? 1 : 0) << " "
+            << nlohmann::json(group.label).dump() << "\n";
     for (const std::string& id : order.commandIds) {
         const auto found = std::find_if(document.commands.begin(), document.commands.end(),
             [&](const CommandNode& node) { return node.id == id; });
@@ -1453,6 +1514,62 @@ std::string Serialize(const CommandDocument& document) {
     }
     for (const std::string& comment : document.trailingComments) out << comment << "\n";
     return out.str();
+}
+
+// Match by directive and survey relationship, not measurement values or position.
+// Occurrence order distinguishes repeated observations of the same relationship.
+static std::vector<std::string> GraphCommandKey(const std::string& text) {
+    CommandNode node;
+    node.text = text;
+    const auto tokens = CommandTokens(node);
+    if (tokens.empty()) return {};
+    std::vector<std::string> key{tokens[0]};
+    // The first HANG backsight is informational and serializes as REF.
+    const auto stations = tokens[0] == "HANG" && tokens.size() >= 4
+        ? std::vector<std::string>{tokens[2], tokens[3]} : StationFields(tokens);
+    key.insert(key.end(), stations.begin(), stations.end());
+    if (tokens[0] == "RAWSET" && tokens.size() >= 6) {
+        key.push_back(std::to_string(std::strtoll(tokens[3].c_str(), nullptr, 10)));
+        key.push_back(tokens.back());
+    } else if (tokens[0] == "DIR" && tokens.size() >= 2) {
+        key.push_back(std::to_string(std::strtoll(tokens[1].c_str(), nullptr, 10)));
+    } else if (tokens[0] == "STN" && tokens.size() >= 4) {
+        key.push_back(tokens[3]);
+    }
+    return key;
+}
+
+static std::string WithGraphMetadata(const std::string& text, const TraverseData& td) {
+    if (td.graphNodes.empty() && td.graphGroups.empty()) return text;
+    CommandDocument document;
+    std::string error;
+    if (!Project(text, document, error)) throw std::invalid_argument("Invalid generated graph metadata: " + error);
+    document.groups = td.graphGroups;
+    std::vector<bool> used(td.graphNodes.size(), false);
+    std::unordered_set<std::string> reservedIds;
+    for (const auto& node : td.graphNodes) reservedIds.insert(node.id);
+    for (auto& node : document.commands) {
+        const auto key = GraphCommandKey(node.text);
+        bool matched = false;
+        for (size_t i = 0; i < td.graphNodes.size(); ++i) {
+            const auto& saved = td.graphNodes[i];
+            if (used[i] || GraphCommandKey(saved.command) != key) continue;
+            node.id = saved.id;
+            node.x = saved.x;
+            node.y = saved.y;
+            node.groupId = saved.groupId;
+            node.manualOrder = saved.manualOrder;
+            used[i] = true;
+            matched = true;
+            break;
+        }
+        if (!matched) {
+            size_t suffix = 1;
+            while (reservedIds.count(node.id)) node.id = "command-" + std::to_string(suffix++);
+            reservedIds.insert(node.id);
+        }
+    }
+    return Serialize(document);
 }
 
 }  // namespace travcmd
