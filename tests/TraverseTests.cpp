@@ -22,8 +22,302 @@
 #include <fstream>
 #include <string>
 #include <regex>
+#include <vector>
 
 using Catch::Approx;
+
+TEST_CASE("RAWSET preserves a single face and source identity", "[traverse][rawset][REQ-452]") {
+    const std::string text = "// @GSTC-SOURCE field-a \"C:/raw/one.fbk\"\n"
+        "STATION 1 0 0 0\nRAWSET 1 2 3 F1 12.345678901 91.25 100.125 SOURCE field-a\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse(text, td, weights, error));
+    const std::string saved = travcmd::Serialize(td, weights);
+    REQUIRE(saved.find("RAWSET") != std::string::npos);
+    REQUIRE(saved.find("field-a") != std::string::npos);
+    TraverseData restored;
+    REQUIRE(travcmd::Parse(saved, restored, weights, error));
+    REQUIRE(restored.rawSets.size() == 1);
+    const auto& raw = restored.rawSets.front();
+    REQUIRE(raw.atStationId == 1);
+    REQUIRE(raw.toStationId == 2);
+    REQUIRE(raw.measurements.setNo == 3);
+    REQUIRE(raw.measurements.hasF1);
+    REQUIRE_FALSE(raw.measurements.hasF2);
+    REQUIRE(raw.measurements.f1HzDec == Catch::Approx(12.345678901).margin(1e-12));
+    REQUIRE(restored.rawSources.front().path == "C:/raw/one.fbk");
+}
+
+TEST_CASE("GSTC projection orders dependencies before stable unrelated ties", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("HDIST 1 2 10\nSTN 1 2\nSTATION 1 0 0 0\n"
+        "DIST 7 8 20\nRAWSET 7 8 1 F2 190 270 20 SOURCE a\n"
+        "// @GSTC-SOURCE a \"one.fbk\"\n", document, error));
+    REQUIRE(document.commands.size() == 5);
+    const auto order = travcmd::Order(document);
+    REQUIRE(order.commandIds == std::vector<std::string>{document.commands[2].id,
+        document.commands[1].id, document.commands[0].id, document.commands[3].id, document.commands[4].id});
+    REQUIRE(order.diagnostics.empty());
+    const auto unresolved = std::find_if(document.stations.begin(), document.stations.end(),
+        [](const auto& station) { return station.id == "7"; });
+    REQUIRE(unresolved != document.stations.end());
+    REQUIRE_FALSE(unresolved->resolved);
+    TraverseData td;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(document), td, weights, error));
+}
+
+TEST_CASE("GSTC command identities and attached metadata survive reorder", "[traverse][rawset][REQ-452]") {
+    const std::string input = "// field notes\n// @GSTC-NODE distance 10.5 -4 frame 99\nHDIST 1 2 20\n"
+        "// @GSTC-NODE leg 0 0 - -\nSTN 1 2\n// @GSTC-NODE origin 5 6 - -\nSTATION 1 0 0 0\n";
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project(input, document, error));
+    REQUIRE(document.commands[0].id == "distance");
+    REQUIRE(document.commands[0].manualOrder == 99);
+    REQUIRE(document.commands[0].groupId == "frame");
+    REQUIRE(travcmd::Order(document).commandIds == std::vector<std::string>{"origin", "leg", "distance"});
+    document.commands[0].x = 800;
+    document.commands[0].groupId = "other-frame";
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(document), restored, error));
+    REQUIRE(restored.commands[2].id == "distance");
+    REQUIRE(restored.commands[2].x == Catch::Approx(800));
+    REQUIRE(restored.commands[2].groupId == "other-frame");
+    REQUIRE(restored.commands[2].manualOrder == 99);
+    REQUIRE(restored.commands[2].comments == std::vector<std::string>{"// field notes"});
+    REQUIRE(travcmd::Order(restored).commandIds == std::vector<std::string>{"origin", "leg", "distance"});
+}
+
+TEST_CASE("GSTC cycle diagnostics isolate the cycle and scope manual overrides", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("// @GSTC-NODE origin 0 0 - -\nSTATION 1 0 0 0\n"
+        "// @GSTC-NODE a 0 0 - -\nSTN 3 2\n// @GSTC-NODE b 0 0 - -\nSTN 2 3\n"
+        "// @GSTC-NODE downstream 0 0 - -\nHDIST 3 2 20\n"
+        "// @GSTC-NODE unrelated 0 0 - -\nDIST 8 9 30\n", document, error));
+    const auto order = travcmd::Order(document);
+    REQUIRE(order.diagnostics.size() == 1);
+    REQUIRE(order.diagnostics[0].kind == travcmd::OrderDiagnosticKind::Cyclic);
+    REQUIRE(order.diagnostics[0].commandIds == std::vector<std::string>{"a", "b"});
+    REQUIRE_FALSE(order.diagnostics[0].overridden);
+    REQUIRE(order.commandIds == std::vector<std::string>{"origin", "a", "b", "downstream", "unrelated"});
+    document.commands[1].manualOrder = 20;
+    document.commands[2].manualOrder = 10;
+    document.commands[3].manualOrder = -100;
+    const auto overridden = travcmd::Order(document);
+    REQUIRE(overridden.diagnostics[0].overridden);
+    REQUIRE(overridden.commandIds == std::vector<std::string>{"origin", "b", "a", "downstream", "unrelated"});
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(document), restored, error));
+    REQUIRE(travcmd::Order(restored).commandIds == overridden.commandIds);
+    document.commands[1].manualOrder = 10;
+    REQUIRE_FALSE(travcmd::Order(document).diagnostics[0].overridden);
+}
+
+TEST_CASE("GSTC ambiguity reports competing station definitions and accepts scoped ranks", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("// @GSTC-NODE a 0 0 - -\nCTRL 2 0 0\n"
+        "// @GSTC-NODE b 0 0 - -\nCTRL 2 1 1\n"
+        "// @GSTC-NODE obs 0 0 - -\nDIST 2 9 20\n", document, error));
+    const auto order = travcmd::Order(document);
+    REQUIRE(order.diagnostics.size() == 1);
+    REQUIRE(order.diagnostics[0].kind == travcmd::OrderDiagnosticKind::Ambiguous);
+    REQUIRE(order.diagnostics[0].commandIds == std::vector<std::string>{"a", "b"});
+    REQUIRE_FALSE(order.diagnostics[0].overridden);
+    document.commands[0].manualOrder = 2;
+    document.commands[1].manualOrder = 1;
+    document.commands[2].manualOrder = -50;
+    const auto manual = travcmd::Order(document);
+    REQUIRE(manual.diagnostics[0].overridden);
+    REQUIRE(manual.commandIds == std::vector<std::string>{"b", "a", "obs"});
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(document), restored, error));
+    REQUIRE(travcmd::Order(restored).commandIds == manual.commandIds);
+}
+
+TEST_CASE("GSTC closed loops use the known origin without false ambiguity", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("STATION 1 0 0 0\nSTN 1 2\nSTN 2 1\nDIST 1 2 20\n", document, error));
+    REQUIRE(travcmd::Order(document).diagnostics.empty());
+    TraverseData td;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(document), td, weights, error));
+}
+
+TEST_CASE("GSTC generated identities avoid every explicit opaque ID", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("STATION 1 0 0 0\n//@GSTC-NODE command-1 0 0 - -\nDIST 1 2 20\n",
+        document, error));
+    REQUIRE(document.commands[0].id != "command-1");
+    REQUIRE(document.commands[1].id == "command-1");
+    travcmd::CommandDocument restored;
+    REQUIRE(travcmd::Project(travcmd::Serialize(document), restored, error));
+    REQUIRE(restored.commands[0].id == document.commands[0].id);
+    REQUIRE(restored.commands[1].id == document.commands[1].id);
+}
+
+TEST_CASE("GSTC station references use the parser's numeric identity", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("HDIST 01 002 20\nSTN 1 2\nSTATION 1 0 0 0\n", document, error));
+    REQUIRE(document.stations.size() == 2);
+    REQUIRE(travcmd::Order(document).commandIds == std::vector<std::string>{document.commands[2].id,
+        document.commands[1].id, document.commands[0].id});
+}
+
+TEST_CASE("GSTC projection retains every setup option spelling accepted by Parse", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("STN 1 2\nHDIST 1 2 20\nSTATION 1 0 0 0\n"
+        "# LOOP ON\n#scale off grid\n# ERRORS 3 0.02 4\n", document, error));
+    REQUIRE(document.commands[3].setup);
+    REQUIRE(document.commands[4].setup);
+    REQUIRE(document.commands[5].setup);
+    const auto order = travcmd::Order(document);
+    REQUIRE(order.commandIds == std::vector<std::string>{document.commands[2].id, document.commands[3].id,
+        document.commands[4].id, document.commands[5].id, document.commands[0].id, document.commands[1].id});
+    TraverseData td;
+    LsaWeights weights;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(document), td, weights, error));
+    REQUIRE(td.isClosedLoop);
+    REQUIRE(weights.sigmaAngleSec == Catch::Approx(3));
+}
+
+TEST_CASE("RAWSET rejects malformed records atomically with physical line numbers", "[traverse][rawset][REQ-452]") {
+    const std::vector<std::string> records = {
+        "1 2 1 SOURCE a", "1 2 1 F1 10 90 SOURCE a", "1 2 1 F1 nan 90 10 SOURCE a",
+        "1 2 1 F2 10 inf 10 SOURCE a", "1 2 1 F1 10 90 1e999 SOURCE a",
+        "1x 2 1 F1 10 90 10 SOURCE a", "1 0 1 F1 10 90 10 SOURCE a",
+        "1 2 -1 F1 10 90 10 SOURCE a", "1 2 999999999999999 F1 10 90 10 SOURCE a",
+        "1 2 1 F1 10x 90 10 SOURCE a", "1 2 1 F1 10 90 10 SOURCE missing",
+        "1 2 1 F1 10 90 10 F1 20 90 10 SOURCE a", "1 2 1 F1 10 90 10 SOURCE a extra",
+        "1 2 1 F1 10 90 10 SOURCE a 'discarded"};
+    for (const std::string& record : records) {
+        INFO(record);
+        TraverseData td;
+        td.startStationId = 77;
+        LsaWeights weights;
+        weights.sigmaAngleSec = 42;
+        std::string error;
+        REQUIRE_FALSE(travcmd::Parse("// @GSTC-SOURCE a \"one.fbk\"\nSTATION 1 0 0 0\n\nRAWSET " +
+            record + "\n", td, weights, error));
+        REQUIRE(error.find("line 4:") == 0);
+        REQUIRE(error.find("unknown directive") == std::string::npos);
+        REQUIRE(td.startStationId == 77);
+        REQUIRE(weights.sigmaAngleSec == Catch::Approx(42));
+    }
+}
+
+TEST_CASE("RAWSET keeps F2 and dual-face sets distinct across files", "[traverse][rawset][REQ-452]") {
+    const std::string text = "RAWSET 4 5 1 F2 201.123456789012 271.25 99.125 SOURCE a\n"
+        "RAWSET 4 5 1 F1 21.123456789012 88.75 98.625 F2 201.125 271.125 98.875 SOURCE b\n"
+        "// @GSTC-SOURCE a \"C:/raw/first file.fbk\"\n"
+        "// @GSTC-SOURCE b \"C:/raw/second.fbk\"\n";
+    TraverseData td;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse(text, td, weights, error));
+    REQUIRE(td.legs.empty());
+    REQUIRE(td.networkDists.empty());
+    TraverseData restored;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(td, weights), restored, weights, error));
+    REQUIRE(restored.rawSets.size() == 2);
+    const auto& first = restored.rawSets[0];
+    const auto& second = restored.rawSets[1];
+    REQUIRE(first.sourceId == "a");
+    REQUIRE(second.sourceId == "b");
+    REQUIRE(first.atStationId == 4);
+    REQUIRE(first.toStationId == 5);
+    REQUIRE(first.measurements.setNo == 1);
+    REQUIRE_FALSE(first.measurements.hasF1);
+    REQUIRE(first.measurements.hasF2);
+    REQUIRE(first.measurements.f2HzDec == Catch::Approx(201.123456789012).epsilon(1e-15));
+    REQUIRE(first.measurements.f2VaDec == Catch::Approx(271.25));
+    REQUIRE(first.measurements.f2Sd == Catch::Approx(99.125));
+    REQUIRE(second.measurements.hasF1);
+    REQUIRE(second.measurements.hasF2);
+    REQUIRE(second.measurements.f1HzDec == Catch::Approx(21.123456789012).epsilon(1e-15));
+    REQUIRE(second.measurements.f1VaDec == Catch::Approx(88.75));
+    REQUIRE(second.measurements.f1Sd == Catch::Approx(98.625));
+    REQUIRE(second.measurements.f2HzDec == Catch::Approx(201.125));
+    REQUIRE(second.measurements.f2VaDec == Catch::Approx(271.125));
+    REQUIRE(second.measurements.f2Sd == Catch::Approx(98.875));
+    REQUIRE(restored.rawSources[0].path == "C:/raw/first file.fbk");
+    REQUIRE(restored.rawSources[1].path == "C:/raw/second.fbk");
+}
+
+TEST_CASE("GSTC rejects invalid attached identity metadata without replacing the projection", "[traverse][rawset][REQ-452]") {
+    const std::vector<std::string> invalid = {
+        "// @GSTC-NODE a 0 0 - -\n// interrupted\nDIST 1 2 3\n",
+        "// @GSTC-NODE a 0 0 - -\n",
+        "// @GSTC-NODE a nan 0 - -\nDIST 1 2 3\n",
+        "// @GSTC-NODE a 0 0 - 1x\nDIST 1 2 3\n",
+        "// @GSTC-NODE a 0 0 - 9999999999999\nDIST 1 2 3\n",
+        "// @GSTC-NODE a 0 0 - - extra\nDIST 1 2 3\n",
+        "// @GSTC-NODE a 0 0 - -\nDIST 1 2 3\n// @GSTC-NODE a 0 0 - -\nDIST 2 3 4\n"};
+    for (const auto& text : invalid) {
+        INFO(text);
+        travcmd::CommandDocument document;
+        std::string error;
+        REQUIRE(travcmd::Project("STATION 77 0 0 0\n", document, error));
+        REQUIRE_FALSE(travcmd::Project(text, document, error));
+        REQUIRE(error.find("line ") == 0);
+        REQUIRE(document.commands.size() == 1);
+        REQUIRE(document.commands[0].text == "STATION 77 0 0 0");
+    }
+}
+
+TEST_CASE("RAWSET source declarations reject duplicate identities and malformed paths", "[traverse][rawset][REQ-452]") {
+    for (const std::string& source : {std::string("// @GSTC-SOURCE a not-json\n"),
+        std::string("// @GSTC-SOURCE a 12\n"),
+        std::string("// @GSTC-SOURCE a \"one.fbk\"\n// @GSTC-SOURCE a \"two.fbk\"\n")}) {
+        TraverseData td;
+        LsaWeights weights;
+        std::string error;
+        REQUIRE_FALSE(travcmd::Parse(source + "RAWSET 1 2 1 F1 10 90 20 SOURCE a\n", td, weights, error));
+        REQUIRE(error.find("line ") == 0);
+        REQUIRE(error.find("source metadata") != std::string::npos);
+    }
+}
+
+TEST_CASE("RAWSET source IDs remain opaque tokens containing punctuation", "[traverse][rawset][REQ-452]") {
+    TraverseData td;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(travcmd::Parse("// @GSTC-SOURCE field'a`b \"one.fbk\"\n"
+        "RAWSET 1 2 1 F1 10 90 20 SOURCE field'a`b\n", td, weights, error));
+    REQUIRE(td.rawSets[0].sourceId == "field'a`b");
+    TraverseData restored;
+    REQUIRE(travcmd::Parse(travcmd::Serialize(td, weights), restored, weights, error));
+    REQUIRE(restored.rawSets[0].sourceId == "field'a`b");
+}
+
+TEST_CASE("RAWSET diagnostics count physical lines even with option prefixes", "[traverse][rawset][REQ-452]") {
+    TraverseData td;
+    LsaWeights weights;
+    std::string error;
+    REQUIRE_FALSE(travcmd::Parse("// note\n# RAWSET 1 2 1 F1 10 90 20 SOURCE absent\n"
+        "// @GSTC-SOURCE a \"one.fbk\"\n", td, weights, error));
+    REQUIRE(error.find("line 2:") == 0);
+}
+
+TEST_CASE("GSTC reports self dependencies without confusing known-station self shots", "[traverse][rawset][REQ-452]") {
+    travcmd::CommandDocument document;
+    std::string error;
+    REQUIRE(travcmd::Project("STN 2 2\n", document, error));
+    const auto order = travcmd::Order(document);
+    REQUIRE(order.diagnostics.size() == 1);
+    REQUIRE(order.diagnostics[0].kind == travcmd::OrderDiagnosticKind::Cyclic);
+    REQUIRE(order.diagnostics[0].commandIds == std::vector<std::string>{document.commands[0].id});
+    REQUIRE(travcmd::Project("STATION 2 0 0 0\nSTN 2 2\n", document, error));
+    REQUIRE(travcmd::Order(document).diagnostics.empty());
+}
 
 namespace {
 
@@ -943,9 +1237,8 @@ TEST_CASE("TraverseIo: a missing file fails Load with a reason", "[io][REQ-403]"
 // ---------------------------------------------------------------------------
 // GitHub issue #845 (Phase A) — GoSurvey's own traverse command language
 // (travcmd::), the two-way-synced text view in the Traverse Editor's Command
-// tab. Only fields the form panel can manually edit round-trip here; raw
-// per-set F1/F2 import detail (rawSets) has no manual-entry counterpart
-// either, so it is out of scope by design (see TraverseCommandLang.hpp).
+// tab. These legacy form fixtures cover the original editable fields.
+// REQ-452's additive RAWSET and command-projection contracts are tested above.
 // ---------------------------------------------------------------------------
 
 namespace {

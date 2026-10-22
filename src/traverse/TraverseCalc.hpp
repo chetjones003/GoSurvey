@@ -22,6 +22,21 @@ struct TraverseMeasSet {
     bool hasF2 = false;
 };
 
+/// A project copy of a raw set. Source identity distinguishes repeated sets
+/// from different files; readings are never implicitly reduced or merged.
+struct TraverseRawSet {
+    int atStationId = 0;
+    int toStationId = 0;
+    TraverseMeasSet measurements;
+    std::string sourceId;
+    int sourceOrder = 0;
+};
+
+struct TraverseRawSource {
+    std::string id;
+    std::string path;
+};
+
 /// One leg of a survey traverse.
 /// Records measurements made at the instrument (FROM) station pointing to the
 /// foresight (TO) station. Computed fields are filled by \ref ComputeTraverse.
@@ -318,6 +333,8 @@ struct NetworkDirectionObs {
 };
 
 struct TraverseData {
+    std::vector<TraverseRawSet> rawSets;
+    std::vector<TraverseRawSource> rawSources;
     // --- Starting station ---
     int startStationId = 1;
     double startEasting = 0.0;
