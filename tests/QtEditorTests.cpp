@@ -6,6 +6,7 @@
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
+#include "QtSplash.hpp"
 #include "TopographicArtwork.hpp"
 #include "RibbonCatalog.hpp"
 #include "TraverseActions.hpp"
@@ -6843,6 +6844,63 @@ private Q_SLOTS:
     capture("qt-910-option-c-slate-teal.png");
 #ifdef GOSURVEY_TEST_ARTIFACT_DIR
     qInfo() << "Issue 910 screenshot options:" << dir;
+#endif
+  }
+
+  // ---- Issue #1028 / REQ-093: the Qt splash progress bar and phase label advance ----
+  void issue1028SplashProgressBarAndPhaseLabelAdvanceDuringTheDisplayTime() {
+    using namespace qtsplash;
+    QCOMPARE(kMinimumDisplayMs, 8000);
+    QCOMPARE(ProgressAt(0), 0.0);
+    QCOMPARE(ProgressAt(kMinimumDisplayMs / 2), 0.5);
+    QCOMPARE(ProgressAt(kMinimumDisplayMs), 1.0);
+    QCOMPARE(ProgressAt(kMinimumDisplayMs * 4), 1.0);
+    QCOMPARE(ProgressAt(-250), 0.0);
+    // Six neutral phases share the display time evenly, in order, and the last one holds.
+    const QStringList phases{"Starting GoSurvey…", "Gathering resources…", "Preparing workspace…",
+                             "Setting up drawing tools…", "Loading your settings…", "Almost ready…"};
+    for (int phase = 0; phase < phases.size(); ++phase)
+      QCOMPARE(PhaseLabelAt(kMinimumDisplayMs * phase / phases.size() + 10), phases[phase]);
+    QCOMPARE(PhaseLabelAt(kMinimumDisplayMs), phases.last());
+    QCOMPARE(PhaseLabelAt(kMinimumDisplayMs * 4), phases.last());
+    QCOMPARE(PhaseLabelAt(-250), phases.first());
+
+    const QPixmap backdrop = MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
+    QCOMPARE(backdrop.size(), QSize(800, 450));
+    const auto frameAt = [&](qint64 elapsedMs) {
+      return MakeFrame(backdrop, ProgressAt(elapsedMs), PhaseLabelAt(elapsedMs)).toImage();
+    };
+    // The bar is 280 px wide starting at x=48; sample its vertical middle.
+    const QColor fill("#148cff");
+    const auto filledPixels = [&](const QImage& image) {
+      int count = 0;
+      for (int x = 48; x < 48 + 280; ++x)
+        if (image.pixelColor(x, 374) == fill) ++count;
+      return count;
+    };
+    const QImage start = frameAt(0);
+    const QImage middle = frameAt(kMinimumDisplayMs / 2);
+    const QImage end = frameAt(kMinimumDisplayMs);
+    QCOMPARE(filledPixels(start), 0);
+    QVERIFY(filledPixels(middle) > 100 && filledPixels(middle) < 180);
+    QVERIFY(filledPixels(end) > 260);
+    // Every phase draws a different label row, and the wordmark above never changes.
+    const QRect labelRow(46, 345, 260, 20);
+    const QRect wordmarkRow(46, 190, 400, 80);
+    QList<QImage> frames;
+    for (int phase = 0; phase < phases.size(); ++phase)
+      frames << frameAt(kMinimumDisplayMs * phase / phases.size() + 10);
+    for (int phase = 1; phase < frames.size(); ++phase) {
+      QVERIFY(frames[phase - 1].copy(labelRow) != frames[phase].copy(labelRow));
+      QVERIFY(filledPixels(frames[phase - 1]) <= filledPixels(frames[phase]));
+      QCOMPARE(frames[phase - 1].copy(wordmarkRow), frames[phase].copy(wordmarkRow));
+    }
+#ifdef GOSURVEY_TEST_ARTIFACT_DIR
+    const QString dir = QtTestArtifactDirectory() + "/qt-1028";
+    QDir().mkpath(dir);
+    for (int phase = 0; phase < frames.size(); ++phase)
+      QVERIFY(frames[phase].save(dir + QString("/qt-1028-splash-phase%1.png").arg(phase + 1)));
+    QVERIFY(end.save(dir + "/qt-1028-splash-end.png"));
 #endif
   }
 
