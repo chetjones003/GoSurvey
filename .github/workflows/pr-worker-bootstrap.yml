@@ -19,18 +19,18 @@ jobs:
         with:
           persist-credentials: false
       - name: Inspect prior listener startup errors
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/inspect-windows-pr-workers.ps1
       - name: Register and start independent analyzer workers
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           GOSURVEY_REGISTRATION_TOKEN: ${{ secrets.GOSURVEY_RUNNER_BOOTSTRAP_TOKEN }}
         run: ./tools/register-windows-pr-workers.ps1 -Start
-      - name: Require listener processes after startup
-        shell: pwsh
+      - name: Require active worker launchers after startup
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           Start-Sleep -Seconds 12
-          ./tools/inspect-windows-pr-workers.ps1 -RequireListeners
+          ./tools/inspect-windows-pr-workers.ps1 -RequireWorkers
 
   inspect-clang:
     name: laptop / clang worker tools
@@ -42,7 +42,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Inspect the registered worker environment
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/initialize-self-hosted-pr-job.ps1 -Role clang-tidy
 
   inspect-msvc:
@@ -55,9 +55,9 @@ jobs:
         with:
           persist-credentials: false
       - name: Inspect the registered worker environment
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/initialize-self-hosted-pr-job.ps1 -Role msvc-analyze
       - name: Stop the inspection job's cache server
         if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/ci-compiler-cache.ps1 -Action stop

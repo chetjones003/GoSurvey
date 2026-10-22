@@ -94,6 +94,9 @@ jobs:
   # Build and test the supported Qt application and headless helpers.
   # ---------------------------------------------------------------------------
   build-and-test:
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     name: full / build and test
     needs: classify-docs-only
     if: >-
@@ -112,7 +115,7 @@ jobs:
 
       - name: Load installed laptop tools and owned build cache
         if: runner.environment == 'self-hosted'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/initialize-self-hosted-pr-job.ps1 -Role build
 
       - name: Set up MSVC
@@ -125,7 +128,7 @@ jobs:
 
       - name: Set up Mesa OpenGL for hosted tests
         if: runner.environment != 'self-hosted'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           # Qt 6.8.3 ships an llvmpipe opengl32sw.dll that only reports OpenGL 3.0. The
           # application needs 3.3 core, so use a pinned Mesa build with a modern llvmpipe.
@@ -154,7 +157,7 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
 
       - name: Ensure Ninja
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
           $ver = '1.12.1'
@@ -166,7 +169,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
       - name: Record runner capacity and Ninja defaults
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Run sccache
@@ -188,7 +191,7 @@ jobs:
 
       - name: Stage Mesa runtime dependencies for test deployment
         if: runner.environment != 'self-hosted'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           # Keep Mesa's test-only driver dependencies beside the app so qt.deployment's isolated
           # copy can exercise the same software OpenGL path with a minimal PATH.
@@ -239,7 +242,7 @@ jobs:
 
       - name: Stop this job's compiler-cache server
         if: always() && runner.environment == 'self-hosted' && env.GOSURVEY_CI_CACHE_STARTED == 'true'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/ci-compiler-cache.ps1 -Action stop
 
   # ---------------------------------------------------------------------------
@@ -263,6 +266,9 @@ jobs:
   # MSVC-generated compile database instead.
   # ---------------------------------------------------------------------------
   lint-clang-tidy:
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     name: full / clang-tidy
     needs: classify-docs-only
     if: >-
@@ -280,7 +286,7 @@ jobs:
 
       - name: Load installed laptop analysis tools
         if: runner.environment == 'self-hosted'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/initialize-self-hosted-pr-job.ps1 -Role clang-tidy
 
       - name: Set up MSVC
@@ -292,7 +298,7 @@ jobs:
         uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
           $ver = '1.12.1'
@@ -304,7 +310,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
       - name: Record runner capacity and Ninja defaults
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Configure (compile_commands.json only, no build)
@@ -315,7 +321,7 @@ jobs:
         run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF -DGOSURVEY_BUILD_QT=ON
 
       - name: clang-tidy (lines changed in this PR only)
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -348,6 +354,9 @@ jobs:
   # Findings surface as build annotations via the existing problem matcher and fail through /WX.
   # ---------------------------------------------------------------------------
   lint-msvc-analyze:
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
     name: full / msvc-analyze
     needs: classify-docs-only
     if: >-
@@ -366,7 +375,7 @@ jobs:
 
       - name: Load installed laptop tools and owned analysis cache
         if: runner.environment == 'self-hosted'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/initialize-self-hosted-pr-job.ps1 -Role msvc-analyze
 
       - name: Set up MSVC
@@ -378,7 +387,7 @@ jobs:
         uses: ./.github/actions/setup-qt
 
       - name: Ensure Ninja
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
           $ver = '1.12.1'
@@ -390,7 +399,7 @@ jobs:
           Add-Content -Path $env:GITHUB_PATH -Value $dir
 
       - name: Record runner capacity and Ninja defaults
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./.github/scripts/record_ci_runner.ps1
 
       - name: Run sccache
@@ -408,7 +417,7 @@ jobs:
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Verify sccache is in the compile commands
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           $commands = & ninja -C build/.cmake/release -t commands
           if ($LASTEXITCODE -ne 0) { throw "Ninja could not list compile commands (exit $LASTEXITCODE)" }
@@ -420,7 +429,7 @@ jobs:
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Select changed translation units
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -460,5 +469,5 @@ jobs:
 
       - name: Stop this job's compiler-cache server
         if: always() && runner.environment == 'self-hosted' && env.GOSURVEY_CI_CACHE_STARTED == 'true'
-        shell: pwsh
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
         run: ./tools/ci-compiler-cache.ps1 -Action stop

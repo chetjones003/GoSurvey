@@ -15,6 +15,16 @@ $workers = @(
 foreach ($worker in $workers) {
   $directory = (Resolve-Path -LiteralPath $worker.directory).Path
   if (-not (Test-Path -LiteralPath (Join-Path $directory '.runner'))) { throw "Unregistered worker: $directory" }
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $probe = [Threading.Mutex]::new($false, "Local\GoSurveyPrWorker-$($identity.User.Value)-$($worker.role)")
+  $acquired = $false
+  try {
+    try { $acquired = $probe.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+  } finally {
+    if ($acquired) { $probe.ReleaseMutex() }
+    $probe.Dispose()
+  }
+  if (-not $acquired) { Write-Host "$($worker.role): role launcher already running."; continue }
   $listenerPath = Join-Path $directory 'bin\Runner.Listener.exe'
   $running = @(Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" |
     Where-Object { $_.ExecutablePath -eq $listenerPath })

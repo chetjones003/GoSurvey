@@ -97,3 +97,22 @@ PowerShell startup/path failure; MSVC environment initialization failure; runner
 connection/parent cleanup. Capture existing startup logs before relaunch and
 require listener processes afterwards. This is targeted instrumentation and a
 startup gate, not a speculative environment fix. REQ-205/437 plan APPROVE.
+
+### Connection and shell findings on 61030d2
+
+The diagnostic run captured both child logs at Listening for Jobs; GitHub then
+reported both registered workers online. However the CIM snapshot showed zero
+child listeners, causing a false failure in the newly added local-process gate.
+Store PowerShell is selected on the laptop; the exact cause of its limited CIM
+view is not established. Use the role launcher's existing lifetime mutex for
+local liveness/idempotence, and let jobs assigned to each role prove GitHub job
+connectivity. Do not treat a process list as authoritative connection status.
+
+The same logs show the interactive user profile loading on CI steps, emitting
+PSReadLine prediction/invalid-console errors. Windows job defaults and explicit
+shells now use -NoProfile, retaining GitHub's pwsh command wrapper and native
+exit-code propagation. This removes observed unwanted startup/profile activity;
+no speedup is claimed until a production run completes.
+
+Plan/code review APPROVE under the existing task authority: do not alter product
+behavior or blocking checks. Keep production routing hosted until role jobs pass.
