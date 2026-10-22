@@ -86,6 +86,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QHeaderView>
 #include <QTableWidget>
 #include <QGroupBox>
 #include <QListWidget>
@@ -5145,6 +5146,111 @@ private Q_SLOTS:
     QVERIFY(!window.State().drawingLayerTable[1].on);
     window.Submit("UNDO");
     QVERIFY(window.State().drawingLayerTable[1].on);
+  }
+
+  void issue1036LayerManagerSortingActsOnTheShownRecord() {
+    ApplyQtAppearance(*qApp, false);  // the app's Dark theme, whatever an earlier test left applied
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    std::string error;
+    QVERIFY(CadAddDrawingLayer(state, "Survey", &error));
+    QVERIFY(CadAddDrawingLayer(state, "Alpha", &error));
+    state.currentLayer = "Survey";
+    std::vector<std::string> storedOrder;
+    for (const auto& layer : state.drawingLayerTable) storedOrder.push_back(layer.name);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      auto* header = table->horizontalHeader();
+      auto names = [&] { QStringList list; for (int row = 0; row < table->rowCount(); ++row) list << table->item(row, 0)->text(); return list; };
+      QCOMPARE(names(), QStringList({"0", "Survey", "Alpha"}));
+      // Layout: the Name column takes the width the others leave, so the table fills the window.
+      int columnsWidth = 0;
+      for (int column = 0; column < table->columnCount(); ++column) if (!table->isColumnHidden(column)) columnsWidth += header->sectionSize(column);
+      QVERIFY(columnsWidth >= table->viewport()->width() - 2);
+      QVERIFY(header->sectionSize(0) > 150);
+      // Swatch and linetype sample sit beside the stored text.
+      QCOMPARE(table->item(0, 4)->text(), QString::fromStdString(state.drawingLayerTable[0].color));
+      QVERIFY(table->item(0, 4)->data(Qt::DecorationRole).isValid());
+      QVERIFY(table->item(0, 5)->data(Qt::DecorationRole).isValid());
+      // The current layer is marked.
+      QVERIFY(table->item(1, 0)->font().bold());
+      QVERIFY(!table->item(2, 0)->font().bold());
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-normal.png")));
+      auto clickHeader = [&](int column) { QTest::mouseClick(header->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(header->sectionViewportPosition(column) + 8, header->height() / 2)); };
+      clickHeader(0);
+      QCOMPARE(names(), QStringList({"0", "Alpha", "Survey"}));
+      clickHeader(0);
+      QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-sorted.png")));
+      // Row 0 is Survey now: the edit lands on Survey, not on the layer that used to be first.
+      table->item(0, 1)->setCheckState(Qt::Unchecked);
+      QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
+      QVERIFY(!state.drawingLayerTable[1].on);
+      QVERIFY(state.drawingLayerTable[0].on && state.drawingLayerTable[2].on);
+      // Delete acts on the row shown.
+      table->setCurrentCell(1, 0);
+      dialog->findChild<QPushButton*>("layerDelete")->click();
+      QCOMPARE(names(), QStringList({"Survey", "0"}));
+      // Set current acts on the row shown.
+      table->setCurrentCell(1, 0);
+      dialog->findChild<QPushButton*>("layerSetCurrent")->click();
+      QCOMPARE(state.currentLayer, std::string("0"));
+      // Columns can be hidden and reordered; the checkbox cells are drawn in both states.
+      header->setSectionHidden(3, true);
+      header->moveSection(header->visualIndex(6), 1);
+      QVERIFY(header->isSectionHidden(3));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
+    // Display sorting never reordered the saved layers.
+    QCOMPARE(state.drawingLayerTable.size(), std::size_t(2));
+    QCOMPARE(state.drawingLayerTable[0].name, storedOrder[0]);
+    QCOMPARE(state.drawingLayerTable[1].name, storedOrder[1]);
+  }
+
+  void issue1036LayerManagerViewportColumnsEditTheCurrentViewport() {
+    ApplyQtAppearance(*qApp, false);  // the app's Dark theme, whatever an earlier test left applied
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    std::string error;
+    QVERIFY(CadAddDrawingLayer(state, "Survey", &error));
+    // Model space: no current viewport, so the VP columns are not shown.
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(table->isColumnHidden(7));
+      QVERIFY(table->isColumnHidden(8));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
+    PaperLayout layout;
+    layout.viewports.push_back(Viewport{});
+    state.paperLayouts = {layout};
+    state.activeSpaceIndex = 0;
+    state.selectedViewportIndex = 0;
+    state.selectedViewports = {0};
+    QVERIFY(CurrentViewport(state) != nullptr);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(!table->isColumnHidden(7));
+      QVERIFY(!table->isColumnHidden(8));
+      table->item(1, 7)->setCheckState(Qt::Checked);
+      QVERIFY(IsLayerFrozenInViewport(state.paperLayouts[0].viewports[0], "Survey"));
+      QVERIFY(!state.drawingLayerTable[1].frozen);
+      table->item(1, 8)->setText("Red");
+      QVERIFY(ViewportLayerColorOverride(state.paperLayouts[0].viewports[0], "Survey") != nullptr);
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-viewport.png")));
+      table->item(1, 8)->setText("");
+      QVERIFY(ViewportLayerColorOverride(state.paperLayouts[0].viewports[0], "Survey") == nullptr);
+      table->item(1, 7)->setCheckState(Qt::Unchecked);
+      QVERIFY(!IsLayerFrozenInViewport(state.paperLayouts[0].viewports[0], "Survey"));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
   }
 
   void pointGroupManagerCreatesAndUndoesFromEmptyState() {
