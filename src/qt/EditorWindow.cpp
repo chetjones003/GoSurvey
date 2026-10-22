@@ -921,6 +921,10 @@ void EditorWindow::StartAuth(bool previewSignIn) {
 
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
+  // The entry point exits its splash wait when the worker marks the task done, before the UI
+  // thread has consumed that result. Resolve it here so only a confirmed offer takes priority;
+  // a completed no-update check must return to Idle before REQ-336 evaluates startup eligibility.
+  ServiceUpdate();
   // REQ-078 before REQ-336: when the startup check found an update, What's New does not
   // auto-open on this launch. The check has already answered by now (the splash waits for it).
   if (UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
@@ -928,8 +932,7 @@ void EditorWindow::InitializeStartup() {
 }
 
 void EditorWindow::MaybeAutoOpenWhatsNew() {
-  if (!m_StartupInitialized || m_WhatsNewAutoOpened || !m_State.authGateResolved ||
-      m_State.activeDrawingIdx != 0 ||
+  if (!m_StartupInitialized || m_WhatsNewAutoOpened || m_State.activeDrawingIdx != 0 ||
       !WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, m_State.whatsNewDismissedVersion, false))
     return;
   m_WhatsNewAutoOpened = true;
@@ -2062,29 +2065,31 @@ void EditorWindow::ShowWhatsNew() {
   browser->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   QFile markdown(QtAsset("whats-new.md"));
   QString notes;
+  QStringList imageNames;
   if (markdown.open(QIODevice::ReadOnly)) {
     notes = QString::fromUtf8(markdown.readAll());
-    // Register bundled images under the markdown's `whats-new:` URLs. QTextBrowser has no
-    // handler for that scheme by default, and scaling wide screenshots keeps them inside the pane.
+    // QTextBrowser has no handler for the Markdown's custom `whats-new:` image URLs.
     const QRegularExpression imageUrl(R"(whats-new:([A-Za-z0-9_.-]+))");
     auto match = imageUrl.globalMatch(notes);
-    QStringList imageNames;
     while (match.hasNext()) {
       const auto found = match.next();
       const QString name = found.captured(1);
       if (!imageNames.contains(name)) imageNames.push_back(name);
-    }
-    for (const auto& name : imageNames) {
-      QImage image(QtAsset("whats-new/" + name));
-      if (image.isNull()) continue;
-      if (image.width() > 460) image = image.scaledToWidth(460, Qt::SmoothTransformation);
-      browser->document()->addResource(QTextDocument::ImageResource, QUrl("whats-new:" + name), image);
     }
   }
   if (notes.trimmed().isEmpty())
     notes = "What's New content could not be loaded from resources/whats-new.md for GoSurvey " +
             QString::fromUtf8(GOSURVEY_VERSION_FULL) + ". You can view the release notes online below.";
   browser->setMarkdown(notes);
+  // setMarkdown clears document resources, so install bundled images afterward. Scaling wide
+  // screenshots keeps them inside the release-notes pane.
+  for (const auto& name : imageNames) {
+    QImage image(QtAsset("whats-new/" + name));
+    if (image.isNull()) continue;
+    if (image.width() > 460) image = image.scaledToWidth(460, Qt::SmoothTransformation);
+    browser->document()->addResource(QTextDocument::ImageResource, QUrl("whats-new:" + name), image);
+  }
+  browser->document()->markContentsDirty(0, browser->document()->characterCount());
   browser->setOpenExternalLinks(true);
   layout->addWidget(browser, 1);
   auto* releases = new QLabel(
