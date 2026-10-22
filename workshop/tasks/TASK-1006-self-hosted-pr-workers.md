@@ -129,3 +129,22 @@ while the spawning step remains alive. This distinguishes activation-path exits,
 normal launcher exits and termination at parent-step/job cleanup. No provisioning
 behavior is changed and no new test suite is added. Diagnostic plan APPROVE under
 REQ-205/437; production stays hosted pending actual role-job success.
+
+### Confirmed root cause and fix plan
+
+Debug attempt 2 of run 39697886049 provides the mechanism: at 00:12:37 UTC,
+Worker_20261022-001205-utc.log explicitly kills launcher PIDs 45488 and 34176
+and their child trees. Both were alive within the spawning step. Runner 2.337.0
+ProcessInvoker.ProcessExitedHandler kills a Windows step's descendant tree after
+five seconds when output streams remain open. Start-Process's redirection path
+inherits handles; removing RUNNER_TRACKING_ID only avoids later job cleanup,
+not this separate step-level stream cleanup. The earlier Store/CIM hypothesis
+was not the cause: the listeners had already been killed before inspection.
+
+Verification plan APPROVE: launch using Windows ShellExecute (explicit -Verb
+Open, hidden window, no parent-side stream redirection). Move log redirection
+inside the child launcher so it owns its output file without inheriting the CI
+step's pipes. Preserve normal-user checks, credential stripping and role mutexes.
+Remove temporary lifetime probes. Validate syntax, repeat the same remote
+registration run and require subsequent role jobs to execute before activation.
+No new test cases; existing workflow is the before/after reproduction.

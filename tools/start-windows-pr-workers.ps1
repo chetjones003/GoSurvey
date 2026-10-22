@@ -42,19 +42,11 @@ foreach ($worker in $workers) {
   try {
     $arguments = @('-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
       '-File', "`"$launcher`"", '-Role', $worker.role, '-RunnerDirectory', "`"$directory`"",
-      '-EnvironmentFile', "`"$EnvironmentFile`"")
-    $process = Start-Process -FilePath $pwsh -ArgumentList $arguments -WindowStyle Hidden -PassThru `
-      -RedirectStandardOutput (Join-Path $WorkersRoot "$($worker.role)-listener.log") `
-      -RedirectStandardError (Join-Path $WorkersRoot "$($worker.role)-listener-error.log")
+      '-EnvironmentFile', "`"$EnvironmentFile`"", '-LogDirectory', "`"$WorkersRoot`"")
+    # ShellExecute starts an independent Windows process without inheriting the
+    # CI step's output handles. The child opens its own log instead.
+    $process = Start-Process -FilePath $pwsh -ArgumentList $arguments -WindowStyle Hidden -Verb Open -PassThru
     Write-Host "$($worker.role): started launcher PID $($process.Id)."
-    # Observe the launched process while this provisioning shell is still alive.
-    Start-Sleep -Seconds 8
-    $process.Refresh()
-    if ($process.HasExited) {
-      Write-Warning "$($worker.role): launch process exited with code $($process.ExitCode)."
-    } else {
-      Write-Host "$($worker.role): launch process still alive; session=$($process.SessionId)."
-    }
   } finally {
     foreach ($entry in $removed.GetEnumerator()) {
       [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')

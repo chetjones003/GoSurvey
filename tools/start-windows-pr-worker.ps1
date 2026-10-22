@@ -2,9 +2,17 @@
 param(
   [Parameter(Mandatory)][ValidateSet('build', 'clang-tidy', 'msvc-analyze')][string]$Role,
   [Parameter(Mandatory)][string]$RunnerDirectory,
-  [string]$EnvironmentFile = 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1'
+  [string]$EnvironmentFile = 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1',
+  [string]$LogDirectory
 )
 $ErrorActionPreference = 'Stop'
+# Open the log inside this detached process. Parent-side Start-Process
+# redirection inherits CI pipe handles and triggers the runner's step cleanup.
+if ($LogDirectory) {
+  $log = Join-Path $LogDirectory "$Role-listener.log"
+  & $PSCommandPath -Role $Role -RunnerDirectory $RunnerDirectory -EnvironmentFile $EnvironmentFile *> $log
+  return
+}
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) -or
@@ -15,7 +23,6 @@ $runnerDir = (Resolve-Path -LiteralPath $RunnerDirectory).Path
 if (-not (Test-Path -LiteralPath (Join-Path $runnerDir '.runner'))) { throw 'Register this worker first.' }
 $mutex = [Threading.Mutex]::new($false, "Local\GoSurveyPrWorker-$($identity.User.Value)-$Role")
 $owned = $false
-Write-Host "Worker launcher: role=$Role; PID=$PID; session=$([Diagnostics.Process]::GetCurrentProcess().SessionId); user=$($identity.User.Value); executable=$([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName); trackingPresent=$([bool]$env:RUNNER_TRACKING_ID)"
 try {
   try { $owned = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $owned = $true }
   if (-not $owned) { Write-Host "$Role worker launcher is already running."; return }
@@ -28,5 +35,4 @@ try {
 } finally {
   if ($owned) { $mutex.ReleaseMutex() }
   $mutex.Dispose()
-  Write-Host "Worker launcher ended: role=$Role; PID=$PID; UTC=$([DateTime]::UtcNow.ToString('o'))"
 }
