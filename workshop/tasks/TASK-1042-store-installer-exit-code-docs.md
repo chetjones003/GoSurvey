@@ -31,3 +31,9 @@ REQ-453 establishes the Store installer invocation and payload, while this addit
 existing installer contract without changing it. Some Partner Center categories cannot be mapped
 one-to-one because Inno Setup returns general process outcomes. Stating that limitation avoids
 misleading Store diagnostics.
+
+## Emergency admin bypass documentation
+
+- Record the repository admin's emergency branch-protection bypass in `CLAUDE.md`,
+  `docs/emergency-admin-bypass.md`, and the project decision log.
+- Verify the current GitHub protection state allows the documented bypass without changing settings.
