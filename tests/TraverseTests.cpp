@@ -4,6 +4,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
+#include <nlohmann/json.hpp>
 
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <regex>
 #include <vector>
@@ -1133,6 +1135,235 @@ LsaWeights MakeRoundTripWeights() {
 }
 
 }  // namespace
+
+TEST_CASE("TraverseIo preserves side and check shot inputs and repeated identities", "[io][REQ-452][1066]") {
+    TraverseData original;
+    TraverseSideShot shot;
+    shot.atStationId = 7;
+    shot.stationId = 101;
+    shot.description = "Fence \"corner\"\ncheck";
+    shot.code = "FC";
+    shot.sourceOrder = 19;
+    shot.horizAngleBuf = "45d30m10s";
+    shot.horizAngleDeg = 45.502777777;
+    shot.hasHorizAngle = true;
+    shot.horizDist = 52.125;
+    shot.hasHorizDist = true;
+    shot.slopeDist = 53.25;
+    shot.hasSlopeDist = true;
+    shot.vertAngleBuf = "-2d15m";
+    shot.vertAngleDeg = -2.25;
+    shot.hasVertAngle = true;
+    shot.isZenithAngle = false;
+    shot.isCheckShot = true;
+    shot.hasKnownCoords = true;
+    shot.knownEasting = -1000.125;
+    shot.knownNorthing = 2000.25;
+    shot.computed = true;
+    shot.computedEasting = 9999.0;
+    shot.errorMsg = "old computation";
+    original.sideShots.push_back(shot);
+    shot.isCheckShot = false;
+    shot.hasKnownCoords = false;
+    shot.hasHorizAngle = false;
+    shot.hasHorizDist = false;
+    shot.hasSlopeDist = false;
+    shot.hasVertAngle = false;
+    shot.isZenithAngle = true;
+    shot.code = "detail";
+    shot.sourceOrder = 20;
+    original.sideShots.push_back(shot);
+    const auto path = (TraverseIoTestDir() / "side-shots.gstrav").string();
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(traverseio::Save(path, original, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    REQUIRE(loaded.sideShots.size() == 2);
+    for (size_t i = 0; i < 2; ++i) {
+        const auto& actual = loaded.sideShots[i];
+        CHECK(actual.atStationId == 7);
+        CHECK(actual.stationId == 101);
+        CHECK(actual.description == "Fence \"corner\"\ncheck");
+        CHECK(actual.code == (i == 0 ? "FC" : "detail"));
+        CHECK(actual.sourceOrder == (i == 0 ? 19 : 20));
+        CHECK(actual.horizAngleBuf == "45d30m10s");
+        CHECK(actual.horizAngleDeg == Approx(45.502777777));
+        CHECK(actual.horizDist == Approx(52.125));
+        CHECK(actual.slopeDist == Approx(53.25));
+        CHECK(actual.vertAngleBuf == "-2d15m");
+        CHECK(actual.vertAngleDeg == Approx(-2.25));
+        CHECK(actual.knownEasting == Approx(-1000.125));
+        CHECK(actual.knownNorthing == Approx(2000.25));
+        CHECK(actual.hasHorizAngle == (i == 0));
+        CHECK(actual.hasHorizDist == (i == 0));
+        CHECK(actual.hasSlopeDist == (i == 0));
+        CHECK(actual.hasVertAngle == (i == 0));
+        CHECK(actual.isCheckShot == (i == 0));
+        CHECK(actual.hasKnownCoords == (i == 0));
+        CHECK(actual.isZenithAngle == (i != 0));
+        CHECK_FALSE(actual.computed);
+        CHECK(actual.computedEasting == Approx(0.0));
+        CHECK(actual.errorMsg.empty());
+    }
+}
+
+TEST_CASE("TraverseIo preserves direction sets and repeated plate readings", "[io][REQ-452][1066]") {
+    TraverseData original;
+    original.networkDirections = {{12, 7, 101, 359.123456789, 1.25, "F1 \"plate\"", 23},
+                                  {12, 7, 101, -0.25, 0.0, "repeat", 24},
+                                  {13, 7, 102, 90.125, 2.5, "F2", 25},
+                                  {0, -1, 0, 0.0, -1.0, "", 0}};
+    const auto path = (TraverseIoTestDir() / "directions.gstrav").string();
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(traverseio::Save(path, original, weights, error));
+    TraverseData loaded;
+    REQUIRE(traverseio::Load(path, loaded, weights, error));
+    REQUIRE(loaded.networkDirections.size() == 4);
+    const std::vector<int> sets{12, 12, 13, 0}, targets{101, 101, 102, 0}, orders{23, 24, 25, 0};
+    const std::vector<double> readings{359.123456789, -0.25, 90.125, 0.0}, errors{1.25, 0.0, 2.5, -1.0};
+    const std::vector<std::string> codes{"F1 \"plate\"", "repeat", "F2", ""};
+    for (size_t i = 0; i < 4; ++i) {
+        const auto& actual = loaded.networkDirections[i];
+        CHECK(actual.setId == sets[i]);
+        CHECK(actual.atId == (i == 3 ? -1 : 7));
+        CHECK(actual.toId == targets[i]);
+        CHECK(actual.directionDeg == Approx(readings[i]));
+        CHECK(actual.stdErrorSec == Approx(errors[i]));
+        CHECK(actual.code == codes[i]);
+        CHECK(actual.sourceOrder == orders[i]);
+    }
+}
+
+TEST_CASE("TraverseIo rejects malformed optional observations without changing the session", "[io][REQ-452][1066]") {
+    using nlohmann::json;
+    const auto valid = json::parse(R"({"format":"gstrav","version":1,
+        "sideShots":[{"atStationId":1,"stationId":2,"description":"detail","code":"FC",
+        "sourceOrder":3,"horizAngleBuf":"45","horizAngleDeg":45,"hasHorizAngle":true,
+        "horizDist":100,"hasHorizDist":true,"slopeDist":101,"hasSlopeDist":false,
+        "vertAngleBuf":"90","vertAngleDeg":90,"isZenithAngle":true,"hasVertAngle":true,
+        "isCheckShot":false,"hasKnownCoords":false,"knownEasting":0,"knownNorthing":0}],
+        "networkDirections":[{"set":1,"at":1,"to":2,"deg":45,"std":1,"code":"D","sourceOrder":4}]})");
+    const auto path = (TraverseIoTestDir() / "bad-observations.gstrav").string();
+    const auto reject = [&](const json& document) {
+        { std::ofstream file(path); file << document.dump(); }
+        TraverseData data;
+        data.startStationId = 88;
+        data.sideShots.push_back({});
+        data.sideShots[0].stationId = 89;
+        data.networkDirections.push_back({90, 88, 89, 123.0, 2.0, "keep", 91});
+        LsaWeights weights;
+        weights.sigmaAngleSec = 7.5;
+        std::string error;
+        bool loaded = true;
+        REQUIRE_NOTHROW(loaded = traverseio::Load(path, data, weights, error));
+        REQUIRE_FALSE(loaded);
+        CHECK_FALSE(error.empty());
+        CHECK(data.startStationId == 88);
+        REQUIRE(data.sideShots.size() == 1);
+        CHECK(data.sideShots[0].stationId == 89);
+        REQUIRE(data.networkDirections.size() == 1);
+        CHECK(data.networkDirections[0].setId == 90);
+        CHECK(data.networkDirections[0].directionDeg == Approx(123.0));
+        CHECK(weights.sigmaAngleSec == Approx(7.5));
+    };
+    for (const auto* collection : {"sideShots", "networkDirections"}) {
+        for (const auto& malformed : {json(nullptr), json::object(), json(42), json::array({42})}) {
+            auto document = valid;
+            document[collection] = malformed;
+            reject(document);
+        }
+        for (const auto& field : valid.at(collection).at(0).items()) {
+            INFO(collection << ": " << field.key());
+            auto document = valid;
+            document[collection][0].erase(field.key());
+            reject(document);
+            document = valid;
+            document[collection][0][field.key()] = nullptr;
+            reject(document);
+            document[collection][0][field.key()] = json::array();
+            reject(document);
+            if (field.key() == "atStationId" || field.key() == "stationId" ||
+                field.key() == "sourceOrder" || field.key() == "set" ||
+                field.key() == "at" || field.key() == "to") {
+                document[collection][0][field.key()] = 1.5;
+                reject(document);
+                document[collection][0][field.key()] = 4294967296ULL;
+                reject(document);
+                document[collection][0][field.key()] = -2147483649LL;
+                reject(document);
+            }
+        }
+    }
+}
+
+TEST_CASE("TraverseIo rejects non-finite observation saves before overwriting a session", "[io][REQ-452][1066]") {
+    const auto path = (TraverseIoTestDir() / "invalid-observation-save.gstrav").string();
+    TraverseData original;
+    original.sideShots.push_back({});
+    original.sideShots[0].stationId = 101;
+    original.networkDirections.push_back({4, 1, 2, 45.0, 1.5, "keep", 3});
+    LsaWeights weights;
+    std::string error;
+    REQUIRE(traverseio::Save(path, original, weights, error));
+    const std::vector<double TraverseSideShot::*> shotFields{
+        &TraverseSideShot::horizAngleDeg, &TraverseSideShot::horizDist,
+        &TraverseSideShot::slopeDist, &TraverseSideShot::vertAngleDeg,
+        &TraverseSideShot::knownEasting, &TraverseSideShot::knownNorthing};
+    const std::vector<double NetworkDirectionObs::*> directionFields{
+        &NetworkDirectionObs::directionDeg, &NetworkDirectionObs::stdErrorSec};
+    for (const double invalid : {std::numeric_limits<double>::infinity(),
+                                 -std::numeric_limits<double>::infinity(),
+                                 std::numeric_limits<double>::quiet_NaN()}) {
+        const auto reject = [&](const TraverseData& data) {
+            bool saved = true;
+            REQUIRE_NOTHROW(saved = traverseio::Save(path, data, weights, error));
+            REQUIRE_FALSE(saved);
+            CHECK_FALSE(error.empty());
+            TraverseData loaded;
+            REQUIRE(traverseio::Load(path, loaded, weights, error));
+            REQUIRE(loaded.sideShots.size() == 1);
+            CHECK(loaded.sideShots[0].stationId == 101);
+            REQUIRE(loaded.networkDirections.size() == 1);
+            CHECK(loaded.networkDirections[0].directionDeg == Approx(45.0));
+            CHECK(loaded.networkDirections[0].stdErrorSec == Approx(1.5));
+        };
+        for (const auto field : shotFields) {
+            auto data = original;
+            data.sideShots[0].*field = invalid;
+            reject(data);
+        }
+        for (const auto field : directionFields) {
+            auto data = original;
+            data.networkDirections[0].*field = invalid;
+            reject(data);
+        }
+    }
+}
+
+TEST_CASE("TraverseIo loads legacy and empty optional observation collections", "[io][REQ-452][1066]") {
+    const auto path = (TraverseIoTestDir() / "legacy-observations.gstrav").string();
+    for (const auto* fields : {"", ",\"sideShots\":[],\"networkDirections\":[]"}) {
+        { std::ofstream file(path); file << "{\"format\":\"gstrav\",\"version\":1,"
+            "\"startStationId\":5,\"weights\":{\"sigmaAngleSec\":3.5}" << fields << "}"; }
+        TraverseData data;
+        data.sideShots.push_back({});
+        data.networkDirections.push_back({});
+        LsaWeights weights;
+        std::string error;
+        REQUIRE(traverseio::Load(path, data, weights, error));
+        CHECK(data.sideShots.empty());
+        CHECK(data.networkDirections.empty());
+        CHECK(data.startStationId == 5);
+        CHECK(weights.sigmaAngleSec == Approx(3.5));
+        REQUIRE(traverseio::Save(path, data, weights, error));
+        TraverseData reopened;
+        REQUIRE(traverseio::Load(path, reopened, weights, error));
+        CHECK(reopened.sideShots.empty());
+        CHECK(reopened.networkDirections.empty());
+    }
+}
 
 TEST_CASE("TraverseIo preserves distinct project raw sets and source provenance", "[io][metadata][REQ-452]") {
     const std::string path = (TraverseIoTestDir() / "raw-provenance.gstrav").string();

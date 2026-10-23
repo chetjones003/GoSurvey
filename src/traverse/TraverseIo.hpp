@@ -13,6 +13,9 @@
 // REQ-452 adds optional rawSources, project rawSets, and graphLayout (nodes/groups)
 // to version 1. Missing fields mean no project raw records or saved graph layout.
 // Source paths are provenance only: Save/Load never open or rewrite those files.
+// Optional sideShots and networkDirections arrays preserve observation inputs,
+// codes, IDs and source order. Omitted arrays load empty; malformed entries fail
+// without changing the session. Side-shot computed outputs are recomputed.
 // Graph nodes store command association text plus opaque IDs and visual/order
 // metadata; measurement values remain in TraverseData's measurement records.
 
