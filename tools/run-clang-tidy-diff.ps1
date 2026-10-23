@@ -31,8 +31,9 @@ foreach ($file in $changed) {
     }
   }
   if ($ranges.Count -eq 0) { continue }
-  $filters += @{ name = $file.Replace('/', '\'); lines = $ranges }
-  if ($file.Contains('/')) { $filters += @{ name = $file; lines = $ranges } }
+  # clang-tidy normalizes line-filter names to forward slashes. Keep one entry per file so a
+  # large release diff does not exceed Windows' command-line length limit.
+  $filters += @{ name = $file; lines = $ranges }
   $files += $file
 }
 $report = [ordered]@{ baseSha = $BaseSha; headSha = (git rev-parse HEAD); lineFilters = $filters;
