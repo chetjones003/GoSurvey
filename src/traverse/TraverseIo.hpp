@@ -9,6 +9,15 @@
 // deliberately NOT part of the format: they are pure functions of the fields that are saved, so the
 // caller reruns ComputeTraverse() after Load() and gets back exactly the closure that was showing
 // when the file was saved, with nothing stored twice.
+//
+// REQ-452 adds optional rawSources, project rawSets, and graphLayout (nodes/groups)
+// to version 1. Missing fields mean no project raw records or saved graph layout.
+// Source paths are provenance only: Save/Load never open or rewrite those files.
+// Optional sideShots and networkDirections arrays preserve observation inputs,
+// codes, IDs and source order. Omitted arrays load empty; malformed entries fail
+// without changing the session. Side-shot computed outputs are recomputed.
+// Graph nodes store command association text plus opaque IDs and visual/order
+// metadata; measurement values remain in TraverseData's measurement records.
 
 #include "TraverseCalc.hpp"
 #include "TraverseLeastSquares.hpp"

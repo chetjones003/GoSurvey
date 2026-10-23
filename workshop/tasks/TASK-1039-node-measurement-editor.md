@@ -1,7 +1,7 @@
 # TASK-1039 — Specify and verify the node-based measurement editor
 
 - Type: feature
-- Status: verified — implementation not started
+- Status: implementation in progress on `feat/node-measurement-editor-1059`
 - Opened: 2026-10-22
 - Owner: Codex
 
@@ -13,7 +13,7 @@
 - Owning subsystem: Qt UI, Commands, Traverse Domain, and traverse IO, each retaining the responsibility stated in `spec/architecture.md`.
 
 ## 2. Scope
-- In scope: verified implementation plan for the graph tab, synchronized command representation, raw-set/provenance model, ordering, and layout persistence.
+- In scope: implement REQ-452 across the command language, traverse domain, traverse IO, and Qt adjustment workspace. GitHub implementation tickets: #1061–#1064.
 - Out of scope: adding a graph-library dependency or changing original raw source files.
 - Smallest change: add RAWSET and metadata support to existing command/domain/IO owners, then project one shared model into the Qt graph and text editor.
 
@@ -40,6 +40,12 @@ None. All public format decisions are recorded in D-2026-10-22-j and REQ-452.
   - [x] Resolve public record and metadata association contracts with user.
   - [x] Re-run verification against the completed data contracts.
   - [x] Obtain user acceptance of REQ-452 and Verification APPROVE before opening Workshop implementation.
+  - [x] Create dependency graph: #1061 RAWSET/domain/order; #1062 `.gsdat`/`.gstrav` persistence after #1061; #1063 Qt graph editor after #1061 and #1062; #1064 Qt/IO acceptance after #1063.
+  - [x] Create integration branch from the open #1060 feature branch so this work remains stacked on its prerequisite.
+  - [ ] Implement #1061 with TDD; merge to integration branch.
+  - [ ] Implement #1062 and #1063 as their dependencies clear; merge each contribution to the integration branch.
+  - [ ] Complete #1064, build/test, capture UI states, and request visual review.
+  - [ ] Run standards/spec code review and resolve findings; update traceability and task log.
 
 ## 7. Verification result
 - Architectural impact: substantial but contained within existing layers; adds command grammar, projection/order logic, raw-source provenance representation, and layout persistence. No new dependency is needed or proposed.
@@ -48,7 +54,7 @@ None. All public format decisions are recorded in D-2026-10-22-j and REQ-452.
 - Domains: architecture ✓; code quality plan ✓; dependencies ✓ (none proposed); performance plan ✓ (large raw sets require a scale test before claiming performance); format compatibility ✓.
 - Findings: none blocking. The previous specification gaps are resolved by user decision D-2026-10-22-j and accepted REQ-452.
 - Required implementation evidence: satisfy the parser/domain/IO and Qt tests above; run the Release build and relevant CTest suites per CLAUDE.md; capture affected Qt surfaces and present them for user review before completion.
-- No implementation has started in this specification/verification task.
+- Verification was completed before implementation. Workshop implementation began 2026-10-22 on the integration branch; acceptance review and implementation results remain pending.
 
 ## 8. Outcome
 - Requirements satisfied: REQ-452 accepted; implementation has not started.

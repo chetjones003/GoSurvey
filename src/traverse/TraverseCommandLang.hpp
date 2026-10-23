@@ -123,14 +123,20 @@
 //   ZENITH <from> <to> <deg> [stderr-sec]
 //       Zenith angle. 90 is level. 0 is straight up.
 //
-// This format only round-trips what TraverseData already models: a leg's raw F1/F2
-// observation sets (src/traverse/FbkImport.cpp import detail) are not represented
-// here, since they have no manual-entry counterpart in the form panel either.
+//   RAWSET <at> <to> <set-number> [F1 <hz> <zenith> <slope>]
+//          [F2 <hz> <zenith> <slope>] SOURCE <source-id>
+//       Preserves one project raw set, with at least one face, without reducing
+//       it to solver observations. Station/set numbers are positive integers;
+//       readings are finite. Source IDs are opaque non-whitespace tokens.
+//       // @GSTC-SOURCE <source-id> <JSON-string-path> declares its source.
 
 #include "TraverseCalc.hpp"
 #include "TraverseLeastSquares.hpp"
 
+#include <cstddef>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace travcmd {
 
@@ -140,10 +146,64 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights);
 /// Parses GoSurvey traverse command-language text into \p td and \p weights.
 /// Returns false with a 1-based "line N: ..." message in \p errorMsg on the first
 /// malformed line; \p td and \p weights are left unchanged on failure.
+/// Graph comments populate project layout but never create solver observations.
 bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::string& errorMsg);
 
 /// Pads each command's fields so the same word lines up in columns. Comments,
 /// blank lines, and a DESC line's free text are left as written.
 std::string AlignColumns(const std::string& text);
+
+/// One command in the text/graph projection. IDs name records across reordering;
+/// sourceOrder breaks unrelated ties. Coordinates/groups never affect ordering.
+struct CommandNode {
+    std::string id;
+    std::string text;
+    std::vector<std::string> comments;
+    size_t sourceOrder = 0;
+    std::vector<std::string> stationIds;
+    bool setup = false;
+    double x = 0.0;
+    double y = 0.0;
+    std::string groupId;
+    std::optional<int> manualOrder;
+};
+
+struct StationAnchor {
+    std::string id;
+    bool resolved = false;
+};
+
+struct CommandDocument {
+    std::vector<TraverseGraphGroup> groups;
+    std::vector<TraverseRawSource> sources;
+    std::vector<CommandNode> commands;
+    std::vector<StationAnchor> stations;
+    std::vector<std::string> trailingComments;
+};
+
+enum class OrderDiagnosticKind { Ambiguous, Cyclic };
+struct OrderDiagnostic {
+    OrderDiagnosticKind kind = OrderDiagnosticKind::Ambiguous;
+    std::vector<std::string> commandIds;
+    bool overridden = false;
+};
+struct CommandOrder {
+    std::vector<std::string> commandIds;
+    std::vector<OrderDiagnostic> diagnostics;
+};
+
+/// Projects directive text and attached metadata without evaluating measurements.
+/// Use Parse to validate measurement values. Metadata errors are line-specific;
+/// failure leaves document unchanged. Missing node IDs get deterministic unique IDs.
+bool Project(const std::string& text, CommandDocument& document, std::string& errorMsg);
+
+/// Derives station/command dependencies, reports duplicate providers and cycles,
+/// and orders unrelated records by sourceOrder. Complete distinct manual ranks
+/// apply only inside diagnosed portions, preserving every external dependency.
+CommandOrder Order(const CommandDocument& document);
+
+/// Serializes ordered command blocks with their IDs, metadata and comments.
+/// Group/source declarations are emitted separately from attached node comments.
+std::string Serialize(const CommandDocument& document);
 
 }  // namespace travcmd

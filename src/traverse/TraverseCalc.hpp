@@ -2,7 +2,9 @@
 
 #include "TraverseLeastSquares.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,44 @@ struct TraverseMeasSet {
     double f2VaDec = 90.0;    ///< Face-2 zenith angle.
     double f2Sd = 0.0;        ///< Face-2 slope distance.
     bool hasF2 = false;
+};
+
+/// A project copy of a raw set. Source identity distinguishes repeated sets
+/// from different files; readings are never implicitly reduced or merged.
+struct TraverseRawSet {
+    int atStationId = 0;
+    int toStationId = 0;
+    TraverseMeasSet measurements;
+    std::string sourceId;
+    int sourceOrder = 0;
+};
+
+struct TraverseRawSource {
+    std::string id;
+    std::string path;
+};
+
+/// Persisted command association and layout. Command text and source order let
+/// the editor restore opaque IDs without using canvas coordinates as identity.
+struct TraverseGraphNode {
+    std::string id;
+    std::string command;  ///< Association text, never an alternative measurement value.
+    size_t sourceOrder = 0;  ///< Stable position in the command projection.
+    double x = 0.0;
+    double y = 0.0;
+    std::string groupId;
+    std::optional<int> manualOrder;
+};
+
+/// Visual frame in logical canvas units; never participates in survey calculations.
+struct TraverseGraphGroup {
+    std::string id;
+    double x = 0.0;
+    double y = 0.0;
+    double width = 0.0;
+    double height = 0.0;
+    bool collapsed = false;
+    std::string label;
 };
 
 /// One leg of a survey traverse.
@@ -318,6 +358,10 @@ struct NetworkDirectionObs {
 };
 
 struct TraverseData {
+    std::vector<TraverseGraphNode> graphNodes;
+    std::vector<TraverseGraphGroup> graphGroups;
+    std::vector<TraverseRawSet> rawSets;
+    std::vector<TraverseRawSource> rawSources;
     // --- Starting station ---
     int startStationId = 1;
     double startEasting = 0.0;

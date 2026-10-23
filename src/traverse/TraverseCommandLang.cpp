@@ -1,12 +1,19 @@
 #include "TraverseCommandLang.hpp"
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
+#include <cmath>
+#include <iomanip>
+#include <limits>
 #include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <sstream>
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace travcmd {
@@ -54,7 +61,7 @@ static void AppendCode(std::ostream& out, const std::string& code) {
 }
 
 static bool UsesSourceOrder(const TraverseData& td) {
-    if (!td.sourceComments.empty()) return true;
+    if (!td.sourceComments.empty() || !td.rawSets.empty()) return true;
     for (const TraverseLeg& leg : td.legs)
         if (leg.sourceOrder != 0) return true;
     for (const TraverseSideShot& shot : td.sideShots)
@@ -123,6 +130,7 @@ std::string AlignColumns(const std::string& text) {
                     size_t quote = raw.find('\'');
                     const size_t tick = raw.find('`');
                     if (tick != std::string::npos && (quote == std::string::npos || tick < quote)) quote = tick;
+                    if (row.keyword == "RAWSET") quote = std::string::npos;
                     const std::string head = quote == std::string::npos ? raw : raw.substr(0, quote);
                     const std::vector<std::string> headToks = quote == std::string::npos ? toks : Tokenize(head);
                     for (size_t i = 1; i < headToks.size(); ++i) row.fields.push_back(headToks[i]);
@@ -374,6 +382,17 @@ static void AppendOrderedBody(std::ostringstream& out, const TraverseData& td) {
         add(diff.sourceOrder, 8, line.str());
     }
 
+    for (const TraverseRawSet& raw : td.rawSets) {
+        std::ostringstream line;
+        line << std::setprecision(std::numeric_limits<double>::max_digits10);
+        line << "RAWSET " << raw.atStationId << " " << raw.toStationId << " " << raw.measurements.setNo;
+        const TraverseMeasSet& set = raw.measurements;
+        if (set.hasF1) line << " F1 " << set.f1HzDec << " " << set.f1VaDec << " " << set.f1Sd;
+        if (set.hasF2) line << " F2 " << set.f2HzDec << " " << set.f2VaDec << " " << set.f2Sd;
+        line << " SOURCE " << raw.sourceId << "\n";
+        add(raw.sourceOrder, 9, line.str());
+    }
+
     std::sort(pieces.begin(), pieces.end(), [](const Piece& a, const Piece& b) {
         if (a.order != b.order) return a.order < b.order;
         if (a.sub != b.sub) return a.sub < b.sub;
@@ -382,12 +401,16 @@ static void AppendOrderedBody(std::ostringstream& out, const TraverseData& td) {
     for (const Piece& piece : pieces) out << piece.text;
 }
 
+static std::string WithGraphMetadata(const std::string& text, const TraverseData& td);
+
 std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
     std::ostringstream out;
     out << "// GoSurvey Traverse Command (GSTC) \xe2\x80\x94 edit and re-apply.\n";
     for (const std::string& option : td.importerSkippedInlineOptions)
         out << "// Inline option from STAR*NET (not applied): " << option << "\n";
 
+    for (const TraverseRawSource& source : td.rawSources)
+        out << "// @GSTC-SOURCE " << source.id << " " << nlohmann::json(source.path).dump() << "\n";
     out << "STATION " << td.startStationId
         << " " << Fmt(td.startEasting)
         << " " << Fmt(td.startNorthing)
@@ -409,7 +432,7 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
 
     if (UsesSourceOrder(td)) {
         AppendOrderedBody(out, td);
-        return AlignColumns(out.str());
+        return WithGraphMetadata(AlignColumns(out.str()), td);
     }
 
     for (size_t i = 0; i < td.legs.size(); ++i) {
@@ -538,15 +561,17 @@ std::string Serialize(const TraverseData& td, const LsaWeights& weights) {
         AppendCode(out, dir.code);
         out << "\n";
     }
-    return AlignColumns(out.str());
+    return WithGraphMetadata(AlignColumns(out.str()), td);
 }
 
 bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::string& errorMsg) {
     TraverseData newTd;
+    bool hasGraphMetadata = false;
     newTd.hasStartBearing = false;
     LsaWeights newWeights;
     bool sawStation = false;
 
+    std::vector<int> rawSetLines;
     std::vector<TraverseLeg> newLegs;
     std::unordered_map<int, size_t> toIndex;  // TO station -> index in newLegs
     std::vector<TraverseSideShot> newSideShots;
@@ -587,6 +612,30 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             continue;
         }
         if (firstNonSpace + 1 < line.size() && line[firstNonSpace] == '/' && line[firstNonSpace + 1] == '/') {
+            const std::string metadata = line.substr(firstNonSpace + 2);
+            std::istringstream sourceLine(metadata);
+            std::string marker;
+            sourceLine >> marker;
+            if (marker == "@GSTC-NODE" || marker == "@GSTC-GROUP") {
+                hasGraphMetadata = true;
+                continue;
+            }
+            if (marker == "@GSTC-SOURCE") {
+                TraverseRawSource source;
+                sourceLine >> source.id;
+                std::string path;
+                std::getline(sourceLine, path);
+                const auto value = nlohmann::json::parse(path, nullptr, false);
+                if (source.id.empty() || !value.is_string() ||
+                    std::any_of(newTd.rawSources.begin(), newTd.rawSources.end(),
+                        [&](const TraverseRawSource& old) { return old.id == source.id; })) {
+                    errorMsg = "line " + std::to_string(lineNo) + ": invalid or duplicate source metadata";
+                    return false;
+                }
+                source.path = value.get<std::string>();
+                newTd.rawSources.push_back(std::move(source));
+                continue;
+            }
             const std::string note = "Inline option from STAR*NET (not applied):";
             std::string body = line.substr(firstNonSpace + 2);
             const size_t noteAt = body.find(note);
@@ -618,10 +667,12 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
 
         std::string lineCode;
         {
+            const auto fields = Tokenize(line);
+            const bool rawSet = !fields.empty() && ToUpper(fields[0]) == "RAWSET";
             size_t quote = line.find('\'');
             const size_t tick = line.find('`');
             if (tick != std::string::npos && (quote == std::string::npos || tick < quote)) quote = tick;
-            if (quote != std::string::npos) {
+            if (!rawSet && quote != std::string::npos) {
                 lineCode = line.substr(quote + 1);
                 const size_t codeStart = lineCode.find_first_not_of(" \t");
                 lineCode = codeStart == std::string::npos ? std::string() : lineCode.substr(codeStart);
@@ -639,7 +690,44 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
             return false;
         };
 
-        if (directive == "IMPORT") {
+        if (directive == "RAWSET") {
+            TraverseRawSet raw;
+            auto positiveId = [](const std::string& token, int& value) {
+                char* end = nullptr;
+                const long long parsed = std::strtoll(token.c_str(), &end, 10);
+                if (end == token.c_str() || *end != '\0' || parsed <= 0 ||
+                    parsed > std::numeric_limits<int>::max()) return false;
+                value = static_cast<int>(parsed);
+                return true;
+            };
+            if (toks.size() < 10 || !positiveId(toks[1], raw.atStationId) ||
+                !positiveId(toks[2], raw.toStationId) || !positiveId(toks[3], raw.measurements.setNo))
+                return fail("expected RAWSET <at> <to> <set-number> [F1 hz zenith slope] [F2 hz zenith slope] SOURCE <source-id>");
+            size_t i = 4;
+            auto face = [&](const char* name, bool& present, double& hz, double& zenith, double& slope) {
+                if (i >= toks.size() || ToUpper(toks[i]) != name) return true;
+                if (i + 3 >= toks.size()) return false;
+                double* values[] = {&hz, &zenith, &slope};
+                for (size_t j = 0; j < 3; ++j) {
+                    char* end = nullptr;
+                    const std::string& token = toks[i + j + 1];
+                    *values[j] = std::strtod(token.c_str(), &end);
+                    if (end == token.c_str() || *end != '\0' || !std::isfinite(*values[j])) return false;
+                }
+                present = true;
+                i += 4;
+                return true;
+            };
+            TraverseMeasSet& set = raw.measurements;
+            if (!face("F1", set.hasF1, set.f1HzDec, set.f1VaDec, set.f1Sd) ||
+                !face("F2", set.hasF2, set.f2HzDec, set.f2VaDec, set.f2Sd) ||
+                (!set.hasF1 && !set.hasF2) || i + 2 != toks.size() || ToUpper(toks[i]) != "SOURCE")
+                return fail("RAWSET requires complete finite F1/F2 tuples and SOURCE <source-id>");
+            raw.sourceId = toks[i + 1];
+            raw.sourceOrder = assignOrder();
+            newTd.rawSets.push_back(std::move(raw));
+            rawSetLines.push_back(lineNo);
+        } else if (directive == "IMPORT") {
             continue;  // `#IMPORT "path"` — an editor note marking where an import's data begins.
         } else if (directive == "STATION") {
             int id = 0;
@@ -1010,10 +1098,18 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
         }
     }
 
+    for (size_t i = 0; i < newTd.rawSets.size(); ++i) {
+        const auto& raw = newTd.rawSets[i];
+        if (std::none_of(newTd.rawSources.begin(), newTd.rawSources.end(),
+                [&](const TraverseRawSource& source) { return source.id == raw.sourceId; })) {
+            errorMsg = "line " + std::to_string(rawSetLines[i]) + ": unknown RAWSET source ID " + raw.sourceId;
+            return false;
+        }
+    }
     const bool hasNetwork = !newTd.networkAngles.empty() || !newTd.networkDists.empty() ||
                             !newTd.networkAzimuths.empty() || !newTd.networkElevDiffs.empty() ||
                             !newTd.networkZeniths.empty() || !newTd.networkDirections.empty();
-    if (!sawStation && !hasNetwork) {
+    if (!sawStation && !hasNetwork && newTd.rawSets.empty()) {
         errorMsg = "missing STATION directive";
         return false;
     }
@@ -1025,10 +1121,455 @@ bool Parse(const std::string& text, TraverseData& td, LsaWeights& weights, std::
     flushNotes(nextSourceOrder);
     newTd.legs = std::move(newLegs);
     newTd.sideShots = std::move(newSideShots);
+    if (hasGraphMetadata) {
+        CommandDocument document;
+        if (!Project(text, document, errorMsg)) return false;
+        newTd.graphGroups = document.groups;
+        for (const auto& node : document.commands)
+            newTd.graphNodes.push_back({node.id, node.text, node.sourceOrder,
+                node.x, node.y, node.groupId, node.manualOrder});
+    }
     td = std::move(newTd);
     weights = newWeights;
     errorMsg.clear();
     return true;
+}
+
+namespace {
+
+std::vector<size_t> StationFieldIndices(const std::string& key) {
+    if (key == "STATION" || key == "CTRL") return {1};
+    if (key == "ANGLE" || key == "HANG") return {1, 2, 3};
+    if (key == "DIR") return {2, 3};
+    if (key == "STN" || key == "HDIST" || key == "SDIST" || key == "VANG" ||
+        key == "DESC" || key == "PRISM" || key == "POLE" || key == "TSERR" ||
+        key == "DIST" || key == "AZIMUTH" || key == "EDIF" || key == "ZENITH" || key == "RAWSET") return {1, 2};
+    return {};
+}
+
+std::vector<std::string> CommandTokens(const CommandNode& node) {
+    auto tokens = Tokenize(node.text);
+    if (tokens.empty()) return tokens;
+    if (tokens[0][0] == '#') tokens[0].erase(0, 1);
+    if (tokens[0].empty()) tokens.erase(tokens.begin());
+    if (tokens.empty()) return tokens;
+    tokens[0] = ToUpper(tokens[0]);
+    for (size_t field : StationFieldIndices(tokens[0])) {
+        if (field >= tokens.size()) continue;
+        char* end = nullptr;
+        const long long value = std::strtoll(tokens[field].c_str(), &end, 10);
+        if (end != tokens[field].c_str() && *end == '\0' && value > 0 && value <= std::numeric_limits<int>::max())
+            tokens[field] = std::to_string(value);
+    }
+    return tokens;
+}
+
+std::vector<std::string> StationFields(const std::vector<std::string>& tokens) {
+    if (tokens.empty()) return {};
+    std::vector<std::string> stations;
+    for (size_t field : StationFieldIndices(tokens[0]))
+        if (field < tokens.size() && tokens[field] != "REF") stations.push_back(tokens[field]);
+    return stations;
+}
+
+bool SetupCommand(const std::string& key) {
+    return key == "STATION" || key == "BEARING" || key == "ENDPOINT" ||
+           key == "LOOP" || key == "SCALE" || key == "ERRORS" || key == "IMPORT";
+}
+
+}  // namespace
+
+bool Project(const std::string& text, CommandDocument& document, std::string& errorMsg) {
+    CommandDocument result;
+    std::istringstream input(text);
+    std::string line;
+    std::vector<std::string> comments;
+    std::unordered_set<std::string> reservedIds;
+    std::istringstream scan(text);
+    while (std::getline(scan, line)) {
+        const size_t first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line.compare(first, 2, "//") != 0) continue;
+        const auto fields = Tokenize(line.substr(first + 2));
+        if (fields.size() >= 2 && fields[0] == "@GSTC-NODE") reservedIds.insert(fields[1]);
+    }
+    std::unordered_set<std::string> usedIds;
+    std::optional<CommandNode> metadata;
+    int lineNo = 0;
+    auto fail = [&](const std::string& message) {
+        errorMsg = "line " + std::to_string(lineNo) + ": " + message;
+        return false;
+    };
+    while (std::getline(input, line)) {
+        ++lineNo;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const size_t first = line.find_first_not_of(" \t");
+        if (first != std::string::npos && line.compare(first, 2, "//") == 0) {
+            const auto fields = Tokenize(line.substr(first + 2));
+            if (!fields.empty() && fields[0] == "@GSTC-GROUP") {
+                if (metadata) return fail("node metadata must immediately precede a command");
+                TraverseGraphGroup group;
+                std::string marker, label;
+                int collapsed = 0;
+                std::istringstream values(line.substr(first + 2));
+                if (!(values >> marker >> group.id >> group.x >> group.y >> group.width >> group.height >> collapsed) ||
+                    !std::isfinite(group.x) || !std::isfinite(group.y) ||
+                    !std::isfinite(group.width) || !std::isfinite(group.height) ||
+                    group.width < 0 || group.height < 0 || (collapsed != 0 && collapsed != 1))
+                    return fail("invalid group metadata");
+                std::getline(values, label);
+                const auto value = nlohmann::json::parse(label, nullptr, false);
+                if (!value.is_string()) return fail("invalid group label");
+                if (std::any_of(result.groups.begin(), result.groups.end(),
+                    [&](const TraverseGraphGroup& old) { return old.id == group.id; }))
+                    return fail("duplicate group ID " + group.id);
+                group.collapsed = collapsed != 0;
+                group.label = value.get<std::string>();
+                result.groups.push_back(std::move(group));
+                continue;
+            }
+            if (!fields.empty() && fields[0] == "@GSTC-SOURCE") {
+                if (metadata) return fail("node metadata must immediately precede a command");
+                TraverseRawSource source;
+                std::string marker, path;
+                std::istringstream values(line.substr(first + 2));
+                values >> marker >> source.id;
+                std::getline(values, path);
+                const auto value = nlohmann::json::parse(path, nullptr, false);
+                if (source.id.empty() || !value.is_string() ||
+                    std::any_of(result.sources.begin(), result.sources.end(),
+                        [&](const TraverseRawSource& old) { return old.id == source.id; }))
+                    return fail("invalid or duplicate source metadata");
+                source.path = value.get<std::string>();
+                result.sources.push_back(std::move(source));
+                continue;
+            }
+            if (!fields.empty() && fields[0] == "@GSTC-NODE") {
+                if (metadata) return fail("node metadata must immediately precede a command");
+                CommandNode node;
+                std::string marker, group, rank, extra;
+                std::istringstream values(line.substr(first + 2));
+                if (!(values >> marker >> node.id >> node.x >> node.y >> group >> rank) ||
+                    (values >> extra) || !std::isfinite(node.x) || !std::isfinite(node.y))
+                    return fail("invalid node metadata");
+                if (!usedIds.insert(node.id).second) return fail("duplicate node ID " + node.id);
+                node.groupId = group == "-" ? "" : group;
+                if (rank != "-") {
+                    char* end = nullptr;
+                    const long long value = std::strtoll(rank.c_str(), &end, 10);
+                    if (end == rank.c_str() || *end != '\0' || value < std::numeric_limits<int>::min() ||
+                        value > std::numeric_limits<int>::max()) return fail("invalid manual order");
+                    node.manualOrder = static_cast<int>(value);
+                }
+                metadata = std::move(node);
+                continue;
+            }
+        }
+        if (first == std::string::npos || line.compare(first, 2, "//") == 0) {
+            if (metadata) return fail("node metadata must immediately precede a command");
+            comments.push_back(line);
+            continue;
+        }
+        CommandNode node;
+        if (metadata) {
+            node = std::move(*metadata);
+            metadata.reset();
+        } else {
+            size_t suffix = result.commands.size() + 1;
+            do { node.id = "command-" + std::to_string(suffix++); }
+            while (reservedIds.count(node.id) || usedIds.count(node.id));
+            usedIds.insert(node.id);
+        }
+        node.sourceOrder = result.commands.size();
+        node.text = line;
+        node.comments = std::move(comments);
+        comments.clear();
+        const auto tokens = CommandTokens(node);
+        if (tokens.empty()) {
+            comments = std::move(node.comments);
+            comments.push_back(line);
+            continue;
+        }
+        node.setup = SetupCommand(tokens[0]);
+        node.stationIds = StationFields(tokens);
+        result.commands.push_back(std::move(node));
+    }
+    if (metadata) return fail("node metadata has no command");
+    result.trailingComments = std::move(comments);
+    for (const CommandNode& node : result.commands) {
+        const auto tokens = CommandTokens(node);
+        for (const std::string& id : node.stationIds) {
+            auto found = std::find_if(result.stations.begin(), result.stations.end(),
+                [&](const StationAnchor& station) { return station.id == id; });
+            if (found == result.stations.end()) {
+                result.stations.push_back({id, false});
+                found = result.stations.end() - 1;
+            }
+            if ((tokens[0] == "STATION" || tokens[0] == "CTRL") ||
+                (tokens[0] == "STN" && tokens.size() > 2 && tokens[2] == id)) found->resolved = true;
+        }
+    }
+    document = std::move(result);
+    errorMsg.clear();
+    return true;
+}
+
+CommandOrder Order(const CommandDocument& document) {
+    const size_t count = document.commands.size();
+    std::vector<std::vector<size_t>> dependencies(count);
+    std::unordered_map<std::string, std::vector<size_t>> providers;
+    std::unordered_map<std::string, std::vector<size_t>> legs;
+    std::vector<std::vector<std::string>> tokens;
+    tokens.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        tokens.push_back(CommandTokens(document.commands[i]));
+        const auto& t = tokens.back();
+        if (t.size() > 1 && (t[0] == "STATION" || t[0] == "CTRL")) providers[t[1]].push_back(i);
+        if (t.size() > 2 && t[0] == "STN") {
+            providers[t[2]].push_back(i);
+            legs[t[1] + " " + t[2]].push_back(i);
+        }
+    }
+    // A closing leg references an existing control; it does not redefine it.
+    for (auto& entry : providers) {
+        auto& candidates = entry.second;
+        const bool known = std::any_of(candidates.begin(), candidates.end(), [&](size_t i) {
+            return tokens[i][0] == "STATION" || tokens[i][0] == "CTRL";
+        });
+        if (known) candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+            [&](size_t i) { return tokens[i][0] == "STN"; }), candidates.end());
+    }
+    for (size_t i = 0; i < count; ++i) {
+        const auto& t = tokens[i];
+        if (t.empty()) continue;
+        auto depend = [&](size_t before) {
+            if (std::find(dependencies[i].begin(), dependencies[i].end(), before) == dependencies[i].end())
+                dependencies[i].push_back(before);
+        };
+        if (!SetupCommand(t[0])) {
+            for (size_t j = 0; j < count; ++j)
+                if (!tokens[j].empty() && SetupCommand(tokens[j][0])) depend(j);
+        }
+        std::vector<std::string> references = StationFields(t);
+        if (t[0] == "STATION" || t[0] == "CTRL") references.clear();
+        if (t[0] == "STN" && t.size() > 2) references = {t[1]};
+        const bool legValue = t[0] == "HANG" || t[0] == "HDIST" || t[0] == "SDIST" || t[0] == "VANG" ||
+                              t[0] == "DESC" || t[0] == "PRISM" || t[0] == "POLE" || t[0] == "TSERR";
+        if (legValue && t.size() > (t[0] == "HANG" ? 3u : 2u)) {
+            const size_t at = t[0] == "HANG" ? 2 : 1;
+            for (size_t provider : legs[t[at] + " " + t[at + 1]]) depend(provider);
+        } else {
+            for (const std::string& station : references)
+                for (size_t provider : providers[station]) depend(provider);
+        }
+    }
+    CommandOrder result;
+    auto sourceLess = [&](size_t a, size_t b) {
+        if (document.commands[a].sourceOrder != document.commands[b].sourceOrder)
+            return document.commands[a].sourceOrder < document.commands[b].sourceOrder;
+        return a < b;
+    };
+    auto manualComplete = [&](const std::vector<size_t>& members) {
+        std::unordered_set<int> ranks;
+        for (size_t member : members) {
+            const auto rank = document.commands[member].manualOrder;
+            if (!rank || !ranks.insert(*rank).second) return false;
+        }
+        return true;
+    };
+    std::vector<std::vector<size_t>> ambiguous;
+    for (const auto& entry : providers) {
+        if (entry.second.size() > 1) {
+            auto members = entry.second;
+            std::sort(members.begin(), members.end(), sourceLess);
+            ambiguous.push_back(std::move(members));
+        }
+    }
+    std::sort(ambiguous.begin(), ambiguous.end(), [&](const auto& a, const auto& b) { return sourceLess(a[0], b[0]); });
+    for (auto members : ambiguous) {
+        OrderDiagnostic diagnostic;
+        diagnostic.kind = OrderDiagnosticKind::Ambiguous;
+        for (size_t member : members) diagnostic.commandIds.push_back(document.commands[member].id);
+        diagnostic.overridden = manualComplete(members);
+        if (diagnostic.overridden) {
+            std::sort(members.begin(), members.end(), [&](size_t a, size_t b) {
+                return *document.commands[a].manualOrder < *document.commands[b].manualOrder;
+            });
+            // An ambiguity override may not reverse an existing dependency.
+            for (size_t i = 1; i < members.size(); ++i) {
+                std::vector<size_t> stack{members[i - 1]};
+                std::vector<bool> seen(count, false);
+                while (!stack.empty()) {
+                    const size_t node = stack.back();
+                    stack.pop_back();
+                    if (node == members[i]) { diagnostic.overridden = false; break; }
+                    if (seen[node]) continue;
+                    seen[node] = true;
+                    for (size_t dependency : dependencies[node]) stack.push_back(dependency);
+                }
+                if (!diagnostic.overridden) break;
+            }
+            if (diagnostic.overridden)
+                for (size_t i = 1; i < members.size(); ++i) dependencies[members[i]].push_back(members[i - 1]);
+        }
+        result.diagnostics.push_back(std::move(diagnostic));
+    }
+    // Strongly connected components keep cycle warnings and overrides local.
+    // Iterative DFS avoids consuming the call stack on long survey chains.
+    std::vector<std::vector<size_t>> dependents(count);
+    for (size_t i = 0; i < count; ++i)
+        for (size_t dependency : dependencies[i]) dependents[dependency].push_back(i);
+    std::vector<bool> visited(count, false);
+    std::vector<size_t> finished;
+    for (size_t root = 0; root < count; ++root) {
+        if (visited[root]) continue;
+        std::vector<std::pair<size_t, size_t>> stack{{root, 0}};
+        visited[root] = true;
+        while (!stack.empty()) {
+            auto& frame = stack.back();
+            if (frame.second == dependencies[frame.first].size()) {
+                finished.push_back(frame.first);
+                stack.pop_back();
+                continue;
+            }
+            const size_t next = dependencies[frame.first][frame.second++];
+            if (!visited[next]) {
+                visited[next] = true;
+                stack.push_back({next, 0});
+            }
+        }
+    }
+    std::vector<size_t> component(count, count);
+    std::vector<std::vector<size_t>> portions;
+    for (auto it = finished.rbegin(); it != finished.rend(); ++it) {
+        if (component[*it] != count) continue;
+        const size_t id = portions.size();
+        portions.push_back({});
+        std::vector<size_t> stack{*it};
+        component[*it] = id;
+        while (!stack.empty()) {
+            const size_t node = stack.back();
+            stack.pop_back();
+            portions.back().push_back(node);
+            for (size_t next : dependents[node]) {
+                if (component[next] != count) continue;
+                component[next] = id;
+                stack.push_back(next);
+            }
+        }
+        auto& members = portions.back();
+        std::sort(members.begin(), members.end(), sourceLess);
+        const bool selfCycle = members.size() == 1 &&
+            std::find(dependencies[members[0]].begin(), dependencies[members[0]].end(), members[0]) != dependencies[members[0]].end();
+        if (members.size() > 1 || selfCycle) {
+            OrderDiagnostic diagnostic;
+            diagnostic.kind = OrderDiagnosticKind::Cyclic;
+            for (size_t member : members) diagnostic.commandIds.push_back(document.commands[member].id);
+            diagnostic.overridden = manualComplete(members);
+            result.diagnostics.push_back(std::move(diagnostic));
+        }
+    }
+    std::vector<bool> emitted(portions.size(), false);
+    while (result.commandIds.size() < count) {
+        size_t next = portions.size();
+        for (size_t i = 0; i < portions.size(); ++i) {
+            if (emitted[i]) continue;
+            bool ready = true;
+            for (size_t member : portions[i])
+                for (size_t dependency : dependencies[member])
+                    if (component[dependency] != i && !emitted[component[dependency]]) ready = false;
+            if (ready && (next == portions.size() || sourceLess(portions[i][0], portions[next][0]))) next = i;
+        }
+        if (next == portions.size()) break; // The component graph is acyclic by construction.
+        emitted[next] = true;
+        auto members = portions[next];
+        if (members.size() > 1 && manualComplete(members))
+            std::sort(members.begin(), members.end(), [&](size_t a, size_t b) {
+                return *document.commands[a].manualOrder < *document.commands[b].manualOrder;
+            });
+        for (size_t member : members) result.commandIds.push_back(document.commands[member].id);
+    }
+    return result;
+}
+
+std::string Serialize(const CommandDocument& document) {
+    const CommandOrder order = Order(document);
+    std::ostringstream out;
+    out << std::setprecision(std::numeric_limits<double>::max_digits10);
+    for (const auto& source : document.sources)
+        out << "// @GSTC-SOURCE " << source.id << " " << nlohmann::json(source.path).dump() << "\n";
+    for (const auto& group : document.groups)
+        out << "// @GSTC-GROUP " << group.id << " " << group.x << " " << group.y << " "
+            << group.width << " " << group.height << " " << (group.collapsed ? 1 : 0) << " "
+            << nlohmann::json(group.label).dump() << "\n";
+    for (const std::string& id : order.commandIds) {
+        const auto found = std::find_if(document.commands.begin(), document.commands.end(),
+            [&](const CommandNode& node) { return node.id == id; });
+        if (found == document.commands.end()) continue;
+        for (const std::string& comment : found->comments) out << comment << "\n";
+        out << std::setprecision(std::numeric_limits<double>::max_digits10);
+        out << "// @GSTC-NODE " << found->id << " " << found->x << " " << found->y << " "
+            << (found->groupId.empty() ? "-" : found->groupId) << " "
+            << (found->manualOrder ? std::to_string(*found->manualOrder) : "-") << "\n";
+        out << found->text << "\n";
+    }
+    for (const std::string& comment : document.trailingComments) out << comment << "\n";
+    return out.str();
+}
+
+// Match by directive and survey relationship, not measurement values or position.
+// Occurrence order distinguishes repeated observations of the same relationship.
+static std::vector<std::string> GraphCommandKey(const std::string& text) {
+    CommandNode node;
+    node.text = text;
+    const auto tokens = CommandTokens(node);
+    if (tokens.empty()) return {};
+    std::vector<std::string> key{tokens[0]};
+    // The first HANG backsight is informational and serializes as REF.
+    const auto stations = tokens[0] == "HANG" && tokens.size() >= 4
+        ? std::vector<std::string>{tokens[2], tokens[3]} : StationFields(tokens);
+    key.insert(key.end(), stations.begin(), stations.end());
+    if (tokens[0] == "RAWSET" && tokens.size() >= 6) {
+        key.push_back(std::to_string(std::strtoll(tokens[3].c_str(), nullptr, 10)));
+        key.push_back(tokens.back());
+    } else if (tokens[0] == "DIR" && tokens.size() >= 2) {
+        key.push_back(std::to_string(std::strtoll(tokens[1].c_str(), nullptr, 10)));
+    } else if (tokens[0] == "STN" && tokens.size() >= 4) {
+        key.push_back(tokens[3]);
+    }
+    return key;
+}
+
+static std::string WithGraphMetadata(const std::string& text, const TraverseData& td) {
+    if (td.graphNodes.empty() && td.graphGroups.empty()) return text;
+    CommandDocument document;
+    std::string error;
+    if (!Project(text, document, error)) throw std::invalid_argument("Invalid generated graph metadata: " + error);
+    document.groups = td.graphGroups;
+    std::vector<bool> used(td.graphNodes.size(), false);
+    std::unordered_set<std::string> reservedIds;
+    for (const auto& node : td.graphNodes) reservedIds.insert(node.id);
+    for (auto& node : document.commands) {
+        const auto key = GraphCommandKey(node.text);
+        bool matched = false;
+        for (size_t i = 0; i < td.graphNodes.size(); ++i) {
+            const auto& saved = td.graphNodes[i];
+            if (used[i] || GraphCommandKey(saved.command) != key) continue;
+            node.id = saved.id;
+            node.x = saved.x;
+            node.y = saved.y;
+            node.groupId = saved.groupId;
+            node.manualOrder = saved.manualOrder;
+            used[i] = true;
+            matched = true;
+            break;
+        }
+        if (!matched) {
+            size_t suffix = 1;
+            while (reservedIds.count(node.id)) node.id = "command-" + std::to_string(suffix++);
+            reservedIds.insert(node.id);
+        }
+    }
+    return Serialize(document);
 }
 
 }  // namespace travcmd
