@@ -18,6 +18,16 @@ handling choose Inno Setup's documented default response (Abort for an Abort/Ret
 command does not force-close GoSurvey or restart Windows. The installer does not launch GoSurvey
 after a silent install.
 
+For Partner Center's required **Installer handling** documentation URL, use the direct raw file URL
+after the exit-code documentation has merged to `beta`:
+
+```text
+https://raw.githubusercontent.com/chetjones003/GoSurvey/beta/docs/installer-exit-codes.md
+```
+
+The page documents Inno Setup's actual process exit codes and explains which Partner Center
+scenarios do not have a distinct GoSurvey installer code.
+
 The bundled VC++ runtime is run with `/install /quiet /norestart`. The packaging script fails if
 that redistributable is missing, so it cannot accidentally create a package that expects to fetch
 it later.
