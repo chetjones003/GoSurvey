@@ -45,6 +45,3 @@
 - Implementation, verification and visual approval are recorded above. The user authorized admin merge after CI passes and issue #897 closure.
 
 - 2026-10-18 — implementation started: add the Option C space strip, layout manager, Page Setup Manager/editor and typed VPSCALE dialog; preserve existing command handlers and page setup data model.
-
-
-

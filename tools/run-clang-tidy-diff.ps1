@@ -48,10 +48,32 @@ $config = (Resolve-Path -LiteralPath .clang-tidy).Path
 $results = @($files | ForEach-Object -Parallel {
   $file = $_
   $clock = [Diagnostics.Stopwatch]::StartNew()
-  $output = @(& $using:tool --enable-check-profile "--store-check-profile=$using:outputDir" `
-    "--config-file=$using:config" --warnings-as-errors=* "-line-filter=$using:lineFilter" `
-    -p $using:buildDir (Join-Path $using:repoRoot $file) 2>&1)
-  $code = $LASTEXITCODE
+  $startInfo = [Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $using:tool
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in @(
+    '--enable-check-profile'
+    "--store-check-profile=$using:outputDir"
+    "--config-file=$using:config"
+    '--warnings-as-errors=*'
+    "-line-filter=$using:lineFilter"
+    '-p'
+    $using:buildDir
+    (Join-Path $using:repoRoot $file)
+  )) { [void]$startInfo.ArgumentList.Add($argument) }
+  $process = [Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) { throw "Could not start clang-tidy for $file" }
+  $stdout = $process.StandardOutput.ReadToEndAsync()
+  $stderr = $process.StandardError.ReadToEndAsync()
+  $process.WaitForExit()
+  $code = $process.ExitCode
+  $output = @($stdout.GetAwaiter().GetResult() -split "`r?`n") +
+    @($stderr.GetAwaiter().GetResult() -split "`r?`n")
+  $process.Dispose()
   [pscustomobject]@{ file = $file; exitCode = $code; seconds = $clock.Elapsed.TotalSeconds; output = $output }
 } -ThrottleLimit $Jobs)
 $failed = $false
