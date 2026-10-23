@@ -7,9 +7,9 @@
 
 ## 1. Authority
 - Goal:         No numbered GOAL is defined in `spec/project.md`; project direction is Qt parity and usability (REQ-427 family).
-- Requirements: REQ-452 (new, accepted by D-2026-10-22-c, directed by the issue), REQ-387 clause 2 (amended), REQ-388, REQ-429, REQ-430, REQ-433 (unchanged semantics)
+- Requirements: REQ-455 (new, accepted by D-2026-10-23-e, directed by the issue), REQ-387 clause 2 (amended), REQ-388, REQ-429, REQ-430, REQ-433 (unchanged semantics)
 - Constraints:  REQ-387 clauses 4-5 (off-UI-thread rendering, bounded cache), REQ-201 (honest failure), REQ-300 (no new dependency)
-- Acceptance:  REQ-452 acceptance 1-10 (command tabs, continuous layout and page sync, wheel and Ctrl+wheel zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, bounded cache, screenshots, old tests still pass)
+- Acceptance:  REQ-455 acceptance 1-10 (command tabs, continuous layout and page sync, wheel and Ctrl+wheel zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, bounded cache, screenshots, old tests still pass)
 - Owning subsystem: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`); the shared `src/pdf/PdfDocument` is unchanged.
 
 ## 2. Scope
@@ -24,7 +24,7 @@
 ## 4. Questions
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
-| 1 | Default layout: page-by-page or continuous? | 2026-10-22 | Not specified by the issue; kept page-by-page (existing behaviour, existing tests) - recorded in D-2026-10-22-c. |
+| 1 | Default layout: page-by-page or continuous? | 2026-10-22 | Not specified by the issue; kept page-by-page (existing behaviour, existing tests) - recorded in D-2026-10-23-e. |
 
 ## 5. Assumptions
 - 100% zoom means 96 dpi (page width in points x 96/72 pixels); the old zoom number was only a multiple of fit-width.

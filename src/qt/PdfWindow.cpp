@@ -332,7 +332,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setWindowTitle("GoSurvey | PDF viewer");
   setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWindowStyle), true));
   resize(1000, 800);
-  // REQ-452: the commands live in a menu bar, one row of icon tools and a side panel (Bluebeam-style). First every
+  // REQ-455: the commands live in a menu bar, one row of icon tools and a side panel (Bluebeam-style). First every
   // control is made here; they are placed once the side panel exists (it contributes a toggle action).
   const auto makeAction = [this](const char* name, const QString& text, const char* icon, const QString& tip, const auto& run) {
     auto* made = new QAction(CadCommandIcon(icon), text, this);
@@ -541,7 +541,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   connect(m_ThumbView->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& current) {
     if (current.isValid() && current.row() + 1 != m_PageNumber->value()) m_PageNumber->setValue(current.row() + 1);
   });
-  // REQ-452: the side panel. A column of labelled buttons (Thumbnails, Tool Chest, Properties) chooses what the
+  // REQ-455: the side panel. A column of labelled buttons (Thumbnails, Tool Chest, Properties) chooses what the
   // panel beside it shows; the buttons say what they are, not just an icon.
   const auto heading = [](const QString& text, QWidget* parent) {
     auto* label = new QLabel(text, parent); label->setObjectName("pdfPanelHeading"); return label;
@@ -619,7 +619,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   thumbnailsAction->setText("Side panel");
   thumbnailsAction->setToolTip("Show or hide the side panel (thumbnails, tool chest, properties)");
 
-  // REQ-452: the ribbon. Tabs of panels, as in the main window; a panel that does not fit collapses into a menu.
+  // REQ-455: the ribbon. Tabs of panels, as in the main window; a panel that does not fit collapses into a menu.
   m_CommandTabs = new QTabWidget(this);
   m_CommandTabs->setObjectName("pdfRibbon");
   m_CommandTabs->setUsesScrollButtons(false);
@@ -685,7 +685,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   ribbonLayout->addWidget(m_CommandTabs);
   ribbonBar->addWidget(ribbonWrapper);
 
-  // REQ-452: page navigation and zoom live on the bottom bar only.
+  // REQ-455: page navigation and zoom live on the bottom bar only.
   const auto statusButton = [this](QAction* action) {
     auto* button = new QToolButton(this); button->setObjectName("pdfStatus_" + action->objectName());
     button->setDefaultAction(action); button->setAutoRaise(true); button->setToolButtonStyle(Qt::ToolButtonIconOnly);
@@ -1579,7 +1579,7 @@ void PdfWindow::closeEvent(QCloseEvent* event) {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// REQ-387 clause 2 / REQ-452: layout, zoom, pan and the continuous strip
+// REQ-387 clause 2 / REQ-455: layout, zoom, pan and the continuous strip
 // ---------------------------------------------------------------------------------------------------
 
 int PdfWindow::CurrentPage() const { return m_PageNumber->value() - 1; }

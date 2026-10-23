@@ -11751,8 +11751,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
      `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
   2. **View.** Page-by-page and continuous-scroll layouts; zoom (Ctrl+wheel around the pointer, fit-width,
-     fit-page, typed %; the plain wheel scrolls the document, REQ-452); pan (scroll bars and middle-button
-     drag, REQ-452); Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+     fit-page, typed %; the plain wheel scrolls the document, REQ-455); pan (scroll bars and middle-button
+     drag, REQ-455); Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
      (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
      reason in the window (REQ-201) and never crashes or hangs the app.
   3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
@@ -11801,8 +11801,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
   "separate operating-system window" exclusion removed (D-2026-10-06-b). 2026-10-22 — clause 2 amended
-  (D-2026-10-22-c, GitHub issue #1037): the wheel scrolls and Ctrl+wheel zooms around the pointer; the
-  middle button pans. The Qt viewer's command surface and navigation details are REQ-452.
+  (D-2026-10-23-e, GitHub issue #1037): the wheel scrolls and Ctrl+wheel zooms around the pointer; the
+  middle button pans. The Qt viewer's command surface and navigation details are REQ-455.
 
 ### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
 
@@ -13717,7 +13717,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22)
 - Revisions: 2026-10-22 — catalogued and accepted (D-2026-10-22-a, GitHub issue #1036).
 
-### REQ-452 — Qt PDF window: command tabs and continuous zoom/pan navigation (GitHub issue #1037)
+### REQ-455 — Qt PDF window: command tabs and continuous zoom/pan navigation (GitHub issue #1037)
 
 - Purpose: the Qt PDF window had grown five stacked toolbar rows, showed one page at a time, and zoomed only
   through buttons. A drafter reading a plan set wants the commands grouped by task and the document to move the
@@ -13725,7 +13725,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   drags the sheet, even while a measuring tool is selected.
 - Priority: must
 - Type: functional (UI)
-- Decision: D-2026-10-22-c. This amends REQ-387 clause 2 for the Qt viewer and adds the command-surface
+- Decision: D-2026-10-23-e. This amends REQ-387 clause 2 for the Qt viewer and adds the command-surface
   layout; REQ-388 (annotations), REQ-390/391/394 (scale), REQ-395 (dimension audit), REQ-392/393 (comparison),
   REQ-429 (thumbnails, search), REQ-430 and REQ-433 keep their behaviour: controls move, semantics do not.
 - Depends on: REQ-387 (bounded cache, off-thread rendering), REQ-388, REQ-429, REQ-430, REQ-433, REQ-436 (Qt accent), REQ-201.
@@ -14716,7 +14716,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
-| REQ-452 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, cache bound + screenshots | accepted |
+| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, cache bound + screenshots | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |

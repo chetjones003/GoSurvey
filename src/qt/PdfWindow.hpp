@@ -76,7 +76,7 @@ public:
     int calUnit = 1;
   };
   void SetEditor(EditorWindow* editor) { m_Editor = editor; }
-  /// REQ-387 clause 2 / REQ-452: page-by-page (default) or continuous vertical scrolling through every page.
+  /// REQ-387 clause 2 / REQ-455: page-by-page (default) or continuous vertical scrolling through every page.
   enum class Layout { PageByPage, Continuous };
   void SetLayout(Layout layout);
   Layout CurrentLayout() const { return m_Layout; }
@@ -99,7 +99,7 @@ private:
   struct SaveResult { bool succeeded = false; std::string error; };
   void RequestRender(bool keepPicture = false);
   void PollRender();
-  // REQ-387 / REQ-452: layout, zoom and the continuous strip. Page rectangles are in canvas coordinates.
+  // REQ-387 / REQ-455: layout, zoom and the continuous strip. Page rectangles are in canvas coordinates.
   struct StripResult { int page = -1, w = 0, h = 0, x = 0, y = 0; bool ok = false; pdfview::Bitmap bitmap; };
   static bool Windowed(QSize full);                 ///< too big to render whole: only the window around the view is drawn
   QRect NeededRegion(int page) const;               ///< the part of page \p page (in its pixels) the view needs drawn

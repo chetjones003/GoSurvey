@@ -7890,7 +7890,7 @@ private Q_SLOTS:
 #endif
   }
 
-  // ---- Issue #1037 / REQ-452: PDF command tabs and continuous zoom/pan navigation ----
+  // ---- Issue #1037 / REQ-455: PDF command tabs and continuous zoom/pan navigation ----
   void issue1037RibbonSidePanelAndStatusBarNavigation() {
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "layout.pdf", pdfview::MakeSyntheticPdf(6, 3, 0));

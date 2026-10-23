@@ -1,5 +1,5 @@
 #pragma once
-// The PDF window's ribbon (REQ-452): the same look and behaviour as the main window's ribbon (EditorRibbon.cpp):
+// The PDF window's ribbon (REQ-455): the same look and behaviour as the main window's ribbon (EditorRibbon.cpp):
 // tabs of panels with captions, large and small buttons, and whole panels that collapse into menus holding the very
 // same actions (live selectors included) and then into a "More" menu, so narrowing the window never loses a command.
 // This is a deliberate copy kept next to the PDF window (decision of the user, issue #1037): the main ribbon is

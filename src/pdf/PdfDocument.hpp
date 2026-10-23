@@ -80,7 +80,7 @@ public:
   bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags = kDisplayFlags,
                   int budgetMs = 0, int sliceMs = 0, const std::function<void()>& between = {});
 
-  /// REQ-452: render only the w x h window at (x, y) of the page drawn fullW x fullH pixels, so a page can be
+  /// REQ-455: render only the w x h window at (x, y) of the page drawn fullW x fullH pixels, so a page can be
   /// shown at any zoom without a bitmap the size of the whole page. Same cancel and failure rules as RenderPage.
   bool RenderRegion(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
                     const std::function<bool()>& cancel, int flags = kDisplayFlags);
