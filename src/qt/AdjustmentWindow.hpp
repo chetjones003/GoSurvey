@@ -23,6 +23,7 @@ class QSpinBox;
 class QEvent;
 class QTabWidget;
 class AdjustmentPlanView;
+class AdjustmentGraph;
 
 class AdjustmentWindow final : public QMainWindow {
 public:
@@ -74,6 +75,7 @@ private:
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   AdjustmentCodeEdit* m_Editor;
+  AdjustmentGraph* m_Graph;
   AdjustmentPlanView* m_Plan;
   QLabel* m_Files;
   QLabel* m_Summary;
@@ -115,5 +117,6 @@ private:
   QLabel* m_ScaleReadout = nullptr;
   QLabel* m_ResidualNote = nullptr;
   bool m_SyncingOptions = false;
+  bool m_GraphLayoutEdit = false;
   QString m_ScaleNote;
 };

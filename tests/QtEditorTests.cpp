@@ -106,6 +106,9 @@
 #include <QFrame>
 #include <QSettings>
 #include <QTreeWidget>
+#include <QGraphicsView>
+#include <QGraphicsScene>
+#include <QGraphicsItem>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QStackedWidget>
@@ -3397,6 +3400,359 @@ private Q_SLOTS:
     QVERIFY(!window.SaveFile(directory.filePath("bad-save.gstrav"), error));
     QVERIFY(!QFile::exists(directory.filePath("bad-save.gstrav")));
     QVERIFY(!window.AcceptResult(error));
+  }
+
+  void issue1063GraphProjectsTextAndRetainsStaleGraph() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* tabs = window.findChild<QTabWidget*>("adjustmentDocumentTabs");
+    QVERIFY(tabs);
+    QCOMPARE(tabs->tabText(0), QString("Editor"));
+    QCOMPARE(tabs->tabText(1), QString("Graph"));
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    auto* outline = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    auto* status = window.findChild<QLabel*>("adjustmentGraphStatus");
+    QVERIFY(outline);
+    QVERIFY(status);
+    editor->setPlainText("CTRL 1 0 0\nDIST 1 2 12.5\n#ERRORS 3 0.01 2\n");
+    window.ValidateNow();
+    QVERIFY(!outline->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    QVERIFY(!outline->findItems("Setup", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    QVERIFY(!outline->findItems("Station 2 (unresolved)", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    editor->setPlainText("DIST broken");
+    window.ValidateNow();
+    QVERIFY(status->text().contains("stale", Qt::CaseInsensitive));
+    QVERIFY(status->text().contains("line 1"));
+    QVERIFY(!outline->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    QCOMPARE(editor->toPlainText(), QString("DIST broken"));
+    editor->setPlainText("CTRL 1 0 0\nDIST 1 3 15\n");
+    window.ValidateNow();
+    QVERIFY(!status->text().contains("stale", Qt::CaseInsensitive));
+    QVERIFY(!outline->findItems("DIST 1 3 15", Qt::MatchExactly | Qt::MatchRecursive).empty());
+  }
+
+  void issue1063GraphPropertiesCreateDeleteAndValidate() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    editor->setPlainText("CTRL 1 0 0\nDIST 1 2 12.5\n");
+    window.ValidateNow();
+    auto* outline = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    auto* properties = window.findChild<QLineEdit*>("graphCommandText");
+    auto* apply = window.findChild<QPushButton*>("graphApplyProperties");
+    auto* add = window.findChild<QPushButton*>("graphAddCommand");
+    auto* remove = window.findChild<QPushButton*>("graphDeleteCommand");
+    auto* draft = window.findChild<QLineEdit*>("graphNewCommand");
+    QVERIFY(properties && apply && add && remove && draft);
+    outline->setCurrentItem(outline->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive).front());
+    QCOMPARE(properties->text(), QString("DIST 1 2 12.5"));
+    auto* values = window.findChild<QTableWidget*>("graphPropertyValues");
+    QVERIFY(values);
+    QCOMPARE(values->item(0, 0)->text(), QString("From station"));
+    values->item(1, 1)->setText("3");
+    values->item(2, 1)->setText("20.25");
+    apply->click();
+    QVERIFY(editor->toPlainText().contains("DIST 1 3 20.25"));
+    window.ValidateNow();
+    QVERIFY(!outline->findItems("Station 3 (unresolved)", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    const QString valid = editor->toPlainText();
+    properties->setText("DIST invalid");
+    apply->click();
+    QCOMPARE(editor->toPlainText(), valid);
+    QVERIFY(!window.findChild<QLabel*>("graphEditError")->text().isEmpty());
+    draft->setText("EDIF 1 3 1.75");
+    add->click();
+    QVERIFY(editor->toPlainText().contains("EDIF 1 3 1.75"));
+    window.ValidateNow();
+    outline->setCurrentItem(outline->findItems("EDIF 1 3 1.75", Qt::MatchExactly | Qt::MatchRecursive).front());
+    remove->click();
+    QVERIFY(!editor->toPlainText().contains("EDIF 1 3 1.75"));
+    window.ValidateNow();
+    editor->setPlainText("DIST invalid");
+    window.ValidateNow();
+    QVERIFY(!apply->isEnabled());
+    QVERIFY(!add->isEnabled());
+    QVERIFY(!remove->isEnabled());
+  }
+
+  void issue1063RawGroupsKeepFacesSourcesAndCollapseOnReopen() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    editor->setPlainText("// @GSTC-SOURCE first \"first.fbk\"\n// @GSTC-SOURCE second \"second.fbk\"\n"
+        "RAWSET 1 2 1 F1 12.25 89.5 100.125 F2 192.5 270.75 100.25 SOURCE first\n"
+        "RAWSET 1 2 1 F2 193.75 271.25 101.5 SOURCE second\n");
+    window.ValidateNow();
+    auto* outline = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    const auto groups = outline->findItems(QString::fromUtf8("Raw sets 1 → 2 (2 sets)"), Qt::MatchExactly | Qt::MatchRecursive);
+    QCOMPARE(groups.size(), 1);
+    auto* group = groups.front();
+    QCOMPARE(group->childCount(), 2);
+    QVERIFY(group->child(0)->toolTip(0).contains("first.fbk"));
+    QVERIFY(group->child(1)->toolTip(0).contains("second.fbk"));
+    outline->setCurrentItem(group->child(0));
+    auto* values = window.findChild<QTableWidget*>("graphPropertyValues");
+    QVERIFY(values);
+    QVERIFY(window.findChild<QLabel*>("graphProvenance")->text().contains("first.fbk"));
+    const QString first = window.findChild<QLineEdit*>("graphCommandText")->text();
+    QVERIFY(first.contains("F1 12.25 89.5 100.125 F2 192.5 270.75 100.25"));
+    group->setExpanded(false);
+    QTemporaryDir directory;
+    QString error;
+    QVERIFY2(window.SaveFile(directory.filePath("raw.gsdat"), error), qPrintable(error));
+    QVERIFY2(window.SaveFile(directory.filePath("raw.gstrav"), error), qPrintable(error));
+    for (const QString& suffix : {QString("gsdat"), QString("gstrav")}) {
+      AdjustmentWindow reopened(*state, log, nullptr);
+      QVERIFY2(reopened.LoadFile(directory.filePath("raw." + suffix), error), qPrintable(error));
+      auto* tree = reopened.findChild<QTreeWidget*>("adjustmentGraphOutline");
+      const auto restored = tree->findItems(QString::fromUtf8("Raw sets 1 → 2 (2 sets)"), Qt::MatchExactly | Qt::MatchRecursive);
+      QCOMPARE(restored.size(), 1);
+      QCOMPARE(restored.front()->childCount(), 2);
+      QVERIFY(!restored.front()->isExpanded());
+      restored.front()->setExpanded(true);
+      tree->setCurrentItem(restored.front()->child(1));
+      const QString second = reopened.findChild<QLineEdit*>("graphCommandText")->text().simplified();
+      QVERIFY2(second.contains("F2 193.75 271.25 101.5 SOURCE second"), qPrintable(second));
+      QVERIFY(!second.contains("F1"));
+    }
+  }
+
+  void issue1063LayoutFramesMoveSaveAndResetWithoutReordering() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    editor->setPlainText("CTRL 1 0 0\nDIST 1 2 12.5\nDIST 1 3 15\n");
+    window.ValidateNow();
+    auto* outline = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    outline->setCurrentItem(outline->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive).front());
+    auto* x = window.findChild<QDoubleSpinBox*>("graphPositionX");
+    auto* y = window.findChild<QDoubleSpinBox*>("graphPositionY");
+    auto* move = window.findChild<QPushButton*>("graphMoveSelection");
+    auto* frameName = window.findChild<QLineEdit*>("graphFrameLabel");
+    auto* frame = window.findChild<QPushButton*>("graphAddFrame");
+    auto* arrange = window.findChild<QPushButton*>("graphArrange");
+    auto* reset = window.findChild<QPushButton*>("graphResetLayout");
+    QVERIFY(x && y && move && frameName && frame && arrange && reset);
+    const auto commands = [](const QString& text) {
+      QStringList result;
+      for (const auto& line : text.split('\n'))
+        if (!line.trimmed().isEmpty() && !line.trimmed().startsWith("//")) result << line.simplified();
+      return result;
+    };
+    const QStringList before = commands(editor->toPlainText());
+    x->setValue(123.5); y->setValue(-45.25); move->click();
+    QCOMPARE(commands(editor->toPlainText()), before);
+    frameName->setText("West boundary"); frame->click();
+    QVERIFY(!outline->findItems("West boundary", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    QTemporaryDir directory;
+    QString error;
+    for (const QString& suffix : {QString("gsdat"), QString("gstrav")}) {
+      QVERIFY2(window.SaveFile(directory.filePath("layout." + suffix), error), qPrintable(error));
+      AdjustmentWindow reopened(*state, log, nullptr);
+      QVERIFY2(reopened.LoadFile(directory.filePath("layout." + suffix), error), qPrintable(error));
+      auto* tree = reopened.findChild<QTreeWidget*>("adjustmentGraphOutline");
+      const auto nodes = tree->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive);
+      // Native files use the established aligned command display.
+      QTreeWidgetItem* restored = nodes.empty() ? nullptr : nodes.front();
+      if (!restored) for (QTreeWidgetItemIterator it(tree); *it; ++it)
+        if ((*it)->text(0).simplified().startsWith("DIST 1 2 ")) restored = *it;
+      QVERIFY(restored);
+      tree->setCurrentItem(restored);
+      QVERIFY(std::abs(reopened.findChild<QTableWidget*>("graphPropertyValues")->item(2, 1)->text().toDouble() - 12.5) < 1e-6);
+      QVERIFY(std::abs(reopened.findChild<QDoubleSpinBox*>("graphPositionX")->value() - 123.5) < 1e-6);
+      QVERIFY(std::abs(reopened.findChild<QDoubleSpinBox*>("graphPositionY")->value() + 45.25) < 1e-6);
+      QCOMPARE(reopened.findChild<QComboBox*>("graphVisualGroup")->currentText(), QString("West boundary"));
+      QVERIFY(commands(reopened.findChild<QPlainTextEdit*>("adjustmentCommands")->toPlainText()).last().startsWith("DIST 1 3 "));
+    }
+    outline->setCurrentItem(outline->findItems("West boundary", Qt::MatchExactly | Qt::MatchRecursive).front());
+    const double oldFrameX = x->value();
+    x->setValue(oldFrameX + 50); move->click();
+    outline->setCurrentItem(outline->findItems("DIST 1 2 12.5", Qt::MatchExactly | Qt::MatchRecursive).front());
+    QVERIFY(std::abs(x->value() - 173.5) < 1e-6);
+    arrange->click();
+    QCOMPARE(commands(editor->toPlainText()), before);
+    reset->click();
+    QCOMPARE(commands(editor->toPlainText()), before);
+    QVERIFY(outline->findItems("West boundary", Qt::MatchExactly | Qt::MatchRecursive).empty());
+    editor->setPlainText("invalid"); window.ValidateNow();
+    QVERIFY(!move->isEnabled());
+    QVERIFY(!arrange->isEnabled());
+  }
+
+  void issue1063OrderingWarningsAndScopedOverridesSurviveReopen() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    editor->setPlainText("CTRL 2 0 0\nCTRL 2 1 1\nDIST 2 9 20\n");
+    window.ValidateNow();
+    auto* warning = window.findChild<QLabel*>("graphOrderingWarnings");
+    auto* sequence = window.findChild<QListWidget*>("graphCommandSequence");
+    auto* enabled = window.findChild<QCheckBox*>("graphManualOrderEnabled");
+    auto* rank = window.findChild<QSpinBox*>("graphManualOrderRank");
+    QVERIFY(warning && sequence && enabled && rank);
+    QVERIFY(warning->text().contains("Ambiguous"));
+    auto* outline = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    auto select = [&](const QString& command) {
+      for (QTreeWidgetItemIterator it(outline); *it; ++it)
+        if ((*it)->text(0).simplified() == command) { outline->setCurrentItem(*it); return; }
+      QFAIL("Command missing from graph");
+    };
+    select("DIST 2 9 20");
+    QVERIFY(!enabled->isEnabled());
+    select("CTRL 2 0 0");
+    QVERIFY(enabled->isEnabled());
+    enabled->setChecked(true); rank->setValue(20);
+    window.findChild<QPushButton*>("graphApplyProperties")->click();
+    QVERIFY(!warning->text().contains("override applied", Qt::CaseInsensitive));
+    select("CTRL 2 1 1");
+    enabled->setChecked(true); rank->setValue(10);
+    window.findChild<QPushButton*>("graphApplyProperties")->click();
+    QVERIFY(warning->text().contains("override applied", Qt::CaseInsensitive));
+    QVERIFY(sequence->item(0)->text().simplified().contains("CTRL 2 1 1"));
+    QTemporaryDir directory;
+    QString error;
+    QVERIFY2(window.SaveFile(directory.filePath("order.gstrav"), error), qPrintable(error));
+    AdjustmentWindow reopened(*state, log, nullptr);
+    QVERIFY2(reopened.LoadFile(directory.filePath("order.gstrav"), error), qPrintable(error));
+    QVERIFY(reopened.findChild<QLabel*>("graphOrderingWarnings")->text().contains("override applied", Qt::CaseInsensitive));
+    const auto* restoredSequence = reopened.findChild<QListWidget*>("graphCommandSequence");
+    int firstControl = -1, secondControl = -1, distance = -1;
+    for (int i = 0; i < restoredSequence->count(); ++i) {
+      const QString command = restoredSequence->item(i)->text().simplified().section(' ', 1);
+      const auto words = command.split(' ');
+      if (words[0] == "CTRL" && words[1] == "2") {
+        if (std::abs(words[2].toDouble() - 1) < 1e-6) firstControl = i;
+        if (std::abs(words[2].toDouble()) < 1e-6) secondControl = i;
+      }
+      if (command.startsWith("DIST 2 9 ")) distance = i;
+    }
+    QVERIFY(firstControl >= 0);
+    QVERIFY(secondControl > firstControl);
+    QVERIFY(distance > secondControl);
+  }
+
+  void issue1063ImportedRawSetsRemainDistinctAcrossFiles() {
+    auto state = StateWithTraverse();
+    state->traverseData = {};
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    const QString source = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/traverse_sample.fbk";
+    QTemporaryDir directory;
+    const QString second = directory.filePath("repeat.fbk");
+    QVERIFY(QFile::copy(source, second));
+    QFile original(source);
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    const QByteArray bytes = original.readAll(); original.close();
+    QStringList failures;
+    QCOMPARE(window.ImportFiles({source, second}, failures), 2);
+    QVERIFY(failures.empty());
+    window.ValidateNow();
+    auto* tree = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    // The established FBK importer assigns sequential project station IDs.
+    auto groups = tree->findItems(QString::fromUtf8("Raw sets 1 → 2 (2 sets)"), Qt::MatchExactly | Qt::MatchRecursive);
+    QCOMPARE(groups.size(), 1);
+    QCOMPARE(groups.front()->childCount(), 2);
+    QVERIFY(groups.front()->child(0)->toolTip(0).contains("traverse_sample.fbk"));
+    QVERIFY(groups.front()->child(1)->toolTip(0).contains("repeat.fbk"));
+    tree->setCurrentItem(groups.front()->child(0));
+    const QString command = window.findChild<QLineEdit*>("graphCommandText")->text().simplified();
+    QVERIFY(command.contains("F1 95 90 200 F2 275 270 200"));
+    QString error;
+    QVERIFY2(window.SaveFile(directory.filePath("imports.gstrav"), error), qPrintable(error));
+    AdjustmentWindow reopened(*state, log, nullptr);
+    QVERIFY2(reopened.LoadFile(directory.filePath("imports.gstrav"), error), qPrintable(error));
+    auto* restored = reopened.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    groups = restored->findItems(QString::fromUtf8("Raw sets 1 → 2 (2 sets)"), Qt::MatchExactly | Qt::MatchRecursive);
+    QCOMPARE(groups.size(), 1);
+    QCOMPARE(groups.front()->childCount(), 2);
+    QVERIFY(original.open(QIODevice::ReadOnly));
+    QCOMPARE(original.readAll(), bytes);
+  }
+
+  void issue1063FrameSelectionAndCanvasDragMoveMembers() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* tabs = window.findChild<QTabWidget*>("adjustmentDocumentTabs");
+    tabs->setCurrentIndex(1);
+    window.resize(1500, 950); window.show();
+    auto* tree = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    auto* draft = window.findChild<QLineEdit*>("graphNewCommand");
+    draft->setText("DIST 1 99 20");
+    window.findChild<QPushButton*>("graphAddCommand")->click();
+    window.findChild<QLineEdit*>("graphFrameLabel")->setText("Field work");
+    window.findChild<QPushButton*>("graphAddFrame")->click();
+    auto frames = tree->findItems("Field work", Qt::MatchExactly | Qt::MatchRecursive);
+    QCOMPARE(frames.size(), 1);
+    tree->setCurrentItem(frames.front());
+    auto* canvas = window.findChild<QGraphicsView*>("adjustmentGraphCanvas");
+    QCOMPARE(canvas->scene()->selectedItems().size(), 1);
+    auto* selected = canvas->scene()->selectedItems().front();
+    const QPointF initial = selected->pos();
+    canvas->centerOn(selected);
+    QCoreApplication::processEvents();
+    const QPoint press = canvas->mapFromScene(selected->sceneBoundingRect().topLeft() + QPointF(5, 5));
+    QTest::mousePress(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, press);
+    const QPoint destination = press + QPoint(40, 20);
+    QMouseEvent move(QEvent::MouseMove, QPointF(destination), QPointF(canvas->viewport()->mapToGlobal(destination)),
+        Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(canvas->viewport(), &move);
+    // A live validation tick must not replace items during an active drag.
+    window.ValidateNow();
+    QTest::mouseRelease(canvas->viewport(), Qt::LeftButton, Qt::NoModifier, destination);
+    QCoreApplication::processEvents();
+    QVERIFY(std::abs(window.findChild<QDoubleSpinBox*>("graphPositionX")->value() - initial.x() - 40) < 1e-6);
+    QVERIFY(std::abs(window.findChild<QDoubleSpinBox*>("graphPositionY")->value() - initial.y() - 20) < 1e-6);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    QVERIFY(editor->toPlainText().contains("DIST 1 99 20"));
+    frames = tree->findItems("Field work", Qt::MatchExactly | Qt::MatchRecursive);
+    QCOMPARE(canvas->scene()->selectedItems().size(), 1);
+    selected = canvas->scene()->selectedItems().front();
+    frames.front()->setExpanded(false);
+    QVERIFY(selected->boundingRect().height() < 60);
+    frames.front()->setExpanded(true);
+    QVERIFY(selected->boundingRect().height() > 100);
+  }
+
+  void issue1063EveryCommandProjectsAndInvalidCyclicTextIsDiagnosed() {
+    auto state = StateWithTraverse();
+    std::vector<std::string> log;
+    AdjustmentWindow window(*state, log, nullptr);
+    auto* editor = window.findChild<QPlainTextEdit*>("adjustmentCommands");
+    const QStringList commands = {"STATION 1 0 0 0", "BEARING 90", "ENDPOINT 10 20 0", "#LOOP OFF", "#SCALE OFF GRID", "#ERRORS 3 0.01 2",
+      "#IMPORT \"field book.fbk\"", "STN 1 2", "HANG REF 1 2 90", "HDIST 1 2 10", "SDIST 1 2 10", "VANG 1 2 90 ZENITH",
+      "DESC 1 2 Boundary marker", "PRISM 1 2 0.01 0.001", "POLE 1 2 0.002", "TSERR 1 2 3 0.01 2", "CTRL 10 10 20",
+      "ANGLE 1 2 10 90", "DIST 1 10 22", "AZIMUTH 1 10 90", "EDIF 1 10 1", "ZENITH 1 10 89", "DIR 1 1 10 90",
+      "RAWSET 1 2 1 F1 90 90 10 SOURCE survey"};
+    editor->setPlainText("// @GSTC-SOURCE survey \"survey.fbk\"\n" + commands.join('\n') + '\n');
+    window.ValidateNow();
+    auto* status = window.findChild<QLabel*>("adjustmentGraphStatus");
+    QVERIFY2(!status->text().contains("stale", Qt::CaseInsensitive), qPrintable(status->text()));
+    auto* tree = window.findChild<QTreeWidget*>("adjustmentGraphOutline");
+    for (const auto& command : commands) {
+      const auto nodes = tree->findItems(command, Qt::MatchExactly | Qt::MatchRecursive);
+      QCOMPARE(nodes.size(), 1);
+      tree->setCurrentItem(nodes.front());
+      QCOMPARE(window.findChild<QLineEdit*>("graphCommandText")->text(), command);
+      QVERIFY(window.findChild<QTableWidget*>("graphPropertyValues")->rowCount() > 0);
+    }
+    editor->setPlainText("STATION 1 0 0 0\nSTN 1 2\nSTN 2 3\nSTN 3 2\n");
+    window.ValidateNow();
+    auto* warning = window.findChild<QLabel*>("graphOrderingWarnings");
+    QVERIFY2(warning->text().contains("Cyclic"), qPrintable(warning->text()));
+    QVERIFY(status->text().contains("stale", Qt::CaseInsensitive));
+    QVERIFY(status->text().contains("already declared"));
+    QVERIFY(!tree->findItems(commands.back(), Qt::MatchExactly | Qt::MatchRecursive).empty());
+    QCOMPARE(editor->toPlainText(), QString("STATION 1 0 0 0\nSTN 1 2\nSTN 2 3\nSTN 3 2\n"));
+    editor->setPlainText("STATION 1 0 0 0\nSTN 1 2\nSTN 2 3\n");
+    window.ValidateNow();
+    QVERIFY(!status->text().contains("stale", Qt::CaseInsensitive));
+    QVERIFY(warning->text().isEmpty());
   }
 
   void issue913RawImportsMergeAndReportPerFileFailures() {
