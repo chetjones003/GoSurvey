@@ -38,6 +38,14 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Emergency repository-admin bypass
+
+When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin
+may use GitHub's existing branch-protection bypass to push or merge directly, including bypassing
+required reviews and checks. Follow [the emergency admin bypass procedure](docs/emergency-admin-bypass.md)
+to record the action. This is an explicit exception to the normal branch workflow; agents must not
+infer emergency authorization from urgency alone.
+
 ### Issues and pull request labels
 
 All agents creating a GitHub issue or pull request must apply the appropriate repository labels as part of creation. Choose labels that match the work's type and status from the repository's existing label set. Add the labels during creation when the tool supports it; otherwise, apply them immediately afterward and confirm they are present. If no existing label fits, use the repository's established label conventions when creating a suitable label.
