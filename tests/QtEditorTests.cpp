@@ -58,10 +58,13 @@
 #include <E57SimpleWriter.h>
 #include <array>
 #include <QPdfWriter>
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QListView>
+#include <QScrollBar>
 #include <QToolBar>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -80,8 +83,6 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QLabel>
-#include <QCompleter>
-#include <QAbstractItemView>
 #include <QMouseEvent>
 #include <QDialogButtonBox>
 #include <QListWidget>
@@ -4288,8 +4289,8 @@ private Q_SLOTS:
     viewport->setFocus();
     QTest::keyClicks(viewport, "l");
     QCOMPARE(input->text(), QString("l"));
-    QTRY_VERIFY(input->completer()->completionCount() > 0);
-    input->completer()->popup()->hide();
+    QTRY_VERIFY(window.m_CommandSuggestionModel->rowCount() > 0);
+    window.m_CommandSuggestions->hide();
     input->setText("LINE");
     QTest::keyClick(input, Qt::Key_Return);
     QCOMPARE(window.State().active, AppCommandState::Kind::Line);
@@ -4514,6 +4515,244 @@ private Q_SLOTS:
     QTest::keyClick(first, Qt::Key_Return);
     QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedFirstPoint); QVERIFY(state.userLinesFlat.empty());
     window.CancelDraftingInput();
+  }
+
+  void issue1039CommandLineAndDynamicFieldsShareOneDraft() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& state = window.State();
+    state.objectSnapEnabled = false;
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* x = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(x);
+    auto* y = window.findChild<QLineEdit*>("dynamicField1"); QVERIFY(y);
+
+    // A command-line point answer is parsed into the same coordinate fields and Enter advances once.
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "12,34");
+    QTRY_COMPARE(x->text(), QString("12"));
+    QTRY_COMPARE(y->text(), QString("34"));
+    QCOMPARE(command->text(), QString("12,34"));
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(state.activeDrawingIdx > 0);
+    QCOMPARE(window.DraftingInputText(), QString("12,34"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-commandline-draft.png")));
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.m_CommandHistory.last(), QString("12,34"));
+    QVERIFY(!state.cmdEnteredHistory.empty());
+    QCOMPARE(QString::fromStdString(state.cmdEnteredHistory.back()), QString("12,34"));
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QVERIFY(std::abs(state.anchorX - 12) < 1e-5);
+    QVERIFY(std::abs(state.anchorY - 34) < 1e-5);
+
+    // A polar dynamic-input pair is shown in the command line using the same entered distance
+    // and angle, while submission still composes the equivalent point for existing command parsing.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "40");
+    y->setFocus(); y->selectAll(); QTest::keyClicks(y, "45");
+    QTRY_COMPARE(command->text(), QString("@40<45"));
+    QCOMPARE(window.DraftingInputText(), QString("@28.284271,28.284271"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/polar-draft-shared.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+
+    // A dynamic-field edit is reflected by the command line, whose Enter submits that same draft.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTRY_VERIFY(!command->text().isEmpty());
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-dynamic-field-draft.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(12));
+
+    // Enter in the dynamic field also submits once and keeps the LINE prompt active.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTest::keyClick(x, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(18));
+
+    // Cancel clears an unsubmitted draft; a later command starts with its own empty prompt state.
+    command->setFocus(); QTest::keyClicks(command, "99,99");
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(command->text(), QString());
+    command->setFocus(); command->setText("CIRCLE"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Circle);
+    command->setFocus(); QTest::keyClicks(command, "0,0"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.circlePhase, AppCommandState::CirclePhase::WaitRadius);
+    auto* radius = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(radius);
+    command->setFocus(); QTest::keyClicks(command, "5");
+    QTRY_COMPARE(radius->text(), QString("5"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/radius-commandline-draft.png")));
+    radius->setFocus(); radius->selectAll(); QTest::keyClicks(radius, "6");
+    QTRY_COMPARE(command->text(), QString("6"));
+    QTest::keyClick(radius, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.userCirclesCxCyZR.size(), std::size_t(4));
+    window.CancelDraftingInput();
+  }
+
+  void issue1040QtCommandFinderFuzzyKeyboardAndMouseSelection() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    auto& state = window.State();
+
+    // Real typing goes to the command field for the first character, then must keep going there
+    // even after suggestions appear instead of being captured by a popup keyboard grab.
+    command->setFocus(); QTest::keyClick(command, Qt::Key_T);
+    QTRY_VERIFY(popup->isVisible());
+    QWidget* typingTarget = QApplication::activePopupWidget();
+    if (!typingTarget) typingTarget = QApplication::focusWidget();
+    QVERIFY(typingTarget);
+    QTest::keyClicks(typingTarget, "raverse");
+    QCOMPARE(command->text(), QString("traverse"));
+    QVERIFY(!FuzzyCommandSuggestions(command->text().toStdString(), 30).empty());
+    QCOMPARE(QString::fromStdString(FuzzyCommandSuggestions(command->text().toStdString(), 30).front().name),
+             QString("TRAVERSE"));
+    QPixmap traverseAndSuggestions = window.grab();
+    {
+      QPainter painter(&traverseAndSuggestions);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(traverseAndSuggestions.save(Issue886Shot("issue1040/traverse-query-kept.png")));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(30, 30));
+    QVERIFY(!popup->isVisible());
+    popup->hide(); command->clear();
+
+    // Subsequence and prefix queries both rank LINE first, and rows carry icons.
+    const auto typoSuggestions = FuzzyCommandSuggestions("lne", 30);
+    QVERIFY(!typoSuggestions.empty());
+    QCOMPARE(QString::fromStdString(typoSuggestions.front().name), QString("LINE"));
+    QVERIFY(!window.m_DynamicInput->isVisible());
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QCOMPARE(command->text(), QString("lne"));
+    QVERIFY(model->rowCount() > 0);
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(popup, Qt::Key_Down);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MKLINE"));
+    QTest::keyClick(popup, Qt::Key_Up);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    const auto firstIcon = model->index(0, 0).data(Qt::DecorationRole);
+    QVERIFY(!qvariant_cast<QIcon>(firstIcon).isNull());
+    QVERIFY(popup->styleSheet().contains("border-radius"));
+    QPixmap editorAndPopup = window.grab();
+    {
+      QPainter painter(&editorAndPopup);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(editorAndPopup.save(Issue886Shot("issue1040/command-finder-fuzzy-results.png")));
+    // A visible Qt::Popup takes the keyboard grab on the real UI path. Deliver Enter through
+    // the popup itself as well as the line edit so this covers the native popup event route.
+    QTest::keyClick(popup, Qt::Key_Return);
+    QVERIFY(!window.m_CommandHistory.isEmpty());
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+
+    // A normal prefix query also ranks LINE first; Escape dismisses the finder without launching it.
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    command->setFocus(); QTest::keyClicks(command, "lin");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(command, Qt::Key_Escape);
+    QVERIFY(!popup->isVisible());
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    // A query with no ranked result hides the prior highlight; Enter submits the typed text unchanged.
+    command->setFocus(); QTest::keyClicks(command, "zzzz");
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(window.m_CommandHistory.last(), QString("zzzz"));
+
+    // The registered `l` alias ranks LINE first; scrolling and clicking launch it.
+    command->setFocus(); QTest::keyClicks(command, "l");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    auto* scroll = popup->verticalScrollBar(); QVERIFY(scroll);
+    QVERIFY(scroll->maximum() > 0);
+    const int beforeScroll = scroll->value();
+    QWheelEvent down(QPointF(popup->viewport()->rect().center()),
+                     popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, -240),
+                     Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &down);
+    QVERIFY(scroll->value() > beforeScroll);
+    const int afterScroll = scroll->value();
+    QWheelEvent up(QPointF(popup->viewport()->rect().center()),
+                   popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, 240),
+                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &up);
+    QVERIFY(scroll->value() < afterScroll);
+    const QModelIndex line = model->index(0, 0);
+    QCOMPARE(line.data().toString(), QString("LINE"));
+    QTest::mouseClick(popup->viewport(), Qt::LeftButton, Qt::NoModifier, popup->visualRect(line).center());
+    QTRY_COMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    window.CancelDraftingInput();
+
+    // Empty input and an active drafting prompt must not leave a stale command result available.
+    command->clear();
+    QVERIFY(!popup->isVisible());
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    const QImage generic = window.style()->standardIcon(QStyle::SP_CommandLink).pixmap(18, 18).toImage();
+
+    for (const auto& primary : RegisteredCommandPrimariesForTest()) {
+      const QString query = QString::fromStdString(primary);
+      command->setText(query);
+      QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                        Q_ARG(QString, query)));
+      QCoreApplication::processEvents();
+      QCOMPARE(model->rowCount() > 0, true);
+      QCOMPARE(model->index(0, 0).data().toString(), query.toUpper());
+      const QIcon icon = qvariant_cast<QIcon>(model->index(0, 0).data(Qt::DecorationRole));
+      QVERIFY2(!icon.isNull(), primary.c_str());
+      QVERIFY2(icon.pixmap(18, 18).toImage() != generic, primary.c_str());
+    }
+
+    command->setText("massprop");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("massprop"))));
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MASSPROP"));
+    QPixmap generatedIconState = window.grab();
+    {
+      QPainter painter(&generatedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(generatedIconState.save(Issue886Shot("issue1041/generated-massprop-icon.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/generated-massprop-popup.png")));
+
+    command->setText("l");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("l"))));
+    QTRY_VERIFY(popup->isVisible());
+    QPixmap mixedIconState = window.grab();
+    {
+      QPainter painter(&mixedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(mixedIconState.save(Issue886Shot("issue1041/mixed-command-icons.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/mixed-command-icons-popup.png")));
   }
 
   void issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved() {
@@ -4753,16 +4992,16 @@ private Q_SLOTS:
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
     QTest::keyClicks(tree, "l");
     QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     tabs->setFocus(); QTRY_VERIFY(tabs->hasFocus());
     QTest::keyClicks(tabs, "c");
     QCOMPARE(input->text(), QString("c")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     auto* tool = window.findChild<QToolButton*>("quick_NEW"); QVERIFY(tool);
     tool->setFocus(); QTRY_VERIFY(tool->hasFocus());
     QTest::keyClicks(tool, "p");
     QCOMPARE(input->text(), QString("p")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     // An editable property keeps text input rather than turning it into a CAD command.
     window.State().userLinesFlat = {0, 0, 0, 10, 0, 0};
     EnsureAttrCounts(window.State());
@@ -4776,7 +5015,7 @@ private Q_SLOTS:
     panel->ToggleConsole(); auto* console = panel->Transcript(); console->setFocus();
     QTRY_VERIFY(console->hasFocus()); QTest::keyClicks(console, "u");
     QCOMPARE(input->text(), QString("u")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     QDialog dialog(&window); auto* field = new QLineEdit(&dialog);
     dialog.setModal(true); dialog.show(); dialog.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&dialog)); field->setFocus();
@@ -4789,10 +5028,9 @@ private Q_SLOTS:
     QVERIFY(QTest::qWaitForWindowActive(dock)); tree->setFocus();
     QTRY_VERIFY(tree->hasFocus()); QTest::keyClicks(tree, "z");
     QCOMPARE(input->text(), QString("z"));
-    // Zoom commands open the completer popup, which can own focus while the command edit still
-    // receives the typed prefix.
-    QTRY_VERIFY(input->hasFocus() || input->completer()->popup()->isVisible());
-    input->completer()->popup()->hide(); input->clear();
+    // Zoom commands open the command suggestion popup while the command edit receives the prefix.
+    QTRY_VERIFY(input->hasFocus() || window.m_CommandSuggestions->isVisible());
+    window.m_CommandSuggestions->hide(); input->clear();
     dock->setFloating(false);
   }
 
