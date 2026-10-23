@@ -1,4 +1,5 @@
 #include "AdjustmentWindow.hpp"
+#include "AdjustmentGraph.hpp"
 #include "EditorWindow.hpp"
 #include "TraverseActions.hpp"
 #include "QtText.hpp"
@@ -53,11 +54,29 @@
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QRegularExpression>
+#include <QScopedValueRollback>
+#include <QUuid>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace {
+// Layout comments must not discard importer detail or invalidate an adjustment.
+// Compare the existing Commands projection, including notes and source mappings.
+bool SameCommandValues(const QString& left, const QString& right) {
+  travcmd::CommandDocument a, b;
+  std::string error;
+  if (!travcmd::Project(left.toUtf8().toStdString(), a, error) ||
+      !travcmd::Project(right.toUtf8().toStdString(), b, error)) return false;
+  if (a.commands.size() != b.commands.size() || a.sources.size() != b.sources.size() ||
+      a.trailingComments != b.trailingComments) return false;
+  for (std::size_t i = 0; i < a.commands.size(); ++i)
+    if (a.commands[i].text != b.commands[i].text || a.commands[i].comments != b.commands[i].comments) return false;
+  for (std::size_t i = 0; i < a.sources.size(); ++i)
+    if (a.sources[i].id != b.sources[i].id || a.sources[i].path != b.sources[i].path) return false;
+  return true;
+}
+
 // Index of the first `#SCALE` / `SCALE` directive line in the command text, or -1.
 int FindScaleLine(const QStringList& lines) {
   for (int i = 0; i < lines.size(); ++i) {
@@ -301,7 +320,10 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   leftLayout->addWidget(files);
   leftLayout->addWidget(summary);
   leftLayout->addWidget(preview, 1);
-  auto* editorPane = new QWidget(splitter);
+  auto* documentTabs = new QTabWidget(splitter);
+  documentTabs->setObjectName("adjustmentDocumentTabs");
+  auto* editorPane = new QWidget(documentTabs);
+  documentTabs->addTab(editorPane, "Editor");
   editorPane->setObjectName("adjustmentEditorPane");
   auto* editorLayout = new QVBoxLayout(editorPane);
   editorLayout->setContentsMargins(8, 8, 8, 8);
@@ -317,6 +339,18 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Editor->setPlainText(QString::fromUtf8(travcmd::Serialize(state.traverseData, state.traverseLsaWeights).c_str()));
   m_SourceText = m_SavedText = m_Editor->toPlainText();
   editorLayout->addWidget(m_Editor, 1);
+  m_Graph = new AdjustmentGraph(documentTabs);
+  m_Graph->textChanged = [this](const QString& text) {
+    if (m_Editor->toPlainText() == text) return;
+    const QScopedValueRollback<bool> layoutEdit(m_GraphLayoutEdit, SameCommandValues(m_Editor->toPlainText(), text));
+    m_Editor->setPlainText(text);
+    if (m_GraphLayoutEdit) {
+      QString error;
+      if (!ParseEditor(error)) m_Output->setPlainText(error);
+    }
+    ValidateNow();
+  };
+  documentTabs->addTab(m_Graph, "Graph");
   auto* resultsPane = new QWidget(splitter);
   resultsPane->setObjectName("adjustmentResultsPane");
   auto* resultsLayout = new QVBoxLayout(resultsPane);
@@ -539,6 +573,8 @@ AdjustmentWindow::AdjustmentWindow(AppCommandState& state, std::vector<std::stri
   m_Poll->setInterval(20);
   connect(m_Poll, &QTimer::timeout, this, [this] { PollCalculation(); });
   connect(m_Editor, &QPlainTextEdit::textChanged, this, [this] {
+    if (m_GraphLayoutEdit) { setWindowModified(HasUnsavedChanges()); return; }
+    m_Graph->SetText({}, "Checking command text…");
     SyncOptionsFromText();
     InvalidateResult();
     if (m_CancelRequested) m_CancelRequested->store(true, std::memory_order_release);
@@ -565,6 +601,7 @@ void AdjustmentWindow::ValidateNow() {
     m_Editor->SetError(0, {});
     m_TextStatus->setText("Command text is valid");
     m_TextStatus->setStyleSheet({});
+    m_Graph->SetText(m_Editor->toPlainText());
   } else {
     const QString message = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str()));
     int line = 0;
@@ -577,6 +614,7 @@ void AdjustmentWindow::ValidateNow() {
     m_Editor->SetError(line, detail);
     m_TextStatus->setText("Parse error \u2014 " + message);
     m_TextStatus->setStyleSheet("color:" + m_Editor->Palette().error.name());
+    m_Graph->SetText(m_Editor->toPlainText(), message);
   }
   RefreshPreview();
 }
@@ -892,7 +930,26 @@ int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failure
     }
 
     const std::size_t importedLegs = imported.legs.size();
+    // Keep raw station identities from the source even when the legacy chained
+    // traverse append remaps solver leg numbers. Cross-file sets remain comparable.
+    auto projectSets = m_Data.rawSets;
+    auto projectSources = m_Data.rawSources;
+    const std::string sourceId = QUuid::createUuid().toString(QUuid::WithoutBraces).toStdString();
+    int at = imported.startStationId;
+    bool hasSets = false;
+    for (const auto& leg : imported.legs) {
+      for (const auto& set : leg.rawSets) {
+        if (!set.hasF1 && !set.hasF2) continue;
+        projectSets.push_back({at, leg.stationId, set, sourceId,
+            static_cast<int>(m_Data.legs.size() + projectSets.size() + imported.legs.size() + 1)});
+        hasSets = true;
+      }
+      at = leg.stationId;
+    }
+    if (hasSets) projectSources.push_back({sourceId, utf8.toStdString()});
     TraverseAppendImported(m_Data, std::move(imported));
+    m_Data.rawSets = std::move(projectSets);
+    m_Data.rawSources = std::move(projectSources);
     m_Data.importedFiles.push_back(utf8.toStdString());
     totalLegs += importedLegs;
     ++importedCount;
@@ -914,6 +971,7 @@ int AdjustmentWindow::ImportFiles(const QStringList& paths, QStringList& failure
   setWindowModified(HasUnsavedChanges());
   statusBar()->showMessage(QString("Imported %1 raw file(s)%2.").arg(importedCount)
       .arg(failures.isEmpty() ? QString{} : QString("; %1 failed — see Files").arg(failures.size())));
+  ValidateNow();
   return importedCount;
 }
 
@@ -1052,13 +1110,20 @@ bool AdjustmentWindow::ParseEditor(QString& error) {
     error = AddDirectiveSuggestion(QString::fromUtf8(reason.c_str())); return false;
   }
   data.importedFiles = importedFiles;
-  m_Data = std::move(data); m_Weights = weights;
+  if (SameCommandValues(m_SourceText, m_Editor->toPlainText())) {
+    m_Data.graphNodes = std::move(data.graphNodes);
+    m_Data.graphGroups = std::move(data.graphGroups);
+  } else {
+    m_Data = std::move(data); m_Weights = weights;
+  }
   m_SourceText = m_Editor->toPlainText();
   return true;
 }
 
 bool AdjustmentWindow::SaveFile(const QString& path, QString& error) {
   if (IsBusy()) { error = "An adjustment is running."; return false; }
+  ValidateNow();
+  if (!m_Graph->PersistLayout()) { error = m_TextStatus->text(); return false; }
   if (!ParseEditor(error)) return false;
   ApplyOptionsToData();
   ApplyResolvedScale();  // keep the saved factor current; an unresolvable one is saved as 1.0
@@ -1122,6 +1187,7 @@ void AdjustmentWindow::closeEvent(QCloseEvent* event) {
 
 void AdjustmentWindow::SetBusy(bool busy) {
   m_Editor->setReadOnly(busy);
+  m_Graph->setEnabled(!busy);
   if (auto* apply = findChild<QPushButton*>("issue915ApplySettings")) apply->setEnabled(!busy);
   if (auto* discard = findChild<QPushButton*>("issue915DiscardSettings")) discard->setEnabled(!busy);
   m_RunAction->setEnabled(!busy);
