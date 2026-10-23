@@ -16,6 +16,7 @@
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
+#include <utility>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -305,11 +306,14 @@ QIcon CadCommandIcon(const QString& icon) {
   return QIcon(QPixmap::fromImage(image));
 }
 
-EditorWindow::EditorWindow() {
+EditorWindow::EditorWindow(QString developmentBranchLabel)
+    : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
   InitUpdates();
   setObjectName("GoSurveyQtEditor");
-  setWindowTitle("GoSurvey");
+  const QString title = m_DevelopmentBranchLabel.isEmpty()
+      ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
+  setWindowTitle(title);
   setWindowFlag(Qt::FramelessWindowHint);
   setMinimumSize(820, 540);
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
@@ -1971,7 +1975,8 @@ void EditorWindow::Refresh() {
   m_CommandBar->SetHint(commandHint);
   RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {
-    const auto title = QString("GoSurvey");
+    const auto title = m_DevelopmentBranchLabel.isEmpty()
+        ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
     m_WindowTitle->setText(title); setWindowTitle(title);
   }
   if (auto* signedIn = findChild<QWidget*>("startSignedInAccount")) {

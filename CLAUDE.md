@@ -84,6 +84,17 @@ For Debug, use `.\build.bat debug`, then run
 `ctest --preset ninja-debug -R "^qt[.]editor$"`. Build all Debug targets before
 `ctest --preset ninja-debug`.
 
+### Agent builds in T3 worktrees
+
+Build and launch from the root of the worktree assigned to the current agent:
+run `.\build.bat` (or `.\build.bat debug`) there, then `.\run.bat` (or
+`.\run.bat debug`). The scripts resolve their source and output paths from that
+checkout, so each worktree uses its own standard `build/` directory and its
+ordinary `GoSurvey.exe` name. Do not redirect output into another worktree or
+the main checkout. Do not close a GoSurvey window running from another worktree
+to unblock a build; that process uses a different executable path. If a build
+is blocked, first confirm the process path belongs to the current worktree.
+
 `build-qt.bat` forwards to `build.bat`. For direct CMake builds, use
 `cmake --build --preset ninja-release` (or `ninja-debug`) from an MSVC developer shell;
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.

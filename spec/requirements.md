@@ -14587,6 +14587,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
+| REQ-453 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14805,6 +14806,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22, user approved scope)
 
 ---
+
+### REQ-453 — Identify development windows by worktree branch
+- Purpose: let a developer distinguish simultaneously running GoSurvey instances built from separate agent worktrees, and keep their build and launch artifacts isolated
+- Priority: should
+- Type: functional
+- Statement: When GoSurvey is launched through the worktree's `run.bat`, the main application window must visibly identify the current Git branch alongside its normal GoSurvey/document title. Build and launch instructions for agents must require building and launching from the assigned worktree root and using that worktree's own `build/` output. The executable filename remains `GoSurvey.exe`; build output and launch paths remain worktree-local. A detached checkout with no branch name may use the ordinary title without a branch label. This increment does not include a standalone window manager or a build/restart watcher.
+- Acceptance:
+  1. Launching with `run.bat` from a named branch displays that exact branch name in the main application's native window title and custom title area, including after title refreshes triggered by document changes.
+  2. Launching without a development branch label keeps the existing `GoSurvey` and document title behavior.
+  3. `run.bat` derives the label from the Git branch in its own worktree and passes it only to the launched process; no branch-specific executable name or build-script output path is introduced.
+  4. Agent build/launch documentation says to run `build.bat` and `run.bat` from the assigned worktree, preserve that checkout's standard `build/` outputs, and not close an application running from another worktree to unblock a build.
+  5. The normal executable filename remains `GoSurvey.exe`; this increment adds neither the standalone manager nor a build/restart watcher.
+- Owner-layer: Application / Qt UI / Build documentation
+- Status: accepted (2026-10-23, user approved scope)
 
 ## Anti-requirements
 
