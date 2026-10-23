@@ -14,6 +14,8 @@ namespace telemetry { struct TelemetryTask; }
 class EditorViewport;
 class QTabBar;
 class QLineEdit;
+class QListView;
+class QStandardItemModel;
 class QResizeEvent;
 class QEvent;
 class QPlainTextEdit;
@@ -77,6 +79,10 @@ private:
   void BuildDraftingInput();
   void RefreshDraftingInput(const QString& hint = {});
   void ResetDraftingInput();
+  void UpdateDraftingInputFromCommandLine(const QString& text);
+  void UpdateCommandLineFromDraftingInput();
+  [[nodiscard]] QString DraftingInputText() const;
+  [[nodiscard]] QString DraftingInputDisplayText() const;
   bool SubmitDraftingInput(bool click = false);
   bool DraftingInputEvent(QObject* watched, QEvent* event);
   void CancelDraftingInput();
@@ -169,6 +175,8 @@ private:
   QLineEdit* m_RecentSearch = nullptr;
   QPlainTextEdit* m_Transcript = nullptr;
   QLineEdit* m_Command = nullptr;
+  QListView* m_CommandSuggestions = nullptr;
+  QStandardItemModel* m_CommandSuggestionModel = nullptr;
   FloatingCommandBar* m_CommandBar = nullptr;
   QFrame* m_DynamicInput = nullptr;
   QLabel* m_DynamicPrompt = nullptr;

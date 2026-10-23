@@ -715,9 +715,12 @@ requirements is a planning failure, not a sign of rigor.
   (recent lines, scrollable) and F2 again collapses it; (4) ESC cancels the active
   command whether or not the console is open; (5) console/history text can be
   selected with the mouse and copied; (6) × hides the bar and Ctrl+9 (or the menu)
-  restores it; (7) autocomplete, the dynamic-cursor input, and the clickable
-  `[A]`/`[2P]` hints still work; (8) the dockable Command line window is still
-  available.
+  restores it; (7) the command-name autocomplete popup ranks fuzzy command matches,
+  displays each result's relevant associated command icon and name in a rounded, scrollable list, and
+  supports keyboard and mouse selection; Enter or clicking a result runs the
+  selected command; every registered command result uses a relevant associated icon, reusing suitable existing art and generating missing artwork instead of showing the generic green Qt command-link icon; `l` ranks `LINE` first by its registered alias and `lin`
+  ranks `LINE` first by name; the dynamic-cursor input and clickable `[A]`/`[2P]`
+  hints still work; (8) the dockable Command line window is still available.
 - Owner-layer: UI
 - Status: accepted
 - Revisions: 2026-06-19 — initial (floating command bar + fading history + F2
@@ -727,7 +730,7 @@ requirements is a planning failure, not a sign of rigor.
   keyword options); idle shows a "Type a command" placeholder. 2026-06-19 — the bar is
   **pinned to the viewport bottom edge** (vertical position locked); the user slides it
   left/right and resizes its **width** (right-edge grip) and the F2 console **height**
-  (top-edge grip); position/width/console-height persist.
+  (top-edge grip); position/width/console-height persist. 2026-10-22 — D-2026-10-22-d: command autocomplete uses ranked fuzzy matches, shows command icons and names in a rounded scrollable popup, and runs the highlighted or clicked result. 2026-10-23 — D-2026-10-23-b: every registered command result has a relevant associated icon; suitable existing artwork is reused and missing artwork is generated instead of using the generic green fallback.
 
 ### REQ-041 — Import Points pre-import validation with specific diagnostics
 - Purpose: data integrity and no silent failure for CSV point import, surfaced to
@@ -12299,13 +12302,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. The existing autocomplete precedent is unchanged by this requirement: when the typed text is not itself an exact match, the highlighted suggestion (ranked as REQ-040's popup already ranks it) still wins on Enter.
   4. A single token that matches no command exactly and has no ranked suggestion at all is submitted unchanged and reported as an unknown command (REQ-201) — it is never silently replaced by an unrelated leftover highlight.
   5. A multi-token line (a command plus arguments) is never rewritten by this resolution; only a single bare token is in scope.
+  6. Idle Qt command suggestions use ranked fuzzy matching, with an exact primary name or alias ahead of prefix matches and prefix matches ahead of subsequence matches. `l` ranks `LINE` first by its registered alias; `lin` ranks `LINE` first by its name. Enter launches the currently highlighted result, and clicking a result launches it; the popup remains scrollable so results beyond the visible rows can be selected.
 - Acceptance:
   - Driven through the real command-bar widget (a unit test on the dispatcher alone cannot see this defect — it lives in which text the UI writes into the submit buffer, not in the dispatcher): typing `ERASE` and pressing Enter starts `DELETE`, even immediately after an unrelated query left a different suggestion highlighted.
   - Typing `RENAME` or `TABLE` (bare words that name no top-level command — `RENAME` is only a `LAYER` sub-verb, `TABLE` only a volume-report sub-verb) and pressing Enter never starts `SURFACERENAME` or runs `VOLTABLE`; the command line stays idle and reports the line as unrecognized.
   - `headless`/DevShell test `req766-fuzzy-exact-wins`.
+  - Qt integration coverage verifies `l` and `lin` rank `LINE` first, Enter launches the highlighted result, and mouse selection from a scrolled popup launches the clicked result.
 - Owner-layer: UI (`src/ui/CadUi.cpp` `DrawCommandLinePanel`), Commands (`src/commands/CadCommands.cpp`/`.hpp` `ResolveCommandLineSubmission`, built on the existing `FuzzyCommandSuggestions`).
 - Status: accepted.
-- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted.
+- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted. 2026-10-22 — D-2026-10-22-d: Qt suggestions expose the existing ranked fuzzy behavior through a selectable, icon-bearing popup; Enter and mouse activation run the selected result.
 
 ### REQ-401 — Traverse Editor: reduce ground distances to grid using the drawing's projection (GitHub issue #828)
 
@@ -12725,11 +12730,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - POLAR increment and additional angles use existing preferences. Native controls support editing and visible save failure without losing the previous settings.
   - Shift+right-click offers the existing temporary snap kinds, with Perpendicular offered only when a reference exists. An override survives hover, ignores persistent per-kind toggles, and clears on pick/cancel without changing preferences.
   - Native cursor input uses the shared dynamic-input model: coordinate/distance-angle fields, Tab, locked values, mode characters and keywords; command and cursor prompts agree. Preserve cancellation, validation, blank Enter defaults and one submission per keypress. Show existing polar/pipe compass guidance and segment bearing-pick interaction.
+  - While a command prompt is active, the command line and at-cursor dynamic-input fields edit one shared draft. Typing or editing in either surface updates the draft shown by the other. Enter in either surface submits that draft once and advances the active command to its next prompt. Command cancellation or completion clears the draft before any later prompt or command; when no command prompt is active, command-line command-name and option entry remains unchanged. Preserve REQ-024 field groups, locks, Tab navigation, supported relative/bearing-distance syntax, Enter submission, and viewport-click placement.
+  - When that shared draft uses a distance/angle pair, the command line displays the same polar representation as the fields (for example, `@40<45`). Submission still resolves through the existing shared draft and coordinate conversion, so matching display text does not change the point the command receives.
   - Fixed shortcuts reach existing commands; text editors retain editing keys and clipboard/undo ownership. Typing from editor chrome reaches command entry; modal dialogs and other windows keep their input. Escape cancels the current gesture before the enclosing command, including bearing-pick and live section/gizmo drags.
   - Preserve existing undo and read-only semantics through shared commands. Do not add geometry/persistence models or change the production frontend.
   - Add focused Qt workflow coverage and update the parity ledger honestly. Present 2–3 integrated visual options for each major affected surface, apply the user's choice and show final meaningful states before completion.
 - Owner-layer: Qt UI; existing command/domain/persistence services retain behavior ownership.
 - Status: accepted (2026-10-19) — D-2026-10-19-a, GitHub issue #903.
+- Revisions: 2026-10-22 — D-2026-10-22-c / GitHub issue #1039: command-line and dynamic-cursor prompt edits share one draft and submit once; no-prompt command entry and REQ-024 input semantics are preserved. 2026-10-23 — D-2026-10-23-a: a shared distance/angle draft is displayed in the command line using the same polar form as its fields; submission remains resolved from the shared draft.
 ### REQ-429 — Qt PDF viewer: thumbnail strip and text search (GitHub issue #905)
 
 - Purpose: bring the 0.7.4 PDF viewer's page thumbnail strip to Qt, and give the Qt viewer text search, so a Qt user can move around a long plan set and find a word in it without leaving GoSurvey.
