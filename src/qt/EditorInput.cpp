@@ -19,6 +19,8 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListView>
+#include <QStandardItemModel>
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -90,6 +92,7 @@ void EditorWindow::BuildDraftingInput() {
       if (m_DynamicGeometry.pointEntry) {
         dyninput::EditText(m_DynamicGroup, i, text.toUtf8().toStdString());
         RefreshDraftingInput();
+        UpdateCommandLineFromDraftingInput();
         if (m_DynamicGroup.requestFocus >= 0) {
           const int slot = m_DynamicGroup.requestFocus;
           m_DynamicGroup.requestFocus = -1;
@@ -108,6 +111,77 @@ void EditorWindow::BuildDraftingInput() {
 void EditorWindow::ResetDraftingInput() {
   m_DynamicReset = true;
   for (auto& field : m_DynamicGroup.f) field = {};
+}
+
+void EditorWindow::UpdateDraftingInputFromCommandLine(const QString& text) {
+  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  if (m_DynamicGeometry.pointEntry) {
+    // Rebuild from the complete value so cumulative edits do not append duplicate mode transitions.
+    dyninput::Reset(m_DynamicGroup, m_DynamicGeometry.initialMode, m_DynamicGeometry.showZ);
+    dyninput::EditText(m_DynamicGroup, 0, text.toUtf8().toStdString());
+    m_DynamicGroup.requestFocus = -1;
+  } else if (m_DynamicFields[0]) {
+    const QSignalBlocker block(m_DynamicFields[0]);
+    m_DynamicFields[0]->setText(text);
+  }
+  RefreshDraftingInput();
+}
+
+QString EditorWindow::DraftingInputText() const {
+  if (!m_DynamicGeometry.pointEntry) return m_DynamicFields[0]->text();
+  const auto live = CadDynInputLive(m_State, m_DynamicGeometry, m_DynamicGroup.mode,
+      m_DynamicCursor.x, m_DynamicCursor.y, m_DynamicCursor.z);
+  QString text = QString::fromStdString(
+      dyninput::Compose(m_DynamicGroup, live, m_DynamicGeometry.directDistance));
+  const bool locked = std::any_of(m_DynamicGroup.f.begin(), m_DynamicGroup.f.end(),
+      [](const dyninput::Field& field) { return field.locked; });
+  if (m_DynamicGeometry.ucsPolar && locked) {
+    // UCS axis prompts measure from their pending origin, not the command's ordinary @ base.
+    bool distanceOk = true, angleOk = true;
+    const double distance = m_DynamicGroup.f[0].locked
+        ? QString::fromStdString(m_DynamicGroup.f[0].text).toDouble(&distanceOk) : live.v[0];
+    const double angle = m_DynamicGroup.f[1].locked
+        ? 90.0 - QString::fromStdString(m_DynamicGroup.f[1].text).toDouble(&angleOk) : live.v[1];
+    if (distanceOk && angleOk && std::isfinite(distance) && std::isfinite(angle)) {
+      const double radians = angle * 3.14159265358979323846 / 180.0;
+      const auto world = ray3d::Add(m_DynamicGeometry.baseWorld,
+          ucs::UcsVectorToWorld(m_State.activeUcs,
+              {distance * std::cos(radians), distance * std::sin(radians), 0}));
+      const auto point = ucs::WorldToUcs(m_State.activeUcs, world);
+      text = QString("%1,%2,%3").arg(point.x, 0, 'g', 17).arg(point.y, 0, 'g', 17).arg(point.z, 0, 'g', 17);
+    }
+  }
+  return text;
+}
+
+QString EditorWindow::DraftingInputDisplayText() const {
+  if (!m_DynamicGeometry.pointEntry || !dyninput::IsPolar(m_DynamicGroup.mode))
+    return DraftingInputText();
+
+  const auto& distanceField = m_DynamicGroup.f[0];
+  const auto& angleField = m_DynamicGroup.f[1];
+  if (!distanceField.locked && !angleField.locked) return {};
+  if (m_DynamicGeometry.directDistance && distanceField.locked && !angleField.locked)
+    return QString::fromStdString(distanceField.text).trimmed();
+
+  const auto live = CadDynInputLive(m_State, m_DynamicGeometry, m_DynamicGroup.mode,
+      m_DynamicCursor.x, m_DynamicCursor.y, m_DynamicCursor.z);
+  const QString distance = distanceField.locked
+      ? QString::fromStdString(distanceField.text).trimmed()
+      : QString::number(live.v[0], 'f', m_State.displayLinearPrecision);
+  const double liveAngle = std::fmod(450.0 - live.v[1], 360.0);
+  const QString angle = angleField.locked
+      ? QString::fromStdString(angleField.text).trimmed()
+      : QString::number(liveAngle, 'f', m_State.displayLinearPrecision);
+  const QString relative = dyninput::IsRelative(m_DynamicGroup.mode) ? "@" : "";
+  return relative + distance + "<" + angle;
+}
+
+void EditorWindow::UpdateCommandLineFromDraftingInput() {
+  if (!m_DynamicInput || !m_DynamicInput->isVisible()) return;
+  const QString text = DraftingInputDisplayText();
+  if (m_Command->text() == text) return;
+  m_Command->setText(text);
 }
 
 void EditorWindow::RefreshDraftingInput(const QString& hint) {
@@ -170,27 +244,7 @@ bool EditorWindow::SubmitDraftingInput(bool click) {
   const bool locked = std::any_of(m_DynamicGroup.f.begin(), m_DynamicGroup.f.end(),
       [](const dyninput::Field& f) { return f.locked; });
   if (click && (!m_DynamicGeometry.pointEntry || !locked)) { ResetDraftingInput(); return false; }
-  QString text = m_DynamicFields[0]->text();
-  if (m_DynamicGeometry.pointEntry) {
-    const auto live = CadDynInputLive(m_State, m_DynamicGeometry, m_DynamicGroup.mode,
-        m_DynamicCursor.x, m_DynamicCursor.y, m_DynamicCursor.z);
-    text = QString::fromStdString(dyninput::Compose(m_DynamicGroup, live, m_DynamicGeometry.directDistance));
-    if (m_DynamicGeometry.ucsPolar && locked) {
-      // UCS axis prompts measure from their pending origin, not the command's ordinary @ base.
-      bool distanceOk = true, angleOk = true;
-      const double distance = m_DynamicGroup.f[0].locked
-          ? QString::fromStdString(m_DynamicGroup.f[0].text).toDouble(&distanceOk) : live.v[0];
-      const double angle = m_DynamicGroup.f[1].locked
-          ? 90.0 - QString::fromStdString(m_DynamicGroup.f[1].text).toDouble(&angleOk) : live.v[1];
-      if (distanceOk && angleOk && std::isfinite(distance) && std::isfinite(angle)) {
-        const double radians = angle * 3.14159265358979323846 / 180.0;
-        const auto world = ray3d::Add(m_DynamicGeometry.baseWorld,
-            ucs::UcsVectorToWorld(m_State.activeUcs, {distance * std::cos(radians), distance * std::sin(radians), 0}));
-        const auto point = ucs::WorldToUcs(m_State.activeUcs, world);
-        text = QString("%1,%2,%3").arg(point.x, 0, 'g', 17).arg(point.y, 0, 'g', 17).arg(point.z, 0, 'g', 17);
-      }
-    }
-  }
+  const QString text = DraftingInputText();
   ResetDraftingInput(); m_Command->clear(); Submit(text);
   return true;
 }
@@ -214,8 +268,12 @@ void EditorWindow::CancelDraftingInput() {
 
 bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
   auto* widget = qobject_cast<QWidget*>(watched);
-  if (!widget || !(widget == this || isAncestorOf(widget)) || QApplication::activeModalWidget() ||
-      QApplication::activePopupWidget()) return false;
+  const bool suggestionPopupWidget = widget && m_CommandSuggestions &&
+      (widget == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(widget));
+  const bool ownSuggestionsPopup = QApplication::activePopupWidget() == m_CommandSuggestions;
+  if (!widget || !(widget == this || isAncestorOf(widget) || suggestionPopupWidget) ||
+      QApplication::activeModalWidget() ||
+      (QApplication::activePopupWidget() && !ownSuggestionsPopup)) return false;
   if (event->type() != QEvent::KeyPress && event->type() != QEvent::ShortcutOverride) return false;
   auto* key = static_cast<QKeyEvent*>(event);
   bool editing = false;
@@ -229,6 +287,32 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     if (focus->isWindow()) break;
   }
   const bool ctrl = key->modifiers().testFlag(Qt::ControlModifier);
+  if ((widget == m_Command || suggestionPopupWidget) &&
+      (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) &&
+      event->type() == QEvent::ShortcutOverride) {
+    key->accept();
+    return false;
+  }
+  if ((widget == m_Command || suggestionPopupWidget) &&
+      (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)) {
+    if (widget == m_Command && m_DynamicInput && m_DynamicInput->isVisible()) return SubmitDraftingInput();
+    if (m_CommandSuggestions && m_CommandSuggestions->isVisible() &&
+        m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
+      QModelIndex selected = m_CommandSuggestions->currentIndex();
+      if (!selected.isValid()) selected = m_CommandSuggestionModel->index(0, 0);
+      const QString command = selected.data(Qt::DisplayRole).toString();
+      m_CommandSuggestions->hide();
+      m_Command->clear();
+      Submit(command);
+      m_Command->setFocus(Qt::OtherFocusReason);
+      return true;
+    }
+    if (widget != m_Command) return false;
+    const QString line = m_Command->text();
+    m_Command->clear();
+    Submit(line);
+    return true;  // Keep this Enter from bubbling to the window's blank-Enter handler.
+  }
   const bool editShortcut = ctrl && (key->key() == Qt::Key_Z || key->key() == Qt::Key_Y ||
       key->key() == Qt::Key_C || key->key() == Qt::Key_V);
   if (editShortcut && event->type() == QEvent::ShortcutOverride) {
@@ -253,6 +337,13 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
     return event->type() == QEvent::ShortcutOverride ? false : true;
   }
   if (key->key() == Qt::Key_Escape) {
+    if (event->type() == QEvent::KeyPress && (widget == m_Command || suggestionPopupWidget) && m_CommandSuggestions &&
+        m_CommandSuggestions->isVisible()) {
+      m_CommandSuggestions->hide();
+      m_Command->clear();
+      key->accept();
+      return true;
+    }
     if (event->type() == QEvent::ShortcutOverride) { key->accept(); return false; }
     CancelDraftingInput(); key->accept(); return true;
   }

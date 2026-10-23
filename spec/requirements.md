@@ -715,9 +715,12 @@ requirements is a planning failure, not a sign of rigor.
   (recent lines, scrollable) and F2 again collapses it; (4) ESC cancels the active
   command whether or not the console is open; (5) console/history text can be
   selected with the mouse and copied; (6) × hides the bar and Ctrl+9 (or the menu)
-  restores it; (7) autocomplete, the dynamic-cursor input, and the clickable
-  `[A]`/`[2P]` hints still work; (8) the dockable Command line window is still
-  available.
+  restores it; (7) the command-name autocomplete popup ranks fuzzy command matches,
+  displays each result's relevant associated command icon and name in a rounded, scrollable list, and
+  supports keyboard and mouse selection; Enter or clicking a result runs the
+  selected command; every registered command result uses a relevant associated icon, reusing suitable existing art and generating missing artwork instead of showing the generic green Qt command-link icon; `l` ranks `LINE` first by its registered alias and `lin`
+  ranks `LINE` first by name; the dynamic-cursor input and clickable `[A]`/`[2P]`
+  hints still work; (8) the dockable Command line window is still available.
 - Owner-layer: UI
 - Status: accepted
 - Revisions: 2026-06-19 — initial (floating command bar + fading history + F2
@@ -727,7 +730,7 @@ requirements is a planning failure, not a sign of rigor.
   keyword options); idle shows a "Type a command" placeholder. 2026-06-19 — the bar is
   **pinned to the viewport bottom edge** (vertical position locked); the user slides it
   left/right and resizes its **width** (right-edge grip) and the F2 console **height**
-  (top-edge grip); position/width/console-height persist.
+  (top-edge grip); position/width/console-height persist. 2026-10-22 — D-2026-10-22-d: command autocomplete uses ranked fuzzy matches, shows command icons and names in a rounded scrollable popup, and runs the highlighted or clicked result. 2026-10-23 — D-2026-10-23-b: every registered command result has a relevant associated icon; suitable existing artwork is reused and missing artwork is generated instead of using the generic green fallback.
 
 ### REQ-041 — Import Points pre-import validation with specific diagnostics
 - Purpose: data integrity and no silent failure for CSV point import, surfaced to
@@ -2889,8 +2892,9 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: When REQ-077 finds a newer version, the application **presents it and waits**. It
   displays the new version, the current version, and the release notes carried in the manifest,
   offering exactly three outcomes: install now, be reminded at the next launch, or skip this version
-  permanently. There is no silent download and no silent install — this application holds unsaved
-  drawings, and an unannounced restart destroys work.
+  permanently. No update download or install starts without the user's explicit choice — this
+  application holds unsaved drawings, and an unannounced restart destroys work. A silent installer
+  mode for deployment does not change this rule.
 
   On the user's choice to install, the application downloads the installer, **verifies it against the
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
@@ -12302,13 +12306,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. The existing autocomplete precedent is unchanged by this requirement: when the typed text is not itself an exact match, the highlighted suggestion (ranked as REQ-040's popup already ranks it) still wins on Enter.
   4. A single token that matches no command exactly and has no ranked suggestion at all is submitted unchanged and reported as an unknown command (REQ-201) — it is never silently replaced by an unrelated leftover highlight.
   5. A multi-token line (a command plus arguments) is never rewritten by this resolution; only a single bare token is in scope.
+  6. Idle Qt command suggestions use ranked fuzzy matching, with an exact primary name or alias ahead of prefix matches and prefix matches ahead of subsequence matches. `l` ranks `LINE` first by its registered alias; `lin` ranks `LINE` first by its name. Enter launches the currently highlighted result, and clicking a result launches it; the popup remains scrollable so results beyond the visible rows can be selected.
 - Acceptance:
   - Driven through the real command-bar widget (a unit test on the dispatcher alone cannot see this defect — it lives in which text the UI writes into the submit buffer, not in the dispatcher): typing `ERASE` and pressing Enter starts `DELETE`, even immediately after an unrelated query left a different suggestion highlighted.
   - Typing `RENAME` or `TABLE` (bare words that name no top-level command — `RENAME` is only a `LAYER` sub-verb, `TABLE` only a volume-report sub-verb) and pressing Enter never starts `SURFACERENAME` or runs `VOLTABLE`; the command line stays idle and reports the line as unrecognized.
   - `headless`/DevShell test `req766-fuzzy-exact-wins`.
+  - Qt integration coverage verifies `l` and `lin` rank `LINE` first, Enter launches the highlighted result, and mouse selection from a scrolled popup launches the clicked result.
 - Owner-layer: UI (`src/ui/CadUi.cpp` `DrawCommandLinePanel`), Commands (`src/commands/CadCommands.cpp`/`.hpp` `ResolveCommandLineSubmission`, built on the existing `FuzzyCommandSuggestions`).
 - Status: accepted.
-- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted.
+- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted. 2026-10-22 — D-2026-10-22-d: Qt suggestions expose the existing ranked fuzzy behavior through a selectable, icon-bearing popup; Enter and mouse activation run the selected result.
 
 ### REQ-401 — Traverse Editor: reduce ground distances to grid using the drawing's projection (GitHub issue #828)
 
@@ -12728,11 +12734,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - POLAR increment and additional angles use existing preferences. Native controls support editing and visible save failure without losing the previous settings.
   - Shift+right-click offers the existing temporary snap kinds, with Perpendicular offered only when a reference exists. An override survives hover, ignores persistent per-kind toggles, and clears on pick/cancel without changing preferences.
   - Native cursor input uses the shared dynamic-input model: coordinate/distance-angle fields, Tab, locked values, mode characters and keywords; command and cursor prompts agree. Preserve cancellation, validation, blank Enter defaults and one submission per keypress. Show existing polar/pipe compass guidance and segment bearing-pick interaction.
+  - While a command prompt is active, the command line and at-cursor dynamic-input fields edit one shared draft. Typing or editing in either surface updates the draft shown by the other. Enter in either surface submits that draft once and advances the active command to its next prompt. Command cancellation or completion clears the draft before any later prompt or command; when no command prompt is active, command-line command-name and option entry remains unchanged. Preserve REQ-024 field groups, locks, Tab navigation, supported relative/bearing-distance syntax, Enter submission, and viewport-click placement.
+  - When that shared draft uses a distance/angle pair, the command line displays the same polar representation as the fields (for example, `@40<45`). Submission still resolves through the existing shared draft and coordinate conversion, so matching display text does not change the point the command receives.
   - Fixed shortcuts reach existing commands; text editors retain editing keys and clipboard/undo ownership. Typing from editor chrome reaches command entry; modal dialogs and other windows keep their input. Escape cancels the current gesture before the enclosing command, including bearing-pick and live section/gizmo drags.
   - Preserve existing undo and read-only semantics through shared commands. Do not add geometry/persistence models or change the production frontend.
   - Add focused Qt workflow coverage and update the parity ledger honestly. Present 2–3 integrated visual options for each major affected surface, apply the user's choice and show final meaningful states before completion.
 - Owner-layer: Qt UI; existing command/domain/persistence services retain behavior ownership.
 - Status: accepted (2026-10-19) — D-2026-10-19-a, GitHub issue #903.
+- Revisions: 2026-10-22 — D-2026-10-22-c / GitHub issue #1039: command-line and dynamic-cursor prompt edits share one draft and submit once; no-prompt command entry and REQ-024 input semantics are preserved. 2026-10-23 — D-2026-10-23-a: a shared distance/angle draft is displayed in the command line using the same polar form as its fields; submission remains resolved from the shared draft.
 ### REQ-429 — Qt PDF viewer: thumbnail strip and text search (GitHub issue #905)
 
 - Purpose: bring the 0.7.4 PDF viewer's page thumbnail strip to Qt, and give the Qt viewer text search, so a Qt user can move around a long plan set and find a word in it without leaving GoSurvey.
@@ -13880,6 +13889,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
 
+### REQ-453 — Microsoft Store installs run without installer UI
+- Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
+- Priority: must
+- Type: functional
+- Statement: The existing Inno Setup EXE supports a Microsoft Store install invocation that does
+  not display setup UI. Store submission uses `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`;
+  the allowed UAC prompt may still appear. The bundled VC++ redistributable also runs quietly.
+  Once the user has obtained the installer file, installation requires no network connection:
+  application files, Qt runtime, resources, PDFium, and VC++ runtime are included in that file.
+  The normal direct-download installer remains interactive. Silent deployment must not launch
+  GoSurvey after installation. Store submissions use a versioned, immutable stable-release asset;
+  the rolling beta asset is not eligible because its binary changes after publication.
+- Acceptance:
+  - the installer compiles and accepts the Store invocation without showing setup, progress, or
+    completion UI; a UAC consent prompt remains permitted;
+  - the VC++ redistributable is invoked with `/install /quiet /norestart`;
+  - packaging fails if the VC++ redistributable is missing, and the resulting installer contains it;
+  - the release workflow checks for the required Qt runtime DLLs, Qt platform plugin, `qt.conf`,
+    bundled template, PDFium, and VC++ redistributable before compiling;
+  - installation succeeds with network access disabled after the installer file is present locally;
+  - no post-install application launch occurs in the Store invocation;
+  - the ordinary direct-download invocation still displays the interactive setup wizard;
+  - Partner Center points to a versioned stable-release installer URL whose bytes are not replaced
+    after that submission;
+  - each stable release publishes a regenerated Store submission note containing the immutable
+    installer URL, SHA-256, and exact install parameters; beta releases do not publish this note;
+- Owner-layer: Build/Platform
+- Status: accepted (2026-10-23, D-2026-10-23-c)
+- Revisions: 2026-10-23 — initial, D-2026-10-23-c.
+
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
   security issue automatically, before either reaches a reviewer or a release, without adding a new
@@ -14874,6 +14913,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 **Multi-port auto-detection + exact-match priority (2026-09-17, user follow-up with screenshots, TASK-269):** TASK-268's filtering still used exactly ONE source connection point — `InsertSourceConnection` returned whichever port was explicitly chosen in the INSERT dialog, or, when none was, always `connections.front()`, the FIRST port defined on the block, regardless of what was actually being snapped to. Reported directly: a flange authored with a `gasketFace` port (mode targeting `Flange face`) and a separate `weldNeckFace` port (mode targeting `Pipe end`), both flagged `isDefault` (the natural state for an only-mode connection point — the UI's own default), snapped to a pipe end using `gasketFace`'s mode instead of `weldNeckFace`'s. **Two compounding causes, both fixed:** (1) `gasketFace` was never even considered as an alternative — `SubmitInsertBlockConnectorPick` now builds a CANDIDATE LIST of every connection point on the block being inserted (or just the one explicitly chosen, unchanged, if the INSERT dialog named one) and picks the nearest ACCEPTED (port, target) pairing across all of them, not a single fixed port. (2) Even considering both ports, `CadBlockConnectionAcceptsTarget`'s `isDefault` fallback (TASK-268) made `gasketFace` look "compatible" with a pipe-end target too, since its own single mode happened to be flagged default — an authoring habit (the only mode on a port defaults to looking like "the" mode), not a deliberate "accept anything" declaration. New `CadBlockConnectionHasExactMode(conn, target)` (cadblock.hpp) checks for a target-tagged mode WITHOUT the `isDefault` fallback; the candidate search now runs in two passes — exact-match candidates first (any port tagged specifically for the target under the cursor beats every default-fallback port, regardless of distance), falling back to the old default-inclusive pass only when no port has an exact match at all. `CadBlockImportTests` gains the exact reported scenario as a regression case (both ports' single mode flagged `isDefault`, `weldNeckFace` defined SECOND — proving neither definition order nor the default flag can steal the pick from the exactly-tagged port). Full suite green: `GoSurveyTests` 1169/1169, `GoSurveySnapTests` 320/320 (up from 319), no regressions. **The same rule applied to the SPLICE path (2026-09-24, user report with screenshot, TASK-276):** TASK-269 fixed which port `INSERT`'s connector snap uses; `PickElbowPorts` — B5's port resolver, reused unchanged by B7's `PIPEFIT` splice and therefore by REQ-350's palette — never got it. It ranked a two-port fitting's ports as "the Inlet/Outlet pair when both roles are tagged, else definition order", and `TrySplicePipeFitNamed` welds whichever port it returns as `near` onto the pipe. The bundled `2in_WELD_NECK_FLANGE` defeats both tests at once: its `gasketFace` (mode target `flange-face`) and `weldNeckFace` (mode target `pipe-end`) are BOTH tagged with the `Inlet` role and the gasket face is defined FIRST, so the gasket face was welded to the pipe and the flange was placed end-for-end — reported as "the flange is placed backwards... it seems like the connection point logic is not being used". `PickElbowPorts` now ranks by `CadBlockConnectionHasExactMode(c, PipeEnd)` first (never the `isDefault` fallback, for TASK-269's own reason: the authoring UI flags an only-mode port default as a matter of habit, not intent), falling through to the existing role and definition-order resolution otherwise. The rule fires only when EXACTLY ONE of the two ports carries that tag, so an elbow, a tee's through pair and an inline valve — all of which have a pipe end on both sides — keep the Inlet/Outlet resolution they were authored with. `CadPipeRunCommandTests` gains 3 `[flangeport]` cases (the reported part modelled port-for-port, asserting the weld neck lands ON the run's station and the gasket face one flange length downstream; the engagement cutback read from the weld neck rather than the gasket face; and a both-sides-pipe-end valve with its Outlet defined first still resolving by role). **Deliberately out of scope, by name:** placing a fitting ON a run's END rather than splicing THROUGH it — `PIPEFIT` has exactly one placement model, so a pick at the very end still splits the run and leaves a short piece beyond the fitting; which end, what happens to the run's length and whether the far port must stay free are product rules of their own. Full suite green: `GoSurveySnapTests` 434/434 (up from 431), `GoSurveyTests` 1218/1219 and ctest 1806/1814 — the same 8 pre-existing failures named under TASK-275, unchanged. | accepted |
 | REQ-344 | Commands/UI/Render | accepted, slice 3 delivered (GitHub issue #479, D-2026-09-11-d, TASK-260). **A section-plane handle drag snaps.** It joins the dimension, entity and MTEXT grip drags in the snap gate's `midCmd` test — no `Kind` is active during one, because the plane is a view state — so the marker, the aperture and the cursor pull are the ordinary ones with no second code path. The snapped point almost never lies ON the drag axis (the axis is a line through the handle; a midpoint is out in the model), so the handle goes where that point **projects** onto the axis, which puts **the whole plane through the snapped point** exactly, to REQ-101's ±0.002 ft, because the plane is perpendicular to the axis it slides along. Applies to every draggable handle, not just Move: "make the plane reach that corner" is the same request as "cut at that midpoint". **No second distance test on whether to honour a snap** — `CadSnap::FindBest` answers only inside a pixel-derived aperture around a real feature, so a point reaching the drag is one the user is pointing at, and a further check would second-guess the snap system with a worse rule while rejecting the very case the feature exists for. The drag update **moved in the frame**, to after the snap is computed: reading the previous frame's snap leaves the plane one frame behind its own marker, visible at drag speed as the plane trailing the glyph it is locked to. **Handle symbols** replace six identical squares, which had made the user read the plane to work out which one flipped it: a diamond with a double-headed arrow **through the plane along the normal** for Move (the one handle whose travel leaves the plane, and the only symbol here that is not flat), back-to-back triangles along the normal for Flip, outward arrowheads at the section line's ends for the length pair, outward triangles on the u-parallel edges for the height pair — all built in the plane's own basis and sized from the rectangle's diagonal, so they lie on the plane and do not change with zoom; the hovered or grabbed one is drawn larger. Tests: `SubObjectSelectionTests` `[req344]` (4 cases — the plane landing exactly through a snapped point while the cursor is aimed elsewhere, no drift across four held frames, releasing the snap handing back to the cursor **measured from the original grab**, and a stretch snapping without touching the cut) inside `[sectionplanegrip]` (14 cases / 131 assertions). Full suite **1510/1510**, up from 1506. **Proven to bite:** ignoring the snapped point fails 3 of the 4 cases and 7 assertions. **A test fixture bug found on the way, worth recording:** the first stretch-snap case displaced its snapped point in world X/Y to get it "off the axis", but the plane's u is not a world axis — part of that displacement lay along u, and the test was then measuring its own arithmetic. Displacements are now stated in the plane's own basis. **Stated increments:** nothing automated sees the symbols — there is no GL context in the suite, so their geometry is unit-tested and their appearance is the user's check; and the section line still carries no direction arrows . **Fixed the same day (user report): the snapped placement was RELATIVE when it must be ABSOLUTE.** The projection is the distance the handle must travel, but the grab's own cursor parameter was subtracted from it, so the plane landed wrong by however far off-centre the click had been — "it looks like it is going to snap too far and then snaps too close". Every case missed it because every fixture aimed its grab ray straight at the handle, making that term exactly zero; `[req344]` now grabs off-centre by design and asserts three different grabs give an identical answer. Reinstated, it lands 2.25 ft out on a 2.25 ft off-centre grab | accepted |
+
+### REQ-452 — Public privacy policy
+- Purpose: give GoSurvey users a clear, accessible account of what the application and its website collect and send
+- Priority: should
+- Type: documentation
+- Statement: The repository must contain a root-level `PRIVACY.md`, and the GoSurvey website must provide an About page with a clearly labeled Privacy section and a link to the complete policy. Both must accurately describe current behavior, including:
+  - desktop usage telemetry, its fields and send frequency, and the signed-in email field;
+  - automatically transmitted startup and crash diagnostics, including the possibility that diagnostic text contains local paths or other machine-specific details;
+  - Auth0 sign-in and the account data stored by GoSurvey, plus where local credentials and preferences are kept;
+  - network services used by the application and website, including online map tiles, release checks, Cloudflare website hosting, the GitHub API, and Google Fonts;
+  - local drawing storage and the fact that drawings are not uploaded by ordinary local editing;
+  - third-party providers' role in processing requests, including that network providers may process IP addresses even when GoSurvey does not store them in its application database;
+  - retention only to the extent established by current configuration; the policy must not invent a fixed retention period;
+  - a clearly identified contact address for privacy requests; if none has been established, explicitly mark that gap rather than guessing.
+- Acceptance:
+  - `PRIVACY.md` exists at the repository root and covers the listed data flows in plain language;
+  - the website has an About page with a visible Privacy section that presents the policy and links to the repository copy;
+  - the main website links to that About page;
+  - all statements are checked against current implementation/configuration, and any not-yet-established contact or retention detail is explicitly identified rather than guessed.
+- Owner-layer: Documentation / Website
+- Status: accepted (2026-10-22, user approved scope)
 
 ---
 

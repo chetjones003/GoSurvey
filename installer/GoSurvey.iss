@@ -34,9 +34,10 @@
   #define OutputDir "Output"
 #endif
 
-; Microsoft VC++ 2015–2022 x64 runtime (placed in build/ by CI or tools/fetch-vc-redist.ps1).
-#ifexist "..\build\vc_redist.x64.exe"
-  #define VcRedistBundled
+; The offline installer must carry the Microsoft VC++ runtime. CI and local packaging put it in
+; build/ before ISCC; fail instead of silently producing an installer that needs a network fetch.
+#ifnexist "..\build\vc_redist.x64.exe"
+  #error Missing build\vc_redist.x64.exe; fetch it with tools\fetch-vc-redist.ps1 before packaging.
 #endif
 
 #define MyAppName "GoSurvey"
@@ -108,10 +109,8 @@ Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
-#ifdef VcRedistBundled
 ; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
 Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
-#endif
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -133,16 +132,9 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
-function ShouldInstallVcRedist: Boolean;
-begin
-  Result := FileExists(ExpandConstant('{app}\redist\VC_redist.x64.exe'));
-end;
-
 [Run]
-#ifdef VcRedistBundled
 ; Idempotent on machines that already have the runtime; required for GoSurvey.exe (/MD).
-Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: ShouldInstallVcRedist
-#endif
+Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 ; The updater's relaunch, routed through Explorer.
 ;
