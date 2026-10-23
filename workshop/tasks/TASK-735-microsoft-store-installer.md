@@ -60,11 +60,12 @@ release asset, not the rolling beta asset.
 ## Verification result
 
 - `git diff --check`: pass.
-- Release workflow inspection: packaging checks the EXE, PDFium DLL, resources directory, and
-  VC++ runtime before invoking ISCC; the stable release attaches generated Store metadata, while
-  the beta path does not.
+- Release workflow inspection: packaging checks the EXE, PDFium DLL, Qt config/plugins, root DLLs,
+  resources directory, and VC++ runtime before invoking ISCC; the stable release attaches generated
+  Store metadata, while the beta path does not.
 - Static inspection: the installer embeds `GoSurvey.exe`, the complete `resources/` tree,
-  `pdfium.dll`, and the required VC++ redistributable; no installer-time download is configured.
+  Qt runtime, `pdfium.dll`, and the required VC++ redistributable; no installer-time download is
+  configured.
 - Inno Setup compile and offline install: not run. `ISCC.exe` and `build/vc_redist.x64.exe` are not
   present in this environment. REQ-453's package/runtime acceptance remains pending until the
   Windows validation in `docs/microsoft-store.md` is completed.

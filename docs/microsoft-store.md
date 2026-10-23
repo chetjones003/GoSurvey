@@ -22,9 +22,10 @@ The bundled VC++ runtime is run with `/install /quiet /norestart`. The packaging
 that redistributable is missing, so it cannot accidentally create a package that expects to fetch
 it later.
 
-The installer contains the application, its resource tree, PDFium, and the VC++ runtime. Once the
-installer file has been obtained, installation works with network access disabled. Downloading the
-installer from the Store still requires connectivity, as Store acquisition does.
+The installer contains the application, its Qt DLLs and plugins, `qt.conf`, resource tree, PDFium,
+and the VC++ runtime. Once the installer file has been obtained, installation works with network
+access disabled. Downloading the installer from the Store still requires connectivity, as Store
+acquisition does.
 
 ## Artifact URL
 

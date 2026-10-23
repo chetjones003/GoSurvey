@@ -13806,7 +13806,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   not display setup UI. Store submission uses `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`;
   the allowed UAC prompt may still appear. The bundled VC++ redistributable also runs quietly.
   Once the user has obtained the installer file, installation requires no network connection:
-  application files and the VC++ runtime are included in that file.
+  application files, Qt runtime, resources, PDFium, and VC++ runtime are included in that file.
   The normal direct-download installer remains interactive. Silent deployment must not launch
   GoSurvey after installation. Store submissions use a versioned, immutable stable-release asset;
   the rolling beta asset is not eligible because its binary changes after publication.
@@ -13815,6 +13815,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     completion UI; a UAC consent prompt remains permitted;
   - the VC++ redistributable is invoked with `/install /quiet /norestart`;
   - packaging fails if the VC++ redistributable is missing, and the resulting installer contains it;
+  - the release workflow checks for `qt.conf`, `qt-plugins/`, and root runtime DLLs before compiling;
   - installation succeeds with network access disabled after the installer file is present locally;
   - no post-install application launch occurs in the Store invocation;
   - the ordinary direct-download invocation still displays the interactive setup wizard;

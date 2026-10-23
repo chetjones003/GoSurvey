@@ -284,10 +284,14 @@ jobs:
         shell: pwsh
         run: |
           foreach ($path in @('build\GoSurvey.exe', 'build\pdfium.dll',
+                              'build\qt.conf', 'build\qt-plugins',
                               'build\vc_redist.x64.exe', 'build\resources')) {
             if (-not (Test-Path $path)) {
               throw "Expected $path in packaging inputs; offline installer would be incomplete."
             }
+          }
+          if (-not (Get-ChildItem 'build\*.dll' -File -ErrorAction SilentlyContinue)) {
+            throw 'Expected runtime DLLs beside GoSurvey.exe; offline installer would be incomplete.'
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
