@@ -392,7 +392,8 @@ void AdjustmentGraph::SetText(const QString& text, const QString& error) {
   m_Controls->setEnabled(true);
   m_Canvas->setInteractive(true);
   RefreshOrdering(m_Document);
-  if (!m_KeepView) Rebuild();
+  // A live validation tick during a drag must not destroy the grabbed item; the release republishes and rebuilds.
+  if (!m_KeepView && !m_Scene->mouseGrabberItem()) Rebuild();
 }
 
 void AdjustmentGraph::Rebuild() {

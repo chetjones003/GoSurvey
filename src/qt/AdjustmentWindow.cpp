@@ -1123,7 +1123,11 @@ bool AdjustmentWindow::ParseEditor(QString& error) {
 bool AdjustmentWindow::SaveFile(const QString& path, QString& error) {
   if (IsBusy()) { error = "An adjustment is running."; return false; }
   ValidateNow();
-  if (!m_Graph->PersistLayout()) { error = m_TextStatus->text(); return false; }
+  if (!m_Graph->PersistLayout()) {
+    // The graph is stale only while the text is invalid; report the same reason the editor gives.
+    if (ParseEditor(error)) error = m_TextStatus->text();
+    return false;
+  }
   if (!ParseEditor(error)) return false;
   ApplyOptionsToData();
   ApplyResolvedScale();  // keep the saved factor current; an unresolvable one is saved as 1.0
