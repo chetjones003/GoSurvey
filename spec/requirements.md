@@ -2892,8 +2892,9 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: When REQ-077 finds a newer version, the application **presents it and waits**. It
   displays the new version, the current version, and the release notes carried in the manifest,
   offering exactly three outcomes: install now, be reminded at the next launch, or skip this version
-  permanently. There is no silent download and no silent install — this application holds unsaved
-  drawings, and an unannounced restart destroys work.
+  permanently. No update download or install starts without the user's explicit choice — this
+  application holds unsaved drawings, and an unannounced restart destroys work. A silent installer
+  mode for deployment does not change this rule.
 
   On the user's choice to install, the application downloads the installer, **verifies it against the
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
@@ -13796,6 +13797,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
                unchanged.
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
+
+### REQ-453 — Microsoft Store installs run without installer UI
+- Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
+- Priority: must
+- Type: functional
+- Statement: The existing Inno Setup EXE supports a Microsoft Store install invocation that does
+  not display setup UI. Store submission uses `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`;
+  the allowed UAC prompt may still appear. The bundled VC++ redistributable also runs quietly.
+  Once the user has obtained the installer file, installation requires no network connection:
+  application files, Qt runtime, resources, PDFium, and VC++ runtime are included in that file.
+  The normal direct-download installer remains interactive. Silent deployment must not launch
+  GoSurvey after installation. Store submissions use a versioned, immutable stable-release asset;
+  the rolling beta asset is not eligible because its binary changes after publication.
+- Acceptance:
+  - the installer compiles and accepts the Store invocation without showing setup, progress, or
+    completion UI; a UAC consent prompt remains permitted;
+  - the VC++ redistributable is invoked with `/install /quiet /norestart`;
+  - packaging fails if the VC++ redistributable is missing, and the resulting installer contains it;
+  - the release workflow checks for the required Qt runtime DLLs, Qt platform plugin, `qt.conf`,
+    bundled template, PDFium, and VC++ redistributable before compiling;
+  - installation succeeds with network access disabled after the installer file is present locally;
+  - no post-install application launch occurs in the Store invocation;
+  - the ordinary direct-download invocation still displays the interactive setup wizard;
+  - Partner Center points to a versioned stable-release installer URL whose bytes are not replaced
+    after that submission;
+  - each stable release publishes a regenerated Store submission note containing the immutable
+    installer URL, SHA-256, and exact install parameters; beta releases do not publish this note;
+- Owner-layer: Build/Platform
+- Status: accepted (2026-10-23, D-2026-10-23-c)
+- Revisions: 2026-10-23 — initial, D-2026-10-23-c.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
