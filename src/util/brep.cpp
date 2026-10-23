@@ -5943,6 +5943,11 @@ bool Extrude(const Profile& profile, double distance, Solid* out, Problem* outWh
       return Fail(Problem::DegenerateEdge, outWhy);
     if (std::fabs(r0 - r1) > 1e-6 * scale)
       return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+    const Vec3 expectedEnd = ray3d::Add(pe.centre, ray3d::RotateVectorAboutAxis(
+        ray3d::Sub(profile.vertices[static_cast<std::size_t>(i)], pe.centre),
+        ray3d::Normalize(pl.zAxis), pe.sweep));
+    if (ray3d::Length(ray3d::Sub(expectedEnd, profile.vertices[static_cast<std::size_t>((i + 1) % n)])) > planeEps)
+      return Fail(Problem::NotClosed, outWhy);
   }
   if (ProfileChordsCross(profile))
     return Fail(Problem::ProfileSelfIntersects, outWhy);
@@ -6154,6 +6159,11 @@ struct LoftProfilePrep {
       return Fail(Problem::DegenerateEdge, outWhy);
     if (std::fabs(r0 - r1) > 1e-6 * scale)
       return Fail(Problem::ProfileArcRadiusMismatch, outWhy);
+    const Vec3 expectedEnd = ray3d::Add(pe.centre, ray3d::RotateVectorAboutAxis(
+        ray3d::Sub(pr.vertices[static_cast<std::size_t>(i)], pe.centre),
+        ray3d::Normalize(pl.zAxis), pe.sweep));
+    if (ray3d::Length(ray3d::Sub(expectedEnd, pr.vertices[static_cast<std::size_t>((i + 1) % n)])) > planeEps)
+      return Fail(Problem::NotClosed, outWhy);
   }
   if (ProfileChordsCross(pr))
     return Fail(Problem::ProfileSelfIntersects, outWhy);
@@ -8775,7 +8785,7 @@ struct DistRange {
 
 /// A `Sphere` or `Torus` recipe that describes its solid, the way `ConicalRecipeFitsSolid` vets a
 /// cylinder's (D-2026-09-17-a): these builders rebuild the pieces from the recipe, so a recipe whose
-/// primitive is a different shape — a damaged `.gs` frame, a solid edited since — would cut in the
+/// primitive is a different shape — a damaged `internal document payload` frame, a solid edited since — would cut in the
 /// wrong place. A recipe that does not fit is not used, and the cut falls through to the refusal the
 /// solid's geometry earns.
 [[nodiscard]] bool RoundRecipeFitsSolid(const Solid& solid) {
@@ -9113,7 +9123,7 @@ struct DistRange {
 // Which recipe a cut may trust (GitHub issue #515 follow-up, D-2026-09-17-a).
 //
 // The curved slice recognisers rebuild both pieces from `solid.recipe`, so a recipe that does not
-// describe its solid — a `.gs` whose frame was damaged, or any future path that forgets to drop a
+// describe its solid — a `internal document payload` whose frame was damaged, or any future path that forgets to drop a
 // recipe after changing the shape — would cut the wrong geometry with no error. And a solid that
 // IS a cylinder or cone but carries no recipe — one saved before #515, a Boolean result, a straight
 // sweep — was refused. Both are answered here, from the geometry: a Cylinder / Cone recipe is used
@@ -11608,7 +11618,7 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 /// bore is an **inward** cylinder wall between the two quartic loops. When `d > r` the kept sphere
 /// is two lens-bitten hemispheres (6v / 10e); when `d < r` (pole-covered) it is the two-half
 /// equatorial zone between the loops, no poles (4v / 8e). Every sphere and bore face integrates
-/// numerically. `.gs` stays v3.
+/// numerically. `internal document payload` stays v3.
 [[nodiscard]] bool BuildSphereCylinderOffsetSubtractSphere(const ucs::Ucs& fr, double r, double Rs,
                                                            double d, Solid* out, Problem* outWhy) {
   OffsetScaffold sc;
@@ -11655,7 +11665,7 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 /// side. Kept sphere: the two lens-bitten hemispheres (`d > r`) or the equatorial zone (`d < r`);
 /// each boss is the **outward** cylinder wall from a quartic loop out to a flat end cap. \p zBot /
 /// \p zTop are the cap heights measured from the sphere centre along \p fr's `zAxis` (`zBot < −zP`,
-/// `zTop > zP`). `.gs` stays v3.
+/// `zTop > zP`). `internal document payload` stays v3.
 [[nodiscard]] bool BuildSphereCylinderOffsetUnion(const ucs::Ucs& fr, double r, double Rs, double d,
                                                   double zBot, double zTop, Solid* out,
                                                   Problem* outWhy) {
@@ -11734,7 +11744,7 @@ void AddOffsetKeptZone(OffsetScaffold* sc) {
 /// quartic loop. When `d > r` the dimple is a lens (longitude ±asin(r/d)); when `d < r`
 /// (pole-covered) it is a full inward polar cap. 4 vertices, 6 edges (2 procedural), 4 faces, χ = 2.
 /// Built in \p fr (origin = sphere centre, `+z` = cylinder axis, `+x` toward the cylinder axis) and
-/// left there. Every sphere and cylinder face integrates numerically. `.gs` stays v3.
+/// left there. Every sphere and cylinder face integrates numerically. `internal document payload` stays v3.
 [[nodiscard]] bool BuildCylinderSphereOffsetStub(const ucs::Ucs& fr, double r, double Rs, double d,
                                                  double zFlat, int sideSign, Solid* out,
                                                  Problem* outWhy) {

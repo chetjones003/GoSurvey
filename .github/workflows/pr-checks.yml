@@ -1,251 +1,77 @@
-# PR gating checks (REQ-402) — build/test, lint, and security, run on every pull request into
-# master or beta, with the SAME check set on both branches.
-#
-# Deliberately split into separate, independently-named jobs rather than one monolithic job: the
-# PR checks list in GitHub's UI shows one line per job, so a failure is attributable at a glance
-# (`lint / clang-tidy` failed vs `security / gitleaks` failed) instead of digging through one big
-# log. Nothing here publishes anything — that stays in release.yml (REQ-202/ADR-029), which is
-# manual-dispatch only and untouched by this file.
-#
-# msvc-analyze is deliberately NON-blocking here (see CMakeLists.txt's GOSURVEY_ENABLE_ANALYZE
-# comment): the existing codebase has never been triaged against /analyze, so failing the whole
-# build on a pre-existing, untouched-file warning would block unrelated PRs. It stays
-# annotation-only until a separate triage pass (tracked as its own task) clears the backlog, at
-# which point GOSURVEY_ENABLE_ANALYZE can be paired with /WX here and this comment/job updated.
+# PR gate (REQ-437). Full C++ build/tests and static analysis run in full-validation.yml;
+# both workflows' check statuses are required and block merge. A validated docs-only PR skips CI;
+# review requirements remain governed by branch rules.
 
 name: pr-checks
 
 on:
   pull_request:
     branches: [master, beta]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 concurrency:
-  group: pr-checks-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: pr-checks-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 permissions:
   contents: read
+  pull-requests: read
   security-events: write
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # build — GoSurvey.exe. The test suite and headless driver are not in this tree.
-  # ---------------------------------------------------------------------------
-  build-and-test:
-    name: build / test
-    runs-on: windows-latest
-    env:
-      SCCACHE_GHA_ENABLED: "true"
+  classify-docs-only:
+    name: policy / docs-only classification
+    runs-on: ubuntu-latest
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
     steps:
-      - name: Check out
+      - name: Check out classifier
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Validate docs-only label against changed paths
+        id: classify
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+        run: python .github/scripts/classify_docs_only.py
 
-      - name: Ensure Ninja
-        shell: pwsh
-        run: |
-          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
-          $ver = '1.12.1'
-          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
-          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-
-      - name: Run sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      - name: Configure
-        run: >
-          cmake --preset ninja-release
-          -DCMAKE_C_COMPILER_LAUNCHER=sccache
-          -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-
-      - name: Build
-        run: cmake --build build
-
-      - name: sccache stats
-        if: always()
-        shell: pwsh
-        run: |
-          if ($env:SCCACHE_PATH) { & $env:SCCACHE_PATH --show-stats }
-          else { sccache --show-stats }
-
-  # ---------------------------------------------------------------------------
-  # lint / clang-tidy — scoped to LINES the PR actually changed (via clang-tidy's own
-  # -line-filter), not whole files. (Amended 2026-10-11, issue #824 follow-up: the original
-  # whole-file scoping still left a PR on the hook for every pre-existing warning anywhere in
-  # any file it touched — on a file the size of CadCommands.hpp that is tens of thousands of
-  # unrelated, untriaged warnings, which made the check unpassable for any PR touching that file
-  # regardless of what the PR itself changed. PR #829 hit this: 0 findings on its own diff, ~95
-  # pre-existing ones elsewhere in the same files.) HeaderFilterRegex below means a .cpp's
-  # included headers are analyzed too, so the SAME combined line-filter (one {name, lines} entry
-  # per changed file) is reused for every clang-tidy invocation in this job, not just the one
-  # where that header is the direct target — otherwise a header's own genuinely-new lines would
-  # only be checked when it happens to be the file passed on the command line.
-  #
-  # Runs natively on windows-latest rather than via a container action (e.g.
-  # ZedThree/clang-tidy-review): GitHub Actions container actions require a Linux runner,
-  # and compile_commands.json here only resolves against the MSVC toolchain (Windows-only),
-  # so a container-based reviewer can't see real compile flags anyway. windows-latest ships
-  # LLVM's clang-tidy.exe (C:\Program Files\LLVM\bin), which is used directly against the
-  # MSVC-generated compile database instead.
-  # ---------------------------------------------------------------------------
-  lint-clang-tidy:
-    name: lint / clang-tidy
-    runs-on: windows-latest
+  fast-pr-gate:
+    name: PR gate
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
+    runs-on: ubuntu-latest
     steps:
-      - name: Check out
+      - name: Check out PR changes
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Ensure Ninja
-        shell: pwsh
-        run: |
-          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
-          $ver = '1.12.1'
-          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
-          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-
-      - name: Configure (compile_commands.json only, no build)
-        # GOSURVEY_USE_PCH=OFF: this step deliberately never builds, so no cmake_pch.cxx.pch
-        # is ever produced. Leaving PCH on left compile_commands.json referencing a .pch that
-        # does not exist, failing clang-tidy on ANY PCH-covered file with a PCH-not-found
-        # compiler error (unrelated to the file's own content) rather than a real finding.
-        run: cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DGOSURVEY_USE_PCH=OFF
-
-      - name: clang-tidy (lines changed in this PR only)
-        shell: pwsh
+      - name: Check patch formatting and Python syntax
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          $clangTidy = Get-Command clang-tidy -ErrorAction SilentlyContinue
-          if (-not $clangTidy) {
-            $candidate = 'C:\Program Files\LLVM\bin\clang-tidy.exe'
-            if (-not (Test-Path $candidate)) { throw "clang-tidy.exe not found on this runner image." }
-            $clangTidy = $candidate
-          } else {
-            $clangTidy = $clangTidy.Source
-          }
-          Write-Host "Using $clangTidy ($(& $clangTidy --version | Select-Object -First 1))"
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          # Vendored sources retain upstream formatting, including whitespace that `diff --check`
+          # flags. Keep checking project-owned changes without rewriting third-party code.
+          git diff --check "$BASE_SHA" HEAD -- . ':(exclude)third_party/**'
+          python -m compileall -q .github/scripts
+          python -m unittest discover -s .github/scripts -p "test_*.py"
 
-          git fetch --depth=1 origin $env:BASE_SHA
-          $changed = git diff --name-only --diff-filter=ACMR "$env:BASE_SHA" HEAD |
-            Where-Object { $_ -match '\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$' } |
-            Where-Object { $_ -notmatch '^third_party/' } |
-            Where-Object { Test-Path $_ }
-
-          if (-not $changed) {
-            Write-Host "No changed C/C++ files to lint."
-            exit 0
-          }
-          Write-Host "Linting (changed lines only):`n$($changed -join "`n")"
-
-          # One combined {name, lines} entry per changed file, reused for every invocation below
-          # (see the job header comment for why: a header's diagnostics can surface while a
-          # DIFFERENT .cpp is the file clang-tidy was invoked on). "name" uses backslashes because
-          # clang-tidy's line-filter matches the diagnostic's file path as the compiler reports it,
-          # which on this MSVC/Windows runner is a backslash-separated absolute path — a
-          # forward-slash "name" (git's own path spelling) never matches that suffix at all.
-          $filterEntries = @()
-          foreach ($file in $changed) {
-            $hunkStarts = git diff -U0 "$env:BASE_SHA" HEAD -- $file |
-              Select-String -Pattern '^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@'
-            $ranges = @()
-            foreach ($m in $hunkStarts) {
-              $start = [int]$m.Matches[0].Groups[1].Value
-              $countGroup = $m.Matches[0].Groups[2]
-              $count = if ($countGroup.Success) { [int]$countGroup.Value } else { 1 }
-              if ($count -eq 0) { continue }  # pure deletion: no new lines in this hunk to check
-              $ranges += "[$start,$($start + $count - 1)]"
-            }
-            if ($ranges.Count -eq 0) { continue }  # file touched only by deletions; nothing new to lint
-            # Two backslashes, not one: this string is embedded directly into JSON text below, and
-            # JSON requires a literal backslash to be written as \\ — a single backslash here would
-            # make the JSON invalid (a Windows path backslash followed by certain letters, e.g. the
-            # "\u" in "CadCommands.hpp", parses as a bad unicode escape, not a path separator).
-            $name = $file -replace '/', '\\'
-            $filterEntries += "{`"name`":`"$name`",`"lines`":[$($ranges -join ',')]}"
-          }
-
-          if ($filterEntries.Count -eq 0) {
-            Write-Host "No added/modified lines in any changed C/C++ file (deletions only)."
-            exit 0
-          }
-          $lineFilter = "[$($filterEntries -join ',')]"
-          Write-Host "Line filter:`n$lineFilter"
-
-          $failed = $false
-          foreach ($file in $changed) {
-            # --warnings-as-errors=* makes a Checks: match fail the run (the exit code is 0 on
-            # warnings otherwise); .clang-tidy's own WarningsAsErrors stays '' since that field
-            # would apply even on a plain `clang-tidy` invocation outside this workflow (e.g. a
-            # local editor integration), where warnings-not-errors is the more useful default.
-            # -line-filter restricts which diagnostics clang-tidy even emits (not a post-filter on
-            # the exit code), so this also cuts the run time and log size on a large header.
-            & $clangTidy --config-file=.clang-tidy --warnings-as-errors=* "-line-filter=$lineFilter" -p build $file
-            if ($LASTEXITCODE -ne 0) { $failed = $true }
-          }
-          if ($failed) {
-            Write-Host "::error::clang-tidy found issue(s) on lines changed by this PR."
-            exit 1
-          }
-
-  # ---------------------------------------------------------------------------
-  # lint / msvc-analyze — report-only (see header comment). Always "passes"; findings
-  # surface as build annotations via the existing problem matcher.
-  # ---------------------------------------------------------------------------
-  lint-msvc-analyze:
-    name: lint / msvc-analyze (report-only)
-    runs-on: windows-latest
-    steps:
-      - name: Check out
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Ensure Ninja
-        shell: pwsh
-        run: |
-          if (Get-Command ninja -ErrorAction SilentlyContinue) { exit 0 }
-          $ver = '1.12.1'
-          $dir = Join-Path $env:RUNNER_TEMP 'ninja'
-          New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $zip = Join-Path $env:RUNNER_TEMP 'ninja.zip'
-          Invoke-WebRequest -Uri "https://github.com/ninja-build/ninja/releases/download/v$ver/ninja-win.zip" -OutFile $zip
-          Expand-Archive -Path $zip -DestinationPath $dir -Force
-          Add-Content -Path $env:GITHUB_PATH -Value $dir
-
-      - name: Configure
-        run: cmake --preset ninja-release -DGOSURVEY_ENABLE_ANALYZE=ON
-
-      - name: Register MSVC /analyze problem matcher
-        run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
-
-      - name: Build (findings become annotations, build is not failed by them)
-        run: cmake --build build
-
-  # ---------------------------------------------------------------------------
-  # security / gitleaks — secret scanning over the PR diff.
-  # ---------------------------------------------------------------------------
+  # These inexpensive security scans remain required on every non-docs PR.
   security-gitleaks:
     name: security / gitleaks
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -258,13 +84,13 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # ---------------------------------------------------------------------------
-  # security / dependency-scan — vendored third_party/ has no lockfile for the usual
-  # Dependabot/npm-audit style tools, so this is a source-composition/CVE filesystem
-  # scan (Trivy) instead.
-  # ---------------------------------------------------------------------------
   security-dependency-scan:
     name: security / dependency-scan
+    needs: classify-docs-only
+    if: >-
+      always() &&
+      (needs.classify-docs-only.result != 'success' ||
+       needs.classify-docs-only.outputs.docs_only != 'true')
     runs-on: ubuntu-latest
     steps:
       - name: Check out
@@ -280,8 +106,4 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
           ignore-unfixed: true
-          # trivy-action's own default Trivy version (v0.65.0) failed to install on this
-          # runner (install.sh exited 1 with no further detail — an upstream asset/install
-          # issue, not something in our scan config). Pinned to a release confirmed available
-          # at the time this was written; bump alongside trivy-action if it fails again.
           version: v0.75.0

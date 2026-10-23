@@ -39,6 +39,19 @@ struct ObjBox {
   float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
 };
 
+/// REQ-429: one occurrence of a search text.
+struct TextHit {
+  int page = 0;
+  std::vector<ObjBox> boxes;
+};
+
+struct TextSearch {
+  std::vector<TextHit> hits;  ///< in page order, then reading order
+  bool truncated = false;     ///< more than kMaxHits occurrences exist; the rest were not collected
+  bool anyText = false;       ///< at least one page has a text layer (false: a scan, so nothing could match)
+  static constexpr size_t kMaxHits = 10000;
+};
+
 class PdfDocument {
 public:
   struct OpenResult {
@@ -78,6 +91,12 @@ public:
   /// callout line), in the viewer's page coordinates like SnapPoints. Used only to colour a changed word whole; the
   /// comparison itself is of the drawn picture. \p cancel is polled; false on failure or cancel.
   bool TextBoxes(int page, std::vector<ObjBox>& out, const std::function<bool()>& cancel);
+
+  /// REQ-429: where \p query (UTF-16) occurs in the document's text, page by page. Each hit has the page and
+  /// the boxes covering the match (one per line fragment), in the viewer's page coordinates like TextBoxes.
+  /// An empty query finds nothing. \p cancel is polled between pages and matches; false on failure or cancel.
+  /// The PDFium lock is held for one page at a time, so rendering is not starved while a long file is searched.
+  bool SearchText(const std::u16string& query, bool matchCase, TextSearch& out, const std::function<bool()>& cancel);
 
   /// REQ-395: every text run (its string and box) and every straight stroke on \p page, in the viewer's page
   /// coordinates, for the automatic scale audit. \p cancel is polled; false on failure or cancel.

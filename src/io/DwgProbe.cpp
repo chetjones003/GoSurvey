@@ -4,7 +4,7 @@
 //
 // Split out of DwgIo.cpp on purpose: this half depends on nothing but <filesystem>, so the test
 // target links it directly. DwgIo.cpp — the conversion orchestration — calls into DxfIo, which
-// pulls in CadCommands.cpp and with it pdfium/WinRT/ImGui, and cannot be linked by tests today.
+// pulls in CadCommands.cpp and with it PDFium/WinRT and the GUI stack, so tests cannot link it today.
 // Keeping the testable logic in its own translation unit is what makes TASK-031's coverage
 // possible without restructuring the whole application.
 

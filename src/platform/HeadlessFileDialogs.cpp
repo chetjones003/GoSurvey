@@ -10,11 +10,12 @@
 // transcript fills (`DIALOG OPEN <path>` / `DIALOG SAVE <path>` / `DIALOG CANCEL`) and returns
 // false — a cancelled dialog — once the queue is empty.
 //
-// Of the fourteen functions in the header, three (`BrowseOpenFileGltfUtf8`,
-// `BrowseOpenFileE57Utf8`, `BrowseOpenFileBlockUtf8`) are reachable from the Commands layer; the
-// rest are called from the UI, which headless does not link. They are all implemented anyway,
-// because a seam that covers most of a header is a link error waiting for whichever command grows
-// a new call.
+// Of the functions in the header, a handful (`BrowseOpenFileGltfUtf8`, `BrowseOpenFilePointCloudUtf8`,
+// `BrowseSaveFilePtsUtf8`, `BrowseSaveFilePtxUtf8`, `BrowseSaveFileLasUtf8`, `BrowseSaveFileLazUtf8`,
+// `BrowseOpenFileBlockUtf8`) are reachable from
+// the Commands layer; the rest are called from the UI, which headless does not link. They are all
+// implemented anyway, because a seam that covers most of a header is a link error waiting for
+// whichever command grows a new call.
 
 #include "WinFileDialogs.hpp"
 
@@ -111,8 +112,30 @@ bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char*) {
 
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
+bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
-bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+bool BrowseOpenFilePointCloudUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
+
+bool BrowseSaveFilePtsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseSaveFileLasUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
+bool BrowseSaveFileLazUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
 
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }

@@ -156,12 +156,12 @@ EXPECT SOLIDPROPS 0 1600 880 8 12 6
 # fence ACCUMULATES into the current selection, and the box is still selected from the drag. A save
 # and reload gives that empty start, and proves the moved solid survives the round trip at its new
 # position at the same time.
-SAVEAS %OUT%/gizmo-solid.gs
+SAVEAS %OUT%/gizmo-solid.dwg
 NEW
 # The always-on gizmo this file exercises: since D-2026-09-28-a a selection alone shows none.
 CMD GIZMO MOVE
 EXPECT SOLIDS 0
-OPEN %OUT%/gizmo-solid.gs
+OPEN %OUT%/gizmo-solid.dwg
 EXPECT SOLIDS 1
 BOX -15 -10 15 10
 EXPECT SELECTED 0

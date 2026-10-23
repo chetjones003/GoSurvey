@@ -288,13 +288,14 @@ TEST_CASE("req379 clause 5: TrackFile tracks a PDF on its own, once, and links a
   CHECK(linked);
 }
 
-TEST_CASE("req379 clause 6: the new-file scan offers untracked dwg/pdf/e57 and nothing else", "[req379][issue732]") {
+TEST_CASE("req379 clause 6: the new-file scan offers untracked dwg/pdf/e57/pts and nothing else", "[req379][issue732]") {
   TempDir root("refresh");
   gsproj::Project p = MakeProject(root.path / "proj");
   const fs::path f = p.Folder();
   WriteText(f / "Drawings" / "New.dwg", "d");
   WriteText(f / "Received" / "PDFs" / "Combined IFC.pdf", "p");
   WriteText(f / "PointClouds" / "scan.E57", "e");          // upper-case extension
+  WriteText(f / "PointClouds" / "site.pts", "p");          // REQ-172 PTS increment
   WriteText(f / "PDFs" / "Tracked.pdf", "p");
   WriteText(f / "Notes" / "readme.txt", "t");              // another kind
   WriteText(f / "PointClouds" / "scan.e57.gscloud", "c");  // a cache
@@ -306,9 +307,16 @@ TEST_CASE("req379 clause 6: the new-file scan offers untracked dwg/pdf/e57 and n
   p.items.push_back(t);
 
   const std::vector<std::string> found = projfiles::FindUntracked(p);
-  const std::vector<std::string> want = {"Drawings/New.dwg", "PointClouds/scan.E57", "Received/PDFs/Combined IFC.pdf"};
+  const std::vector<std::string> want = {"Drawings/New.dwg", "PointClouds/scan.E57",
+                                         "PointClouds/site.pts", "Received/PDFs/Combined IFC.pdf"};
   CHECK(found == want);
 
   REQUIRE(projfiles::TrackFile(&p, f / "Received" / "PDFs" / "Combined IFC.pdf"));
-  CHECK(projfiles::FindUntracked(p).size() == 2);  // tracked files are not offered again
+  CHECK(projfiles::FindUntracked(p).size() == 3);  // tracked files are not offered again
+}
+
+TEST_CASE("RoleForFile: .pts maps to PointCloud, same as .e57 (REQ-172 PTS increment)", "[req379][pts]") {
+  CHECK(projfiles::RoleForFile("site.pts") == projfiles::Role::PointCloud);
+  CHECK(projfiles::RoleForFile("site.PTS") == projfiles::Role::PointCloud);
+  CHECK(projfiles::RoleForFile("site.e57") == projfiles::Role::PointCloud);
 }

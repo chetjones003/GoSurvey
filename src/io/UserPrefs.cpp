@@ -1,6 +1,6 @@
 #include "UserPrefs.hpp"
 
-#include "AppIcon.hpp"
+#include "AppPaths.hpp"
 #include "CadCommands.hpp"
 
 #include <nlohmann/json.hpp>
@@ -89,8 +89,6 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     st.systemPreferIntegratedGpu = s["systemPreferIntegratedGpu"].get<bool>();
   if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
     st.gfxSmoothLineDisplay = s["gfxSmoothLineDisplay"].get<bool>();
-  if (s.contains("gfxAcceleratedFontDisplay") && s["gfxAcceleratedFontDisplay"].is_boolean())
-    st.gfxAcceleratedFontDisplay = s["gfxAcceleratedFontDisplay"].get<bool>();
   if (s.contains("gfxVideoMemoryCachingLevel") && s["gfxVideoMemoryCachingLevel"].is_number_integer())
     st.gfxVideoMemoryCachingLevel = std::clamp(s["gfxVideoMemoryCachingLevel"].get<int>(), 1, 5);
 
@@ -99,6 +97,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   num("viewportCrosshairG",      &st.viewportCrosshairG,      0.f, 1.f);
   num("viewportCrosshairB",      &st.viewportCrosshairB,      0.f, 1.f);
   num("viewportCrosshairHairPx", &st.viewportCrosshairHairPx, 0.75f, 4.f);
+  // REQ-450: the pickbox half-size is one setting; X and Y are kept equal.
+  num("viewportCrosshairPickHalfPxX", &st.viewportCrosshairPickHalfPxX, 2.f, 20.f);
+  num("viewportCrosshairPickHalfPxY", &st.viewportCrosshairPickHalfPxY, 2.f, 20.f);
 
   // --- Viewport background (Display → Window Elements) ---
   num("viewportBgR", &st.viewportBgR, 0.f, 1.f);
@@ -141,8 +142,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
 
   // --- Panel focus restoration ---
   if (s.contains("focusedSidePanel") && s["focusedSidePanel"].is_string()) {
-    if (s["focusedSidePanel"].get<std::string>() == "Properties")
-      st.pendingPropertiesFocus = true;
+    st.propertiesPanelActive = s["focusedSidePanel"].get<std::string>() == "Properties";
   }
 
   // --- Right-click behavior (Drafting tab legacy + User Preferences) ---
@@ -212,6 +212,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   // REQ-336 — What's New auto-open dismiss (same shape as updateSkippedVersion).
   if (s.contains("whatsNewDismissedVersion") && s["whatsNewDismissedVersion"].is_string())
     st.whatsNewDismissedVersion = s["whatsNewDismissedVersion"].get<std::string>();
+
+  // REQ-091 (amended 2026-10-11, D-2026-10-11-a) — "Don't Sign In" at the launch gate, persisted
+  // so the gate never reappears once chosen.
+  b("authOptedOut", &st.authOptedOut);
 
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
@@ -316,7 +320,9 @@ void LoadUserStartupPrefs(AppCommandState& st) {
     }
     if (j.contains("settings") && j["settings"].is_object())
       ApplyUserPrefsSettings(st, j["settings"]);
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): a corrupt/unreadable prefs file falls back to
+                   // defaults; st was only ever partially written above, and every field already
+                   // has a sane default.
   }
 }
 
@@ -332,7 +338,8 @@ void LoadUserStartupPrefSettings(AppCommandState& st) {
       return;
     if (j.contains("settings") && j["settings"].is_object())
       ApplyUserPrefsSettings(st, j["settings"]);
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): same fallback-to-defaults reasoning as
+                   // LoadUserStartupPrefs above.
   }
 }
 
@@ -371,7 +378,6 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
   s["systemPreferIntegratedGpu"]   = st.systemPreferIntegratedGpu;
   s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
-  s["gfxAcceleratedFontDisplay"]   = st.gfxAcceleratedFontDisplay;
   s["gfxVideoMemoryCachingLevel"]  = st.gfxVideoMemoryCachingLevel;
 
   // Crosshair appearance
@@ -379,6 +385,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportCrosshairG"]          = st.viewportCrosshairG;
   s["viewportCrosshairB"]          = st.viewportCrosshairB;
   s["viewportCrosshairHairPx"]     = st.viewportCrosshairHairPx;
+  s["viewportCrosshairPickHalfPxX"] = st.viewportCrosshairPickHalfPxX;
+  s["viewportCrosshairPickHalfPxY"] = st.viewportCrosshairPickHalfPxY;
 
   // Viewport background
   s["viewportBgR"]                 = st.viewportBgR;
@@ -443,6 +451,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["updateUseBetaChannel"] = st.updatePrefs.useBetaChannel;
   s["updateSkippedVersion"] = st.updatePrefs.skippedVersion;
   s["whatsNewDismissedVersion"] = st.whatsNewDismissedVersion;
+  s["authOptedOut"] = st.authOptedOut;  // REQ-091 amended, D-2026-10-11-a
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;
@@ -533,7 +542,8 @@ TelemetryIds GetTelemetryIds() {
 
     if (j.contains("installId") && j["installId"].is_string())
       result.installId = j["installId"].get<std::string>();
-  } catch (...) {
+  } catch (...) {  // NOLINT(bugprone-empty-catch): a corrupt/unreadable prefs file leaves
+                   // result's install id unset, which callers already treat as "none yet".
   }
 
   return result;

@@ -27,14 +27,12 @@ namespace {
 
 const char* StageWireName(Stage stage) {
   switch (stage) {
-  case Stage::GlfwInit:
-    return "glfw_init";
-  case Stage::GlfwCreateWindow:
-    return "glfw_window";
+  case Stage::GraphicsContext:
+    return "graphics_context";
   case Stage::OpenGlInit:
     return "opengl_init";
   }
-  return "glfw_init";
+  return "graphics_context";
 }
 
 void TryPostStartupReportSilent(Stage stage, const std::string& reportUtf8) {
@@ -67,9 +65,7 @@ void TryPostStartupReportSilent(Stage stage, const std::string& reportUtf8) {
 
 std::string StageSummary(Stage stage) {
   switch (stage) {
-  case Stage::GlfwInit:
-    return "GoSurvey could not initialize its display library (GLFW).";
-  case Stage::GlfwCreateWindow:
+  case Stage::GraphicsContext:
     return "GoSurvey could not create a graphics window.\n\n"
            "This usually means OpenGL 3.3 is not available from your graphics driver. "
            "OpenGL is provided by your GPU driver (it is not a separate installer like Visual C++).\n\n"
@@ -83,11 +79,6 @@ std::string StageSummary(Stage stage) {
   }
   return "GoSurvey could not start.";
 }
-
-#ifdef _WIN32
-int         g_lastGlfwErrorCode = 0;
-std::string g_lastGlfwErrorText;
-#endif
 
 std::filesystem::path StartupFailureLogPath() {
   const std::filesystem::path dir = UserDataDirectory();
@@ -118,26 +109,12 @@ void WriteStartupFailureLog(Stage stage, const std::string& detailUtf8) {
   out << StageSummary(stage) << "\n";
   if (!detailUtf8.empty())
     out << "detail: " << detailUtf8 << "\n";
-#ifdef _WIN32
-  if (g_lastGlfwErrorCode != 0 || !g_lastGlfwErrorText.empty()) {
-    out << "last_glfw_error: " << g_lastGlfwErrorCode << " " << g_lastGlfwErrorText << "\n";
-  }
-#endif
   out << "log_file: " << logPath.u8string() << "\n\n";
 }
 
 }  // namespace
 
-void NoteGlfwError(int code, const char* description) {
-#ifdef _WIN32
-  g_lastGlfwErrorCode = code;
-  g_lastGlfwErrorText = (description && description[0]) ? description : std::string();
-#endif
-  (void)code;
-  (void)description;
-}
-
-[[noreturn]] void FailAndShow(Stage stage, const std::string& detailUtf8) {
+std::string RecordAndSend(Stage stage, const std::string& detailUtf8) {
   WriteStartupFailureLog(stage, detailUtf8);
 
   const std::string summary = StageSummary(stage);
@@ -146,14 +123,6 @@ void NoteGlfwError(int code, const char* description) {
     body += "\n\nTechnical detail:\n";
     body += detailUtf8;
   }
-#ifdef _WIN32
-  if (g_lastGlfwErrorCode != 0 || !g_lastGlfwErrorText.empty()) {
-    body += "\n\nLast GLFW message:\n";
-    body += std::to_string(g_lastGlfwErrorCode);
-    body += ": ";
-    body += g_lastGlfwErrorText;
-  }
-#endif
   body += "\n\nA copy of this report was appended to:\n";
   body += StartupFailureLogPath().u8string();
   body += "\n\nUse \"Send This Report\" to copy this text and open GitHub to file an issue.";
@@ -161,7 +130,11 @@ void NoteGlfwError(int code, const char* description) {
   std::fprintf(stderr, "%s\n", body.c_str());
 
   TryPostStartupReportSilent(stage, body);
+  return body;
+}
 
+[[noreturn]] void FailAndShow(Stage stage, const std::string& detailUtf8) {
+  const std::string body = RecordAndSend(stage, detailUtf8);
 #ifdef _WIN32
   failureReportUi::ShowReportDialog(L"GoSurvey could not start", body);
   ::ExitProcess(1);

@@ -1,0 +1,229 @@
+# Use a spare Windows 11 laptop as a build runner
+
+GitHub's runner makes an outbound HTTPS connection to receive jobs. The laptop
+does not need a public IP, router port forwarding, or a public RDP server.
+Tailscale is optional for remote administration.
+
+This guide prepares the machine and its dedicated PR workers. Production routing
+is controlled by the repository variable `GOSURVEY_PR_RUNNERS`; installing the
+runner alone does not move jobs onto it.
+
+## 1. Install the build environment
+
+Use Windows 11 x64, an SSD, at least 8 GB RAM, and at least 30 GB free space.
+16 GB RAM and additional free space are preferable for concurrent compilation.
+Use a dedicated build machine/account without personal credentials or files.
+
+Download `tools/setup-windows-build-runner.ps1` from this branch, or run it from
+a checkout. Open **PowerShell as administrator**:
+
+```powershell
+# Inspect the plan first; this makes no changes.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup-windows-build-runner.ps1 -PlanOnly
+
+# Install tools, Qt, and launchers; prevent automatic sleep while plugged in.
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup-windows-build-runner.ps1 -PreventSleep
+```
+
+For a downloaded standalone copy, replace `tools\setup-windows-build-runner.ps1`
+with its actual location. If WinGet is missing, install/update Microsoft's
+[App Installer](https://apps.microsoft.com/detail/9nblggh4nns1) first.
+
+The script installs Git, CMake, Ninja, PowerShell 7, Python 3.13, LLVM/clang-tidy,
+sccache, GitHub CLI, and 7-Zip using WinGet. It requires MSVC 14.50 or newer,
+using an existing Visual Studio 2026 C++ installation or installing stable
+`Microsoft.VisualStudio.BuildTools` with the C++ workload and Windows SDK.
+It installs the same Qt 6.8.3 MSVC x64 kit used in CI through an isolated aQt
+environment. Existing package installations are checked before installing.
+
+Defaults: helper files under `C:\GoSurveyCI`, Qt under `C:\Qt`. Override with
+`-InstallRoot` and `-QtDirectory` if needed. If an installer requests a restart,
+restart Windows and rerun the script. The script never restarts Windows itself.
+
+For machines prepared by the earlier VS 2022 setup, stop the runner, download
+the updated setup script and rerun it as administrator. This also refreshes the
+environment helper to select the newer tools explicitly. Then restart the runner
+from a normal PowerShell window. The bundled E57/CS-MAP libraries need STL
+functions absent from MSVC 14.44; updating only the VC++ Redistributable will
+not fix their link errors. Benchmark preflight now checks those exact runtime
+references with a tiny compile/link probe before the project build.
+
+`-PreventSleep` changes plugged-in sleep and hibernate timeouts. Check Windows'
+lid-close setting separately if the laptop will run with its lid closed, and
+keep it powered and ventilated. No network listener or firewall port is added.
+
+## 2. Register the laptop with GitHub
+
+Sign into the Windows account that will run jobs and open a **normal,
+non-administrator PowerShell 7 window**. Use the runner account's own folder,
+such as `$env:USERPROFILE\actions-runner`.
+
+1. Open [GoSurvey's runner registration page](https://github.com/chetjones003/GoSurvey/settings/actions/runners/new).
+2. Select **Windows**, **x64**.
+3. Follow GitHub's current download, checksum, extract, and `config.cmd`
+   instructions in that folder. The generated registration token expires after
+   one hour; enter it on the laptop, not in chat or a committed script.
+4. Give it a name such as `gosurvey-laptop` and an additional label
+   `gosurvey-laptop`.
+5. When configuration asks to run as a Windows service, choose **No** for this
+   initial GUI-test setup.
+
+Our Qt launcher creates a private desktop but explicitly launches its child on
+`winsta0`. Running that launcher from service session 0 has not been validated.
+An interactive logged-in runner is the initial supported configuration for this
+experiment. Lock/disconnect behavior and graphics must be checked on the actual
+laptop before unattended use.
+
+Start the runner:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File 'C:\GoSurveyCI\Start-GoSurveyRunner.ps1'
+```
+
+Use `-RunnerDirectory` if its folder differs. GitHub should show the runner as
+**Idle**, and the terminal should say **Listening for Jobs**. Keep this session
+running; after restarting Windows, sign in and launch it again.
+
+## 3. Validate the hardware before moving required jobs
+
+The helper `Enter-GoSurveyEnvironment.ps1` loads the MSVC environment and Qt,
+uses a per-user local sccache outside the checkout, and sets conservative worker
+counts based on the machine's CPU/RAM. Dot-source it for manual builds:
+
+```powershell
+Set-ExecutionPolicy Bypass -Scope Process
+. 'C:\GoSurveyCI\Enter-GoSurveyEnvironment.ps1'
+git clone https://github.com/chetjones003/GoSurvey.git
+Set-Location GoSurvey
+git switch beta
+cmake --preset ninja-release -DGOSURVEY_BUILD_TESTS=ON -DGOSURVEY_USE_PCH=OFF -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache "-DCMAKE_PREFIX_PATH=$env:GOSURVEY_QT_ROOT"
+cmake --build --preset ninja-release --target GoSurveyQt GoSurveyTests gosurvey_headless GoSurveyQtTests
+ctest --preset ninja-release
+sccache --show-stats
+```
+
+Measure a clean build, an incremental rebuild, and full tests. Windows 11 uses
+the laptop's graphics driver; OpenGL viewport tests need working graphics. A
+headless VPS may need the pinned Mesa deployment already used in the hosted CI
+workflow. The setup script does not deploy a replacement system graphics driver.
+
+## 4. Register the production PR workers
+
+The laptop has three independent Windows runner instances:
+
+| Job | Role label | Runner/work directory | Initial concurrency |
+|---|---|---|---|
+| Build and full tests | `gosurvey-pr-build` | Existing `C:\actions-runner` | 3 build workers; 6 CTest processes |
+| clang-tidy | `gosurvey-pr-clang-tidy` | `%USERPROFILE%\GoSurveyCI\pr-workers\clang-tidy` | 2 analyzer processes |
+| MSVC `/analyze` | `gosurvey-pr-msvc-analyze` | `%USERPROFILE%\GoSurveyCI\pr-workers\msvc-analyze` | 1 analyzer/build worker |
+
+All share the laptop's CPU/RAM and installed Qt/MSVC. Every instance has its own
+checkout and CMake tree. The build job keeps its existing warm external sccache;
+MSVC analysis uses a separate external cache. Each cache job owns a separate
+endpoint and stops only its own daemon. Production jobs do one normal build,
+not the benchmark's duplicate clean rebuild. The laptop's full suite runs four
+Qt shards and two Catch2 shards; exact case coverage is still audited.
+
+The owner-only `pr-worker-bootstrap.yml` provisions the two analyzer workers
+through the already-running build listener. A short-lived registration token
+is supplied as an encrypted Actions secret and removed after registration.
+The official runner ZIP is checksum-verified. The script never copies another
+runner's credential files. New listeners do not inherit the bootstrap job's
+credentials, workspace variables or process-tracking identity.
+
+For manual provisioning, use a normal PowerShell 7 window in the repository.
+Obtain the one-hour registration token using GitHub's runner registration page
+and supply it privately in `GOSURVEY_REGISTRATION_TOKEN`, then run:
+
+```powershell
+.\tools\register-windows-pr-workers.ps1 -Start
+```
+
+The existing build runner must additionally have the `gosurvey-pr-build` label
+in GitHub runner settings. Repeating registration validates existing instances
+and starts listeners only when needed; it does not replace live registrations.
+The generated `workers.json` lists non-secret installation information.
+
+After a Windows restart, sign into the same normal account and start all three:
+
+```powershell
+pwsh -NoProfile -ExecutionPolicy Bypass -File "$env:USERPROFILE\GoSurveyCI\pr-workers\start-windows-pr-workers.ps1"
+```
+
+The existing build listener is reused if already running. Each role launcher
+holds a mutex to prevent duplicates. Combined listener output/error logs are
+`%USERPROFILE%\GoSurveyCI\pr-workers\<role>-listener.log`. Windows ShellExecute
+starts hidden, independent processes; each child opens its own log. Do not add
+parent-side Start-Process output redirection: inherited CI pipe handles cause
+the Actions runner to kill the child tree when the provisioning step exits.
+Keep the user session available; service
+session 0 remains unsupported for the GUI test launcher.
+
+## 5. Select production routing
+
+After all three role labels are online, set `GOSURVEY_PR_RUNNERS=self-hosted` in
+the repository's Actions variables. `full-validation.yml` then routes
+owner-authored same-repository PRs to the role workers. Other PRs, including
+forks, use hosted Windows runners. The lightweight gate and Linux security jobs
+use hosted Ubuntu. This policy selects trusted work for the configured workflow;
+it is not isolation against arbitrary code or a compromised repository writer.
+
+Set `GOSURVEY_PR_RUNNERS=hosted` to select hosted Windows workers for new runs,
+then rerun validation when necessary. An offline matching self-hosted worker
+queues its job; GitHub does not automatically choose a hosted fallback. Existing
+required check names/failure behavior and the explicit `docs-only` label gate
+are preserved. The initial concurrency limits need observation under combined
+load; additional runner registrations do not add CPU or RAM.
+
+## 6. Optional benchmark
+
+The initial `gosurvey-victus-ci` laptop is validated separately by
+`.github/workflows/self-hosted-benchmark.yml`. It is manual-only and accepts only
+the repository owner's actor in this repository. It never runs on a PR event.
+The job checks normal interactive execution before checkout, uses the uniquely
+labeled laptop, and uploads preflight/build/cache/CTest evidence. Production
+checks use `full-validation.yml` and do not invoke the benchmark helper.
+
+`tools/benchmark-windows-runner.ps1` can also be run locally from a normal
+PowerShell 7 session. It times an initial build and a `--clean-first` rebuild with
+the local cache, then runs the complete CTest suite using native graphics and
+audits exact case coverage across two Catch2 and six Qt shards. It also measures
+clang-tidy and MSVC analysis against the same PR base used by hosted checks.
+Supply `-BaseSha <PR-base-commit>` (or set `BASE_SHA`); the benchmark workflow
+resolves that commit automatically. Reports retain analyzer scope and versions.
+Default CTest concurrency is eight. It preserves the external compiler
+cache and writes reports under `build/artifacts/runner-benchmark/`. Treat the first
+build as cold only when its actual cache counters show that. Keep separate
+checkout/build trees for simultaneous runner instances.
+
+The benchmark explicitly starts its own sccache server on an OS-selected
+loopback port before querying statistics, then stops that server afterward.
+All compiler clients inherit the selected port; the disk cache remains outside
+the checkout. Cache-control calls have a 30-second deadline and retain separate
+stdout/stderr diagnostics on failure.
+
+A runner with the additional label above can be selected with:
+
+```yaml
+runs-on: [self-hosted, Windows, X64, gosurvey-laptop]
+```
+
+Do not apply this broadly to the public repository's PR jobs. PR code can execute
+arbitrary commands and compromise a persistent machine. Use an isolated runner
+for trusted work and retain hosted or freshly isolated execution for untrusted
+PRs; keeping secrets out of a workflow alone is insufficient protection.
+
+Production jobs reuse installed Qt and the external compiler cache. Checkout
+keeps its normal cleanup so untracked build files cannot contaminate another PR;
+cached compiler outputs still survive. Each registered runner accepts one job
+at a time; independent instances share the CPU/RAM budget above. All required
+checks continue to block merge.
+
+### References
+
+- [GitHub: adding a self-hosted runner](https://docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/add-runners)
+- [GitHub: runner communication and routing](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
+- [GitHub: securing self-hosted runners](https://docs.github.com/en/actions/reference/security/secure-use#hardening-for-self-hosted-runners)
+- [Microsoft: WinGet install options](https://learn.microsoft.com/en-us/windows/package-manager/winget/install)
+- [Microsoft: Visual Studio installer parameters](https://learn.microsoft.com/en-us/visualstudio/install/use-command-line-parameters-to-install-visual-studio)
+- [aQt: command-line options](https://aqtinstall.readthedocs.io/en/v3.3.0/cli.html)

@@ -76,7 +76,7 @@
 
 
 struct SelectedEntity {
-  enum class Type {
+  enum class Type : std::uint8_t {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
     FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
     Mesh = 8,         ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
@@ -127,7 +127,7 @@ struct SelectedEntity {
     /// zero-or-many, so giving it an `e.index` slot would be inventing storage this feature does not
     /// need. What ADR-059 (h) got wrong was concluding from that shape that the plane could not be
     /// an entity **at all** — it reversed a view-state bool's non-negotiables (no Properties report,
-    /// no `.gs`, no undo), not its selection storage. This tag exists so the Properties panel and the
+    /// no `internal document payload`, no undo), not its selection storage. This tag exists so the Properties panel and the
     /// transform-refusal doc comments above have a name for what a selected plane IS, the same as
     /// `Solid`/`PointCloud` do; `DrawPropertiesPanel` still branches on `sectionPlaneSelected`
     /// directly rather than scanning `selection` for it. **Display-and-erase-and-slide/flip/resize
@@ -142,7 +142,11 @@ struct SelectedEntity {
     PositionMarker = 17,
     /// Multileader callout (REQ-367 / issue #619). MOVE / COPY / ERASE act on path + label together;
     /// ROTATE / SCALE / MIRROR / STRETCH refuse it by name (\ref DropMultileadersFromSelection).
-    Multileader = 18
+    Multileader = 18,
+    /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
+    /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
+    /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
+    Spline = 19
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -839,6 +843,9 @@ struct CadExtendedGeometryInput {
   const std::vector<float>* circleNormals = nullptr;
   const std::vector<CadEllipse>* ellipses = nullptr;
   const std::vector<EntityAttributes>* ellAttrs = nullptr;
+  /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
+  const std::vector<CadSpline>* splines = nullptr;
+  const std::vector<EntityAttributes>* splineAttrs = nullptr;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -971,7 +978,7 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
 /// \c Kind::Scale, \c modifyPhase == NeedDestination — live scale from cursor (see \ref AppCommandState::scalePhase).
 bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale);
 
-/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for ImGui overlay.
+/// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for the viewport overlay.
 /// New CAD entities: mirror this pattern — GL rubber (\p main.cpp) + \ref CadAnnotationCollectTransformPreviews / UI overlay (\p CadUi.cpp) + grips (\p CadUi.cpp).
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out);
@@ -996,6 +1003,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> arcAttrs;
   std::vector<CadEllipse>       ellipses;
   std::vector<EntityAttributes> ellAttrs;
+  std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
+  std::vector<EntityAttributes> splineAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1024,7 +1033,7 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && blockRefs.empty() &&
+           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
            filledRegions.empty();
   }
 };
@@ -1059,7 +1068,7 @@ inline constexpr int kPolyBulgeGripBase = 1 << 20;
 
 /// The Object Layers tab's rows (REQ-361): each kind of object that lands on its own layer when it
 /// is created. Stored by index — append only.
-enum class ObjectLayerKind {
+enum class ObjectLayerKind : std::uint8_t {
   SurveyPoint = 0,
   SurveyPointLabel,
   Surface,      ///< Every TIN surface store entry (TIN, grid, volume, corridor).
@@ -1073,7 +1082,7 @@ inline constexpr int kObjectLayerKindCount = 8;
 
 /// One Object Layers row: the base layer, the name modifier and whether a creation dialog may change it.
 struct ObjectLayerRow {
-  enum class Modifier { None = 0, Prefix = 1, Suffix = 2 };
+  enum class Modifier : std::uint8_t { None = 0, Prefix = 1, Suffix = 2 };
   std::string layer;
   Modifier    modifier = Modifier::None;
   std::string value;   ///< Each `*` becomes the new object's name.
@@ -1099,7 +1108,7 @@ struct AddDrawingPlan;   // ProjectAddFlow.hpp (REQ-378)
 /// REQ-375 / D-2026-10-05-e: the settings a project supplies as defaults that a project drawing may
 /// override. The zone and the drawing unit are enforced instead; the transformation, geographic
 /// marker and online map are always the drawing's own. The names are the trailer's.
-enum class ProjectDefaultKey : unsigned {
+enum class ProjectDefaultKey : std::uint8_t {
   AngularUnits = 0,
   FootDefinition,
   ScaleInsertedObjects,
@@ -1124,8 +1133,8 @@ struct DrawingSettings {
     overridden = on ? (overridden | bit) : (overridden & ~bit);
   }
 
-  enum class AngularUnits { Degrees = 0, Radians = 1, Grads = 2 };
-  enum class FootDefinition { UsSurvey = 0, International = 1 };
+  enum class AngularUnits : std::uint8_t { Degrees = 0, Radians = 1, Grads = 2 };
+  enum class FootDefinition : std::uint8_t { UsSurvey = 0, International = 1 };
   AngularUnits   angularUnits = AngularUnits::Degrees;
   /// Imperial to Metric conversion: every feet↔meters conversion in the drawing uses this.
   FootDefinition footDefinition = FootDefinition::UsSurvey;
@@ -1149,10 +1158,10 @@ struct DrawingSettings {
   /// `grid = G_ref + k·R(θ)·(L − L_ref)` with k = k_grid · k_sea. Angles are stored in degrees
   /// whatever the Angular units (the window converts). Belongs to the zone: reset with it.
   struct Transform {
-    enum class Computation { ReferencePoint = 0, UserDefined = 1 };
+    enum class Computation : std::uint8_t { ReferencePoint = 0, UserDefined = 1 };
     /// Rotation point: θ from a second point's grid vs local bearing. ToNorth / Azimuth are the two
     /// kinds of "Specify grid rotation angle".
-    enum class Rotation { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
+    enum class Rotation : std::uint8_t { RotationPoint = 0, ToNorth = 1, Azimuth = 2 };
     bool        apply = false;
     bool        applySeaLevel = false;
     double      elevation = 0.0;        ///< h, drawing unit
@@ -1194,7 +1203,7 @@ struct DrawingSettings {
 
   /// The Geolocation tab's online map (REQ-363, D-2026-09-30-b). Map Off draws nothing and fetches
   /// nothing. Stored values are the trailer's; append, never renumber.
-  enum class OnlineMap { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
+  enum class OnlineMap : std::uint8_t { Off = 0, UsgsImagery = 1, UsgsImageryTopo = 2, UsgsTopo = 3 };
   OnlineMap onlineMap = OnlineMap::Off;
 
   /// REQ-364: a piece of the online map kept inside the drawing (ADR-064 (e)): its tiles as they were
@@ -1335,6 +1344,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1368,7 +1379,7 @@ struct DrawingGeometrySnapshot {
   double worldDocumentOriginY = 0.0;
   /// The section plane (REQ-343 amended, GitHub issue #479 acceptance 8). Mirrors
   /// `AppCommandState::viewportSectionClip`/`Offset`/`Flip`/`FrameValid`/`Frame`/`Extent` — moved
-  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `.gs`) so creating, deleting, sliding,
+  /// into the undo-tracked snapshot (and, via `GsIo.cpp`, into `internal document payload`) so creating, deleting, sliding,
   /// flipping and resizing the plane are all undoable, and the plane survives a save/reload. Local
   /// coordinates, exactly like every other entity here (see "Local storage invariant").
   bool                sectionPlaneActive = false;
@@ -1447,7 +1458,7 @@ struct DrawingDocument {
   float  viewportFovDeg = kDefaultFovDeg;
   /// The section clip is per TAB (REQ-341, D-2026-09-16-b): a clip set in one drawing must not hide
   /// half of another when the user switches to it, and switching back restores it. A fresh document
-  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `.gs`.
+  /// starts with it off, which is what keeps NEW and OPEN clean. Still never written to `internal document payload`.
   bool   viewportSectionClip = false;
   double viewportSectionClipOffset = 0.0;
   bool   viewportSectionClipFlip = false;
@@ -1513,6 +1524,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -1545,7 +1558,7 @@ struct DrawingDocument {
   std::vector<SelectedEntity>   selection;
   /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
   /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
-  /// would hide whatever objects happened to draw those numbers there. Never written to `.gs` —
+  /// would hide whatever objects happened to draw those numbers there. Never written to `internal document payload` —
   /// this struct is the in-memory tab store, not the file format.
   std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
@@ -1553,7 +1566,7 @@ struct DrawingDocument {
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
-  std::string filePath;           ///< Absolute path to the .gs file, empty if never saved.
+  std::string filePath;           ///< Absolute path to the .dwg drawing file, empty if never saved.
   std::vector<DrawingGeometrySnapshot> undoStack;
   std::vector<DrawingGeometrySnapshot> redoStack;
 };
@@ -1635,6 +1648,12 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
+/// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
+/// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
+/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
+/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
+bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
@@ -1754,7 +1773,7 @@ constexpr int kRibbonTabGeolocationCtx = 12;
 
 /// REQ-171 point-cloud vertex colour source, chosen by the user (session-global — see
 /// `AppCommandState::pointCloudDisplay`).
-enum class PointCloudColorScheme { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
+enum class PointCloudColorScheme : std::uint8_t { Rgb = 0, Solid = 1, Elevation = 2, Intensity = 3 };
 
 /// REQ-171 point-cloud display settings (session-global, not per-cloud — `CadPointCloud`'s payload
 /// is immutable, architecture §11.5, so mutable display prefs live here instead, same reasoning as
@@ -1773,7 +1792,7 @@ struct PointCloudDisplaySettings {
 /// the two selections. Nothing in a selection says whether the user wants to MOVE, TURN or RESIZE
 /// it: the operation has no derivation to disagree with, so it is a setting. Different question,
 /// different answer.
-enum class CadGizmoOp {
+enum class CadGizmoOp : std::uint8_t {
   /// Three handles along the active UCS, committing through `ApplyTranslationToSelection`.
   Translate,
   /// ONE ring, about the active UCS Z, committing through \ref ApplyRotationAboutUcsZ.
@@ -1797,7 +1816,7 @@ struct UnsavedProject {
 };
 
 struct AppCommandState {
-  enum class Kind {
+  enum class Kind : std::uint8_t {
     None,
     Line,
     Circle,
@@ -1977,6 +1996,10 @@ struct AppCommandState {
     /// named dimensions, so it has different state and a different state machine, and folding it
     /// into `Solid` would mean a table with a variable-length entry no other row uses.
     Polysolid,
+    /// REQ-444 REVCLOUD: a scalloped closed outline, clicked point by point or converted from a
+    /// closed polyline / circle. Its own Kind because it has a path-building state machine like
+    /// POLYSOLID, but it commits an ordinary closed bulge polyline (REQ-316), not a new entity.
+    Revcloud,
     /// PRESSPULL (REQ-319 / D-2026-09-04-c, widened by GitHub issue #396): move a solid FACE along
     /// its own normal, or turn a closed polyline/circle into (or out of) a solid along its plane
     /// normal. Its own Kind because — like EXTRUDE — it has a select-target phase and then a
@@ -2047,6 +2070,8 @@ struct AppCommandState {
     /// Surface and Pad elevation, the way every other command with options does - it does not take
     /// everything on one line and give up. padSolidPhase drives it.
     PadSolid,
+    /// REQ-443: create a fit-point or control-vertex NURBS spline.
+    Spline,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2058,6 +2083,7 @@ struct AppCommandState {
     case Kind::Grading:       return "GRADING";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
+    case Kind::Spline:        return "SPLINE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2121,6 +2147,7 @@ struct AppCommandState {
     case Kind::Sweep:            return "SWEEP";
     case Kind::Boolean:          return "BOOLEAN";
     case Kind::Polysolid:          return "POLYSOLID";  // REQ-317
+    case Kind::Revcloud:           return "REVCLOUD";   // REQ-444
     case Kind::PressPull:          return "PRESSPULL";
     case Kind::BConnectMode:       return "BCONNECTMODE";
     case Kind::BConnect:           return "BCONNECT";
@@ -2215,6 +2242,9 @@ struct AppCommandState {
   int surveyPointDisplayPrecision = 4;
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
   float surveyPointLabelPlottedHeightInches = 0.10f;
+  // Frontend-provided natural text measurement. Session-only; no UI toolkit types
+  // cross into Commands. A null hook retains the legacy/headless measurement path.
+  void (*measureAnnotationText)(float, const std::string&, const std::string&, float*, float*) = nullptr;
   SurveyLabelStyleTemplates surveyLabelTemplates;
   /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
   /// world). The box grows east from this edge, so longer text never grows back toward the point.
@@ -2310,7 +2340,6 @@ struct AppCommandState {
   float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
   float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
   int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
-  double cmdLogLastChangeTime = 0.0;  ///< ImGui time of the last log append (drives the fade).
   size_t cmdLogLastSizeForFade = 0;   ///< log size seen at the last fade-timer reset.
   std::vector<std::string> cmdEnteredHistory;  ///< recently submitted command-line entries (newest last; capped). Runtime only.
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
@@ -2474,7 +2503,7 @@ struct AppCommandState {
   bool objectSnap3dKnot = false;          ///< A NURBS (freeform) face's knot points.
   bool objectSnap3dPerpendicular = false; ///< Foot of the perpendicular from a command reference onto a planar face.
   /// Isolines drawn around a curved solid face, per full turn (AutoCAD calls this ISOLINES).
-  /// Per drawing, persisted in `.gs` and in user preferences like every other display setting.
+  /// Per drawing, persisted in `internal document payload` and in user preferences like every other display setting.
   int viewportSolidIsolines = kSolidDefaultIsolines;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
@@ -2498,36 +2527,39 @@ struct AppCommandState {
   bool pendingZoomExtents = false;
   bool pendingZoomWindow = false;
   /// REQ-399: bring the main GoSurvey window to the foreground on the next frame (the main loop owns
-  /// the GLFW window handle, so this is a request rather than a direct call from the PDF viewer window).
+  /// the main window handle, so this is a request rather than a direct call from the PDF viewer window).
   bool requestMainWindowFocus = false;
   float pendingZoomMnX = 0.f;
   float pendingZoomMxX = 0.f;
   float pendingZoomMnY = 0.f;
   float pendingZoomMxY = 0.f;
 
-  enum class LinePhase { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
+  enum class LinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
   /// Segments committed in the current LINE chain; the point being specified is
   /// (lineDraftSegments + 2) once past the first point (REQ-024 ordinal prompt).
   uint32_t lineDraftSegments = 0;
 
-  enum class PolylinePhase { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
+  enum class PolylinePhase : std::uint8_t { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
 
   float polyFirstX = 0.f;
   float polyFirstY = 0.f;
   uint32_t polyDraftSegments = 0;
 
-  enum class ArcPhase { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
+  enum class ArcPhase : std::uint8_t { WaitStart, WaitMid, WaitEnd } arcPhase = ArcPhase::WaitStart;
 
   float arcAx = 0.f, arcAy = 0.f;
   float arcBx = 0.f, arcBy = 0.f;
   float arcAz = 0.f, arcBz = 0.f;   ///< work-plane elevation of each pick (REQ-312), as circleCz
 
-  enum class EllipsePhase { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+  enum class EllipsePhase : std::uint8_t { WaitCenter, WaitMajorEnd, WaitRatio } ellPhase = EllipsePhase::WaitCenter;
+
+  enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
+  std::vector<spline::Vec3> splineDraftPoints;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
   /// - one ground surface, several pads at different levels - is just a number each time.
-  enum class PadSolidPhase { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
+  enum class PadSolidPhase : std::uint8_t { WaitBoundary, WaitOptions, WaitSurfaceName } padSolidPhase =
       PadSolidPhase::WaitBoundary;
   std::uint64_t padSolidBoundaryId = 0;
   std::string padSolidSurface;
@@ -2538,19 +2570,19 @@ struct AppCommandState {
 
   /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
   /// is how a rectangle of an exact width and height is drawn.
-  enum class RectPhase { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
+  enum class RectPhase : std::uint8_t { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
 
   float rectX1 = 0.f, rectY1 = 0.f;
 
-  enum class TextCmdPhase { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
+  enum class TextCmdPhase : std::uint8_t { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
 
   float textInsX = 0.f, textInsY = 0.f;
   float textHeightDraft = 1.f;
   float textRotDraft = 0.f;
 
-  enum class MtextPhase { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
+  enum class MtextPhase : std::uint8_t { WaitCorner1, WaitCorner2, WaitString } mtextPhase = MtextPhase::WaitCorner1;
   /// MLEADER (REQ-367): tip, landing, then label editor (\ref MleaderPhase::WaitLabel).
-  enum class MleaderPhase { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
+  enum class MleaderPhase : std::uint8_t { WaitArrowTip, WaitLanding, WaitLabel } mleaderPhase = MleaderPhase::WaitArrowTip;
   float mleaderTipX = 0.f;
   float mleaderTipY = 0.f;
   float mleaderTipZ = 0.f;
@@ -2583,13 +2615,12 @@ struct AppCommandState {
   // must not become a dependency of the commands layer.
   int mtextEditCaret = 0;
   int mtextEditAnchor = 0;            ///< caret == anchor means no selection
-  /// The editor owns keyboard focus. Deliberately NOT ImGui's ActiveID: holding that persistently makes
-  /// ImGui refuse to hover any other item, which dead-locks every other control in the application. The
+  /// The editor owns keyboard focus. Keeping that ownership local prevents one input control from
+  /// blocking pointer interaction with the rest of the application. The
   /// widget only takes ActiveID for the duration of a drag-select, exactly as a stock widget does.
   bool mtextEditFocused = false;
   bool mtextEditMouseSelecting = false;
   float mtextEditScrollY = 0.f;       ///< px scrolled when the text outgrows the box's height cap
-  double mtextEditBlinkT = 0.0;       ///< ImGui time the caret last moved (restarts the blink)
   std::vector<std::string> mtextEditUndo;  ///< in-editor Ctrl+Z snapshots (drawing undo is separate)
   std::vector<std::string> mtextEditRedo;
   float mtextEditLastHeight = 0.f;    ///< height the wrapped layout used last frame (positions the box)
@@ -2620,9 +2651,9 @@ struct AppCommandState {
   /// True while the ruler's width marker is being dragged (so the undo snapshot is pushed exactly once).
   bool mtextRulerDragActive = false;
 
-  enum class DimPhase { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
+  enum class DimPhase : std::uint8_t { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
   /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
-  enum class DimAngularPhase { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
+  enum class DimAngularPhase : std::uint8_t { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
   float dimAngVx = 0.f;
   float dimAngVy = 0.f;
   float dimE1x = 0.f, dimE1y = 0.f;
@@ -2677,7 +2708,7 @@ struct AppCommandState {
   /// in the application ever assigned `Camera::projection`, so perspective was unreachable.
   ///
   /// They sit here, beside azimuth/elevation, because they share exactly that lifetime: per
-  /// drawing, saved per tab, persisted in `.gs`, restored by a named view. **Orthographic is the
+  /// drawing, saved per tab, persisted in `internal document payload`, restored by a named view. **Orthographic is the
   /// default everywhere**, which is what keeps REQ-058's plan-view parity guarantee intact.
   Camera::Projection viewportProjection = Camera::Projection::Orthographic;
   float viewportFovDeg = kDefaultFovDeg;  ///< Perspective vertical FOV; ignored when orthographic.
@@ -2799,7 +2830,7 @@ struct AppCommandState {
   bool segmentAngleKeyboardAwaitBearing = false;
 
   /// Next stable entity id to hand out for this drawing (REQ-076 / ADR-027). Monotonic, persisted
-  /// in `.gs`, and **never rewound** — in particular it is deliberately NOT part of
+  /// in `internal document payload`, and **never rewound** — in particular it is deliberately NOT part of
   /// \ref DrawingGeometrySnapshot, so draw → undo → draw gives the second entity a *new* id rather
   /// than reusing the undone one's. Reuse is the one thing an identity must not do.
   std::uint64_t nextEntityId = 1;
@@ -2817,14 +2848,14 @@ struct AppCommandState {
   std::vector<EntityAttributes> userLineAttrs;
 
   // --- Circle ---
-  enum class CircleStyle { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
+  enum class CircleStyle : std::uint8_t { CenterRadius, ThreePoint } circleStyle = CircleStyle::CenterRadius;
 
   // --- The prompted solid-primitive command (REQ-313 as amended) ---------------------------------
 
   /// The most named dimensions any primitive has (PYRAMID: sides, base radius, top radius, height).
   static constexpr int kMaxSolidParams = 4;
 
-  enum class SolidPhase {
+  enum class SolidPhase : std::uint8_t {
     WaitBasePoint,   ///< Click, or type X,Y[,Z]. The base centre — or the centre, for sphere/torus.
     WaitParameters,  ///< Base set: type a letter + value, a bare value for the next unset one, or Enter.
   } solidPhase = SolidPhase::WaitBasePoint;
@@ -2870,7 +2901,7 @@ struct AppCommandState {
 
   // --- The EXTRUDE command (REQ-314 / ADR-046, GitHub #147) --------------------------------------
 
-  enum class ExtrudePhase {
+  enum class ExtrudePhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
     WaitHeight,      ///< Profiles gathered: type a height, or move the cursor and click.
   } extrudePhase = ExtrudePhase::SelectProfiles;
@@ -2890,7 +2921,7 @@ struct AppCommandState {
   // selected closed polyline/circle — mutually exclusive per D-2026-09-04-a), then a distance phase
   // with the same typed-or-dragged-with-a-live-ghost shape.
 
-  enum class PressPullPhase {
+  enum class PressPullPhase : std::uint8_t {
     SelectTarget,  ///< A face named by Ctrl+click, or a closed-shape entity selection; Enter confirms.
     WaitDistance,  ///< Target gathered: type a distance, or move the cursor and click.
   } pressPullPhase = PressPullPhase::SelectTarget;
@@ -2915,7 +2946,7 @@ struct AppCommandState {
 
   // --- The REVOLVE command (REQ-314 / ADR-046 increment 2, GitHub #147) --------------------------
 
-  enum class RevolvePhase {
+  enum class RevolvePhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate a selection of closed polylines / circles; Enter confirms.
     WaitAxisStart,   ///< Pick or type the first point of the revolve axis.
     WaitAxisEnd,     ///< Pick or type the second point of the revolve axis.
@@ -2930,7 +2961,7 @@ struct AppCommandState {
 
   // --- The SLICE command (REQ-314 / ADR-046 increment 3, GitHub #147) ---------------------------
 
-  enum class SlicePhase {
+  enum class SlicePhase : std::uint8_t {
     SelectSolids,   ///< Accumulate a selection of solids; Enter confirms.
     WaitP1,         ///< First of three points that define the cutting plane.
     WaitP2,
@@ -2949,7 +2980,7 @@ struct AppCommandState {
   // so typing SECTION with nothing selected printed "select one or more solids first" and ENDED.
   // That reads as a prompt and behaves as a refusal — the next click lands with the command already
   // over and merely selects the solid, which is precisely how it was reported.
-  enum class SectionPhase {
+  enum class SectionPhase : std::uint8_t {
     SelectSolids,  ///< Accumulate a selection of solids; Enter confirms.
     WaitP1,        ///< First of three points defining the section plane, or [UCS] for the work plane.
     WaitP2,
@@ -2969,7 +3000,7 @@ struct AppCommandState {
   // starts a section LINE instead: the plane then stands square to the work plane, through that
   // line — which is the only way to aim a plane at a solid with no flat face at all, such as a
   // sphere or a torus.
-  enum class SectionPlanePhase {
+  enum class SectionPlanePhase : std::uint8_t {
     PickFaceOrPoint,   ///< A flat face places the plane outright; any other point starts a line.
     WaitThroughPoint,  ///< The second point of the section line.
   } sectionPlanePhase = SectionPlanePhase::PickFaceOrPoint;
@@ -2982,13 +3013,13 @@ struct AppCommandState {
 
   // --- The LOFT command (REQ-315 / ADR-048, GitHub #241) ---------------------------------------
 
-  enum class LoftPhase {
+  enum class LoftPhase : std::uint8_t {
     SelectProfiles,  ///< Accumulate an ORDERED selection of closed polylines / circles; Enter builds.
   } loftPhase = LoftPhase::SelectProfiles;
 
   // --- The SWEEP command (REQ-315 / ADR-048, GitHub #241) --------------------------------------
 
-  enum class SweepPhase {
+  enum class SweepPhase : std::uint8_t {
     SelectInputs,  ///< Accumulate a closed profile and a line/arc path; Enter builds.
   } sweepPhase = SweepPhase::SelectInputs;
 
@@ -3002,7 +3033,7 @@ struct AppCommandState {
 
   // --- The prompted UNION / SUBTRACT / INTERSECT command (REQ-314 / ADR-046, GitHub #147) --------
 
-  enum class BooleanPhase {
+  enum class BooleanPhase : std::uint8_t {
     SelectOperands,     ///< UNION / INTERSECT: one "select objects" step.
     SelectMinuend,      ///< SUBTRACT step 1: the solids to subtract from.
     SelectSubtrahend,   ///< SUBTRACT step 2: the solids to subtract.
@@ -3014,7 +3045,7 @@ struct AppCommandState {
   std::vector<int> booleanMinuend;  ///< SUBTRACT: cadSolids indices gathered by step 1.
   // --- REQ-317 POLYSOLID: a wall swept along a picked path ---------------------------------------
 
-  enum class PolysolidPhase {
+  enum class PolysolidPhase : std::uint8_t {
     WaitFirstPoint,  ///< the start of the run, or `O` to convert something already drawn
     WaitObject,      ///< `O` was given: the next click names the entity to sweep along
     WaitNextPoint    ///< a run is under way; each further point commits a segment
@@ -3031,6 +3062,26 @@ struct AppCommandState {
   /// `H 4`). 0 = nothing armed; otherwise the uppercase letter.
   char polysolidPending = 0;
 
+  // --- REQ-444 REVCLOUD: a scalloped closed outline ----------------------------------------------
+
+  enum class RevcloudPhase : std::uint8_t {
+    WaitFirstPoint,  ///< the first corner, or `O` to convert a closed shape already drawn
+    WaitObject,      ///< `O` was given: the next click names the closed polyline or circle
+    WaitNextPoint    ///< a path is under way; each further point adds a corner
+  } revcloudPhase = RevcloudPhase::WaitFirstPoint;
+
+  /// The corners picked so far, as x,y pairs in storage coordinates.
+  std::vector<double> revcloudDraft;
+  /// Elevation the cloud commits at: the work plane's, read when the first corner is picked.
+  double revcloudZ = 0.0;
+  /// Remembered between invocations (REQ-444 item 3): the size of each scallop, whether they bulge
+  /// the other way, and whether Object mode erases the shape it converted.
+  double revcloudArcLength = 0.5;
+  bool revcloudReverse = false;
+  bool revcloudDeleteOriginal = false;
+  /// A letter typed on its own, waiting for its value on the next line (`A` then `1`). 0 = none.
+  char revcloudPending = 0;
+
   /// Remembered between invocations, the way AutoCAD remembers PSOLWIDTH and PSOLHEIGHT: a wall is
   /// almost always drawn at the same size as the last one, and re-typing it every time is the
   /// friction that makes a command feel wrong. Saved with the drawing.
@@ -3040,7 +3091,7 @@ struct AppCommandState {
 
   // --- PIPERUN: interactive CadPipeRun routing (issue #486 increment B2 / REQ-345) --------------
 
-  enum class PipeRunPhase {
+  enum class PipeRunPhase : std::uint8_t {
     WaitNominalSize,     ///< first prompt of a run: nominal size, optional pressure class
     WaitWallThickness,   ///< size known; the wall the pipe is hollow to (D-2026-09-23-a)
     WaitFirstPoint,      ///< size and wall known; the next click/point is the run's start
@@ -3102,7 +3153,7 @@ struct AppCommandState {
   /// caller's own single-pipe-run selection, never re-resolved from `st.selection` mid-command.
   int pipeSplitRunIndex = -1;
 
-  enum class CirclePhase {
+  enum class CirclePhase : std::uint8_t {
     WaitCenterOrMode, ///< Pick center, or type 3P for three-point circle
     WaitRadius,       ///< Center set: radius click, number, or D + diameter
     ThreeP_WaitP1,
@@ -3177,7 +3228,7 @@ struct AppCommandState {
   /// cut slope, the fill slope, the target surface and — for an open baseline only — which side to
   /// grade. Enter grades. Every value is remembered between runs in a drawing, because a site is
   /// normally graded to one surface at one pair of slopes and only the baseline changes.
-  enum class GradingPhase {
+  enum class GradingPhase : std::uint8_t {
     WaitBaseline,
     WaitOptions,
     WaitCutSlope,
@@ -3194,6 +3245,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
+  /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
+  std::uint64_t gradingEditId = 0;
 
   /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
   std::vector<float> featureLineDraftVerts;
@@ -3235,7 +3289,7 @@ struct AppCommandState {
   ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
   /// Within a run, \p T switches to picking cutting edges and \p L back to the drawn line, so either mode
   /// is reachable whatever TRIMSTATE says.
-  enum class TrimPhase {
+  enum class TrimPhase : std::uint8_t {
     SelectCuttingEdges,
     CuttingLine_WaitP1,
     CuttingLine_WaitP2,
@@ -3265,7 +3319,7 @@ struct AppCommandState {
   bool showConnectionModesWindow = false;
   int blockAuthoringPaletteTab = 0;  ///< 0 Parameters, 1 Actions, 2 Parameter Sets, 3 Constraints
   /// REQ-350 — the Pipe Fittings palette. Session state beside `blockAuthoringPaletteOpen` and for
-  /// the same reasons: the window's POSITION persists through `imgui.ini` on its own, and which
+  /// the same reasons: the window's POSITION persists in its settings, and which
   /// palette happened to be open is not worth a key in the settings file. Opened automatically by
   /// PIPERUN and by the PIPEPALETTE command; stays open when the run finishes (REQ-350 (a)).
   bool pipeFittingPaletteOpen = false;
@@ -3310,6 +3364,8 @@ struct AppCommandState {
                                             ///< for the "Waiting for browser..." button label
   std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
   std::string authError;                ///< set only after a user-initiated sign-in attempt fails
+  /// REQ-091 (amended 2026-10-11, issue #824): set by the launch gate's "Don't Sign In" button.
+  bool        authDeclineRequested = false;
   bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
   bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
                                              ///< the menu-bar account dropdown — REQ-091 amendment)
@@ -3326,12 +3382,17 @@ struct AppCommandState {
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  bool        appWindowFocused = true;               ///< GLFW focused; auto-open What's New waits for this
   /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
-  /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
-  /// there is no internet connectivity at all (same offline exception REQ-077's update gate
-  /// uses) — never re-checked mid-session, so signing out later does not reopen the gate.
+  /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
+  /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
+  /// REQ-077's update gate uses) — never re-checked mid-session, so signing out later does not
+  /// reopen the gate.
   bool        authGateResolved = false;
+  /// REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): the user chose "Don't Sign In" at
+  /// the launch gate. Persisted in gosurvey-user.json; checked before the gate would otherwise
+  /// open, so it never reappears once set. Cleared by a successful sign-in from Settings (the
+  /// only remaining way to opt back in).
+  bool        authOptedOut = false;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
@@ -3343,7 +3404,7 @@ struct AppCommandState {
   /// OFFSET: distance (or T for a through point) first, then select object, then side/through pick;
   /// on a successful commit it loops back to WaitSelectEntity with the same distance/mode retained,
   /// until Enter/Esc ends the command (REQ-103's documented TRIM/OFFSET per-target loop pattern).
-  enum class OffsetPhase {
+  enum class OffsetPhase : std::uint8_t {
     WaitDistanceOrThrough,
     WaitSelectEntity,
     WaitSidePick,
@@ -3360,6 +3421,9 @@ struct AppCommandState {
   /// While OFFSET waits for the first pick, entity under cursor (for highlight).
   bool offsetHoverHighlightValid = false;
   SelectedEntity offsetHoverEntity{};
+  /// Paper layout captured by OFFSET when its paper object is picked; guards the side-pick from
+  /// ever resolving the stored index against a different layout after a tab switch.
+  int offsetPaperLayoutIndex = -1;
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
 
@@ -3453,7 +3517,7 @@ struct AppCommandState {
 
   /// Named piping networks (issue #486 increment B3 / REQ-345) — see `CadPipingSystem`'s own doc
   /// comment (CadEntities.hpp) for the ownership model. Metadata only, like `cadPipeRuns` itself;
-  /// persisted in `.gs` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
+  /// persisted in `internal document payload` (additive array, ADR-020 (d)) and snapshotted on undo alongside it.
   std::vector<CadPipingSystem> cadPipingSystems;
 
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
@@ -3463,6 +3527,8 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
   std::vector<EntityAttributes> cadMultileaderAttrs;
+  std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
+  std::vector<EntityAttributes> cadSplineAttrs;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -3474,7 +3540,7 @@ struct AppCommandState {
   char blockEditPickerName[256]{};
   /// In-place block editing (REQ-107 / ADR-043). While active, the model arrays hold the
   /// definition's primitive geometry in local coords and \c blockEditModelStash holds the real
-  /// drawing. Session-only — never in \ref DrawingDocument, never in `.gs`.
+  /// drawing. Session-only — never in \ref DrawingDocument, never in `internal document payload`.
   bool blockEditActive = false;
   bool bconnectAwaitingFace = false;
   char bconnectNameBuf[128]{};
@@ -3492,7 +3558,7 @@ struct AppCommandState {
   // solid face (reusing the existing bconnectAwaitingFace pick mechanism) or accepts typed
   // "x,y,z,nx,ny,nz".
   // -------------------------------------------------------------------------
-  enum class BConnectPhase {
+  enum class BConnectPhase : std::uint8_t {
     WaitName,
     WaitNominalSize,
     WaitRole,
@@ -3505,7 +3571,7 @@ struct AppCommandState {
   // BCONNECTEDIT wizard (issue #496): one value prompted per step, each showing the port's
   // current value with Enter-to-keep, plus a remove option.
   // -------------------------------------------------------------------------
-  enum class BConnectEditPhase {
+  enum class BConnectEditPhase : std::uint8_t {
     WaitConnName,
     WaitRemoveConfirm, ///< Only reached when the typed connection name exists.
     WaitNominalSize,
@@ -3523,7 +3589,7 @@ struct AppCommandState {
   // BLOCKFITTING wizard (issue #496): one value prompted per step, each showing the current value
   // with Enter-to-keep.
   // -------------------------------------------------------------------------
-  enum class BlockFittingPhase {
+  enum class BlockFittingPhase : std::uint8_t {
     WaitPartType,
     WaitNominalSize,
     WaitPressureClass,
@@ -3538,7 +3604,7 @@ struct AppCommandState {
   // BCONNECTMODE wizard (issue #496): one value prompted per step, instead of a
   // single comma-separated command line.
   // -------------------------------------------------------------------------
-  enum class BConnectModePhase {
+  enum class BConnectModePhase : std::uint8_t {
     WaitConnName,
     WaitModeName,
     WaitRemoveConfirm, ///< Only reached when the typed mode name already exists.
@@ -3568,8 +3634,6 @@ struct AppCommandState {
   /// Camera to restore when the session closes (the view BEDIT was invoked from).
   double blockEditCamPanX = 0.0, blockEditCamPanY = 0.0, blockEditCamPanZ = 0.0;
   float  blockEditCamZoom = 1.f, blockEditCamAz = 0.f, blockEditCamEl = 90.f, blockEditCamRoll = 0.f;
-  /// Debug Developer Shell (REQ-161). Default off; status-bar DEV toggles it. Release ignores it.
-  bool devShellVisible = false;
   std::vector<std::string> blockRecent;
   std::vector<std::string> blockFavorites;
   std::string blockLibraryFilter;
@@ -3635,6 +3699,11 @@ struct AppCommandState {
   /// `TickPointCloudImport`, once `done` is observed — the same "worker computes, main thread
   /// applies" split `SurfaceRebuildAsync`/`TinBuildResult` already uses.
   struct PointCloudImportAsync {
+    /// Which reader/cache-builder pair to use, decided once from `sourcePath`'s extension when the
+    /// job is created (`StartPointCloudImportAsync`) — REQ-172's "share the async plumbing across
+    /// formats instead of duplicating the worker" shape. Append a new value, never reorder/remove.
+    enum class SourceFormat : std::uint8_t { E57, Pts, Ptx, Las, Laz };
+    SourceFormat format = SourceFormat::E57;
     std::string sourcePath;
     std::string cachePath;
     std::thread thread;
@@ -3653,8 +3722,11 @@ struct AppCommandState {
     /// Total leaf count, set once (by the worker) right after the cache is opened for the preview
     /// pass — 0 until then, which the UI reads as "phase 3 hasn't started yet."
     std::atomic<std::int64_t> previewTotalLeaves{0};
-    /// From `pointcloud_e57::QuickPointCountEstimate`, read before dispatch (cheap: metadata only).
-    /// 0 means unknown — the progress UI falls back to an indeterminate bar in that case.
+    /// From `pointcloud_e57::QuickPointCountEstimate`, `pointcloud_pts::QuickPointCountEstimate`,
+    /// `pointcloud_ptx::QuickPointCountEstimate`, `pointcloud_las::QuickPointCountEstimate`, or
+    /// `pointcloud_laz::QuickPointCountEstimate`
+    /// (per `format`), read before dispatch (cheap: metadata only). 0 means unknown — the
+    /// progress UI falls back to an indeterminate bar in that case.
     std::int64_t totalPointsEstimate = 0;
     std::chrono::steady_clock::time_point startTime;
     /// UI-thread-only cosmetic state for the progress dialog: the ETA text is recomputed at most
@@ -3721,7 +3793,7 @@ struct AppCommandState {
   };
 
   /// The Volume Dashboard's own state (REQ-073 amendment). **UI/session-only** — never in
-  /// \ref DrawingGeometrySnapshot, never in \ref DrawingDocument, never in `.gs` — the amendment's
+  /// \ref DrawingGeometrySnapshot, never in \ref DrawingDocument, never in `internal document payload` — the amendment's
   /// own rule, matching REQ-075's Surface Manager for the same reason: this is a VIEW onto document
   /// state (which two surfaces, and their last computed comparison), not document state itself.
   struct VolumeDashboardState {
@@ -3769,7 +3841,7 @@ struct AppCommandState {
   std::string lastVolumeBaseName;
   std::string lastVolumeComparisonName;
 
-  /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
+  /// REQ-145 Quick Profile — session graph only, never `internal document payload` (same rule as Volume Dashboard).
   struct QuickProfileState {
     bool open = false;
     bool hasResult = false;
@@ -3810,7 +3882,7 @@ struct AppCommandState {
     ///
     /// The **resolved style by value**, not a revision counter. ADR-036 (e) names the key
     /// "(tin pointer, style revision)"; a counter has to be bumped by every route that can change the
-    /// table, and undo restore, `.gs` load, tab switch and DXF import are four of them, so the one
+    /// table, and undo restore, `internal document payload` load, tab switch and DXF import are four of them, so the one
     /// that gets forgotten leaves stale contours on screen with nothing to point at. Comparing the
     /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
     /// comparison is cheaper than the allocation it prevents.
@@ -3856,7 +3928,7 @@ struct AppCommandState {
   };
 
   /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
-  /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
+  /// \ref DrawingDocument, never in `internal document payload` — which is what makes REQ-070's "never stored in `internal document payload`"
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
 
@@ -3870,7 +3942,7 @@ struct AppCommandState {
   };
   mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
 
-  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `.gs`.
+  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `internal document payload`.
   struct SurfaceWatershedCacheEntry {
     std::uint64_t surfaceId = 0;
     std::weak_ptr<const CadTin> builtFrom;
@@ -3887,7 +3959,7 @@ struct AppCommandState {
   std::string delPointSurfaceName;
   std::string movePointSurfaceName;
   std::string delLineSurfaceName;
-  enum class MoveTinPointPhase { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
+  enum class MoveTinPointPhase : std::uint8_t { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
   double moveTinFromX = 0.0;
   double moveTinFromY = 0.0;
   std::vector<float> lastWaterDropPathXyz;
@@ -3990,7 +4062,7 @@ struct AppCommandState {
   /// selection does not interfere with whole-entity selection" hold without every consumer of
   /// \ref selection having to know this exists.
   ///
-  /// **Session state, like \ref hiddenEntityIds** — not written to `.gs` and not carried in an undo
+  /// **Session state, like \ref hiddenEntityIds** — not written to `internal document payload` and not carried in an undo
   /// snapshot. A selection is not part of the drawing, and a reference that expires on a topology
   /// change (\ref SelectedSubObject) would be meaningless after a reload anyway.
   std::vector<SelectedSubObject> subObjectSelection;
@@ -4074,20 +4146,20 @@ struct AppCommandState {
 
   /// 3DMOVE / 3DROTATE / 3DSCALE: collecting the selection, asking for the base point the gizmo
   /// sits on (D-2026-09-28-c), or showing the handles on it.
-  enum class GizmoCmdPhase { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
+  enum class GizmoCmdPhase : std::uint8_t { SelectObjects, BasePoint, Handles } gizmoCmdPhase = GizmoCmdPhase::SelectObjects;
 
   // --- Geolocation tab commands (REQ-359) ---
   /// GEOMARKLATLONG: WaitFirst = latitude, WaitSecond = longitude. GEOREORIENTMARKER: WaitFirst =
   /// the design point, WaitSecond = a point along north from it.
   /// GEOCAPTUREAREA: the two corners, then Capturing while the map controller gathers the tiles.
-  enum class GeoCmdPhase { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
+  enum class GeoCmdPhase : std::uint8_t { WaitFirst, WaitSecond, Capturing } geoCmdPhase = GeoCmdPhase::WaitFirst;
   double geoCmdFirstA = 0.0;  ///< GEOMARKLATLONG: the latitude; GEOREORIENTMARKER: design point X (local)
   double geoCmdFirstB = 0.0;  ///< GEOREORIENTMARKER: design point Y (local)
   /// REQ-360: what a running \ref Kind::DrawingSettingsPick picks, and its result for the Drawing
   /// Settings window (which reads and clears \c done). Points are one pick; ToNorth / LocalAzimuth
   /// are two (a direction), with the first in geoCmdFirstA/B.
   struct DrawingSettingsPickState {
-    enum class Target { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
+    enum class Target : std::uint8_t { None, ReferencePoint, RotationPoint, ToNorth, LocalAzimuth } target = Target::None;
     bool   done = false;         ///< A result is waiting for the window.
     double worldX = 0.0;         ///< The picked point (WORLD), for the point targets.
     double worldY = 0.0;
@@ -4119,10 +4191,10 @@ struct AppCommandState {
   // --- CHPROP / MATCHPROP / LAYMCUR (REQ-356) ---
   /// SelectObjects is every command's pick step (MATCHPROP's source); CHPROP then asks which
   /// property (WaitProperty) and its value (WaitValue); MATCHPROP's destinations are SelectTargets.
-  enum class PropCmdPhase { SelectObjects, WaitProperty, WaitValue, SelectTargets };
+  enum class PropCmdPhase : std::uint8_t { SelectObjects, WaitProperty, WaitValue, SelectTargets };
   PropCmdPhase propCmdPhase = PropCmdPhase::SelectObjects;
   /// The property CHPROP is asking a value for.
-  enum class ChPropProperty { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
+  enum class ChPropProperty : std::uint8_t { Color, Layer, Linetype, Lineweight } chPropProperty = ChPropProperty::Color;
   /// MATCHPROP's source attributes, copied when the source is picked (an index would not survive an
   /// undo in between — architecture §11.9).
   EntityAttributes matchPropSource;
@@ -4155,7 +4227,7 @@ struct AppCommandState {
   /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
   ///
   /// Ids, not indices: erase compacts the entity arrays (architecture §11.9), so an index would
-  /// come to name a different object. **Session state** — deliberately not written to `.gs`, so a
+  /// come to name a different object. **Session state** — deliberately not written to `internal document payload`, so a
   /// drawing always opens showing everything.
   std::vector<std::uint64_t> hiddenEntityIds;
 
@@ -4241,6 +4313,10 @@ struct AppCommandState {
   // Ellipse originals.
   float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
   float entityGripOrigEllRatio = 0.f;
+
+  /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
+  /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
+  CadSpline entityGripOrigSpline;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -4260,8 +4336,28 @@ struct AppCommandState {
   /// the live stretch distance (REQ-024).
   float entityGripLiveDistance = 0.f;
 
+  // --- Grip hover menu (REQ-356): Lengthen/Stretch for a line-endpoint grip ---
+  /// Set when the drag was armed via the hover menu's "Lengthen" item rather than a plain click-drag:
+  /// the live update and the typed-distance box both measure along \c entityGripLengthenDir instead of
+  /// free cursor position / ORTHO, so the endpoint can only move along the line's own original angle.
+  bool entityGripLengthenMode = false;
+  /// Unit vector from the FIXED endpoint toward the grip being dragged, at the moment "Lengthen" was
+  /// chosen — the line's own angle, frozen for the rest of this drag.
+  float entityGripLengthenDirX = 0.f;
+  float entityGripLengthenDirY = 0.f;
+  /// Dwell timer + identity for the grip hover menu: which selected line-endpoint grip (if any) the
+  /// cursor is currently resting on, used to open the Lengthen/Stretch popup after ~0.5s and to reset
+  /// the timer the instant the hovered grip changes (REQ-356).
+  HoverDwell gripMenuHoverDwell{};
+  int gripMenuHoverEntityIndex = -1;
+  int gripMenuHoverWhich = -1;
+  /// The grip the popup is open for (or was last open for) — latched separately from the hover above
+  /// so the popup's own content doesn't vanish the instant the cursor leaves the grip to reach the menu.
+  int gripMenuPendingEntityIndex = -1;
+  int gripMenuPendingWhich = -1;
+
   // --- MOVE / COPY ---
-  enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
+  enum class ModifyPhase : std::uint8_t { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
 
   float modifyBaseX = 0.f;
   float modifyBaseY = 0.f;
@@ -4272,7 +4368,7 @@ struct AppCommandState {
   /// base-to-cursor over this value in \c ScalePhase::FactorPick).
   float scaleRefDist = 1.f;
   /// \c Kind::Scale — sub-state while \c modifyPhase == NeedDestination (after base).
-  enum class ScalePhase {
+  enum class ScalePhase : std::uint8_t {
     FactorPick, ///< Default: \c scaleRefDist from selection vs base; scale = dist(base,cursor)/ref or typed factor.
     Ref_WaitP1, ///< First point of explicit reference length segment.
     Ref_WaitP2, ///< Second point sets \c scaleRefDist.
@@ -4283,7 +4379,7 @@ struct AppCommandState {
   float scaleNewLenP1X = 0.f, scaleNewLenP1Y = 0.f;
 
   // --- ROTATE ---
-  enum class RotatePhase {
+  enum class RotatePhase : std::uint8_t {
     PickSelection,
     NeedBase,
     NeedAngleOrReference, ///< decimal/DMS **clockwise from north**, or R reference
@@ -4307,7 +4403,7 @@ struct AppCommandState {
   float pendingRotateCopyBx = 0.f, pendingRotateCopyBy = 0.f, pendingRotateCopyRad = 0.f;
 
   // --- MIRROR (REQ-103 step 1) ---
-  enum class MirrorPhase {
+  enum class MirrorPhase : std::uint8_t {
     PickSelection,
     NeedP1,          ///< first point of the mirror line
     NeedP2,          ///< second point of the mirror line
@@ -4331,8 +4427,8 @@ struct AppCommandState {
   bool mirrorEraseSourcePending = false;
 
   // --- ARRAY (REQ-305) ---
-  enum class ArrayType { Rectangular, Polar } arrayType = ArrayType::Rectangular;
-  enum class ArrayPhase {
+  enum class ArrayType : std::uint8_t { Rectangular, Polar } arrayType = ArrayType::Rectangular;
+  enum class ArrayPhase : std::uint8_t {
     PickSelection,
     WaitType,               ///< "[R]ectangular / [P]olar"
     Rect_WaitColumns,       ///< typed integer only — not spatial
@@ -4382,8 +4478,8 @@ struct AppCommandState {
   /// for: pick a line, read what it measures, type what you want it to measure. DElta's "add 50
   /// to whatever this is" needs the current length as context anyway, which a bare prompt before
   /// the pick cannot give.
-  enum class LengthenMode { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Total;
-  enum class LengthenPhase {
+  enum class LengthenMode : std::uint8_t { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Total;
+  enum class LengthenPhase : std::uint8_t {
     WaitSelectOrMode,  ///< pick an object (applies current mode+value), or type DE/P/T/DY to (re)set the mode
     WaitDeltaValue,    ///< typed signed length to add/subtract
     WaitPercentValue,  ///< typed percentage of current length (100 = unchanged)
@@ -4413,7 +4509,7 @@ struct AppCommandState {
   bool lengthenPendingApplyOnValue = false;
 
   // --- EXTEND (REQ-103 step 3) ---
-  enum class ExtendPhase {
+  enum class ExtendPhase : std::uint8_t {
     SelectBoundaries, ///< picking boundary edges; Enter (needs >=1) advances to SelectTargets
     SelectTargets,    ///< picking objects to extend, one per click, loops until Enter/Esc
   } extendPhase = ExtendPhase::SelectBoundaries;
@@ -4422,7 +4518,7 @@ struct AppCommandState {
   std::vector<SelectedEntity> extendBoundaries;
 
   // --- BREAK (REQ-103 step 4) --- (BreakPoint is file-scope; see its definition above)
-  enum class BreakPhase {
+  enum class BreakPhase : std::uint8_t {
     SelectFirstPoint,  ///< pick selects the entity AND supplies break point 1
     SelectSecondPoint, ///< pick supplies break point 2, projected onto the same entity; applies, loops
   } breakPhase = BreakPhase::SelectFirstPoint;
@@ -4442,7 +4538,7 @@ struct AppCommandState {
   bool stretchRectInUcsPlane = false;
 
   // --- FILLET (REQ-103 step 6a) ---
-  enum class FilletPhase {
+  enum class FilletPhase : std::uint8_t {
     WaitFirstEntity,  ///< pick the first curve (or type R/T to set radius/trim mode)
     WaitSecondEntity, ///< pick the second curve; applies immediately, loops back to WaitFirstEntity
   } filletPhase = FilletPhase::WaitFirstEntity;
@@ -4487,7 +4583,7 @@ struct AppCommandState {
   bool filletSolidAwaitingRadius = false;
 
   // --- CHAMFER (REQ-103 step 6b) ---
-  enum class ChamferPhase { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
+  enum class ChamferPhase : std::uint8_t { WaitFirstEntity, WaitSecondEntity } chamferPhase = ChamferPhase::WaitFirstEntity;
   /// Same shape as `filletFirstEntity`/`filletFirstPolySeg` — see that field's comment.
   SelectedEntity chamferFirstEntity{};
   int chamferFirstPolySeg = -1;
@@ -4545,12 +4641,12 @@ struct AppCommandState {
   float pickDisambiguationScreenX = 0.f;
   float pickDisambiguationScreenY = 0.f;
   bool pickDisambiguationShiftClick = false;
-  enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
+  enum class SurveyInversePhase : std::uint8_t { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
 
   /// REQ-105: DIST — two-point 3D distance (delta X/Y/Z + slope distance).
-  enum class DistPhase { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
+  enum class DistPhase : std::uint8_t { WaitFrom, WaitTo } distPhase = DistPhase::WaitFrom;
   float distFromX = 0.f;
   float distFromY = 0.f;
   float distFromZ = 0.f;
@@ -4559,8 +4655,8 @@ struct AppCommandState {
   /// it; the elevations are kept per surface, by name, because a point can be covered by more than
   /// one surface (existing and proposed) and a grade must be computed within one surface, never
   /// across two (Q1, TASK-055).
-  enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
-  enum class QuickProfilePhase { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
+  enum class SurfaceElevPhase : std::uint8_t { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  enum class QuickProfilePhase : std::uint8_t { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
   std::string quickProfileSurfaceName;
   double quickProfileFromX = 0.0;
   double quickProfileFromY = 0.0;
@@ -4642,6 +4738,15 @@ struct AppCommandState {
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   /// When set, the Point Group manager selects this named group on the next draw.
   std::string pointGroupManagerFocusName;
+  bool showSurveyPointGridWindow = false;  ///< Survey Point Database grid (REQ-400).
+  /// REQ-400 clause 5: a grid edit that retagged a point to a number already in the database, waiting
+  /// on the user's overwrite / renumber / cancel answer. Cleared once answered or the window closes.
+  struct SurveyPointGridConflict {
+    bool        active = false;
+    int         oldNumber = 0;    ///< the row being edited (its number before the edit)
+    int         newNumber = 0;    ///< the number the user typed, already taken
+    SurveyPoint pendingValues;    ///< the rest of the edit, applied once the conflict is resolved
+  } surveyPointGridConflict;
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
   /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
   bool showCreateSurfaceWindow = false;
@@ -4649,8 +4754,8 @@ struct AppCommandState {
   bool showSurfacePropertiesWindow = false;
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
-  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
-  enum class ToolspaceTab : int { Prospector = 0, Settings = 1, Project = 2 };
+  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `internal document payload`.
+  enum class ToolspaceTab : std::uint8_t { Prospector = 0, Settings = 1, Project = 2 };
   bool showToolspaceWindow = true;
   /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
   /// other manager windows: which panels are open is not a property of the drawing.
@@ -4718,7 +4823,7 @@ struct AppCommandState {
   /// the same decision `SECTION` made (D-2026-09-09-i) and for the same reason, so the two commands
   /// cut on the same plane and a user can section exactly what they are looking into.
   ///
-  /// **Deliberately NOT persisted to `.gs`**, unlike \ref viewportProjection which sits beside a
+  /// **Deliberately NOT persisted to `internal document payload`**, unlike \ref viewportProjection which sits beside a
   /// named view. This is an inspection mode, not a property of the drawing: opening a file to find
   /// half of it invisible, with the reason three menus away, is the failure this avoids. REQ-341
   /// records persistence as a possible increment rather than an oversight.
@@ -4755,7 +4860,7 @@ struct AppCommandState {
   /// True while the section plane is SELECTED and showing its handles (REQ-343).
   ///
   /// Not a `SelectedEntity`. The plane is still a view state — it has no layer, no attributes and
-  /// no place in `.gs` — so putting it in `selection` would put a branch for it in every consumer
+  /// no place in `internal document payload` — so putting it in `selection` would put a branch for it in every consumer
   /// of that vector (MOVE, DELETE, DXF export, the property panel, the highlight walk), and the
   /// first one that forgot would be a view setting silently exported or erased. That is the same
   /// argument `SelectedSubObject` records for keeping its own store.
@@ -4938,7 +5043,6 @@ struct AppCommandState {
   // System → Graphics Performance sub-dialog.
   bool showGraphicsPerformanceDialog = false;
   bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
-  bool gfxAcceleratedFontDisplay = true;       ///< Placeholder (font rasterization through ImGui is already GPU).
   int gfxVideoMemoryCachingLevel = 5;          ///< Placeholder 1..5.
   bool gfx3dFastShadedMode = true;             ///< Placeholders (no 3D pipeline).
   bool gfx3dAdvancedMaterialEffects = true;
@@ -5003,7 +5107,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   struct DrawingTab {
     std::string  name;
-    uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+    uint32_t     uid = 0;  ///< Stable per-tab ID used to prevent label collisions.
     uint32_t     projectUid = 0;  ///< REQ-374: ProjectSession::uid this drawing belongs to; 0 = standalone.
     /// REQ-376 (#696 P3): how this tab's survey points relate to the project database. Unattached = not
     /// decided yet (decided on the first frame after the tab is built); Shared = the tab reads and
@@ -5039,13 +5143,13 @@ struct AppCommandState {
   /// A question the user must answer before a project open can continue (damaged marker, or the lock
   /// is held). Drawn as a modal by DrawProjectDialogs; the continuation re-enters the open path.
   struct ProjectPrompt {
-    enum class Kind { None, Damaged, Locked } kind = Kind::None;
+    enum class Kind : std::uint8_t { None, Damaged, Locked } kind = Kind::None;
     std::string      gsprojPath;
     std::string      dwgPath;      ///< the drawing being opened, or empty for Open Project
     std::string      message;      ///< why the marker is damaged
     gsproj::LockInfo holder;       ///< Locked: who holds it
     bool             stale = false;
-    bool             openRequested = false;  ///< ask ImGui to open the modal next frame
+    bool             openRequested = false;  ///< ask the UI to open the modal on its next update
   } projectPrompt;
   bool showNewProjectDialog = false;  ///< REQ-374 clause 1; File > New Project / Start screen
   /// REQ-375: the Project Settings window is open for ProjectSession::uid == this (0 = closed).
@@ -5059,7 +5163,7 @@ struct AppCommandState {
   /// the project is attached in a project drawing. Drawn as a modal by DrawProjectDialogs; the answer
   /// goes to ResolveProjectAttach and then on to the attach that asked.
   struct ProjectAttachPrompt {
-    enum class Kind { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
+    enum class Kind : std::uint8_t { None, PointCloud, Pdf, PdfTrack } kind = Kind::None;  ///< PdfTrack: Add PDF to project (REQ-379 cl. 5), no placement
     uint32_t    projectUid = 0;
     std::string sourcePath;          ///< UTF-8
     std::string destRel;             ///< where a copy would go, project-relative
@@ -5144,8 +5248,6 @@ struct AppCommandState {
   int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
   uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
   bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
-  bool pendingViewportFocus   = false; ///< Request ImGui focus on the Drawing1 window next frame.
-  bool pendingPropertiesFocus = false; ///< Request ImGui focus on the Properties tab on next Begin().
   bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
   int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
   int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
@@ -5160,7 +5262,7 @@ struct AppCommandState {
 
   // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
   uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.
-  std::string activeDocFilePath;            ///< Absolute path to the active doc's .gs file.
+  std::string activeDocFilePath;            ///< Absolute path to the active doc's .dwg drawing file.
   int undoHistoryMaxSize = 50; ///< Maximum undo frames per drawing tab (0 = unlimited). Settings → User Preferences.
 
   // --- Close confirmation ---
@@ -5179,7 +5281,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
   // -------------------------------------------------------------------------
-  enum class AlignPhase { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
+  enum class AlignPhase : std::uint8_t { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
 
   struct AlignControlPt { float srcX = 0.f, srcY = 0.f, dstX = 0.f, dstY = 0.f; };
   std::vector<AlignControlPt> alignControlPts;
@@ -5204,7 +5306,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // PDFATTACH command state
   // -------------------------------------------------------------------------
-  enum class PdfAttachPhase {
+  enum class PdfAttachPhase : std::uint8_t {
     WaitDialog,       ///< Dialog is open; user browses / configures
     Building,         ///< Async rasterize running in background; dialog shows spinner
     WaitInsertPoint,  ///< User picks insertion point in viewport
@@ -5227,7 +5329,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   // INSERT dialog (issue #124)
   // -------------------------------------------------------------------------
-  enum class InsertBlockPhase {
+  enum class InsertBlockPhase : std::uint8_t {
     WaitDialog,
     WaitInsertPoint,
     WaitScale,
@@ -5282,7 +5384,7 @@ struct AppCommandState {
   char insertBlockAttrBuf[8][128]{};
 
   // Block Create dialog (ribbon Create button) — mirrors Insert dialog (issue #475 follow-up)
-  enum class BlockCreatePhase { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
+  enum class BlockCreatePhase : std::uint8_t { WaitDialog, WaitBasePoint } blockCreatePhase = BlockCreatePhase::WaitDialog;
   bool blockCreateDialogOpen = false;
   char blockCreateName[256]{};
   float blockCreateBaseX = 0.f;
@@ -5396,6 +5498,9 @@ struct AppCommandState {
   // 1->2, the same "done picking edges" signal model-space TRIM/EXTEND get from a real Enter.
   int   paperExtendPhase = 0;
   std::vector<PaperEntityRef> paperExtendBoundaries;
+  // Paper-space TRIM cutting edges (REQ-039). Kept separate from model `trimCutters`, whose
+  // SelectedEntity indices address model stores and must never be interpreted as paper indices.
+  std::vector<PaperEntityRef> paperTrimCutters;
   // Paper-space BREAK of native paper entities (REQ-103 step 4): 0 idle, 1 waiting for the
   // entity+first-point pick, 2 waiting for the second point (applies, loops back to 1). Pure click
   // flow like paper EXTEND — no typed value, so not simplified away.
@@ -5444,9 +5549,9 @@ struct AppCommandState {
   /// REQ-155 (issue #155): while floating model space is entered, \ref activeUcs holds that
   /// VIEWPORT's active UCS (so coordinate entry / grid / ORTHO / readout / UCSFOLLOW resolve
   /// against the viewport's frame). The drawing-scoped UCS is parked here for the duration and
-  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`.gs` save,
+  /// restored on exit. \ref CadDrawingScopedUcs reads the right one; persistence (`internal document payload` save,
   /// per-tab snapshot) must go through it so a save/tab-switch WHILE floating records the
-  /// drawing's frame, not the viewport's. Session-only — never written to `.gs`.
+  /// drawing's frame, not the viewport's. Session-only — never written to `internal document payload`.
   ucs::Ucs drawingActiveUcsStash;
   bool     floatingUcsSwapActive = false;
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
@@ -5487,6 +5592,9 @@ struct AppCommandState {
   TraverseData traverseData;
   /// When true, traverseData must be recomputed before the next panel draw.
   bool traverseDataDirty = true;
+  /// REQ-403 (#834): last path saved/loaded via the Traverse Editor, "" until one exists. Plain
+  /// "Save" writes here again without reprompting; "Save As…" always prompts and updates it.
+  std::string traverseFilePath;
 
   /// Closure-analysis window (unadjusted vs least-squares, REQ-014).
   bool        showTraverseClosureWindow = false;
@@ -5498,6 +5606,26 @@ struct AppCommandState {
   /// Index of the leg whose per-leg observation editor is expanded (REQ-018),
   /// or -1 when none. Accordion: at most one leg is expanded at a time.
   int         traverseExpandedLeg = -1;
+
+  /// GitHub issue #845 (Phase A) — command-style text view, two-way synced with the
+  /// form panel through the same traverseData/traverseLsaWeights.
+  bool        traverseCommandViewActive = false;  ///< Form tab vs. Command tab.
+  std::string traverseCommandText;                ///< Editable buffer (GSTC syntax).
+  /// True once the text has been generated for the currently-active edit session;
+  /// while editing, the form side must not regenerate and clobber unapplied text.
+  bool        traverseCommandTextLoaded = false;
+  std::string traverseCommandError;               ///< Parse error from the last Apply, if any.
+  /// LSA Editor: last path opened/saved as a plain-text `.gsdat` command document
+  /// (the GSTC source itself — distinct from the structured `.gstrav` save format),
+  /// "" until one exists. Plain "Save" writes here again; "Save As…" always prompts.
+  std::string traverseGsdatFilePath;
+  /// Issue #848 follow-up: one entry per raw-data file imported into the current
+  /// traverse, `{legIndex, "IMPORT \"path\""}` — legIndex is the 0-based index (at
+  /// import time) of the first leg that file contributed, so the Command tab can
+  /// re-insert a `# IMPORT "path"` comment line at the right spot every time it
+  /// regenerates the GSTC text from traverseData (travcmd::Parse ignores comments,
+  /// so this can't round-trip through the text itself). Cleared on Load/Open/Clear.
+  std::vector<std::pair<int, std::string>> traverseImportMarkers;
 
   // -------------------------------------------------------------------------
   // CLIPBOARD (COPYCLIP / PASTECLIP)
@@ -5537,7 +5665,7 @@ inline void CadForEachPolylineArcMidGrip(const AppCommandState& st, int pi, F&& 
   if (pi < 0 || pi >= np)
     return;
   const int v0 = st.userPolylineOffsets[static_cast<std::size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi + 1)];
+  const int v1 = st.userPolylineOffsets[static_cast<std::size_t>(pi) + 1];
   const bool closed = static_cast<std::size_t>(pi) < st.userPolylineClosed.size() &&
                       st.userPolylineClosed[static_cast<std::size_t>(pi)];
   const int nseg = (v1 - v0) - 1 + (closed && (v1 - v0) >= 2 ? 1 : 0);
@@ -5672,7 +5800,7 @@ inline float CadWorkPlaneElevation(const AppCommandState& st) {
 /// it. Without the override, snapped geometry would be silently lifted to the current elevation
 /// and would not touch the thing it was snapped to.
 inline float CadCommitElevation(const AppCommandState& st) {
-  return st.viewportSnapPickValid ? st.viewportSnapPickLocalZ : CadWorkPlaneElevation(st);
+  return st.viewportSnapPickValid ? static_cast<float>(st.viewportSnapPickLocalZ) : CadWorkPlaneElevation(st);
 }
 
 /// True when the active UCS is the World Coordinate System — the default, and what the status bar
@@ -5681,7 +5809,7 @@ inline bool CadUcsIsWorld(const AppCommandState& st) { return ucs::IsWorld(st.ac
 
 /// The DRAWING-scoped active UCS (REQ-154), correct even while a per-viewport frame is live in
 /// \ref AppCommandState::activeUcs because floating model space is entered (REQ-155). Persistence —
-/// the `.gs` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
+/// the `internal document payload` save and the per-tab document snapshot — must read this, never `activeUcs` directly,
 /// or a save/tab-switch performed while floating would record the viewport's frame as the drawing's.
 inline const ucs::Ucs& CadDrawingScopedUcs(const AppCommandState& st) {
   return st.floatingUcsSwapActive ? st.drawingActiveUcsStash : st.activeUcs;
@@ -5823,7 +5951,7 @@ enum class EntityKind : std::uint8_t {
   /// walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting Surface anywhere but the
   /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
   /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
-  /// legacy `.gs` loading with the ids it loaded with yesterday.
+  /// legacy `internal document payload` loading with the ids it loaded with yesterday.
   Surface,
   /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
   Table,
@@ -5839,7 +5967,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-359 / D-2026-09-29-e. Appended after PointCloud for the same id-sweep reason.
   PositionMarker,
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
-  Multileader
+  Multileader,
+  /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
+  Spline
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -5857,9 +5987,9 @@ struct EntityRef {
 ///
 /// **Idempotent**: an entity that already has an id keeps it, always. Only `id == 0` is filled, from
 /// \ref AppCommandState::nextEntityId, in a fixed array order — which is what makes assignment
-/// deterministic for a legacy `.gs` (same file, same ids, every load).
+/// deterministic for a legacy `internal document payload` (same file, same ids, every load).
 ///
-/// Deliberately called only at **cold boundaries** — before an undo snapshot, before a `.gs` save,
+/// Deliberately called only at **cold boundaries** — before an undo snapshot, before a `internal document payload` save,
 /// and before a reference is taken — never per frame (architecture §11.7). Assigning at the 127
 /// sites that construct an EntityAttributes was rejected: a missed site there is not a compile
 /// error, it is a silently id-less entity (the ADR-025 (a) lesson).
@@ -6212,6 +6342,22 @@ void CancelPolysolidCommand(AppCommandState& st);
 /// the viewport can put the cursor into the same plane the builder reads it from - one frame, not two.
 [[nodiscard]] ucs::Ucs CadPolysolidFrameFor(const AppCommandState& st);
 
+// --- REQ-444 REVCLOUD ----------------------------------------------------------------------------
+/// Open the command: pick a first corner, or `O` to convert a closed shape already drawn.
+void StartRevcloudCommand(AppCommandState& st, std::vector<std::string>& log);
+/// The prompt line, echoing the arc length and options in force.
+[[nodiscard]] std::string CadRevcloudPromptText(const AppCommandState& st);
+/// Handle one typed line: a coordinate, Enter, or one of `A R D O C U`. \return false if not consumed.
+bool HandleRevcloudTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+/// Handle a viewport click: a corner, or — at the `O`bject prompt — the shape to convert.
+void SubmitRevcloudViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// Drop the draft path, keeping the remembered arc length and options.
+void CancelRevcloudCommand(AppCommandState& st);
+/// The cloud the cursor currently proposes (the draft plus \p cursor, closed), built by the SAME
+/// function the commit uses. Empty when the draft is too short for one.
+[[nodiscard]] std::vector<double> CadRevcloudPreviewPolyline(const AppCommandState& st, double curX, double curY,
+                                                             std::vector<float>* outBulge);
+
 // --- PIPERUN (issue #486 increment B2 / REQ-345) -------------------------------------------------
 /// Open the command: prompt for a nominal size (+ optional pressure class).
 void StartPipeRunCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -6293,6 +6439,16 @@ void HandlePipePropCommand(const std::string& args, AppCommandState& st, std::ve
 /// unrecognized \p args reports the current networks). \p args is everything typed after the
 /// command name itself. ADD/REMOVE act on `AppCommandState::selection`'s pipe runs.
 void HandlePipingSystemCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+
+// --- LAYOUT / VPSCALE / PAGESETUP (REQ-025/026/027, issue #751/#753 V3) ----------------------------
+/// One-shot text dispatch for LAYOUT's NEW/RENAME/DELETE subverbs — the typed equivalent of the
+/// layout tab bar's add/rename/delete (REQ-025). \p args is everything typed after "LAYOUT".
+void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
+/// number; a blank \p args reports the current viewport's scale instead.
+void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
+void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.
 ///
 /// ONE builder for the preview, the click that commits a point and the Enter that finishes — a
@@ -6417,7 +6573,7 @@ void SubmitRevolveViewportPick(AppCommandState& st, float wx, float wy, std::vec
 
 // --- UNION / SUBTRACT / INTERSECT (REQ-314 / ADR-046 increment 4, B1) -----------------------
 
-enum class CadBooleanOp { Union, Subtract, Intersect };
+enum class CadBooleanOp : std::uint8_t { Union, Subtract, Intersect };
 
 /// Combine the two B-rep solids in the current selection (REQ-314 B1). UNION and INTERSECT do not
 /// care about order; SUBTRACT keeps the first selected solid and removes the second. Both operands
@@ -6458,9 +6614,9 @@ void SubmitSectionViewportPick(AppCommandState& st, float wx, float wy, std::vec
 
 /// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
 /// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
-/// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
+/// the identical current/stale/rebuilding classification for a surface, and it has no UI
 /// dependency, so it lives here rather than in either panel.
-enum class SurfaceState { Current, Stale, Rebuilding };
+enum class SurfaceState : std::uint8_t { Current, Stale, Rebuilding };
 
 /// \p surfaceIndex's current/stale/rebuilding state. Both non-`Current` states are already knowable
 /// without any new bookkeeping: a rebuild in flight is an entry in \c surfaceRebuildAsync, and
@@ -6548,9 +6704,11 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
 
-/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the E57
-/// at \p path. Refuses (logs why, returns false) if an import is already in flight. Call once from
-/// the `POINTCLOUDATTACH` command handler; \ref TickPointCloudImport reaps the result.
+/// REQ-171/172, ADR-060 — starts a background `.gscloud` build + preview-sample read for the
+/// E57/PTS/PTX/LAS/LAZ point cloud at \p path (format decided from the extension — see
+/// `PointCloudImportAsync::SourceFormat`). Refuses (logs why, returns false) if an import is
+/// already in flight. Call once from the single `POINTCLOUDATTACH` command handler (the sole
+/// import entry point for every point-cloud format); \ref TickPointCloudImport reaps the result.
 bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
                                 std::vector<std::string>& log);
 
@@ -6560,6 +6718,42 @@ bool StartPointCloudImportAsync(AppCommandState& st, const std::string& path,
 /// on failure or cancellation, logs the reason and commits nothing. A no-op while no import is in
 /// flight or the in-flight one has not finished yet.
 void TickPointCloudImport(AppCommandState& st, std::vector<std::string>& log);
+
+/// What a progress display shows for an in-flight import (REQ-172,
+/// ADR-060): the build's three real phases weighted by rough cost, and an ETA recomputed at most
+/// once a second.
+struct PointCloudImportProgress {
+  /// "Reading scan..." / "Building spatial index..." / "Sampling preview...".
+  const char* phase = "Reading scan...";
+  /// 0..1, or negative when the point total is unknown (indeterminate bar).
+  float fraction = -1.f;
+  /// "estimating..." or "~2m 30s remaining"; empty when the total is unknown.
+  std::string eta;
+};
+PointCloudImportProgress UpdatePointCloudImportProgress(AppCommandState::PointCloudImportAsync& job);
+
+/// Which writer an export uses. REQ-172 delivers export for PTS, PTX, LAS and LAZ; E57 is
+/// import-only (no writer exists).
+enum class PointCloudExportFormat : std::uint8_t { Pts, Ptx, Las, Laz };
+
+/// What `EXPORTPTS` / `EXPORTPTX` / `EXPORTLAS` / `EXPORTLAZ` will write: the selected point
+/// clouds, or every cloud in the drawing when none is selected (REQ-172).
+struct PointCloudExportPlan {
+  int cloudCount = 0;
+  /// True when at least one cloud is selected, false when the export covers every cloud.
+  bool fromSelection = false;
+  /// Sum of the clouds' full point counts (not their bounded preview samples).
+  std::int64_t pointCount = 0;
+  /// Suggested file name: the cloud's own stem for one cloud, `pointclouds.<ext>` for several.
+  std::string defaultFileName;
+};
+PointCloudExportPlan PlanPointCloudExport(const AppCommandState& st, PointCloudExportFormat format);
+
+/// Writes the planned point clouds to \p pathUtf8 in \p format, logging the outcome in the same
+/// words as the typed commands. Returns false (drawing and file untouched on a refusal) if there
+/// is nothing to export or the writer fails. Not a drawing edit, so there is nothing to undo.
+bool ExportPointCloudsToFile(AppCommandState& st, PointCloudExportFormat format,
+                             const std::string& pathUtf8, std::vector<std::string>& log);
 
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
@@ -6776,6 +6970,7 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripDownWorldX = 0.f;
   st.entityGripDownWorldY = 0.f;
   st.entityGripTypedDistanceValid = false;
+  st.entityGripLengthenMode = false;
 }
 
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
@@ -6800,6 +6995,12 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     st.userCirclesCxCyZR[k] = st.entityGripOrigCx;
     st.userCirclesCxCyZR[k + 1] = st.entityGripOrigCy;
     st.userCirclesCxCyZR[k + 3] = st.entityGripOrigR;  // [k+2] is Z — a grip drag does not change it
+    break;
+  }
+  case SelectedEntity::Type::Spline: {  // REQ-443
+    if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
+      return;
+    st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -7046,6 +7247,7 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -7467,7 +7669,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
 /// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
-enum class ViewportPickFamily { None, Table, Annotation, Linework, Solid, FilledRegion };
+enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion };
 
 /// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
 struct ViewportPickRequest {
@@ -7650,6 +7852,17 @@ struct DrawingTransformFactors {
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
 
+// --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
+/// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"
+/// option is on: Combined = the Transformation tab's k = k_grid · k_sea at its reference point;
+/// GridOnly = k_grid alone. Reuses \ref ResolveDrawingTransform rather than a second computation.
+/// \p factorOut is left at 1.0 and a non-empty reason is returned when the drawing has no
+/// coordinate system (REQ-358) or the Transformation tab's reference point cannot be resolved
+/// (REQ-360's own failure cases).
+[[nodiscard]] std::string ResolveTraverseScaleFactor(const AppCommandState& st,
+                                                     TraverseData::ScaleFactorKind kind,
+                                                     double* factorOut);
+
 /// WGS 84 latitude/longitude ↔ a LOCAL drawing point (REQ-363 item 3, ADR-064 (b)): the same chain as
 /// \ref DrawingPointToGrid / \ref GridToDrawingPoint plus the datum path to WGS 84, with the zone, the
 /// datum paths and the REQ-360 transformation resolved ONCE by \ref Open, so an online map can place
@@ -7750,7 +7963,7 @@ struct DwgGeoData {
   /// What GEODATA's reference point (the design point in the coordinate system) is, by its
   /// coordinate type: 3 geographic = longitude / latitude (degrees), 2 projected grid = easting /
   /// northing in the zone's unit; anything else (unknown, local grid) gives no grid reference.
-  enum class Reference { None, Geographic, ProjectedGrid };
+  enum class Reference : std::uint8_t { None, Geographic, ProjectedGrid };
   Reference   reference = Reference::None;
   double      refX = 0.0;  ///< Longitude or easting.
   double      refY = 0.0;  ///< Latitude or northing.
@@ -7798,6 +8011,10 @@ bool HandleGeoCommandText(AppCommandState& st, const std::string& line, std::vec
 int CadApplyLinetypeToSelection(AppCommandState& st, const std::string& linetype, int* skipped = nullptr);
 /// The same, for the lineweight in millimetres (\c -1 = ByLayer).
 int CadApplyLineweightToSelection(AppCommandState& st, float mm, int* skipped = nullptr);
+/// Transparency edit on the selection (0 = opaque, 1 = clear, -1 = ByLayer), over the same types as
+/// the line-style edits: one undo step, pushed only when something changes. The 0.7.4 Properties
+/// panel wrote transparency with no undo step; both frontends now share this service (#891).
+int CadApplyTransparencyToSelection(AppCommandState& st, float transparency, int* skipped = nullptr);
 /// What \ref CadSelectionColor returns when the selected objects carry more than one colour.
 inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
 /// The colour storage the selected objects share, \ref kCadSelectionColorVaries when they differ,
@@ -7807,6 +8024,34 @@ inline constexpr const char* kCadSelectionColorVaries = "*VARIES*";
 /// step), leaving the current colour alone; with nothing selected, sets \ref
 /// AppCommandState::currentColor.
 void CadRibbonPickColor(AppCommandState& st, const std::string& color, std::vector<std::string>& log);
+// --- Right-click classification (REQ-054, REQ-084) -------------------------------------------
+/// What a right-click in the drawing does. Both frontends classify with \ref CadClassifyRightClick
+/// so the preference dialog means the same thing in each (#891).
+enum class RightClickAction : std::uint8_t {
+  Enter,         ///< Submit an empty line (finish the command, or repeat the last when idle).
+  RepeatLast,    ///< Repeat the last command; only returned when there is one to repeat.
+  ShortcutMenu,  ///< Open the shortcut menu.
+};
+/// The verdict of the Default / Edit / Command Mode preferences (REQ-084 (a)) for a right-click
+/// PRESS. A mode that says "repeat" with nothing to repeat opens the menu rather than doing nothing.
+/// With time-sensitive right-click on and no selection, the caller measures the hold instead
+/// (\ref CadRightClickIsTimed) and uses \ref CadRightClickHoldIsMenu.
+[[nodiscard]] inline RightClickAction CadClassifyRightClick(const AppCommandState& st, bool hasSelection) {
+  using K = AppCommandState::Kind;
+  using CM = AppCommandState::RightClickCommandMode;
+  if (st.active != K::None)
+    return st.rightClickCommandMode == CM::Enter ? RightClickAction::Enter : RightClickAction::ShortcutMenu;
+  const bool repeat = hasSelection
+      ? st.rightClickEditMode == AppCommandState::RightClickEditMode::RepeatLastCommand
+      : st.rightClickDefaultMode == AppCommandState::RightClickDefaultMode::RepeatLastCommand;
+  return repeat && st.lastCommand != K::None ? RightClickAction::RepeatLast : RightClickAction::ShortcutMenu;
+}
+/// True when this right-click is decided by how long the button is held (REQ-084 (b)): the option
+/// is on and nothing is selected — a selection still goes through Edit Mode.
+[[nodiscard]] inline bool CadRightClickIsTimed(const AppCommandState& st, bool hasSelection) {
+  return st.rightClickTimeSensitive && !hasSelection;
+}
+
 /// True for \c Kind::ChProp / \c MatchProp / \c LayMCur.
 [[nodiscard]] bool IsPropCommandKind(AppCommandState::Kind k);
 void StartChPropCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -7946,6 +8191,15 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, float dz,
                                  std::vector<std::string>& log);
 
+/// Every primary command name in the command registry (issue #785's regression test: a merge
+/// dropped eight handlers while leaving their registry rows in place, which made the loss
+/// invisible by inspection). Test-only, but cheap enough to leave built in all configurations.
+std::vector<std::string> RegisteredCommandPrimariesForTest();
+
+/// True if some handler claimed \p primary (a name from `RegisteredCommandPrimariesForTest()`).
+/// False means the registry advertises a command that silently does nothing when typed.
+bool DispatchByPrimaryForTest(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
+
 /// Rotate the whole selection by \p rad about the axis through (\p bx, \p by, \p bz) parallel to the
 /// ACTIVE UCS Z — the complete typed-ROTATE transform, dispatch included (REQ-329 increment 2,
 /// REQ-332 increment 2). The caller owns the undo snapshot.
@@ -7979,7 +8233,7 @@ void ApplyUniformScaleAboutBase(AppCommandState& st, float bx, float by, float b
 /// third thing that can disagree with them. `None` is the answer whenever no gizmo may be drawn —
 /// which is REQ-060's third acceptance bullet and, for a face, the honest answer for a selection the
 /// kernel has no operation for.
-enum class CadGizmoMode {
+enum class CadGizmoMode : std::uint8_t {
   None,
   /// The entity selection: three handles along the active UCS, committing through
   /// `ApplyTranslationToSelection`.
@@ -8230,6 +8484,8 @@ void RecalcAlignResult(AppCommandState& st);
 /// \p applyScale — false strips scale (rotation + translation only; re-derives tx/ty from centroids).
 void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool applyScale);
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Start PDF page rasterization on a worker while the dialog remains responsive.
+void StartPdfAttachBuild(AppCommandState& st, std::vector<std::string>& log);
 /// Called from the viewport when the user clicks to place the PDF attachment.
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 
@@ -8257,6 +8513,16 @@ struct CommandSuggestion {
 
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
 std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
+
+/// What the command line should actually run for \p typedText, decided fresh against the text
+/// itself rather than a suggestion computed on an earlier keystroke (GitHub issue #766: the UI's
+/// persisted autocomplete highlight could survive from an unrelated earlier query, so typing the
+/// exact alias ERASE ran DRAWINGSETTINGS, RENAME ran SURFACERENAME, and TABLE ran VOLTABLE). A
+/// single-token \p typedText that exactly names a command or alias always resolves to that
+/// command — FuzzyCommandSuggestions ranks an exact match first — so an exact name never loses to
+/// a stale or merely-similar suggestion. A multi-token line (a command plus its arguments) and an
+/// unrecognized single token are both returned unchanged.
+std::string ResolveCommandLineSubmission(const std::string& typedText);
 
 /// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
 /// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
@@ -8320,5 +8586,3 @@ bool ComputeSectionClipIndicatorBounds(const AppCommandState& st, ray3d::Vec3* o
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);
-
-bool LoadApplicationFont();

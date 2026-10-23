@@ -10,9 +10,6 @@ its `VENDORED.md` in the same commit.
 
 | Dir | Upstream | Pin | Form |
 |-----|----------|-----|------|
-| `imgui/` | github.com/ocornut/imgui | `81cfcb8c1` (v1.92.9 docking) | source (core + backends) |
-| `imgui_test_engine/` | github.com/ocornut/imgui_test_engine | `v1.92.9` | source, Debug-only (may be absent) |
-| `glfw/` | github.com/glfw/glfw | `3.4` | source (no docs/tests/examples) |
 | `glew/` | github.com/nigels-com/glew | `2.2.0` | source (`glew.c` + headers) |
 | `catch2/` | github.com/catchorg/Catch2 | `v3.5.2` | amalgamated `.hpp`/`.cpp` + `catch2/` shims |
 | `libredwg/` | github.com/LibreDWG/libredwg | `0.14` + GoSurvey changes | library source (`src/`, `include/`), built by our CMake — see its `VENDORED.md` |
@@ -20,3 +17,4 @@ its `VENDORED.md` in the same commit.
 | `pdfium/` | github.com/bblanchon/pdfium-binaries | `chromium/7857` | prebuilt binaries |
 | `nlohmann/` | github.com/nlohmann/json | `v3.11.3` | `json.hpp` single header |
 | `stb_image.h` | github.com/nothings/stb | (see file header) | single header |
+| `pugixml/` | github.com/zeux/pugixml | `v1.14` | `src/pugixml.{hpp,cpp}` + `pugiconfig.hpp` |

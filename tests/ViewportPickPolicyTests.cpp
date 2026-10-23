@@ -502,3 +502,44 @@ TEST_CASE("Issue #564: 3DMOVE/3DROTATE/3DSCALE select objects, then click handle
     CHECK_FALSE(ViewportIsObjectSelectionStep(st));
   }
 }
+
+TEST_CASE("REQ-450: cursor is crosshair plus pickbox, and pickbox only while selecting",
+          "[viewport][cursor][req450]") {
+  AppCommandState idle;
+  const ViewportCursorShape normal = ViewportCursorShapeFor(idle, 1000.f, 600.f);
+  CHECK(normal.arms);
+  // Defaults: 5 % of the shorter side, pickbox half-width 4 px.
+  CHECK(normal.armLengthPx == 30.f);
+  CHECK(normal.pickHalfPx == 4.f);
+
+  AppCommandState mv = AtFirstPrompt(K::Move);
+  mv.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  const ViewportCursorShape selecting = ViewportCursorShapeFor(mv, 1000.f, 600.f);
+  CHECK_FALSE(selecting.arms);
+  CHECK(selecting.pickHalfPx == 4.f);
+
+  // The normal cursor returns when the step ends.
+  mv.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+  CHECK(ViewportCursorShapeFor(mv, 1000.f, 600.f).arms);
+
+  // Paper-space selection steps count too.
+  AppCommandState paper;
+  paper.paperDeleteWaitingSelection = true;
+  CHECK_FALSE(ViewportCursorShapeFor(paper, 1000.f, 600.f).arms);
+}
+
+TEST_CASE("REQ-450: configured size and pickbox are honoured within their ranges",
+          "[viewport][cursor][req450]") {
+  AppCommandState st;
+  st.displayCrosshairSizePct = 100;
+  st.viewportCrosshairPickHalfPxX = 12.f;
+  const ViewportCursorShape big = ViewportCursorShapeFor(st, 800.f, 500.f);
+  CHECK(big.armLengthPx == 500.f);
+  CHECK(big.pickHalfPx == 12.f);
+  // Out-of-range state never produces an unusable cursor.
+  st.displayCrosshairSizePct = 0;
+  st.viewportCrosshairPickHalfPxX = 99.f;
+  const ViewportCursorShape clamped = ViewportCursorShapeFor(st, 800.f, 500.f);
+  CHECK(clamped.armLengthPx == 5.f);
+  CHECK(clamped.pickHalfPx == 20.f);
+}

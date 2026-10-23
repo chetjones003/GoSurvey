@@ -9,7 +9,9 @@ struct DrawingSettings;
 
 /// GoSurvey workspace-template (.gst) file I/O: drawing geometry, layers, survey points, and
 /// Settings-panel values (JSON in UTF-8). NOT the drawing document format — that is `.dwg`
-/// (ADR-044); this reads/writes the narrow startup-template file only.
+/// (ADR-044); this reads/writes the narrow startup-template file only. `GsIo` is a historical
+/// module name: it serializes the document JSON payload and `.gst` templates, not standalone
+/// `.gs` drawings (retired by issue #264).
 bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 bool LoadGoSurveyTemplateFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 /// Same JSON tree a `.gst` template file holds (REQ-175 DWG trailer).

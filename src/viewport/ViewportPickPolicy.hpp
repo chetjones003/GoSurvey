@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 
 #include "CadCommands.hpp"
@@ -194,6 +195,12 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Polysolid:
     return cmd.polysolidPhase == AppCommandState::PolysolidPhase::WaitObject ? R::RawEntityPick
                                                                              : R::SnappedPointPick;
+
+  // REQ-444 REVCLOUD: corners, except at the `O`bject prompt, where the click names the closed
+  // polyline, rectangle or circle to convert instead of a coordinate.
+  case K::Revcloud:
+    return cmd.revcloudPhase == AppCommandState::RevcloudPhase::WaitObject ? R::RawEntityPick
+                                                                           : R::SnappedPointPick;
 
   // PIPERUN (issue #486 increment B2 / REQ-345): every phase past the size prompt wants an
   // ordinary snapped coordinate — the start point, then each further vertex. At the
@@ -447,7 +454,7 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||
             cmd.insertBlockPhase == IPh::WaitRotation || cmd.insertBlockPhase == IPh::WaitConnectorTarget)
                ? R::InsertBlockPick
-               : R::Ignore;  // dialog / attribute prompt — clicks go to ImGui
+               : R::Ignore;  // dialog / attribute prompt owns the interaction
   }
 
   // --- Deliberately click-less in model space. ---
@@ -588,4 +595,24 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
 /// at each of REQ-121's three call sites).
 inline bool PaperIsObjectSelectionStep(const AppCommandState& cmd) {
   return cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection;
+}
+
+/// What the viewport cursor looks like right now (REQ-450).
+///
+/// Normal use is a crosshair with a central pickbox; an object-selection step (REQ-121, model or
+/// paper space) shows the pickbox alone. Kept as a pure function of the command state so the rule
+/// is testable without a window. Lengths are in screen pixels.
+struct ViewportCursorShape {
+  bool  arms = true;       ///< False in an object-selection step: pickbox only.
+  float armLengthPx = 0.f; ///< Total length of each arm line, centred on the pointer.
+  float pickHalfPx = 4.f;  ///< Half the pickbox square's width.
+};
+
+inline ViewportCursorShape ViewportCursorShapeFor(const AppCommandState& cmd, float viewW, float viewH) {
+  ViewportCursorShape shape;
+  shape.arms = !(ViewportIsObjectSelectionStep(cmd) || PaperIsObjectSelectionStep(cmd));
+  const float pct = std::clamp(static_cast<float>(cmd.displayCrosshairSizePct), 1.f, 100.f);
+  shape.armLengthPx = pct * std::min(viewW, viewH) / 100.f;
+  shape.pickHalfPx = std::clamp(cmd.viewportCrosshairPickHalfPxX, 2.f, 20.f);
+  return shape;
 }

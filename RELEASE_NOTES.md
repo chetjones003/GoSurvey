@@ -14,7 +14,65 @@ The heading must be the plain three-part version (`## 0.5.0`). Every beta in tha
 same section, because a beta is a preview of that release. A version with no section here shows a
 short fallback message instead — which is a missed opportunity, not a failure.
 
+Older release sections below are historical; format names in them describe the builds of that
+time. Current GoSurvey drawings use DWG.
+
 ---
+
+## 0.7.4
+
+**Traverse Editor: unit scaling, ground-to-grid, curvature and refraction, and a new LSA
+adjuster — new**
+- The Traverse Editor now always shows and works in your drawing's own linear unit (feet or
+  meters, set in Drawing Settings) — every distance field, standard-error entry, and report is
+  labeled with that unit, so there's no more guessing which unit a number is in.
+- New "Apply scale factor" option reduces field-measured ground distances to grid before they
+  drive coordinates, closure, and the adjustment — using the projection already set on your
+  drawing (e.g. MGA56/GDA2020). Choose **Combined** (grid × sea-level factor) or **Grid only**.
+  Off by default; your existing traverses are unaffected until you turn it on.
+- Traverse elevations now allow for earth curvature and refraction: the editor applies the
+  standard combined curvature-and-refraction correction to each leg's elevation difference —
+  worth about 7 cm on a 1 km leg, so long sights no longer drift the way plain trigonometry left
+  them. The "Curv + Refr" option is on by default, with the refraction coefficient (Refr k)
+  beside it (0.14 suits average conditions; the editor warns if k is set outside its typical
+  −2 to +2 range). Legs with no vertical angle are unchanged, and turning the option off restores
+  the previous plain-trigonometry elevations.
+- The Traverse Editor has a new least-squares adjustment (LSA) engine and editor: a standalone
+  window with syntax highlighting, line numbers, inline error messages, and a plan-view preview
+  with error ellipses. Importing more than one raw-data file now merges them into one continuous
+  traverse instead of replacing what you already imported. Real Trimble Access JobXML files are
+  now read correctly, and open (non-closed-loop) traverses can be adjusted too, not just closed
+  loops. Project-wide adjustment settings (instrument standard errors, centering error, 2D/3D,
+  convergence) now live in one Project Settings dialog and are saved with the traverse. The
+  adjustment report opens with a summary of the files and settings used, and exports to .txt,
+  .pdf, or .rtf.
+
+**Point cloud file formats — new**
+- GoSurvey can now import and export laser-scan point clouds in **E57**, **LAS**, **LAZ**,
+  **PTS**, and **PTX**, all through the Point Cloud ribbon's **Attach** command.
+- LAS and LAZ support every point format the format defines (0 through 10), including the
+  GPS-time and extended-classification formats modern scanners and government lidar deliverables
+  (e.g. USGS) commonly use — not just the older, simpler ones.
+- **Confirmed working against real-world files: E57 and LAS/LAZ.** PTS and PTX are implemented
+  and tested against hand-built sample files, but we don't yet have real-world PTS/PTX files to
+  confirm against — if you hit an issue importing one, please send us the file.
+
+- Fixed a second case of the command line running a different command than what was typed.
+- The sign-in prompt at launch is now a real choice: sign in now, or choose "Don't Sign In" to
+  skip it for good. You can still sign in later any time from Settings.
+
+## 0.7.3
+
+- The Pipe Network ribbon button now starts a pipe run directly.
+- Feature Line ribbon buttons now start the Feature Line command.
+- Removed ribbon buttons for features that weren't implemented yet (Parcel, Assembly,
+  Intersections, Pond, Underground Storage, Channel).
+- Added a Survey Point Database grid panel for browsing and editing points in a table.
+- New LAYOUT, PAGESETUP, and VPSCALE commands for setting up paper space layouts and viewport
+  scale.
+- A line-endpoint grip now shows a Lengthen/Stretch hover menu, and the Perpendicular snap
+  override works correctly during a grip drag.
+- Fixed the command line sometimes running a different command than what was typed.
 
 ## 0.7.2
 

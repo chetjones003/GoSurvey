@@ -2,6 +2,7 @@
 
 #include "CadEntities.hpp"
 #include "util/cadblock.hpp"
+#include "util/cadtable.hpp"
 #include "util/geom2d.hpp"  // the shared segment/circle-vs-box tests the model-space fence uses
 #include "util/ucs.hpp"  // REQ-155: per-viewport active UCS frame (pure value type, ray3d only)
 
@@ -16,7 +17,7 @@
 // selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
 // paper* vector.
 struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6 };
+  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5, Block = 6, Leader = 7, Table = 8 };
   Type type = Type::Line;
   int  index = 0;
 };
@@ -62,6 +63,8 @@ struct Viewport {
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
+  bool on = true;       // DWG VIEWPORT on/off (issue #768); carried through DWG, not yet enforced when drawing
+  bool locked = false;  // DWG 'display locked' flag (issue #768); carried through DWG, not yet enforced
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
   // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
   // viewport (on screen and in the plot). No entry = the layer's normal color.
@@ -70,10 +73,10 @@ struct Viewport {
 
   // REQ-061: the camera this viewport views model space through. The defaults — azimuth 0,
   // elevation 90 (straight down), no roll, orthographic — reproduce the historical flat plan
-  // projection (ModelToPaperIn) to the last bit, so every legacy drawing and every legacy .gs
+  // projection (ModelToPaperIn) to the last bit, so every legacy drawing and every legacy internal document payload
   // is unchanged. Orientation is measured exactly as the model-viewport Camera measures it
   // (azimuth about world +Z, 0 = looking north; elevation above the horizon, +90 = plan).
-  // Persisted additively in .gs (GsIo). Named UCS/view definitions stay per-drawing (issue #155):
+  // Persisted additively in internal document payload (GsIo). Named UCS/view definitions stay per-drawing (issue #155):
   // only this active orientation is per-viewport.
   float camAzimuthDeg = 0.f;
   float camElevationDeg = 90.f;
@@ -85,15 +88,15 @@ struct Viewport {
   // coordinate entry / grid / ORTHO / the readout / UCSFOLLOW against while the user is in
   // FLOATING MODEL SPACE (REQ-036) inside it. A `ucs::Ucs` VALUE, not a name — so an ad-hoc UCS
   // built while floating (3-point / ZAxis / rotate) persists to the viewport, matching AutoCAD's
-  // UCSVP. The default is World, under which every pre-REQ-155 drawing and .gs is unchanged.
+  // UCSVP. The default is World, under which every pre-REQ-155 drawing and internal document payload is unchanged.
   // Named UCS *definitions* stay per-drawing on AppCommandState::ucsNamed (single owner); this is
-  // only the per-viewport *active frame*. Persisted additively in .gs (GsIo).
+  // only the per-viewport *active frame*. Persisted additively in internal document payload (GsIo).
   ucs::Ucs activeUcs;
 
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 
   // REQ-061: true when the camera is the historical straight-down orthographic plan view. Callers
-  // keep the exact pre-change 2D path (ModelToPaperIn, ImGui AddCircle, uniform px/model) on this.
+  // keep the exact pre-change 2D path (ModelToPaperIn, circle marker, uniform px/model) on this.
   [[nodiscard]] bool cameraIsPlan() const {
     return !camPerspective && std::fabs(camAzimuthDeg) < 1.e-4f &&
            std::fabs(camElevationDeg - 90.f) < 1.e-4f && std::fabs(camRollDeg) < 1.e-4f;
@@ -287,7 +290,7 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
 
 /// Everything the layout-viewport TEXT/MTEXT overlay needs from one annotation: isolation skip,
 /// the scale REQ-050 picks, and the font family the draw call must pass to SHX/TTF resolve.
-/// CadUi uses this struct's fields rather than inlining the drawing scale or ImGui::GetFont().
+/// The Qt viewport uses these fields rather than inlining the drawing scale or font resolution.
 struct ViewportTextOverlayPlan {
   bool skipHidden = false;
   float modelUnitsPerPlottedInch = 50.f;
@@ -418,6 +421,12 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperFilledRegionAttrs;
   std::vector<CadBlockRef>      paperBlockRefs;
   std::vector<EntityAttributes> paperBlockRefAttrs;
+  /// Multileaders on the sheet, in paper inches (path + label as one object, like model space; issue #768).
+  std::vector<CadMultileader>   paperMultileaders;
+  std::vector<EntityAttributes> paperMultileaderAttrs;
+  /// First-class tables on the sheet (REQ-148), in paper inches like model-space tables are in model units.
+  std::vector<CadTable>         paperTables;
+  std::vector<EntityAttributes> paperTableAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -477,6 +486,21 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
     consider(L.paperPolyVerts[v], L.paperPolyVerts[v + 1]);  // polyline vertices
   for (const CadBlockRef& br : L.paperBlockRefs)
     consider(br.xf.x, br.xf.y);
+  for (const CadMultileader& ml : L.paperMultileaders) {
+    if (ml.pathXyz.size() >= 3) {
+      consider(ml.pathXyz[0], ml.pathXyz[1]);                                      // arrow tip
+      consider(ml.pathXyz[ml.pathXyz.size() - 3], ml.pathXyz[ml.pathXyz.size() - 2]);  // landing
+    }
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      if (branch.size() >= 3)
+        consider(branch[0], branch[1]);                                            // extra arrow tip
+  }
+  for (const CadTable& tb : L.paperTables)
+    for (int c = 0; c < 4; ++c) {
+      float x = 0.f, y = 0.f;
+      CadTableWorldCorner(tb, c, &x, &y);
+      consider(x, y);                                                              // table corners
+    }
   return found;
 }
 
@@ -666,5 +690,42 @@ inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0,
       CadBlockWorldAabb(*blockDefs, br, &mnX, &mnY, &mxX, &mxY);
     if (boxSel(mnX, mnY, mxX, mxY))
       out.push_back({PaperEntityRef::Type::Block, bi});
+  }
+  for (int mi = 0; mi < static_cast<int>(L.paperMultileaders.size()); ++mi) {
+    const CadMultileader& ml = L.paperMultileaders[static_cast<size_t>(mi)];
+    // A multileader is its leader paths plus its label box: touching any part selects it (crossing);
+    // window needs every part inside.
+    bool any = false, allIn = true, touch = false;
+    auto chain = [&](const std::vector<float>& path) {
+      xy.clear();
+      for (size_t k = 0; k + 2 < path.size(); k += 3) {
+        xy.push_back(path[k]);
+        xy.push_back(path[k + 1]);
+      }
+      if (xy.size() < 4)
+        return;
+      any = true;
+      if (PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, /*windowMode=*/false))
+        touch = true;
+      if (!PaperChainHitsBox(xy, /*closed=*/false, bx0, by0, bx1, by1, /*windowMode=*/true))
+        allIn = false;
+    };
+    chain(ml.pathXyz);
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      chain(branch);
+    const CadAnnotation& a = ml.label;
+    any = true;
+    if (a.boxMinX <= bx1 && a.boxMaxX >= bx0 && a.boxMinY <= by1 && a.boxMaxY >= by0)
+      touch = true;
+    if (!(a.boxMinX >= bx0 && a.boxMaxX <= bx1 && a.boxMinY >= by0 && a.boxMaxY <= by1))
+      allIn = false;
+    if (any && (windowMode ? allIn : touch))
+      out.push_back({PaperEntityRef::Type::Leader, mi});
+  }
+  for (int ti = 0; ti < static_cast<int>(L.paperTables.size()); ++ti) {
+    float tx0, ty0, tx1, ty1;
+    CadTableWorldAabb(L.paperTables[static_cast<size_t>(ti)], &tx0, &ty0, &tx1, &ty1);
+    if (boxSel(tx0, ty0, tx1, ty1))
+      out.push_back({PaperEntityRef::Type::Table, ti});
   }
 }

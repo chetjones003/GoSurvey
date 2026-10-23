@@ -14,3 +14,17 @@ paths-ignore:
   - third_party
   - build
   - samples
+
+# query-filters (2026-10-10, issue TBD): two global dataflow queries from the
+# security-and-quality suite never finish on this codebase -- confirmed hung past 11+ hours
+# locally and killed twice in CI (both runs stalled at the identical 181/183-query point).
+# Both are taint-tracking configurations (cpp/overrun-write, cpp/invalid-pointer-deref);
+# `paths-ignore` above only filters REPORTED alert locations, it does not stop the dataflow
+# evaluator from tracing through third_party's extracted database (LibreDWG's huge
+# pointer/array-heavy structs are the likely combinatorial-blowup source), so excluding
+# third_party here does not fix this -- the query itself must be excluded.
+query-filters:
+  - exclude:
+      id: cpp/overrun-write
+  - exclude:
+      id: cpp/invalid-pointer-deref

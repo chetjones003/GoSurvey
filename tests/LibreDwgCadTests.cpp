@@ -18,13 +18,13 @@
 #include "util/AcisSatParser.hpp"
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
+#include "util/spline.hpp"
 
 #include "SolidMeasure.hpp"
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
-#include <imgui.h>
 
 #include <algorithm>
 #include <chrono>
@@ -147,27 +147,6 @@ bool DwgHasAcadAnnotativeDataEed(const Dwg_Data& dwg) {
   return false;
 }
 
-// Survey-point labels are measured through ImGui::GetFont() while a point is placed/imported
-// (EnsureSurveyPointLabelMtext) — same fixture as GsMigrateLegacyBreaklineTests.cpp (ADR-031 (c')).
-struct HeadlessImGuiScope {
-  HeadlessImGuiScope() {
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.DisplaySize = ImVec2(1920.f, 1080.f);
-    io.DeltaTime = 1.0f / 60.0f;
-    io.IniFilename = nullptr;
-    io.Fonts->AddFontDefault();
-    unsigned char* pixels = nullptr;
-    int w = 0, h = 0;
-    io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);
-    ImGui::NewFrame();
-  }
-  ~HeadlessImGuiScope() {
-    ImGui::EndFrame();
-    ImGui::DestroyContext();
-  }
-};
 
 }  // namespace
 
@@ -196,6 +175,53 @@ TEST_CASE("LibreDWG DWG round-trips a model-space LINE", "[dwg][libredwg]") {
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.userLinesFlat.size() == 6);
   REQUIRE(in.userLinesFlat[3] == Catch::Approx(10.f).margin(0.05f));
+}
+
+TEST_CASE("DXF round-trips an open fit SPLINE", "[dxf][libredwg][req443]") {
+  ScratchDir dir("dxf-spline");
+  const auto p = (dir.path / "spline.dxf").string();
+  AppCommandState st;
+  spline::Spline spline;
+  REQUIRE(spline::MakeFit({{0, 0, 0}, {3, 4, 1}, {7, 2, 2}, {10, 0, 3}}, false, &spline, nullptr));
+  st.cadSplines.push_back(spline);
+  st.cadSplineAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.cadSplines.size() == 1);
+  const auto& loaded = in.cadSplines.front();
+  CHECK(loaded.degree == 3);
+  CHECK(loaded.isFit());
+  REQUIRE(loaded.fit.size() == spline.fit.size());
+  for (std::size_t i = 0; i < spline.fit.size(); ++i) {
+    CHECK(loaded.fit[i].x == Catch::Approx(spline.fit[i].x).margin(1e-6));
+    CHECK(loaded.fit[i].y == Catch::Approx(spline.fit[i].y).margin(1e-6));
+    CHECK(loaded.fit[i].z == Catch::Approx(spline.fit[i].z).margin(1e-6));
+  }
+  CHECK(spline::Length(loaded) == Catch::Approx(spline::Length(spline)).margin(1e-5));
+}
+
+TEST_CASE("DWG round-trips a closed CV SPLINE", "[dwg][libredwg][req443]") {
+  ScratchDir dir("dwg-spline");
+  const auto p = (dir.path / "spline.dwg").string();
+  AppCommandState st;
+  spline::Spline spline;
+  REQUIRE(spline::MakeControl({{0, 0, 0}, {8, 0, 1}, {10, 7, 2}, {2, 10, 1}}, true, &spline, nullptr));
+  st.cadSplines.push_back(spline);
+  st.cadSplineAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.cadSplines.size() == 1);
+  const auto& loaded = in.cadSplines.front();
+  CHECK(loaded.degree == 3);
+  CHECK(loaded.periodic);
+  CHECK_FALSE(loaded.isFit());
+  CHECK(loaded.ctrl.size() == spline.ctrl.size());
+  CHECK(spline::Length(loaded) == Catch::Approx(spline::Length(spline)).margin(1e-3));
 }
 
 // Issue #600: full export path respects dwgExportVersion (LibreDWG body only — no trailer).
@@ -363,7 +389,6 @@ TEST_CASE("ExportDwgFile writes a built TIN surface as POLYLINE_PFACE (issue #61
 
 TEST_CASE("ExportDwgFile survives repeated save with two TIN surfaces (issue #663)",
           "[dwg][libredwg][issue663]") {
-  HeadlessImGuiScope imgui;
   ScratchDir dir("dwg-two-tin-stress");
   const auto p = (dir.path / "two.dwg").string();
   const std::filesystem::path demo =
@@ -1945,7 +1970,6 @@ TEST_CASE("DXF survey point XDATA round-trips a state-plane coordinate within RE
 // ~0.008-0.025 ft, outside +/-0.002 ft) — proven by reverting the field to `float` locally and
 // re-running, then restored.
 TEST_CASE("CSV import stores a state-plane survey point within REQ-101 tolerance", "[csv][survey][req101]") {
-  HeadlessImGuiScope imguiScope;
   ScratchDir dir("csv-survey-req101");
   const auto p = (dir.path / "points.csv").string();
   {
@@ -3358,7 +3382,7 @@ TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert 
       continue;
     const Dwg_Object_BLOCK_HEADER* hdr2 = blk->tio.object->tio.BLOCK_HEADER;
     if (hdr2 == nullptr ||
-        libredwgcad_detail::DecodeDwgString(hdr2->name, false) != "GOSURVEY_POINT")
+        libredwgcad_detail::DecodeDwgString(hdr2->name, dwg.header.version >= R_2007) != "GOSURVEY_POINT")
       continue;
     ++nInsert;
     insertXy.emplace_back(ins->ins_pt.x, ins->ins_pt.y);
@@ -3370,8 +3394,8 @@ TEST_CASE("DWG export writes each survey point as a GOSURVEY_POINT block insert 
     if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
       continue;
     const Dwg_Entity_ATTRIB* att = o->tio.entity->tio.ATTRIB;
-    const std::string tag = libredwgcad_detail::DecodeDwgString(att->tag, false);
-    const std::string val = libredwgcad_detail::DecodeDwgString(att->text_value, false);
+    const std::string tag = libredwgcad_detail::DecodeDwgString(att->tag, dwg.header.version >= R_2007);
+    const std::string val = libredwgcad_detail::DecodeDwgString(att->text_value, dwg.header.version >= R_2007);
     if (tag == "NUMBER") attrNumbers.push_back(val);
     if (tag == "DESCRIPTION") attrDescs.push_back(val);
   }
@@ -3504,7 +3528,8 @@ TEST_CASE("DWG export writes a feature line as POLYLINE_3D with XDATA identity (
       Dwg_Object_Entity* ent = o->tio.entity;
       for (BITCODE_BL j = 0; j < ent->num_eed; ++j) {
         if (ent->eed[j].data != nullptr && ent->eed[j].data->code == 0)
-          eedStrings.emplace_back(ent->eed[j].data->u.eed_0.string, ent->eed[j].data->u.eed_0.length);
+          eedStrings.push_back(libredwgcad_detail::DecodeDwgString(ent->eed[j].data->u.eed_0.string,
+              ent->eed[j].data->u.eed_0.is_tu != 0));
       }
     }
     if (o->fixedtype == DWG_TYPE_VERTEX_3D && o->tio.entity && o->tio.entity->tio.VERTEX_3D)
@@ -3563,11 +3588,11 @@ TEST_CASE("DWG export writes TEXT rotation, style, and the degree sign (issue #6
     ++nText;
     const Dwg_Entity_TEXT* t = o->tio.entity->tio.TEXT;
     rotation = t->rotation;
-    text = libredwgcad_detail::DecodeDwgString(t->text_value, false);
+    text = libredwgcad_detail::DecodeDwgString(t->text_value, dwg.header.version >= R_2007);
     if (t->style != nullptr) {
       Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, t->style->absolute_ref);
       if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
-        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, dwg.header.version >= R_2007);
     }
   }
   CHECK(nText == 1);
@@ -3634,7 +3659,7 @@ TEST_CASE("DWG export writes MTEXT rotation, attachment, height, and style (issu
     if (m->style != nullptr) {
       Dwg_Object* sObj = dwg_resolve_handle_silent(&dwg, m->style->absolute_ref);
       if (sObj != nullptr && sObj->tio.object != nullptr && sObj->tio.object->tio.STYLE != nullptr)
-        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, false);
+        styleName = libredwgcad_detail::DecodeDwgString(sObj->tio.object->tio.STYLE->name, dwg.header.version >= R_2007);
     }
   }
   CHECK(nMtext == 1);
@@ -3698,8 +3723,8 @@ TEST_CASE("DWG export writes an INSERT with five attributes without corruption (
     if (o->fixedtype != DWG_TYPE_ATTRIB || o->tio.entity == nullptr || o->tio.entity->tio.ATTRIB == nullptr)
       continue;
     const Dwg_Entity_ATTRIB* a = o->tio.entity->tio.ATTRIB;
-    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, false),
-                       libredwgcad_detail::DecodeDwgString(a->text_value, false));
+    attrs.emplace_back(libredwgcad_detail::DecodeDwgString(a->tag, rd.header.version >= R_2007),
+                       libredwgcad_detail::DecodeDwgString(a->text_value, rd.header.version >= R_2007));
   }
   REQUIRE(attrs.size() == 5);
   for (int i = 0; i < 5; ++i) {
@@ -3772,7 +3797,7 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
     const Dwg_Object* o = &dwg.object[i];
     if (o->fixedtype == DWG_TYPE_BLOCK_HEADER && o->tio.object != nullptr &&
         o->tio.object->tio.BLOCK_HEADER != nullptr) {
-      const std::string nm = libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, false);
+      const std::string nm = libredwgcad_detail::DecodeDwgString(o->tio.object->tio.BLOCK_HEADER->name, dwg.header.version >= R_2007);
       if (nm == "MARKER" || nm == "VALVE")
         ++nBlockDefs;
     }
@@ -3783,7 +3808,7 @@ TEST_CASE("DWG export writes real BLOCK definitions, INSERTs, and attributes (is
         Dwg_Object* blk = dwg_resolve_handle_silent(&dwg, ins->block_header->absolute_ref);
         if (blk != nullptr && blk->tio.object != nullptr && blk->tio.object->tio.BLOCK_HEADER != nullptr)
           insertBlockNames.push_back(
-              libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, false));
+              libredwgcad_detail::DecodeDwgString(blk->tio.object->tio.BLOCK_HEADER->name, dwg.header.version >= R_2007));
       }
     }
     if (o->fixedtype == DWG_TYPE_ATTRIB && o->tio.entity != nullptr && o->tio.entity->tio.ATTRIB != nullptr)
@@ -4563,7 +4588,7 @@ TEST_CASE("R2018 export/import round-trips MATERIAL diffuse on mesh (REQ-372, is
 }
 
 TEST_CASE("Mesh MATERIAL diffuse and name persist through GsIo (REQ-372 inc 3, issue #624)",
-          "[gs][gsio][issue624][req372]") {
+          "[payload][gsio][issue624][req372]") {
   AppCommandState src;
   src.cadMeshes.push_back(MakeUnitSquareMesh());
   EntityAttributes at;
@@ -5361,16 +5386,18 @@ TEST_CASE("DWG import names each skipped paper-space type on a real sheet (issue
     CHECK(L.paperPolyAttrs.size() == (L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1));
   }
   INFO("lines=" << lines << " texts=" << texts << " curves=" << curves << " polys=" << polys);
-  // This sheet's remaining objects are outside the paper-space set (fills, points, a table) and its
-  // text/curves were never in paper space; the point here is the existing import is intact and every
-  // skip is named by type (REQ-201), not lumped under "unsupported type".
+  // Issue #768: the sheet's fills now import as paper fills (they used to be skipped by name);
+  // whatever is still outside the set (points, a table) stays named by type (REQ-201).
+  size_t fills = 0;
+  for (const PaperLayout& L : in.paperLayouts)
+    fills += L.paperFilledRegions.size();
   CHECK(lines > 0);
-  CHECK(texts + curves + polys == 0);
-  bool named = false;
+  CHECK(fills > 0);
+  // REQ-113 acceptance 2: the sheet's own text, curves and polylines now arrive (the reader used to
+  // drop every paper-space entity it flagged as sheet content).
+  CHECK(texts + curves + polys > 0);
   for (const std::string& l : log)
-    if (l.find("unsupported type HATCH") != std::string::npos)
-      named = true;
-  CHECK(named);
+    CHECK(l.find("unsupported type HATCH") == std::string::npos);
 }
 
 // The Duke sheet has only LINE/VIEWPORT/INSERT plus HATCH/POINT/table on its paper space, so it cannot
@@ -5449,4 +5476,381 @@ TEST_CASE("A DXF with paper space still re-imports (issue #765)", "[dxf][libredw
     UNSCOPED_INFO(l);
   REQUIRE(ok);
   CHECK(in.userLinesFlat.size() == 6);
+}
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): paper-space fills and multileaders reach the DWG's own
+// paper-space entities and read back onto the same layout.
+TEST_CASE("Paper-space HATCH and MULTILEADER round-trip through DWG (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  for (const DwgSaveVersion ver : {DwgSaveVersion::R2018, DwgSaveVersion::R2000}) {
+    ScratchDir dir("dwg-paper-fill-leader");
+    const auto p = (dir.path / "paper-fill-leader.dwg").string();
+    AppCommandState st;
+    st.dwgExportVersion = ver;
+    PaperLayout sheet;
+    sheet.name = "Sheet1";
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(1.f, 1.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+    CadMultileader ml{};
+    ml.pathXyz = {1.f, 5.f, 0.f, 3.f, 5.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 3.f;
+    ml.label.insY = 5.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.1f;
+    ml.label.boxMinX = 3.f;
+    ml.label.boxMinY = 4.9f;
+    ml.label.boxMaxX = 6.f;
+    ml.label.boxMaxY = 5.1f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+    st.paperLayouts.push_back(std::move(sheet));
+    std::vector<std::string> log;
+    REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+    AppCommandState in;
+    REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+    REQUIRE(in.paperLayouts.size() == 1);
+    const PaperLayout& back = in.paperLayouts[0];
+    for (const std::string& l : log) UNSCOPED_INFO(l);
+    UNSCOPED_INFO("hatch objs=" << CountDwgFixedType(p.c_str(), DWG_TYPE_HATCH));
+    REQUIRE(back.paperFilledRegions.size() == 1);
+    CHECK(back.paperFilledRegions[0].vertsXyz.size() >= 12);
+    CHECK(back.paperFilledRegions[0].vertsXyz[0] == Catch::Approx(1.0).margin(0.001));
+    REQUIRE(back.paperMultileaders.size() == 1);
+    CHECK(back.paperMultileaders[0].pathXyz[0] == Catch::Approx(1.f).margin(0.001f));
+    CHECK(back.paperMultileaders[0].pathXyz[1] == Catch::Approx(5.f).margin(0.001f));
+    CHECK(back.paperMultileaders[0].label.text.find("SEE NOTE") != std::string::npos);
+    CHECK(in.cadFilledRegions.empty());
+    CHECK(in.cadMultileaders.empty());
+  }
+}
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): the sheet's size and orientation and each viewport's view
+// direction, frozen layers, lock and on/off survive DWG save then open.
+TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  ScratchDir dir("dwg-paper-setup");
+  const auto p = (dir.path / "paper-setup.dwg").string();
+  AppCommandState st;
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  PaperLayout sheet;
+  sheet.name = "Big";
+  sheet.portraitWidthIn = 60.f;  // a custom 60 x 80 in landscape sheet, not a preset
+  sheet.portraitHeightIn = 80.f;
+  sheet.landscape = true;
+  sheet.presetIdx = -1;
+  Viewport vp;
+  vp.paperXIn = 5.f;
+  vp.paperYIn = 5.f;
+  vp.paperWIn = 60.f;  // wider than 50 in: used to be dropped as "chrome"
+  vp.paperHIn = 40.f;
+  vp.scaleModelPerPaperIn = 20.f;
+  vp.camAzimuthDeg = 30.f;
+  vp.camElevationDeg = 40.f;
+  vp.camRollDeg = 10.f;
+  vp.frozenLayers = {"Walls"};
+  vp.locked = true;
+  vp.on = false;
+  sheet.viewports.push_back(vp);
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout portrait;
+  portrait.name = "Tall";
+  portrait.portraitWidthIn = 8.5f;
+  portrait.portraitHeightIn = 11.f;
+  portrait.landscape = false;
+  portrait.presetIdx = 0;
+  st.paperLayouts.push_back(std::move(portrait));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.paperLayouts.size() == 2);
+  const PaperLayout& big = in.paperLayouts[0];
+  CHECK(big.sheetWidthIn() == Catch::Approx(80.f).margin(0.01f));
+  CHECK(big.sheetHeightIn() == Catch::Approx(60.f).margin(0.01f));
+  CHECK(big.landscape);
+  UNSCOPED_INFO("VIEWPORT objs=" << CountDwgFixedType(p.c_str(), DWG_TYPE_VIEWPORT));
+  REQUIRE(big.viewports.size() == 1);
+  const Viewport& v = big.viewports[0];
+  CHECK(v.paperWIn == Catch::Approx(60.f).margin(0.01f));
+  CHECK(v.camAzimuthDeg == Catch::Approx(30.f).margin(0.01f));
+  CHECK(v.camElevationDeg == Catch::Approx(40.f).margin(0.01f));
+  CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.01f));
+  CHECK(v.locked);
+  CHECK_FALSE(v.on);
+  REQUIRE(v.frozenLayers.size() == 1);
+  CHECK(v.frozenLayers[0] == "Walls");
+  const PaperLayout& tall = in.paperLayouts[1];
+  CHECK_FALSE(tall.landscape);
+  CHECK(tall.sheetWidthIn() == Catch::Approx(8.5f).margin(0.01f));
+  CHECK(tall.sheetHeightIn() == Catch::Approx(11.f).margin(0.01f));
+  CHECK(tall.presetIdx == 0);
+}
+
+// Issue #768 / REQ-113 (D-2026-10-20-a): the DXF path (DxfIo, the app's own DXF reader and writer)
+// carries the whole paper-space set: fills, sheet size and orientation, viewport state, and layouts
+// beyond the first. A multileader has no DXF form here, so it comes back as its lines plus its label.
+TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (issue #768)",
+          "[dxf][req113][issue768]") {
+  ScratchDir dir("dxf-paper-768");
+  const auto p = (dir.path / "paper-768.dxf").string();
+  AppCommandState st;
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  PaperLayout sheet;
+  sheet.name = "Big";
+  sheet.portraitWidthIn = 24.f;
+  sheet.portraitHeightIn = 36.f;
+  sheet.landscape = true;
+  sheet.presetIdx = -1;
+  sheet.paperFilledRegions.push_back(SquareHatchRegion(1.f, 1.f, 2.f));
+  sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+  CadMultileader ml{};
+  ml.pathXyz = {1.f, 5.f, 0.f, 3.f, 5.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.insX = 3.f;
+  ml.label.insY = 5.f;
+  ml.label.text = "SEE NOTE 4";
+  ml.label.plottedHeightInches = 0.1f;
+  ml.label.boxMinX = 3.f;
+  ml.label.boxMinY = 4.9f;
+  ml.label.boxMaxX = 6.f;
+  ml.label.boxMaxY = 5.1f;
+  sheet.paperMultileaders.push_back(ml);
+  sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+  Viewport vp;
+  vp.paperXIn = 2.f;
+  vp.paperYIn = 2.f;
+  vp.paperWIn = 20.f;
+  vp.paperHIn = 12.f;
+  vp.scaleModelPerPaperIn = 20.f;
+  vp.camAzimuthDeg = 30.f;
+  vp.camElevationDeg = 40.f;
+  vp.camRollDeg = 10.f;
+  vp.frozenLayers = {"Walls"};
+  vp.locked = true;
+  vp.on = false;
+  sheet.viewports.push_back(vp);
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout second;
+  second.name = "Tall";
+  second.portraitWidthIn = 8.5f;
+  second.portraitHeightIn = 11.f;
+  second.landscape = false;
+  second.presetIdx = 0;
+  second.paperCircles = {2.f, 3.f, 1.f};
+  second.paperCircleAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(second));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 2);
+  const PaperLayout& big = in.paperLayouts[0];
+  CHECK(big.name == "Big");
+  CHECK(big.sheetWidthIn() == Catch::Approx(36.f).margin(0.01f));
+  CHECK(big.sheetHeightIn() == Catch::Approx(24.f).margin(0.01f));
+  CHECK(big.landscape);
+  REQUIRE(big.paperFilledRegions.size() == 1);
+  CHECK(big.paperFilledRegions[0].vertsXyz[0] == Catch::Approx(1.f).margin(0.001f));
+  CHECK(big.paperLines.size() == 6);  // the leader's one segment
+  bool hasLabel = false;
+  for (const CadAnnotation& a : big.paperTexts)
+    hasLabel = hasLabel || a.text.find("SEE NOTE") != std::string::npos;
+  CHECK(hasLabel);
+  REQUIRE(big.viewports.size() == 1);
+  const Viewport& v = big.viewports[0];
+  CHECK(v.paperWIn == Catch::Approx(20.f).margin(0.01f));
+  CHECK(v.camAzimuthDeg == Catch::Approx(30.f).margin(0.05f));
+  CHECK(v.camElevationDeg == Catch::Approx(40.f).margin(0.05f));
+  CHECK(v.camRollDeg == Catch::Approx(10.f).margin(0.05f));
+  CHECK(v.locked);
+  CHECK_FALSE(v.on);
+  REQUIRE(v.frozenLayers.size() == 1);
+  CHECK(v.frozenLayers[0] == "Walls");
+  const PaperLayout& tall = in.paperLayouts[1];
+  CHECK(tall.name == "Tall");
+  CHECK_FALSE(tall.landscape);
+  CHECK(tall.presetIdx == 0);
+  REQUIRE(tall.paperCircles.size() == 3);
+  CHECK(tall.paperCircles[0] == Catch::Approx(2.f).margin(0.001f));
+  CHECK(in.userCirclesCxCyZR.empty());  // paper entities did not leak into model space
+  CHECK(in.cadFilledRegions.empty());
+}
+
+// Issue #768 / REQ-113: a sheet table reaches the DWG the way a model-space table does (LibreDWG has no
+// dwg_add_TABLE): grid LINEs plus one MTEXT per cell. It reads back as that geometry and text on the same
+// sheet, in paper inches, not on the model.
+TEST_CASE("Paper-space table is written to DWG as grid lines and cell text (issue #768)",
+          "[dwg][libredwg][req113][issue768]") {
+  ScratchDir dir("dwg-paper-table");
+  const auto p = (dir.path / "paper-table.dwg").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  CadTable tb;
+  tb.insX = 1.f;
+  tb.insY = 5.f;
+  tb.width = 4.f;
+  tb.height = 2.f;
+  tb.cols = 2;
+  tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+  tb.plottedHeightInches = 0.1f;
+  sheet.paperTables.push_back(tb);
+  sheet.paperTableAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+  AppCommandState in;
+  REQUIRE(ImportLibreCadFile(in, p.c_str(), log, /*asDxf=*/false));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& back = in.paperLayouts[0];
+  // Outline (4) + one column divider + one row divider = 6 segments.
+  CHECK(back.paperLines.size() == size_t{36});
+  int found = 0;
+  for (const CadAnnotation& a : back.paperTexts)
+    for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
+      if (a.text.find(w) != std::string::npos)
+        ++found;
+  CHECK(found == 4);
+  CHECK(in.userLinesFlat.empty());  // nothing leaked into model space
+}
+
+TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #768)",
+          "[dxf][req113][issue768]") {
+  ScratchDir dir("dxf-paper-table");
+  const auto p = (dir.path / "paper-table.dxf").string();
+  AppCommandState st;
+  PaperLayout sheet;
+  sheet.name = "Sheet1";
+  CadTable tb;
+  tb.insX = 1.f;
+  tb.insY = 5.f;
+  tb.width = 4.f;
+  tb.height = 2.f;
+  tb.cols = 2;
+  tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+  tb.plottedHeightInches = 0.1f;
+  sheet.paperTables.push_back(tb);
+  sheet.paperTableAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, p.c_str(), log));
+  bool logged = false;
+  for (const std::string& l : log)
+    logged = logged || l.find("paper-space table") != std::string::npos;
+  CHECK(logged);  // the loss of the table identity is named (REQ-201)
+  AppCommandState in;
+  REQUIRE(ImportDxfFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  CHECK(in.paperLayouts[0].paperLines.size() == size_t{36});
+  int found = 0;
+  for (const CadAnnotation& a : in.paperLayouts[0].paperTexts)
+    for (const char* w : {"ALPHA", "BETA", "GAMMA", "DELTA"})
+      if (a.text.find(w) != std::string::npos)
+        ++found;
+  CHECK(found == 4);
+}
+
+// Issue #768 / REQ-113 acceptance 7 - hidden fixture writer for the AutoCAD oracle (accoreconsole).
+// Run with GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.oracle768]"; it writes <dir>/L<n>_<version>.dwg and
+// sheet.dxf. Levels add one feature at a time so a file AutoCAD rejects points at the feature:
+// 0 no paper layouts, 1 sheet lines/circle/arc/polyline/text, 2 + plain viewport, 3 + viewport state,
+// 4 + fill, leader and table.
+static void BuildOracleState(AppCommandState& st, int level) {
+  CadLayerRow walls;
+  walls.name = "Walls";
+  st.drawingLayerTable.push_back(walls);
+  st.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  st.userLineAttrs.push_back(EntityAttributes{});
+  if (level < 1)
+    return;
+  PaperLayout sheet;
+  sheet.name = "Plan";
+  sheet.portraitWidthIn = 24.f;
+  sheet.portraitHeightIn = 36.f;
+  sheet.landscape = true;
+  sheet.paperLines = {1.f, 1.f, 0.f, 20.f, 1.f, 0.f};
+  sheet.paperLineAttrs.push_back(EntityAttributes{});
+  sheet.paperCircles = {5.f, 5.f, 1.f};
+  sheet.paperCircleAttrs.push_back(EntityAttributes{});
+  CadArc arc{};
+  arc.cx = 9.f; arc.cy = 5.f; arc.r = 1.f; arc.startRad = 0.f; arc.sweepRad = 3.14159f;
+  sheet.paperArcs.push_back(arc);
+  sheet.paperArcAttrs.push_back(EntityAttributes{});
+  sheet.paperPolyOffsets = {0, 3};
+  sheet.paperPolyVerts = {12.f, 3.f, 0.f, 14.f, 3.f, 0.f, 14.f, 5.f, 0.f};
+  sheet.paperPolyClosed = {0};
+  sheet.paperPolyAttrs.push_back(EntityAttributes{});
+  CadAnnotation text;
+  text.kind = CadAnnotation::Kind::Text;
+  text.text = "PLAN SHEET";
+  text.insX = 2.f; text.insY = 9.f;
+  text.plottedHeightInches = 0.3f;
+  sheet.paperTexts.push_back(text);
+  sheet.paperTextAttrs.push_back(EntityAttributes{});
+  if (level >= 2) {
+    Viewport vp;
+    vp.paperXIn = 8.f; vp.paperYIn = 10.f; vp.paperWIn = 12.f; vp.paperHIn = 8.f;
+    vp.scaleModelPerPaperIn = 20.f;
+    if (level >= 3) {
+      vp.camAzimuthDeg = 30.f; vp.camElevationDeg = 40.f;
+      vp.locked = true;
+      vp.frozenLayers = {"Walls"};
+    }
+    sheet.viewports.push_back(vp);
+  }
+  if (level >= 4) {
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(16.f, 3.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+    CadTable tb;
+    tb.insX = 2.f; tb.insY = 14.f; tb.width = 4.f; tb.height = 2.f; tb.cols = 2;
+    tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+    tb.plottedHeightInches = 0.15f;
+    sheet.paperTables.push_back(tb);
+    sheet.paperTableAttrs.push_back(EntityAttributes{});
+  }
+  st.paperLayouts.push_back(std::move(sheet));
+  PaperLayout tall;
+  tall.name = "Tall";
+  tall.portraitWidthIn = 8.5f;
+  tall.portraitHeightIn = 11.f;
+  tall.landscape = false;
+  tall.paperCircles = {2.f, 3.f, 1.f};
+  tall.paperCircleAttrs.push_back(EntityAttributes{});
+  st.paperLayouts.push_back(std::move(tall));
+}
+
+TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]") {
+  const char* outDir = std::getenv("GOSURVEY_ORACLE_DIR");  // required: where to write the fixtures
+  REQUIRE(outDir != nullptr);
+  const std::filesystem::path dir = std::filesystem::path(outDir);
+  std::filesystem::create_directories(dir);
+  const std::pair<const char*, DwgSaveVersion> versions[] = {{"R2000", DwgSaveVersion::R2000},
+                                                               {"R2010", DwgSaveVersion::R2010},
+                                                               {"R2018", DwgSaveVersion::R2018}};
+  std::vector<std::string> log;
+  for (int level = 0; level <= 4; ++level)
+    for (const auto& v : versions) {
+      AppCommandState st;
+      BuildOracleState(st, level);
+      st.dwgExportVersion = v.second;
+      const std::string name = "L" + std::to_string(level) + "_" + v.first + ".dwg";
+      REQUIRE(ExportLibreCadFile(st, (dir / name).string().c_str(), log, /*asDxf=*/false));
+    }
+  AppCommandState st;
+  BuildOracleState(st, 4);
+  REQUIRE(ExportDxfFile(st, (dir / "sheet.dxf").string().c_str(), log));
 }

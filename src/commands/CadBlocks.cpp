@@ -273,6 +273,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadPositionMarkerAttrs.clear();
   st.cadMultileaders.clear();  // REQ-367: model-space objects, never block content
   st.cadMultileaderAttrs.clear();
+  st.cadSplines.clear();  // REQ-443: model-space objects, never block content
+  st.cadSplineAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
@@ -425,8 +427,9 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   } else if (ext == ".sat")
     ok = ImportSatFileToScratch(scratch, pathUtf8, log);
   else {
-    // .gs block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
-    // block-library container is tracked as issue #284, not part of this one.
+    // Legacy `.gs` block-library import was removed by issue #264 (D-2026-09-03-h); re-adding a
+    // block-library container is tracked as issue #284, not part of this one. This is historical
+    // compatibility context, not a supported drawing-file path.
     log.push_back("BLOCKIMPORT — expected a .dxf, .dwg or .sat file.");
     return -1;
   }
@@ -3564,7 +3567,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
       log.push_back("BPARAM — value must be a number.");
       return true;
     }
+    PushUndoSnapshot(st, "Block parameter");
     st.blockDefs[static_cast<size_t>(di)].parameters.push_back(std::move(p));
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BPARAM — added " + f[0] + ".");
     return true;
   }
@@ -3593,7 +3599,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
         return true;
       }
     }
+    PushUndoSnapshot(st, "Block action");
     st.blockDefs[static_cast<size_t>(di)].actions.push_back(std::move(a));
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BACTION — bound to " + f[1] + ".");
     return true;
   }
@@ -3611,7 +3620,10 @@ bool CadBlocksTryIdleCommand(AppCommandState& st, const std::string& plotTok, st
     const int di = CadBlockFindDef(st.blockDefs, st.blockEditorName);
     if (di < 0)
       return true;
+    PushUndoSnapshot(st, "Block visibility state");
     st.blockDefs[static_cast<size_t>(di)].visibilityStates.push_back(f[0]);
+    st.blockEditorDirty = true;
+    BumpCadGpuCache(st);
     log.push_back("BVISIBILITY — state " + f[0] + ".");
     return true;
   }

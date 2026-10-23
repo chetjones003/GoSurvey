@@ -36,7 +36,8 @@ the places where a feature is present but not finished.
 
 - **[[Survey Points]]** — creating, editing, importing, and exporting the point database
 - **[[Point Groups and Surfaces]]** — rule-based groups and TIN surfaces
-- **[[Traverse Editor]]** — raw observations, Face 1/Face 2, least-squares closure, FBK import
+- **[[Traverse Editor]]** — raw observations, Face 1/Face 2, GPS vectors, least-squares closure,
+  a command-language editor, and raw-format import (FBK, STAR\*NET, RW5, JobXML)
 - **[[Coordinate Alignment]]** — ALIGN, the 2D Helmert fit, control-point tagging
 - **[[Inquiry Commands]]** — ID, INVERSE, SURFELEV
 
@@ -47,7 +48,7 @@ the places where a feature is present but not finished.
 - **[[Plotting]]** — Page Setup Manager, Plot, Batch Plot
 - **[[PDF Underlays]]** — attaching a PDF and snapping to it
 - **[[Import and Export]]** — DXF, DWG, CSV, FBK, glTF/GLB, STL, JSON
-- **[[Files and Drawings]]** — the `.gs` file, drawing tabs, templates, updates
+- **[[Files and Drawings]]** — DWG drawings, drawing tabs, templates, updates
 
 ## Reference
 

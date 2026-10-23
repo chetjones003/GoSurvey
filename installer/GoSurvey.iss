@@ -6,7 +6,7 @@
 ;
 ; Version resolution, in priority order:
 ;   1. ISCC /DAppVersion=... /DAppVersionQuad=...   (what CI passes)
-;   2. build\generated\version.iss                  (written by CMake from project(VERSION))
+;   2. build\.cmake\release\generated\version.iss                  (written by CMake from project(VERSION))
 ;   3. the 0.0.0-local fallback below               (an un-configured tree)
 ; The fallback is deliberately not a plausible release number: a build that reaches it
 ; has bypassed the single version source and should be obvious at a glance.
@@ -15,8 +15,8 @@
 ; Or with an explicit version: iscc /DAppVersion=0.5.0-beta.7 /DAppVersionQuad=0.5.0.7 installer\GoSurvey.iss
 
 #ifndef AppVersion
-  #ifexist "..\build\generated\version.iss"
-    #include "..\build\generated\version.iss"
+  #ifexist "..\build\.cmake\release\generated\version.iss"
+    #include "..\build\.cmake\release\generated\version.iss"
   #endif
 #endif
 #ifndef AppVersion
@@ -34,9 +34,10 @@
   #define OutputDir "Output"
 #endif
 
-; Microsoft VC++ 2015–2022 x64 runtime (placed in build/ by CI or tools/fetch-vc-redist.ps1).
-#ifexist "..\build\vc_redist.x64.exe"
-  #define VcRedistBundled
+; The offline installer must carry the Microsoft VC++ runtime. CI and local packaging put it in
+; build/ before ISCC; fail instead of silently producing an installer that needs a network fetch.
+#ifnexist "..\build\vc_redist.x64.exe"
+  #error Missing build\vc_redist.x64.exe; fetch it with tools\fetch-vc-redist.ps1 before packaging.
 #endif
 
 #define MyAppName "GoSurvey"
@@ -90,9 +91,10 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [InstallDelete]
 ; Sweep the version-stamped executables shipped up to 0.4.0 (ADR-029 (b)). Without this an
-; upgraded install keeps a stale GoSurvey-0.4.0.exe beside the new GoSurvey.exe, and any
+; upgraded install keeps the stable GoSurvey.exe path, now backed by the Qt application.
 ; shortcut still pointing at it would launch a version that can never update itself again.
 Type: files; Name: "{app}\GoSurvey-*.exe"
+Type: files; Name: "{app}\GoSurvey.exe"
 ; Clear the bundled resource trees before laying down the new payload so an icon/hatch/block
 ; that was renamed or removed between releases does not linger in the installed copy. These are
 ; app assets only — user data lives in %APPDATA%\GoSurvey and is untouched.
@@ -104,10 +106,11 @@ Type: filesandordirs; Name: "{app}\resources\blocks"
 Source: "{#BuildDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\resources\*"; DestDir: "{app}\resources"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
-#ifdef VcRedistBundled
+Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
 Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
-#endif
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -129,16 +132,9 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
-function ShouldInstallVcRedist: Boolean;
-begin
-  Result := FileExists(ExpandConstant('{app}\redist\VC_redist.x64.exe'));
-end;
-
 [Run]
-#ifdef VcRedistBundled
 ; Idempotent on machines that already have the runtime; required for GoSurvey.exe (/MD).
-Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: ShouldInstallVcRedist
-#endif
+Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 ; The updater's relaunch, routed through Explorer.
 ;
@@ -163,7 +159,8 @@ Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Flags: 
 [UninstallRun]
 ; Clear Windows icon cache to ensure new icon is displayed on reinstall
 Filename: "cmd.exe"; Parameters: "/c ""del /f /q %LocalAppData%\IconCache.db"""; Flags: runhidden
-; issue #264: the .gs file association was removed. Clear the leftover Explorer registry cache
+; issue #264 retired standalone .gs drawings. This only clears the stale per-user Explorer cache;
+; the installer does not register or advertise that extension.
 ; entry on uninstall/upgrade so an older install's association doesn't linger.
 Filename: "reg.exe"; Parameters: "delete ""HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.gs"" /f"; Flags: runhidden
 ; Delete user application data (history, layout files, preferences).

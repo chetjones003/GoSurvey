@@ -126,7 +126,7 @@ enum class CadBlockConnectionRole : std::uint8_t { Inlet = 0, Outlet, Branch };
 }
 
 /// Piping catalog part type (issue #486 increment A1). `None` = not a piping fitting (ordinary
-/// block). Kept a closed enum, tagged as a string in .gs so the library/lookup keys stay stable.
+/// block). Kept a closed enum, tagged as a string in internal document payload so the library/lookup keys stay stable.
 enum class CadPipePartType : std::uint8_t {
   None = 0,
   Elbow90,
@@ -140,7 +140,7 @@ enum class CadPipePartType : std::uint8_t {
   Cap,
   Other,
   /// REQ-350 / D-2026-09-24-a (1). Appended AFTER `Other` rather than inserted in category order so
-  /// no existing enumerator's numeric value moves — the tag string is what .gs and the LIBEXPORT
+  /// no existing enumerator's numeric value moves — the tag string is what internal document payload and the LIBEXPORT
   /// sidecars persist, but a stable numeric value costs nothing to keep, and an in-memory value that
   /// silently changed meaning would be the worst kind of bug to go looking for.
   Nozzle
@@ -1669,6 +1669,20 @@ inline constexpr int kDrawingUnitCount = 5;
 inline constexpr const char* kDrawingUnitNames[kDrawingUnitCount] = {"Unitless", "Inches", "Feet", "Meters",
                                                                      "Millimeters"};
 inline constexpr int kDrawingUnitCodes[kDrawingUnitCount] = {0, 1, 2, 6, 4};
+
+/// Abbreviation for a drawing's INSUNITS code, parallel to \ref kDrawingUnitCodes (issue #831):
+/// unit-aware readouts (e.g. the Traverse Editor) label distances with the active drawing's
+/// linear unit instead of hardcoding "ft". Falls back to "ft" for an unrecognized code.
+[[nodiscard]] inline const char* CadDrawingInsUnitsAbbrev(int code) {
+  switch (code) {
+    case 0: return "";    // Unitless
+    case 1: return "in";
+    case 2: return "ft";
+    case 6: return "m";
+    case 4: return "mm";
+    default: return "ft";
+  }
+}
 
 [[nodiscard]] inline bool CadBlockHasMatchlineDyn(const CadBlockDefinition& def) {
   for (const CadBlockParameter& p : def.parameters) {

@@ -312,8 +312,12 @@ bool FbkImport(const char* path, TraverseData& td, std::string& errorMsg) {
             }
             return s;
         };
-        if (baseName(td.legs.back().description) == baseName(first.stnName))
+        if (baseName(td.legs.back().description) == baseName(first.stnName)) {
             td.isClosedLoop = true;
+            // A re-observation of the start is the fixed start monument, not an
+            // extra free station. Otherwise the solver counts two extra unknowns.
+            td.legs.back().stationId = td.startStationId;
+        }
     }
 
     return true;

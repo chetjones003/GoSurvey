@@ -5,7 +5,7 @@
 //
 // Pure by design, like RecentDrawings: <filesystem> + nlohmann::json only, every path and the wall
 // clock / process-liveness check passed in by the caller, so GoSurveyTests drives it against a temp
-// folder. Nothing here knows about ImGui or the app state. Failures are returned as a message for the
+// folder. Nothing here knows about UI or app state. Failures are returned as a message for the
 // caller to log (REQ-201); nothing throws.
 
 #include <cstdint>
@@ -101,6 +101,10 @@ LockResult TryAcquire(const std::filesystem::path& gsprojFile, const LockInfo& m
 /// A lock held from another machine cannot be judged, so it is never stale here; the user can still
 /// take it over with the explicit warning (REQ-382 clause 3).
 bool IsStale(const LockInfo& holder, const LockInfo& me, const std::function<bool(std::uint32_t)>& pidAlive);
+
+/// True when a process with this id is running on this machine (an id we may not open still counts as
+/// running). Platforms without a check answer true, so a lock is never wrongly called stale.
+bool ProcessIsRunning(std::uint32_t pid);
 
 /// Overwrites the lock with \p me (the user confirmed the takeover warning).
 bool TakeOver(const std::filesystem::path& gsprojFile, const LockInfo& me);

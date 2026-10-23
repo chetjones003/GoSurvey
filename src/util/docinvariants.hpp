@@ -12,7 +12,7 @@
 // every step of a fuzz run.
 //
 // Scope note. Only invariants that are a function of a SINGLE AppCommandState live here. The
-// differential oracles REQ-204 also names — undo/redo identity, `.gs` save/load/save stability,
+// differential oracles REQ-204 also names — undo/redo identity, `internal document payload` save/load/save stability,
 // DXF export/import convergence — compare *two* states or need file IO, so they belong to the
 // driver, not to this header.
 

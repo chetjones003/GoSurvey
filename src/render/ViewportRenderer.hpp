@@ -29,6 +29,10 @@ struct RenderTuning {
   float bgR = 0.f;                  ///< Display → Window Elements: viewport background (clear) color. Default black preserves prior behavior.
   float bgG = 0.f;
   float bgB = 0.f;
+  float gridR = 0.14f;               ///< Qt Dark may tint the drafting grid; other callers keep the legacy gray.
+  float gridG = 0.14f;
+  float gridB = 0.15f;
+  float gridA = 0.28f;
   /// REQ-064. Defaulting to Wireframe2D is what keeps every existing call site — and the pixel
   /// output it produces — unchanged: that style takes the same depth-off path as before.
   VisualStyle visualStyle = VisualStyle::Wireframe2D;
@@ -95,7 +99,7 @@ public:
                    const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{},
                    const std::vector<PdfAttachment>* pdfAttachments = nullptr,
                    // When >= 0, the view is in paper space; GL geometry is skipped and the paper-space
-                   // sheet/viewports are drawn by the ImGui overlay (CadUi::DrawDrawingViewport).
+                   // sheet/viewports are drawn by the Qt paper-space overlay.
                    int activeSpaceIndex = -1,
                    // Solid-filled regions (ADR-011) drawn under the linework via stencil even-odd fill.
                    const std::vector<CadFilledRegion>* filledRegions = nullptr,
@@ -194,6 +198,10 @@ public:
                    const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
+  [[nodiscard]] bool HasRenderedFrame() const { return renderedW_ > 0 && renderedH_ > 0; }
+  [[nodiscard]] int RenderedWidth() const { return renderedW_; }
+  [[nodiscard]] int RenderedHeight() const { return renderedH_; }
+  void BlitRenderedFrame(unsigned int destinationFramebuffer, int width, int height) const;
 
   /// REQ-363 / ADR-064 (d): an online map tile's texture from top-row-first RGBA — linear filtered,
   /// clamped at the edges so neighbouring tiles meet without a seam. 0 on failure. Static: tiles are
@@ -234,7 +242,7 @@ public:
   bool EnsurePartThumbnail(const std::string& key, const PartThumbnailInput& in, int px);
 
   /// The cached texture for \p key, or 0 when nothing is cached — which is the palette's cue to draw
-  /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to ImGui.
+  /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to the UI.
   [[nodiscard]] unsigned int PartThumbnailTexture(const std::string& key) const;
 
   /// Drop \p key's cached thumbnail, so the next request re-renders it. Called when a block
@@ -251,10 +259,8 @@ private:
   static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
                     float* outColMajor);
 
-  /// ADR-062 — one cached part thumbnail. Each owns its OWN framebuffer and colour texture, rather
-  /// than sharing one small FBO and copying out: `ImGui::Image` records a texture id and samples it
-  /// after every UI call has run, so a shared target would make every row in the palette display
-  /// whichever part was rendered last.
+  /// ADR-062 — one cached part thumbnail. Each owns its own framebuffer and colour texture so palette
+  /// rows keep their rendered part image while the viewport renderer prepares later thumbnails.
   struct PartThumbnailEntry {
     std::string key;
     unsigned int fbo = 0;
@@ -278,8 +284,15 @@ private:
   unsigned int fbo_ = 0;
   unsigned int colorTex_ = 0;
   unsigned int rbo_ = 0;
+  // Allocation size is retained while the live viewport shrinks or grows within
+  // this capacity, avoiding renderbuffer destruction/recreation on each resize step.
   int fbW_ = 0;
   int fbH_ = 0;
+  // Current drawing area within the retained allocation.
+  int viewW_ = 0;
+  int viewH_ = 0;
+  int renderedW_ = 0;
+  int renderedH_ = 0;
 
   /// Multisampled pass → blit to \p colorTex_ (reduces aliasing / "sparkle" when zoomed).
   unsigned int msFbo_ = 0;

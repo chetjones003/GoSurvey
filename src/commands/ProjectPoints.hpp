@@ -57,3 +57,38 @@ std::vector<std::string> ProjectPointSources(AppCommandState& st);
 /// REQ-377 clause 4: hides the selected points in the active drawing only; the database keeps them
 /// and other drawings are unaffected. Returns how many were hidden.
 int HideSelectedPointsHere(AppCommandState& st);
+
+// ---- REQ-400: the Survey Point Database grid panel -------------------------------------------
+
+enum class EditDatabasePointStatus {
+  NotFound,   ///< no active project database, or no entry numbered \c pointNumber
+  ReadOnly,   ///< the project is open read-only (REQ-382); nothing was changed
+  Collision,  ///< \p newValues.id is already used by a DIFFERENT entry; nothing was changed
+  Applied,
+};
+struct EditDatabasePointResult {
+  EditDatabasePointStatus status = EditDatabasePointStatus::NotFound;
+};
+
+/// Writes \p newValues over the database entry currently numbered \p pointNumber (REQ-400 clause 4):
+/// coordinates, elevation, description and the point number itself. Bumps the database's revision so
+/// every open tab of the project pulls the change next frame (same bookkeeping as \c ApplyChanges).
+/// \p newValues.id may equal \p pointNumber (ordinary edit) or differ (a renumber); a renumber onto a
+/// number some OTHER entry already holds is refused (status \c Collision) rather than overwritten —
+/// the caller resolves it through the project's existing overwrite/renumber/cancel question.
+EditDatabasePointResult EditDatabasePoint(AppCommandState& st, int pointNumber, const SurveyPoint& newValues,
+                                          double now, std::vector<std::string>& log);
+
+/// Selects, in the active drawing's point selection, every entry of \p pointNumbers that is currently
+/// visible there (REQ-377). Returns how many of \p pointNumbers were NOT selected because they are
+/// hidden here or do not exist.
+int SelectDatabasePoints(AppCommandState& st, const std::vector<int>& pointNumbers);
+
+enum class GridConflictAnswer { Overwrite, Renumber, Cancel };
+
+/// Carries out the user's answer to \c AppCommandState::surveyPointGridConflict (REQ-400 clause 5):
+/// Overwrite removes the entry that held the colliding number and gives it to the edited point;
+/// Renumber keeps the colliding entry and gives the edited point the next free number instead;
+/// Cancel discards the edit. Clears the conflict either way.
+void ResolveGridNumberConflict(AppCommandState& st, GridConflictAnswer answer, double now,
+                               std::vector<std::string>& log);

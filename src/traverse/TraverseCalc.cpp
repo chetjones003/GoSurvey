@@ -1,9 +1,14 @@
 #include "TraverseCalc.hpp"
 
+#include "../geo/EcefTransform.hpp"
+
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <string>
+#include <unordered_map>
 
 static constexpr double kDeg2Rad = 3.14159265358979323846 / 180.0;
 
@@ -273,6 +278,50 @@ void ReduceLegFromSets(TraverseLeg& leg) {
 }
 
 
+void TraverseAppendImported(TraverseData& into, TraverseData&& imported) {
+    if (into.legs.empty() && into.sideShots.empty() && into.gpsVectors.empty()) {
+        into = std::move(imported);
+        return;
+    }
+
+    int maxUsedId = into.startStationId;
+    for (const TraverseLeg& leg : into.legs) maxUsedId = std::max(maxUsedId, leg.stationId);
+    for (const TraverseSideShot& shot : into.sideShots)
+        maxUsedId = std::max({maxUsedId, shot.atStationId, shot.stationId});
+    for (const TraverseGpsVector& vector : into.gpsVectors)
+        maxUsedId = std::max({maxUsedId, vector.fromStationId, vector.toStationId});
+
+    const int chainEndId = into.legs.empty() ? into.startStationId : into.legs.back().stationId;
+    std::unordered_map<int, int> remap;
+    remap[imported.startStationId] = chainEndId;
+    int nextId = maxUsedId + 1;
+    auto mapId = [&](int oldId) {
+        const auto found = remap.find(oldId);
+        if (found != remap.end()) return found->second;
+        const int newId = nextId++;
+        remap.emplace(oldId, newId);
+        return newId;
+    };
+
+    for (TraverseLeg& leg : imported.legs) leg.stationId = mapId(leg.stationId);
+    for (TraverseSideShot& shot : imported.sideShots) {
+        shot.atStationId = mapId(shot.atStationId);
+        shot.stationId = mapId(shot.stationId);
+    }
+    for (TraverseGpsVector& vector : imported.gpsVectors) {
+        vector.fromStationId = mapId(vector.fromStationId);
+        vector.toStationId = mapId(vector.toStationId);
+    }
+
+    into.legs.insert(into.legs.end(), std::make_move_iterator(imported.legs.begin()),
+                     std::make_move_iterator(imported.legs.end()));
+    into.sideShots.insert(into.sideShots.end(), std::make_move_iterator(imported.sideShots.begin()),
+                          std::make_move_iterator(imported.sideShots.end()));
+    into.gpsVectors.insert(into.gpsVectors.end(), std::make_move_iterator(imported.gpsVectors.begin()),
+                           std::make_move_iterator(imported.gpsVectors.end()));
+}
+
+
 // ------------------------------------------------------------------ computation --
 
 void ComputeTraverse(TraverseData& td) {
@@ -300,6 +349,12 @@ void ComputeTraverse(TraverseData& td) {
     // This is equivalent to treating startBearing as the "previous forward bearing minus 180°"
     // so the formula (prevFwd + 180° + HA) becomes (startBearing - 180° + 180° + HA) = startBearing + HA.
     double prevFwdBearing = td.startBearingDeg - 180.0;
+
+    // Per-occupied-station position + effective backsight bearing, captured as
+    // each leg resolves, for the side-shot/check-shot pass below (REQ-409).
+    struct StationSetup { double e = 0.0, n = 0.0, z = 0.0, backBearingDeg = 0.0; bool valid = false; };
+    std::unordered_map<int, StationSetup> setups;
+    setups[td.startStationId] = {td.startEasting, td.startNorthing, td.startElevation, td.startBearingDeg, true};
 
     for (auto& leg : td.legs) {
         leg.computed = false;
@@ -339,6 +394,7 @@ void ComputeTraverse(TraverseData& td) {
         double hd = 0.0;
         double dz = 0.0;
         bool hasHD = false;
+        bool hasVA = false;  // a vertical angle was resolved for this leg
 
         // Resolve the active vertical angle (F1/F2 or single)
         auto resolveVA = [&](double* vaOut) -> bool {
@@ -366,6 +422,7 @@ void ComputeTraverse(TraverseData& td) {
             // Compute dz from vertical angle if available
             double va = 0.0;
             if (resolveVA(&va)) {
+                hasVA = true;
                 if (leg.isZenithAngle) {
                     const double sinZ = std::sin(va * kDeg2Rad);
                     dz = (std::abs(sinZ) > 1e-10) ? hd * std::cos(va * kDeg2Rad) / sinZ : 0.0;
@@ -379,8 +436,13 @@ void ComputeTraverse(TraverseData& td) {
                 leg.errorMsg = "Slope distance requires vertical angle";
                 break;
             }
-            hd = TraverseReduceToHoriz(leg.slopeDist, va, leg.isZenithAngle);
-            dz = TraverseReduceToVert(leg.slopeDist, va, leg.isZenithAngle);
+            hasVA = true;  // slope distances always carry a vertical angle
+            // Prism constant (GitHub issue #845 follow-up): a real EDM correction,
+            // applied before reduction — only meaningful for a measured slope
+            // distance, not one already entered as a reduced horizontal distance.
+            const double correctedSd = leg.slopeDist + (leg.hasPrismConstant ? leg.prismConstant : 0.0);
+            hd = TraverseReduceToHoriz(correctedSd, va, leg.isZenithAngle);
+            dz = TraverseReduceToVert(correctedSd, va, leg.isZenithAngle);
             hasHD = true;
         }
 
@@ -389,11 +451,24 @@ void ComputeTraverse(TraverseData& td) {
             break;
         }
 
+        // --- Earth curvature + atmospheric refraction (issue #826) ---
+        // Combined correction C = (1 - k) * hd^2 / (2R), added to the trig dZ.
+        // hd is the horizontal distance resolved above, for both the entered-HD
+        // and slope-distance paths. Applied only when a vertical angle was
+        // resolved: legs with no vertical observation keep legacy flat behavior.
+        if (td.applyCurvRefCorr && hasVA) {
+            constexpr double kEarthRadiusM = 6371000.0;  // mean earth radius
+            dz += (1.0 - td.refractionCoeff) * hd * hd / (2.0 * kEarthRadiusM);
+        }
+
         // --- Coordinate increments ---
         const double bearingRad = fwdBearing * kDeg2Rad;
-        leg.computedHorizDist = hd;
-        leg.computedDeltaE    = hd * std::sin(bearingRad);
-        leg.computedDeltaN    = hd * std::cos(bearingRad);
+        // REQ-401: reduce ground to grid when requested; off (the default) reproduces hd exactly.
+        const double gridHd = td.applyScaleFactor ? hd * td.scaleFactor : hd;
+        leg.computedGroundHorizDist = hd;
+        leg.computedHorizDist = gridHd;
+        leg.computedDeltaE    = gridHd * std::sin(bearingRad);
+        leg.computedDeltaN    = gridHd * std::cos(bearingRad);
         leg.computedDeltaZ    = dz;
         leg.computedEasting   = curE + leg.computedDeltaE;
         leg.computedNorthing  = curN + leg.computedDeltaN;
@@ -401,7 +476,10 @@ void ComputeTraverse(TraverseData& td) {
         leg.computed          = true;
         leg.hasSufficientData = true;
 
-        td.closurePerimeter += hd;
+        td.closurePerimeter += gridHd;
+
+        setups[leg.stationId] = {leg.computedEasting, leg.computedNorthing, leg.computedElevation,
+                                  TraverseNormBearing(fwdBearing + 180.0), true};
 
         curE = leg.computedEasting;
         curN = leg.computedNorthing;
@@ -409,10 +487,133 @@ void ComputeTraverse(TraverseData& td) {
         prevFwdBearing = fwdBearing;
     }
 
-    // --- Closure ---
-    if (td.isClosedLoop && !td.legs.empty() && td.legs.back().computed) {
-        td.closureDeltaE = curE - td.startEasting;
-        td.closureDeltaN = curN - td.startNorthing;
+    // --- Side shots and check shots (REQ-409, GitHub issue #853) ---
+    // Reduced with the exact same trig as a leg, using the occupied station's
+    // resolved position and effective backsight bearing captured above — a
+    // shot's forward bearing is simply (that station's back-bearing + its own
+    // turned angle), matching the per-leg formula exactly (see `setups` above).
+    for (auto& ss : td.sideShots) {
+        ss.computed = false;
+        ss.hasSufficientData = false;
+        ss.errorMsg.clear();
+        ss.checkDiscrepancy = 0.0;
+
+        const auto it = setups.find(ss.atStationId);
+        if (it == setups.end() || !it->second.valid) {
+            ss.errorMsg = "Occupied station not found or not resolved";
+            continue;
+        }
+        if (!ss.hasHorizAngle) {
+            ss.errorMsg = "Horizontal angle required";
+            continue;
+        }
+
+        double hd = 0.0, dz = 0.0;
+        bool hasHD = false, hasVA = false;
+        if (ss.hasHorizDist) {
+            hd = ss.horizDist;
+            hasHD = true;
+            if (ss.hasVertAngle) {
+                hasVA = true;
+                if (ss.isZenithAngle) {
+                    const double sinZ = std::sin(ss.vertAngleDeg * kDeg2Rad);
+                    dz = (std::abs(sinZ) > 1e-10) ? hd * std::cos(ss.vertAngleDeg * kDeg2Rad) / sinZ : 0.0;
+                } else {
+                    dz = hd * std::tan(ss.vertAngleDeg * kDeg2Rad);
+                }
+            }
+        } else if (ss.hasSlopeDist) {
+            if (!ss.hasVertAngle) {
+                ss.errorMsg = "Slope distance requires vertical angle";
+                continue;
+            }
+            hasVA = true;
+            hd = TraverseReduceToHoriz(ss.slopeDist, ss.vertAngleDeg, ss.isZenithAngle);
+            dz = TraverseReduceToVert(ss.slopeDist, ss.vertAngleDeg, ss.isZenithAngle);
+            hasHD = true;
+        }
+
+        if (!hasHD || hd < 0.0) {
+            ss.errorMsg = "Horizontal or slope distance required";
+            continue;
+        }
+
+        if (td.applyCurvRefCorr && hasVA) {
+            constexpr double kEarthRadiusM = 6371000.0;
+            dz += (1.0 - td.refractionCoeff) * hd * hd / (2.0 * kEarthRadiusM);
+        }
+
+        const double fwdBearing = TraverseNormBearing(it->second.backBearingDeg + ss.horizAngleDeg);
+        const double bearingRad = fwdBearing * kDeg2Rad;
+        const double gridHd = td.applyScaleFactor ? hd * td.scaleFactor : hd;
+
+        ss.computedBearingDeg = fwdBearing;
+        ss.computedHorizDist = gridHd;
+        ss.computedDeltaE = gridHd * std::sin(bearingRad);
+        ss.computedDeltaN = gridHd * std::cos(bearingRad);
+        ss.computedDeltaZ = dz;
+        ss.computedEasting = it->second.e + ss.computedDeltaE;
+        ss.computedNorthing = it->second.n + ss.computedDeltaN;
+        ss.computedElevation = it->second.z + dz;
+        ss.computed = true;
+        ss.hasSufficientData = true;
+
+        if (ss.hasKnownCoords) {
+            const double dE = ss.computedEasting - ss.knownEasting;
+            const double dN = ss.computedNorthing - ss.knownNorthing;
+            ss.checkDiscrepancy = std::sqrt(dE * dE + dN * dN);
+        }
+    }
+
+    // --- GPS vectors (REQ-416, GitHub issue #847) ---
+    // Resolved only when the "from" station already has a known local position
+    // (start station, a computed leg station, or another already-resolved GPS
+    // vector's end station, in file order) — a GPS-only sub-network with no tie
+    // into the conventional traverse is a defined gap, not a guess.
+    constexpr double kMetersToFeet = 1.0 / 0.3048;  // exact international foot.
+    for (auto& gv : td.gpsVectors) {
+        gv.computed = false;
+        gv.errorMsg.clear();
+
+        if (!td.hasGpsOrigin) {
+            gv.errorMsg = "GPS origin latitude/longitude required to resolve vectors";
+            continue;
+        }
+        const auto it = setups.find(gv.fromStationId);
+        if (it == setups.end() || !it->second.valid) {
+            gv.errorMsg = "Origin station \"" + gv.fromName +
+                          "\" has no known position (not the start station, a computed "
+                          "traverse leg, or an already-resolved GPS vector)";
+            continue;
+        }
+
+        double eastM = 0.0, northM = 0.0, upM = 0.0;
+        geo::EcefDeltaToEnu(gv.deltaXEcefM, gv.deltaYEcefM, gv.deltaZEcefM,
+                            td.gpsOriginLatDeg, td.gpsOriginLonDeg, &eastM, &northM, &upM);
+
+        gv.computedDeltaEastFt = eastM * kMetersToFeet;
+        gv.computedDeltaNorthFt = northM * kMetersToFeet;
+        gv.computedDeltaUpFt = upM * kMetersToFeet;
+        gv.computedToEasting = it->second.e + gv.computedDeltaEastFt;
+        gv.computedToNorthing = it->second.n + gv.computedDeltaNorthFt;
+        gv.computedToElevation = it->second.z + gv.computedDeltaUpFt;
+        gv.computed = true;
+
+        // Make the resolved end station available to a later vector chained off it.
+        setups[gv.toStationId] = {gv.computedToEasting, gv.computedToNorthing,
+                                   gv.computedToElevation, 0.0, true};
+    }
+
+    // --- Closure --- (issue #848 follow-up: an open traverse with known end
+    // coordinates closes against THAT point instead of the start — closing
+    // against the start wouldn't mean anything once the chain doesn't loop
+    // back there).
+    if (!td.legs.empty() && td.legs.back().computed &&
+        (td.isClosedLoop || td.hasEndCoordinates)) {
+        const double closeToE = td.isClosedLoop ? td.startEasting : td.endEasting;
+        const double closeToN = td.isClosedLoop ? td.startNorthing : td.endNorthing;
+        td.closureDeltaE = curE - closeToE;
+        td.closureDeltaN = curN - closeToN;
         td.closureLinear = std::sqrt(td.closureDeltaE * td.closureDeltaE +
                                      td.closureDeltaN * td.closureDeltaN);
         if (td.closureLinear > 1e-10 && td.closurePerimeter > 1e-10)

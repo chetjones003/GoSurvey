@@ -3,7 +3,7 @@
 // Three of REQ-070's five acceptance conditions are decided entirely in this header, before any
 // geometry is generated:
 //   * "a surface whose style was deleted falls back to a default style rather than failing to draw";
-//   * "a legacy `.gs` loads unchanged" — every surface in one carries an EMPTY styleName, which must
+//   * "a legacy `document JSON payload` loads unchanged" — every surface in one carries an EMPTY styleName, which must
 //     take the same fallback path as a deleted one;
 //   * "a major interval that is not a whole multiple of the minor interval is rejected with a
 //     specific message rather than producing mis-labelled contours".
@@ -123,7 +123,7 @@ TEST_CASE("A deleted style falls back to Standard rather than failing to draw",
 TEST_CASE("An empty style name resolves to Standard", "[surface][req070][style]") {
   // This is the legacy case, and it is the one that runs on EVERY surface in EVERY drawing written
   // before this field existed. If it returned nullptr, those surfaces would stop drawing on the day
-  // the feature shipped — the exact opposite of "a legacy `.gs` loads unchanged".
+  // the feature shipped — the exact opposite of "a legacy `document JSON payload` loads unchanged".
   const auto styles = SurfaceStyles::DefaultSurfaceStyles();
 
   const SurfaceStyle* got = SurfaceStyles::Resolve(styles, "");
@@ -255,6 +255,20 @@ TEST_CASE("IntervalsCompatible tolerates a null message pointer", "[surface][req
   CHECK_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, nullptr));
 }
 
+TEST_CASE("IntervalsCompatible labels its rejection with the drawing's actual unit", "[surface][req070][style][req832]") {
+  // Issue #832: a meters drawing must not see "ft" in this message. The default (no unit passed)
+  // stays "ft" for every pre-existing caller — this only covers the new optional parameter.
+  std::string why;
+  REQUIRE_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, &why, "m"));
+  CHECK(Mentions(why, "7 m"));
+  CHECK(Mentions(why, "2 m"));
+  CHECK_FALSE(Mentions(why, "ft"));
+
+  std::string whyDefault;
+  REQUIRE_FALSE(SurfaceStyles::IntervalsCompatible(2.0, 7.0, &whyDefault));
+  CHECK(Mentions(whyDefault, "ft"));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Value equality — the display cache's staleness key rides on it
 // ---------------------------------------------------------------------------------------------
@@ -310,7 +324,7 @@ TEST_CASE("Style equality notices a change in any component or interval",
 TEST_CASE("A style starts with analysis off, and that is the legacy state too",
           "[surface][req072][style]") {
   // REQ-072's "turning banding off restores the style's plain display unchanged" is satisfied by
-  // making OFF the state a style begins in. A `.gs` written before REQ-072 existed carries none of
+  // making OFF the state a style begins in. A `document JSON payload` written before REQ-072 existed carries none of
   // these keys, and the reader seeds each style from this same default — so an old drawing opens
   // displaying exactly what it displayed before, without the reader needing a legacy branch.
   const SurfaceStyle standard = SurfaceStyles::StandardSurfaceStyle();

@@ -1,0 +1,63 @@
+name: PR worker registration
+on:
+  push:
+    branches: [chore/self-hosted-pr-workers]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: gosurvey-pr-worker-registration
+  cancel-in-progress: false
+jobs:
+  register:
+    name: laptop / register PR workers
+    if: github.repository == 'chetjones003/GoSurvey' && github.actor == 'chetjones003' && github.ref == 'refs/heads/chore/self-hosted-pr-workers'
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect prior listener startup errors
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./tools/inspect-windows-pr-workers.ps1
+      - name: Register and start independent analyzer workers
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        env:
+          GOSURVEY_REGISTRATION_TOKEN: ${{ secrets.GOSURVEY_RUNNER_BOOTSTRAP_TOKEN }}
+        run: ./tools/register-windows-pr-workers.ps1 -Start
+      - name: Require active worker launchers after startup
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          Start-Sleep -Seconds 12
+          ./tools/inspect-windows-pr-workers.ps1 -RequireWorkers
+
+  inspect-clang:
+    name: laptop / clang worker tools
+    needs: register
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-clang-tidy]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect the registered worker environment
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role clang-tidy
+
+  inspect-msvc:
+    name: laptop / MSVC worker tools
+    needs: register
+    runs-on: [self-hosted, Windows, X64, gosurvey-pr-msvc-analyze]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Inspect the registered worker environment
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./tools/initialize-self-hosted-pr-job.ps1 -Role msvc-analyze
+      - name: Stop the inspection job's cache server
+        if: always() && env.GOSURVEY_CI_CACHE_STARTED == 'true'
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: ./tools/ci-compiler-cache.ps1 -Action stop

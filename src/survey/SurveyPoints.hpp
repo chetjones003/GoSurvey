@@ -173,8 +173,12 @@ void RegenerateAllSurveyPointLabels(AppCommandState& st);
 void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<SurveyPoint>& conflictsWorld,
                                          bool overwrite, int offset, std::vector<std::string>* log);
 
+/// UTF-8 path. Writes a staged replacement; serialization/write failures preserve the destination.
+/// Version 1 retains local coordinates with origin metadata and raw field descriptions.
 bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log);
 
+/// Validates the complete file before replacing points/labels as one undo step. Old unversioned
+/// files without origins keep their legacy local-coordinate interpretation. Rejects read-only projects.
 bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::vector<std::string>& log);
 
 void StartCreatePointsCommand(AppCommandState& st, std::vector<std::string>& log);

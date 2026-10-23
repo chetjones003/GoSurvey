@@ -2,7 +2,7 @@
 #
 # Two jobs, three publish outcomes, decided by which branch the run targets:
 #
-#   build             compile GoSurvey.exe only (no headless driver, no test suite — this
+#   build             compile GoSurvey.exe (Qt frontend) and supporting checks — this
 #                     pipeline ships the app, it does not verify it), run only on manual
 #                     dispatch (REQ-202 (d))
 #   package           Inno installer from the build artifacts; then:
@@ -66,6 +66,14 @@ jobs:
         # quietly picking up some other compiler. That loud failure is deliberate (see below).
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Install the supported Qt frontend's pinned MSVC kit before configure.
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          arch: win64_msvc2022_64
+          cache: true
+
       - name: Ensure Ninja
         # The repo's CMakePresets.json uses the Ninja generator. windows-latest already ships
         # ninja; only download the official zip if PATH does not have it. Chocolatey is not used
@@ -116,10 +124,14 @@ jobs:
             $tag      = "v$version"
           } elseif ($branch -eq 'beta') {
             $channel  = 'beta'
-            # The run number is monotonic per workflow, so betas order correctly within a
-            # cycle: 0.5.0-beta.2 < 0.5.0-beta.10 (numeric compare, not string).
-            $suffix   = "-beta.${{ github.run_number }}"
-            $full     = "$version$suffix"
+            # REQ-402 (2026-10-09): no auto-appended "-beta.N" suffix. The target beta version
+            # (e.g. 0.7.1 vs 0.8.0 — a real decision, not a running counter) is chosen in CLI
+            # conversation and committed as a project(VERSION) bump BEFORE this workflow is
+            # dispatched against beta, the same way a master release is decided. The rolling
+            # `channel-beta` prerelease tag/assets still get replaced on every dispatch; only the
+            # version STRING shown to users is now the plain version, matching what was bumped.
+            $suffix   = ''
+            $full     = $version
             $quadLast = "${{ github.run_number }}"
             $tag      = 'channel-beta'
           } else {
@@ -172,18 +184,12 @@ jobs:
         # per-target compile option (CMakeLists.txt's gosurvey_target_warnings), additive and
         # scoped to our own targets only. It does not fail the build unless paired with /WX,
         # which is deliberately NOT set — the existing codebase has never been triaged against it.
-        # GOSURVEY_BUILD_HEADLESS / GOSURVEY_BUILD_TESTS are OFF: this pipeline ships
-        # GoSurvey.exe only. The headless transcript driver, GsJsonDwgFixture, and the
-        # Catch2 suite are dev/test-only targets (see CMakeLists.txt) with no bearing on
-        # what the installer packages, so this configure never defines those targets in
-        # the first place rather than building and then discarding them.
+        # This pipeline ships the Qt application only.
         run: >
           cmake --preset ninja-release
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_ENABLE_ANALYZE=ON
-          -DGOSURVEY_BUILD_HEADLESS=OFF
-          -DGOSURVEY_BUILD_TESTS=OFF
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 
@@ -194,7 +200,7 @@ jobs:
         run: echo "::add-matcher::.github/msvc-analyze-matcher.json"
 
       - name: Build
-        run: cmake --build build
+        run: cmake --build --preset ninja-release
 
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
@@ -221,7 +227,9 @@ jobs:
           name: gosurvey-bin
           path: |
             build/GoSurvey.exe
-            build/pdfium.dll
+            build/*.dll
+            build/qt.conf
+            build/qt-plugins/
             build/resources/
           if-no-files-found: error
           retention-days: 1
@@ -243,8 +251,8 @@ jobs:
 
       - name: Download binaries
         # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
-        # paths, so the archive contains GoSurvey.exe at its root. Unpack into
-        # build/ so installer/GoSurvey.iss still finds {#BuildDir}\GoSurvey.exe.
+        # paths, so the archive contains the app/runtime files at its root. Unpack into
+        # build/ so installer/GoSurvey.iss finds the Qt deployment tree.
         uses: actions/download-artifact@v4
         with:
           name: gosurvey-bin
@@ -275,11 +283,18 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          if (-not (Test-Path 'build\GoSurvey.exe')) {
-            throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
-          }
-          if (-not (Test-Path 'build\vc_redist.x64.exe')) {
-            throw 'Expected build\vc_redist.x64.exe — the installer must ship the VC++ runtime.'
+          # Keep these runtime requirements aligned with tools/verify-qt-deployment.ps1. The
+          # installer must remain usable after the Store downloads it once and the machine goes
+          # offline; checking for any DLL is not enough to prove the Qt runtime is complete.
+          foreach ($path in @('build\GoSurvey.exe', 'build\Qt6Core.dll', 'build\Qt6Gui.dll',
+                              'build\Qt6Widgets.dll', 'build\Qt6OpenGL.dll',
+                              'build\Qt6OpenGLWidgets.dll', 'build\pdfium.dll',
+                              'build\qt.conf', 'build\qt-plugins\platforms\qwindows.dll',
+                              'build\resources\default-template.gst',
+                              'build\vc_redist.x64.exe')) {
+            if (-not (Test-Path $path)) {
+              throw "Expected $path in packaging inputs; offline installer would be incomplete."
+            }
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
@@ -300,10 +315,32 @@ jobs:
         # unsigned for now, so SmartScreen will warn and the manifest's SHA-256 proves integrity
         # but not authenticity. The step exists so signing drops in without restructuring the
         # pipeline. Since the 2023 CA/Browser hardware-key rules this needs a cloud signing
-        # service (Azure Trusted Signing / SSL.com eSigner / DigiCert KeyLocker), NOT a .pfx in
-        # a repository secret.
+        # service, NOT a .pfx in a repository secret.
+        #
+        # 2026-10-09: chose SignPath Foundation (signpath.org), which signs OSS projects for
+        # free — but their application requires the project to already be independently
+        # findable (a Google search for the project name, a homepage that isn't just the bare
+        # repo). GoSurvey isn't there yet, so the application is ON HOLD, not submitted. This
+        # step stays a no-op until that's resolved. DO NOT wire in SignPath until the account
+        # exists and the four secrets below are confirmed present in repo settings.
+        #
+        # Once SIGNPATH_API_TOKEN / SIGNPATH_ORGANIZATION_ID / SIGNPATH_PROJECT_SLUG /
+        # SIGNPATH_SIGNING_POLICY exist as repo secrets, replace this step's `run:` block with:
+        #
+        #   - name: Sign the installer
+        #     uses: signpath/github-action-submit-signing-request@v1
+        #     with:
+        #       api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+        #       organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+        #       project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+        #       signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY }}
+        #       artifact-configuration-slug: 'installer'
+        #       github-artifact-id: <id of an installer\Output\*.exe artifact uploaded just before this step>
+        #       wait-for-completion: true
+        #       output-artifact-directory: 'installer\Output\signed'
+        #     # then replace installer\Output\*.exe with the signed copy before the manifest/publish steps.
         shell: pwsh
-        run: Write-Host "Code signing not configured - shipping unsigned (recorded technical debt)."
+        run: Write-Host "Code signing not configured - shipping unsigned (recorded technical debt; SignPath application on hold, see comment above)."
 
       - name: Write the update manifest
         id: manifest
@@ -331,7 +368,8 @@ jobs:
           # correct at the moment it is written rather than depending on a later redirect.
           $url = "https://github.com/$repo/releases/download/$tag/$($installer.Name)"
 
-          # The .gs format version this build writes, read from the one place that defines it.
+          # This schema version belongs to the JSON payload embedded in DWG. The manifest key
+          # remains gsFormatVersion for compatibility with already deployed updater clients.
           # The CLIENT compares it against its own compiled-in value, so no release history has to
           # be consulted here and the comparison happens where the truth is actually known.
           $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
@@ -343,7 +381,8 @@ jobs:
           # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
           # are written for developers and are full of things an end user should never be shown --
           # file paths, requirement numbers, compiler behaviour. Piping them straight through put
-          # "the installer registers .gs with shell\open\command..." in front of users, which is
+          # "the installer registers .gs with shell\open\command..." is a historical phrase
+          # denied from release notes; it is not current file-association guidance.
           # how this was caught.
           #
           # The section key is the plain three-part version, so every beta in a cycle shows the
@@ -414,6 +453,14 @@ jobs:
             notes       = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
+          if ($env:GITHUB_REF_NAME -eq 'master') {
+            @(
+              "Installer URL: $url"
+              "SHA-256: $sha"
+              'Install parameters: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
+              'UAC: A Windows UAC prompt is permitted.'
+            ) | Set-Content -Path installer\Output\store-submission.txt -Encoding UTF8
+          }
           # Same text, as Markdown, for the GitHub release page body (see the publish steps).
           Set-Content -Path installer\Output\release-body.md -Value $notes -Encoding UTF8
           "installer=$($installer.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
@@ -489,6 +536,7 @@ jobs:
           gh release create "v${{ needs.build.outputs.version }}" `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" `
+            "installer\Output\store-submission.txt" `
             --title "GoSurvey ${{ needs.build.outputs.version }}" `
             --notes-file installer\Output\release-body.md
 

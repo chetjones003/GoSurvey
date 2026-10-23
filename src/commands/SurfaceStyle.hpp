@@ -91,7 +91,7 @@ inline std::vector<SurfaceStyle> DefaultSurfaceStyles() {
 ///
 /// This is the whole of "resolution is on read". An empty name and a name whose style was deleted
 /// take the same path deliberately: REQ-070 states the deleted case, and the empty case is what every
-/// surface in every `.gs` written before this field existed will present on first load.
+/// surface in every `internal document payload` written before this field existed will present on first load.
 inline const SurfaceStyle* Resolve(const std::vector<SurfaceStyle>& styles, const std::string& name) {
   if (!name.empty())
     if (const SurfaceStyle* s = Find(styles, name)) return s;
@@ -149,12 +149,19 @@ inline std::string FormatFt(double v) {
 /// Compared by ratio with a tolerance, never with `==` on floats: 0.1 and 0.5 are both inexact in
 /// binary, and `std::fmod(0.5, 0.1)` is 0.09999999999999995, not 0. The tolerance is relative to the
 /// ratio, so it holds across a 0.1 ft interval and a 100 ft one alike.
-inline bool IntervalsCompatible(double minorFt, double majorFt, std::string* why) {
+///
+/// \p unitAbbrev labels the message with the drawing's actual configured linear unit (issue #832);
+/// the field names and the math stay "Ft" regardless — this is REQ-022's relabel-only convention, the
+/// same one the Traverse Editor already follows (issue #831) — so the default keeps every pre-existing
+/// caller (including this file's own tests) reading exactly as before.
+inline bool IntervalsCompatible(double minorFt, double majorFt, std::string* why,
+                                 const char* unitAbbrev = "ft") {
   const auto fail = [&](const std::string& msg) {
     if (why) *why = msg;
     return false;
   };
   const auto fmt = [](double v) { return FormatFt(v); };
+  const std::string u = unitAbbrev;
 
   if (!std::isfinite(minorFt) || minorFt <= 0.0)
     return fail("The minor contour interval must be greater than zero.");
@@ -171,10 +178,10 @@ inline bool IntervalsCompatible(double minorFt, double majorFt, std::string* why
     // what REQ-201 asks a rejection to be.
     const double below = std::floor(ratio) * minorFt;
     const double above = std::ceil(ratio) * minorFt;
-    return fail("A major interval of " + fmt(majorFt) + " ft is not a whole multiple of the " +
-                fmt(minorFt) + " ft minor interval, so major contours would be labelled at "
+    return fail("A major interval of " + fmt(majorFt) + " " + u + " is not a whole multiple of the " +
+                fmt(minorFt) + " " + u + " minor interval, so major contours would be labelled at "
                 "elevations no minor contour is drawn at. Use " + fmt(below) + " or " + fmt(above) +
-                " ft.");
+                " " + u + ".");
   }
   if (why) why->clear();
   return true;

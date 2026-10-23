@@ -4,7 +4,7 @@
 
 /// Ray/plane/segment math for the 3D viewport (REQ-058 / ADR-025 (d)).
 ///
-/// Pure and dependency-free — no GL, no ImGui, no CAD session state — so the picking and snapping
+/// Pure and dependency-free — no GL, no UI, no CAD session state — so the picking and snapping
 /// math is unit-testable without a window or a GL context (the ADR-002 layering pressure that
 /// already governs the traverse and hatch modules).
 ///

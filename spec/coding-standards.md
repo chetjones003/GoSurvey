@@ -215,11 +215,86 @@ Let tools enforce mechanical style so reviews can focus on substance.
   - **4267 / 4245**: `size_t`→32-bit and signed/unsigned at Win32 / ImGui / vendored
     API boundaries.
   - **4456–4459**: local / parameter / member / global shadowing — style, not a bug.
+  MSVC `/analyze` (REQ-324, blocking on PRs since D-2026-10-20-d / #977) adds these justified suppressions,
+  also in `gosurvey_target_warnings`:
+  - **6246**: shadowing reported by the analyzer — same policy as 4456–4459.
+  - **6262** (large stack frame): `/analyze:stacksize 65536` for product code (largest frame ~40 KB, not
+    recursive); the check is off for test targets, whose Catch2 bodies and headless transcript driver hold
+    large fixtures on the stack (up to ~230 KB).
+  - **4200**: zero-sized arrays in LibreDWG's vendored C header `dwg.h`.
+  - Vendored `pugixml.cpp` and `StbImage.cpp` (stb_image) are compiled with `/analyze-`.
+  There are no accepted baseline findings; a new `/analyze` or `/W4` warning fails the PR.
   Everything else — including unused variables, uninitialised reads, and every
   `/W3` correctness warning — stays on and must be fixed, not suppressed.
   `_CRT_SECURE_NO_WARNINGS` is defined (C4996 for `getenv` / `strncpy` etc.).
   Vendored third-party targets build at `/w` (`third_party/`, D-2026-08-31-b).
 - Commit formatter config to the repo; never hand-format around it.
+- `clang-tidy` runs in CI as a **blocking** check against lines changed in a PR only (`.clang-tidy`,
+  `.github/workflows/pr-checks.yml`), with `--warnings-as-errors=*` — any enabled check that fires
+  on a touched line fails the PR. The enabled groups are `bugprone-*`, `clang-analyzer-*`,
+  `performance-*`, plus `cppcoreguidelines-slicing`, `cppcoreguidelines-pro-type-member-init`,
+  `modernize-use-override`, `modernize-use-nullptr`, `modernize-use-default-member-init` (see
+  `.clang-tidy` for the exact exclusions and why). Write new code clean against these the first
+  time rather than discovering them in CI — the ones that recur most on new point-cloud/binary-IO
+  style code:
+  - **`performance-enum-size`**: give every new `enum class` an explicit narrow base type, e.g.
+    `enum class Kind : std::uint8_t { A, B };` — not just when a review flags it.
+  - **`bugprone-misplaced-widening-cast`**: when indexing with an offset (`toks[4 + i]`), make the
+    loop/index variable itself the wider type (`std::size_t i`) instead of computing the sum in a
+    narrower type and casting the result — `toks[static_cast<std::size_t>(4 + i)]` with `int i` is
+    flagged even though it "looks" safe.
+  - **`bugprone-narrowing-conversions`**: an integer divided/rounded into a floating type needs an
+    explicit `static_cast` at the point of conversion, not just at the end of an expression —
+    `static_cast<float>(std::clamp(r, 0, 255)) / 255.0f`, not `std::clamp(r, 0, 255) / 255.0f`; a
+    `long long` from `std::llround(...)` assigned into a `double` needs
+    `static_cast<double>(std::llround(...))`, not a bare assignment.
+  - **`bugprone-integer-division`**: `static_cast<double>(a / b)` (casting an already-truncated
+    integer result) is flagged whether or not the truncation was intended. If it was intended
+    (a deliberate floor/"layer index"), compute it into a named `int`/`int64_t` first and cast
+    *that* — the cast makes the intent visible to both the linter and the next reader. If it
+    wasn't intended, cast an operand before dividing instead.
+
+## 11a. ImGui windows and settings/options dialogs
+
+Every new ImGui window, popup, or modal — ribbon palette, settings dialog, report
+viewer, anything — follows these so the app feels like one program, not a pile of
+ad hoc panels each agent invented fresh (D-2026-10-14-c). Before shipping a new
+window, re-read this section and check it against the running app, not just the code.
+
+- **Move by the title bar only.** `main.cpp` sets
+  `io.ConfigWindowsMoveFromTitleBarOnly = true` once, globally — a new window never
+  needs to do anything for this; if a window feels draggable from its body, that is
+  a regression in this global flag, not something to fix per-window.
+- **Give every window a real title.** `BeginPopupModal`/`Begin` use the string before
+  `###` as the visible title and the string after `###` as the stable id, e.g.
+  `"Project Settings###traverse_project_settings"` — never let the raw id (a
+  snake_case internal string) show up as the title text a user reads.
+- **No scrollbar — everything in a settings/options window is visible at once.**
+  Use `ImGuiWindowFlags_AlwaysAutoResize` so the window always sizes to its exact
+  content, plus a generous `ImGuiStyleVar_WindowPadding` (push before `Begin`/
+  `BeginPopupModal`, pop right after — `WindowPadding` is latched at `Begin` time)
+  and `ImGuiStyleVar_ItemSpacing` (push after `Begin`, pop before `EndPopup`/`End`
+  — `ItemSpacing` is live, not latched) so auto-sizing doesn't look cramped. A
+  scrollbar on a settings window is a sign the label column is too narrow or a
+  field belongs in a secondary/advanced section, not a reason to let it scroll.
+  A content-heavy window that's read more than edited (a report, a log, a table) is
+  the one case where a fixed `SetNextWindowSize(ImVec2(w, h), ImGuiCond_Appearing)`
+  plus a real scroll region is the right call instead.
+- **Settings/options windows use `UiFormLabel` (`src/ui/CadUiHelpers.hpp`), not a
+  widget's own trailing label.** A settings/options window is one whose job is a
+  list of labeled fields a person edits (not a toolbar, not a report/log view, not
+  a canvas). For each field: `UiFormLabel("Label", kLabelW)` then the widget with an
+  `"##id"`-only label (so nothing is drawn twice), `ImGui::SetNextItemWidth` set to
+  one shared `kFieldW` for the whole window. This is what makes a column of fields
+  line up under each other the way a native Windows options dialog does, instead of
+  each row's input box starting wherever that row's label happened to end.
+- **Group related fields under `ImGui::SeparatorText`, with a small `ImGui::Dummy`
+  spacer before each section and before the closing button row** — see
+  `DrawTraverseProjectSettingsPopup` (`src/ui/CadUi_TraverseEditor.cpp`) for a
+  worked example of all of the above together.
+- **A primary action button (Done/OK/Save) is right-aligned**, not left-stuck under
+  the last field: `ImGui::SetCursorPosX(ImGui::GetWindowWidth() - buttonW -
+  ImGui::GetStyle().WindowPadding.x)`.
 
 ## 12. Tests
 

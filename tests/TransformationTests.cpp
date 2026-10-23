@@ -381,3 +381,39 @@ TEST_CASE("DRAWINGSETTINGS picks a point, a survey point or a direction for the 
   CHECK_FALSE(StartDrawingSettingsPick(st, PickTarget::RotationPoint, log));
   CancelActiveCommand(st, log);
 }
+
+// REQ-401 (GitHub issue #828): the Traverse Editor's scale factor is resolved from the drawing's
+// existing Transformation tab machinery, not a second calculation.
+TEST_CASE("ResolveTraverseScaleFactor resolves Combined/GridOnly and reports why it can't", "[req401]") {
+  LoadShippedDictionary();
+
+  // No coordinate system at all: refused with a reason, factor left at 1.0.
+  {
+    AppCommandState none;
+    double factor = -1.0;
+    const std::string err = ResolveTraverseScaleFactor(none, TraverseData::ScaleFactorKind::Combined, &factor);
+    CHECK_FALSE(err.empty());
+    CHECK(factor == 1.0);
+  }
+
+  // A real zone + reference point, same fixture REQ-360's own test proved against the NGS datasheet.
+  AppCommandState st = TexasFeetDrawing();
+  Tx& t = st.drawingSettings.transform;
+  t.refGridE = kEFt;
+  t.refGridN = kNFt;  // apply left false: REQ-401 wants the factor whether or not the transform is "on"
+
+  double gridOnly = -1.0;
+  REQUIRE(ResolveTraverseScaleFactor(st, TraverseData::ScaleFactorKind::GridOnly, &gridOnly).empty());
+  CHECK(std::abs(gridOnly - kDatasheetScaleFactor) <= 1e-8);
+
+  double combined = -1.0;
+  REQUIRE(ResolveTraverseScaleFactor(st, TraverseData::ScaleFactorKind::Combined, &combined).empty());
+  CHECK(combined == Catch::Approx(gridOnly));  // sea level factor off: Combined == GridOnly
+
+  // Sea level on: Combined now differs from GridOnly.
+  t.applySeaLevel = true;
+  t.elevation = 1000.0;
+  t.spheroidRadiusM = 20906000.0 * 1200.0 / 3937.0;
+  REQUIRE(ResolveTraverseScaleFactor(st, TraverseData::ScaleFactorKind::Combined, &combined).empty());
+  CHECK(combined != Catch::Approx(gridOnly));
+}

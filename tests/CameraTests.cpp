@@ -276,7 +276,7 @@ TEST_CASE("A degenerate viewport size yields an invalid ray, not a NaN one", "[c
 // ---------------------------------------------------------------------------
 // WorldToScreen — the projection every OVERLAY-drawn thing must use once the camera can rotate.
 //
-// Text, dimensions, survey labels, grips and snap glyphs are drawn by ImGui rather than GL, so
+// Text, dimensions, survey labels, grips and snap glyphs are drawn in the Qt overlay rather than GL, so
 // they do not inherit the renderer's MVP. Before this existed they used an axis-aligned plan
 // mapping, which meant an orbit would tilt the linework and leave every annotation behind.
 // ---------------------------------------------------------------------------

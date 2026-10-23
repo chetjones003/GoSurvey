@@ -459,7 +459,6 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
   const double py = ux;
   const double dma = static_cast<double>(ma);
   const double dmb = dma * static_cast<double>(el.ratio);
-  constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
   // A tilted ellipse (GitHub #531) leaves the XY plane, so no single elevation describes it: each
   // sample carries its own Z, exactly as the tilted-arc branch above does, and is taken through
@@ -486,6 +485,30 @@ void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n,
     xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
   CadTessellateLinetypeChainVc(xy.data(), n + 1, z, closedTurn, lt, dashPatScale, rgba, &out);
+}
+
+/// REQ-443: a spline as a chain of chords no further than \p chordTolerance from the curve, dashed to its
+/// linetype exactly as an ellipse is. A spline has an elevation per point, so every sample carries its own Z
+/// (the same per-vertex-Z chain a tilted arc uses) and the chain is never closed here: a periodic spline's
+/// tessellation already returns to its first point.
+void AppendSplineVcDashed(std::vector<float>& out, const CadSpline& sp, double chordTolerance, float dashPatScale,
+                          const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG,
+                          float defB, double viewAnchorX, double viewAnchorY) {
+  std::vector<ray3d::Vec3> pts;
+  spline::Tessellate(sp, chordTolerance, &pts);
+  if (pts.size() < 2)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  std::vector<float> xy(pts.size() * 2), zs(pts.size());
+  for (size_t i = 0; i < pts.size(); ++i) {
+    xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+    xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+    zs[i] = static_cast<float>(pts[i].z);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba, &out,
+                               zs.data());
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
@@ -571,9 +594,12 @@ void AppendSnapTriangleOutline(std::vector<float>& out, const SnapGlyphFrame& f,
   f.seg(out, h, -h, 0.f, h);
 }
 
-void AppendSnapCrossInSquare(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
-  f.seg(out, -h, 0.f, h, 0.f);
-  f.seg(out, 0.f, -h, 0.f, h);
+/// AutoCAD's Perpendicular marker: a right-angle "foot" bracket (two perpendicular legs meeting at
+/// a corner, like a carpenter's square) rather than a closed outline, so it reads as a distinct
+/// shape from the Endpoint square at a glance instead of a square with a faint inner mark.
+void AppendSnapRightAngleFoot(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, -h, -h, h, -h);
+  f.seg(out, -h, -h, -h, h);
 }
 
 /// Two diagonal segments (×); \p halfDiag is half the segment length along each diagonal from center.
@@ -674,8 +700,7 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiagonalCross(out, f, mh * 0.42f);
     break;
   case CadSnap::Kind::Perpendicular:
-    AppendSnapSquareOutline(out, f, mh);
-    AppendSnapCrossInSquare(out, f, mh * 0.55f);
+    AppendSnapRightAngleFoot(out, f, mh);
     break;
   case CadSnap::Kind::Intersection:
     // A plain X — the objects genuinely cross here (REQ-062).
@@ -715,6 +740,9 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     // A small filled-looking dot (REQ-348) — the snap answers with an actual scanned point, not a
     // computed feature, so the glyph reads as "a point" rather than borrowing another kind's shape.
     AppendSnapCircle(out, f, mh * 0.3f, snapCircSegs);
+    break;
+  case CadSnap::Kind::Nearest:
+    AppendSnapCircle(out, f, mh * 0.42f, snapCircSegs);
     break;
   }
 }
@@ -1054,31 +1082,38 @@ void ViewportRenderer::DestroyFramebuffer() {
     fbo_ = 0;
   }
   fbW_ = fbH_ = 0;
+  renderedW_ = renderedH_ = 0;
 }
 
 bool ViewportRenderer::EnsureFramebuffer(int w, int h) {
   if (w <= 0 || h <= 0)
     return false;
-  if (fbo_ && w == fbW_ && h == fbH_)
+  if (fbo_ && w <= fbW_ && h <= fbH_)
     return true;
 
+  const auto roundUp = [](int value) {
+    constexpr int allocationBlock = 256;
+    return ((value + allocationBlock - 1) / allocationBlock) * allocationBlock;
+  };
+  const int allocationWidth = roundUp(std::max(w, fbW_));
+  const int allocationHeight = roundUp(std::max(h, fbH_));
   DestroyFramebuffer();
-  fbW_ = w;
-  fbH_ = h;
+  fbW_ = allocationWidth;
+  fbH_ = allocationHeight;
 
   glGenFramebuffers(1, &fbo_);
   glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
 
   glGenTextures(1, &colorTex_);
   glBindTexture(GL_TEXTURE_2D, colorTex_);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocationWidth, allocationHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTex_, 0);
 
   glGenRenderbuffers(1, &rbo_);
   glBindRenderbuffer(GL_RENDERBUFFER, rbo_);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, allocationWidth, allocationHeight);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo_);
 
   GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -1086,7 +1121,17 @@ bool ViewportRenderer::EnsureFramebuffer(int w, int h) {
   return status == GL_FRAMEBUFFER_COMPLETE;
 }
 
+void ViewportRenderer::BlitRenderedFrame(unsigned int destinationFramebuffer, int width, int height) const {
+  if (!fbo_ || !HasRenderedFrame() || width <= 0 || height <= 0) return;
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destinationFramebuffer);
+  glBlitFramebuffer(0, 0, renderedW_, renderedH_, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  glBindFramebuffer(GL_FRAMEBUFFER, destinationFramebuffer);
+}
+
 void ViewportRenderer::SetSize(int width, int height) {
+  viewW_ = width;
+  viewH_ = height;
   EnsureFramebuffer(width, height);
 }
 
@@ -1178,7 +1223,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<std::shared_ptr<const CadPointCloud>>* pointClouds,
                                    const std::vector<EntityAttributes>* pointCloudAttrs,
                                    const PointCloudDisplaySettings* pointCloudDisplay) {
-  if (!EnsureFramebuffer(fbWidth, fbHeight))
+  viewW_ = fbWidth;
+  viewH_ = fbHeight;
+  if (!EnsureFramebuffer(viewW_, viewH_))
     return;
 
   // MSAA path is gated by "Hardware Acceleration" + "Smooth line display" (Settings → System → Graphics Performance).
@@ -1195,7 +1242,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDisable(GL_LINE_SMOOTH);
   }
   glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
-  glViewport(0, 0, fbW_, fbH_);
+  glViewport(0, 0, viewW_, viewH_);
 
   // --- Visual style (REQ-064 / ADR-026 (e)) ------------------------------------------------------
   // 2D Wireframe takes exactly the path it always took: depth test off, depth writes off, draw order
@@ -1227,7 +1274,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glClearStencil(0);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-  // Paper space: the ImGui overlay in CadUi::DrawDrawingViewport renders the sheet, viewport rects,
+  // Paper space: the Qt overlay renders the sheet, viewport rectangles,
   // and model geometry clipped+scaled inside each viewport, all pan/zoom-aware (via its w2s transform).
   // We leave the GL texture as the cleared background and let that overlay draw on top.
   //
@@ -1250,7 +1297,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // legal for both. The epilogue reads only `useMsaa`, `fbo_`, `msFbo_`, `fbW_`, `fbH_`, all
   // declared above the jump, so nothing it needs lives inside this block.
   {
-  const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
+  const float aspect = static_cast<float>(viewW_) / static_cast<float>(std::max(viewH_, 1));
   // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
   // without quantizing halfHd at extreme zooms.
   // Pan and zoom are carried by the camera now: the target is the pan point and orthoHalfH is the
@@ -1304,7 +1351,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   float model[16];
   // Vertices arrive with XY relative to the view anchor but Z ABSOLUTE, so the camera's target
   // elevation has to be subtracted here — the anchoring only ever covered X and Y. Without it the
-  // GL geometry and the ImGui overlay (which projects through Camera::WorldToScreen, and that DOES
+  // GL geometry and the Qt overlay (which projects through Camera::WorldToScreen, and that DOES
   // subtract targetZ) drift apart vertically as soon as the view is panned while orbited, so the
   // crosshair and snap glyph stop landing on the lines they belong to.
   const float panZf = static_cast<float>(cam.targetZ);
@@ -1662,7 +1709,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glUniform4f(locCol, 0.14f, 0.14f, 0.15f, 0.28f);
+    glUniform4f(locCol, tuning.gridR, tuning.gridG, tuning.gridB, tuning.gridA);
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
     glBindVertexArray(0);
@@ -2405,7 +2452,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
       if (!fr.isSolid())
-        continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
+        continue;  // line-pattern hatches are drawn as clipped lines in the viewport overlay (REQ-043)
       // REQ-084 (d): a fill isolated out is not drawn.
       if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
           CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
@@ -2675,6 +2722,25 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                                    tuning.arcCircleSmoothnessCap));
             AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, e.z, dashPatScale, attr, lr,
                                    kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
+        // REQ-443 splines: sampled to a quarter of a pixel at this zoom (never coarser than the 0.002 ft
+        // REQ-101 holds the curve to), so a zoomed-in spline is smooth and a zoomed-out one is cheap.
+        if (extended->splines) {
+          const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
+          const double splineTol = std::min(kSplineSampleTolerance, std::max(1e-6, 0.25 * pixelWorld));
+          for (size_t i = 0; i < extended->splines->size(); ++i) {
+            EntityAttributes attr{};
+            if (extended->splineAttrs && i < extended->splineAttrs->size())
+              attr = (*extended->splineAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+            AppendSplineVcDashed(cpuVcLines_, (*extended->splines)[i], splineTol, dashPatScale, attr, lr,
+                                 kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -3013,7 +3079,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- Window selection preview (semi-transparent fill + outline) ---
   // The selection box used to be drawn here, as a world-space rectangle on the XY plane. It moved to
-  // a screen-space ImGui overlay in CadUi (TASK-047): world geometry projects to a parallelogram
+  // a screen-space viewport overlay (TASK-047): world geometry projects to a parallelogram
   // once the view is orbited, and the hit test forms an axis-aligned SCREEN rectangle from the two
   // drag corners — so the drawn box and the region that selects disagreed in every non-plan view.
 
@@ -3177,7 +3243,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // Midpoint, Perpendicular) shared between both.
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
-    BuildSnapOverlayLines(*snapOverlay, cam, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
+    BuildSnapOverlayLines(*snapOverlay, cam, halfH, viewH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       if (snapOverlay->solid)
@@ -3494,7 +3560,7 @@ finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
-  // REQ-341: the clip must not outlive this call. ImGui draws the whole UI immediately after with
+  // REQ-341: the clip must not outlive this call. The UI draws immediately afterward with
   // its own shaders, which do not write `gl_ClipDistance` — and a shader that leaves it unwritten
   // while GL_CLIP_DISTANCE0 is enabled has UNDEFINED clip distances, so leaving this on can delete
   // arbitrary parts of the interface. Unconditional, and outside the geometry block so the
@@ -3504,12 +3570,14 @@ finish_render:
   if (useMsaa && msFbo_ && fbo_) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_);
-    glBlitFramebuffer(0, 0, fbW_, fbH_, 0, 0, fbW_, fbH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBlitFramebuffer(0, 0, viewW_, viewH_, 0, 0, viewW_, viewH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   }
 
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  renderedW_ = viewW_;
+  renderedH_ = viewH_;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3813,8 +3881,8 @@ bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThu
   glUseProgram(0);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   // Leave the viewport as the scene pass left it, so nothing downstream inherits a 64 px viewport.
-  if (fbW_ > 0 && fbH_ > 0)
-    glViewport(0, 0, fbW_, fbH_);
+  if (viewW_ > 0 && viewH_ > 0)
+    glViewport(0, 0, viewW_, viewH_);
   return true;
 }
 
@@ -3824,11 +3892,11 @@ bool ViewportRenderer::EnsurePartThumbnail(const std::string& key, const PartThu
 // RenderScene for the drawing it wants pictured. Best-effort: returns false on any failure and
 // writes nothing. This is the only gl* path for the feature; keeping it here holds invariant §11.6.
 bool ViewportRenderer::CaptureThumbnailBmp(const char* pathUtf8, int maxDim) const {
-  if (!pathUtf8 || !pathUtf8[0] || fbo_ == 0 || fbW_ < 4 || fbH_ < 4 || maxDim < 8)
+  if (!pathUtf8 || !pathUtf8[0] || fbo_ == 0 || viewW_ < 4 || viewH_ < 4 || maxDim < 8)
     return false;
 
-  const int srcW = fbW_;
-  const int srcH = fbH_;
+  const int srcW = viewW_;
+  const int srcH = viewH_;
   std::vector<unsigned char> src(static_cast<size_t>(srcW) * static_cast<size_t>(srcH) * 4u);
   glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo_);
   glReadBuffer(GL_COLOR_ATTACHMENT0);

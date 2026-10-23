@@ -13,13 +13,13 @@
 /// no cue for where a typed X or Y will actually go. The axes ARE that cue — an arm that
 /// foreshortens to nothing is telling you it points at the viewer.
 ///
-/// Pure and dependency-free (no ImGui, no GL, no AppCommandState) so the projection is unit-testable
+/// Pure and dependency-free (no UI, no GL, no AppCommandState) so the projection is unit-testable
 /// without a window, the same rule `Camera` itself follows (ADR-002). The caller owns the drawing.
 namespace crosshair3d {
 
 /// One projected axis, as a screen-space delta from the crosshair centre.
 ///
-/// Screen Y grows DOWNWARD (the ImGui convention the viewport draws in), which is why the up term
+/// Screen Y grows DOWNWARD (the viewport screen convention), which is why the up term
 /// is negated when this is built.
 struct Arm {
   float dx = 0.f;
@@ -36,7 +36,7 @@ struct Triad {
   Arm z;
 };
 
-/// Axis colours, as plain RGB bytes so this header stays free of ImGui (which owns `ImU32`).
+/// Axis colours, as plain RGB bytes so this header stays independent of UI colour types.
 ///
 /// The near-universal CAD convention — X red, Y green, Z blue — so neither the crosshair nor the
 /// UCS icon needs a legend. **They are defined once, here, and used by both**: the icon and the

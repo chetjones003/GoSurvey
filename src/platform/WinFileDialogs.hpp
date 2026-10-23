@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
+#include <vector>
 
 /// Point file for import — `.csv` **or** `.txt`, which REQ-083 treats as one format. UTF-8 path
 /// output; returns false if cancelled or unavailable (non-Windows). The `Csv` in the name is
@@ -39,8 +41,46 @@ bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
 /// UTF-8 path for saving a plotted PDF; suggests default file name.
 bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
+/// UTF-8 path for saving a plain-text report (REQ-423); suggests default file name.
+bool BrowseSaveFileTxtUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// UTF-8 path for saving an .rtf report (REQ-423); suggests default file name.
+bool BrowseSaveFileRtfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
 /// Autodesk Field Book raw-data file (*.fbk).
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
+
+/// MicroSurvey STAR*NET data file for import (issue #846, Phase B).
+bool BrowseOpenFileStarNetUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Carlson SurvCE/SurvPC raw data file (*.rw5) for import (issue #846, Phase B).
+bool BrowseOpenFileRw5Utf8(char* utf8Out, size_t utf8Cap);
+
+/// Trimble JobXML (*.jxl / *.xml) for import (issue #846, Phase B).
+bool BrowseOpenFileJobXmlUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Multi-select variants of the four raw-data pickers above (issue #848 follow-up):
+/// a .gsdat file can hold the merged legs of several field-day raw files, so the
+/// LSA Editor's Import actions let the user pick more than one file of the same
+/// format in a single dialog. Returns false (outPaths left empty) if cancelled or
+/// unavailable (non-Windows); outPaths is cleared on every call.
+bool BrowseOpenFilesFbkUtf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesStarNetUtf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesRw5Utf8(std::vector<std::string>& outPaths);
+bool BrowseOpenFilesJobXmlUtf8(std::vector<std::string>& outPaths);
+
+/// REQ-403 (#834): a Traverse Editor save file (`.gstrav`) to load.
+bool BrowseOpenFileGstravUtf8(char* utf8Out, size_t utf8Cap);
+
+/// REQ-403 (#834): where to save a Traverse Editor session (`.gstrav`).
+bool BrowseSaveFileGstravUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// LSA Editor command-text document (`.gsdat`) to open — the GSTC source text
+/// itself, as a plain file, distinct from the structured `.gstrav` save format.
+bool BrowseOpenFileGsdatUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Where to save a `.gsdat` command-text document.
+bool BrowseSaveFileGsdatUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
 /// glTF / GLB 3D model for import (REQ-065).
 bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
@@ -48,6 +88,19 @@ bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap);
 /// Block definition import — `.dxf` or `.dwg` (WBLOCK drawings included).
 bool BrowseOpenFileBlockUtf8(char* utf8Out, size_t utf8Cap);
 
-/// E57 point-cloud scan for import (REQ-172). PTS/PTX/LAS/LAZ are future increments (D-2026-09-17-d
-/// delivers E57 first) — not offered here yet.
-bool BrowseOpenFileE57Utf8(char* utf8Out, size_t utf8Cap);
+/// Any point-cloud scan for import — E57, PTS, PTX, LAS, or LAZ (REQ-172). POINTCLOUDATTACH is
+/// the single import command for every format; the dialog's combined filter lists all five
+/// extensions and the caller picks the reader by the chosen file's own extension.
+bool BrowseOpenFilePointCloudUtf8(char* utf8Out, size_t utf8Cap);
+
+/// UTF-8 path for exporting the selected point cloud(s) to PTS; suggests a default file name.
+bool BrowseSaveFilePtsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// UTF-8 path for exporting the selected point cloud(s) to PTX; suggests a default file name.
+bool BrowseSaveFilePtxUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// UTF-8 path for exporting the selected point cloud(s) to LAS; suggests a default file name.
+bool BrowseSaveFileLasUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+/// UTF-8 path for exporting the selected point cloud(s) to LAZ; suggests a default file name.
+bool BrowseSaveFileLazUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);

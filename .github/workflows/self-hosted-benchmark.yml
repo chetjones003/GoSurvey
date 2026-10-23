@@ -1,0 +1,70 @@
+name: self-hosted benchmark
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gosurvey-victus-benchmark
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    name: laptop / environment, build and test
+    if: github.repository == 'chetjones003/GoSurvey' && github.actor == 'chetjones003'
+    runs-on: [self-hosted, Windows, X64, gosurvey-victus-ci]
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"
+    env:
+      NINJA_STATUS: '[%f/%t; %r running; %e s] '
+    steps:
+      - name: Require a normal interactive Windows account
+        run: |
+          $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Stop this runner and restart it from a normal PowerShell window.'
+          }
+          if ([Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) {
+            throw 'The initial GUI benchmark requires a logged-in desktop, not a service.'
+          }
+
+      - name: Check out the trusted benchmark revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve the same PR base used by hosted analysis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $base = gh api repos/chetjones003/GoSurvey/pulls/1047 --jq .base.sha
+          if ($LASTEXITCODE -ne 0 -or $base -notmatch '^[0-9a-f]{40}$') { throw 'Could not resolve the PR base.' }
+          git fetch --no-tags --depth=1 origin $base
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch the PR base.' }
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "BASE_SHA=$base"
+
+      - name: Measure builds, full tests and diff-scoped analyzers
+        run: ./tools/benchmark-windows-runner.ps1
+
+      - name: Upload laptop benchmark evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: laptop-benchmark-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: warn
+          include-hidden-files: true
+          path: |
+            build/artifacts/runner-benchmark/
+            build/artifacts/catch/
+            build/artifacts/coverage-*.json
+            build/artifacts/qt-editor/**/discovery.json
+            build/.cmake/release/Testing/Temporary/LastTest.log
+            build/.cmake/release/Testing/Temporary/LastTestsFailed.log
+            build/artifacts/qt-editor/**/qt-tests.xml
+            build/artifacts/qt-editor/**/qt-tests.log

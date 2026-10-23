@@ -499,7 +499,7 @@ A change is rejected if it breaks any of these:
   CSV) stay model-only. (c) **Snapping** in paper space resolves against paper-space
   entities only; snapping to model geometry shown inside viewports is deferred.
   (d) **Persistence:** paper-space entities serialize per layout in the native `.gs`
-  (REQ-031/037); DXF persistence deferred. No new dependency, no new global.
+  (REQ-031/037); DXF persistence deferred. No new dependency, no new global. Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h).
 - Alternatives: (a) one global entity store tagged with a space id — rejected: breaks
   single-owner (§10.1), and per-layout ownership matches how viewports/frozen-layers are
   already owned. (b) a separate parallel command set for paper geometry — rejected:
@@ -533,7 +533,7 @@ A change is rejected if it breaks any of these:
   `PaperLayout` remains the single visible owner (§10.1). These render through the
   pan/zoom-aware ImGui paper overlay (consistent with ADR-009's revert of the GL paper
   pass), participate in paper selection/snap/edit, and **persist per layout in `.gs`**
-  (REQ-031/037 pattern); DXF persistence of the new paper types stays **deferred**.
+  (REQ-031/037 pattern); DXF persistence of the new paper types stays **deferred**. Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h).
   (b) **Copy/paste routes by active space** (the ADR-008/009 active-space branch
   pattern): copy reads the model selection+arrays in model/floating-model space, or the
   active layout's selection+stores in paper space; paste writes into whichever space is
@@ -582,7 +582,7 @@ A change is rejected if it breaks any of these:
 - Consequences: the paper selection/box-select/Properties/draw/modify branches each grow to cover all
   paper object types; one new shared inline-text-edit helper reused by model + paper; the text-anchor
   fix corrects paper text picking and snapping. DXF persistence of paper objects stays deferred (.gs
-  only). Delivered incrementally (Phase 1 selection/text-pick/Properties, Phase 2 in-place editor,
+  only). Addendum (2026-10-20, D-2026-10-20-a): paper-space persistence is restated against DWG and DXF (REQ-113); the `.gs` wording in this decision is historical, and `.gs` is retired (D-2026-09-03-h). Delivered incrementally (Phase 1 selection/text-pick/Properties, Phase 2 in-place editor,
   Phase 3 grips, Phase 4 draw + modify) so each slice is independently verifiable.
 
 - Addendum (2026-06-18): solid fills (`CadFilledRegion`, ADR-011) are now clipboard-copyable too.
@@ -1641,7 +1641,7 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `AppCommandState`, not a new global (§11.3). PKCE's SHA-256 needs a byte-buffer overload beside the
   existing file-hashing `ComputeFileSha256` in `HttpFetch.cpp` (same BCrypt call, different input),
   plus a small base64url-encode helper — neither exists today.
-  (e) **A new, separate Cloudflare Worker (`tools/accounts-worker/`) serves REQ-092's license lookup**,
+  (e) **A new, separate Cloudflare Worker (`workers/accounts/` in the private gosurveycad-site repo) serves REQ-092's license lookup**,
   not the existing `telemetry-worker`. The two have opposite trust models: the ping endpoint is
   public and unauthenticated by design (regex-whitelisted anonymous fields); this one requires a
   verified Auth0 JWT (checked against Auth0's JWKS — signature, `exp`, `aud`/`iss`) on every request.
@@ -1950,13 +1950,18 @@ amended 2026-10-01 D-2026-10-01-f)
       UTF-8 JSON). GoSurvey Open prefers the trailer when present; otherwise REQ-170 CAD import.
   (c) **No second schema and no new dictionary/EED mapping in this increment.** Per-field EED /
       XRECORD (dwg-plan P-01..P-05) remains a later option. DM-08 is still not claimed.
-  (d) **`.gs` APIs stay.** Workspace template and an explicit `.gs` path still use `GsIo`.
-      **Amended D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
+  (d) **The original GoSurvey JSON serializer stays for internal document payloads.**
+      The earlier decision to preserve standalone `.gs` APIs was superseded by
+      **D-2026-09-03-h / issue #264 (2026-09-04):** standalone `.gs` as an openable
       document is retired outright — no explicit `.gs` path anywhere, including WBLOCK/BLOCKIMPORT
       (block-library replacement spun to issue #284). The workspace template moved to
       its own narrower format, `.gst`, with a dedicated reader/writer
       (`SaveGoSurveyTemplateFile`/`LoadGoSurveyTemplateFile`) — same JSON shape, no file
       association. `BuildRoot`/`LoadGoSurveyFromJsonUtf8` (clause (b)) are unaffected.
+      **Clarified D-2026-10-20-d:** all remaining `.gs` extension language in active requirements,
+      user documentation, and source comments must identify legacy compatibility or internal
+      serialization explicitly. Current GoSurvey drawings use `.dwg`; standalone `.gs` read,
+      write, and open behavior is not part of the product.
   (e) **Headless SAMEFILE** on two GoSurvey DWGs compares **trailer JSON**, not the synthesized CAD
       body, because LibreDWG encode is not the document-identity oracle (REQ-079 still applies to
       the JSON tree).
@@ -4796,7 +4801,63 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   (e.g. Esri, which needs a key) is a new entry in the map table plus a key decision, with no change
   to the pipeline.
 
-### ADR-062 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
+### ADR-070 — A grading group is an ordinary REQ-069 surface built from REQ-398's baked output, not a new volume engine or a live-linked overlay   (2026-10-09, accepted)
+
+- **Status:** accepted (2026-10-09, D-2026-10-09-b; revised same day after discovering REQ-398
+  already exists — see REQ-404's revision note). Backs REQ-404 (GitHub issue #802 follow-up).
+  **An earlier version of this ADR also backed a withdrawn-REQ-403** ("grading object": footprint +
+  criteria + dynamic re-projection), written without first finding that REQ-398 ("Side slope
+  grading to a surface: the daylight line", accepted 2026-10-05) already implements baseline/
+  slopes/surface-target grading as a one-shot `GRADING` command. withdrawn-REQ-403 duplicated REQ-398 with a
+  conflicting design (dynamic/live vs. REQ-398's deliberate baked/one-shot) and is withdrawn
+  entirely, not merely superseded. This ADR is rewritten to cover only REQ-404's actual remaining
+  question: how to build the grading-GROUP surface from REQ-398's existing, baked output.
+- **Context.** REQ-398 already produces, per grading, a baseline (feature line) and a daylight
+  line (baked, non-live geometry). REQ-398's own Statement names the "larger and more valuable
+  follow-on" it deliberately does not cover: a **graded design surface** built from several
+  gradings' baseline/daylight-line pairs, which would give volumes, contours and statistics for
+  free from tools already built (REQ-073/074/075). The question is how to build that surface
+  without duplicating REQ-073's volume engine or re-opening REQ-398's "baked, not live" decision.
+- **Decision.**
+  (a) **A grading group's surface is built through the SAME surface-construction path any other
+      surface uses** (REQ-068's triangulator, fed the ground bounded by each member grading's
+      baseline and daylight line as input geometry), reusing REQ-069's generation-staleness +
+      cooperative-cancellation rebuild machinery (architecture §8) rather than a bespoke
+      grading-surface path. Consequence: a grading group surface is interchangeable with any other
+      surface everywhere surfaces are consumed — REQ-073 volumes, REQ-074 spot elevation, REQ-075
+      Surface Manager — with zero new code in any of those three.
+  (b) **No new volume-compute code.** REQ-404 states explicitly that cut/fill/net for a grading
+      group is answered by handing its surface to REQ-073's existing comparison, not by a
+      grading-specific volume formula. The only genuinely new compute is REQ-404's
+      baseline/daylight-line-to-TIN assembly step.
+  (c) **The group surface inherits REQ-398's baked-only rule, not REQ-069's live-rebuild rule.** A
+      member grading's daylight line does not update when its baseline or target surface changes
+      (REQ-398, deliberate); therefore a grading group surface built from that output cannot be
+      more live than its inputs, and is rebuilt only on group-membership change or an explicit
+      member re-run — never silently on an upstream edit REQ-398 itself does not react to. This is
+      the one point where grading groups do NOT mirror REQ-069's surface-breakline dynamic-rebuild
+      precedent, and the mismatch is deliberate, not an oversight: tracking a baked REQ-398 output
+      live would require re-opening REQ-398's own accepted decision first.
+  (d) **No separate "grading object" entity, no "grading criteria" store.** Both were part of the
+      withdrawn-REQ-403 and are not reintroduced; REQ-404 consumes REQ-398's existing baseline
+      (feature line) and daylight-line output directly.
+- **Alternatives.** (1) *A second, grading-specific volume engine* (optimized for cut/fill against
+  a single target rather than general surface-to-surface): rejected — REQ-073 already answers
+  exactly this question once a group has a surface, and a second engine is a second thing to keep
+  correct. (2) *Making the group surface track live edits to a member's baseline/target*: rejected
+  — would require amending REQ-398's own accepted "baked, not live" decision, which is out of
+  scope for a group-surface ADR and not requested by issue #802. (3) *Reintroducing a persistent
+  "grading object" entity* (the withdrawn-REQ-403 approach) as the group's membership unit instead
+  of REQ-398's existing baked output: rejected — duplicates a requirement that already exists and
+  already shipped a command for it.
+- **Consequences.** Grading-group's new surface area is small: assembling REQ-398's baseline/
+  daylight-line pairs into one TIN. Everything downstream of "grading group has a surface" is
+  free. Cost: a grading group surface is only as current as the last time each member grading was
+  (re-)run — editing a baseline or target surface afterward silently desyncs the group surface
+  until that member is re-run and re-added, which is REQ-398's own limitation inherited rather than
+  a new one introduced here.
+
+### ADR-069 — Surface-referencing geometry is BAKED by default; a link is opt-in, stamped by stable entity id, marked in the drawing, and degrades to plain geometry when its surface goes   (2026-09-28, accepted)
 
 - **Status:** accepted (2026-09-28). Backs GitHub issue #150 (3D Phase 7) acceptance 6, and gates
   every other reference item in that phase. Recorded before any of it was implemented.
@@ -4999,3 +5060,40 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   logic is a pure scheduler and cache that can be unit-tested without a window. Cost: a dense CAD-plot
   PDF page can take longer than one frame to render, so the viewer shows the stand-in first; this is
   the designed behaviour, and the bench reports the worst frame so a regression is visible.
+
+### ADR-068 — Admin dashboard: separate Worker, Cloudflare Access, unlinked subdomain   (2026-10-11, accepted)
+
+- **Status:** accepted (D-2026-10-11-c). Backs REQ-402.
+- **Context.** The operator needs one web view over telemetry (`gosurvey-telemetry` D1, REQ-080),
+  accounts (`gosurveycad-db` D1, REQ-091/092) and Workers logs, reachable only by him. Three candidate
+  auth designs were considered: Cloudflare Access, a shared password checked in Worker code, or reusing
+  Auth0 with a hardcoded allow-listed user id.
+- **Decision.**
+  (a) **Authentication is Cloudflare Access**, not application code. Access sits in front of the
+      request at Cloudflare's edge — a rejected request never reaches the Worker, so there is no
+      password to brute-force and no session logic to get wrong. The alternatives (shared password,
+      Auth0 allow-list) both put the operator's own access control inside code this repo maintains,
+      for no benefit over a config Cloudflare already provides for free.
+  (b) **A separate Worker, `admin-api`** (`workers/admin/` in the private gosurveycad-site repo), not a route bolted onto the existing
+      `gosurveycad-api` accounts Worker. It is bound to both D1 databases as **read-only** data access —
+      it has no write path to either. Keeping it separate means the Access policy, and the blast radius
+      of a bug in it, cannot touch the accounts Worker's own `/api/me`/`/api/profile` routes.
+  (c) **Reachable only at an unlinked subdomain, `admin.gosurveycad.com`.** This is defense in depth,
+      not the access control itself (that is (a)): no page on the public site links to it, and it is
+      excluded from `sitemap.xml`/`robots.txt`. A subdomain was chosen over an obscure path so it stays
+      architecturally separate from the public site's own routing and is easy to point Access at as a
+      whole.
+  (d) **The public marketing site moved to a separate private repo** (`chetjones003/gosurveycad-site`)
+      as a prerequisite, so that `admin.gosurveycad.com` (and anything else about this dashboard) never
+      appears in GoSurvey's public git history. This repo's own docs point to the new repo; the deploy
+      mechanism (`wrangler pages deploy`, by hand) is unchanged.
+- **Alternatives.** (1) *Shared password in Worker code:* simplest to build, but it is secret-management
+  the operator must maintain and it can be brute-forced; rejected. (2) *Reuse Auth0 + allow-list:* adds a
+  dependency on the regular user-login system for an owner-only surface; rejected. (3) *Obscure path
+  instead of a subdomain:* works but mixes admin routing into the public site's own Worker/Pages project;
+  rejected in favor of (b)'s clean separation.
+- **Consequences.** No new secrets in this repo (Access is configured in the Cloudflare dashboard/API,
+  outside the build). The admin Worker can be deployed, broken, or redeployed without any risk to the
+  accounts or telemetry Workers' own request paths. Cost: three Cloudflare Workers/Pages projects to
+  operate instead of two, and Access policy/DNS setup lives outside version control — documented in
+  `docs/` instead.

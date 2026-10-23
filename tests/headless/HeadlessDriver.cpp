@@ -1,21 +1,11 @@
 // gosurvey_headless — the REQ-203 transcript driver.
 //
-// Executes a transcript (a text file of command-line submissions and viewport picks) against a real
-// AppCommandState, with no window, no GPU and no display, and reports what the drawing became.
+// Executes transcripts through the same command entry points as the Qt editor. It creates no
+// editor window; Qt's offscreen text layout supplies the annotation measurements used by the app.
 // The grammar is documented in docs/fuzz-harness.md §2.
-//
-// Two things about this program are deliberate and easy to undo by accident:
-//
-//  1. **It drives the SAME entry points the GUI drives** — ProcessCommandLineSubmit and
-//     SubmitViewportPick — rather than calling command internals. A driver that reached past the
-//     command line would test a path no user can take, and would keep passing after the real one
-//     broke.
-//  2. **It creates an ImGui context and loads the application's font** (ADR-031 (c′)). Loading a
-//     `.gs` measures survey label text and stores the result as geometry, so a driver without a
-//     font would silently produce different geometry from the GUI — which is exactly the class of
-//     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "QtText.hpp"
 #include "viewport/CadRubberPreview.hpp"
 #include "CadBlocks.hpp"
 // CadCoord::WorldFromLocal, for EXPECT LINEXYZ (REQ-154) and EXPECT VERTEX / EXPECT ELEVATION
@@ -33,14 +23,16 @@
 #include "ViewportPickPolicy.hpp"
 #include "docinvariants.hpp"
 
-#include <imgui.h>
 
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <filesystem>
 #include <algorithm>
+#include <QGuiApplication>
+#include <QCoreApplication>
 #include <array>
 #include <tuple>
 #include <fstream>
@@ -360,7 +352,9 @@ bool ExtractedContoursMatchDisplay(const AppCommandState& st) {
   for (size_t p = 0; p < plCount; ++p) {
     const int b = st.userPolylineOffsets[p];
     const int e = st.userPolylineOffsets[p + 1];
-    const auto vx = [&](int v, int c) { return st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]; };
+    const auto vx = [&](int v, int c) {
+      return static_cast<float>(st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]);
+    };
     for (int v = b; v + 1 < e; ++v)
       baked.push_back(canon(vx(v, 0), vx(v, 1), vx(v, 2), vx(v + 1, 0), vx(v + 1, 1), vx(v + 1, 2)));
     // A closed polyline's closing segment is implied, exactly as the display buffer's is.
@@ -404,6 +398,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
 
   if (verb == "NEW") {
     run.st = AppCommandState{};
+    run.st.measureAnnotationText = MeasureQtText;
     LoadBundledBlockLibrary(run.st, run.log);
     run.log.push_back("[driver] NEW");
   } else if (verb == "SPACE") {
@@ -445,7 +440,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     }
   } else if (verb == "EXPORT" || verb == "IMPORT") {
     // EXPORT <FORMAT> <path> / IMPORT <FORMAT> <path> — the interchange formats, as distinct from
-    // OPEN/SAVEAS which are the drawing's own `.gs`. Two words rather than an `EXPORTDXF` verb so
+    // OPEN/SAVEAS which are the drawing's own DWG file with embedded GoSurvey payload. Two words rather than an `EXPORTDXF` verb so
     // the parser-fuzzing stage can add GLTF and STL without inventing a verb each
     // (docs/fuzz-harness.md §8 stage 6).
     //
@@ -804,7 +799,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
       // HatchPick case does — same two calls, same order, same miss message. Until this existed no
       // filled region could be created headless, so nothing about hatches had a transcript at all:
-      // not their rendering, not their Z, not their round trip through `.gs` or DXF.
+      // not their rendering, not their Z, not their round trip through `document JSON payload` or DXF.
       //
       // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
       // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
@@ -1343,7 +1338,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
     //
     // Not an assertion. Label PLACEMENT is a relationship between two rectangles, and no
-    // `EXPECT <count>` can express it while a `.gs` diff shows it only as eight bare floats. This
+    // `EXPECT <count>` can express it while a `document JSON payload` diff shows it only as eight bare floats. This
     // prints the two numbers that decide whether the placement rule holds — the box's offset from
     // its point, and the box's size — so that a rule like "the anchor does not move when the text
     // gets longer" can be read straight off the log.
@@ -1664,7 +1659,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     } else if (what == "SAMEFILE" || what == "DIFFERENTFILE") {
       const bool wantSame = (what == "SAMEFILE");
-      // EXPECT SAMEFILE <a> <b> — byte comparison. This is what makes the `gs-roundtrip` oracle
+      // EXPECT SAMEFILE <a> <b> — compares embedded GoSurvey payload JSON. This is what makes the document-payload oracle
       // expressible in a transcript rather than needing a separate build-system step, which in turn
       // is what lets the fuzzer generate it.
       //
@@ -1717,7 +1712,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     } else if (what == "FILECONTAINS" || what == "FILELACKS") {
       // EXPECT FILECONTAINS <path> "<text>"   /   EXPECT FILELACKS <path> "<text>"
       //
-      // A literal substring test over a saved document, reading the `.gs` JSON out of a DWG trailer
+      // A literal substring test over a saved document, reading the `document JSON payload` JSON out of a DWG trailer
       // exactly as SAMEFILE above does, so it works on either extension.
       //
       // It exists for a shape of acceptance condition no count and no byte comparison can state:
@@ -2399,8 +2394,10 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       double gy1 = 0.;
       double gx2 = 0.;
       double gy2 = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], &gx1, &gy1);
-      CadCoord::WorldFromLocal(run.st, run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], &gx2, &gy2);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base]),
+                                static_cast<float>(run.st.userLinesFlat[base + 1]), &gx1, &gy1);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userLinesFlat[base + 3]),
+                                static_cast<float>(run.st.userLinesFlat[base + 4]), &gx2, &gy2);
       const double got[6] = {gx1, gy1, static_cast<double>(run.st.userLinesFlat[base + 2]),
                              gx2, gy2, static_cast<double>(run.st.userLinesFlat[base + 5])};
       const char* names[6] = {"x1", "y1", "z1", "x2", "y2", "z2"};
@@ -2432,12 +2429,12 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYBULGE: vertex index out of range for that polyline", sourceLine);
         return false;
       }
-      const size_t gv = static_cast<size_t>(v0 + vi);
+      const size_t gv = static_cast<size_t>(v0) + static_cast<size_t>(vi);
       const double got = gv < run.st.userPolylineVertsBulge.size()
                              ? static_cast<double>(run.st.userPolylineVertsBulge[gv])
                              : 0.0;
@@ -2446,6 +2443,50 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         std::snprintf(msg, sizeof(msg), "EXPECT POLYBULGE %ld %ld: is %.6f, expected %.6f", pi, vi, got, want);
         Fail(run, "expect", msg, sourceLine);
         return false;
+      }
+      return true;
+    } else if (what == "PAPERPOLYVERT") {
+      // EXPECT PAPERPOLYVERT <layoutIndex> <polylineIndex> <vertexIndex> <x> <y> <z> — one
+      // native paper-space polyline vertex. Paper coordinates are already expressed in sheet inches.
+      std::istringstream is(arg);
+      long li = -1, pi = -1, vi = -1;
+      double want[3] = {0, 0, 0};
+      if (!(is >> li >> pi >> vi) || !(is >> want[0] >> want[1] >> want[2])) {
+        Fail(run, "parse", "EXPECT PAPERPOLYVERT needs <layoutIndex> <polylineIndex> <vertexIndex> <x> <y> <z>",
+             sourceLine);
+        return false;
+      }
+      if (li < 0 || static_cast<size_t>(li) >= run.st.paperLayouts.size()) {
+        Fail(run, "expect", "EXPECT PAPERPOLYVERT: no layout at index " + std::to_string(li), sourceLine);
+        return false;
+      }
+      const PaperLayout& layout = run.st.paperLayouts[static_cast<size_t>(li)];
+      if (pi < 0 || static_cast<size_t>(pi) + 1 >= layout.paperPolyOffsets.size()) {
+        Fail(run, "expect", "EXPECT PAPERPOLYVERT: no polyline at index " + std::to_string(pi), sourceLine);
+        return false;
+      }
+      const int v0 = layout.paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = layout.paperPolyOffsets[static_cast<size_t>(pi) + 1];
+      if (vi < 0 || vi >= v1 - v0) {
+        Fail(run, "expect", "EXPECT PAPERPOLYVERT: vertex index out of range for that polyline", sourceLine);
+        return false;
+      }
+      const size_t gv = static_cast<size_t>(v0 + vi) * 3;
+      if (gv + 2 >= layout.paperPolyVerts.size()) {
+        Fail(run, "expect", "EXPECT PAPERPOLYVERT: vertex storage out of range", sourceLine);
+        return false;
+      }
+      const double got[3] = {layout.paperPolyVerts[gv], layout.paperPolyVerts[gv + 1],
+                             layout.paperPolyVerts[gv + 2]};
+      const char* names[3] = {"x", "y", "z"};
+      for (int k = 0; k < 3; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[224];
+          std::snprintf(msg, sizeof(msg), "EXPECT PAPERPOLYVERT %ld %ld %ld: %s is %.6f, expected %.6f",
+                        li, pi, vi, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
       }
       return true;
     } else if (what == "POLYVERT") {
@@ -2466,7 +2507,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       if (vi < 0 || vi >= (v1 - v0)) {
         Fail(run, "expect", "EXPECT POLYVERT: vertex index out of range for that polyline", sourceLine);
         return false;
@@ -2477,7 +2518,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       double gx = 0., gy = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userPolylineVerts[gv], run.st.userPolylineVerts[gv + 1], &gx, &gy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userPolylineVerts[gv]),
+                                static_cast<float>(run.st.userPolylineVerts[gv + 1]), &gx, &gy);
       const double got[3] = {gx, gy, static_cast<double>(run.st.userPolylineVerts[gv + 2])};
       const char* names[3] = {"x", "y", "z"};
       for (int k = 0; k < 3; ++k) {
@@ -2536,7 +2578,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         return false;
       }
       const int v0 = run.st.userPolylineOffsets[static_cast<size_t>(pi)];
-      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int v1 = run.st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
       long got = 0;
       for (int vi = v0; vi < v1; ++vi)
         if (static_cast<size_t>(vi) < run.st.userPolylineVertsBulge.size() &&
@@ -2574,8 +2616,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
       double gcx = 0.;
       double gcy = 0.;
-      CadCoord::WorldFromLocal(run.st, run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1], &gcx,
-                               &gcy);
+      CadCoord::WorldFromLocal(run.st, static_cast<float>(run.st.userCirclesCxCyZR[base]),
+                               static_cast<float>(run.st.userCirclesCxCyZR[base + 1]), &gcx, &gcy);
       float nx = 0.f;
       float ny = 0.f;
       float nz = 1.f;
@@ -2676,8 +2718,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         if (aix < 0)
           continue;
         const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
-        const float dx = a.boxMinX - p.easting;
-        const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - p.northing;
+        const float dx = a.boxMinX - static_cast<float>(p.easting);
+        const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - static_cast<float>(p.northing);
         const float w = a.boxMaxX - a.boxMinX;
         ++labels;
         if (dx < 0.f) {
@@ -2722,6 +2764,76 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "the fixture must vary the description text",
              sourceLine);
         return false;
+      }
+    } else if (what == "PAPERLINE") {
+      // EXPECT PAPERLINE <layout> <line> <x0> <y0> <x1> <y1> — paper-inch endpoints in one
+      // specific layout. Counts alone cannot prove TRIM shortened a paper line or stayed out of
+      // another layout, so this reads the same layout-owned line store the renderer and document JSON payload writer use.
+      std::istringstream is(arg);
+      long layoutIx = -1, lineIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> lineIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERLINE needs <layout> <line> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || lineIx < 0) {
+        Fail(run, "expect", "PAPERLINE: layout or line index is out of range", sourceLine);
+        return false;
+      }
+      const auto& lines = run.st.paperLayouts[static_cast<size_t>(layoutIx)].paperLines;
+      const size_t base = static_cast<size_t>(lineIx) * 6;
+      if (base + 4 >= lines.size()) {
+        Fail(run, "expect", "PAPERLINE: line index is out of range", sourceLine);
+        return false;
+      }
+      const double got[4] = {lines[base], lines[base + 1], lines[base + 3], lines[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        lineIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
+      }
+    } else if (what == "PAPERPOLYLINE") {
+      // EXPECT PAPERPOLYLINE <layout> <polyline> <x0> <y0> <x1> <y1> — assert the two
+      // endpoints of a trimmed open paper polyline, including which side the pick retained.
+      std::istringstream is(arg);
+      long layoutIx = -1, polyIx = -1;
+      double want[4] = {};
+      if (!(is >> layoutIx >> polyIx >> want[0] >> want[1] >> want[2] >> want[3])) {
+        Fail(run, "parse", "EXPECT PAPERPOLYLINE needs <layout> <polyline> <x0> <y0> <x1> <y1>", sourceLine);
+        return false;
+      }
+      if (layoutIx < 0 || static_cast<size_t>(layoutIx) >= run.st.paperLayouts.size() || polyIx < 0) {
+        Fail(run, "expect", "PAPERPOLYLINE: layout or polyline index is out of range", sourceLine);
+        return false;
+      }
+      const auto& layout = run.st.paperLayouts[static_cast<size_t>(layoutIx)];
+      const size_t index = static_cast<size_t>(polyIx);
+      if (index + 1 >= layout.paperPolyOffsets.size()) {
+        Fail(run, "expect", "PAPERPOLYLINE: polyline index is out of range", sourceLine);
+        return false;
+      }
+      const int begin = layout.paperPolyOffsets[index], end = layout.paperPolyOffsets[index + 1];
+      if (end - begin != 2) {
+        Fail(run, "expect", "PAPERPOLYLINE: expected exactly two vertices after trimming", sourceLine);
+        return false;
+      }
+      const size_t base = static_cast<size_t>(begin) * 3;
+      const double got[4] = {layout.paperPolyVerts[base], layout.paperPolyVerts[base + 1],
+                             layout.paperPolyVerts[base + 3], layout.paperPolyVerts[base + 4]};
+      const char* names[4] = {"x0", "y0", "x1", "y1"};
+      for (int k = 0; k < 4; ++k) {
+        if (std::fabs(got[k] - want[k]) > 0.01) {
+          char msg[256];
+          std::snprintf(msg, sizeof(msg), "PAPERPOLYLINE %ld %ld: %s is %.6f, expected %.6f", layoutIx,
+                        polyIx, names[k], got[k], want[k]);
+          Fail(run, "expect", msg, sourceLine);
+          return false;
+        }
       }
     } else {
       long want = 0;
@@ -2954,35 +3066,6 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   return run.failures.empty();
 }
 
-// ---------------------------------------------------------------------------
-// ImGui, headless (ADR-031 (c′)) — a font atlas, no window, no GPU.
-// ---------------------------------------------------------------------------
-
-void InitHeadlessImGui() {
-  IMGUI_CHECKVERSION();
-  ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
-  io.DisplaySize = ImVec2(1920.f, 1080.f);  // no real display; NewFrame only needs it non-zero
-  io.DeltaTime = 1.0f / 60.0f;
-  io.IniFilename = nullptr;  // never write imgui.ini from a test run (CON-07)
-
-  if (!LoadApplicationFont())
-    io.Fonts->AddFontDefault();
-  io.FontGlobalScale = 1.35f;  // matches main.cpp, so text measures the same as it does in the GUI
-
-  unsigned char* pixels = nullptr;
-  int w = 0;
-  int h = 0;
-  io.Fonts->GetTexDataAsRGBA32(&pixels, &w, &h);  // builds the atlas on the CPU; nothing is uploaded
-
-  ImGui::NewFrame();  // makes ImGui::GetFont() valid — SurveyPoints.cpp measures through it
-}
-
-void ShutdownHeadlessImGui() {
-  ImGui::EndFrame();
-  ImGui::DestroyContext();
-}
-
 int Usage() {
   std::fprintf(stderr,
                "usage: gosurvey_headless run  <transcript> [--json <path>] [--out <dir>]\n"
@@ -3001,11 +3084,19 @@ int RunTranscriptMain(int argc, char** argv);
 int FuzzMain(int argc, char** argv, const char* exePath);
 
 int main(int argc, char** argv) {
-  if (argc >= 2 && std::string(argv[1]) == "fuzz")
-    return FuzzMain(argc, argv, argv[0]);
-  if (argc >= 3 && std::string(argv[1]) == "run")
-    return RunTranscriptMain(argc, argv);
-  return Usage();
+  qputenv("QT_QPA_PLATFORM", "offscreen");
+  qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", QCoreApplication::applicationDirPath().toLocal8Bit() + "/qt-plugins/platforms");
+  QGuiApplication qtApp(argc, argv);
+  try {
+    if (argc >= 2 && std::string(argv[1]) == "fuzz")
+      return FuzzMain(argc, argv, argv[0]);
+    if (argc >= 3 && std::string(argv[1]) == "run")
+      return RunTranscriptMain(argc, argv);
+    return Usage();
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "unhandled exception: %s\n", e.what());
+    return 1;
+  }
 }
 
 namespace {
@@ -3040,9 +3131,9 @@ int RunTranscriptMain(int argc, char** argv) {
     return 2;
   }
 
-  InitHeadlessImGui();
 
   Run run;
+  run.st.measureAnnotationText = MeasureQtText;
   run.checkEveryStep = checkEveryStep;
   run.outDir = outDir.empty()
                    ? (std::filesystem::temp_directory_path() / "gosurvey_headless")
@@ -3070,7 +3161,6 @@ int RunTranscriptMain(int argc, char** argv) {
     CheckInvariants(run, sourceLine);
 
   const size_t pending = headless::PendingDialogAnswers();
-  ShutdownHeadlessImGui();
 
   // --- Report ---------------------------------------------------------------------------------
   const bool passed = run.failures.empty();

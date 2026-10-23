@@ -22,7 +22,7 @@ TEST_CASE("A 2x2 TABLE lays out four cells inside its box", "[req148][table]") {
   CHECK(rects[2].y0 == 0.f);
 }
 
-TEST_CASE("TABLE entity JSON round-trips cells and insertion", "[req148][table][gs]") {
+TEST_CASE("TABLE entity JSON round-trips cells and insertion", "[req148][table][payload]") {
   CadTable t;
   t.insX = 1.f;
   t.insY = 2.f;
@@ -44,7 +44,7 @@ TEST_CASE("TABLE entity JSON round-trips cells and insertion", "[req148][table][
   CHECK(b.rotationRad == 0.25f);
 }
 
-TEST_CASE("TABLE JSON round-trips localYFlipped when set", "[req148][table][gs]") {
+TEST_CASE("TABLE JSON round-trips localYFlipped when set", "[req148][table][payload]") {
   CadTable t;
   t.localYFlipped = true;
   nlohmann::json o;
@@ -122,7 +122,7 @@ TEST_CASE("CadTableFitToContent grows width when a cell string gets longer", "[r
   CHECK(t.width > w0);
 }
 
-TEST_CASE("legacy TABLE annotation JSON still round-trips cells", "[req148][table][gs]") {
+TEST_CASE("legacy TABLE annotation JSON still round-trips cells", "[req148][table][payload]") {
   CadAnnotation a;
   a.kind = CadAnnotation::Kind::Table;
   a.tableCols = 2;

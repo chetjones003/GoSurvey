@@ -6,11 +6,11 @@
 
 #include <cmath>
 
-/// `.gs` serialization for the B-rep solid kernel (REQ-313 / REQ-314 / REQ-315).
+/// `internal document payload` serialization for the B-rep solid kernel (REQ-313 / REQ-314 / REQ-315).
 ///
 /// Split out of `GsIo.cpp` so the serializer is **linkable without the command layer** — the same
 /// ADR-002 split `GsMigrate` already took, and the reason the mesh round-trip test could only test a
-/// re-implementation before. A solid's `.gs` fidelity (topology counts identical, volume and area
+/// re-implementation before. A solid's `internal document payload` fidelity (topology counts identical, volume and area
 /// stable across a save/reopen — REQ-315 acceptance) is now checked directly, through exactly the
 /// code the saver runs.
 ///

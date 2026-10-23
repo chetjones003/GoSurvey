@@ -455,7 +455,14 @@ TEST_CASE("Offline: one message, no stall, and news again after a success (REQ-3
   CHECK(map.Drawing());
   CHECK(log.size() == 1);
   net.mode = 2;  // and gone again: that is news
-  Settle(map, st, ViewOn(kEFt - kOriginX + 20000.0, kNFt - kOriginY, 500.f), log);
+  // Immediate retries keep the failed service busy. The notification, rather
+  // than global idle, is the completion condition this assertion needs.
+  const Camera failedView = ViewOn(kEFt - kOriginX + 20000.0, kNFt - kOriginY, 500.f);
+  const auto failureDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (log.size() < 2 && std::chrono::steady_clock::now() < failureDeadline) {
+    map.Update(st, true, failedView, 800, 600, log);
+    if (log.size() < 2) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
   CHECK(log.size() == 2);
 }
 

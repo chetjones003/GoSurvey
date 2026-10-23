@@ -6,7 +6,7 @@
 //
 // Pure by design, like Project.hpp: <filesystem> + nlohmann::json + the SurveyPoint struct only, the
 // clock passed in by the caller, so GoSurveyTests drives it against a temp folder. Nothing here knows
-// about ImGui, drawings or tabs. Failures come back as a message for the caller to log (REQ-201);
+// about UI, drawings or tabs. Failures come back as a message for the caller to log (REQ-201);
 // nothing throws.
 //
 // COORDINATES ARE WORLD (state-plane), not drawing-local. A drawing stores points local to its own

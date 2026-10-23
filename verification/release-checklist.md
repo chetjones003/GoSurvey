@@ -23,6 +23,7 @@ Authority: all of `spec/`, plus the verdicts of `build-`, `review-`, and
 - [ ] `build-checklist.md` — PASS on the exact release commit.
 - [ ] `review-checklist.md` — PASS; no open **blocking** findings.
 - [ ] `testing-checklist.md` — PASS; full suite green on the release commit.
+- [ ] For a major-version release: [`docs/major-release-feature-checklist.md`](../docs/major-release-feature-checklist.md) — PASS on the exact release candidate; findings are resolved or handled under this gate.
 - [ ] All advisory findings are either resolved or recorded as accepted with a
       tracking task.
 

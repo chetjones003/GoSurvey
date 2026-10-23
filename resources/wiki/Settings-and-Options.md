@@ -20,9 +20,9 @@ Search paths, file locations, and the startup template.
 
 | Control | What it does |
 |---|---|
-| **Startup template (.gs)** — Custom .gs path | The `.gs` new drawings start from |
+| **Startup template (.gst)** — Custom template path | The `.gst` new drawings start from |
 | **Browse** | File dialog (Windows only in this build) |
-| **Clear path (use bundled)** | Falls back to `resources/default-template.gs` beside the executable |
+| **Clear path (use bundled)** | Falls back to `resources/default-template.gst` beside the executable |
 | **Save startup preferences** | Writes `gosurvey-user.json` |
 
 The tab reports where the bundled template resolved to, or says it was not found. See
@@ -265,7 +265,7 @@ A separate dialog: `UNITS`, `UN`, or `DDUNITS`.
 |---|---|
 | **Length** | **Type:** `Decimal` (fixed — *GoSurvey works in decimal units (survey/civil norm). Other length formats are reserved.*) · **Precision:** `0.0` to `0.00000000` |
 | **Angle** | **Type:** Decimal Degrees · Deg/Min/Sec · Surveyor's Units. **Precision** (decimals on the smallest unit). **Clockwise** and **Base (0°)**: North · East · South · West · Custom |
-| **Insertion scale** | **Units to scale inserted content:** Feet · Meters · Unitless. *Relabel only — saved to the drawing (.gs) and DXF `$INSUNITS`; geometry unchanged* |
+| **Insertion scale** | **Units to scale inserted content:** Feet · Meters · Unitless. *Relabel only — saved to the drawing (DWG) and DXF `$INSUNITS`; geometry unchanged* |
 | **Sample Output** | A live preview of a coordinate and an angle in the chosen formats |
 
 Saved with `Drawing units saved (gosurvey-user.json).`
@@ -283,7 +283,7 @@ The angle **entry** convention — north is 0°, clockwise — never changes. Th
 | File | Contents |
 |---|---|
 | `gosurvey-user.json` — beside the executable | Display precision, angle format, startup template, update settings, and the rest of the Options dialog |
-| The `.gs` drawing | Plot scale, insertion units, layers, text styles, layouts |
+| The DWG drawing | Plot scale, insertion units, layers, text styles, layouts |
 | `%APPDATA%\GoSurvey\history.log` | Undo history log |
 | `resources/layouts/*.ini` | Saved panel layouts |
 

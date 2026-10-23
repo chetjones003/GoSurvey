@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JOBFile jobName="SampleLoop" version="5.72" product="Trimble Access" productVersion="2024.00">
+  <FieldBook>
+    <StationRecord ID="ST1" TimeStamp="2026-01-01T08:00:00">
+      <StationName>7</StationName>
+    </StationRecord>
+    <BackBearingRecord ID="BB1" TimeStamp="2026-01-01T08:01:00">
+      <Station>7</Station>
+      <BackSight>5</BackSight>
+      <Face1HorizontalCircle>0.0000</Face1HorizontalCircle>
+    </BackBearingRecord>
+    <PointRecord ID="P1" TimeStamp="2026-01-01T08:02:00">
+      <Name>9</Name>
+      <StationID>ST1</StationID>
+      <BackBearingID>BB1</BackBearingID>
+      <Circle>
+        <HorizontalCircle>100.0000</HorizontalCircle>
+        <VerticalCircle>90.0000</VerticalCircle>
+        <EDMDistance>45.8000</EDMDistance>
+      </Circle>
+    </PointRecord>
+    <StationRecord ID="ST2" TimeStamp="2026-01-01T08:03:00">
+      <StationName>9</StationName>
+    </StationRecord>
+    <BackBearingRecord ID="BB2" TimeStamp="2026-01-01T08:04:00">
+      <Station>9</Station>
+      <BackSight>7</BackSight>
+      <Face1HorizontalCircle>0.0000</Face1HorizontalCircle>
+    </BackBearingRecord>
+    <PointRecord ID="P2" TimeStamp="2026-01-01T08:05:00">
+      <Name>10</Name>
+      <StationID>ST2</StationID>
+      <BackBearingID>BB2</BackBearingID>
+      <Circle>
+        <HorizontalCircle>240.0000</HorizontalCircle>
+        <VerticalCircle>90.0000</VerticalCircle>
+        <EDMDistance>61.0000</EDMDistance>
+      </Circle>
+    </PointRecord>
+    <StationRecord ID="ST3" TimeStamp="2026-01-01T08:06:00">
+      <StationName>10</StationName>
+    </StationRecord>
+    <BackBearingRecord ID="BB3" TimeStamp="2026-01-01T08:07:00">
+      <Station>10</Station>
+      <BackSight>9</BackSight>
+      <Face1HorizontalCircle>0.0000</Face1HorizontalCircle>
+    </BackBearingRecord>
+    <PointRecord ID="P3" TimeStamp="2026-01-01T08:08:00">
+      <Name>7</Name>
+      <StationID>ST3</StationID>
+      <BackBearingID>BB3</BackBearingID>
+      <Circle>
+        <HorizontalCircle>78.8333</HorizontalCircle>
+        <VerticalCircle>90.0000</VerticalCircle>
+        <EDMDistance>53.3400</EDMDistance>
+      </Circle>
+    </PointRecord>
+  </FieldBook>
+  <Reductions>
+    <Point ID="RP1" TimeStamp="2026-01-01T08:00:00">
+      <Name>7</Name>
+      <Code></Code>
+      <Grid>
+        <North>1500.000</North>
+        <East>1600.000</East>
+        <Elevation>0.000</Elevation>
+      </Grid>
+    </Point>
+    <Point ID="RP2" TimeStamp="2026-01-01T08:00:00">
+      <Name>5</Name>
+      <Code></Code>
+      <Grid>
+        <North>1500.000</North>
+        <East>1570.000</East>
+        <Elevation>0.000</Elevation>
+      </Grid>
+    </Point>
+  </Reductions>
+  <Environment>
+  </Environment>
+</JOBFile>
