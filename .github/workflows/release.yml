@@ -283,15 +283,18 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          foreach ($path in @('build\GoSurvey.exe', 'build\pdfium.dll',
-                              'build\qt.conf', 'build\qt-plugins',
-                              'build\vc_redist.x64.exe', 'build\resources')) {
+          # Keep these runtime requirements aligned with tools/verify-qt-deployment.ps1. The
+          # installer must remain usable after the Store downloads it once and the machine goes
+          # offline; checking for any DLL is not enough to prove the Qt runtime is complete.
+          foreach ($path in @('build\GoSurvey.exe', 'build\Qt6Core.dll', 'build\Qt6Gui.dll',
+                              'build\Qt6Widgets.dll', 'build\Qt6OpenGL.dll',
+                              'build\Qt6OpenGLWidgets.dll', 'build\pdfium.dll',
+                              'build\qt.conf', 'build\qt-plugins\platforms\qwindows.dll',
+                              'build\resources\default-template.gst',
+                              'build\vc_redist.x64.exe')) {
             if (-not (Test-Path $path)) {
               throw "Expected $path in packaging inputs; offline installer would be incomplete."
             }
-          }
-          if (-not (Get-ChildItem 'build\*.dll' -File -ErrorAction SilentlyContinue)) {
-            throw 'Expected runtime DLLs beside GoSurvey.exe; offline installer would be incomplete.'
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {

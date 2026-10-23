@@ -13815,7 +13815,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
     completion UI; a UAC consent prompt remains permitted;
   - the VC++ redistributable is invoked with `/install /quiet /norestart`;
   - packaging fails if the VC++ redistributable is missing, and the resulting installer contains it;
-  - the release workflow checks for `qt.conf`, `qt-plugins/`, and root runtime DLLs before compiling;
+  - the release workflow checks for the required Qt runtime DLLs, Qt platform plugin, `qt.conf`,
+    bundled template, PDFium, and VC++ redistributable before compiling;
   - installation succeeds with network access disabled after the installer file is present locally;
   - no post-install application launch occurs in the Store invocation;
   - the ordinary direct-download invocation still displays the interactive setup wizard;
