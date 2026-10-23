@@ -80,6 +80,11 @@ public:
   bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags = kDisplayFlags,
                   int budgetMs = 0, int sliceMs = 0, const std::function<void()>& between = {});
 
+  /// REQ-452: render only the w x h window at (x, y) of the page drawn fullW x fullH pixels, so a page can be
+  /// shown at any zoom without a bitmap the size of the whole page. Same cancel and failure rules as RenderPage.
+  bool RenderRegion(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+                    const std::function<bool()>& cancel, int flags = kDisplayFlags);
+
   /// REQ-391 clause 5: the ends and corners of the vector line work on \p page (the corners of its paths,
   /// forms included), in the viewer's page coordinates (points from the page's bottom-left as displayed, so
   /// rotation and an offset page box are already accounted for). \p cancel is polled; the first \p maxPoints
@@ -105,6 +110,9 @@ public:
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 
 private:
+  bool RenderWindow(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+                    const std::function<bool()>& cancel, int flags, int budgetMs, int sliceMs,
+                    const std::function<void()>& between);
   PdfDocument() = default;
   struct Impl;
   std::unique_ptr<Impl> impl_;

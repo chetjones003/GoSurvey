@@ -1,6 +1,7 @@
 #include "PdfWindow.hpp"
 #include "QtAccent.hpp"
 #include "PdfCanvas.hpp"
+#include "PdfRibbon.hpp"
 #include "EditorWindow.hpp"
 #include "PdfSplit.hpp"
 #include "PdfScaleCheck.hpp"
@@ -13,6 +14,14 @@
 #include <QMessageBox>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QTabWidget>
+#include <QToolButton>
+#include <QMenu>
+#include <QGridLayout>
+#include <QStackedWidget>
+#include <QButtonGroup>
+#include <QWheelEvent>
+#include <QResizeEvent>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QProgressBar>
@@ -54,6 +63,46 @@
 #include <map>
 #include <set>
 #include <cmath>
+
+// Navigation icons that say what they do: page arrows (with end bars for first/last), magnifiers, fit marks.
+QIcon NavIcon(const QString& kind) {
+  QPixmap pixmap(48, 48);
+  pixmap.fill(Qt::transparent);
+  QPainter p(&pixmap);
+  p.setRenderHint(QPainter::Antialiasing);
+  const QColor ink("#e8eef9");
+  p.setPen(Qt::NoPen);
+  p.setBrush(ink);
+  const auto triangle = [&](bool left, double x) {
+    QPolygonF shape;
+    if (left) shape << QPointF(x + 16, 9) << QPointF(x + 16, 39) << QPointF(x, 24);
+    else shape << QPointF(x, 9) << QPointF(x, 39) << QPointF(x + 16, 24);
+    p.drawPolygon(shape);
+  };
+  if (kind == "previous") triangle(true, 14);
+  else if (kind == "next") triangle(false, 18);
+  else if (kind == "first") { p.drawRect(8, 9, 5, 30); triangle(true, 16); }
+  else if (kind == "last") { triangle(false, 16); p.drawRect(35, 9, 5, 30); }
+  else if (kind == "zoomin" || kind == "zoomout") {
+    p.setPen(QPen(ink, 4, Qt::SolidLine, Qt::RoundCap));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPointF(20, 20), 13, 13);
+    p.drawLine(QPointF(30, 30), QPointF(42, 42));
+    p.drawLine(QPointF(14, 20), QPointF(26, 20));
+    if (kind == "zoomin") p.drawLine(QPointF(20, 14), QPointF(20, 26));
+  } else if (kind == "fitwidth") {
+    p.drawRect(5, 12, 4, 24); p.drawRect(39, 12, 4, 24);
+    p.drawPolygon(QPolygonF{QPointF(12, 24), QPointF(22, 16), QPointF(22, 32)});
+    p.drawPolygon(QPolygonF{QPointF(36, 24), QPointF(26, 16), QPointF(26, 32)});
+  } else if (kind == "fitpage") {
+    p.setPen(QPen(ink, 4));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(QRectF(12, 5, 24, 38));
+    p.setPen(QPen(ink, 3));
+    p.drawLine(QPointF(17, 15), QPointF(31, 15)); p.drawLine(QPointF(17, 24), QPointF(31, 24)); p.drawLine(QPointF(17, 33), QPointF(31, 33));
+  }
+  return QIcon(pixmap);
+}
 
 // REQ-387 clause 2: the thumbnail strip's model. Rows are pages; only the rows the view asks to paint are ever
 // rendered, one at a time on a worker, nearest the top of the strip first. A draft (time-budgeted) render shows
@@ -227,7 +276,36 @@ constexpr const char* kPdfWindowStyle = // scoped to the window's own chrome so 
     "QDockWidget{color:#e8eef9;} QDockWidget::title{background:#292f34;padding:6px;}"
     "#pdfThumbnailList{background:#202529;color:#cfd8da;border:0;selection-background-color:@tint@;selection-color:white;}"
     "#pdfFindEdit{background:#15191c;color:#fff;border:1px solid #424b51;border-radius:4px;padding:3px 6px;}"
-    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}";
+    "QToolBar QLabel,QToolBar QCheckBox{color:#e8eef9;} QMainWindow > QScrollArea{background:#171b1e;}"
+    "#pdfCommandBar{background:#191d20;border-top:1px solid #30373c;border-bottom:1px solid #333b40;}"
+    "#pdfRibbon::pane{border:1px solid #363e43;background:#202529;}"
+    "#pdfRibbon QTabBar::tab{background:#1b2023;color:#dce2e5;border:1px solid #353d42;padding:6px 14px;margin-right:2px;}"
+    "#pdfRibbon QTabBar::tab:selected{background:#2a3035;color:#f4f7f8;border-bottom:2px solid @strong@;}"
+    "#pdfRibbon QTabBar::tab:hover:!selected{background:#30373c;}"
+    "#pdfRibbon QToolButton{padding:2px 5px;border-radius:4px;color:#e8eef9;border:1px solid transparent;}"
+    "#pdfRibbon QToolButton:hover{background:#343c41;border-color:@edge@;}"
+    "#pdfRibbon QToolButton:pressed,#pdfRibbon QToolButton:checked{background:@tint@;border-color:@strong@;}"
+    "#pdfRibbon QToolButton:disabled{color:#78858a;}"
+    "#pdfRibbon QWidget[ribbonPanel=\"true\"]{border-right:1px solid #3a4247;}"
+    "#ribbonPanelLabel{color:#b5c0c5;font-size:10px;border-top:1px solid #3a4247;padding-top:2px;}"
+    "#pdfRibbon QLabel,#pdfRibbon QCheckBox{color:#e8eef9;}"
+    "#pdfRibbon QSpinBox,#pdfRibbon QDoubleSpinBox,#pdfRibbon QComboBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:2px 6px;color:#fff;}"
+    "#pdfRibbon QPushButton{background:#2a3035;border:1px solid #41494e;border-radius:4px;padding:3px 10px;color:#e8eef9;}"
+    "#pdfRibbon QPushButton:hover{background:#343c41;} #pdfRibbon QPushButton:disabled{color:#89979a;}"
+    "#pdfSideStrip{background:#1b2023;border-right:1px solid #30373c;}"
+    "#pdfSideStrip QToolButton{color:#cfd8da;border:1px solid transparent;border-radius:4px;padding:3px 2px;}"
+    "#pdfSideStrip QToolButton:hover{background:#30373c;border-color:@edge@;}"
+    "#pdfSideStrip QToolButton:checked{background:#2a3035;color:#fff;border-left:3px solid @strong@;}"
+    "#pdfToolChest,#pdfProperties{background:#202529;}"
+    "#pdfToolChest QToolButton{color:#e8eef9;border:1px solid transparent;border-radius:4px;padding:2px 5px;}"
+    "#pdfToolChest QToolButton:hover{background:#343c41;border-color:@edge@;} #pdfToolChest QToolButton:checked{background:@tint@;border-color:@strong@;}"
+    "#pdfToolChest QLabel,#pdfProperties QLabel{color:#e8eef9;}"
+    "#pdfPanelHeading{color:#b5c0c5;font-size:11px;font-weight:600;border-bottom:1px solid #3a4247;padding:4px 0 2px 0;}"
+    "QStatusBar QToolButton{color:#e8eef9;padding:2px;border-radius:4px;border:1px solid transparent;} QStatusBar QToolButton:hover{background:#343c41;border-color:@edge@;}"
+    "QStatusBar QLabel{color:#e8eef9;font-size:14px;}"
+    "QStatusBar QSpinBox{background:#15191c;border:1px solid #424b51;border-radius:4px;padding:2px 6px;color:#fff;font-size:14px;}"
+    "#pdfScaleLabel{background:#30373c;border:1px solid #41494e;border-radius:10px;padding:2px 12px;color:#d8e3e4;font-weight:600;}"
+    "#pdfSnapStatus{color:#f5b73a;}";
 
 constexpr const char* kPdfExtractReviewStyle =
     "QDialog{background:#22272b;color:#eef2ff;} QLabel{color:#eef2ff;font-size:13px;}"
@@ -254,127 +332,186 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   setWindowTitle("GoSurvey | PDF viewer");
   setStyleSheet(QtApplyAccent(QString::fromLatin1(kPdfWindowStyle), true));
   resize(1000, 800);
-  auto* tools = addToolBar("PDF");
-  tools->setMovable(false);
-  tools->addAction(QIcon(QtAsset("icons/Open.png")), "Open...", this, [this] {
+  // REQ-452: the commands live in a menu bar, one row of icon tools and a side panel (Bluebeam-style). First every
+  // control is made here; they are placed once the side panel exists (it contributes a toggle action).
+  const auto makeAction = [this](const char* name, const QString& text, const char* icon, const QString& tip, const auto& run) {
+    auto* made = new QAction(CadCommandIcon(icon), text, this);
+    if (name && *name) made->setObjectName(name);
+    made->setToolTip(tip.isEmpty() ? text : tip);
+    connect(made, &QAction::triggered, this, run);
+    return made;
+  };
+  auto* openAction = makeAction("pdfOpenAction", "Open...", "Open.png", "Open a PDF", [this] {
     const auto path = QFileDialog::getOpenFileName(this, "Open PDF", {}, "PDF (*.pdf)");
     if (!path.isEmpty()) Open(path);
   });
-  tools->addSeparator();
-  m_PageNumber = new QSpinBox(tools);
+  auto* saveAsAction = makeAction("pdfSaveAsAction", "Save As...", "Save_as.png", "Save a copy with the annotations", [this] { SaveAs(); });
+  auto* extractPagesAction = makeAction("pdfExtractPagesAction", "Extract pages...", "Export.png", "Save chosen pages as a new PDF", [this] { SplitPages(); });
+  auto* findAction = makeAction("pdfFindAction", "Find...", "Find.png", "Find text in the document (Ctrl+F)", [this] { ShowFindBar(); });
+  findAction->setShortcut(QKeySequence::Find);
+  addAction(findAction); // a shortcut only fires while its action sits on a visible widget: keep Find live from every tab
+  m_PageNumber = new QSpinBox(this);
   m_PageNumber->setRange(1, 1);
-  m_PageNumber->setPrefix("Page ");
-  tools->addWidget(m_PageNumber);
+  m_PageNumber->setAccessibleName("Page");
   connect(m_PageNumber, &QSpinBox::valueChanged, this, [this] {
-    m_Draft.clear(); m_SnapHit = false; m_SnapPrevValid = false;
-    SyncThumbnail(); UpdateScaleDisplay(); if (m_SnapOn) { StartSnapRead(m_PageNumber->value() - 1); UpdateSnap(m_LastPointer); }
-    RequestRender();
+    if (!m_SyncingPage) m_Draft.clear(); // scrolling past a page keeps the picks in progress on theirs
+    m_SnapHit = false; m_SnapPrevValid = false;
+    SyncThumbnail(); UpdateScaleDisplay(); if (m_SnapOn) { StartSnapRead(m_PageNumber->value() - 1); RefreshSnap(); }
+    if (m_Layout == Layout::Continuous) { if (!m_SyncingPage) ScrollToPage(m_PageNumber->value() - 1); }
+    else RequestRender();
+    UpdateZoomUi(); SyncPageNav(); UpdatePropertiesPanel();
     if (m_Compare && m_Compare->basePage != m_PageNumber->value() - 1)
       m_CompareBasePage->setValue(m_PageNumber->value());
   });
-  tools->addAction("Previous", this, [this] { m_PageNumber->setValue(m_PageNumber->value() - 1); });
-  tools->addAction("Next", this, [this] { m_PageNumber->setValue(m_PageNumber->value() + 1); });
-  tools->addSeparator();
-  tools->addAction("Zoom in", this, [this] { m_Zoom = std::min(4.0, m_Zoom * 1.25); RequestRender(); });
-  tools->addAction("Zoom out", this, [this] { m_Zoom = std::max(0.1, m_Zoom / 1.25); RequestRender(); });
-  tools->addAction("Fit width", this, [this] { m_Zoom = 1.0; RequestRender(); });
-  tools->addAction("Save As...", this, [this] { SaveAs(); });
-  tools->addAction("Extract pages...", this, [this] { SplitPages(); });
-  auto* extract = tools->addAction("Extract coordinates", this, [this] {
-    if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
-    SetTool(-1, QString()); // leave any scale pick in progress
-    m_ExtractMode = true; m_ExtractDragging = false; m_ExtractResult.reset();
-    statusBar()->showMessage("Drag a rectangle around selectable coordinate text. Esc cancels.");
-    m_Page->setCursor(Qt::CrossCursor);
+  auto* previousAction = makeAction("pdfPreviousPage", "Previous", "Back.png", "Previous page (Page Up)", [this] { m_PageNumber->setValue(m_PageNumber->value() - 1); });
+  auto* nextAction = makeAction("pdfNextPage", "Next", "Front.png", "Next page (Page Down)", [this] { m_PageNumber->setValue(m_PageNumber->value() + 1); });
+  previousAction->setIcon(NavIcon("previous"));
+  nextAction->setIcon(NavIcon("next"));
+  m_LayoutBox = new QComboBox(this);
+  m_LayoutBox->setObjectName("pdfLayoutBox");
+  m_LayoutBox->setAccessibleName("Layout");
+  m_LayoutBox->addItem("Page by page", static_cast<int>(Layout::PageByPage));
+  m_LayoutBox->addItem("Continuous", static_cast<int>(Layout::Continuous));
+  m_LayoutBox->setToolTip("Show one page at a time, or scroll through every page");
+  connect(m_LayoutBox, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
+    SetLayout(static_cast<Layout>(m_LayoutBox->itemData(index).toInt()));
   });
-  extract->setObjectName("pdfExtractCoordinates");
-  auto* audit = tools->addAction("Audit scale", this, [this] { ShowScaleAudit(); });
-  audit->setObjectName("pdfAuditScale");
-  audit->setToolTip("Compare this page's dimension text with its scale");
-  auto* compare = tools->addAction("Compare revisions…", this, [this] { BeginCompare(); });
-  compare->setObjectName("pdfCompareRevisions");
-  tools->addSeparator();
-  auto* findAction = tools->addAction("Find...", this, [this] { ShowFindBar(); });
-  findAction->setObjectName("pdfFindAction");
-  findAction->setShortcut(QKeySequence::Find);
-  findAction->setToolTip("Find text in the document (Ctrl+F)");
-  addToolBarBreak(Qt::TopToolBarArea); // the annotation tools get a row of their own (there are enough of them now)
-  auto* annotationTools = addToolBar("PDF annotations and measurements");
-  annotationTools->setObjectName("pdfAnnotationTools");
+  auto* zoomOutAction = makeAction("pdfZoomOut", "Zoom out", "Zoom_Window.png", "Zoom out", [this] { ZoomBy(1 / 1.25, m_Scroll->viewport()->rect().center()); });
+  m_ZoomBox = new QSpinBox(this);
+  m_ZoomBox->setObjectName("pdfZoomPercent");
+  m_ZoomBox->setAccessibleName("Zoom");
+  m_ZoomBox->setRange(5, 1000);
+  m_ZoomBox->setValue(100);
+  m_ZoomBox->setSuffix("%");
+  m_ZoomBox->setKeyboardTracking(false);
+  m_ZoomBox->setToolTip("Zoom: type a percentage of the page's actual size");
+  connect(m_ZoomBox, &QSpinBox::valueChanged, this, [this](int percent) {
+    if (std::abs(percent - ZoomPercent()) >= 1.0) SetZoomPercent(percent);
+  });
+  auto* zoomInAction = makeAction("pdfZoomIn", "Zoom in", "Zoom_Window.png", "Zoom in (Ctrl+wheel zooms around the pointer)", [this] { ZoomBy(1.25, m_Scroll->viewport()->rect().center()); });
+  auto* fitWidth = makeAction("pdfFitWidth", "Fit width", "Zoom_Extensis.png", "Make the page as wide as the window", [this] { FitWidth(); });
+  auto* fitPage = makeAction("pdfFitPage", "Fit page", "Zoom_Extensis.png", "Show the whole page", [this] { FitPage(); });
+  zoomOutAction->setIcon(NavIcon("zoomout"));
+  zoomInAction->setIcon(NavIcon("zoomin"));
+  fitWidth->setIcon(NavIcon("fitwidth"));
+  fitPage->setIcon(NavIcon("fitpage"));
   m_ToolGroup = new QActionGroup(this);
-  const std::pair<const char*, int> kinds[] = {{"Select", -2}, {"Browse", -1}, {"Text", 0}, {"Line", 1}, {"Rectangle", 2},
-      {"Ellipse", 3}, {"Length", 5}, {"Polyline length", 6}, {"Area", 7}, {"Angle", 8}, {"Check", kToolCheck}};
+  struct ToolKind { const char* label; int id; const char* icon; };
+  const ToolKind kinds[] = {{"Select", -2, "Select.png"}, {"Browse", -1, "Pan.png"}, {"Text", 0, "text.png"}, {"Line", 1, "line.png"},
+      {"Rectangle", 2, "rect.png"}, {"Ellipse", 3, "ellipse.png"}, {"Length", 5, "Measure_Distance.png"},
+      {"Polyline length", 6, "polyline.png"}, {"Area", 7, "Measure_Area.png"}, {"Angle", 8, "Measure_Angle.png"}, {"Check", kToolCheck, "Check.png"}};
+  std::map<int, QAction*> toolActions;
   for (const auto& kind : kinds) {
-    auto* action = annotationTools->addAction(kind.first);
-    action->setCheckable(true); m_ToolGroup->addAction(action);
-    action->setData(kind.second);
-    if (kind.second == -2) action->setChecked(true);
-    if (kind.second == kToolCheck) {
-      action->setObjectName("pdfCheckTool");
-      action->setToolTip("Check the page scale against a dimension the drawing states");
+    auto* tool = new QAction(CadCommandIcon(kind.icon), kind.label, this);
+    tool->setCheckable(true); m_ToolGroup->addAction(tool);
+    tool->setData(kind.id);
+    tool->setToolTip(kind.id == -2 ? "Select an annotation; drag it or a grip to edit" : kind.id == -1 ? "Browse pages" : kind.label);
+    if (kind.id == -2) tool->setChecked(true);
+    if (kind.id == kToolCheck) {
+      tool->setObjectName("pdfCheckTool");
+      tool->setToolTip("Check the page scale against a dimension the drawing states");
     }
-    connect(action, &QAction::triggered, this, [this, kind] {
+    toolActions[kind.id] = tool;
+    connect(tool, &QAction::triggered, this, [this, kind] {
       m_CheckTarget = 0;
-      if (kind.second == kToolCheck) SetTool(kToolCheck, "Check: click the two ends of a dimension the drawing states.");
-      else SetTool(kind.second, kind.second == -2 ? "Select an annotation; drag it or a grip to edit." :
-          kind.second == -1 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
+      if (kind.id == kToolCheck) SetTool(kToolCheck, "Check: click the two ends of a dimension the drawing states.");
+      else SetTool(kind.id, kind.id == -2 ? "Select an annotation; drag it or a grip to edit." :
+          kind.id == -1 ? "Browse pages" : "Click points on the page. Right-click finishes a polyline/area or cancels a draft.");
     });
   }
-  auto* calibrateTool = new QAction("Calibrate", m_ToolGroup); // started from Set scale...; not a toolbar button
+  auto* calibrateTool = new QAction("Calibrate", m_ToolGroup); // started from Set scale...; not a ribbon button
   calibrateTool->setCheckable(true);
   calibrateTool->setData(kToolCalibrate);
-  auto* style = addToolBar("Annotation style");
-  style->setObjectName("pdfAnnotationStyle");
-  auto* color = style->addAction("Color...");
-  color->setObjectName("pdfAnnotationColor");
-  connect(color, &QAction::triggered, this, [this] {
+  auto* color = makeAction("pdfAnnotationColor", "Color...", "Color_Faces.png", "Annotation colour", [this] {
     const QColor chosen = QColorDialog::getColor(QColor::fromRgb(m_AnnotationColor), this, "Annotation color");
     if (chosen.isValid()) m_AnnotationColor = chosen.rgb() & 0xFFFFFFu;
   });
-  style->addWidget(new QLabel("Width", style));
-  auto* width = new QDoubleSpinBox(style); width->setObjectName("pdfAnnotationWidth");
-  width->setRange(0.1, 20.0); width->setSingleStep(0.25); width->setValue(m_AnnotationThickness); width->setSuffix(" pt");
-  style->addWidget(width);
+  auto* width = new QDoubleSpinBox(this); width->setObjectName("pdfAnnotationWidth"); width->setAccessibleName("Width");
+  width->setRange(0.1, 20.0); width->setSingleStep(0.25); width->setValue(m_AnnotationThickness); width->setSuffix(" pt"); width->setPrefix("Width ");
   connect(width, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) { m_AnnotationThickness = static_cast<float>(value); });
-  style->addWidget(new QLabel("Text size", style));
-  auto* fontSize = new QDoubleSpinBox(style); fontSize->setObjectName("pdfAnnotationFontSize");
-  fontSize->setRange(4.0, 144.0); fontSize->setValue(m_AnnotationFontSize); fontSize->setSuffix(" pt");
-  style->addWidget(fontSize);
+  auto* fontSize = new QDoubleSpinBox(this); fontSize->setObjectName("pdfAnnotationFontSize"); fontSize->setAccessibleName("Text size");
+  fontSize->setRange(4.0, 144.0); fontSize->setValue(m_AnnotationFontSize); fontSize->setSuffix(" pt"); fontSize->setPrefix("Size ");
   connect(fontSize, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this](double value) { m_AnnotationFontSize = static_cast<float>(value); });
-  auto* font = new QComboBox(style); font->setObjectName("pdfAnnotationFont");
+  auto* font = new QComboBox(this); font->setObjectName("pdfAnnotationFont"); font->setAccessibleName("Font");
   for (const char* family : {"Helvetica", "Times", "Courier"}) font->addItem(family);
-  style->addWidget(font);
   connect(font, &QComboBox::currentTextChanged, this, [this](const QString& value) { m_AnnotationFont = value.toStdString(); });
-  auto* bold = new QCheckBox("Bold", style); bold->setObjectName("pdfAnnotationBold"); style->addWidget(bold);
-  auto* italic = new QCheckBox("Italic", style); italic->setObjectName("pdfAnnotationItalic"); style->addWidget(italic);
+  auto* bold = new QCheckBox("Bold", this); bold->setObjectName("pdfAnnotationBold");
+  auto* italic = new QCheckBox("Italic", this); italic->setObjectName("pdfAnnotationItalic");
   connect(bold, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationBold = value; });
   connect(italic, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationItalic = value; });
-  auto* fill = new QCheckBox("Fill closed shapes", style); fill->setObjectName("pdfAnnotationFill"); style->addWidget(fill);
+  auto* fill = new QCheckBox("Fill closed shapes", this); fill->setObjectName("pdfAnnotationFill");
   connect(fill, &QCheckBox::toggled, this, [this](bool value) { m_AnnotationFill = value; });
-  auto* applyStyle = style->addAction("Apply style to selected");
-  applyStyle->setObjectName("pdfAnnotationApplyStyle");
-  connect(applyStyle, &QAction::triggered, this, [this] {
+  auto* applyStyle = makeAction("pdfAnnotationApplyStyle", "Apply style to selected", "Color_Edges.png", "Give the selected annotation the style above", [this] {
     if (m_SelectedAnnotation < 0 || m_SelectedAnnotation >= static_cast<int>(m_Annotations.Items().size())) return;
     auto annotation = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
     ApplyAnnotationStyle(annotation);
     if (m_Annotations.Replace(m_SelectedAnnotation, annotation)) SceneChanged();
   });
-  annotationTools->addAction("Undo", this, [this] { m_Annotations.Undo(); SceneChanged(); });
-  annotationTools->addAction("Redo", this, [this] { m_Annotations.Redo(); SceneChanged(); });
-  BuildScaleToolbar();
+  auto* undoAction = makeAction("pdfUndo", "Undo", "undo.png", "Undo the last annotation edit (Ctrl+Z)", [this] { m_Annotations.Undo(); SceneChanged(); });
+  auto* redoAction = makeAction("pdfRedo", "Redo", "redo.png", "Redo (Ctrl+Y)", [this] { m_Annotations.Redo(); SceneChanged(); });
+  BuildScaleControls();
+  auto* extract = makeAction("pdfExtractCoordinates", "Extract coordinates", "Extract_Data.png", "Drag a rectangle around coordinate text", [this] {
+    if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
+    SetTool(-1, QString()); // leave any scale pick in progress
+    m_ExtractMode = true; m_ExtractDragging = false; m_ExtractBox = false; m_ExtractResult.reset(); UpdateToolStatus(); m_Page->update();
+    statusBar()->showMessage("Drag a rectangle around selectable coordinate text. Esc cancels.");
+    m_Page->setCursor(Qt::CrossCursor);
+  });
+  auto* audit = makeAction("pdfAuditScale", "Audit scale", "Audit.png", "Compare this page's dimension text with its scale", [this] { ShowScaleAudit(); });
+  auto* compare = makeAction("pdfCompareRevisions", "Compare revisions…", "DWG_Compare.png", "Compare this sheet with a revision", [this] { BeginCompare(); });
+  addAction(m_SnapAction); // F3 stays live from every tab
   m_Scroll = new QScrollArea(this);
   m_Scroll->setAlignment(Qt::AlignCenter);
   m_Page = new PdfCanvas(m_Scroll);
   m_Page->setMouseTracking(true);
-  m_Page->clicked = [this](QPointF point, Qt::MouseButton button) { PageClick(point, button); };
+  // The page-local point (and the page it lies on) comes from DispatchInput: with one page shown it is the canvas point.
+  m_Page->clicked = [this](QPointF point, Qt::MouseButton button) {
+    DispatchInput(point, true, [this, button](QPointF local) { PageClick(local, button); });
+  };
   m_Page->doubleClicked = [this] { EditSelectedAnnotation(); };
-  m_Page->moved = [this](QPointF point) { MoveExtract(point); MoveAnnotation(point); UpdateSnap(point); };
+  m_Page->moved = [this](QPointF point) {
+    DispatchInput(point, QApplication::mouseButtons().testFlag(Qt::LeftButton), [this](QPointF local) { MoveExtract(local); MoveAnnotation(local); UpdateSnap(local); });
+  };
   m_Page->left = [this] { if (m_SnapHit) { m_SnapHit = false; m_SnapPrevValid = false; m_Page->update(); } };
   m_Page->overlay = [this](QPainter& painter) { DrawCompareOverlay(painter); DrawHighlights(painter); DrawAnnotations(painter); DrawScaleOverlay(painter); DrawAuditOverlay(painter); DrawExtractOverlay(painter); };
-  m_Page->pressed = [this](QPointF point, Qt::MouseButton button) { BeginExtract(point, button); };
-  m_Page->released = [this](QPointF point, Qt::MouseButton button) { EndExtract(point, button); EndAnnotation(point, button); };
+  m_Page->paintStrip = [this](QPainter& painter, const QRect& exposed) { return PaintStrip(painter, exposed); };
+  m_Page->pressed = [this](QPointF point, Qt::MouseButton button) {
+    m_InputPage = m_Layout == Layout::Continuous && m_Document ? PageAtY(qRound(point.y())) : -1;
+    DispatchInput(point, true, [this, button](QPointF local) { BeginExtract(local, button); });
+  };
+  m_Page->released = [this](QPointF point, Qt::MouseButton button) {
+    DispatchInput(point, true, [this, button](QPointF local) { EndExtract(local, button); EndAnnotation(local, button); });
+    m_InputPage = -1;
+  };
   m_Scroll->setWidget(m_Page);
   setCentralWidget(m_Scroll);
+  // Middle-button pan and Ctrl+wheel zoom work over the page and over the margin around it.
+  m_Page->installEventFilter(this);
+  m_Scroll->viewport()->installEventFilter(this);
+  m_StripPoll = new QTimer(this);
+  m_StripPoll->setInterval(20);
+  connect(m_StripPoll, &QTimer::timeout, this, [this] { PollStrip(); });
+  m_ZoomSettle = new QTimer(this);
+  m_ZoomSettle->setSingleShot(true);
+  m_ZoomSettle->setInterval(120);
+  connect(m_ZoomSettle, &QTimer::timeout, this, [this] { RequestRender(true); });
+  const auto scrolledPage = [this] { // a page too big to draw whole: redraw when the view leaves the drawn window
+    if (m_Layout == Layout::PageByPage && m_Document && !m_Page->imageFull.isEmpty() && !PageWindowCovers()) m_ZoomSettle->start();
+  };
+  connect(m_Scroll->horizontalScrollBar(), &QScrollBar::valueChanged, this, scrolledPage);
+  connect(m_Scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, scrolledPage);
+  m_ResizeTimer = new QTimer(this);
+  m_ResizeTimer->setSingleShot(true);
+  m_ResizeTimer->setInterval(150);
+  connect(m_ResizeTimer, &QTimer::timeout, this, [this] {
+    if (m_Layout != Layout::Continuous || !m_Document) return;
+    const QPoint top(m_Scroll->viewport()->width() / 2, 0);
+    const ZoomAnchor anchor = CaptureAnchor(top);
+    RebuildLayout();
+    RestoreAnchor(anchor, top);
+    ScheduleStrip();
+  });
+  connect(m_Scroll->verticalScrollBar(), &QScrollBar::valueChanged, this, [this] { OnScrolled(); });
   m_Poll = new QTimer(this);
   m_Poll->setInterval(30);
   connect(m_Poll, &QTimer::timeout, this, [this] { PollRender(); });
@@ -404,14 +541,191 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   connect(m_ThumbView->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& current) {
     if (current.isValid() && current.row() + 1 != m_PageNumber->value()) m_PageNumber->setValue(current.row() + 1);
   });
-  m_ThumbDock = new QDockWidget("Thumbnails", this);
+  // REQ-452: the side panel. A column of labelled buttons (Thumbnails, Tool Chest, Properties) chooses what the
+  // panel beside it shows; the buttons say what they are, not just an icon.
+  const auto heading = [](const QString& text, QWidget* parent) {
+    auto* label = new QLabel(text, parent); label->setObjectName("pdfPanelHeading"); return label;
+  };
+  const auto chestButton = [](QAction* tool, QWidget* parent) {
+    auto* button = new QToolButton(parent); button->setObjectName("pdfChest_" + tool->text().remove(' ').remove('.'));
+    button->setDefaultAction(tool); button->setAutoRaise(true); button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    button->setIconSize(QSize(24, 24)); button->setFixedSize(70, 58); return button;
+  };
+  auto* chestPage = new QWidget(this);
+  chestPage->setObjectName("pdfToolChest");
+  auto* chest = new QVBoxLayout(chestPage); chest->setContentsMargins(8, 8, 8, 8); chest->setSpacing(4);
+  const auto chestSection = [&](const QString& title, const QList<QAction*>& tools) {
+    chest->addWidget(heading(title, chestPage));
+    auto* grid = new QGridLayout; grid->setSpacing(2); int index = 0;
+    for (auto* tool : tools) { grid->addWidget(chestButton(tool, chestPage), index / 3, index % 3); ++index; }
+    grid->setColumnStretch(3, 1); chest->addLayout(grid);
+  };
+  chestSection("Markup", {toolActions[-2], toolActions[-1], toolActions[0], toolActions[1], toolActions[2], toolActions[3]});
+  chestSection("Measurement", {toolActions[5], toolActions[6], toolActions[7], toolActions[8], toolActions[kToolCheck]});
+  chestSection("Review", {extract, audit, compare});
+  chest->addStretch(1);
+  // Properties: what the open document and the current page are (read-only; UpdatePropertiesPanel keeps it current).
+  auto* propertiesPage = new QWidget(this);
+  propertiesPage->setObjectName("pdfProperties");
+  auto* properties = new QVBoxLayout(propertiesPage); properties->setContentsMargins(8, 8, 8, 8); properties->setSpacing(4);
+  properties->addWidget(heading("Document", propertiesPage));
+  auto* documentForm = new QFormLayout; documentForm->setLabelAlignment(Qt::AlignLeft);
+  for (const char* row : {"File", "Pages"}) {
+    auto* value = new QLabel("-", propertiesPage); value->setObjectName(QString("pdfProp") + row); value->setWordWrap(true);
+    value->setTextInteractionFlags(Qt::TextSelectableByMouse); documentForm->addRow(QString(row) + ":", value);
+  }
+  properties->addLayout(documentForm);
+  properties->addWidget(heading("Current page", propertiesPage));
+  auto* pageForm = new QFormLayout; pageForm->setLabelAlignment(Qt::AlignLeft);
+  for (const char* row : {"Number", "Size", "Scale"}) {
+    auto* value = new QLabel("-", propertiesPage); value->setObjectName(QString("pdfProp") + row); value->setWordWrap(true);
+    pageForm->addRow(QString(row) + ":", value);
+  }
+  properties->addLayout(pageForm);
+  properties->addStretch(1);
+  m_SidePages = new QStackedWidget(this);
+  m_SidePages->setObjectName("pdfSidePages");
+  auto* sideStrip = new QWidget(this);
+  sideStrip->setObjectName("pdfSideStrip");
+  auto* stripLayout = new QVBoxLayout(sideStrip); stripLayout->setContentsMargins(2, 4, 2, 4); stripLayout->setSpacing(2);
+  auto* sideGroup = new QButtonGroup(this);
+  sideGroup->setExclusive(true);
+  const std::tuple<QWidget*, const char*, const char*> sideTabs[] = {{m_ThumbView, "Sheet.png", "Thumbnails"},
+      {chestPage, "Blocks_Palette.png", "Tool Chest"}, {propertiesPage, "Layer_Properties.png", "Properties"}};
+  for (const auto& [page, icon, name] : sideTabs) {
+    const int index = m_SidePages->addWidget(page);
+    auto* button = new QToolButton(sideStrip);
+    button->setObjectName(QString("pdfSideButton_") + QString(name).remove(' '));
+    button->setText(name); button->setToolTip(QString("Show the ") + QString(name).toLower());
+    button->setIcon(CadCommandIcon(icon)); button->setIconSize(QSize(24, 24));
+    button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon); button->setCheckable(true); button->setAutoRaise(true);
+    button->setFixedSize(76, 62); button->setChecked(index == 0);
+    sideGroup->addButton(button, index); stripLayout->addWidget(button);
+  }
+  stripLayout->addStretch(1);
+  connect(sideGroup, &QButtonGroup::idClicked, m_SidePages, &QStackedWidget::setCurrentIndex);
+  auto* sidePanel = new QWidget(this);
+  sidePanel->setObjectName("pdfSidePanel");
+  auto* sideLayout = new QHBoxLayout(sidePanel); sideLayout->setContentsMargins(0, 0, 0, 0); sideLayout->setSpacing(0);
+  sideLayout->addWidget(sideStrip); sideLayout->addWidget(m_SidePages, 1);
+  m_ThumbDock = new QDockWidget("Panels", this);
   m_ThumbDock->setObjectName("pdfThumbnails");
-  m_ThumbDock->setWidget(m_ThumbView);
+  m_ThumbDock->setWidget(sidePanel);
   addDockWidget(Qt::LeftDockWidgetArea, m_ThumbDock);
-  resizeDocks({m_ThumbDock}, {PdfThumbnails::kBox + 60}, Qt::Horizontal);
+  resizeDocks({m_ThumbDock}, {PdfThumbnails::kBox + 100}, Qt::Horizontal);
   auto* thumbnailsAction = m_ThumbDock->toggleViewAction();
   thumbnailsAction->setObjectName("pdfThumbnailsAction");
-  tools->addAction(thumbnailsAction);
+  thumbnailsAction->setIcon(CadCommandIcon("Sheet.png"));
+  thumbnailsAction->setText("Side panel");
+  thumbnailsAction->setToolTip("Show or hide the side panel (thumbnails, tool chest, properties)");
+
+  // REQ-452: the ribbon. Tabs of panels, as in the main window; a panel that does not fit collapses into a menu.
+  m_CommandTabs = new QTabWidget(this);
+  m_CommandTabs->setObjectName("pdfRibbon");
+  m_CommandTabs->setUsesScrollButtons(false);
+  m_CommandTabs->setElideMode(Qt::ElideNone);
+  m_CommandTabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  m_CommandTabs->setMinimumWidth(0);
+  m_CommandTabs->setFixedHeight(pdfribbon::kHeight);
+  const auto addPage = [this](const QString& name, const std::function<void(pdfribbon::Page*)>& fillPage) {
+    auto* page = new pdfribbon::Page(m_CommandTabs);
+    page->setObjectName("pdfRibbonPage_" + QString(name).remove('/'));
+    page->setProperty("ribbonTab", name);
+    fillPage(page);
+    m_CommandTabs->addTab(page, name);
+  };
+  const auto tabKey = [](const QString& name) { return QString(name).remove('/'); };
+  addPage("Open/View", [&](pdfribbon::Page* page) {
+    const QString tab = tabKey("Open/View");
+    pdfribbon::PanelBuilder file(page, tab, "File");
+    file.Large(openAction); file.Small(saveAsAction); file.Small(extractPagesAction); file.Finish(page, 10);
+    pdfribbon::PanelBuilder view(page, tab, "View"); // page navigation and zoom live on the bottom bar
+    view.Widget(m_LayoutBox); view.Finish(page, 10);
+    pdfribbon::PanelBuilder search(page, tab, "Search");
+    search.Large(findAction); search.Finish(page, 5);
+    pdfribbon::PanelBuilder palettes(page, tab, "Palettes");
+    palettes.Large(thumbnailsAction); palettes.Finish(page, 5);
+  });
+  addPage("Annotate", [&](pdfribbon::Page* page) {
+    const QString tab = tabKey("Annotate");
+    pdfribbon::PanelBuilder tools(page, tab, "Annotations");
+    for (const int id : {-2, -1, 0, 1, 2, 3}) tools.Small(toolActions[id]);
+    tools.Finish(page, 10);
+    pdfribbon::PanelBuilder look(page, tab, "Style");
+    look.Small(color); look.Widget(width); look.Widget(fontSize);
+    look.Widget(font); look.Widget(bold); look.Widget(italic);
+    look.Widget(fill); look.Small(applyStyle); look.Finish(page, 8);
+    pdfribbon::PanelBuilder edit(page, tab, "Edit");
+    edit.Small(undoAction); edit.Small(redoAction); edit.Finish(page, 5);
+  });
+  addPage("Measure", [&](pdfribbon::Page* page) {
+    const QString tab = tabKey("Measure");
+    pdfribbon::PanelBuilder measure(page, tab, "Measure");
+    for (const int id : {5, 6, 7, 8, int(kToolCheck)}) measure.Small(toolActions[id]);
+    measure.Finish(page, 10);
+    pdfribbon::PanelBuilder scale(page, tab, "Scale");
+    scale.Small(m_SetScaleAction); scale.Widget(m_ScaleLabel); scale.Widget(m_ChecksButton); scale.Widget(m_ShowChecksBox); scale.Finish(page, 9);
+    pdfribbon::PanelBuilder snap(page, tab, "Snap");
+    snap.Small(m_SnapAction); snap.Widget(m_SnapStatus); snap.Finish(page, 6);
+    pdfribbon::PanelBuilder edit(page, tab, "Edit");
+    edit.Small(undoAction); edit.Small(redoAction); edit.Finish(page, 5);
+  });
+  addPage("Review", [&](pdfribbon::Page* page) {
+    pdfribbon::PanelBuilder review(page, tabKey("Review"), "Review");
+    review.Large(extract); review.Large(audit); review.Large(compare); review.Finish(page, 10);
+  });
+  auto* ribbonBar = addToolBar("PDF ribbon");
+  ribbonBar->setObjectName("pdfCommandBar");
+  ribbonBar->setMovable(false); ribbonBar->setFloatable(false); ribbonBar->setContentsMargins(0, 0, 0, 0);
+  auto* ribbonWrapper = new QWidget(ribbonBar);
+  ribbonWrapper->setObjectName("pdfRibbonWrapper");
+  ribbonWrapper->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  auto* ribbonLayout = new QVBoxLayout(ribbonWrapper);
+  ribbonLayout->setContentsMargins(0, 0, 0, 0);
+  ribbonLayout->addWidget(m_CommandTabs);
+  ribbonBar->addWidget(ribbonWrapper);
+
+  // REQ-452: page navigation and zoom live on the bottom bar only.
+  const auto statusButton = [this](QAction* action) {
+    auto* button = new QToolButton(this); button->setObjectName("pdfStatus_" + action->objectName());
+    button->setDefaultAction(action); button->setAutoRaise(true); button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    button->setIconSize(QSize(22, 22)); button->setFixedSize(34, 32); return button;
+  };
+  auto* firstAction = makeAction("pdfFirstPage", "First page", "Back.png", "First page (Home)", [this] { m_PageNumber->setValue(1); });
+  auto* lastAction = makeAction("pdfLastPage", "Last page", "Front.png", "Last page (End)", [this] { m_PageNumber->setValue(m_PageNumber->maximum()); });
+  firstAction->setIcon(NavIcon("first"));
+  lastAction->setIcon(NavIcon("last"));
+  m_PageNumber->setObjectName("pdfPageNumber");
+  m_PageNumber->setKeyboardTracking(false);
+  m_PageNumber->setToolTip("Go to a page");
+  m_PageNumber->setMinimumSize(70, 30);
+  m_StatusPageCount = new QLabel("of 1", this);
+  m_StatusPageCount->setObjectName("pdfStatusPageCount");
+  m_StatusPageCount->setMinimumWidth(48);
+  m_ZoomBox->setMinimumSize(96, 30);
+  for (QAction* action : {firstAction, previousAction}) statusBar()->addPermanentWidget(statusButton(action));
+  m_ToolStatus = new QLabel(this);
+  m_ToolStatus->setObjectName("pdfActiveTool");
+  m_ToolStatus->setMinimumWidth(260);
+  statusBar()->addPermanentWidget(m_ToolStatus);
+  UpdateToolStatus();
+  auto* pageLabel = new QLabel("Page", this);
+  pageLabel->setObjectName("pdfStatusPageLabel");
+  statusBar()->addPermanentWidget(pageLabel);
+  statusBar()->addPermanentWidget(m_PageNumber);
+  statusBar()->addPermanentWidget(m_StatusPageCount);
+  for (QAction* action : {nextAction, lastAction, zoomOutAction}) statusBar()->addPermanentWidget(statusButton(action));
+  statusBar()->addPermanentWidget(m_ZoomBox);
+  for (QAction* action : {zoomInAction, fitWidth, fitPage}) statusBar()->addPermanentWidget(statusButton(action));
+  for (const auto key : {Qt::Key_PageUp, Qt::Key_PageDown, Qt::Key_Home, Qt::Key_End}) { // REQ-387 clause 2: keyboard page navigation
+    auto* navigate = new QShortcut(QKeySequence(key), this);
+    connect(navigate, &QShortcut::activated, this, [this, key] {
+      if (!m_Document) return;
+      const int last = m_PageNumber->maximum();
+      m_PageNumber->setValue(key == Qt::Key_PageUp ? m_PageNumber->value() - 1 : key == Qt::Key_PageDown ? m_PageNumber->value() + 1 :
+                             key == Qt::Key_Home ? 1 : last);
+    });
+  }
 
   // REQ-429: the find bar, on its own row under the toolbars.
   addToolBarBreak(Qt::TopToolBarArea);
@@ -512,15 +826,11 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   connect(m_AuditAllRows, &QCheckBox::toggled, this, [this] { RefreshScaleAudit(); });
   connect(m_AuditShowSheet, &QCheckBox::toggled, this, [this] { m_Page->update(); });
   connect(m_AuditTable, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) {
-    if (!m_AuditReady || row < 0 || row >= static_cast<int>(m_AuditRows.size()) || m_AuditPage != m_PageNumber->value() - 1 || m_Page->image.isNull()) return;
+    if (!m_AuditReady || row < 0 || row >= static_cast<int>(m_AuditRows.size()) || m_AuditPage != CurrentPage() || !PageReady()) return;
     m_AuditSelected = m_AuditRows[static_cast<std::size_t>(row)];
     m_Page->update();
     const auto& match = m_AuditMatches.matches[static_cast<std::size_t>(m_AuditRows[static_cast<std::size_t>(row)])];
-    const auto size = m_Document->Sizes()[m_AuditPage];
-    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
-    const int x = qRound(match.tx * factor), y = qRound((size.hPt - match.ty) * factor);
-    m_Scroll->horizontalScrollBar()->setValue(std::max(0, x - m_Scroll->viewport()->width() / 2));
-    m_Scroll->verticalScrollBar()->setValue(std::max(0, y - m_Scroll->viewport()->height() / 2));
+    CenterOnPagePoint(m_AuditPage, match.tx, match.ty);
   });
   connect(useConsensus, &QPushButton::clicked, this, [this] {
     const pdfview::PageScale* current = EffectiveScale(m_AuditPage);
@@ -637,14 +947,9 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   connect(m_CompareBasePage, qOverload<int>(&QSpinBox::valueChanged), this, [this](int page) { if (m_Compare && page > 0) { m_Compare->basePage = page - 1; m_Compare->aligned = false; m_Compare->manualAlignment = false; if (m_PageNumber->value() != page) m_PageNumber->setValue(page); StartCompare(false); } });
   connect(m_CompareRevisionPage, qOverload<int>(&QSpinBox::valueChanged), this, [this](int page) { if (m_Compare && page > 0) { m_Compare->revisionPage = page - 1; m_Compare->aligned = false; m_Compare->manualAlignment = false; StartCompare(false); } });
   connect(m_CompareTable, &QTableWidget::currentCellChanged, this, [this](int row, int, int, int) {
-    if (!m_Compare || row < 0 || row >= static_cast<int>(m_Compare->changes.size()) || m_Page->image.isNull()) return;
+    if (!m_Compare || row < 0 || row >= static_cast<int>(m_Compare->changes.size()) || !PageReady()) return;
     const auto& region = m_Compare->changes[static_cast<std::size_t>(row)];
-    const auto size = m_Document->Sizes()[m_Compare->basePage];
-    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
-    const int x = qRound((region.x0 + region.x1) * 0.5 * factor);
-    const int y = qRound((size.hPt - (region.y0 + region.y1) * 0.5) * factor);
-    m_Scroll->horizontalScrollBar()->setValue(std::max(0, x - m_Scroll->viewport()->width() / 2));
-    m_Scroll->verticalScrollBar()->setValue(std::max(0, y - m_Scroll->viewport()->height() / 2));
+    CenterOnPagePoint(m_Compare->basePage, (region.x0 + region.x1) * 0.5, (region.y0 + region.y1) * 0.5);
   });
   connect(closeCompare, &QPushButton::clicked, this, [this] {
     m_CompareDialog->hide(); m_ComparePicking = false;
@@ -663,6 +968,7 @@ PdfWindow::~PdfWindow() {
   for (auto& page : m_SnapPages) *page.second.cancel = true;
   m_SnapPages.clear(); // each reader holds the document: the futures wait here
   CancelSearch(true);
+  CancelStrip(true);
   m_Thumbs->SetDocument(nullptr); // the document is destroyed before the model; the worker must be done with it
   m_Cancel = true;
   if (m_Work.valid()) {
@@ -724,16 +1030,22 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   if (!document) { error = "The PDF could not be opened."; return false; }
   if (m_Work.valid()) { error = "Wait for the current page to finish before opening another PDF."; return false; }
   CancelSearch(true); // the search, the snap readers and the thumbnail worker all hold the old document
+  CancelStrip(true);
+  m_StripCache.clear(); m_StripFull.clear(); m_StripOrigin.clear();
   for (auto& page : m_SnapPages) *page.second.cancel = true;
   m_SnapPages.clear();
   m_Thumbs->SetDocument(nullptr);
   m_Document = std::move(document);
   m_Thumbs->SetDocument(m_Document.get());
+  m_Page->placeholder.clear();
+  m_MaxPageWidthPt = 1.0;
+  for (const auto& size : m_Document->Sizes()) m_MaxPageWidthPt = std::max(m_MaxPageWidthPt, static_cast<double>(size.wPt));
+  m_CtxPage = m_InputPage = m_DraftPage = m_PointerPage = m_ExtractPage = -1;
   ClearSearch();
   m_Annotations = {}; m_Draft.clear();
   m_SelectedAnnotation = -1; m_AnnotationDragging = false; m_DragPreview.reset();
   ++m_Revision;
-  m_ExtractMode = false; m_ExtractDragging = false; m_ExtractResult.reset();
+  m_ExtractMode = false; m_ExtractDragging = false; m_ExtractBox = false; m_ExtractResult.reset(); UpdateToolStatus();
   if (m_ExtractReview) m_ExtractReview->hide();
   m_RobustPicks.clear(); m_SelectedCheck = -1; m_SnapHit = false; m_SnapPrevValid = false;
   m_FileScales = pdfview::ReadPageScales(m_Document->Path());
@@ -743,6 +1055,8 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   const QSignalBlocker pageBlock(m_PageNumber);
   m_PageNumber->setRange(1, m_Document->PageCount());
   m_PageNumber->setValue(1);
+  m_Scroll->verticalScrollBar()->setValue(0); m_Scroll->horizontalScrollBar()->setValue(0);
+  SyncPageNav();
   SyncThumbnail();
   setWindowTitle("GoSurvey | " + path + "[*]"); setWindowModified(false);
   UpdateScaleDisplay();
@@ -751,19 +1065,26 @@ bool PdfWindow::AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, co
   return true;
 }
 
-void PdfWindow::RequestRender() {
+void PdfWindow::RequestRender(bool keepPicture) {
   if (!m_Document) return;
-  m_Page->image = {}; m_Page->update();
+  RebuildLayout();
+  UpdateZoomUi();
+  if (m_Layout == Layout::Continuous) { ScheduleStrip(); m_Page->update(); return; }
+  if (!keepPicture) { m_Page->image = {}; m_Page->imageFull = {}; m_Page->imageOrigin = {}; }
+  m_Page->update();
   if (m_Work.valid()) { m_Pending = true; m_Cancel = true; return; }
   const int page = m_PageNumber->value() - 1;
-  const auto& size = m_Document->Sizes()[page];
-  const int w = std::clamp(qRound(std::max(200, m_Scroll->viewport()->width() - 30) * m_Zoom), 64, 4096);
-  const int h = std::clamp(qRound(static_cast<double>(w) * size.hPt / size.wPt), 64, 8192);
+  const QSize target = RenderPx(page);
+  const int w = target.width(), h = target.height();
+  const QRect region = NeededRegion(page);
+  m_WorkRegion = region; m_WorkFull = target;
   m_Cancel = false;
-  m_Work = std::async(std::launch::async, [this, page, w, h] {
+  m_Work = std::async(std::launch::async, [this, page, w, h, region] {
     pdfview::Bitmap bitmap;
-    if (!m_Document->RenderPage(page, w, h, bitmap, [this] { return m_Cancel.load(); })) return pdfview::Bitmap{};
-    return bitmap;
+    const bool ok = Windowed(QSize(w, h))
+        ? m_Document->RenderRegion(page, w, h, region.x(), region.y(), region.width(), region.height(), bitmap, [this] { return m_Cancel.load(); })
+        : m_Document->RenderPage(page, w, h, bitmap, [this] { return m_Cancel.load(); });
+    return ok ? bitmap : pdfview::Bitmap{};
   });
   statusBar()->showMessage("Rendering page...");
   m_Poll->start();
@@ -774,21 +1095,27 @@ void PdfWindow::PollRender() {
   m_Poll->stop();
   try {
     auto bitmap = m_Work.get();
-    if (!m_Pending && bitmap.w > 0 && bitmap.h > 0) {
+    if (m_Layout != Layout::PageByPage) {
+      // switched to the continuous layout while this page was rendering: its bitmap is not wanted
+    } else if (!m_Pending && bitmap.w > 0 && bitmap.h > 0) {
       QImage image(bitmap.bgra.data(), bitmap.w, bitmap.h, static_cast<qsizetype>(bitmap.w) * 4, QImage::Format_ARGB32);
       m_Page->image = image.copy();
-      m_Page->resize(bitmap.w, bitmap.h);
+      // The picture is drawn at the display's pixel density, so imageFull is in device pixels.
+      m_Page->imageOrigin = m_WorkRegion.topLeft();
+      m_Page->imageFull = m_WorkFull;
+      if (RenderPx(CurrentPage()) != m_WorkFull) m_Pending = true; // zoomed again while it drew
       m_Page->update();
       statusBar()->showMessage(QString("Page %1 of %2").arg(m_PageNumber->value()).arg(m_Document->PageCount()));
     } else if (!m_Pending) statusBar()->showMessage("The page could not be rendered.");
   } catch (const std::exception& error) {
     statusBar()->showMessage(QString::fromUtf8(error.what()));
   }
-  if (m_Pending) { m_Pending = false; RequestRender(); }
+  if (m_Layout != Layout::PageByPage) m_Pending = false;
+  if (m_Pending) { m_Pending = false; RequestRender(true); } // the picture was already dropped if the page changed
 }
 
 pdfview::PageScale PdfWindow::CurrentScale() const {
-  const auto* scale = EffectiveScale(m_PageNumber->value() - 1);
+  const auto* scale = EffectiveScale(ActivePage());
   return scale ? *scale : pdfview::PageScale{0, pdfview::Unit::Inch, 0};
 }
 
@@ -811,13 +1138,13 @@ bool PdfWindow::AddAnnotation(const pdfview::Annot& annotation, QString& error) 
 }
 
 QPointF PdfWindow::CanvasToPage(QPointF point) const {
-  if (!m_Document || m_Page->width() <= 0 || m_Page->height() <= 0) return {};
-  const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
-  return {point.x() * size.wPt / m_Page->width(), (m_Page->height() - point.y()) * size.hPt / m_Page->height()};
+  if (!m_Document || PageWidthPx() <= 0 || PageHeightPx() <= 0) return {};
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(ActivePage())];
+  return {point.x() * size.wPt / PageWidthPx(), (PageHeightPx() - point.y()) * size.hPt / PageHeightPx()};
 }
 
 int PdfWindow::HitAnnotation(QPointF p, float tolerance) const {
-  const int page = m_PageNumber->value() - 1;
+  const int page = ActivePage();
   const auto& items = m_Annotations.Items();
   const auto segmentDistance = [](QPointF p, QPointF a, QPointF b) {
     const QPointF d = b - a;
@@ -903,9 +1230,9 @@ void PdfWindow::EndAnnotation(QPointF point, Qt::MouseButton button) {
 void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (m_ComparePicking) { ComparePick(point, button); return; }
   if (m_ExtractMode) return;
-  if (!m_Document || (m_Tool < 0 && m_Tool != -2) || IsBusy() || m_Page->image.isNull()) return;
+  if (!m_Document || (m_Tool < 0 && m_Tool != -2) || IsBusy() || !PageReady()) return;
   UpdateSnap(point); // the click's own position, so a click without a prior move still snaps
-  const auto size = m_Document->Sizes()[m_PageNumber->value() - 1];
+  const auto size = m_Document->Sizes()[ActivePage()];
   if (m_Tool == -2) {
     if (button != Qt::LeftButton) return;
     const QPointF pagePoint = CanvasToPage(point);
@@ -919,23 +1246,25 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
         }
       } else if (selected.kind == pdfview::Annot::Kind::Line) grips = {{selected.x0,selected.y0},{selected.x1,selected.y1}};
       else grips = {{selected.x0,selected.y0},{selected.x1,selected.y1},{selected.x0,selected.y1},{selected.x1,selected.y0}};
-      const float tol = static_cast<float>(7.0 * size.wPt / std::max(1, m_Page->width()));
+      const float tol = static_cast<float>(7.0 * size.wPt / std::max(1, PageWidthPx()));
       for (int i = 0; i < static_cast<int>(grips.size()); ++i) {
         if (QLineF(pagePoint, grips[static_cast<std::size_t>(i)]).length() <= tol) {
           m_AnnotationHandle = i; m_AnnotationDragging = true; m_DragStart = point; m_DragOriginal = selected; return;
         }
       }
     }
-    m_SelectedAnnotation = HitAnnotation(pagePoint, static_cast<float>(5.0 * size.wPt / std::max(1, m_Page->width())));
+    m_SelectedAnnotation = HitAnnotation(pagePoint, static_cast<float>(5.0 * size.wPt / std::max(1, PageWidthPx())));
     if (m_SelectedAnnotation >= 0) {
       m_AnnotationDragging = true; m_AnnotationHandle = -1; m_DragStart = point;
       m_DragOriginal = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
     }
     m_Page->update(); return;
   }
+  if (!m_Draft.empty() && m_DraftPage >= 0 && m_DraftPage != ActivePage()) m_Draft.clear(); // picks stay on one page
+  if (m_Draft.empty()) m_DraftPage = ActivePage();
   if (m_Tool == kToolCalibrate || m_Tool == kToolCheck) {
     if (button != Qt::LeftButton) { m_Draft.clear(); m_Page->update(); return; }
-    if (m_Tool == kToolCheck && m_Draft.empty() && m_CheckTarget == 0 && !EffectiveScale(m_PageNumber->value() - 1)) {
+    if (m_Tool == kToolCheck && m_Draft.empty() && m_CheckTarget == 0 && !EffectiveScale(ActivePage())) {
       statusBar()->showMessage("This page has no scale. Use Set scale... first.");
       return;
     }
@@ -969,7 +1298,7 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (button == Qt::RightButton && (!multi || m_Draft.size() < required)) { m_Draft.clear(); m_Page->update(); return; }
   if (m_Draft.size() < required || (multi && button != Qt::RightButton)) { m_Page->update(); return; }
   pdfview::Annot annotation;
-  annotation.kind = kind; annotation.page = m_PageNumber->value() - 1;
+  annotation.kind = kind; annotation.page = ActivePage();
   ApplyAnnotationStyle(annotation);
   annotation.x0 = m_Draft.front().first; annotation.y0 = m_Draft.front().second;
   annotation.x1 = m_Draft.back().first; annotation.y1 = m_Draft.back().second;
@@ -988,7 +1317,8 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
 }
 
 void PdfWindow::DrawExtractOverlay(QPainter& painter) {
-  if (!m_ExtractDragging && !m_ExtractResult) return;
+  if (!m_ExtractDragging && !m_ExtractBox) return;
+  if (m_Layout == Layout::Continuous && m_ExtractPage != ActivePage()) return;
   painter.setPen(QPen(QColor("#e7a800"), 2, Qt::DashLine));
   painter.setBrush(QColor(255, 208, 64, 55));
   painter.drawRect(QRectF(m_ExtractStart, m_ExtractEnd).normalized());
@@ -997,9 +1327,9 @@ void PdfWindow::DrawExtractOverlay(QPainter& painter) {
 void PdfWindow::BeginExtract(QPointF point, Qt::MouseButton button) {
   if (!m_ExtractMode) return;
   if (button != Qt::LeftButton) {
-    m_ExtractMode = false; m_Page->unsetCursor(); statusBar()->showMessage("Coordinate extraction cancelled."); return;
+    m_ExtractMode = false; UpdateToolStatus(); m_Page->unsetCursor(); statusBar()->showMessage("Coordinate extraction cancelled."); return;
   }
-  m_ExtractDragging = true; m_ExtractStart = m_ExtractEnd = point; m_Page->update();
+  m_ExtractDragging = true; m_ExtractPage = ActivePage(); m_ExtractStart = m_ExtractEnd = point; m_Page->update();
 }
 
 void PdfWindow::MoveExtract(QPointF point) {
@@ -1009,7 +1339,7 @@ void PdfWindow::MoveExtract(QPointF point) {
 
 void PdfWindow::EndExtract(QPointF point, Qt::MouseButton button) {
   if (!m_ExtractDragging || button != Qt::LeftButton) return;
-  m_ExtractEnd = point; m_ExtractDragging = false; m_ExtractMode = false;
+  m_ExtractEnd = point; m_ExtractDragging = false; m_ExtractMode = false; UpdateToolStatus();
   m_Page->unsetCursor(); m_Page->update();
   if (QRectF(m_ExtractStart, m_ExtractEnd).normalized().width() < 5 ||
       QRectF(m_ExtractStart, m_ExtractEnd).normalized().height() < 5) {
@@ -1019,18 +1349,18 @@ void PdfWindow::EndExtract(QPointF point, Qt::MouseButton button) {
 }
 
 void PdfWindow::ExtractRegion() {
-  if (!m_Document || m_Page->image.isNull()) return;
+  if (!m_Document || !PageReady()) return;
   std::vector<pdfview::DimText> texts;
   std::vector<pdfview::DimSeg> segments;
-  if (!m_Document->AuditPageData(m_PageNumber->value() - 1, texts, segments, [] { return false; })) {
+  if (!m_Document->AuditPageData(ActivePage(), texts, segments, [] { return false; })) {
     QMessageBox::warning(this, "Extract Coordinates", "Could not read selectable text from this PDF page."); return;
   }
-  const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(ActivePage())];
   const QRectF box = QRectF(m_ExtractStart, m_ExtractEnd).normalized();
-  const float x0 = static_cast<float>(box.left() * size.wPt / m_Page->width());
-  const float x1 = static_cast<float>(box.right() * size.wPt / m_Page->width());
-  const float y0 = static_cast<float>((m_Page->height() - box.bottom()) * size.hPt / m_Page->height());
-  const float y1 = static_cast<float>((m_Page->height() - box.top()) * size.hPt / m_Page->height());
+  const float x0 = static_cast<float>(box.left() * size.wPt / PageWidthPx());
+  const float x1 = static_cast<float>(box.right() * size.wPt / PageWidthPx());
+  const float y0 = static_cast<float>((PageHeightPx() - box.bottom()) * size.hPt / PageHeightPx());
+  const float y1 = static_cast<float>((PageHeightPx() - box.top()) * size.hPt / PageHeightPx());
   m_ExtractResult = pdfview::ExtractCoordinates(texts, x0, y0, x1, y1);
   if (m_ExtractResult->status != pdfview::ExtractStatus::Ok) {
     QMessageBox::information(this, "Extract Coordinates", QString::fromUtf8(m_ExtractResult->message.c_str()));
@@ -1054,9 +1384,34 @@ void PdfWindow::ShowExtractReview() {
     table->setHorizontalHeaderLabels({"Source text", "Northing", "Easting", "Elevation", "Description", "Point #", "Creates", "Decision"});
     table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
     table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Fixed);
+    table->setColumnWidth(7, 220); // room for the Accept and Deny buttons whole
     table->setWordWrap(true); table->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(table);
     auto* close = new QPushButton("Close", m_ExtractReview); close->setObjectName("pdfCoordinateReviewClose");
-    connect(close, &QPushButton::clicked, m_ExtractReview, &QDialog::hide); layout->addWidget(close, 0, Qt::AlignRight);
+    connect(close, &QPushButton::clicked, m_ExtractReview, &QDialog::reject);
+    connect(m_ExtractReview, &QDialog::rejected, this, [this] { m_ExtractBox = false; m_Page->update(); }); // review closed: the box goes
+    auto* acceptAll = new QPushButton("Accept all", m_ExtractReview); acceptAll->setObjectName("pdfCoordinateAcceptAll");
+    auto* denyAll = new QPushButton("Deny all", m_ExtractReview); denyAll->setObjectName("pdfCoordinateDenyAll");
+    // Accept all walks the list top to bottom through the same per-candidate path (so an id conflict still asks);
+    // it stops at the first candidate that could not be created, leaving that one and the rest for review.
+    connect(acceptAll, &QPushButton::clicked, this, [this] {
+      if (!m_ExtractResult || m_ExtractResult->candidates.empty()) return;
+      if (!m_Editor) { QMessageBox::information(this, "Extract Coordinates", "Open the PDF from an active drawing to accept coordinates."); return; }
+      auto& list = m_ExtractResult->candidates;
+      const std::size_t created = m_Editor->CommitPdfCoordinates(list);
+      list.erase(list.begin(), list.begin() + static_cast<std::ptrdiff_t>(created));
+      ShowExtractReview();
+      statusBar()->showMessage(list.empty() ? "Extracted coordinates accepted." : QString("%1 accepted; the rest need review.").arg(created));
+    });
+    connect(denyAll, &QPushButton::clicked, this, [this] {
+      if (!m_ExtractResult) return;
+      m_ExtractResult->candidates.clear();
+      ShowExtractReview();
+      statusBar()->showMessage("Candidates denied; drawing unchanged.");
+    });
+    auto* buttons = new QHBoxLayout();
+    buttons->addWidget(acceptAll); buttons->addWidget(denyAll); buttons->addStretch(1); buttons->addWidget(close);
+    layout->addLayout(buttons);
   }
   auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates");
   table->setRowCount(static_cast<int>(m_ExtractResult->candidates.size()));
@@ -1069,12 +1424,14 @@ void PdfWindow::ShowExtractReview() {
     for (int col = 0; col < 7; ++col) table->setItem(row, col, new QTableWidgetItem(cells[col]));
     auto* decisions = new QWidget(table); auto* buttons = new QHBoxLayout(decisions); buttons->setContentsMargins(2, 2, 2, 2);
     auto* accept = new QPushButton("Accept", decisions); auto* deny = new QPushButton("Deny", decisions);
+    accept->setMinimumWidth(90); deny->setMinimumWidth(90);
     accept->setObjectName(QString("pdfCoordinateAccept_%1").arg(row)); deny->setObjectName(QString("pdfCoordinateDeny_%1").arg(row));
     buttons->addWidget(accept); buttons->addWidget(deny); table->setCellWidget(row, 7, decisions);
     connect(accept, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, true); });
     connect(deny, &QPushButton::clicked, this, [this, row] { DecideExtractCandidate(row, false); });
   }
   table->resizeRowsToContents();
+  m_ExtractBox = !m_ExtractResult->candidates.empty(); m_Page->update();
   m_ExtractReview->show(); m_ExtractReview->raise();
 }
 
@@ -1087,16 +1444,17 @@ void PdfWindow::DecideExtractCandidate(int row, bool accept) {
   m_ExtractResult->candidates.erase(m_ExtractResult->candidates.begin() + row);
   if (m_ExtractResult->candidates.empty()) {
     if (auto* table = m_ExtractReview->findChild<QTableWidget*>("pdfCoordinateCandidates")) table->setRowCount(0);
+    m_ExtractBox = false; m_Page->update();
     statusBar()->showMessage(accept ? "Extracted coordinates accepted." : "Candidate denied; drawing unchanged.");
   } else ShowExtractReview();
 }
 
 void PdfWindow::DrawAnnotations(QPainter& painter) {
-  if (!m_Document || m_Page->image.isNull()) return;
-  const int page = m_PageNumber->value() - 1;
+  if (!m_Document || !PageReady()) return;
+  const int page = ActivePage();
   const auto size = m_Document->Sizes()[page];
-  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
-  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+  const double scaleX = static_cast<double>(PageWidthPx()) / size.wPt;
+  const double scaleY = static_cast<double>(PageHeightPx()) / size.hPt;
   const double factor = std::sqrt(scaleX * scaleY);
   auto map = [&](float x, float y) { return QPointF(x * scaleX, (size.hPt - y) * scaleY); };
   for (std::size_t itemIndex = 0; itemIndex < m_Annotations.Items().size(); ++itemIndex) {
@@ -1136,7 +1494,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     }
   }
   painter.setPen(QPen(QColor(QtAccentFor(false).strong), 2));
-  for (std::size_t i = 0; m_Tool != kToolCalibrate && m_Tool != kToolCheck && i < m_Draft.size(); ++i) {
+  for (std::size_t i = 0; (m_DraftPage < 0 || m_DraftPage == page) && m_Tool != kToolCalibrate && m_Tool != kToolCheck && i < m_Draft.size(); ++i) {
     const auto pt = map(m_Draft[i].first, m_Draft[i].second);
     painter.drawEllipse(pt, 3, 3);
     if (i) painter.drawLine(map(m_Draft[i - 1].first, m_Draft[i - 1].second), pt);
@@ -1215,9 +1573,557 @@ void PdfWindow::closeEvent(QCloseEvent* event) {
   if (m_OpenWork.valid()) { statusBar()->showMessage("Wait for the PDF to finish opening before closing."); event->ignore(); return; }
   if (m_SaveWork.valid()) { statusBar()->showMessage("Wait for the PDF save to finish before closing."); event->ignore(); return; }
   if (!ConfirmDiscard()) { event->ignore(); return; }
-  m_Cancel = true; m_SearchCancel = true; m_AuditCancel = true;
+  m_Cancel = true; m_StripCancel = true; m_SearchCancel = true; m_AuditCancel = true;
   if (m_Compare) m_Compare->cancel = true;
   event->accept();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// REQ-387 clause 2 / REQ-452: layout, zoom, pan and the continuous strip
+// ---------------------------------------------------------------------------------------------------
+
+int PdfWindow::CurrentPage() const { return m_PageNumber->value() - 1; }
+int PdfWindow::ActivePage() const { return m_CtxPage >= 0 ? m_CtxPage : CurrentPage(); }
+
+QSize PdfWindow::PagePx(int page) const {
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(page)];
+  const double wide = WidthAtZoomOne(page) * m_Zoom;
+  const int w = std::clamp(qRound(wide), 64, 200000);
+  const int h = std::clamp(qRound(static_cast<double>(w) * size.hPt / size.wPt), 64, 400000);
+  return {w, h};
+}
+
+// A page bigger than this is never drawn whole (a bitmap that size would be gigabytes): only the window around
+// the view is, and it is redrawn as the view moves.
+bool PdfWindow::Windowed(QSize full) {
+  return static_cast<long long>(full.width()) * full.height() > 24'000'000LL;
+}
+
+// The page's size in device pixels: pages are drawn at the display's density so they stay crisp on a scaled screen.
+QSize PdfWindow::RenderPx(int page) const {
+  const QSize logical = PagePx(page);
+  const double ratio = devicePixelRatioF();
+  return {std::max(1, qRound(logical.width() * ratio)), std::max(1, qRound(logical.height() * ratio))};
+}
+
+QRect PdfWindow::NeededRegion(int page) const {
+  const QSize full = RenderPx(page);
+  if (!Windowed(full)) return QRect(QPoint(0, 0), full);
+  const QRect pageRect = PageRect(page);
+  const QSize view = m_Scroll->viewport()->size();
+  QRect seen(m_Scroll->horizontalScrollBar()->value(), m_Scroll->verticalScrollBar()->value(), view.width(), view.height());
+  seen.translate(-pageRect.topLeft());
+  seen.adjust(-view.width() / 2, -view.height() / 2, view.width() / 2, view.height() / 2);
+  const double ratio = devicePixelRatioF();
+  const QRect device(QPoint(qFloor(seen.x() * ratio), qFloor(seen.y() * ratio)), QPoint(qCeil(seen.right() * ratio), qCeil(seen.bottom() * ratio)));
+  return device.intersected(QRect(QPoint(0, 0), full));
+}
+
+// Page-by-page: true when the current picture covers everything the view shows.
+bool PdfWindow::PageWindowCovers() const {
+  if (m_Page->image.isNull()) return false;
+  if (m_Page->imageFull.isEmpty()) return true;
+  const double factor = static_cast<double>(m_Page->width()) / std::max(1, m_Page->imageFull.width());
+  const QRectF have(m_Page->imageOrigin.x() * factor, m_Page->imageOrigin.y() * factor, m_Page->image.width() * factor, m_Page->image.height() * factor);
+  const QRectF view(m_Scroll->horizontalScrollBar()->value(), m_Scroll->verticalScrollBar()->value(), m_Scroll->viewport()->width(), m_Scroll->viewport()->height());
+  return have.adjusted(-1, -1, 1, 1).contains(view.intersected(QRectF(m_Page->rect())));
+}
+
+// The page's width at zoom 1: the viewport width in page-by-page mode ("fit width"); in the continuous layout the
+// widest page is that wide and narrower pages keep their proportion, so the pages stay in true relative size.
+double PdfWindow::WidthAtZoomOne(int page) const {
+  const double fit = std::max(200, m_Scroll->viewport()->width() - 30);
+  if (m_Layout != Layout::Continuous) return fit;
+  return fit * static_cast<double>(m_Document->Sizes()[static_cast<std::size_t>(page)].wPt) / m_MaxPageWidthPt;
+}
+
+double PdfWindow::ZoomPercent() const {
+  if (!m_Document) return 100.0;
+  const int page = CurrentPage();
+  const double actualPx = static_cast<double>(m_Document->Sizes()[static_cast<std::size_t>(page)].wPt) * 96.0 / 72.0;
+  return WidthAtZoomOne(page) * m_Zoom / actualPx * 100.0;
+}
+
+void PdfWindow::SetZoomPercent(double percent) {
+  if (!m_Document || percent <= 0) return;
+  const int page = CurrentPage();
+  const double actualPx = static_cast<double>(m_Document->Sizes()[static_cast<std::size_t>(page)].wPt) * 96.0 / 72.0;
+  SetZoom(percent / 100.0 * actualPx / WidthAtZoomOne(page), m_Scroll->viewport()->rect().center());
+}
+
+void PdfWindow::UpdateZoomUi() {
+  if (!m_ZoomBox) return;
+  const int percent = std::clamp(qRound(ZoomPercent()), m_ZoomBox->minimum(), m_ZoomBox->maximum());
+  const QSignalBlocker block(m_ZoomBox);
+  m_ZoomBox->setValue(percent);
+}
+
+// The bottom bar's "of N" count beside the page box.
+void PdfWindow::SyncPageNav() {
+  if (!m_StatusPageCount) return;
+  m_StatusPageCount->setText(QString("of %1").arg(m_PageNumber->maximum()));
+}
+
+// Properties tab of the side panel: what the open document and the page being read are.
+void PdfWindow::UpdatePropertiesPanel() {
+  const auto show = [this](const char* name, const QString& text) { if (auto* label = findChild<QLabel*>(name)) label->setText(text); };
+  if (!m_Document) {
+    for (const char* name : {"pdfPropFile", "pdfPropPages", "pdfPropNumber", "pdfPropSize", "pdfPropScale"}) show(name, "-");
+    return;
+  }
+  const int page = CurrentPage();
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(page)];
+  show("pdfPropFile", QFileInfo(QString::fromStdWString(m_Document->Path().wstring())).fileName());
+  show("pdfPropPages", QString::number(m_Document->PageCount()));
+  show("pdfPropNumber", QString("%1 of %2").arg(page + 1).arg(m_Document->PageCount()));
+  show("pdfPropSize", QString("%1 x %2 in").arg(size.wPt / 72.0, 0, 'f', 2).arg(size.hPt / 72.0, 0, 'f', 2));
+  const auto* scale = EffectiveScale(page);
+  show("pdfPropScale", scale ? QString::fromUtf8(scale->RatioText().c_str()) : QString("Unscaled"));
+}
+
+void PdfWindow::ZoomBy(double factor, QPoint viewportPoint) { SetZoom(m_Zoom * factor, viewportPoint); }
+
+void PdfWindow::FitWidth() {
+  if (!m_Document) { m_Zoom = 1.0; return; }
+  const double wide = m_Layout == Layout::Continuous
+      ? m_MaxPageWidthPt / static_cast<double>(m_Document->Sizes()[static_cast<std::size_t>(CurrentPage())].wPt) : 1.0;
+  SetZoom(wide, m_Scroll->viewport()->rect().center());
+  m_Scroll->horizontalScrollBar()->setValue(0);
+}
+
+void PdfWindow::FitPage() {
+  if (!m_Document) return;
+  const int page = CurrentPage();
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(page)];
+  const double widthZoom = m_Layout == Layout::Continuous ? m_MaxPageWidthPt / static_cast<double>(size.wPt) : 1.0;
+  const double heightAtOne = WidthAtZoomOne(page) * size.hPt / size.wPt;
+  const double heightZoom = std::max(100, m_Scroll->viewport()->height() - 2 * kPageGap) / heightAtOne;
+  SetZoom(std::min(widthZoom, heightZoom), m_Scroll->viewport()->rect().center());
+  m_Scroll->horizontalScrollBar()->setValue(0);
+  if (m_Layout == Layout::Continuous) ScrollToPage(page);
+}
+
+PdfWindow::ZoomAnchor PdfWindow::CaptureAnchor(QPoint viewportPoint) const {
+  ZoomAnchor anchor;
+  if (!m_Document) return anchor;
+  const QPoint canvasPoint = m_Page->mapFrom(m_Scroll->viewport(), viewportPoint);
+  anchor.page = m_Layout == Layout::Continuous ? PageAtY(canvasPoint.y()) : CurrentPage();
+  const QRect rect = PageRect(anchor.page);
+  anchor.fx = (canvasPoint.x() - rect.x()) / std::max(1.0, static_cast<double>(rect.width()));
+  anchor.fy = (canvasPoint.y() - rect.y()) / std::max(1.0, static_cast<double>(rect.height()));
+  return anchor;
+}
+
+void PdfWindow::ApplyScrollRange(QScrollBar* bar, int canvasLength, int viewLength) {
+  bar->setRange(0, std::max(0, canvasLength - viewLength)); // what QScrollArea settles on once it has laid the page out
+  bar->setPageStep(viewLength);
+}
+
+void PdfWindow::RestoreAnchor(const ZoomAnchor& anchor, QPoint viewportPoint) {
+  if (!m_Document) return;
+  const QRect rect = PageRect(anchor.page);
+  const QPointF target(rect.x() + anchor.fx * rect.width(), rect.y() + anchor.fy * rect.height());
+  const QSize view = m_Scroll->viewport()->size();
+  ApplyScrollRange(m_Scroll->horizontalScrollBar(), m_Page->width(), view.width());
+  ApplyScrollRange(m_Scroll->verticalScrollBar(), m_Page->height(), view.height());
+  m_Scroll->horizontalScrollBar()->setValue(m_Page->width() > view.width() ? qRound(target.x() - viewportPoint.x()) : 0);
+  m_Scroll->verticalScrollBar()->setValue(m_Page->height() > view.height() ? qRound(target.y() - viewportPoint.y()) : 0);
+}
+
+// Zooms so the page point under viewportPoint stays under it; the page is re-rendered at the new size.
+void PdfWindow::SetZoom(double zoom, QPoint viewportPoint) {
+  if (m_Document) { // 5% to 1000% of the page's actual size
+    const int page = CurrentPage();
+    const double actualPx = static_cast<double>(m_Document->Sizes()[static_cast<std::size_t>(page)].wPt) * 96.0 / 72.0;
+    zoom = std::clamp(zoom, 0.05 * actualPx / WidthAtZoomOne(page), 10.0 * actualPx / WidthAtZoomOne(page));
+  } else zoom = std::clamp(zoom, 0.1, 4.0);
+  if (!m_Document) { m_Zoom = zoom; return; }
+  if (std::abs(zoom - m_Zoom) < 1e-9) { UpdateZoomUi(); return; }
+  const ZoomAnchor anchor = CaptureAnchor(viewportPoint);
+  m_Zoom = zoom;
+  // Resize at once (the old picture is stretched to the new size, so the page follows the wheel without a blank
+  // frame); the sharp render waits until the zooming pauses, so a run of wheel notches costs one render.
+  RebuildLayout();
+  UpdateZoomUi();
+  if (m_Layout == Layout::PageByPage && m_Work.valid()) { m_Pending = true; m_Cancel = true; }
+  m_Page->update();
+  RestoreAnchor(anchor, viewportPoint);
+  m_ZoomSettle->start();
+}
+
+void PdfWindow::CenterOnPagePoint(int page, double xPt, double yPt) {
+  if (!m_Document || !PageReady() || page < 0 || page >= m_Document->PageCount()) return;
+  if (m_Layout == Layout::PageByPage && page != CurrentPage()) return;
+  const QRect rect = PageRect(page);
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(page)];
+  const int x = rect.x() + qRound(xPt * rect.width() / size.wPt);
+  const int y = rect.y() + qRound((size.hPt - yPt) * rect.height() / size.hPt);
+  m_Scroll->horizontalScrollBar()->setValue(std::max(0, x - m_Scroll->viewport()->width() / 2));
+  m_Scroll->verticalScrollBar()->setValue(std::max(0, y - m_Scroll->viewport()->height() / 2));
+}
+
+// Page-by-page sizes the canvas to the current page; continuous stacks every page (top to bottom, centred).
+void PdfWindow::RebuildLayout() {
+  if (!m_Document) return;
+  if (m_Layout == Layout::PageByPage) {
+    const QSize px = PagePx(CurrentPage());
+    if (m_Page->size() != px) m_Page->resize(px);
+    return;
+  }
+  const int count = m_Document->PageCount();
+  m_PageTop.assign(static_cast<std::size_t>(count), 0);
+  m_PageWpx.assign(static_cast<std::size_t>(count), 0);
+  m_PageHpx.assign(static_cast<std::size_t>(count), 0);
+  int y = kPageGap, widest = 0;
+  for (int page = 0; page < count; ++page) {
+    const QSize px = PagePx(page);
+    const auto index = static_cast<std::size_t>(page);
+    m_PageTop[index] = y; m_PageWpx[index] = px.width(); m_PageHpx[index] = px.height();
+    y += px.height() + kPageGap;
+    widest = std::max(widest, px.width());
+  }
+  const QSize canvas(widest + 2 * kPageGap, y);
+  if (m_Page->size() != canvas) m_Page->resize(canvas);
+}
+
+QRect PdfWindow::PageRect(int page) const {
+  if (m_Layout != Layout::Continuous) return QRect(0, 0, m_Page->width(), m_Page->height());
+  if (page < 0 || page >= static_cast<int>(m_PageTop.size())) return {};
+  const auto index = static_cast<std::size_t>(page);
+  return QRect((m_Page->width() - m_PageWpx[index]) / 2, m_PageTop[index], m_PageWpx[index], m_PageHpx[index]);
+}
+
+int PdfWindow::PageAtY(int y) const {
+  if (m_PageTop.empty()) return 0;
+  const auto after = std::upper_bound(m_PageTop.begin(), m_PageTop.end(), y);
+  int page = std::max(0, static_cast<int>(after - m_PageTop.begin()) - 1);
+  const int bottom = m_PageTop[static_cast<std::size_t>(page)] + m_PageHpx[static_cast<std::size_t>(page)];
+  // In the gap below a page: the nearer of the two neighbours.
+  if (y > bottom && page + 1 < static_cast<int>(m_PageTop.size()) && y - bottom > m_PageTop[static_cast<std::size_t>(page) + 1] - y) ++page;
+  return page;
+}
+
+int PdfWindow::PageWidthPxOf(int page) const {
+  if (m_Layout == Layout::Continuous && page >= 0 && page < static_cast<int>(m_PageWpx.size())) return m_PageWpx[static_cast<std::size_t>(page)];
+  return m_Page->width();
+}
+
+int PdfWindow::PageHeightPxOf(int page) const {
+  if (m_Layout == Layout::Continuous && page >= 0 && page < static_cast<int>(m_PageHpx.size())) return m_PageHpx[static_cast<std::size_t>(page)];
+  return m_Page->height();
+}
+
+bool PdfWindow::PageReady() const {
+  if (!m_Document) return false;
+  return m_Layout == Layout::Continuous ? !m_PageTop.empty() : !m_Page->image.isNull();
+}
+
+void PdfWindow::SetLayout(Layout layout) {
+  {
+    const QSignalBlocker block(m_LayoutBox);
+    m_LayoutBox->setCurrentIndex(layout == Layout::Continuous ? 1 : 0);
+  }
+  if (auto* menuAction = findChild<QAction*>(layout == Layout::Continuous ? "pdfLayoutContinuous" : "pdfLayoutPageByPage")) menuAction->setChecked(true);
+  if (layout == m_Layout) return;
+  const int page = CurrentPage();
+  CancelStrip(true);
+  m_Layout = layout;
+  m_Draft.clear(); m_SnapHit = false; m_SnapPrevValid = false;
+  if (layout == Layout::Continuous) {
+    m_Cancel = true; m_Pending = false; // a page-by-page render still running is dropped when it ends
+    m_Page->image = {}; m_Page->imageFull = {}; m_Page->imageOrigin = {};
+    UpdateZoomUi();
+    if (m_Document) {
+      RebuildLayout();
+      m_Scroll->horizontalScrollBar()->setValue(0);
+      ScrollToPage(page);
+      ScheduleStrip();
+    }
+  } else {
+    m_StripCache.clear(); m_StripFull.clear(); m_StripOrigin.clear(); m_PageTop.clear(); m_PageWpx.clear(); m_PageHpx.clear();
+    m_Scroll->verticalScrollBar()->setValue(0); m_Scroll->horizontalScrollBar()->setValue(0);
+    RequestRender();
+  }
+  m_Page->update();
+}
+
+void PdfWindow::ScrollToPage(int page) {
+  if (!m_Document) return;
+  page = std::clamp(page, 0, m_Document->PageCount() - 1);
+  if (m_Layout != Layout::Continuous) { m_PageNumber->setValue(page + 1); return; }
+  if (m_PageTop.empty()) RebuildLayout();
+  auto* bar = m_Scroll->verticalScrollBar();
+  m_ProgrammaticScroll = true; // the page the user asked for stays current even when it is too short to reach the middle
+  ApplyScrollRange(bar, m_Page->height(), m_Scroll->viewport()->height());
+  bar->setValue(m_PageTop[static_cast<std::size_t>(page)] - kPageGap);
+  m_ProgrammaticScroll = false;
+  if (CurrentPage() != page) {
+    m_SyncingPage = true;
+    m_PageNumber->setValue(page + 1);
+    m_SyncingPage = false;
+  }
+  ScheduleStrip();
+}
+
+// The page boxes meeting the viewport, first and last.
+std::pair<int, int> PdfWindow::VisiblePages() const {
+  if (m_PageTop.empty()) return {0, -1};
+  const int top = m_Scroll->verticalScrollBar()->value();
+  const int bottom = top + m_Scroll->viewport()->height();
+  const int count = static_cast<int>(m_PageTop.size());
+  int first = std::max(0, static_cast<int>(std::upper_bound(m_PageTop.begin(), m_PageTop.end(), top) - m_PageTop.begin()) - 1);
+  if (m_PageTop[static_cast<std::size_t>(first)] + m_PageHpx[static_cast<std::size_t>(first)] < top && first + 1 < count) ++first;
+  const int last = std::max(first, static_cast<int>(std::upper_bound(m_PageTop.begin(), m_PageTop.end(), bottom) - m_PageTop.begin()) - 1);
+  return {first, std::min(last, count - 1)};
+}
+
+// The viewport moved: follow the page in the middle of it and render what came into view.
+void PdfWindow::OnScrolled() {
+  if (m_Layout != Layout::Continuous || !m_Document || m_PageTop.empty()) return;
+  const int y = m_Scroll->verticalScrollBar()->value();
+  if (y != m_LastScrollY) { m_ScrollDirection = y > m_LastScrollY ? 1 : -1; m_LastScrollY = y; }
+  if (!m_ProgrammaticScroll) {
+    const int page = PageAtY(y + m_Scroll->viewport()->height() / 2);
+    if (page != CurrentPage()) {
+      m_SyncingPage = true; // the thumbnail strip, page box and scale readout follow; the picks in progress stay
+      m_PageNumber->setValue(page + 1);
+      m_SyncingPage = false;
+      statusBar()->showMessage(QString("Page %1 of %2").arg(page + 1).arg(m_Document->PageCount()));
+    }
+  }
+  ScheduleStrip();
+}
+
+// Paints each page meeting the exposed rectangle: its cached picture (a blank sheet until it arrives; a picture of
+// another zoom is scaled as a stand-in), then every overlay in the page's own coordinates.
+bool PdfWindow::PaintStrip(QPainter& painter, const QRect& exposed) {
+  if (m_Layout != Layout::Continuous || !m_Document || m_PageTop.empty()) return false;
+  const int count = static_cast<int>(m_PageTop.size());
+  int first = std::max(0, static_cast<int>(std::upper_bound(m_PageTop.begin(), m_PageTop.end(), exposed.top()) - m_PageTop.begin()) - 1);
+  for (int page = first; page < count && m_PageTop[static_cast<std::size_t>(page)] <= exposed.bottom(); ++page) {
+    const QRect rect = PageRect(page);
+    if (!rect.intersects(exposed)) continue;
+    painter.fillRect(rect, Qt::white);
+    const auto cached = m_StripCache.find(page);
+    if (cached != m_StripCache.end()) {
+      const QSize full = m_StripFull.count(page) ? m_StripFull[page] : cached->second.size();
+      const QPoint origin = m_StripOrigin.count(page) ? m_StripOrigin[page] : QPoint();
+      const double factor = static_cast<double>(rect.width()) / std::max(1, full.width());
+      const QRectF target(rect.x() + origin.x() * factor, rect.y() + origin.y() * factor, cached->second.width() * factor, cached->second.height() * factor);
+      painter.setRenderHint(QPainter::SmoothPixmapTransform, factor != 1.0);
+      painter.setClipRect(rect);
+      painter.drawImage(target, cached->second);
+      painter.setClipping(false);
+    }
+    painter.setPen(QPen(QColor(96, 104, 110), 1));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(rect.adjusted(-1, -1, 0, 0));
+    painter.save();
+    painter.translate(rect.topLeft());
+    painter.setClipRect(QRect(0, 0, rect.width(), rect.height()));
+    painter.setRenderHint(QPainter::Antialiasing);
+    {
+      PageScope scope(*this, page);
+      if (m_Page->overlay) m_Page->overlay(painter);
+    }
+    painter.restore();
+  }
+  return true;
+}
+
+void PdfWindow::CancelStrip(bool wait) {
+  m_StripCancel = true;
+  if (!wait) return;
+  if (m_StripWork.valid()) {
+    try { m_StripWork.wait(); } catch (const std::exception& error) { qWarning() << "PDF page worker wait failed:" << error.what(); }
+    m_StripWork = {};
+  }
+  m_StripWorkPage = -1;
+  if (m_StripPoll) m_StripPoll->stop();
+}
+
+// One worker at a time (REQ-387 clause 4: one-shot workers, not a pool): the visible pages first, then the pages
+// ahead of the scroll direction, then one behind. A page that scrolled away is cancelled.
+void PdfWindow::ScheduleStrip() {
+  if (m_Layout != Layout::Continuous || !m_Document || m_PageTop.empty()) return;
+  const auto [first, last] = VisiblePages();
+  const int count = static_cast<int>(m_PageTop.size());
+  std::vector<int> wanted;
+  for (int page = first; page <= last; ++page) wanted.push_back(page);
+  for (int step = 1; step <= kReadAhead; ++step) {
+    const int ahead = m_ScrollDirection > 0 ? last + step : first - step;
+    if (ahead >= 0 && ahead < count) wanted.push_back(ahead);
+  }
+  const int behind = m_ScrollDirection > 0 ? first - 1 : last + 1;
+  if (behind >= 0 && behind < count) wanted.push_back(behind);
+  const auto stale = [this](int page) {
+    const auto cached = m_StripCache.find(page);
+    if (cached == m_StripCache.end()) return true;
+    const QSize px = RenderPx(page);
+    const QSize full = m_StripFull.count(page) ? m_StripFull[page] : cached->second.size();
+    if (full != px) return true;
+    if (!Windowed(px)) return false;
+    return !QRect(m_StripOrigin[page], cached->second.size()).contains(NeededRegion(page));
+  };
+  if (m_StripWork.valid()) {
+    const bool stillWanted = std::find(wanted.begin(), wanted.end(), m_StripWorkPage) != wanted.end() && stale(m_StripWorkPage);
+    if (!stillWanted) m_StripCancel = true; // its result is dropped; the poll starts the next page
+    m_StripPoll->start();
+    return;
+  }
+  for (const int page : wanted) {
+    if (!stale(page)) continue;
+    const QSize px = RenderPx(page);
+    const QRect region = NeededRegion(page);
+    m_StripCancel = false;
+    m_StripWorkPage = page;
+    pdfview::PdfDocument* document = m_Document.get();
+    m_StripWork = std::async(std::launch::async, [this, document, page, px, region] {
+      StripResult result;
+      result.page = page; result.w = px.width(); result.h = px.height(); result.x = region.x(); result.y = region.y();
+      try {
+        result.ok = Windowed(px)
+            ? document->RenderRegion(page, px.width(), px.height(), region.x(), region.y(), region.width(), region.height(), result.bitmap, [this] { return m_StripCancel.load(); })
+            : document->RenderPage(page, px.width(), px.height(), result.bitmap, [this] { return m_StripCancel.load(); });
+      }
+      catch (...) { result.ok = false; } // the page keeps its blank sheet
+      return result;
+    });
+    m_StripPoll->start();
+    return;
+  }
+}
+
+void PdfWindow::PollStrip() {
+  if (m_StripWork.valid()) {
+    if (m_StripWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    StripResult result;
+    try { result = m_StripWork.get(); }
+    catch (const std::exception& error) { qWarning() << "PDF page render failed:" << error.what(); }
+    m_StripWork = {};
+    m_StripWorkPage = -1;
+    if (m_Layout == Layout::Continuous && m_Document && result.ok && result.bitmap.w > 0 && result.page >= 0 &&
+        result.page < static_cast<int>(m_PageTop.size()) && RenderPx(result.page) == QSize(result.w, result.h)) {
+      QImage image(result.bitmap.bgra.data(), result.bitmap.w, result.bitmap.h, static_cast<qsizetype>(result.bitmap.w) * 4, QImage::Format_ARGB32);
+      m_StripCache[result.page] = image.copy();
+      m_StripFull[result.page] = QSize(result.w, result.h);
+      m_StripOrigin[result.page] = Windowed(QSize(result.w, result.h)) ? QPoint(result.x, result.y) : QPoint();
+      m_Page->update(PageRect(result.page));
+      // Bounded cache: drop the page farthest from the view until it fits; pages in view are never dropped.
+      const auto [first, last] = VisiblePages();
+      std::size_t total = 0;
+      for (const auto& entry : m_StripCache) total += static_cast<std::size_t>(entry.second.sizeInBytes());
+      while (total > kStripCacheBytes) {
+        int farthest = -1, farthestDistance = -1;
+        for (const auto& entry : m_StripCache) {
+          if (entry.first >= first && entry.first <= last) continue;
+          const int distance = entry.first < first ? first - entry.first : entry.first - last;
+          if (distance > farthestDistance) { farthest = entry.first; farthestDistance = distance; }
+        }
+        if (farthest < 0) break;
+        total -= static_cast<std::size_t>(m_StripCache[farthest].sizeInBytes());
+        m_StripCache.erase(farthest); m_StripFull.erase(farthest); m_StripOrigin.erase(farthest);
+      }
+    }
+  }
+  if (!m_StripWork.valid()) {
+    ScheduleStrip();
+    if (!m_StripWork.valid()) m_StripPoll->stop();
+  }
+}
+
+void PdfWindow::resizeEvent(QResizeEvent* event) {
+  QMainWindow::resizeEvent(event);
+  if (m_Layout == Layout::Continuous && m_Document && m_ResizeTimer) m_ResizeTimer->start(); // re-fit once the resize settles
+}
+
+// Pointer routing for the continuous layout: the page under the pointer (or the one a press/pick started on) is the
+// active page, and the point handed on is in that page's own pixels. With one page shown nothing changes.
+int PdfWindow::InputPageFor(QPointF canvasPoint, bool buttonsDown) const {
+  if (m_Layout != Layout::Continuous || !m_Document || m_PageTop.empty()) return -1;
+  if (buttonsDown && m_InputPage >= 0) return m_InputPage;
+  if (!m_Draft.empty() && m_DraftPage >= 0) return m_DraftPage;
+  return PageAtY(qRound(canvasPoint.y()));
+}
+
+void PdfWindow::DispatchInput(QPointF canvasPoint, bool buttonsDown, const std::function<void(QPointF)>& handler) {
+  const int page = InputPageFor(canvasPoint, buttonsDown);
+  const QPointF local = page >= 0 ? canvasPoint - PageRect(page).topLeft() : canvasPoint;
+  PageScope scope(*this, page);
+  handler(local);
+}
+
+void PdfWindow::RefreshSnap() {
+  PageScope scope(*this, m_Layout == Layout::Continuous && m_PointerPage >= 0 ? m_PointerPage : -1);
+  UpdateSnap(m_LastPointer);
+}
+
+bool PdfWindow::eventFilter(QObject* watched, QEvent* event) {
+  if ((watched == m_Page || (m_Scroll && watched == m_Scroll->viewport())) && HandleViewportEvent(watched, event)) return true;
+  return QMainWindow::eventFilter(watched, event);
+}
+
+// Ctrl+wheel zooms around the pointer; the middle button drags the document. Both work over the page and over the
+// margin around it, and the middle button never reaches the annotation or measurement tools.
+bool PdfWindow::HandleViewportEvent(QObject* watched, QEvent* event) {
+  const auto endPan = [this] {
+    m_Panning = false;
+    if (m_ExtractMode) m_Page->setCursor(Qt::CrossCursor); else m_Page->unsetCursor();
+    m_Scroll->viewport()->unsetCursor();
+  };
+  switch (event->type()) {
+  case QEvent::Wheel: {
+    auto* wheel = static_cast<QWheelEvent*>(event);
+    if (!m_Document) return false;
+    if (!(wheel->modifiers() & Qt::ControlModifier)) {
+      if (m_Layout != Layout::Continuous) return false; // one page: the scroll area's own wheel handling
+      // Continuous layout: the wheel scrolls through the document (three lines a notch, or the touchpad's pixels).
+      auto* bar = m_Scroll->verticalScrollBar();
+      const int step = !wheel->pixelDelta().isNull() ? -wheel->pixelDelta().y()
+                                                     : qRound(-wheel->angleDelta().y() / 120.0 * 3 * std::max(bar->singleStep(), 13));
+      bar->setValue(bar->value() + step);
+      wheel->accept();
+      return true;
+    }
+    const int notches = wheel->angleDelta().y();
+    if (notches == 0) return true;
+    const QPoint at = wheel->position().toPoint();
+    const QPoint viewportPoint = watched == m_Page ? m_Page->mapTo(m_Scroll->viewport(), at) : at;
+    ZoomBy(std::pow(1.2, notches / 120.0), viewportPoint);
+    wheel->accept();
+    return true;
+  }
+  case QEvent::MouseButtonPress:
+  case QEvent::MouseButtonDblClick: {
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() != Qt::MiddleButton) return false;
+    if (event->type() == QEvent::MouseButtonPress && m_Document) {
+      m_Panning = true;
+      m_PanLast = mouse->globalPosition().toPoint();
+      m_Page->setCursor(Qt::ClosedHandCursor);
+      m_Scroll->viewport()->setCursor(Qt::ClosedHandCursor);
+    }
+    return true;
+  }
+  case QEvent::MouseMove: {
+    if (!m_Panning) return false;
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    if (!(mouse->buttons() & Qt::MiddleButton)) { endPan(); return false; }
+    const QPoint now = mouse->globalPosition().toPoint();
+    const QPoint delta = now - m_PanLast;
+    m_PanLast = now;
+    m_Scroll->horizontalScrollBar()->setValue(m_Scroll->horizontalScrollBar()->value() - delta.x());
+    m_Scroll->verticalScrollBar()->setValue(m_Scroll->verticalScrollBar()->value() - delta.y());
+    return true;
+  }
+  case QEvent::MouseButtonRelease: {
+    auto* mouse = static_cast<QMouseEvent*>(event);
+    if (mouse->button() != Qt::MiddleButton) return false;
+    if (m_Panning) endPan();
+    return true;
+  }
+  default: return false;
+  }
 }
 
 int PdfWindow::ThumbnailsKept() const { return m_Thumbs ? m_Thumbs->Kept() : 0; }
@@ -1251,11 +2157,13 @@ void PdfWindow::EscapePressed() {
     m_CompareStatus->setText("Manual alignment cancelled. The current alignment is unchanged.");
   }
   if (m_ExtractMode || m_ExtractDragging) {
-    m_ExtractMode = false; m_ExtractDragging = false; m_Page->unsetCursor(); m_Page->update();
+    m_ExtractMode = false; m_ExtractDragging = false; m_ExtractBox = false; UpdateToolStatus(); m_Page->unsetCursor(); m_Page->update();
     statusBar()->showMessage("Coordinate extraction cancelled.");
   }
+  else if (m_ExtractBox) { m_ExtractBox = false; m_Page->update(); } // Esc clears the source box left up for review
   else if (IsSearching()) CancelSearch(false); // the poll reports "Search cancelled"
   else if (m_Tool >= 0 || !m_Draft.empty()) EscapeTool(); // REQ-430: a pick in progress, then the tool
+  else if (m_SelectedAnnotation >= 0) { m_SelectedAnnotation = -1; m_Page->update(); } // Select: Esc lets go of the selection
   else if (m_FindBar->isVisible()) CloseFindBar();
 }
 
@@ -1342,11 +2250,11 @@ void PdfWindow::ShowHit(int index) {
 }
 
 void PdfWindow::DrawHighlights(QPainter& painter) {
-  if (!m_Document || m_Page->image.isNull() || m_Hits.empty()) return;
-  const int page = m_PageNumber->value() - 1;
+  if (!m_Document || !PageReady() || m_Hits.empty()) return;
+  const int page = ActivePage();
   const auto size = m_Document->Sizes()[page];
-  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
-  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+  const double scaleX = static_cast<double>(PageWidthPx()) / size.wPt;
+  const double scaleY = static_cast<double>(PageHeightPx()) / size.hPt;
   painter.setPen(Qt::NoPen);
   for (int i = 0; i < static_cast<int>(m_Hits.size()); ++i) {
     const auto& hit = m_Hits[static_cast<std::size_t>(i)];
@@ -1483,11 +2391,11 @@ void PdfWindow::RefreshScaleAudit() {
 
 void PdfWindow::DrawAuditOverlay(QPainter& painter) {
   if (!m_AuditShowSheet || !m_AuditShowSheet->isChecked() || !m_AuditReady || !m_Document ||
-      m_AuditPage != m_PageNumber->value() - 1 || m_AuditSelected < 0 ||
-      m_AuditSelected >= static_cast<int>(m_AuditMatches.matches.size()) || m_Page->image.isNull()) return;
+      m_AuditPage != ActivePage() || m_AuditSelected < 0 ||
+      m_AuditSelected >= static_cast<int>(m_AuditMatches.matches.size()) || !PageReady()) return;
   const auto& match = m_AuditMatches.matches[static_cast<std::size_t>(m_AuditSelected)];
   const auto size = m_Document->Sizes()[m_AuditPage];
-  const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
+  const double factor = static_cast<double>(PageWidthPx()) / std::max(1.0, static_cast<double>(size.wPt));
   const QPointF first(match.x0 * factor, (size.hPt - match.y0) * factor);
   const QPointF last(match.x1 * factor, (size.hPt - match.y1) * factor);
   const auto& result = m_AuditResult.results[static_cast<std::size_t>(m_AuditSelected)];
@@ -1512,7 +2420,7 @@ void PdfWindow::BeginCompare() {
   if (m_Compare && m_CompareWork.valid()) { QMessageBox::warning(this, "Compare revisions", "Wait for the current comparison to finish."); return; }
   m_Compare = std::make_unique<CompareSession>();
   m_Compare->source = path;
-  m_Compare->basePage = m_PageNumber->value() - 1;
+  m_Compare->basePage = CurrentPage();
   m_Compare->revisionPage = 0;
   {
     const QSignalBlocker baseBlock(m_CompareBasePage);
@@ -1668,7 +2576,7 @@ void PdfWindow::UpdateCompareOverlay() {
 }
 
 void PdfWindow::DrawCompareOverlay(QPainter& painter) {
-  if (!m_Compare || m_Compare->overlay.isNull()) return;
+  if (!m_Compare || m_Compare->overlay.isNull() || ActivePage() != m_Compare->basePage) return;
   if (m_Compare->mode == 2) return; // Base mode is the original page.
   painter.save();
   if (m_Compare->mode == 1) painter.setOpacity(std::clamp(m_Compare->opacity / 100.0, 0.0, 1.0));
@@ -1677,7 +2585,7 @@ void PdfWindow::DrawCompareOverlay(QPainter& painter) {
   else if (m_Compare->mode == 3) painter.drawImage(QPoint(0, 0), m_Compare->revisionView);
   else painter.drawImage(QPoint(0, 0), m_Compare->overlay);
   if (m_Compare->haveChanges && m_CompareShowHighlights->isChecked()) {
-    const double factor = static_cast<double>(m_Page->image.width()) / std::max(1, m_Compare->overlay.width());
+    const double factor = static_cast<double>(PageWidthPx()) / std::max(1, m_Compare->overlay.width());
     for (const auto& region : m_Compare->changes) {
       const QColor color = region.kind == pdfdiff::Kind::Added ? QColor(45, 205, 105, 90) :
         region.kind == pdfdiff::Kind::Removed ? QColor(235, 65, 65, 90) : QColor(240, 175, 45, 100);
@@ -1691,12 +2599,13 @@ void PdfWindow::DrawCompareOverlay(QPainter& painter) {
 }
 
 void PdfWindow::ComparePick(QPointF point, Qt::MouseButton button) {
-  if (!m_Compare || !m_Compare->revision || button != Qt::LeftButton || m_Page->image.isNull()) return;
+  if (!m_Compare || !m_Compare->revision || button != Qt::LeftButton || !PageReady()) return;
   if (m_CompareMode->currentIndex() != 2 && m_CompareMode->currentIndex() != 3) {
     m_CompareStatus->setText("Choose Base or Revision in the view selector before picking matching points."); return;
   }
+  if (ActivePage() != m_Compare->basePage) { m_CompareStatus->setText("Pick the matching points on the base page."); return; }
   const auto size = m_Document->Sizes()[m_Compare->basePage];
-  const double factor = static_cast<double>(m_Page->image.width()) / std::max(1.0, static_cast<double>(size.wPt));
+  const double factor = static_cast<double>(PageWidthPx()) / std::max(1.0, static_cast<double>(size.wPt));
   pdfalign::Pt picked{point.x() / factor, size.hPt - point.y() / factor};
   const bool isBase = m_CompareMode->currentIndex() == 2;
   const bool expectedBase = (m_ComparePickCount % 2) == 0;

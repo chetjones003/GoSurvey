@@ -72,6 +72,7 @@
 #include <QDialog>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QWheelEvent>
 #include <QSizeGrip>
 #include <QRegularExpression>
 #include <QTextBlock>
@@ -96,6 +97,8 @@
 #include <QPushButton>
 #include <QProgressBar>
 #include <QToolButton>
+#include <QWidgetAction>
+#include <QMenuBar>
 #include <QStatusBar>
 #include <QMenu>
 #include <QBoxLayout>
@@ -506,10 +509,19 @@ void Issue906Move(QWidget* canvas, QPoint position) {
   QMouseEvent move(QEvent::MouseMove, QPointF(position), QPointF(canvas->mapToGlobal(position)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(canvas, &move);
 }
+// Issue #1037: a wheel event and a mouse event with explicit buttons, sent the way the window system would.
+void Issue1037Wheel(QWidget* target, QPoint position, int delta, Qt::KeyboardModifiers modifiers) {
+  QWheelEvent wheel(QPointF(position), QPointF(target->mapToGlobal(position)), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers,
+                    Qt::NoScrollPhase, false);
+  QApplication::sendEvent(target, &wheel);
+}
+void Issue1037MouseGlobal(QWidget* target, QEvent::Type type, QPoint global, Qt::MouseButton button, Qt::MouseButtons buttons) {
+  QMouseEvent event(type, QPointF(target->mapFromGlobal(global)), QPointF(global), button, buttons, Qt::NoModifier);
+  QApplication::sendEvent(target, &event);
+}
 QAction* Issue906Action(PdfWindow& window, const QString& text) {
-  for (auto* bar : window.findChildren<QToolBar*>())
-    for (auto* action : bar->actions())
-      if (action->text() == text) return action;
+  for (auto* action : window.findChildren<QAction*>())
+    if (action->text() == text && !action->isSeparator()) return action;
   return nullptr;
 }
 // Sets the preset \p label on the current page through the Set scale dialog.
@@ -1072,6 +1084,80 @@ private Q_SLOTS:
     QVERIFY(state.surveyPoints.empty()); // Deny never touches the drawing.
   }
 
+  void pdfCoordinateReviewAcceptAllAndDenyAll() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-all.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
+    PdfWindow window(&editor);
+    window.SetEditor(&editor);
+    window.resize(1100, 820); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    std::vector<pdfview::CoordCandidate> candidates;
+    for (int i = 0; i < 4; ++i) {
+      pdfview::CoordCandidate candidate;
+      candidate.northing = 1000.0 + i; candidate.easting = 2000.0 + i; candidate.elevation = 50.0 + i;
+      candidate.description = "CTRL"; candidate.pointNumber = 10 + i; candidate.sourceText = "row";
+      candidates.push_back(candidate);
+    }
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
+    window.ShowExtractReview();
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
+    auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates");
+    QCOMPARE(table->rowCount(), 4);
+    review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->click();
+    QCOMPARE(state.surveyPoints.size(), size_t(4));
+    QCOMPARE(table->rowCount(), 0);
+
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
+    window.ShowExtractReview();
+    QCOMPARE(table->rowCount(), 4);
+    review->findChild<QPushButton*>("pdfCoordinateDenyAll")->click();
+    QCOMPARE(table->rowCount(), 0);
+    QCOMPARE(state.surveyPoints.size(), size_t(4)); // Deny all never touches the drawing.
+  }
+
+  void issue1037ActiveToolIsNamedOnTheStatusBarAndEscapeEndsIt() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "tool-flow.pdf", pdfview::MakeSyntheticPdf(2, 3, 0));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* label = window.statusBar()->findChild<QLabel*>("pdfActiveTool");
+    QVERIFY(label);
+    QCOMPARE(label->text(), QString("Tool: Select"));
+    QAction* line = nullptr;
+    for (QAction* action : window.findChildren<QAction*>()) if (action->text() == "Line") line = action;
+    QVERIFY(line);
+    line->trigger();
+    QVERIFY(label->text().contains("Line") && label->text().contains("Esc"));
+    QVERIFY(line->isChecked());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QCOMPARE(window.m_Tool, -1);
+    QVERIFY(!label->text().contains("Esc"));
+    window.findChild<QAction*>("pdfExtractCoordinates")->trigger();
+    QVERIFY(label->text().contains("Extract coordinates") && label->text().contains("Esc"));
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!label->text().contains("Extract"));
+    // The yellow source box stays while candidates are under review, and Esc or closing the review removes it.
+    pdfview::CoordCandidate candidate; candidate.northing = 1; candidate.easting = 2; candidate.sourceText = "N1 E2";
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.ShowExtractReview();
+    QVERIFY(window.m_ExtractBox);
+    window.EscapePressed();
+    QVERIFY(!window.m_ExtractBox);
+    window.ShowExtractReview();
+    QVERIFY(window.m_ExtractBox);
+    window.findChild<QDialog*>("pdfCoordinateReview")->findChild<QPushButton*>("pdfCoordinateReviewClose")->click();
+    QVERIFY(!window.m_ExtractBox);
+  }
+
   void pdfCoordinateRegionCancelAndNoTextAreSafe() {
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "coordinate-scan.pdf",
@@ -1144,6 +1230,26 @@ private Q_SLOTS:
     QCOMPARE(state.surveyPoints.front().description, candidate.description);
     QVERIFY(DoUndo(state, editor.m_Log));
     QCOMPARE(state.surveyPoints.front().description, existing.description);
+  }
+
+  void pdfCoordinateCircleLandsInTheDrawingAndZoomExtentsFramesIt() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate();
+    editor.resize(1000, 700);
+    editor.show();
+    QTRY_VERIFY_WITH_TIMEOUT(editor.m_Viewport->IsRendererReady(), 10000);
+    auto& state = editor.State();
+    pdfview::CoordCandidate candidate; // a state-plane northing/easting with no description: becomes a circle
+    candidate.northing = 303401.741; candidate.easting = 1887631.271;
+    QVERIFY(editor.CommitPdfCoordinate(candidate));
+    QCOMPARE(state.userCirclesCxCyZR.size(), size_t(4));
+    QVERIFY(state.userCirclesCxCyZR[3] > 0.f);
+    QTRY_VERIFY_WITH_TIMEOUT(!state.pendingZoomExtents, 10000);
+    QStringList log;
+    for (const auto& line : editor.m_Log) log << QString::fromStdString(line);
+    QVERIFY2(log.join(" | ").contains("Zoom extents applied"), qPrintable(log.join(" | ")));
+    // The view is now centred on the circle, so the circle is on screen rather than off in empty space.
+    QVERIFY(std::abs(state.viewportPanX - state.userCirclesCxCyZR[0]) < 1.0 && std::abs(state.viewportPanY - state.userCirclesCxCyZR[1]) < 1.0);
   }
 
   void approvedTopographyStaysInPanelBackgrounds() {
@@ -7157,7 +7263,7 @@ private Q_SLOTS:
     rect.kind = pdfview::Annot::Kind::Rect;
     rect.x0 = 20; rect.y0 = 30; rect.x1 = 80; rect.y1 = 100;
     QVERIFY(window.AddAnnotation(rect, error));
-    QVERIFY(window.findChild<QToolBar*>("pdfAnnotationStyle"));
+    QVERIFY(window.findChild<QDoubleSpinBox*>("pdfAnnotationWidth"));
     const QPointF centre = window.PageToCanvas(50, 65);
     window.PageClick(centre, Qt::LeftButton);
     QCOMPARE(window.m_SelectedAnnotation, 0);
@@ -7544,6 +7650,442 @@ private Q_SLOTS:
       QVERIFY(frames[phase].save(dir + QString("/qt-1028-splash-phase%1.png").arg(phase + 1)));
     QVERIFY(end.save(dir + "/qt-1028-splash-end.png"));
 #endif
+  }
+
+  // ---- Issue #1037 / REQ-452: PDF command tabs and continuous zoom/pan navigation ----
+  void issue1037RibbonSidePanelAndStatusBarNavigation() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "layout.pdf", pdfview::MakeSyntheticPdf(6, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1200, 800);
+    window.show();
+    auto* tabs = window.findChild<QTabWidget*>("pdfRibbon");
+    QVERIFY(tabs);
+    QStringList titles;
+    for (int i = 0; i < tabs->count(); ++i) titles << tabs->tabText(i);
+    QCOMPARE(titles, (QStringList{"Open/View", "Annotate", "Measure", "Review"}));
+    // Every command of a tab: the ribbon buttons' actions plus whatever sits in a collapsed panel's menu.
+    const auto actionsIn = [&](int tab) {
+      QStringList names;
+      for (auto* button : tabs->widget(tab)->findChildren<QToolButton*>()) {
+        if (button->defaultAction()) names << button->defaultAction()->text();
+        if (button->menu()) for (auto* action : button->menu()->actions()) names << action->text();
+      }
+      return names;
+    };
+    const QStringList expected[] = {
+      {"Open...", "Save As...", "Extract pages...", "Find...", "Side panel"},
+      {"Select", "Browse", "Text", "Line", "Rectangle", "Ellipse", "Color...", "Apply style to selected", "Undo", "Redo"},
+      {"Length", "Polyline length", "Area", "Angle", "Check", "Undo", "Redo", "Set scale...", "Snap: off"},
+      {"Extract coordinates", "Audit scale", QStringLiteral("Compare revisions\u2026")}};
+    for (int tab = 0; tab < 4; ++tab) {
+      const QStringList actual = actionsIn(tab);
+      for (const QString& name : expected[tab]) QVERIFY2(actual.contains(name), qPrintable(titles[tab] + " is missing " + name));
+    }
+    for (auto* bar : window.findChildren<QToolBar*>())
+      QVERIFY2(bar->objectName() == "pdfCommandBar" || bar->objectName() == "pdfFindBar", qPrintable(bar->objectName()));
+    QVERIFY(tabs->widget(0)->findChild<QComboBox*>("pdfLayoutBox"));
+    // Page navigation and zoom are on the bottom bar only, not in the ribbon.
+    for (const QString& name : {"Previous", "Next", "Zoom out", "Zoom in", "Fit width", "Fit page"}) QVERIFY2(!actionsIn(0).contains(name), qPrintable(name));
+    QVERIFY(!tabs->widget(0)->findChild<QSpinBox*>());
+    QVERIFY(tabs->widget(1)->findChild<QDoubleSpinBox*>("pdfAnnotationWidth"));
+    QVERIFY(tabs->widget(1)->findChild<QCheckBox*>("pdfAnnotationBold"));
+    QVERIFY(tabs->widget(2)->findChild<QPushButton*>("pdfScaleChecksButton"));
+    QVERIFY(tabs->widget(2)->findChild<QCheckBox*>("pdfShowChecks"));
+    QVERIFY(tabs->widget(3)->findChild<QToolButton*>("tool_pdfAuditScale"));
+    for (int tab = 0; tab < 4; ++tab) QVERIFY(!tabs->widget(tab)->findChildren<QLabel*>("ribbonPanelLabel").isEmpty());
+    const char* shots[] = {"open-view", "annotate", "measure", "review"};
+    for (int tab = 0; tab < 4; ++tab) {
+      tabs->setCurrentIndex(tab);
+      QVERIFY(window.grab().save(Issue905Shot((std::string("qt-1037-tab-") + shots[tab] + ".png").c_str())));
+    }
+    tabs->setCurrentIndex(0);
+    // Side panel: three buttons that say what they are (text, not just an icon) choose the page beside them.
+    auto* strip = window.findChild<QWidget*>("pdfSideStrip");
+    auto* pages = window.findChild<QStackedWidget*>("pdfSidePages");
+    QVERIFY(strip && pages);
+    const QStringList labels{"Thumbnails", "Tool Chest", "Properties"};
+    for (int i = 0; i < 3; ++i) {
+      auto* button = strip->findChild<QToolButton*>(QString("pdfSideButton_") + QString(labels[i]).remove(' '));
+      QVERIFY2(button, qPrintable(labels[i]));
+      QCOMPARE(button->text(), labels[i]);
+      QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonTextUnderIcon);
+      QVERIFY(!button->icon().isNull());
+    }
+    QCOMPARE(pages->currentIndex(), 0);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-thumbnails.png")));
+    strip->findChild<QToolButton*>("pdfSideButton_ToolChest")->click();
+    QCOMPARE(pages->currentIndex(), 1);
+    auto* chestRectangle = pages->findChild<QToolButton*>("pdfChest_Rectangle");
+    QVERIFY(chestRectangle);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-tool-chest.png")));
+    chestRectangle->click();
+    QCOMPARE(window.m_Tool, 2); // the chest button is the very same tool as the ribbon's
+    QVERIFY(Issue906Action(window, "Rectangle")->isChecked());
+    strip->findChild<QToolButton*>("pdfSideButton_Properties")->click();
+    QCOMPARE(pages->currentIndex(), 2);
+    QCOMPARE(window.findChild<QLabel*>("pdfPropFile")->text(), QString("-")); // nothing open yet
+    // Open a six-page file: the properties follow it and the page.
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.findChild<QLabel*>("pdfPropFile")->text(), QString("layout.pdf"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropPages")->text(), QString("6"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropNumber")->text(), QString("1 of 6"));
+    QVERIFY(window.findChild<QLabel*>("pdfPropSize")->text().contains(" in"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropScale")->text(), QString("Unscaled"));
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-properties.png")));
+    // Navigation on the bottom bar: first / previous / page box / next / last and zoom, in step with the ribbon.
+    auto* statusPage = window.statusBar()->findChild<QSpinBox*>("pdfPageNumber");
+    auto* statusZoom = window.statusBar()->findChild<QSpinBox*>("pdfZoomPercent");
+    QVERIFY(statusPage && statusZoom);
+    QCOMPARE(window.statusBar()->findChild<QLabel*>("pdfStatusPageCount")->text(), QString("of 6"));
+    QCOMPARE(statusPage->maximum(), 6);
+    for (const char* name : {"pdfFirstPage", "pdfPreviousPage", "pdfNextPage", "pdfLastPage", "pdfZoomOut", "pdfZoomIn", "pdfFitWidth", "pdfFitPage"}) {
+      auto* button = window.statusBar()->findChild<QToolButton*>(QString("pdfStatus_") + name);
+      QVERIFY2(button && !button->icon().isNull() && button->height() >= 30, name);
+    }
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfNextPage")->click();
+    QCOMPARE(window.CurrentPage(), 1);
+    QCOMPARE(statusPage->value(), 2);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfLastPage")->click();
+    QCOMPARE(window.CurrentPage(), 5);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFirstPage")->click();
+    QCOMPARE(window.CurrentPage(), 0);
+    statusPage->setValue(4);
+    QCOMPARE(window.CurrentPage(), 3);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfPreviousPage")->click();
+    QCOMPARE(window.CurrentPage(), 2);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFirstPage")->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    statusZoom->setValue(50);
+    QVERIFY(std::abs(window.ZoomPercent() - 50.0) < 1.0);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfZoomIn")->click();
+    QVERIFY(window.ZoomPercent() > 55.0);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFitWidth")->click();
+    QCOMPARE(window.m_Page->width(), std::max(200, window.m_Scroll->viewport()->width() - 30));
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-status-navigation.png")));
+    // The side panel hides and shows from the ribbon.
+    window.findChild<QAction*>("pdfThumbnailsAction")->trigger();
+    QVERIFY(!window.findChild<QDockWidget*>("pdfThumbnails")->isVisible());
+    // Narrow window: ribbon panels collapse into menus holding the same actions; nothing is lost.
+    window.resize(560, 800);
+    tabs->setCurrentIndex(1);
+    QTest::qWait(50);
+    QVERIFY(actionsIn(1).contains("Rectangle") && actionsIn(1).contains("Color..."));
+    QVERIFY(tabs->widget(1)->findChild<QToolButton*>("pdfRibbonMore") != nullptr);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-ribbon-narrow.png")));
+    bool mirroredWidth = false;
+    for (auto* button : tabs->widget(1)->findChildren<QToolButton*>())
+      if (button->menu() && button->objectName().contains("Style"))
+        for (auto* action : button->menu()->actions())
+          if (auto* widgetAction = qobject_cast<QWidgetAction*>(action))
+            if (qobject_cast<QDoubleSpinBox*>(widgetAction->defaultWidget())) mirroredWidth = true;
+    QVERIFY(mirroredWidth);
+  }
+
+  void issue1037ContinuousLayoutScrollsAndStaysSynchronized() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "continuous.pdf", pdfview::MakeSyntheticPdf(8, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.CurrentLayout(), PdfWindow::Layout::PageByPage); // the default keeps the existing behaviour
+    auto* spin = window.findChild<QSpinBox*>();
+    auto* bar = window.m_Scroll->verticalScrollBar();
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    QCOMPARE(window.findChild<QComboBox*>("pdfLayoutBox")->currentIndex(), 1);
+    QCOMPARE(window.m_PageTop.size(), std::size_t(8));
+    int stack = PdfWindow::kPageGap;
+    for (int page = 0; page < 8; ++page) stack += window.m_PageHpx[static_cast<std::size_t>(page)] + PdfWindow::kPageGap;
+    QCOMPARE(window.m_Page->height(), stack);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 10000);
+    // Scrolling: the page in the middle of the view becomes the current page; the strip follows.
+    bar->setValue(window.m_PageTop[4]);
+    QCOMPARE(spin->value(), 5);
+    QCOMPARE(window.m_ThumbView->currentIndex().row(), 4);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(4) == 1, 10000);
+    // Choosing a page scrolls it to the top and the box keeps it.
+    window.ScrollToPage(2);
+    QCOMPARE(spin->value(), 3);
+    QCOMPARE(bar->value(), window.m_PageTop[2] - PdfWindow::kPageGap);
+    spin->setValue(7);
+    QCOMPARE(window.CurrentPage(), 6);
+    QCOMPARE(bar->value(), std::min(bar->maximum(), window.m_PageTop[6] - PdfWindow::kPageGap));
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(spin->value(), 1);
+    QCOMPARE(bar->value(), 0);
+    QTest::keyClick(&window, Qt::Key_PageDown);
+    QCOMPARE(spin->value(), 2);
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(spin->value(), 8);
+    QTest::keyClick(&window, Qt::Key_PageUp);
+    QCOMPARE(spin->value(), 7);
+    // The plain wheel scrolls the document continuously.
+    window.ScrollToPage(0);
+    const int before = bar->value();
+    Issue1037Wheel(window.m_Page, QPoint(300, 200), -120, Qt::NoModifier);
+    QVERIFY(bar->value() > before);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 10000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-continuous.png")));
+    // Back to one page: the page is kept and drawn again.
+    window.ScrollToPage(3);
+    window.SetLayout(PdfWindow::Layout::PageByPage);
+    QCOMPARE(spin->value(), 4);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    QCOMPARE(spin->value(), 4);
+    QCOMPARE(bar->value(), std::min(bar->maximum(), window.m_PageTop[3] - PdfWindow::kPageGap));
+  }
+
+  void issue1037CtrlWheelZoomKeepsThePointerAnchored() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "zoom.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      auto* viewport = window.m_Scroll->viewport();
+      const QPoint pointer(viewport->width() / 3, viewport->height() / 2);
+      for (const int notches : {2, 2, -1}) {
+        const double zoomBefore = window.m_Zoom;
+        const auto anchor = window.CaptureAnchor(pointer);
+        const QPoint onCanvas = window.m_Page->mapFrom(viewport, pointer);
+        Issue1037Wheel(window.m_Page, onCanvas, notches * 120, Qt::ControlModifier);
+        QVERIFY2((notches > 0) == (window.m_Zoom > zoomBefore), "Ctrl+wheel changes the zoom the right way");
+        // The page point that was under the pointer is still under it, within a pixel.
+        const QRect rect = window.PageRect(anchor.page);
+        const QPointF expected(rect.x() + anchor.fx * rect.width(), rect.y() + anchor.fy * rect.height());
+        const QPoint actual = window.m_Page->mapFrom(viewport, pointer);
+        const auto stopped = [](const QScrollBar* scrollBar) { return scrollBar->value() == 0 || scrollBar->value() == scrollBar->maximum(); };
+        if (!stopped(window.m_Scroll->horizontalScrollBar()))
+          QVERIFY2(std::abs(expected.x() - actual.x()) <= 1.0, qPrintable(QString("anchor moved sideways: expected %1 got %2").arg(expected.x()).arg(actual.x())));
+        if (!stopped(window.m_Scroll->verticalScrollBar()))
+          QVERIFY2(std::abs(expected.y() - actual.y()) <= 1.0, qPrintable(QString("anchor moved vertically: expected %1 got %2").arg(expected.y()).arg(actual.y())));
+        QCOMPARE(window.m_ZoomBox->value(), std::clamp(qRound(window.ZoomPercent()), 5, 1000));
+      }
+      QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-zoomed-continuous.png" : "qt-1037-zoomed-page.png")));
+    }
+  }
+
+  void issue1037MiddleDragPansWithoutTouchingTools() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "pan.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetZoomPercent(200);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      auto* canvas = window.m_Page;
+      auto* h = window.m_Scroll->horizontalScrollBar();
+      auto* v = window.m_Scroll->verticalScrollBar();
+      QVERIFY(h->maximum() > 100 && v->maximum() > 100);
+      h->setValue(150); v->setValue(300);
+      for (const char* tool : {"Rectangle", "Length", "Select"}) {
+        Issue906Action(window, tool)->trigger();
+        // A Length measurement is mid-pick: one point is down.
+        if (QString(tool) == "Length") {
+          QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, canvas->mapFromGlobal(window.m_Scroll->viewport()->mapToGlobal(QPoint(200, 200))));
+          QCOMPARE(window.m_Draft.size(), std::size_t(1));
+        }
+        const auto draft = window.m_Draft;
+        const int tool0 = window.m_Tool;
+        const int selected = window.m_SelectedAnnotation;
+        const QPoint start = window.m_Scroll->viewport()->mapToGlobal(QPoint(400, 300));
+        const int hStart = h->value(), vStart = v->value();
+        Issue1037MouseGlobal(canvas, QEvent::MouseButtonPress, start, Qt::MiddleButton, Qt::MiddleButton);
+        QCOMPARE(canvas->cursor().shape(), Qt::ClosedHandCursor);
+        Issue1037MouseGlobal(canvas, QEvent::MouseMove, start + QPoint(-40, -25), Qt::NoButton, Qt::MiddleButton);
+        QCOMPARE(h->value(), hStart + 40);
+        QCOMPARE(v->value(), vStart + 25);
+        if (QString(tool) == "Select") QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-pan-continuous.png" : "qt-1037-pan-page.png")));
+        Issue1037MouseGlobal(canvas, QEvent::MouseButtonRelease, start + QPoint(-40, -25), Qt::MiddleButton, Qt::NoButton);
+        QVERIFY(canvas->cursor().shape() != Qt::ClosedHandCursor);
+        QVERIFY(window.m_Annotations.Items().empty());
+        QCOMPARE(window.m_Draft, draft);
+        QCOMPARE(window.m_Tool, tool0);
+        QCOMPARE(window.m_SelectedAnnotation, selected);
+        QVERIFY(!window.HasUnsavedChanges());
+        QVERIFY(!window.m_ExtractDragging);
+        window.m_Draft.clear();
+        h->setValue(150); v->setValue(300);
+      }
+      // The margin around the page pans as well (the viewport itself, outside the canvas).
+      const int vBefore = v->value();
+      const QPoint start = window.m_Scroll->viewport()->mapToGlobal(QPoint(5, 300));
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseButtonPress, start, Qt::MiddleButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseMove, start + QPoint(0, -30), Qt::NoButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseButtonRelease, start + QPoint(0, -30), Qt::MiddleButton, Qt::NoButton);
+      QCOMPARE(v->value(), vBefore + 30);
+    }
+  }
+
+  void issue1037FitWidthFitPageTypedPercentAndKeyboard() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "fit.pdf", pdfview::MakeSyntheticPdf(5, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    auto* viewport = window.m_Scroll->viewport();
+    window.FitPage();
+    QVERIFY(window.m_Page->height() <= viewport->height());
+    QVERIFY(window.m_Page->width() <= viewport->width() - 30);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.findChild<QAction*>("pdfFitWidth")->trigger();
+    QCOMPARE(window.m_Page->width(), std::max(200, viewport->width() - 30));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    // A typed percentage is a percentage of the page's actual size at 96 dpi.
+    window.m_ZoomBox->setValue(100);
+    const double wPt = window.m_Document->Sizes()[0].wPt;
+    QVERIFY(std::abs(window.m_Page->width() - wPt * 96.0 / 72.0) <= 1.5);
+    QVERIFY(std::abs(window.ZoomPercent() - 100.0) < 0.5);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.m_ZoomBox->setValue(50);
+    QVERIFY(std::abs(window.m_Page->width() - wPt * 96.0 / 72.0 / 2.0) <= 1.5);
+    // Keyboard page navigation in the single-page layout.
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* spin = window.findChild<QSpinBox*>();
+    QTest::keyClick(&window, Qt::Key_PageDown);
+    QCOMPARE(spin->value(), 2);
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(spin->value(), 5);
+    QTest::keyClick(&window, Qt::Key_PageUp);
+    QCOMPARE(spin->value(), 4);
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(spin->value(), 1);
+    // Continuous: fit page puts the whole page in view, fit width spans the view.
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    window.FitPage();
+    QVERIFY(window.m_PageHpx[0] <= viewport->height());
+    window.FitWidth();
+    QCOMPARE(window.m_PageWpx[0], std::max(200, viewport->width() - 30));
+  }
+
+  void issue1037ContinuousLayoutAnnotatesTheSecondPage() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "second.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    window.ScrollToPage(1);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(1) == 1, 10000);
+    Issue906Action(window, "Rectangle")->trigger();
+    const QRect second = window.PageRect(1);
+    const QPoint first(second.left() + 100, second.top() + 150), last(second.left() + 300, second.top() + 350);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, first);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, last);
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+    const auto& made = window.m_Annotations.Items()[0];
+    QCOMPARE(made.page, 1); // the page under the pointer, not the page box
+    const auto size = window.m_Document->Sizes()[1];
+    QVERIFY(std::abs(made.x0 - 100.0 * size.wPt / second.width()) < 0.5);
+    QVERIFY(std::abs(made.y0 - (second.height() - 150.0) * size.hPt / second.height()) < 0.5);
+    // It is drawn on the second page only.
+    const QImage shot = window.m_Page->grab().toImage();
+    QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
+    const double ratio = static_cast<double>(shot.width()) / window.m_Page->width(); // the grab is in device pixels
+    const auto hasRed = [&](const QRect& rect) {
+      const QRect device(qRound(rect.x() * ratio), qRound(rect.y() * ratio), qRound(rect.width() * ratio), qRound(rect.height() * ratio));
+      return Issue906HasPixelNear(shot.copy(device), QColor(255, 0, 0), 40);
+    };
+    QVERIFY(hasRed(second));
+    QVERIFY(!hasRed(window.PageRect(0)));
+    QVERIFY(!hasRed(window.PageRect(2)));
+    // A pick on one page and a click on another do not mix: the draft restarts on the new page.
+    Issue906Action(window, "Line")->trigger();
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));
+    QCOMPARE(window.m_Draft.size(), std::size_t(1));
+    const QRect third = window.PageRect(2);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(third.left() + 60, third.top() + 60));
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+    QCOMPARE(window.m_Draft.size(), std::size_t(1));
+    QCOMPARE(window.m_DraftPage, 2);
+    QVERIFY(window.HasUnsavedChanges());
+  }
+
+  void issue1037ZoomReaches1000PercentByDrawingOnlyTheViewedWindow() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "big.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      window.SetZoomPercent(1000);
+      QVERIFY2(std::abs(window.ZoomPercent() - 1000.0) < 1.0, qPrintable(QString::number(window.ZoomPercent())));
+      QVERIFY(window.m_Page->width() > 8000); // far past the old 4096 pixel cap
+      // Zooming further is refused at the limit; the box shows it.
+      window.ZoomBy(2.0, window.m_Scroll->viewport()->rect().center());
+      QVERIFY(window.ZoomPercent() <= 1001.0);
+      // Only the window around the view is drawn, and it covers the view.
+      if (layout == PdfWindow::Layout::PageByPage) {
+        QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull() && window.PageWindowCovers(), 20000);
+        QVERIFY(window.m_Page->image.width() < window.m_Page->width() / 2);
+        // Scrolling away redraws the window around the new view.
+        window.m_Scroll->verticalScrollBar()->setValue(window.m_Scroll->verticalScrollBar()->maximum() / 2);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.PageWindowCovers(), 20000);
+      } else {
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 20000);
+        QVERIFY(window.m_StripCache[0].width() < window.PageRect(0).width() / 2);
+        window.m_Scroll->verticalScrollBar()->setValue(window.m_Scroll->verticalScrollBar()->maximum() / 3);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.m_StripCache.empty(), 20000);
+      }
+      QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-1000-continuous.png" : "qt-1037-1000-page.png")));
+      window.SetZoomPercent(5);
+      QVERIFY(std::abs(window.ZoomPercent() - 5.0) < 0.6);
+    }
+  }
+
+  void issue1037RenderCacheStaysBoundedAndCloseWaitsForTheWorker() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "long.pdf", pdfview::MakeSyntheticPdf(40, 3, 0));
+    {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(PdfWindow::Layout::Continuous);
+      window.SetZoom(4.0, window.m_Scroll->viewport()->rect().center()); // huge pages: a few of them exceed the cap
+      for (int page = 0; page < 10; ++page) {
+        window.ScrollToPage(page);
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(page) == 1, 20000);
+        std::size_t outside = 0;
+        const auto [first, last] = window.VisiblePages();
+        for (const auto& entry : window.m_StripCache)
+          if (entry.first < first || entry.first > last) outside += static_cast<std::size_t>(entry.second.sizeInBytes());
+        QVERIFY2(outside <= PdfWindow::kStripCacheBytes, "pages outside the view stay within the cap");
+      }
+      QVERIFY(window.m_StripCache.size() < 10); // the farthest pages were dropped
+      window.ScrollToPage(30); // a render is now in flight; the window is destroyed while it runs
+    }
   }
 
   // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----

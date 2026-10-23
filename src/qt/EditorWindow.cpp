@@ -2373,9 +2373,41 @@ void EditorWindow::RefreshRecentProjects() {
     grid->addWidget(new QLabel("No recent projects. Use New Project or Open Project.", m_ProjectTiles), 0, 0);
 }
 
-void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->SetEditor(this); window->show(); }
+// The viewer is its own top-level window, not an owned child: an owned window is kept above its owner, which stopped
+// the main window being focused (or alt-tabbed to) while a PDF was open. It closes with the main window.
+void EditorWindow::ShowPdf() {
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+}
 
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
+  if (!CreatePdfCoordinate(c)) return false;
+  FinishPdfCoordinates();
+  return true;
+}
+
+// Accept all: every candidate is created first and the view is framed and redrawn once at the end, so a long list
+// does not flash the drawing once per point. Stops at the first candidate that could not be created.
+std::size_t EditorWindow::CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates) {
+  std::size_t created = 0;
+  for (const auto& candidate : candidates) {
+    if (!CreatePdfCoordinate(candidate)) break;
+    ++created;
+  }
+  if (created) FinishPdfCoordinates();
+  return created;
+}
+
+void EditorWindow::FinishPdfCoordinates() {
+  StartZoomExtentsCommand(m_State, m_Log);
+  m_State.requestMainWindowFocus = true;
+  Refresh();
+  raise(); activateWindow();
+}
+
+bool EditorWindow::CreatePdfCoordinate(const pdfview::CoordCandidate& c) {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     QMessageBox::information(this, "Extract Coordinates", "Open a drawing before accepting extracted coordinates.");
     return false;
@@ -2423,10 +2455,6 @@ bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
                          static_cast<float>(c.northing - m_State.worldDocumentOriginY),
                          static_cast<float>(c.elevation.value_or(0.0)), radius, 0.f, 0.f, 1.f, m_Log);
   }
-  StartZoomExtentsCommand(m_State, m_Log);
-  m_State.requestMainWindowFocus = true;
-  Refresh();
-  raise(); activateWindow();
   return true;
 }
 void EditorWindow::ShowAdjustment() {

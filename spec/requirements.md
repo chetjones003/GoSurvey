@@ -11746,8 +11746,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
      window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
      `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
-  2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
-     pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+  2. **View.** Page-by-page and continuous-scroll layouts; zoom (Ctrl+wheel around the pointer, fit-width,
+     fit-page, typed %; the plain wheel scrolls the document, REQ-452); pan (scroll bars and middle-button
+     drag, REQ-452); Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
      (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
      reason in the window (REQ-201) and never crashes or hangs the app.
   3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
@@ -11795,7 +11796,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
-  "separate operating-system window" exclusion removed (D-2026-10-06-b).
+  "separate operating-system window" exclusion removed (D-2026-10-06-b). 2026-10-22 — clause 2 amended
+  (D-2026-10-22-c, GitHub issue #1037): the wheel scrolls and Ctrl+wheel zooms around the pointer; the
+  middle button pans. The Qt viewer's command surface and navigation details are REQ-452.
 
 ### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
 
@@ -12265,7 +12268,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
      - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
      Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
-  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created.
   6. **What Accept creates.**
      - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
      - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
@@ -13705,6 +13708,94 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22)
 - Revisions: 2026-10-22 — catalogued and accepted (D-2026-10-22-a, GitHub issue #1036).
 
+### REQ-452 — Qt PDF window: command tabs and continuous zoom/pan navigation (GitHub issue #1037)
+
+- Purpose: the Qt PDF window had grown five stacked toolbar rows, showed one page at a time, and zoomed only
+  through buttons. A drafter reading a plan set wants the commands grouped by task and the document to move the
+  way every PDF viewer moves: the wheel scrolls, Ctrl+wheel zooms where the pointer is, and the middle button
+  drags the sheet, even while a measuring tool is selected.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-22-c. This amends REQ-387 clause 2 for the Qt viewer and adds the command-surface
+  layout; REQ-388 (annotations), REQ-390/391/394 (scale), REQ-395 (dimension audit), REQ-392/393 (comparison),
+  REQ-429 (thumbnails, search), REQ-430 and REQ-433 keep their behaviour: controls move, semantics do not.
+- Depends on: REQ-387 (bounded cache, off-thread rendering), REQ-388, REQ-429, REQ-430, REQ-433, REQ-436 (Qt accent), REQ-201.
+- Statement:
+  1. **Command ribbon.** The stacked toolbars are replaced by a ribbon built like the main window's (REQ-436
+     look; large and small buttons, captioned panels, `src/qt/PdfRibbon.hpp`): a panel that does not fit
+     collapses into a menu holding the same actions and live controls, and collapsed panels move into a
+     "More" menu, so narrowing the window never loses a command. The tabs above the page are:
+     **Open/View** (Open, Save As, Extract pages, Find, thumbnail strip toggle, page box, Previous/Next, layout,
+     Zoom out/in, zoom percentage, Fit width, Fit page), **Annotate** (Select, Browse, Text, Line, Rectangle,
+     Ellipse, colour, width, text size, font, Bold, Italic, Fill, Apply style, Undo, Redo), **Measure** (Length,
+     Polyline length, Area, Angle, Check, Undo, Redo, Set scale, scale readout, Scale checks, Show on sheet,
+     Snap) and **Review** (Extract coordinates, Audit scale, Compare revisions), each grouped into captioned
+     panels. Every control the window had
+     is still reachable, with the same names, tooltips, shortcuts and behaviour. The tabs use the Qt graphite
+     appearance and amber accent (REQ-436); the selected tab is marked by an accent underline. The dockable
+     thumbnail strip and the find bar keep their places.
+  2. **Layouts.** A layout box offers **Page by page** (the default; one page, as before) and **Continuous**
+     (every page stacked top to bottom with a small gap, centred). Switching keeps the current page.
+  3. **Wheel.** In the continuous layout the plain mouse wheel scrolls continuously through the document, from
+     the first page to the last with no page boundary. In page-by-page the wheel scrolls within the page.
+  4. **Zoom around the pointer.** Ctrl+wheel zooms by a fixed ratio per notch, clamped to the same range as the
+     zoom buttons; the page point under the pointer stays under the pointer as the zoom changes (to within a
+     pixel, except where the document edge stops the scroll), in both layouts. The Zoom buttons anchor at the
+     centre of the view. **Fit width** and **Fit page** fit the current page; the **zoom box** shows the
+     current page's displayed width as a percentage of its actual size (100% = 96 dpi) and a typed
+     percentage sets it.
+  5. **Middle-button pan.** Dragging with the middle button moves the document with the pointer, over the page
+     and over the margin around it, in both layouts and with any tool selected. A pan never creates, selects,
+     moves or edits an annotation or measurement, never adds a pick to a measurement in progress, never starts
+     or ends a coordinate-extraction drag, and leaves the active tool, its draft and the selection unchanged.
+     The cursor is a closed hand while panning.
+  6. **Synchronised page.** While scrolling in the continuous layout the page box, the thumbnail strip, the
+     scale readout and the status bar follow the page in the middle of the view; choosing a page in the page
+     box, the strip, Previous/Next, Page Up/Down, Home/End or a search hit scrolls that page to the top.
+     A measurement draft survives scrolling but is cleared by a click on another page (a measurement belongs
+     to one page).
+  7. **Tools on every visible page.** Annotations, measurements, scale checks, search highlights and the snap
+     marker are drawn on each visible page, and a click, drag or snap always acts on the page under the
+     pointer, exactly as in page-by-page. Dialogs that act on "the page" (Set scale, Audit scale, Compare
+     revisions) act on the current page.
+  8. **Responsive and bounded (REQ-387 clauses 4-5).** In the continuous layout pages are rendered off the UI
+     thread, one worker at a time, visible pages first, then a read-ahead window ahead of the scroll direction;
+     a render whose page left the window is cancelled; a page not ready shows its blank sheet (or the previous
+     zoom's picture scaled as a stand-in), never a stall. The rendered-page cache is bounded (256 MB) and drops
+     the page farthest from the view first; pages in view are never dropped. Opening another file or closing
+     the window cancels and waits for the worker.
+  9. **Honest failure (REQ-201).** A page that cannot be drawn keeps its blank sheet and the window stays
+     usable; nothing in this requirement changes what is saved to a PDF.
+- Acceptance:
+  1. `GoSurveyQtTests` `issue1037*` (command surface): the window has the four tabs named in clause 1 in that
+     order, no standalone toolbar row remains outside the ribbon except the find bar, every action the window
+     had before (by name) is found in the tab clause 1 puts it in, every panel has a caption, and at a narrow
+     window width the panels collapse into menus that still hold the same actions and live controls.
+  2. (layout) a multi-page file in the continuous layout has a canvas as tall as its pages plus gaps; scrolling
+     moves the page box and the thumbnail selection to the page in the middle of the view; choosing a page
+     scrolls it to the top and the page box keeps it; switching to page-by-page and back keeps the page.
+  3. (wheel) a plain wheel event scrolls the continuous document; a Ctrl+wheel event changes the zoom and does
+     not scroll by itself; the page point under the pointer before and after a Ctrl+wheel zoom is the same
+     within one pixel, in both layouts.
+  4. (pan) a middle-button press, drag and release scrolls the document by the pointer movement and, with the
+     Rectangle, Length and Select tools selected, leaves the annotation list, the draft, the selection and the
+     unsaved-changes state unchanged.
+  5. (zoom) Fit width makes the current page as wide as the view; Fit page makes it fit in the view; a typed
+     percentage sets the displayed width to that percentage of 96 dpi.
+  6. (keyboard) Page Up/Down and Home/End move the current page.
+  7. (tools) in the continuous layout an annotation drawn on the second page lands on the second page, at the
+     point clicked, and is drawn there only; a pick started on one page restarts when the next click lands on
+     another page.
+  8. (bounds) rendering a long file top to bottom keeps the cached pages within the cap, and closing the
+     window while a page renders waits for the worker (no crash).
+  9. Screenshots of the four tabs, the continuous layout, a zoomed page and a pan in progress are saved under
+     `build/artifacts/` and shown to the user for approval before the issue is closed.
+  10. Existing PDF window tests (`pdf*`, `issue905*`, `issue906*`) still pass with the page-by-page default.
+- Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
+  `src/pdf/PdfDocument` (unchanged).
+- Status: accepted (2026-10-22) - D-2026-10-22-c, GitHub issue #1037.
+- Revisions: 2026-10-22 - catalogued and accepted (D-2026-10-22-c, GitHub issue #1037).
+
 ## Quality requirements
 
 ### REQ-200 — Deterministic, reproducible build
@@ -14586,6 +14677,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
+| REQ-452 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, cache bound + screenshots | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
