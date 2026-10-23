@@ -211,6 +211,11 @@ QString Issue914Shot(const char* name) {
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
 }
+QString Req453Shot(const char* name) {
+  const QString directory = QtTestArtifactDirectory();
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
 QAction* Action(QWidget& widget, const QString& text) {
   for (auto* action : widget.findChildren<QAction*>()) if (action->text() == text) return action;
   return nullptr;
@@ -632,6 +637,40 @@ class QtEditorTests final : public QObject {
   }
 
 private Q_SLOTS:
+  void req453DevelopmentBranchAppearsInBothWindowTitlesAndSurvivesRefresh() {
+    EditorWindow window(QStringLiteral("feature/window-label"));
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-development-branch-title.png")));
+  }
+
+  void req453WindowTitleWithoutDevelopmentBranchStaysUnchanged() {
+    EditorWindow window;
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-normal-title.png")));
+  }
+
   void issue803SplineRibbonPreviewAndSelectionScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
