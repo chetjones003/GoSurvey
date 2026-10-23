@@ -6,6 +6,10 @@ Instructions for AI coding agents working in this repository.
 VERIFICATION -> WORKSHOP, the git workflow, the Windows build tooling, and the SPEC GAP rules) and
 applies to every agent, not only Claude.
 
+## Before creating a pull request
+
+Complete the [pre-PR product documentation review in `CLAUDE.md`](CLAUDE.md#pre-pr-product-documentation-review-req-453): inspect `README.md`, `PRIVACY.md`, `resources/wiki/`, and the public manual wiki linked from `gosurveycad.com`. Update affected sources before opening the PR, and record each review and its outcome in the task log or PR description. An affected external wiki update must be completed before opening the PR.
+
 ## Build, test and clean output
 
 Use the Windows MSVC/CMake/Ninja workflow in [CLAUDE.md §1](CLAUDE.md#1-environment).

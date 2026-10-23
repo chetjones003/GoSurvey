@@ -38,6 +38,22 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Pre-PR product documentation review (REQ-453)
+
+Before creating any pull request, inspect all four product documentation sources:
+
+1. `README.md`
+2. `PRIVACY.md`
+3. The in-app help wiki in `resources/wiki/`
+4. The public user manual wiki linked from `gosurveycad.com` (currently the
+   [GoSurvey GitHub Wiki](https://github.com/chetjones003/GoSurvey/wiki))
+
+Update every source affected by the change before opening the pull request. In
+the task log or pull request description, record each source as reviewed and
+either identify its update or state that no update was needed. If an affected
+external wiki cannot be updated due to missing access, keep the pull request
+unopened until access is available and the update is made.
+
 ### Issues and pull request labels
 
 All agents creating a GitHub issue or pull request must apply the appropriate repository labels as part of creation. Choose labels that match the work's type and status from the repository's existing label set. Add the labels during creation when the tool supports it; otherwise, apply them immediately afterward and confirm they are present. If no existing label fits, use the repository's established label conventions when creating a suitable label.
