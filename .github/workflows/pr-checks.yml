@@ -58,7 +58,9 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git diff --check "$BASE_SHA" HEAD
+          # Vendored sources retain upstream formatting, including whitespace that `diff --check`
+          # flags. Keep checking project-owned changes without rewriting third-party code.
+          git diff --check "$BASE_SHA" HEAD -- . ':(exclude)third_party/**'
           python -m compileall -q .github/scripts
           python -m unittest discover -s .github/scripts -p "test_*.py"
 
