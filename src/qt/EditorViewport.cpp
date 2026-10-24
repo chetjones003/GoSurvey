@@ -205,6 +205,9 @@ void EditorViewport::paintGL() {
   const int w = qRound(width() * devicePixelRatioF());
   const int h = qRound(height() * devicePixelRatioF());
   if (w <= 0 || h <= 0) return;
+  // New entities still have id zero after their command's pre-edit undo snapshot.
+  // Assign identities before display caches and selection overlays consume them (REQ-076).
+  EnsureEntityIds(m_State);
   // A named-view restore starts an orientation animation without going through this widget; make
   // sure something is ticking it (REQ-059).
   if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
