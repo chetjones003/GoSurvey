@@ -11,6 +11,11 @@ applies to every agent, not only Claude.
 Use the Windows MSVC/CMake/Ninja workflow in [CLAUDE.md §1](CLAUDE.md#1-environment).
 From the repository root in PowerShell:
 
+Build and run only from the root of your assigned worktree, using that checkout's
+`./build.bat` and `./run.bat` (or their `debug` variants). Leave GoSurvey instances
+started from other worktrees untouched; do not close them or interfere with their
+builds or runtime files.
+
 - Build both frontends and all tests/helpers: `.\build.bat`.
 - Qt and domain tests: `.\build.bat`, then `ctest --preset ninja-release -R "^qt[.]editor$"` for GUI tests.
   This runs GUI tests on a hidden desktop. Set `$env:GOSURVEY_QT_ROOT` if the installed

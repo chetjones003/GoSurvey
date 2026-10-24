@@ -98,6 +98,14 @@ the actual CMake trees are under `build/.cmake/`. Tests run with the matching CT
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows
 CMake/CTest and `gh` executables. Keep the Windows-native toolchain.
 
+### Agent worktree isolation
+
+Build and run only from the root of the worktree assigned to the current agent, using that
+checkout's `./build.bat` (or `./build.bat debug`) and `./run.bat` (or `./run.bat debug`).
+Each worktree has its own `build/` directory and application path. Leave GoSurvey instances
+started from other worktrees untouched; do not close them or interfere with their builds or
+runtime files.
+
 ### Keep build output clean
 
 Release application output consists of the Qt application `GoSurvey.exe` and `GoSurveyQtTests.exe` under `build/`.
