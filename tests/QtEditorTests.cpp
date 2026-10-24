@@ -6237,6 +6237,21 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::None);
   }
 
+  void issue1083CoordinateSystemDictionaryLoadsWithTheWindow() {
+    // Issue #1083: the zone, grid readouts and the online map need the dictionary before Drawing
+    // Settings has ever been opened. Start from an unloaded dictionary, as a fresh session does.
+    QVERIFY(!geo::LoadDictionaries("C:/no/such/folder"));
+    QVERIFY(!geo::DictionariesLoaded());
+    EditorWindow window;
+    QVERIFY2(geo::DictionariesLoaded(), geo::DictionaryError().c_str());
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.drawingInsUnits = 2;
+    state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+    const auto factors = ResolveDrawingTransform(state.drawingSettings, state.drawingInsUnits, false);
+    QVERIFY2(factors.ok, factors.error.c_str());
+  }
+
   void drawingSettingsFileMenuLoadsCoordinateSystemCategories() {
     EditorWindow window;
     auto* fileMenu = window.findChild<QMenu*>("fileMenu"); QVERIFY(fileMenu);

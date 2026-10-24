@@ -25,6 +25,7 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "UserPrefs.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
@@ -342,8 +343,22 @@ QString GeneratedCommandIconFamily(const QString& name, const QString& descripti
   return "utility";
 }
 
+void EditorWindow::LoadCoordinateSystemDictionaries() {
+  if (geo::DictionariesLoaded()) return;
+  std::string directory;
+  try {
+    directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+  } catch (const std::exception& error) {
+    qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
+  }
+  geo::LoadDictionaries(directory);
+}
+
 EditorWindow::EditorWindow() {
   m_State.measureAnnotationText = MeasureQtText;
+  // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
+  // without Drawing Settings having been opened first.
+  LoadCoordinateSystemDictionaries();
   InitUpdates();
   setObjectName("GoSurveyQtEditor");
   setWindowTitle("GoSurvey");
