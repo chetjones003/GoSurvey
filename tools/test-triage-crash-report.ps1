@@ -116,6 +116,18 @@ try {
   $mismatch = Invoke-CrashReportTriage -Id '44' -DestinationRoot $mismatchRoot
   if ($mismatch.PdbStatus -notmatch 'does not match') { throw 'A mismatched PDB identity was not reported.' }
   if (Test-Path -LiteralPath (Join-Path $mismatch.Directory 'GoSurvey.pdb')) { throw 'A mismatched PDB was left available to the agent.' }
+
+  $script:WranglerCalls.Clear()
+  $script:FixtureId = 45
+  $script:FixtureDumpKey = $null
+  $script:FixtureReport = "version: 0.7.4`ncommit: unknown`npdb: $identity`n"
+  $script:MockPdbIdentity = $identity
+  $unknownCommitRoot = Join-Path $artifactRoot 'unknown-commit'
+  $unknownCommit = Invoke-CrashReportTriage -Id '45' -DestinationRoot $unknownCommitRoot
+  if ($script:WranglerCalls.Count -ne 1) { throw 'An unknown commit caused an R2 symbol request.' }
+  if (-not (Test-Path -LiteralPath $unknownCommit.Report)) { throw 'An unknown commit prevented saving report text.' }
+  if (-not (Test-Path -LiteralPath $unknownCommit.Manifest)) { throw 'An unknown commit prevented writing the manifest.' }
+  if ($unknownCommit.PdbStatus -notmatch '12-character build commit') { throw 'An unknown commit was not reported as an unavailable PDB.' }
 } finally {
   $resolvedArtifacts = [System.IO.Path]::GetFullPath($artifactRoot)
   if (-not $resolvedArtifacts.StartsWith($artifactParent + [System.IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {

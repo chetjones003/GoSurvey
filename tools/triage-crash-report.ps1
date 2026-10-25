@@ -181,10 +181,10 @@ function Invoke-CrashReportTriage {
   if ($identity.ContainsKey('pdb')) { $metadata.pdbIdentity = $identity.pdb }
   if ($identity.ContainsKey('version') -and $identity.version -ceq [string]$row.version -and
       $identity.ContainsKey('commit') -and $identity.ContainsKey('pdb') -and $identity.pdb -cne 'unavailable') {
-    $pdbKey = Get-CrashPdbObjectKey -Version $identity.version -Commit $identity.commit -Identity $identity.pdb
     $partialPdbPath = Join-Path $destination 'GoSurvey.pdb.partial'
     $pdbPath = Join-Path $destination 'GoSurvey.pdb'
     try {
+      $pdbKey = Get-CrashPdbObjectKey -Version $identity.version -Commit $identity.commit -Identity $identity.pdb
       Invoke-Wrangler -Arguments @(
         'r2', 'object', 'get', "$script:CrashTriageBucket/$pdbKey", '--remote', '--config', $script:CrashTriageConfig,
         '--file', $partialPdbPath
