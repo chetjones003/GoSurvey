@@ -45,11 +45,15 @@ jobs:
       has_cpp_changes: ${{ steps.changed-cpp.outputs.has_cpp_changes }}
       self_hosted: ${{ steps.route.outputs.self_hosted }}
     steps:
-      - name: Select trusted Windows worker pool
+      # TEMPORARY: PR validation is pinned to GitHub-hosted Windows runners while the self-hosted
+      # workers are unreliable (an offline worker queues its job forever; GitHub does not fall
+      # back). The GOSURVEY_PR_RUNNERS variable is ignored. To restore self-hosted routing, put
+      # back the original expression: vars.GOSURVEY_PR_RUNNERS == 'self-hosted' &&
+      # github.event.pull_request.head.repo.full_name == github.repository &&
+      # github.event.pull_request.user.login == github.repository_owner
+      - name: Select Windows worker pool (pinned to hosted)
         id: route
-        env:
-          SELF_HOSTED: ${{ vars.GOSURVEY_PR_RUNNERS == 'self-hosted' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner }}
-        run: echo "self_hosted=$SELF_HOSTED" >> "$GITHUB_OUTPUT"
+        run: echo "self_hosted=false" >> "$GITHUB_OUTPUT"
 
       - name: Check out classifier
         uses: actions/checkout@v4

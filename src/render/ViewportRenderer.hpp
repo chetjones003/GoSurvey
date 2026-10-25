@@ -245,6 +245,14 @@ public:
   /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to the UI.
   [[nodiscard]] unsigned int PartThumbnailTexture(const std::string& key) const;
 
+  /// Copy \p key's cached thumbnail out of GPU memory as tightly packed RGBA8, top row first, so a
+  /// frontend whose palette lives in another GL context (the Qt editor's floating palette cannot
+  /// sample this renderer's texture) can show it as an ordinary image. False when \p key is not
+  /// cached. Same call-site constraint as \ref EnsurePartThumbnail; restores no framebuffer binding
+  /// of its own beyond unbinding, which is where EnsurePartThumbnail leaves it.
+  [[nodiscard]] bool ReadPartThumbnailPixels(const std::string& key, std::vector<unsigned char>* rgba,
+                                             int* px) const;
+
   /// Drop \p key's cached thumbnail, so the next request re-renders it. Called when a block
   /// definition is edited (ADR-062 (c) — the one way a part's geometry changes in a session).
   void InvalidatePartThumbnail(const std::string& key);

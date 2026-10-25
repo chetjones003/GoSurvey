@@ -6240,6 +6240,179 @@ private Q_SLOTS:
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
   }
 
+private:
+  // Issue #1084 / REQ-350: the Pipe Fittings palette shows in the Qt editor. Names of the rows a tab lists.
+  static QStringList PipePaletteRows(QDialog* palette, int tab) {
+    QStringList names;
+    auto* list = palette->findChild<QListWidget*>(QString("pipeFittingList%1").arg(tab));
+    if (!list || !list->isVisible()) return names;
+    for (int i = 0; i < list->count(); ++i) names << list->item(i)->data(Qt::UserRole).toString();
+    return names;
+  }
+  // A real part picture, not the empty placeholder box: it has drawn pixels well inside its border.
+  static bool PipePaletteRowHasPicture(QListWidget* list, int row) {
+    const QImage image = list->item(row)->icon().pixmap(64, 64).toImage().convertToFormat(QImage::Format_ARGB32);
+    int drawn = 0;
+    for (int y = 8; y < 56; ++y)
+      for (int x = 8; x < 56; ++x)
+        if (qAlpha(image.pixel(x, y)) > 0) ++drawn;
+    return drawn > 150;
+  }
+
+private Q_SLOTS:
+  void issue1084PipeRunOpensPaletteWithSizeMatchedParts() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    QVERIFY(!window.findChild<QDialog*>("pipeFittingPalette"));
+
+    window.Submit("PIPERUN");  // opens the palette by itself (REQ-350 (a))
+    QVERIFY(state.pipeFittingPaletteOpen);
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    QVERIFY(palette->isVisible());
+    QVERIFY(!palette->isModal());  // a palette, never a modal
+    window.Submit("2in");
+    window.Submit("");  // schedule 40
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    QVERIFY(tabs);
+    QCOMPARE(tabs->tabPosition(), QTabWidget::East);
+    QCOMPARE(tabs->count(), 5);
+    QCOMPARE(tabs->tabText(0), QString("Fittings"));
+    QCOMPARE(tabs->tabText(1), QString("Flanges"));
+    tabs->setCurrentIndex(1);
+
+    // A 2in run lists the two 2in flanges and not the 4in one (size match is exact).
+    const QStringList twoInch = PipePaletteRows(palette, 1);
+    QVERIFY(twoInch.contains("2IN_BLIND_FLANGE"));
+    QVERIFY(twoInch.contains("2in_WELD_NECK_FLANGE"));
+    QVERIFY(!twoInch.contains("CJ_4in_WELD_NECK_FLANGE"));
+    QCOMPARE(palette->findChild<QLabel*>("pipeFittingRun")->text(), QString("Pipe run: 2in"));
+
+    // Route something and finish: the palette stays open after the run is committed.
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+
+    // A 4in run re-filters the same window, live.
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QCOMPARE(PipePaletteRows(palette, 1), QStringList{"CJ_4in_WELD_NECK_FLANGE"});
+
+    // A category with nothing at this size says so, naming the size.
+    tabs->setCurrentIndex(2);
+    auto* empty = palette->findChild<QLabel*>("pipeFittingEmpty2");
+    QVERIFY(empty && empty->isVisible());
+    QVERIFY(empty->text().contains("4in"));
+    QVERIFY(empty->text().contains("valves"));
+    QVERIFY(PipePaletteRows(palette, 2).isEmpty());
+    QCOMPARE(state.pipeFittingPaletteTab, 2);
+
+    // Cancel the run in progress (the palette stays open), then: the close box closes it and the
+    // reopen command shows it again where it was.
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+    QVERIFY(state.pipeFittingPaletteOpen);
+    const QPoint before = palette->pos();
+    palette->close();
+    QVERIFY(!palette->isVisible());
+    QVERIFY(!state.pipeFittingPaletteOpen);
+    window.Submit("PIPEPALETTE");
+    QVERIFY(state.pipeFittingPaletteOpen);
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QVERIFY(palette->isVisible());
+    QCOMPARE(palette->pos(), before);
+    window.Submit("PIPEPALETTE");  // the same command closes it again
+    QVERIFY(!palette->isVisible());
+  }
+
+  void issue1084PaletteRowsShowShadedPicturesAndArmThePart() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    palette->findChild<QTabWidget*>("pipeFittingTabs")->setCurrentIndex(1);
+    auto* list = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(list && list->isVisible());
+    QCOMPARE(list->count(), 2);
+
+    // Each row's picture is rendered once by the renderer and then shown.
+    for (int row = 0; row < list->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(list, row), 10000);
+    QCOMPARE(window.m_Viewport->PartThumbnails().size(), std::size_t(2));
+    QVERIFY(list->item(0)->text().contains('\n'));  // the name, with size and type beneath
+
+    // Picking a row arms the part for the next viewport click and does not place anything yet.
+    const QString name = list->item(0)->data(Qt::UserRole).toString();
+    const auto refsBefore = state.cadBlockRefs.size();
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(0)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    QCOMPARE(QString::fromUtf8(state.insertBlockName), name);
+    QVERIFY(state.insertBlockPipeSpliceArmed);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore);
+
+    // A click off every run places it as an ordinary block INSERT.
+    window.Submit("500,500,0");  // the same placement a viewport click makes, typed
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+    QCOMPARE(QString::fromUtf8(state.cadBlockRefs.back().defName.c_str()), name);
+    QVERIFY(!state.insertBlockPipeSpliceArmed);
+
+    // ESC disarms an armed part.
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(1)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+  }
+
+  void qt1084PipeFittingPaletteScreenshots() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    auto shoot = [&](const QString& file) {
+      QApplication::processEvents();
+      QVERIFY(palette->grab().save(artifacts + file));
+    };
+    // Before any picture exists: name-only rows with placeholder boxes.
+    tabs->setCurrentIndex(1);
+    auto* flanges = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(flanges);
+    for (int row = 0; row < flanges->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges, row), 10000);
+    shoot("qt-1084-palette-2in-flanges.png");
+    tabs->setCurrentIndex(2);
+    shoot("qt-1084-palette-2in-valves-empty.png");
+    window.Submit("");
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    tabs->setCurrentIndex(1);
+    auto* flanges4 = palette->findChild<QListWidget*>("pipeFittingList1");
+    for (int row = 0; row < flanges4->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges4, row), 10000);
+    shoot("qt-1084-palette-4in-flanges.png");
+    QVERIFY(window.grab().save(artifacts + "qt-1084-palette-in-window.png"));
+  }
+
   void issue1002RibbonExportsLandXmlThroughTheCommand() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
     QTest::qWait(100);
