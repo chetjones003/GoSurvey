@@ -35,4 +35,8 @@
 - Output layout (`build.output-layout`): passed.
 - Review follow-up: expanded the test to explicitly pin opening with multiple tabs while a regular drawing tab is active. Rebuilt and reran the focused Qt test and complete CTest suite after the change; all passed.
 - Code review: Standards PASS, no documented breaches or actionable smells. Spec PASS, no missing behavior or scope creep; the initial coverage concern was resolved by the expanded test.
-- Pre-PR product documentation review is still required before any pull request is opened; this implementation task does not open a PR.
+- Pre-PR product documentation review (REQ-453), 2026-10-25:
+  - `README.md`: reviewed; no update needed because it describes DWG support but does not document the Open workflow.
+  - `PRIVACY.md`: reviewed; no update needed because this change does not affect data handling.
+  - `resources/wiki/`: updated `Getting-Started.md`, `Files-and-Drawings.md`, and `User-Interface.md` to describe the New Drawing chooser and direct Open behavior.
+  - Public manual wiki linked from `gosurveycad.com`: reviewed and updated `Getting Started`, `Files and Drawings`, and `User Interface`; published as wiki commit `59e4c92` before opening the PR.
