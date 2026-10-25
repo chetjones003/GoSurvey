@@ -1058,6 +1058,7 @@ void EditorWindow::ShowUnits() {
       const int zoneIndex = systems->findData(QString::fromUtf8(initialZoneCode.c_str()));
       if (zoneIndex >= 0) { systems->setCurrentIndex(zoneIndex); staged.zoneCode = initialZoneCode; }
     } else staged.zoneCode = initialZoneCode;
+    updateDetails();
   }
   zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str()));
   connect(category, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, populateSystems](int) {
