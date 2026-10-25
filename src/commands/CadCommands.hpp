@@ -7717,6 +7717,9 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
 
+/// Drops any queued ZOOM EXTENTS / ZOOM WINDOW request.
+void ClearPendingViewportZoom(AppCommandState& st);
+
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Commits a circle at (\p cx,\p cy,\p cz) with radius \p r, normal (\p nx,\p ny,\p nz), local
