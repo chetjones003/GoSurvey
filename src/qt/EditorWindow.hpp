@@ -28,13 +28,14 @@ class QMenu;
 class QPoint;
 class QGridLayout;
 class QWidget;
+class QDialog;
 class FloatingCommandBar;
 class QFrame;
 class QTimer;
 
 class EditorWindow final : public QMainWindow {
 public:
-  EditorWindow();
+  explicit EditorWindow(QString developmentBranchLabel = {});
   ~EditorWindow() override;
   void Submit(const QString& command);
   void BeginInteractiveResize();
@@ -149,6 +150,9 @@ private:
   void ShowRightClickCustomization();
   void ShowSelectionList();
   void ShowBlockAuthoringPalette();
+  // Issue #1084: the REQ-350 Pipe Fittings palette (EditorPipePalette.cpp).
+  void ShowPipeFittingPalette();
+  void RefreshPipeFittingPalette(QDialog* dialog);
   void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();
@@ -157,6 +161,7 @@ private:
   void ServiceUpdate();
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
+  QString m_DevelopmentBranchLabel;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
