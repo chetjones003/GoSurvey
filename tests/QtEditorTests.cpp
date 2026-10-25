@@ -2276,6 +2276,11 @@ private Q_SLOTS:
     dialog->show();
     QTRY_VERIFY(dialog->isVisible());
     QCOMPARE(dialog->windowTitle(), QString("GoSurvey encountered a problem"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportNextStepsHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportExplanation"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportNextSteps"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportHeader"));
     auto* text = dialog->findChild<QPlainTextEdit*>("failureReportText");
     QVERIFY(text);
     QVERIFY(text->isReadOnly());
@@ -2588,20 +2593,25 @@ private Q_SLOTS:
 
   void failureReportAndUsageNoticeScreenshots() {
     const QString dir = QtTestArtifactDirectory();
-    std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
-                                                              SampleCrashReport()));
-    dialog->resize(dialog->minimumSize());
-    dialog->show();
-    QTest::qWait(50);
-    QVERIFY(dialog->grab().save(dir + "/qt-883-report-final.png"));
-    std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
-        "GoSurvey could not start",
-        "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
-        "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
-    startup->resize(startup->minimumSize());
-    startup->show();
-    QTest::qWait(50);
-    QVERIFY(startup->grab().save(dir + "/qt-883-startup-final.png"));
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      const QString appearance = light ? "light" : "dark";
+      std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
+                                                                SampleCrashReport()));
+      dialog->resize(dialog->minimumSize());
+      dialog->show();
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(dir + "/qt-1004-crash-" + appearance + ".png"));
+      std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
+          "GoSurvey could not start",
+          "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
+          "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
+      startup->resize(startup->minimumSize());
+      startup->show();
+      QTest::qWait(50);
+      QVERIFY(startup->grab().save(dir + "/qt-1004-startup-" + appearance + ".png"));
+    }
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window;
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
