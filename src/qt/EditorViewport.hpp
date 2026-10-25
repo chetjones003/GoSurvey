@@ -36,6 +36,8 @@ public:
   std::function<void(const QPoint& globalPosition)> snapMenuRequested;
   std::function<bool()> submitLockedInput;
   void SetOrientation(float azimuth, float elevation);
+  /// Refreshes the native cursor after command state changes outside a mouse event.
+  void RefreshCommandCursor();
   /// Eases the view to an orientation over a fraction of a second (REQ-059); SetOrientation snaps.
   void AnimateToOrientation(float azimuth, float elevation);
   /// A press at 'point' on the ViewCube (face, arrow or home) sets the view it stands for.

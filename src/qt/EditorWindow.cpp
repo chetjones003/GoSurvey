@@ -2065,6 +2065,7 @@ void EditorWindow::Refresh() {
   RefreshProperties();
   RefreshToolspace();
   RefreshRibbon();
+  m_Viewport->RefreshCommandCursor();
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();

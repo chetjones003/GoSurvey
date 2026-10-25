@@ -10,19 +10,21 @@
 ## Plan
 
 - Files/subsystems: `src/qt/EditorViewport.cpp`, Qt editor regression tests in `tests/QtEditorTests.cpp`, this workshop task record.
-- Smallest implementation: route left-button drag deltas to the existing camera orbit math when ORBIT is active and to the existing view pan transform when PAN is active. Keep ordinary left-drag selection and existing middle-button gestures untouched. Respect viewcube hit routing and the command's current model/paper-space restrictions.
+- Smallest implementation: route left-button drag deltas to the shared existing camera orbit math when ORBIT is active in model space and to the shared existing view pan transform when PAN is active. Keep ordinary left-drag selection and existing middle-button gestures untouched. Refresh the hand cursor as soon as PAN mode starts, and respect viewcube hit routing.
 - Test seam: public Qt viewport mouse press/move/release events; assert ORBIT azimuth/elevation and PAN view pan state change, and assert middle-button pan/orbit continue working. User approved this seam on 2026-10-24.
 - Verification: focused Qt editor test via hidden desktop, then project build and full Release CTest suite per repository workflow; record any environment/toolchain failure accurately.
-- Architecture boundary: UI-layer event routing only; reuse existing view-state transforms and command state, with no new API, abstraction, dependency, or persisted data.
+- Architecture boundary: UI-layer event routing and cursor refresh only; reuse existing view-state transforms and command state, with no new domain API, dependency, or persisted data.
 
 ## Verification outcome
 
-- PASS. `.\build.bat` built all Release targets with MSVC; Qt editor and domain tests/helpers were included.
-- PASS. Focused `panCommandLeftDragMovesView`, `orbitCommandLeftDragTumblesView`, and existing `frontViewPanMovesInCameraPlane` Qt tests passed through the hidden desktop runner.
-- PASS. `ctest --preset ninja-release -R "^qt[.]editor" --output-on-failure`: 6/6 shards passed.
-- PASS. `ctest --preset ninja-release --output-on-failure`: 191/191 tests passed, including `build.output-layout`, `qt.deployment`, and `qt.parity-ledger`.
+- PASS. `.\build.bat` built all Release targets with MSVC after the review fixes.
+- PASS. Focused `panCommandLeftDragMovesView`, `orbitCommandLeftDragTumblesView`, and `frontViewPanMovesInCameraPlane` Qt tests passed through the hidden desktop runner. The ORBIT test also checks paper-space drag does not change the camera; the PAN test checks the hand cursor is active on command entry.
+- PASS. Existing Qt coverage for `issue1034ManualOrbitCancelsAnimationAndTheCubeTracksCamera` passed in the six-shard editor run.
+- PASS. `ctest --preset ninja-release -R "^qt[.]editor" --output-on-failure`: 6/6 shards passed after the review fixes.
+- PASS. `ctest --preset ninja-release --output-on-failure`: 191/191 tests passed after the review fixes, including `build.output-layout`, `qt.deployment`, and `qt.parity-ledger`.
 - PASS. `git diff --check` reported no whitespace errors.
 - Test setup note: an initial GUI test version waited on OpenGL initialization and hit the hidden runner timeout. The tests were changed to send press/move/release events directly through a lightweight public `EditorViewport`, avoiding OpenGL while still checking the viewport's observable state.
+- Review follow-up: cursor refresh is now called by the editor's command-state refresh so PAN displays the hand as soon as it starts. ORBIT drag explicitly remains model-space-only. Pan/orbit delta calculations are shared with the existing middle-drag branches.
 
 ## Completion report
 

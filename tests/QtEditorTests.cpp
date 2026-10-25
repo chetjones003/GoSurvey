@@ -5150,6 +5150,21 @@ private Q_SLOTS:
     QApplication::sendEvent(&viewport, &release);
     QVERIFY(std::abs(state.viewportAzimuthDeg - azimuth) > 0.1f);
     QVERIFY(std::abs(state.viewportElevationDeg - elevation) > 0.1f);
+
+    state.activeSpaceIndex = 0;
+    const float paperAzimuth = state.viewportAzimuthDeg;
+    const float paperElevation = state.viewportElevationDeg;
+    QMouseEvent paperPress(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperPress);
+    QMouseEvent paperMove(QEvent::MouseMove, finish, finish, Qt::NoButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperMove);
+    QMouseEvent paperRelease(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperRelease);
+    QCOMPARE(state.viewportAzimuthDeg, paperAzimuth);
+    QCOMPARE(state.viewportElevationDeg, paperElevation);
   }
 
   void panCommandLeftDragMovesView() {
@@ -5157,12 +5172,16 @@ private Q_SLOTS:
     std::vector<std::string> log;
     EditorViewport viewport(state, log, nullptr);
     viewport.resize(800, 600);
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    QEnterEvent enter(start, start, start);
+    QApplication::sendEvent(&viewport, &enter);
     StartPanCommand(state, log);
+    viewport.RefreshCommandCursor();
     QCOMPARE(state.active, AppCommandState::Kind::Pan);
+    QCOMPARE(viewport.cursor().shape(), Qt::OpenHandCursor);
     const double panX = state.viewportPanX;
     const double panY = state.viewportPanY;
     const double panZ = state.viewportPanZ;
-    const QPoint start(viewport.width() / 2, viewport.height() / 2);
     const QPoint finish = start + QPoint(25, 20);
     QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
         Qt::NoModifier);
