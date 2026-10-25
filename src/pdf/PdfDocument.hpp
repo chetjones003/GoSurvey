@@ -30,6 +30,20 @@ struct Bitmap {
   bool partial = false;      ///< the render stopped at its time budget; only part of the page is drawn
 };
 
+/// Pixel dimensions for a full-page render.
+struct PixelSize {
+  int width = 0;
+  int height = 0;
+};
+
+/// A top-left-origin rectangle, in pixels.
+struct PixelRect {
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+};
+
 /// Area-averaged copy no larger than \p maxSide on its longer side (a stand-in made from a sharp render
 /// costs a few milliseconds, where rendering one from the page costs as much as the sharp render did).
 Bitmap Downscale(const Bitmap& src, int maxSide);
@@ -80,9 +94,9 @@ public:
   bool RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags = kDisplayFlags,
                   int budgetMs = 0, int sliceMs = 0, const std::function<void()>& between = {});
 
-  /// REQ-455: render only the w x h window at (x, y) of the page drawn fullW x fullH pixels, so a page can be
+  /// REQ-455: render only p region of the page drawn at p fullSize pixels, so a page can be
   /// shown at any zoom without a bitmap the size of the whole page. Same cancel and failure rules as RenderPage.
-  bool RenderRegion(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+  bool RenderRegion(int page, PixelSize fullSize, PixelRect region, Bitmap& out,
                     const std::function<bool()>& cancel, int flags = kDisplayFlags);
 
   /// REQ-391 clause 5: the ends and corners of the vector line work on \p page (the corners of its paths,
@@ -110,7 +124,7 @@ public:
   static constexpr int kDisplayFlags = 0x01 /*FPDF_ANNOT*/ | 0x02 /*FPDF_LCD_TEXT*/;
 
 private:
-  bool RenderWindow(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+  bool RenderWindow(int page, PixelSize fullSize, PixelRect region, Bitmap& out,
                     const std::function<bool()>& cancel, int flags, int budgetMs, int sliceMs,
                     const std::function<void()>& between);
   PdfDocument() = default;

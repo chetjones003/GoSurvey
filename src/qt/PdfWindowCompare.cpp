@@ -303,7 +303,7 @@ bool ResampleRevision(pdfview::PdfDocument& revision, int page, const pdfview::P
   out.bgra.assign(static_cast<std::size_t>(view.w) * view.h * 4u, 255);
   if (rw <= 0 || rh <= 0 || static_cast<double>(rw) * rh > kMaxSourcePixels) return true;
   pdfview::Bitmap source;
-  if (!revision.RenderRegion(page, fullW, fullH, rx, ry, rw, rh, source, cancel) || source.w <= 0) return false;
+  if (!revision.RenderRegion(page, {fullW, fullH}, {rx, ry, rw, rh}, source, cancel) || source.w <= 0) return false;
   for (int y = 0; y < view.h; ++y) {
     if (cancel()) return false;
     uint8_t* row = &out.bgra[static_cast<std::size_t>(y) * view.w * 4u];
@@ -333,7 +333,8 @@ bool BuildDetailMarks(pdfview::PdfDocument& base, int page, const QImage& lowMar
                       const std::function<bool()>& cancel, pdfview::Bitmap& marks, pdfview::Bitmap& redMarks) {
   const int fullW = view.FullW(), fullH = view.FullH();
   pdfview::Bitmap baseSource;
-  if (!base.RenderRegion(page, fullW, fullH, view.x0, view.y0, view.w, view.h, baseSource, cancel) || baseSource.w != view.w || baseSource.h != view.h) return false;
+  if (!base.RenderRegion(page, {fullW, fullH}, {view.x0, view.y0, view.w, view.h}, baseSource, cancel) || baseSource.w != view.w ||
+      baseSource.h != view.h) return false;
   const int lw = lowMarks.width(), lh = lowMarks.height();
   std::vector<uint8_t> found(static_cast<std::size_t>(lw) * lh, 0), margin(found.size(), 0); // 1: blue, 2: red
   for (int y = 0; y < lh; ++y) {

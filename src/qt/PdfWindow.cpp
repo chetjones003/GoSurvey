@@ -1205,7 +1205,8 @@ void PdfWindow::RequestRender(bool keepPicture) {
   m_Work = std::async(std::launch::async, [this, page, w, h, region] {
     pdfview::Bitmap bitmap;
     const bool ok = Windowed(QSize(w, h))
-        ? m_Document->RenderRegion(page, w, h, region.x(), region.y(), region.width(), region.height(), bitmap, [this] { return m_Cancel.load(); })
+        ? m_Document->RenderRegion(page, {w, h}, {region.x(), region.y(), region.width(), region.height()}, bitmap,
+                                   [this] { return m_Cancel.load(); })
         : m_Document->RenderPage(page, w, h, bitmap, [this] { return m_Cancel.load(); });
     return ok ? bitmap : pdfview::Bitmap{};
   });
@@ -2289,7 +2290,8 @@ void PdfWindow::ScheduleStrip() {
       result.page = page; result.w = px.width(); result.h = px.height(); result.x = region.x(); result.y = region.y();
       try {
         result.ok = Windowed(px)
-            ? document->RenderRegion(page, px.width(), px.height(), region.x(), region.y(), region.width(), region.height(), result.bitmap, [this] { return m_StripCancel.load(); })
+            ? document->RenderRegion(page, {px.width(), px.height()}, {region.x(), region.y(), region.width(), region.height()},
+                                     result.bitmap, [this] { return m_StripCancel.load(); })
             : document->RenderPage(page, px.width(), px.height(), result.bitmap, [this] { return m_StripCancel.load(); });
       }
       catch (...) { result.ok = false; } // the page keeps its blank sheet

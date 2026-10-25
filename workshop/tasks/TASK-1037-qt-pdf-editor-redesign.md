@@ -80,7 +80,8 @@
   and 5 passed after adding the narrow-status, overflow, and cloud captures. The refreshed visual review
   includes the corrected 560 px status bar; `git diff --check` reports no whitespace errors.
 - Code-review fixes 2026-10-25: removed the unrelated extra viewport zoom call; compare-detail wait failures
-  are logged; revision-cloud corner bounds share one helper. The Release build passed after these fixes;
+  are logged; revision-cloud corner bounds share one helper; render regions use grouped pixel size and
+  rectangle values. The Release build passed after these fixes;
   the 191-test suite above predates this review-fix pass.
 - Refactor 2026-10-25: moved the comparison workflow methods and detail-rendering helpers into
   `PdfWindowCompare.cpp`; behavior and ownership stay on `PdfWindow`.

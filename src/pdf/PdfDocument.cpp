@@ -673,35 +673,35 @@ bool PdfDocument::SearchText(const std::u16string& query, bool matchCase, TextSe
 
 bool PdfDocument::RenderPage(int page, int w, int h, Bitmap& out, const std::function<bool()>& cancel, int flags,
                              int budgetMs, int sliceMs, const std::function<void()>& between) {
-  return RenderWindow(page, w, h, 0, 0, w, h, out, cancel, flags, budgetMs, sliceMs, between);
+  return RenderWindow(page, {w, h}, {0, 0, w, h}, out, cancel, flags, budgetMs, sliceMs, between);
 }
 
-bool PdfDocument::RenderRegion(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+bool PdfDocument::RenderRegion(int page, PixelSize fullSize, PixelRect region, Bitmap& out,
                                const std::function<bool()>& cancel, int flags) {
-  return RenderWindow(page, fullW, fullH, x, y, w, h, out, cancel, flags, 0, 0, {});
+  return RenderWindow(page, fullSize, region, out, cancel, flags, 0, 0, {});
 }
 
-bool PdfDocument::RenderWindow(int page, int fullW, int fullH, int x, int y, int w, int h, Bitmap& out,
+bool PdfDocument::RenderWindow(int page, PixelSize fullSize, PixelRect region, Bitmap& out,
                                const std::function<bool()>& cancel, int flags, int budgetMs, int sliceMs,
                                const std::function<void()>& between) {
   out = {};
-  if (page < 0 || page >= PageCount() || w < 1 || h < 1 || fullW < 1 || fullH < 1)
+  if (page < 0 || page >= PageCount() || region.width < 1 || region.height < 1 || fullSize.width < 1 || fullSize.height < 1)
     return false;
   std::lock_guard<std::recursive_mutex> lock(PdfiumMutex());
   FPDF_PAGE p = FPDF_LoadPage(impl_->doc, page);
   if (p == nullptr)
     return false;
 
-  out.w = w;
-  out.h = h;
-  out.bgra.assign(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0xFF);
-  FPDF_BITMAP bm = FPDFBitmap_CreateEx(w, h, FPDFBitmap_BGRA, out.bgra.data(), w * 4);
+  out.w = region.width;
+  out.h = region.height;
+  out.bgra.assign(static_cast<size_t>(region.width) * static_cast<size_t>(region.height) * 4u, 0xFF);
+  FPDF_BITMAP bm = FPDFBitmap_CreateEx(region.width, region.height, FPDFBitmap_BGRA, out.bgra.data(), region.width * 4);
   if (bm == nullptr) {
     FPDF_ClosePage(p);
     out = {};
     return false;
   }
-  FPDFBitmap_FillRect(bm, 0, 0, w, h, 0xFFFFFFFFu);
+  FPDFBitmap_FillRect(bm, 0, 0, region.width, region.height, 0xFFFFFFFFu);
 
   struct Pause {
     const std::function<bool()>* cancel;
@@ -724,7 +724,7 @@ bool PdfDocument::RenderWindow(int page, int fullW, int fullH, int x, int y, int
     return ((*c->cancel)() || (c->budgeted && now >= c->deadline) || (c->sliced && now >= c->sliceEnd)) ? TRUE : FALSE;
   };
 
-  int status = FPDF_RenderPageBitmap_Start(bm, p, -x, -y, fullW, fullH, 0, flags, &pause);
+  int status = FPDF_RenderPageBitmap_Start(bm, p, -region.x, -region.y, fullSize.width, fullSize.height, 0, flags, &pause);
   while (status == FPDF_RENDER_TOBECONTINUED) {
     if (cancel()) {
       FPDF_RenderPage_Close(p);
