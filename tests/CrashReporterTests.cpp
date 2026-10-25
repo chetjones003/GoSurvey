@@ -17,25 +17,37 @@ TEST_CASE("ExceptionCodeToWireReason maps common Windows codes", "[crash][platfo
 #ifdef _WIN32
 #include "CrashBuildInfo.hpp"
 
+#include <cstring>
 #include <regex>
 #include <stdexcept>
 
 namespace {
 
-std::string g_described;
-
-int CaptureRecord(EXCEPTION_POINTERS* ep) {
+int CaptureRecord(EXCEPTION_POINTERS* ep, char* output, size_t outputSize) {
   // Describe now: the thrown object is destroyed once the handler unwinds.
-  g_described = crashReporter::DescribeThrownCppException(ep->ExceptionRecord);
+  const std::string description = crashReporter::DescribeThrownCppException(ep->ExceptionRecord);
+  if (outputSize > 0) {
+    std::strncpy(output, description.c_str(), outputSize - 1);
+    output[outputSize - 1] = '\0';
+  }
   return EXCEPTION_EXECUTE_HANDLER;
 }
 
 void ThrowRuntimeError() { throw std::runtime_error("boom from test"); }
 
-void CaptureThrow(void (*thrower)()) {
+std::exception_ptr CaptureCppException(void (*thrower)()) {
+  try {
+    thrower();
+  } catch (...) {
+    return std::current_exception();
+  }
+  return nullptr;
+}
+
+void CaptureThrow(void (*thrower)(), char* output, size_t outputSize) {
   __try {
     thrower();
-  } __except (CaptureRecord(GetExceptionInformation())) {
+  } __except (CaptureRecord(GetExceptionInformation(), output, outputSize)) {
   }
 }
 
@@ -58,17 +70,17 @@ TEST_CASE("PdbIdentityOfModule reports unavailable for no module or a non-image"
 }
 
 TEST_CASE("DescribeThrownCppException names the type and what() of a std exception", "[crash][platform]") {
-  g_described.clear();
-  CaptureThrow(ThrowRuntimeError);
-  const std::string text = g_described;
+  char described[768] = {};
+  CaptureThrow(ThrowRuntimeError, described, sizeof(described));
+  const std::string text = described;
   REQUIRE(text.find("runtime_error") != std::string::npos);
   REQUIRE(text.find("what(): boom from test") != std::string::npos);
 }
 
 TEST_CASE("DescribeThrownCppException names a non-std type without a what()", "[crash][platform]") {
-  g_described.clear();
-  CaptureThrow(ThrowPlainStruct);
-  const std::string text = g_described;
+  char described[768] = {};
+  CaptureThrow(ThrowPlainStruct, described, sizeof(described));
+  const std::string text = described;
   REQUIRE(text.find("NotAnStdException") != std::string::npos);
   REQUIRE(text.find("what():") == std::string::npos);
 }
@@ -78,5 +90,17 @@ TEST_CASE("DescribeThrownCppException ignores other exceptions and null", "[cras
   av.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
   REQUIRE(crashReporter::DescribeThrownCppException(&av).empty());
   REQUIRE(crashReporter::DescribeThrownCppException(nullptr).empty());
+}
+
+TEST_CASE("DescribeCppException reports a standard exception's type and message", "[crash][platform]") {
+  const std::string text = crashReporter::DescribeCppException(CaptureCppException(ThrowRuntimeError));
+  REQUIRE(text.find("runtime_error") != std::string::npos);
+  REQUIRE(text.find("what(): boom from test") != std::string::npos);
+}
+
+TEST_CASE("DescribeCppException reports non-standard exceptions generically", "[crash][platform]") {
+  const std::string text = crashReporter::DescribeCppException(CaptureCppException(ThrowPlainStruct));
+  REQUIRE(text == "Uncaught C++ exception of a non-standard type.\n");
+  REQUIRE(crashReporter::DescribeCppException(nullptr).empty());
 }
 #endif

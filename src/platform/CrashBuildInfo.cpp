@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstring>
 #include <exception>
+#include <typeinfo>
 
 namespace crashReporter {
 namespace {
@@ -159,6 +160,18 @@ std::string DescribeThrownCppException(const void* exceptionRecord) {
   (void)exceptionRecord;
   return std::string();
 #endif
+}
+
+std::string DescribeCppException(std::exception_ptr exception) {
+  if (!exception)
+    return std::string();
+  try {
+    std::rethrow_exception(exception);
+  } catch (const std::exception& e) {
+    return std::string("Uncaught C++ exception: ") + typeid(e).name() + "\nwhat(): " + e.what() + "\n";
+  } catch (...) {
+    return "Uncaught C++ exception of a non-standard type.\n";
+  }
 }
 
 }  // namespace crashReporter

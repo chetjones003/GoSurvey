@@ -17,7 +17,6 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
-#include <typeinfo>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -372,15 +371,7 @@ void AbortSignalHandler(int) {
 
 // std::terminate usually means an exception nobody caught: name it and keep its what().
 std::string DescribeCurrentException() {
-  if (!std::current_exception())
-    return std::string();
-  try {
-    throw;
-  } catch (const std::exception& e) {
-    return std::string("Uncaught C++ exception: ") + typeid(e).name() + "\nwhat(): " + e.what() + "\n";
-  } catch (...) {
-    return "Uncaught C++ exception of a non-standard type.\n";
-  }
+  return crashReporter::DescribeCppException(std::current_exception());
 }
 
 void TerminateHandler() {

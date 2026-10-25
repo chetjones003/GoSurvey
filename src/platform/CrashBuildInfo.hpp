@@ -1,5 +1,6 @@
 #pragma once
 
+#include <exception>
 #include <string>
 
 namespace crashReporter {
@@ -15,6 +16,10 @@ std::string PdbIdentityOfModule(const void* moduleBase);
 /// Returns an empty string for any other exception or when the record cannot be read.
 /// Allocation-light and guarded against bad pointers: it runs inside the crash handler.
 std::string DescribeThrownCppException(const void* exceptionRecord);
+
+/// Describes a captured active exception: dynamic type and what() for std::exception, a generic
+/// message for non-standard types, and an empty string when no exception is present.
+std::string DescribeCppException(std::exception_ptr exception);
 #endif
 
 }  // namespace crashReporter

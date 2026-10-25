@@ -24,7 +24,7 @@
 /// and must never be compared against one.
 #define GOSURVEY_VERSION_FULL "@PROJECT_VERSION@@GOSURVEY_VERSION_SUFFIX@"
 
-/// Short git commit this build was configured from (REQ-425 §8), or "unknown". CI passes
-/// -DGOSURVEY_GIT_COMMIT; a developer build reads it from git at configure time, so it can lag
-/// behind new commits until CMake is reconfigured.
+/// Short git commit this build was configured from (REQ-425 section 8), or "unknown". CI passes
+/// -DGOSURVEY_GIT_COMMIT; a developer build reads the commit at configure time. CMake
+/// watches the current Git ref and reconfigures when it changes.
 #define GOSURVEY_GIT_COMMIT "@GOSURVEY_GIT_COMMIT@"

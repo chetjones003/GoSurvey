@@ -96,6 +96,61 @@ set(GOSURVEY_GIT_COMMIT "" CACHE STRING
 if(NOT GOSURVEY_GIT_COMMIT)
   find_package(Git QUIET)
   if(GIT_FOUND)
+    # Reconfigure an incremental CMake build when HEAD or its current ref moves, so
+    # generated crash reports keep identifying the commit used to build the binary.
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE GOSURVEY_GIT_HEAD_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" symbolic-ref --quiet HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE GOSURVEY_GIT_HEAD_REF
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(GOSURVEY_GIT_HEAD_PATH)
+      get_filename_component(GOSURVEY_GIT_HEAD_PATH "${GOSURVEY_GIT_HEAD_PATH}" ABSOLUTE
+                             BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+      if(EXISTS "${GOSURVEY_GIT_HEAD_PATH}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOSURVEY_GIT_HEAD_PATH}")
+      endif()
+    endif()
+    if(GOSURVEY_GIT_HEAD_REF)
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path "${GOSURVEY_GIT_HEAD_REF}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GOSURVEY_GIT_REF_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(GOSURVEY_GIT_REF_PATH)
+        get_filename_component(GOSURVEY_GIT_REF_PATH "${GOSURVEY_GIT_REF_PATH}" ABSOLUTE
+                               BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(EXISTS "${GOSURVEY_GIT_REF_PATH}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOSURVEY_GIT_REF_PATH}")
+        endif()
+        get_filename_component(GOSURVEY_GIT_REF_DIRECTORY "${GOSURVEY_GIT_REF_PATH}" DIRECTORY)
+        if(IS_DIRECTORY "${GOSURVEY_GIT_REF_DIRECTORY}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                       "${GOSURVEY_GIT_REF_DIRECTORY}")
+        endif()
+      endif()
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path packed-refs
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GOSURVEY_GIT_PACKED_REFS_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(GOSURVEY_GIT_PACKED_REFS_PATH)
+        get_filename_component(GOSURVEY_GIT_PACKED_REFS_PATH "${GOSURVEY_GIT_PACKED_REFS_PATH}" ABSOLUTE
+                               BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(EXISTS "${GOSURVEY_GIT_PACKED_REFS_PATH}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                       "${GOSURVEY_GIT_PACKED_REFS_PATH}")
+        endif()
+      endif()
+    endif()
     execute_process(
       COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
