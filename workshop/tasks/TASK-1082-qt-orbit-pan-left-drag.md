@@ -32,4 +32,8 @@
 - Qt ORBIT left drag now tumbles using the existing Shift+middle orbit math; Qt PAN left drag now pans using the existing middle-drag view transform. The viewport consumes command-mode left presses so they cannot fall through into drawing/selection. PAN shows its hand cursor, and the manual ORBIT path cancels an active view animation as the middle-drag path already does.
 - Scope is limited to accepted REQ-045 and REQ-084(c) command interactions. Existing middle-button pan/orbit and command exit behavior are unchanged.
 - No assumptions about the spec or architecture were needed. No technical debt identified.
-- Documentation review: no product documentation was changed because this is a Qt input-parity fix; task outcome and verification are recorded here. The pre-PR product documentation review remains required before opening any PR.
+- Pre-PR product documentation review:
+  - `README.md` — reviewed; no update needed for a Qt input-parity fix.
+  - `PRIVACY.md` — reviewed; no update needed because the change does not affect data handling.
+  - `resources/wiki/` — reviewed `Views-and-Navigation.md`, `Commands/orbit.md`, `Commands/pan.md`, `Command-Reference.md`, and `Keyboard-Shortcuts.md`; command pages already document left-drag PAN/ORBIT and existing middle-drag navigation, so no update was needed.
+  - Public GoSurvey GitHub Wiki — reviewed its `Views-and-Navigation.md` and `Command-Reference.md`; it already documents left-drag PAN and the ORBIT gesture, so no update was needed.
