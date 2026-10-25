@@ -44,11 +44,14 @@ std::exception_ptr CaptureCppException(void (*thrower)()) {
   return nullptr;
 }
 
-void CaptureThrow(void (*thrower)(), char* output, size_t outputSize) {
+bool CaptureThrow(void (*thrower)(), char* output, size_t outputSize) {
+  bool handled = false;
   __try {
     thrower();
   } __except (CaptureRecord(GetExceptionInformation(), output, outputSize)) {
+    handled = true;
   }
+  return handled;
 }
 
 struct NotAnStdException {};
@@ -71,7 +74,7 @@ TEST_CASE("PdbIdentityOfModule reports unavailable for no module or a non-image"
 
 TEST_CASE("DescribeThrownCppException names the type and what() of a std exception", "[crash][platform]") {
   char described[768] = {};
-  CaptureThrow(ThrowRuntimeError, described, sizeof(described));
+  REQUIRE(CaptureThrow(ThrowRuntimeError, described, sizeof(described)));
   const std::string text = described;
   REQUIRE(text.find("runtime_error") != std::string::npos);
   REQUIRE(text.find("what(): boom from test") != std::string::npos);
@@ -79,7 +82,7 @@ TEST_CASE("DescribeThrownCppException names the type and what() of a std excepti
 
 TEST_CASE("DescribeThrownCppException names a non-std type without a what()", "[crash][platform]") {
   char described[768] = {};
-  CaptureThrow(ThrowPlainStruct, described, sizeof(described));
+  REQUIRE(CaptureThrow(ThrowPlainStruct, described, sizeof(described)));
   const std::string text = described;
   REQUIRE(text.find("NotAnStdException") != std::string::npos);
   REQUIRE(text.find("what():") == std::string::npos);
