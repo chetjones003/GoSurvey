@@ -9172,20 +9172,22 @@ private Q_SLOTS:
       window.CenterOnPagePoint(page, 200.0 * size.wPt / pageRect.width(),
                                (pageRect.height() - 250.0) * size.hPt / pageRect.height());
       QWidget* viewport = window.m_Scroll->viewport();
+      const QRect pageInViewport(window.m_Page->mapTo(viewport, pageRect.topLeft()), pageRect.size());
+      const QRect visiblePage = pageInViewport.intersected(viewport->rect());
+      const QRect visibleCanvas(window.m_Page->mapFrom(viewport, visiblePage.topLeft()), visiblePage.size());
+      window.m_Page->repaint(visibleCanvas); // flush the queued continuous-layout overlay paint before sampling
       const QImage shot = viewport->grab().toImage();
       if (capture) *capture = shot;
       const double ratio = static_cast<double>(shot.width()) / viewport->width();
-      const QRect pageInViewport(window.m_Page->mapTo(viewport, pageRect.topLeft()), pageRect.size());
-      const QRect visiblePage = pageInViewport.intersected(viewport->rect());
       const QRect device(qRound(visiblePage.x() * ratio), qRound(visiblePage.y() * ratio),
                          qRound(visiblePage.width() * ratio), qRound(visiblePage.height() * ratio));
       return Issue906HasPixelNear(shot.copy(device), QColor(255, 0, 0), 40);
     };
     QImage shot;
-    QVERIFY(hasRedOnPage(1, &shot));
+    QTRY_VERIFY_WITH_TIMEOUT(hasRedOnPage(1, &shot), 5000);
     QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
-    QVERIFY(!hasRedOnPage(0));
-    QVERIFY(!hasRedOnPage(2));
+    QTRY_VERIFY_WITH_TIMEOUT(!hasRedOnPage(0), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(!hasRedOnPage(2), 5000);
     // A pick on one page and a click on another do not mix: the draft restarts on the new page.
     Issue906Action(window, "Line")->trigger();
     QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));
