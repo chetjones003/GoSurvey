@@ -5095,6 +5095,8 @@ private Q_SLOTS:
 
     EditorWindow window;
     const auto initialTabs = window.State().drawingTabs.size();
+    QVERIFY(initialTabs >= 2);
+    QCOMPARE(window.State().activeDrawingIdx, 0);
     bool chooserAppeared = false;
     QTimer::singleShot(0, [&] {
       if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
@@ -5107,10 +5109,28 @@ private Q_SLOTS:
     QVERIFY(!chooserAppeared);
     QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
     QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
-    QVERIFY(window.State().activeDrawingIdx > 0);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(initialTabs));
     QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
     QCOMPARE(window.State().drawingTabs[static_cast<std::size_t>(window.State().activeDrawingIdx)].name,
              std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    window.SwitchDrawing(1);
+    const auto tabsBeforeSecondOpen = window.State().drawingTabs.size();
+    bool secondChooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        secondChooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!secondChooserAppeared);
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeSecondOpen + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(tabsBeforeSecondOpen));
+    QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
+    QCOMPARE(window.State().drawingTabs.back().name, std::string("Existing"));
     QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
 
     const auto activeIndex = window.State().activeDrawingIdx;

@@ -28,9 +28,10 @@
 ## 4. Delivered and verified
 
 - `EditorWindow::OpenDrawing` now creates a drawing tab directly, preserving the standalone New Drawing template chooser for its intended workflow.
-- Added `qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure`, covering successful open, active-tab focus, Start-tab identity, loaded geometry, and missing-file rollback. The test failed before the fix because the chooser appeared, then passed after the fix.
+- Added `qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure`, covering successful open from Start and from an existing drawing tab, active-tab focus, preservation of earlier tabs, loaded geometry, and missing-file rollback. The test failed before the fix because the chooser appeared, then passed after the fix.
 - `build.bat`: passed (Release).
 - Focused hidden-desktop Qt test: passed (3 assertions, 0 failures).
 - Full `ctest --preset ninja-release`: passed, 191/191 tests.
 - Output layout (`build.output-layout`): passed.
+- Review follow-up: expanded the test to explicitly pin opening with multiple tabs while a regular drawing tab is active. Rebuilt and reran the focused Qt test and complete CTest suite after the change; all passed.
 - Pre-PR product documentation review is still required before any pull request is opened; this implementation task does not open a PR.
