@@ -409,6 +409,15 @@ void EditorViewport::paintGL() {
       glDeleteFramebuffers(1, &readFbo);
     }
   }
+  // REQ-350 (e): the Pipe Fittings palette's part pictures are rendered here, after the scene pass
+  // (the one point in a paint where binding another framebuffer is safe), a few per paint.
+  if (m_Ready && (!m_State.pipeFittingThumbRequests.empty() || !m_State.pipeFittingThumbStale.empty())) {
+    const bool changed = ServicePipeFittingThumbnails(m_State, *m_Renderer, m_PartThumbs);
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    glViewport(0, 0, w, h);
+    if (!m_State.pipeFittingThumbRequests.empty()) update();
+    if (changed && partThumbnailsChanged) partThumbnailsChanged();
+  }
   QPainter painter(this);
   const Camera overlayCamera = CadViewCamera(m_State);
   if (paperSpace) {
