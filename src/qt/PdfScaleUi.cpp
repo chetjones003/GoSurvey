@@ -270,6 +270,23 @@ void PdfWindow::SetTool(int tool, const QString& status) {
   m_Page->update();
 }
 
+void PdfWindow::UpdateStatusBarLayout() {
+  if (!m_ToolStatus || !m_StatusMore) return;
+  const bool compact = width() < 760;
+  const auto hideInCompact = [this, compact](const char* name) {
+    if (auto* button = statusBar()->findChild<QToolButton*>(QString("pdfStatus_") + name))
+      button->setVisible(!compact);
+  };
+  hideInCompact("pdfFirstPage");
+  hideInCompact("pdfLastPage");
+  hideInCompact("pdfFitPage");
+  m_StatusMore->setVisible(compact);
+  m_ToolStatus->setMinimumWidth(compact ? 64 : 0);
+  m_PageNumber->setMinimumWidth(compact ? 52 : 70);
+  m_StatusPageCount->setMinimumWidth(compact ? 32 : 48);
+  m_ZoomBox->setMinimumWidth(compact ? 78 : 96);
+}
+
 // The bottom bar always names the tool in use; a drawing tool (and Extract Coordinates) also says how to leave it.
 void PdfWindow::UpdateToolStatus() {
   if (!m_ToolStatus) return;
@@ -280,7 +297,16 @@ void PdfWindow::UpdateToolStatus() {
     for (QAction* action : m_ToolGroup->actions())
       if (action->data().toInt() == m_Tool) { name = action->text(); leavable = m_Tool >= 0; break; }
   }
-  m_ToolStatus->setText(leavable ? QString("Tool: %1  (Esc to cancel)").arg(name) : QString("Tool: %1").arg(name));
+  const QString fullText = leavable ? QString("Tool: %1  (Esc to cancel)").arg(name) : QString("Tool: %1").arg(name);
+  m_ToolStatus->setToolTip(fullText);
+  QString compactName = name;
+  if (name == "Rectangle") compactName = "Rect";
+  else if (name == "Revision cloud") compactName = "Cloud";
+  else if (name == "Polyline length") compactName = "Polyline";
+  else if (name == "Extract coordinates") compactName = "Extract";
+  const QString visibleText = width() < 760 ? compactName : fullText;
+  m_ToolStatus->setText(QFontMetrics(m_ToolStatus->font()).elidedText(
+      visibleText, Qt::ElideRight, std::max(32, m_ToolStatus->width() - 8)));
 }
 
 // Esc: a pick in progress first, then the tool.

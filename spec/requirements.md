@@ -13774,7 +13774,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      usable. Existing marks and measurements are saved exactly as before; the only new saved content is the
      Callout and Revision cloud marks (clauses 12-13), written as standard PDF annotations.
   10. **Tool hotkeys and Browse.** Select (S), Browse (B), Text (T), Line (L), Rectangle (R), Ellipse (E),
-      Callout (D), Revision cloud (K), Length (G), Polyline length (P), Area (A) and Angle (H) have single-key
+      Callout (C), Revision cloud (K), Length (D), Polyline length (P), Area (A), Angle (G) and Check (H) have single-key
       shortcuts shown in their tooltips; Esc returns to Browse. With Browse selected the left button drags the
       document like the middle button.
   11. **Previews.** After the first click of Text, Line, Rectangle, Ellipse, Callout and Revision cloud a
@@ -13783,7 +13783,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
       FreeText callout (an arrow from the box to the target) that can be selected, moved by its target or its
       box, restyled and deleted (REQ-396).
   13. **Revision cloud.** The Revision cloud button has a drop-down offering **Rectangle cloud** (two clicks,
-      the default) and **Polygon cloud** (a click per vertex, Enter finishes); the button shows and uses the
+      the default) and **Polygon cloud** (at least three clicks, Enter finishes); the button shows and uses the
       last mode chosen. The cloud is saved as a standard PDF Square annotation with a scalloped appearance and
       is read back as a revision cloud.
   14. **Box select.** With Select, two clicks define a box: left to right is a window (blue, solid; marks
@@ -13802,45 +13802,64 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. `GoSurveyQtTests` `issue1037*` (command surface): the window has the four tabs named in clause 1 in that
      order, no standalone toolbar row remains outside the ribbon except the find bar, every action the window
      had before (by name) is found in the tab clause 1 puts it in, every panel has a caption, and at a narrow
-     window width the panels collapse into menus that still hold the same actions and live controls.
+     window width the panels collapse into menus that still hold the same actions and live controls; the
+     Annotate overflow menu is inspected for Rectangle and Color actions, and the status-bar controls remain
+     within the bar without overlap while less common navigation actions move into More.
   2. (layout) a multi-page file in the continuous layout has a canvas as tall as its pages plus gaps; scrolling
      moves the page box and the thumbnail selection to the page in the middle of the view; choosing a page
      scrolls it to the top and the page box keeps it; switching to page-by-page and back keeps the page.
   3. (wheel) a plain wheel event scrolls the continuous document; a Ctrl+wheel event changes the zoom and does
      not scroll by itself; the page point under the pointer before and after a Ctrl+wheel zoom is the same
      within one pixel, in both layouts.
-  4. (pan) a middle-button press, drag and release scrolls the document by the pointer movement and, with the
-     Rectangle, Length and Select tools selected, leaves the annotation list, the draft, the selection and the
-     unsaved-changes state unchanged.
+  4. (pan) a middle-button press, drag and release scrolls the document by the pointer movement, shows the closed-hand
+     cursor while held, and with Rectangle, Length, Select and coordinate extraction selected, leaves the annotation
+     list, draft, selection, extraction drag and unsaved-changes state unchanged.
   5. (zoom) Fit width makes the current page as wide as the view; Fit page makes it fit in the view; a typed
      percentage sets the displayed width to that percentage of 96 dpi.
-  6. (keyboard) Page Up/Down and Home/End move the current page.
+  6. (keyboard and page sync) Page Up/Down and Home/End move the current page; choosing a page by box, thumbnail or
+     search hit scrolls that page to the top. `issue1037ContinuousLayoutScrollsAndStaysSynchronized`,
+     `pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations` and
+     `issue1037ContinuousSearchAndSnapOnLaterPage` cover page and search navigation.
   7. (tools) in the continuous layout an annotation drawn on the second page lands on the second page, at the
      point clicked, and is drawn there only; a pick started on one page restarts when the next click lands on
-     another page.
+     another page. `issue1037ContinuousLayoutAnnotatesTheSecondPage` covers annotation input;
+     `issue1037ContinuousSearchAndSnapOnLaterPage` covers later-page search highlights and the snap marker.
   8. (bounds) rendering a long file top to bottom keeps the cached pages within the cap, and closing the
      window while a page renders waits for the worker (no crash).
   9. Screenshots of the four tabs, the continuous layout, a zoomed page and a pan in progress are saved under
-     `build/artifacts/` and shown to the user for approval before the issue is closed.
+     `build/artifacts/` and shown to the user for approval before the issue is closed. Refreshed captures
+     presented for approval on 2026-10-25 include `qt-1037-tab-open-view.png`, `qt-1037-tab-annotate.png`, `qt-1037-tab-measure.png`,
+     `qt-1037-tab-review.png`, `qt-1037-continuous.png`, `qt-1037-zoomed-page.png`, `qt-1037-pan-page.png`,
+     `qt-1037-status-narrow.png`, `qt-1037-ribbon-narrow.png`, `qt-1037-ribbon-overflow-actions.png`, `qt-1037-cloud-default.png`,
+     `qt-1037-cloud-menu.png` and `qt-1037-cloud-polygon-mode.png`.
   10. Existing PDF window tests (`pdf*`, `issue905*`, `issue906*`) still pass with the page-by-page default.
-  11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`, `issue1037BrowseDragPansTheDocument`
-      and `issue1037SelectBoxWindowAndCrossing`: hotkeys and Esc, Browse drag pan, callout and both cloud modes
-      saved and read back, window versus crossing selection including a cloud.
-  12. (compare, clause 15) the compare tests list the changes in the `pdfComparePanel` side-panel tab and, at 600%,
-      produce the sharp detail picture and sharp marks.
+  11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`,
+      `issue1037RevisionCloudReadBackKeepsBoundsOnRotatedPages`, `issue1037BrowseDragPansTheDocument` and
+      `issue1037SelectBoxWindowAndCrossing`: all hotkeys and Esc, Browse drag pan, callout and both cloud modes
+      saved and read back, rotated cloud bounds, window versus crossing selection including a cloud, single-click
+      selection, Delete and Apply style across a selection.
+  12. (compare, clause 15) `pdfCompareRunsDiffAndSupportsManualAlignmentAndFailure` and
+      `issue1037CompareDetailKeepsRevisionWhenDetailMarksFail` list changes in the `pdfComparePanel` tab and, at
+      600%, produce the sharp detail picture and sharp marks; a failed detail-mark render keeps the sharp revision.
   13. (clause 3, clause 8) `issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled`: the plain wheel scrolls a page-by-page
       document without zooming, and a render overtaken by a zoom change is cancelled and redone.
-  14. (clauses 1, 11, 13) `issue1037ToolChestCloudMenuAndPreviews`: the Tool Chest holds the markup, measurement and
-      review buttons, the revision-cloud drop-down has the two modes and the button shows the last one, and
-      each drawing tool shows a preview after its first click. The status-bar navigation controls and the side
-      panel tabs are covered by `issue1037RibbonSidePanelAndStatusBarNavigation`.
-  15. (clause 16) the Accept all and Deny all buttons are exercised in the extract-review test (`pdfCoordinateAcceptAll`).
+  14. (clauses 1, 11, 13) `issue1037ToolChestCloudMenuAndPreviews` verifies Tool Chest commands, both cloud modes,
+      last-mode display, drawing previews, and access to collapsed panel actions at a narrow width.
+      `issue1037RibbonSidePanelAndStatusBarNavigation` covers the status controls and side tabs, checks
+      narrow status-bar bounds and the More menu, and captures both separately from the ribbon.
+  15. (clause 16; REQ-399) `pdfCoordinateReviewAcceptAllAndDenyAll` verifies both batch actions;
+      `pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate` verifies Accept all stops at the first failure.
+  16. (clause 17) `issue1037PdfWindowIsTopLevelAndClosesWithEditor` verifies the PDF window can be focused
+      independently and closes with its editor owner.
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
   `src/pdf` layer, which gains only `PdfDocument::RenderRegion` (windowed rendering) and the Callout and Revision cloud
   annotation kinds in `PdfAnnotate`.
 - Status: accepted (2026-10-23) - D-2026-10-23-e, GitHub issue #1037.
 - Revisions: 2026-10-23 - catalogued and accepted (D-2026-10-23-e, GitHub issue #1037).
   2026-10-25 - final design, directed by the user while testing: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).
+  2026-10-25 - user confirmed the implementation hotkeys (Callout C, Length D, Angle G, Check H); clause 10 now
+  matches the implementation and the REQ-396 Callout note. Added evidence for rotated cloud bounds, failed compare
+  detail marks, extraction-pan isolation, page ownership, batch-stop behavior and the exact approval captures.
 
 ## Quality requirements
 
@@ -14829,7 +14848,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
-| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout, Revision cloud, box select, previews, compare panel, cache bound and render cancellation, screenshots | accepted |
+| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel (including narrow-width overflow actions), continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout and Revision cloud save/read-back, box select, previews, compare panel and detail failure, cache bound and render cancellation, top-level ownership | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-453 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |

@@ -78,7 +78,8 @@ public:
   void SetEditor(EditorWindow* editor) { m_Editor = editor; }
   /// REQ-387 clause 2 / REQ-455: page-by-page (default) or continuous vertical scrolling through every page.
   enum class Layout { PageByPage, Continuous };
-  enum class CompareMode { Tint, Opacity, Base, Revision }; ///< the order of the Compare panel's View box
+  enum class CompareMode { Tint, Opacity, Base, Revision };
+  enum class ComparePickCount { None = 0, OnePair = 2, TwoPairs = 4 };
   void SetLayout(Layout layout);
   Layout CurrentLayout() const { return m_Layout; }
   /// The zero-based page the controls and the thumbnail strip are on (the page at the middle of the view when continuous).
@@ -92,9 +93,9 @@ public:
   /// Zoom by a factor keeping the page point under a point of the scroll area's viewport fixed.
   void ZoomBy(double factor, QPoint viewportPoint);
 protected:
+  void resizeEvent(QResizeEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
-  void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 private:
   friend class QtEditorTests;
@@ -176,7 +177,9 @@ private:
   QStackedWidget* m_SidePages = nullptr;
   QLabel* m_StatusPageCount = nullptr;
   QLabel* m_ToolStatus = nullptr;  ///< bottom bar: the active tool and how to leave it
+  QToolButton* m_StatusMore = nullptr;
   void UpdateToolStatus();
+  void UpdateStatusBarLayout();
   void SyncPageNav();
   void UpdatePropertiesPanel();
   void PollOpen();
@@ -301,6 +304,7 @@ private:
   void EscapeTool();
   void UpdateScaleDisplay();
   void SceneChanged();                         ///< after anything the scale display or overlay depends on
+  void ClearAnnotationSelection();
   void ShowSetScale();
   void BeginCalibrate();
   void FinishCalibrationPicks();
@@ -400,6 +404,7 @@ private:
   // A sharp picture of the revision for the part of the page on screen (Revision and Opacity views at high zoom): the
   // fixed-resolution comparison images alone go soft once the page is shown much larger than they were made.
   struct CompareDetail { pdfview::Bitmap bitmap, marks, redMarks; QRect rect; int pageWidthPx = 0; double ratio = 1.0; bool failed = false; };
+  static bool KeepCompareRevisionWhenMarksFail(CompareDetail& detail, bool cancelled);
   std::future<CompareDetail> m_CompareDetailWork;
   std::atomic<bool> m_CompareDetailCancel{false};
   bool m_CompareDetailAgain = false;
@@ -431,7 +436,7 @@ private:
   bool m_ComparePicking = false;
   bool m_CompareClosePending = false;
   int m_ComparePickCount = 0;
-  int m_ComparePickTarget = 0;
+  ComparePickCount m_ComparePickTarget = ComparePickCount::None;
   pdfalign::Pt m_ComparePicks[4];
   void BeginCompare();
   void StartCompare(bool findChanges);

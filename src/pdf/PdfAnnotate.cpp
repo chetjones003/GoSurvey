@@ -1062,6 +1062,17 @@ struct ViewerToUser {
     if (m.kind == Annot::Kind::Rect || m.kind == Annot::Kind::Ellipse || m.kind == Annot::Kind::Text || m.kind == Annot::Kind::Leader) {
       if (m.x0 > m.x1) std::swap(m.x0, m.x1);
       if (m.y0 > m.y1) std::swap(m.y0, m.y1);
+    } else if (m.kind == Annot::Kind::RevCloud && !m.pts.empty()) {
+      // The viewer-to-user rotation can reverse either axis. Rebuild the box from every transformed corner;
+      // RevCloud's saved PDF rectangle is only an envelope and its original diagonal may now be reversed.
+      m.x0 = m.x1 = m.pts.front().first;
+      m.y0 = m.y1 = m.pts.front().second;
+      for (const auto& p : m.pts) {
+        m.x0 = std::min(m.x0, p.first);
+        m.x1 = std::max(m.x1, p.first);
+        m.y0 = std::min(m.y0, p.second);
+        m.y1 = std::max(m.y1, p.second);
+      }
     }
   }
 };
