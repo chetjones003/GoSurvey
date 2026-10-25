@@ -35,7 +35,7 @@ class QTimer;
 
 class EditorWindow final : public QMainWindow {
 public:
-  EditorWindow();
+  explicit EditorWindow(QString developmentBranchLabel = {});
   ~EditorWindow() override;
   void Submit(const QString& command);
   void BeginInteractiveResize();
@@ -161,6 +161,7 @@ private:
   void ServiceUpdate();
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
+  QString m_DevelopmentBranchLabel;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;

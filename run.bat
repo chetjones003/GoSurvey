@@ -13,6 +13,10 @@ rem build.bat debug  (debug).
 
 cd /d "%~dp0"
 
+rem The window label is process-local and identifies the branch in this checkout.
+set "GOSURVEY_DEV_BRANCH="
+for /f "delims=" %%b in ('git branch --show-current 2^>nul') do set "GOSURVEY_DEV_BRANCH=%%b"
+
 set "REL=build\GoSurvey.exe"
 set "DBG=build\debug\GoSurvey.exe"
 

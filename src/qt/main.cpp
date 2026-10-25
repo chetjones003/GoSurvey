@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
   }
   int result = 0;
   {
-    EditorWindow window;
+    EditorWindow window(qEnvironmentVariable("GOSURVEY_DEV_BRANCH"));
     LoadUserStartupPrefSettings(window.State());
     // REQ-093: the minimum display time counts from here, so the bar animates for its whole span
     // instead of sitting still while the window above is being built.
