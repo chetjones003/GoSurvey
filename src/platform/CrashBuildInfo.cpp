@@ -89,7 +89,8 @@ bool ReadThrownTypeAndWhat(const EXCEPTION_RECORD* rec, char* typeOut, size_t ty
       }
     }
     return hasType;
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
+                                                               : EXCEPTION_CONTINUE_SEARCH) {
     return false;
   }
 }
@@ -122,7 +123,9 @@ bool ReadPdbIdentity(const void* moduleBase, char* out, size_t cap) {
                     g.Data4[6], g.Data4[7], static_cast<unsigned long>(rsds->age));
       return true;
     }
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  } __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER
+                                                               : EXCEPTION_CONTINUE_SEARCH) {
+    return false;
   }
   return false;
 }
