@@ -5102,3 +5102,55 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
 - Decision: Remove the `auth/` client subsystem, credential and OAuth platform adapters, account/sign-in settings and start-screen routes, persisted sign-in opt-out, and any startup gate or account-service lookup. Telemetry contains only the anonymous five-field REQ-080 payload and starts independently on its existing one-shot worker. Its network failure remains silent. Keep the independent diagnostics/reporting flow unchanged. Remove the usage/privacy notice from app settings; the repository privacy policy remains the user-facing disclosure and describes both streams.
 - Boundary: This retires an existing subsystem; it adds no layer or dependency and does not change the telemetry backend schema. Existing `install`/`active` event names remain; `active` means each subsequent application open. Deployed Auth0/accounts services and their stored data are outside this client repository and are not operated or deleted by this decision.
 - Consequences: The application starts with the same functionality regardless of network connectivity except for best-effort background services that already exist (updates, maps, diagnostics). The new-install id remains local and is not derived from machine data. `PRIVACY.md` must distinguish anonymous usage pings from diagnostic reports, which may contain local paths.
+
+### ADR-072 — Install GoSurvey per-user and migrate machine-wide copies once   (2026-10-24, accepted)
+
+- **Status:** accepted (D-2026-10-24-c). Backs REQ-078 and REQ-454.
+- **Context.** The existing Inno Setup installer defaults to Program Files, where installation and
+  replacement require administrator rights. A PowerShell bootstrap cannot sign the installer or
+  guarantee suppression of SmartScreen/Defender warnings. The user wants a one-command stable
+  release install and future user-approved in-app updates without routine elevation. Existing
+  machine-wide installs cannot be removed from Program Files by a standard account.
+- **Decision.** All GoSurvey installs use `%LOCALAPPDATA%\Programs\GoSurvey` for the current user.
+  Fresh bootstrap and in-app updates run per-user and silently. A legacy Program Files install is
+  migrated once with Windows UAC consent so the protected files can be removed. Migration preserves
+  user settings/data and recreates the supported shortcuts; it leaves one working per-user copy.
+  REQ-078 continues to require the user's explicit update choice and applies the update to that same
+  per-user installation. The repository-hosted PowerShell bootstrap reads the latest stable
+  `latest.json`, verifies the installer bytes against its SHA-256, and runs only after verification.
+  The hash is an integrity check, not publisher authentication. Windows-controlled
+  SmartScreen/Defender warnings are outside the guarantee. Standalone `.gs` drawings and their file
+  association remain retired per D-2026-10-20-d; migration does not restore them.
+- **Alternatives.** (1) Keep Program Files and require elevation on every update — rejected because
+  it defeats the no-elevation install/update goal. (2) Leave existing machine-wide installs in place
+  alongside a new per-user copy — rejected because it leaves duplicate installations and ambiguous
+  shortcuts. (3) Claim the bootstrap avoids Windows security warnings — rejected because an unsigned
+  installer cannot make that guarantee.
+- **Consequences.** The installer's default privilege mode and path, migration behavior, and the
+  updater's launch arguments must agree on per-user installation. `REQ-078` and `REQ-453` remain
+  distinct: in-app updates retain explicit consent, while Store packaging keeps its silent invocation
+  and permitted OS UAC behavior. One-time migration may display UAC; fresh installs and later
+  per-user updates do not request elevation. For those two paths the release packages the licensed
+  app-local Visual C++ runtime DLLs; each release must refresh them. The Store path retains the
+  shared redistributable invocation required by REQ-453. Signing remains technical debt.
+
+### ADR-073 — App-local Visual C++ runtime for non-elevated install paths   (2026-10-24, accepted)
+
+- **Status:** accepted (D-2026-10-24-d). Backs REQ-454; preserves REQ-453's Store package behavior.
+- **Context.** The existing installer invokes `vc_redist.x64.exe /install /quiet /norestart`.
+  `/quiet` removes its UI, but the shared runtime installer can still request UAC when the machine
+  does not already have a compatible runtime. That breaks REQ-454's no-elevation fresh install and
+  update paths. Microsoft documents app-local runtime deployment as an option for users without
+  administrator rights, with the servicing cost borne by the application publisher.
+- **Decision.** Package the licensed x64 Visual C++ runtime DLLs beside `GoSurvey.exe` and refresh
+  those files in each release. The PowerShell bootstrap and REQ-078 in-app update pass an installer
+  switch that skips the shared redistributable installer, relying on the app-local copies. Keep the
+  shared redistributable in the installer and invoke it quietly for the Microsoft Store path under
+  REQ-453, which permits UAC. Do not statically link the CRT or add a third-party dependency.
+- **Alternatives.** (1) Keep running the shared package for all paths — rejected because it can
+  request UAC on the required no-elevation bootstrap/update paths. (2) Statically link the runtime —
+  rejected in favor of the project's current dynamic runtime model. (3) Use app-local DLLs without
+  updating them on release — rejected because it leaves security and compatibility servicing stale.
+- **Consequences.** Release packaging must copy the licensed CRT files from the active MSVC toolset
+  and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
+  those DLLs as part of each release. The Store submission continues to carry the shared redist.
