@@ -4671,6 +4671,16 @@ private Q_SLOTS:
     for (const auto& entry : window.m_Log) logged = logged || entry.find("Zoom extents applied") != std::string::npos;
     QVERIFY(logged);
 
+    // The middle double-click does the same, and works mid-command without disturbing it (REQ-120).
+    window.Submit("LINE"); window.Submit("10,10");
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    st.viewportPanX = -5000.0; st.viewportPanY = 7000.0; st.viewportZoom = 1.f;
+    QTest::mouseDClick(window.m_Viewport, Qt::MiddleButton, Qt::NoModifier, QPoint(300, 300));
+    QTRY_VERIFY(std::abs(st.viewportPanX - cx) < 1.0);
+    QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
+
     // An empty drawing says why nothing moved (REQ-201) and leaves the view alone.
     EditorWindow empty; empty.CreateDrawingFromTemplate(); empty.resize(1280, 800); empty.show();
     QVERIFY(QTest::qWaitForWindowActive(&empty));

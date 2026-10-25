@@ -1270,6 +1270,15 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
     mousePressEvent(event);
     return;
   }
+  // REQ-120: a middle double-click zooms to extents, even mid-command. It writes the camera only
+  // (paintGL consumes the flag), so the active command's phase, points and draft are untouched.
+  if (event->button() == Qt::MiddleButton) {
+    m_State.pendingZoomWindow = false;
+    m_State.pendingZoomExtents = true;
+    event->accept();
+    update();
+    return;
+  }
   if (m_State.activeSpaceIndex >= 0 && m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
       !InFloatingModelSpace(m_State)) {
     ray3d::Vec3 point;

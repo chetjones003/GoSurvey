@@ -18,7 +18,7 @@
 ## 2. Scope
 - In scope: call `ProcessPendingViewportZoom` from the Qt viewport paint path; Qt regression test; this log.
 - Out of scope: any change to framing maths, the spec, or other frontends.
-- Smallest change: one call at the top of `paintGL`, before the camera is built.
+- Smallest change: one call at the top of `paintGL`, before the camera is built; plus a middle-button branch in `mouseDoubleClickEvent` that sets the pending flag (the Qt viewport had no handler for the REQ-120 gesture at all).
 
 ## 3. Architectural boundary check
 - No new abstraction, dependency or state. `ProcessPendingViewportZoom` is the existing Commands entry point; the retired ImGui `CadUi.cpp` called it every frame with the viewport size, and that call was lost in the Qt move (#966).
@@ -32,6 +32,7 @@
 
 ## 6. Implementation log
 - 2026-10-25 — Confirmed `ProcessPendingViewportZoom` had no caller in `src/`. Added the call in `paintGL` with the viewport pixel size and aspect (width/height, as the ImGui caller did).
+- 2026-10-25 — Final review found the middle double-click had no Qt handler either; `mouseDoubleClickEvent` now sets the pending flag (mid-command safe, camera only) and the test covers it with a real middle double-click during LINE.
 - 2026-10-25 — First test draft failed because `LINE` was still active (the command correctly refused `ZOOMEXTENTS` mid-command); the test now ends the LINE first.
 
 ## 7. Verification result
