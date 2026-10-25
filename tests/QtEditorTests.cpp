@@ -125,6 +125,7 @@
 #include <QTemporaryFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -4506,6 +4507,13 @@ private Q_SLOTS:
     const auto typoSuggestions = FuzzyCommandSuggestions("lne", 30);
     QVERIFY(!typoSuggestions.empty());
     QCOMPARE(QString::fromStdString(typoSuggestions.front().name), QString("LINE"));
+    const auto aliasSuggestions = FuzzyCommandSuggestions("l", 1);
+    QVERIFY(!aliasSuggestions.empty());
+    QCOMPARE(QString::fromStdString(aliasSuggestions.front().name), QString("LINE"));
+    QVERIFY(aliasSuggestions.front().exactMatch);
+    const auto prefixSuggestions = FuzzyCommandSuggestions("lin", 1);
+    QVERIFY(!prefixSuggestions.empty());
+    QVERIFY(!prefixSuggestions.front().exactMatch);
     QVERIFY(!window.m_DynamicInput->isVisible());
     command->setFocus(); QTest::keyClicks(command, "lne");
     QCOMPARE(command->text(), QString("lne"));
@@ -4584,6 +4592,58 @@ private Q_SLOTS:
     QVERIFY(!popup->isVisible());
     QTest::keyClick(command, Qt::Key_Escape);
     QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue1081QtExactOpenWinsOverOpenPackSuggestion() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+
+    command->setFocus(); QTest::keyClicks(command, "OPEN");
+    QTRY_VERIFY(popup->isVisible());
+    const auto openSuggestions = FuzzyCommandSuggestions("OPEN", 1);
+    QCOMPARE(QString::fromStdString(openSuggestions.front().name), QString("OPENPACK"));
+    QVERIFY(!openSuggestions.front().exactMatch);
+    QCOMPARE(model->index(0, 0).data().toString(), QString("OPENPACK"));
+    QModelIndex packRow;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("OPENPACK")) {
+        packRow = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(packRow.isValid());
+    popup->setCurrentIndex(packRow);
+
+    QString dialogTitle;
+    QStringList dialogFilters;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialogTitle = dialog->windowTitle();
+      dialogFilters = dialog->nameFilters();
+      dialog->reject();
+    });
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(dialogTitle, QString("Open drawing"));
+    QVERIFY(dialogFilters.contains(QString("Drawing (*.dwg)")));
+
+    command->setFocus(); QTest::keyClicks(command, "LINE");
+    QTRY_VERIFY(popup->isVisible());
+    QModelIndex otherCommand;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("MKLINE")) {
+        otherCommand = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(otherCommand.isValid());
+    popup->setCurrentIndex(otherCommand);
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.State().active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
   }
 
   void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
