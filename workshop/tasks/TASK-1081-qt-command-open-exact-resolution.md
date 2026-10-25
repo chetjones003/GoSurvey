@@ -47,7 +47,8 @@
 ## 8. Outcome
 - Requirements satisfied: REQ-040 and REQ-400 command-line behavior for exact command names and aliases, including the UI-routed `OPEN` action.
 - Tests added: `issue1081QtExactOpenWinsOverOpenPackSuggestion`; exact-match flags verified in `issue1040QtCommandFinderFuzzyKeyboardAndMouseSelection`.
-- Documentation updated: task log only; product documentation is unaffected.
+- Product documentation review: `README.md` reviewed; no change needed. `PRIVACY.md` reviewed; no change needed. In-app `resources/wiki/Command-Line.md` updated so Enter documents exact-command/alias precedence over the highlighted suggestion. `resources/wiki/Command-Reference.md` and `resources/wiki/Files-and-Drawings.md` reviewed; no change needed. The website manual link on `gosurveycad.com` was verified to point to the public GitHub Wiki; its `Command-Line` page was updated with the same Enter behavior, while `Files-and-Drawings` was reviewed with no change needed.
 - Build: Release build succeeded. Full suite passed 191/191.
 - Assumptions / technical debt: none.
 - Code review: completed on `origin/beta...HEAD`; zero findings on Standards and Spec axes.
+- Public wiki update: `Command-Line.md` updated in the linked GoSurvey Wiki repository before PR creation (`dfbcf285dbf0864bf24ea896068b0ff0fbd64584`).
