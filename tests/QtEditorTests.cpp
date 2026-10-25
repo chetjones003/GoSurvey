@@ -9162,17 +9162,30 @@ private Q_SLOTS:
     const auto size = window.m_Document->Sizes()[1];
     QVERIFY(std::abs(made.x0 - 100.0 * size.wPt / second.width()) < 0.5);
     QVERIFY(std::abs(made.y0 - (second.height() - 150.0) * size.hPt / second.height()) < 0.5);
-    // It is drawn on the second page only.
-    const QImage shot = window.m_Page->grab().toImage();
-    QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
-    const double ratio = static_cast<double>(shot.width()) / window.m_Page->width(); // the grab is in device pixels
-    const auto hasRed = [&](const QRect& rect) {
-      const QRect device(qRound(rect.x() * ratio), qRound(rect.y() * ratio), qRound(rect.width() * ratio), qRound(rect.height() * ratio));
+    // Check the visible scroll viewport. Grabbing the entire canvas asks Windows to paint a
+    // taller-than-window child widget, which can omit off-screen pixels on hosted desktops.
+    const auto hasRedOnPage = [&](int page, QImage* capture = nullptr) {
+      const auto size = window.m_Document->Sizes()[static_cast<std::size_t>(page)];
+      const QRect pageRect = window.PageRect(page);
+      // Keep the same page-relative area visible on all three pages, including the last page,
+      // which cannot be scrolled all the way to the top when it is taller than the viewport.
+      window.CenterOnPagePoint(page, 200.0 * size.wPt / pageRect.width(),
+                               (pageRect.height() - 250.0) * size.hPt / pageRect.height());
+      QWidget* viewport = window.m_Scroll->viewport();
+      const QImage shot = viewport->grab().toImage();
+      if (capture) *capture = shot;
+      const double ratio = static_cast<double>(shot.width()) / viewport->width();
+      const QRect pageInViewport(window.m_Page->mapTo(viewport, pageRect.topLeft()), pageRect.size());
+      const QRect visiblePage = pageInViewport.intersected(viewport->rect());
+      const QRect device(qRound(visiblePage.x() * ratio), qRound(visiblePage.y() * ratio),
+                         qRound(visiblePage.width() * ratio), qRound(visiblePage.height() * ratio));
       return Issue906HasPixelNear(shot.copy(device), QColor(255, 0, 0), 40);
     };
-    QVERIFY(hasRed(second));
-    QVERIFY(!hasRed(window.PageRect(0)));
-    QVERIFY(!hasRed(window.PageRect(2)));
+    QImage shot;
+    QVERIFY(hasRedOnPage(1, &shot));
+    QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
+    QVERIFY(!hasRedOnPage(0));
+    QVERIFY(!hasRedOnPage(2));
     // A pick on one page and a click on another do not mix: the draft restarts on the new page.
     Issue906Action(window, "Line")->trigger();
     QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));

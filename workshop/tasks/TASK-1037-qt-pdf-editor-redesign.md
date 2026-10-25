@@ -95,3 +95,24 @@
   the unsupported entry-count assertion. No viewer behavior or SPEC changes.
 - CI follow-up verification: `.\build.bat` passed. The three affected Qt tests passed in one hidden-
   desktop run (5 total QtTest cases including setup/cleanup); no production code changed.
+- CI follow-up (PR #1101, 2026-10-25): `full / build and test` failed twice on hosted Windows in
+  `issue1037ContinuousLayoutAnnotatesTheSecondPage`, at the assertion that a full `m_Page->grab()`
+  contains red pixels on page 2. The standalone test passed ten times locally, and shard 3 plus all
+  six Qt shards passed locally in parallel. The test scrolls page 2 into view but samples the entire,
+  taller-than-window canvas; the repeated hosted-only failure is consistent with the hidden desktop
+  clipping canvas pixels outside the visible scroll viewport. This is an inference from the runner
+  difference; the hosted screenshot is not included in the CI artifact.
+  - Authority: REQ-455 clause 7 and Acceptance 7 (annotation is drawn on its owning continuous-layout
+    page only); REQ-433 high-DPI clause 3.
+  - Plan: make the regression assertion sample the scroll viewport, mapping each page rectangle from
+    canvas coordinates into viewport/device pixels. Scroll to pages 0, 1 and 2 and assert red appears
+    only on page 1. Keep the change test-only; no viewer behavior or SPEC change.
+  - Files: `tests/QtEditorTests.cpp` and this task record.
+  - Verification: Release build; the focused Qt test; shard 3; all six Qt editor shards in parallel;
+    `git diff --check`.
+  - Architectural boundary: existing widget/test seams only; no new dependency, production API,
+    layer, or data format.
+  - Verification result: `build.bat` passed; the focused test passed (3 QtTest cases including
+    setup/cleanup); shard 3 passed; all six Qt shards passed together (6/6); `git diff --check` passed.
+    The test now samples the page through the visible viewport after centering the same page area.
+    No production code or SPEC changed.
