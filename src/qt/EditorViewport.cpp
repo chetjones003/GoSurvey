@@ -216,11 +216,11 @@ void EditorViewport::paintGL() {
   // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport
   // size, so it happens here, before the camera below is built from the result (REQ-120, REQ-123).
   // The pan/zoom out-pointers are optional: the function writes them into the state itself.
-  // A resize preview freezes the widget at its old size; keep the request pending until the real
-  // size is back, or the framing would use the old aspect.
-  if (!m_ResizePreview)
-    ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
-        static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
+  // Imports fit the drawing to the last painted size (DxfIo/LibreDwgCad read these).
+  m_State.viewportLastFbW = w;
+  m_State.viewportLastFbH = h;
+  ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
+      static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
   const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
@@ -1272,8 +1272,7 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
   // (a middle press passes through the cube to orbit/pan, so this does too). It writes the camera
   // only (paintGL consumes the flag), so the active command's phase, points and draft are untouched.
   if (event->button() == Qt::MiddleButton) {
-    ClearPendingViewportZoom(m_State);
-    m_State.pendingZoomExtents = true;
+    RequestZoomExtents(m_State);
     event->accept();
     update();
     return;

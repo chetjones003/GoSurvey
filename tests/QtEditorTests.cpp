@@ -1,6 +1,7 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "io/DwgIo.hpp"
+#include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "ViewportRenderer.hpp"
@@ -4647,17 +4648,22 @@ private Q_SLOTS:
   }
 
 private:
-  // GitHub #1024: helpers for the Qt zoom-extents tests. Friends of EditorWindow, so they can reach
-  // its log and cancel path; a free function could not.
+  // GitHub #1024: helpers for the Qt zoom tests. Friends of EditorWindow, so they can reach its log
+  // and cancel path; a free function could not.
   static constexpr std::size_t kFlatLineStride = 6;  // x0 y0 z0 x1 y1 z1
   static constexpr double kExtentsMargin = 0.08;      // REQ-122: the binding axis leaves 8% free
+  static constexpr double kFitMin = 0.98, kFitMax = 1.001;  // "framed": the binding axis is within 2% of the margin
+  static constexpr double kParkedPanX = -5000.0, kParkedPanY = 7000.0;  // a camera nothing could frame
+  static constexpr double kLineW = 400.0, kLineH = 200.0;               // the line DrawLine("0,0", "400,200") makes
+  static constexpr double kThinLineScale = 13.587;  // req123-viewport-zoom-extents.txt: 2 * (100 / 3.68) / 4 in
 
   static void DrawLine(EditorWindow& window, const char* from, const char* to) {
     for (const char* text : {"LINE", from, to}) window.Submit(text);
     window.CancelDraftingInput();
   }
-  static void ParkCamera(AppCommandState& st) {  // somewhere that cannot be mistaken for a framing
-    st.viewportPanX = -5000.0; st.viewportPanY = 7000.0; st.viewportZoom = 1.f;
+  static void DrawWideLine(EditorWindow& window) { DrawLine(window, "0,0", "400,200"); }
+  static void ParkCamera(AppCommandState& st) {
+    st.viewportPanX = kParkedPanX; st.viewportPanY = kParkedPanY; st.viewportZoom = 1.f;
   }
   static bool LogHas(const std::vector<std::string>& log, const char* text) {
     return std::any_of(log.begin(), log.end(), [&](const std::string& e) { return e.find(text) != std::string::npos; });
@@ -4670,30 +4676,57 @@ private:
     const double halfW = halfH * view.width() / view.height();
     return std::max(0.5 * spanX / (halfW * (1.0 - kExtentsMargin)), 0.5 * spanY / (halfH * (1.0 - kExtentsMargin)));
   }
+  static bool IsFramed(const AppCommandState& st, const QWidget& view, double spanX, double spanY) {
+    const double fit = FrameFit(st, view, spanX, spanY);
+    return fit > kFitMin && fit <= kFitMax;
+  }
+  static EditorViewport* PaintedViewport(EditorWindow& window) {
+    window.m_Viewport->grabFramebuffer();
+    return window.m_Viewport;
+  }
 
 private Q_SLOTS:
   // GitHub #1024 / REQ-120 / REQ-122: ZOOMEXTENTS only sets a pending flag, so the Qt viewport has to
   // consume it when it paints. The headless transcripts call the zoom function directly and cannot
-  // see this; only the real viewport can.
+  // see this; only the real viewport can. Wide, tall and ultra-wide windows move the binding axis.
   void issue1024QtZoomExtentsFramesTheDrawing() {
+    for (const QSize size : {QSize(1280, 800), QSize(600, 900), QSize(1600, 500)}) {
+      EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(size); window.show();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      auto& st = window.State();
+      DrawWideLine(window);
+      QVERIFY(st.userLinesFlat.size() >= kFlatLineStride);
+      const std::size_t o = st.userLinesFlat.size() - kFlatLineStride;
+      const double cx = 0.5 * (st.userLinesFlat[o] + st.userLinesFlat[o + 3]);
+      const double cy = 0.5 * (st.userLinesFlat[o + 1] + st.userLinesFlat[o + 4]);
+
+      ParkCamera(st);
+      window.Submit("ZOOMEXTENTS");
+      QTRY_VERIFY(!st.pendingZoomExtents);
+      QVERIFY(std::abs(st.viewportPanX - cx) < 1.0);
+      QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
+      QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+      // The whole line fits, and the axis that binds leaves 8% free (REQ-122).
+      QVERIFY2(IsFramed(st, *window.m_Viewport, kLineW, kLineH),
+               qPrintable(QString("window %1x%2").arg(size.width()).arg(size.height())));
+    }
+  }
+
+  // REQ-122: an orbited camera frames the model's 3D box by its silhouette, not the plan rectangle.
+  void issue1024QtZoomExtentsFramesTheDrawingWhenOrbited() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     auto& st = window.State();
-    DrawLine(window, "0,0", "400,200");
-    QVERIFY(st.userLinesFlat.size() >= kFlatLineStride);
-    const std::size_t o = st.userLinesFlat.size() - kFlatLineStride;
-    const double cx = 0.5 * (st.userLinesFlat[o] + st.userLinesFlat[o + 3]);
-    const double cy = 0.5 * (st.userLinesFlat[o + 1] + st.userLinesFlat[o + 4]);
-
+    DrawWideLine(window);
+    PaintedViewport(window)->SetOrientation(30.f, 40.f);
     ParkCamera(st);
     window.Submit("ZOOMEXTENTS");
     QTRY_VERIFY(!st.pendingZoomExtents);
-    QVERIFY(std::abs(st.viewportPanX - cx) < 1.0);
-    QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
-    QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
-    // The whole 400 x 200 line fits, and the axis that binds leaves 8% free (REQ-122).
-    const double fit = FrameFit(st, *window.m_Viewport, 400.0, 200.0);
-    QVERIFY2(fit > 0.98 && fit <= 1.001, qPrintable(QString("fit %1").arg(fit)));
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied (3D)"));
+    QVERIFY(std::abs(st.viewportPanX - kLineW / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanZ) < 1.0);
+    QVERIFY(st.viewportZoom > 0.f && st.viewportZoom != 1.f);
   }
 
   // REQ-120: the middle double-click is the same operation as the typed command, is transparent
@@ -4702,26 +4735,30 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     auto& st = window.State();
-    DrawLine(window, "0,0", "400,200");
+    DrawWideLine(window);
     window.Submit("LINE"); window.Submit("10,10");
     QCOMPARE(st.active, AppCommandState::Kind::Line);
     QCOMPARE(st.linePhase, AppCommandState::LinePhase::NeedNextPoint);
     const std::size_t lines = st.userLinesFlat.size();
 
-    // The typed route stays refused mid-command; nothing about it is relaxed.
+    // The typed route stays refused mid-command; nothing about it is relaxed. (REQ-120 quotes the
+    // older "Could not parse point" wording; today the LINE prompt names itself, same refusal.)
     ParkCamera(st);
     window.Submit("ZOOMEXTENTS");
     QApplication::processEvents(); QTest::qWait(50);
     QVERIFY(LogHas(window.m_Log, "still running"));
-    QVERIFY(std::abs(st.viewportPanX + 5000.0) < 1e-9);
+    QVERIFY(!st.pendingZoomExtents);
+    QCOMPARE(st.viewportPanX, kParkedPanX);
 
-    for (const QPoint& at : {QPoint(300, 300), Px(ViewCubeSceneOf(window.m_Viewport, st).center)}) {
+    // Off the cube, and on its centre, home button and bottom-right corner.
+    const viewcube::Scene scene = ViewCubeSceneOf(window.m_Viewport, st);
+    const QPoint cubeCorner(qRound(scene.originX + scene.sizePx - 3), qRound(scene.originY + scene.sizePx - 3));
+    for (const QPoint& at : {QPoint(300, 300), Px(scene.center), Px(scene.home), cubeCorner}) {
       ParkCamera(st);
       QTest::mouseDClick(window.m_Viewport, Qt::MiddleButton, Qt::NoModifier, at);
-      QTRY_VERIFY(std::abs(st.viewportPanX - 200.0) < 1.0);
-      QVERIFY(std::abs(st.viewportPanY - 100.0) < 1.0);
-      const double fit = FrameFit(st, *window.m_Viewport, 400.0, 200.0);
-      QVERIFY2(fit > 0.98 && fit <= 1.001, qPrintable(QString("fit %1").arg(fit)));
+      QTRY_VERIFY2(std::abs(st.viewportPanX - kLineW / 2) < 1.0, qPrintable(QString("%1,%2").arg(at.x()).arg(at.y())));
+      QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+      QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
     }
     // The LINE in progress kept its first point: the next point completes a segment from (10,10).
     QCOMPARE(st.active, AppCommandState::Kind::Line);
@@ -4733,6 +4770,25 @@ private Q_SLOTS:
     QCOMPARE(st.userLinesFlat[lines + 3], 50.0);
     QCOMPARE(st.userLinesFlat[lines + 4], 60.0);
     window.CancelDraftingInput();
+  }
+
+  // REQ-122: a queued ZOOM WINDOW is applied by the viewport too. Its pending request was stranded
+  // the same way. The request is queued directly: the Qt viewport never starts ZOOM WINDOW's first
+  // corner from a click (a separate defect, #1100), so no click can queue it yet.
+  void issue1024QtQueuedZoomWindowFramesTheRectangle() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    ParkCamera(st);
+    st.pendingZoomMnX = 100.f; st.pendingZoomMxX = 300.f;
+    st.pendingZoomMnY = 50.f; st.pendingZoomMxY = 150.f;
+    st.pendingZoomWindow = true;
+    window.m_Viewport->update();
+    QTRY_VERIFY(!st.pendingZoomWindow);
+    QVERIFY(LogHas(window.m_Log, "Zoom window applied"));
+    QVERIFY(std::abs(st.viewportPanX - 200.0) < 0.5);
+    QVERIFY(std::abs(st.viewportPanY - 100.0) < 0.5);
+    QVERIFY(IsFramed(st, *window.m_Viewport, 200.0, 100.0));
   }
 
   // REQ-201: with nothing to frame, say so and leave the view alone.
@@ -4756,7 +4812,7 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     auto& st = window.State();
-    DrawLine(window, "0,0", "400,200");
+    DrawWideLine(window);
     const int layout = AddPaperLayout(st);
     SetActiveSpace(st, layout);
     window.Refresh();
@@ -4767,8 +4823,7 @@ private Q_SLOTS:
     QTRY_VERIFY(!st.pendingZoomExtents);
     QVERIFY(std::abs(st.viewportPanX - 0.5 * sheetW) < 0.01);
     QVERIFY(std::abs(st.viewportPanY - 0.5 * sheetH) < 0.01);
-    const double fit = FrameFit(st, *window.m_Viewport, sheetW, sheetH);
-    QVERIFY2(fit > 0.98 && fit <= 1.001, qPrintable(QString("fit %1").arg(fit)));
+    QVERIFY(IsFramed(st, *window.m_Viewport, sheetW, sheetH));
   }
 
   // REQ-123: inside an activated viewport the model is framed into the VIEWPORT's own rectangle, and
@@ -4788,19 +4843,62 @@ private Q_SLOTS:
     vp.modelCenterX = -900.0; vp.modelCenterY = 900.0; vp.scaleModelPerPaperIn = 1.f;
     window.Submit("ZOOMEXTENTS");
     QTRY_VERIFY(!st.pendingZoomExtents);
-    // Worked by hand in req123-viewport-zoom-extents.txt: width binds, 2 * (100 / 3.68) / 4 in.
     QVERIFY(std::abs(vp.modelCenterX - 50.0) < 0.01);
     QVERIFY(std::abs(vp.modelCenterY - 10.0) < 0.01);
-    QVERIFY(std::abs(vp.scaleModelPerPaperIn - 13.587) < 0.01);
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);
 
     st.viewportZoomLocked = true;
     ParkCamera(st);
     window.Submit("ZOOMEXTENTS");
     QTRY_VERIFY(!st.pendingZoomExtents);
-    QVERIFY(std::abs(vp.scaleModelPerPaperIn - 13.587) < 0.01);  // the viewport was left alone
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);  // the viewport was left alone
     const auto& sheet = st.paperLayouts[static_cast<std::size_t>(layout)];
     QVERIFY(std::abs(st.viewportPanX - 0.5 * sheet.sheetWidthIn()) < 0.01);
     QVERIFY(std::abs(st.viewportPanY - 0.5 * sheet.sheetHeightIn()) < 0.01);
+  }
+
+  // Entering BEDIT queues a zoom extents of the block's own content; it was dead in Qt until the
+  // viewport consumed the request, so the editor now opens framed on the block.
+  void issue1024QtBlockEditFramesTheBlockContent() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    CadBlockDefinition block;
+    block.name = "Issue1024Block";
+    block.content.lines = {0.f, 0.f, 0.f, static_cast<float>(kLineW), static_cast<float>(kLineH), 0.f};
+    block.content.lineAttrs.resize(1);
+    block.content.lineVis.resize(1);
+    st.blockDefs.push_back(block);
+    ParkCamera(st);
+    window.Submit("BEDIT Issue1024Block");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(st.blockEditActive);
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+  }
+
+  // Imports fit the drawing to the size the viewport last painted at (DxfIo/LibreDwgCad read it);
+  // before the Qt viewport published it they always fit to a stale 900 x 650.
+  void issue1024QtViewportPublishesItsPixelSizeAndImportsFitToIt() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString path = directory.filePath("wide.dxf");
+    {
+      EditorWindow source; source.CreateDrawingFromTemplate(); source.resize(1280, 800); source.show();
+      QVERIFY(QTest::qWaitForWindowActive(&source));
+      DrawWideLine(source);
+      std::vector<std::string> log;
+      QVERIFY(ExportDxfFile(source.State(), path.toUtf8().constData(), log));
+    }
+    // Aspect 3.2: the wide line is height-bound here but width-bound at the stale 900 x 650 (1.38).
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1600, 500); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    PaintedViewport(window);
+    QCOMPARE(st.viewportLastFbW, qRound(window.m_Viewport->width() * window.m_Viewport->devicePixelRatioF()));
+    QCOMPARE(st.viewportLastFbH, qRound(window.m_Viewport->height() * window.m_Viewport->devicePixelRatioF()));
+    std::vector<std::string> log;
+    QVERIFY(ImportDxfFile(st, path.toUtf8().constData(), log));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
   }
 
   void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
