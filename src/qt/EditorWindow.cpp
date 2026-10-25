@@ -2532,7 +2532,8 @@ void EditorWindow::RefreshRecentProjects() {
 }
 
 // The viewer is its own top-level window, not an owned child: an owned window is kept above its owner, which stopped
-// the main window being focused (or alt-tabbed to) while a PDF was open. It closes with the main window.
+// the main window being focused (or alt-tabbed to) while a PDF was open. It closes with the main window; if the user
+// declines to discard unsaved marks the close is refused and the viewer stays open on its own, which keeps their work.
 void EditorWindow::ShowPdf() {
   auto* window = new PdfWindow(nullptr);
   window->SetEditor(this);

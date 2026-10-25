@@ -285,6 +285,7 @@ private:
 
   // REQ-430: scale display, calibration, scale checks and snapping (src/qt/PdfScaleUi.cpp).
   friend class PdfScaleDialogs;
+  static constexpr int kToolSelect = -2, kToolBrowse = -1;
   static constexpr int kToolCalibrate = 20; ///< m_Tool values beyond the annotation kinds
   static constexpr int kToolCheck = 21;
   struct SnapPage {

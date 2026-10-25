@@ -11837,7 +11837,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 2: Line is a true Line written by a post-save patch because PDFium
-  cannot create one (D-2026-10-06-e).
+  cannot create one (D-2026-10-06-e). 2026-10-25 — REQ-455 (GitHub issue #1037) adds the Revision cloud kind (a standard Square annotation with a scalloped appearance, clause 13) and the Callout (clause 12); the existing kinds are saved as before.
 
 ### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
 
@@ -12220,7 +12220,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     tool draws an arrow with a boxed note and the saved PDF shows it in a second reader.
 - Owner-layer: Domain/IO (`src/pdf/`), UI
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool). 2026-10-25 — the Qt viewer's Callout tool (C) revives this Leader as a PDF FreeText callout with the target-then-box click order (REQ-455 clause 12).
 
 ### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
 
@@ -12291,7 +12291,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
 - Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
 - Status: accepted
-- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing.
 
 ### REQ-400 — Command-line resolution: an exact typed command or alias always wins (GitHub issue #766)
 
@@ -13740,8 +13740,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Audit scale, Compare revisions). Page navigation, the page box, Previous/Next, zoom out/in, the zoom
      percentage, Fit width and Fit page sit in the status bar. The **side panel** at the left holds a strip of
      tabs: **Thumbnails**, **Tool Chest**, **Properties** and, while a comparison runs, **Compare**. Every
-     control the window had is still reachable with the same names, tooltips and behaviour. The tabs use the
-     Qt graphite appearance and amber accent (REQ-436).
+     control the window had is still reachable with the same names, tooltips and behaviour. The **Tool Chest**
+     tab holds one-click buttons for every markup, measurement and review command, grouped Markup, Measurement
+     and Review; **Properties** shows, read-only, the open file and page count and the current page's number,
+     size and scale. The tabs use the Qt graphite appearance and amber accent (REQ-436).
   2. **Layouts.** A layout box offers **Page by page** (the default; one page, as before) and **Continuous**
      (every page stacked top to bottom with a small gap, centred). Switching keeps the current page.
   3. **Wheel.** In the continuous layout the plain mouse wheel scrolls continuously through the document, from
@@ -13790,10 +13792,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
       is read back as a revision cloud.
   14. **Box select.** With Select, two clicks define a box: left to right is a window (blue, solid; marks
       wholly inside) and right to left a crossing (green, dashed; marks touched). The selection may hold
-      several marks; Delete and Apply style act on all of them.
+      several marks; Delete and Apply style act on all of them. Moving or resizing acts on one mark: clicking a
+      mark selects only that one.
   15. **Compare in the side panel.** Compare revisions opens as the Compare tab of the side panel, aligns
       the sheets and lists the changes at once. The overlay follows the zoom: at high zoom Tint, Revision and
       Opacity views redraw the visible part at screen resolution so the marks stay sharp.
+  16. **Coordinate review.** The extract-coordinates review panel (REQ-399) has **Accept all** and **Deny all**
+      for the whole candidate list.
+  17. **Window ownership.** The PDF window is its own top-level window rather than a child of the main window
+      (an owned window stayed above its owner and stopped the main window being focused); it closes with the
+      main window unless the user keeps unsaved marks.
 - Acceptance:
   1. `GoSurveyQtTests` `issue1037*` (command surface): the window has the four tabs named in clause 1 in that
      order, no standalone toolbar row remains outside the ribbon except the find bar, every action the window
@@ -13822,16 +13830,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`, `issue1037BrowseDragPansTheDocument`
       and `issue1037SelectBoxWindowAndCrossing`: hotkeys and Esc, Browse drag pan, callout and both cloud modes
       saved and read back, window versus crossing selection including a cloud.
-  13. (clause 3, clause 8) `issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled`: the plain wheel scrolls a page-by-page
-      document without zooming, and a render overtaken by a zoom change is cancelled and redone.
   12. (compare, clause 15) the compare tests list the changes in the `pdfComparePanel` side-panel tab and, at 600%,
       produce the sharp detail picture and sharp marks.
+  13. (clause 3, clause 8) `issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled`: the plain wheel scrolls a page-by-page
+      document without zooming, and a render overtaken by a zoom change is cancelled and redone.
+  14. (clauses 1, 11, 13) `issue1037ToolChestCloudMenuAndPreviews`: the Tool Chest holds the markup, measurement and
+      review buttons, the revision-cloud drop-down has the two modes and the button shows the last one, and
+      each drawing tool shows a preview after its first click. The status-bar navigation controls and the side
+      panel tabs are covered by `issue1037RibbonSidePanelAndStatusBarNavigation`.
+  15. (clause 16) the Accept all and Deny all buttons are exercised in the extract-review test (`pdfCoordinateAcceptAll`).
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
   `src/pdf` layer, which gains only `PdfDocument::RenderRegion` (windowed rendering) and the Callout and Revision cloud
   annotation kinds in `PdfAnnotate`.
-- Status: accepted (2026-10-22) - D-2026-10-22-c, GitHub issue #1037.
-- Revisions: 2026-10-22 - catalogued and accepted (D-2026-10-22-c, GitHub issue #1037).
-  2026-10-24 - final design: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).
+- Status: accepted (2026-10-23) - D-2026-10-23-e, GitHub issue #1037.
+- Revisions: 2026-10-23 - catalogued and accepted (D-2026-10-23-e, GitHub issue #1037).
+  2026-10-25 - final design, directed by the user while testing: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).
 
 ## Quality requirements
 
@@ -14744,7 +14757,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
-| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, cache bound + screenshots | accepted |
+| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout, Revision cloud, box select, previews, compare panel, cache bound and render cancellation, screenshots | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |

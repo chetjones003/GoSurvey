@@ -1214,6 +1214,46 @@ private Q_SLOTS:
       if (a.kind == pdfview::Annot::Kind::RevCloud && a.page == 1) { sawCloud = true; QCOMPARE(static_cast<int>(a.pts.size()), 4); QCOMPARE(a.page, 1); }
     }
     QVERIFY(sawCallout); QVERIFY(sawCloud);
+    for (const auto& a : back)
+      if (a.kind == pdfview::Annot::Kind::RevCloud && a.page == 1) { QVERIFY(a.x0 < a.x1 && a.y0 < a.y1); } // the corners' box is filled in
+    // A cloud with too few corners (a malformed mark) draws nothing and does not stop the save.
+    pdfview::Annot degenerate = cloud; degenerate.pts = {{10.f, 10.f}, {10.f, 10.f}};
+    QVERIFY(window.AddAnnotation(degenerate, error));
+    QVERIFY2(window.SaveFile(directory.filePath("degenerate.pdf"), error), qPrintable(error));
+    // The ribbon's Undo drops the selection, so no grip is left on a mark that moved or went away.
+    window.m_SelectedAnnotation = static_cast<int>(window.m_Annotations.Items().size()) - 1;
+    window.findChild<QAction*>("pdfUndo")->trigger();
+    QCOMPARE(window.m_SelectedAnnotation, -1);
+  }
+
+  // REQ-455 clauses 1, 11 and 13: the Tool Chest buttons, the revision-cloud drop-down, and a preview after the first click.
+  void issue1037ToolChestCloudMenuAndPreviews() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "previews.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    auto* chest = window.findChild<QWidget*>("pdfToolChest");
+    QVERIFY(chest);
+    QVERIFY(chest->findChildren<QToolButton*>().size() >= 16); // Markup 8, Measurement 5, Review 3
+    auto* cloud = window.findChild<QToolButton*>("pdfCloudButton");
+    QVERIFY(cloud && cloud->menu());
+    QCOMPARE(cloud->menu()->actions().size(), 2); // rectangle (default) and polygon
+    QCOMPARE(cloud->text(), QString("Rect cloud"));
+    cloud->menu()->actions().at(1)->trigger();
+    QCOMPARE(cloud->text(), QString("Polygon cloud")); // the button shows, and uses, the last mode
+    QVERIFY(window.m_CloudPolygon);
+    // After the first click a dashed preview follows the pointer: the page looks different with it than without.
+    for (const int tool : {1, 2, 3, 4, 9}) {
+      window.SetTool(tool, QString());
+      window.m_Draft.clear();
+      window.m_PointerIn = true; window.m_PointerPage = 0; window.m_LastPointer = QPointF(260, 220);
+      const QImage without = window.m_Page->grab().toImage();
+      window.m_Draft = {{40.f, 600.f}}; window.m_DraftPage = 0;
+      const QImage with = window.m_Page->grab().toImage();
+      QVERIFY2(without != with, qPrintable(QString("no preview for tool %1").arg(tool)));
+    }
   }
 
   // Select works like the drawing's box select: two clicks; left to right takes what the box encloses, right to left

@@ -993,7 +993,7 @@ bool AddLeader(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, st
 bool AddRevCloud(FPDF_PAGE page, const Annot& a) {
   const std::vector<CloudArc> arcs = RevCloudArcs(a);
   if (arcs.empty())
-    return false;
+    return true; // fewer than three distinct corners (a malformed file): nothing to draw, and that must not stop the save
   const float t = std::max(0.1f, a.thickness);
   float l = 1e30f, b = 1e30f, r = -1e30f, tp = -1e30f;
   const auto grow = [&](float x, float y) {
@@ -1380,7 +1380,14 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
         while (in >> x >> y)
           a.pts.push_back({x, y});
         a.kind = Annot::Kind::RevCloud;
-        a.text = GetString(an, "Contents");
+        if (!a.pts.empty()) { // the bounding box of the corners, for anything that reads x0..y1 of a mark
+          a.x0 = a.x1 = a.pts.front().first;
+          a.y0 = a.y1 = a.pts.front().second;
+          for (const auto& p : a.pts) {
+            a.x0 = std::min(a.x0, p.first); a.x1 = std::max(a.x1, p.first);
+            a.y0 = std::min(a.y0, p.second); a.y1 = std::max(a.y1, p.second);
+          }
+        }
       } else if (st == FPDF_ANNOT_SQUARE || st == FPDF_ANNOT_CIRCLE) {
         a.kind = st == FPDF_ANNOT_SQUARE ? Annot::Kind::Rect : Annot::Kind::Ellipse;
         a.x0 = rc.left + bw / 2;

@@ -421,11 +421,11 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     tool->setData(kind.id);
     tool->setShortcut(QKeySequence(QString::fromLatin1(kind.key))); // single-letter tool hotkeys; Esc returns to Browse
     addAction(tool); // the shortcut works from any ribbon tab, not only while the button is on screen
-    tool->setToolTip((kind.id == -2 ? QString("Select an annotation; drag it or a grip to edit") : kind.id == -1 ? QString("Browse pages: drag to pan") :
+    tool->setToolTip((kind.id == kToolSelect ? QString("Select an annotation; drag it or a grip to edit") : kind.id == -1 ? QString("Browse pages: drag to pan") :
         kind.id == 4 ? QString("Callout: click what to point at, click where the note goes, then type the note") :
         kind.id == 9 ? QString("Revision cloud: click the corners, right-click to finish") : QString(kind.label)) +
         QString(" (%1)").arg(kind.key));
-    if (kind.id == -2) tool->setChecked(true);
+    if (kind.id == kToolSelect) tool->setChecked(true);
     if (kind.id == kToolCheck) {
       tool->setObjectName("pdfCheckTool");
       tool->setToolTip("Check the page scale against a dimension the drawing states (H)");
@@ -434,7 +434,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     connect(tool, &QAction::triggered, this, [this, kind] {
       m_CheckTarget = 0;
       if (kind.id == kToolCheck) SetTool(kToolCheck, "Check: click the two ends of a dimension the drawing states.");
-      else SetTool(kind.id, kind.id == -2 ? "Select an annotation; drag it or a grip to edit." :
+      else SetTool(kind.id, kind.id == kToolSelect ? "Select an annotation; drag it or a grip to edit." :
           kind.id == -1 ? "Browse pages" : kind.id == 4 ? "Click the thing to point at, then click where the note goes." :
           kind.id == 9 ? (m_CloudPolygon ? "Click the corners of the cloud. Enter finishes; Esc cancels." : "Click two opposite corners of the cloud.") :
           "Click points on the page. Right-click finishes a polyline/area/cloud or cancels a draft.");
@@ -486,8 +486,8 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
     }
     if (changed) { const int keep = m_SelectedAnnotation; const auto more = m_SelectedMore; SceneChanged(); m_SelectedAnnotation = keep; m_SelectedMore = more; }
   });
-  auto* undoAction = makeAction("pdfUndo", "Undo", "undo.png", "Undo the last annotation edit (Ctrl+Z)", [this] { m_Annotations.Undo(); SceneChanged(); });
-  auto* redoAction = makeAction("pdfRedo", "Redo", "redo.png", "Redo (Ctrl+Y)", [this] { m_Annotations.Redo(); SceneChanged(); });
+  auto* undoAction = makeAction("pdfUndo", "Undo", "undo.png", "Undo the last annotation edit (Ctrl+Z)", [this] { m_Annotations.Undo(); m_SelectedAnnotation = -1; SceneChanged(); });
+  auto* redoAction = makeAction("pdfRedo", "Redo", "redo.png", "Redo (Ctrl+Y)", [this] { m_Annotations.Redo(); m_SelectedAnnotation = -1; SceneChanged(); });
   BuildScaleControls();
   auto* extract = makeAction("pdfExtractCoordinates", "Extract coordinates", "Extract_Data.png", "Drag a rectangle around coordinate text", [this] {
     if (!m_Document) { statusBar()->showMessage("Open a PDF page before extracting coordinates."); return; }
@@ -1261,6 +1261,26 @@ int PdfWindow::HitAnnotation(QPointF p, float tolerance) const {
   return -1;
 }
 
+namespace {
+// Where the editing handles of a mark sit, in page points: a callout's target and box corner, the picks of a measurement or cloud
+// (plus a Length's dimension-line midpoint), a line's two ends, or the four corners of a box.
+std::vector<QPointF> GripPoints(const pdfview::Annot& a) {
+  std::vector<QPointF> grips;
+  if (a.kind == pdfview::Annot::Kind::Leader && !a.pts.empty()) {
+    grips = {{a.pts[0].first, a.pts[0].second}, {std::min(a.x0, a.x1), std::max(a.y0, a.y1)}};
+  } else if (a.UsesPoints()) {
+    for (const auto& p : a.pts) grips.push_back({p.first, p.second});
+    if (a.kind == pdfview::Annot::Kind::Length && a.pts.size() == 2) {
+      const auto line = pdfview::LengthDimLine(a);
+      grips.push_back({(line.x0 + line.x1) * .5, (line.y0 + line.y1) * .5});
+    }
+  } else if (a.kind == pdfview::Annot::Kind::Line) grips = {{a.x0, a.y0}, {a.x1, a.y1}};
+  else grips = {{a.x0, a.y0}, {a.x1, a.y1}, {a.x0, a.y1}, {a.x1, a.y0}};
+  return grips;
+}
+constexpr double kGripPickPx = 7.0, kMarkPickPx = 5.0, kMinDragPx = 4.0; // screen pixels: grab a handle, hit a mark, smallest box drawn
+} // namespace
+
 // A callout's box follows its text: top-left corner kept, room (kLeaderPad) round the text.
 void PdfWindow::FitLeaderBox(pdfview::Annot& a) {
   float w = 0.f, h = 0.f;
@@ -1365,10 +1385,10 @@ void PdfWindow::EndAnnotation(QPointF point, Qt::MouseButton button) {
 void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (m_ComparePicking) { ComparePick(point, button); return; }
   if (m_ExtractMode) return;
-  if (!m_Document || (m_Tool < 0 && m_Tool != -2) || IsBusy() || !PageReady()) return;
+  if (!m_Document || (m_Tool < 0 && m_Tool != kToolSelect) || IsBusy() || !PageReady()) return;
   UpdateSnap(point); // the click's own position, so a click without a prior move still snaps
   const auto size = m_Document->Sizes()[ActivePage()];
-  if (m_Tool == -2) {
+  if (m_Tool == kToolSelect) {
     if (button != Qt::LeftButton) return;
     const QPointF pagePoint = CanvasToPage(point);
     if (!m_Draft.empty() && m_DraftPage == ActivePage()) { // the second corner of a box select
@@ -1379,17 +1399,8 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
     }
     if (m_SelectedAnnotation >= 0 && m_SelectedAnnotation < static_cast<int>(m_Annotations.Items().size()) && m_SelectedMore.empty()) {
       const auto& selected = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
-      std::vector<QPointF> grips;
-      if (selected.kind == pdfview::Annot::Kind::Leader && !selected.pts.empty()) {
-        grips = {{selected.pts[0].first, selected.pts[0].second}, {std::min(selected.x0, selected.x1), std::max(selected.y0, selected.y1)}};
-      } else if (selected.UsesPoints()) {
-        for (const auto& p : selected.pts) grips.push_back({p.first,p.second});
-        if (selected.kind == pdfview::Annot::Kind::Length && selected.pts.size() == 2) {
-          const auto line = pdfview::LengthDimLine(selected); grips.push_back({(line.x0+line.x1)*.5,(line.y0+line.y1)*.5});
-        }
-      } else if (selected.kind == pdfview::Annot::Kind::Line) grips = {{selected.x0,selected.y0},{selected.x1,selected.y1}};
-      else grips = {{selected.x0,selected.y0},{selected.x1,selected.y1},{selected.x0,selected.y1},{selected.x1,selected.y0}};
-      const float tol = static_cast<float>(7.0 * size.wPt / std::max(1, PageWidthPx()));
+      const std::vector<QPointF> grips = GripPoints(selected);
+      const float tol = static_cast<float>(kGripPickPx * size.wPt / std::max(1, PageWidthPx()));
       for (int i = 0; i < static_cast<int>(grips.size()); ++i) {
         if (QLineF(pagePoint, grips[static_cast<std::size_t>(i)]).length() <= tol) {
           m_AnnotationHandle = i; m_AnnotationDragging = true; m_DragStart = point; m_DragOriginal = selected; return;
@@ -1397,7 +1408,7 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
       }
     }
     m_SelectedMore.clear();
-    m_SelectedAnnotation = HitAnnotation(pagePoint, static_cast<float>(5.0 * size.wPt / std::max(1, PageWidthPx())));
+    m_SelectedAnnotation = HitAnnotation(pagePoint, static_cast<float>(kMarkPickPx * size.wPt / std::max(1, PageWidthPx())));
     if (m_SelectedAnnotation >= 0) {
       m_AnnotationDragging = true; m_AnnotationHandle = -1; m_DragStart = point;
       m_DragOriginal = m_Annotations.Items()[static_cast<std::size_t>(m_SelectedAnnotation)];
@@ -1453,7 +1464,7 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
   if (annotation.UsesPoints()) annotation.pts = m_Draft;
   if (kind == pdfview::Annot::Kind::RevCloud && !m_CloudPolygon) { // two opposite corners make a rectangle
     const auto a = m_Draft.front(), b = m_Draft.back();
-    if (std::abs(a.first - b.first) * PageWidthPx() / std::max(1.f, size.wPt) < 4.0 || std::abs(a.second - b.second) * PageWidthPx() / std::max(1.f, size.wPt) < 4.0) { m_Draft.clear(); m_Page->update(); return; }
+    if (std::abs(a.first - b.first) * PageWidthPx() / std::max(1.f, size.wPt) < kMinDragPx || std::abs(a.second - b.second) * PageWidthPx() / std::max(1.f, size.wPt) < kMinDragPx) { m_Draft.clear(); m_Page->update(); return; }
     annotation.pts = {a, {b.first, a.second}, b, {a.first, b.second}};
   }
   annotation.offset = dimensionOffset;
@@ -1462,7 +1473,7 @@ void PdfWindow::PageClick(QPointF point, Qt::MouseButton button) {
     annotation.x0 = annotation.x1 = m_Draft.back().first;
     annotation.y0 = annotation.y1 = m_Draft.back().second;
     const double reach = std::hypot(m_Draft.back().first - m_Draft.front().first, m_Draft.back().second - m_Draft.front().second);
-    if (reach * PageWidthPx() / std::max(1.f, size.wPt) < 4.0) { m_Draft.clear(); m_Page->update(); return; } // both clicks on one spot
+    if (reach * PageWidthPx() / std::max(1.f, size.wPt) < kMinDragPx) { m_Draft.clear(); m_Page->update(); return; } // both clicks on one spot
     bool accepted = false;
     const auto text = QInputDialog::getMultiLineText(this, "PDF callout", "Text", {}, &accepted);
     if (!accepted || text.isEmpty()) { m_Draft.clear(); m_Page->update(); return; }
@@ -1679,16 +1690,8 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
       painter.drawText(map(anchor.first, anchor.second), QString::fromUtf8(pdfview::DimensionLabel(annotation, CurrentScale()).c_str()));
     }
     if (showGrips) {
-      std::vector<QPointF> grips;
-      if (annotation.kind == pdfview::Annot::Kind::Leader && !annotation.pts.empty()) {
-        grips = {map(annotation.pts[0].first, annotation.pts[0].second), map(std::min(annotation.x0, annotation.x1), std::max(annotation.y0, annotation.y1))};
-      } else if (annotation.UsesPoints()) {
-        for (const auto& pt : annotation.pts) grips.push_back(map(pt.first, pt.second));
-        if (annotation.kind == pdfview::Annot::Kind::Length && annotation.pts.size() == 2) {
-          const auto dim = pdfview::LengthDimLine(annotation); grips.push_back(map((dim.x0+dim.x1)*.5f,(dim.y0+dim.y1)*.5f));
-        }
-      } else if (annotation.kind == pdfview::Annot::Kind::Line) grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1)};
-      else grips = {map(annotation.x0,annotation.y0),map(annotation.x1,annotation.y1),map(annotation.x0,annotation.y1),map(annotation.x1,annotation.y0)};
+      std::vector<QPointF> grips = GripPoints(annotation);
+      for (auto& grip : grips) grip = map(static_cast<float>(grip.x()), static_cast<float>(grip.y()));
       painter.setPen(QPen(QColor("#0d1521"), 1)); painter.setBrush(QColor(QtAccentFor(true).strong));
       for (const auto& grip : grips) painter.drawRect(QRectF(grip.x()-4,grip.y()-4,8,8));
     }
@@ -1704,7 +1707,7 @@ void PdfWindow::DrawAnnotations(QPainter& painter) {
     if (i && connected) painter.drawLine(map(m_Draft[i - 1].first, m_Draft[i - 1].second), pt);
   }
   // Box select under Select: blue and solid for a window (left to right), green and dashed for a crossing, as in the drawing.
-  if (m_Tool == -2 && !m_Draft.empty() && m_PointerIn && (m_DraftPage < 0 || m_DraftPage == page) && (m_PointerPage < 0 || m_PointerPage == page)) {
+  if (m_Tool == kToolSelect && !m_Draft.empty() && m_PointerIn && (m_DraftPage < 0 || m_DraftPage == page) && (m_PointerPage < 0 || m_PointerPage == page)) {
     const QPointF anchor = map(m_Draft.front().first, m_Draft.front().second);
     const QPointF end = m_LastPointer;
     const bool window = end.x() >= anchor.x();
@@ -3087,12 +3090,12 @@ void PdfWindow::StopCompareDetail() {
 }
 
 void PdfWindow::ComparePick(QPointF point, Qt::MouseButton button) {
-  if (!m_Compare || !m_Compare->revision || button != Qt::LeftButton || !PageReady()) return;
-  if (m_CompareMode->currentIndex() != 2 && m_CompareMode->currentIndex() != 3) {
+  if (!m_Compare || !m_Compare->revision || m_Compare->busy || button != Qt::LeftButton || !PageReady()) return;
+  if (m_Compare->mode != CompareMode::Base && m_Compare->mode != CompareMode::Revision) {
     m_CompareStatus->setText("Choose Base or Revision in the view selector before picking matching points."); return;
   }
   if (ActivePage() != m_Compare->basePage) { m_CompareStatus->setText("Pick the matching points on the base page."); return; }
-  const auto size = m_Document->Sizes()[m_Compare->basePage];
+  const auto size = BasePageSize();
   const double factor = static_cast<double>(PageWidthPx()) / std::max(1.0, static_cast<double>(size.wPt));
   pdfalign::Pt picked{point.x() / factor, size.hPt - point.y() / factor};
   const bool isBase = m_CompareMode->currentIndex() == 2;
@@ -3108,7 +3111,7 @@ void PdfWindow::ComparePick(QPointF point, Qt::MouseButton button) {
   std::string why;
   pdfalign::Transform transform;
   bool ok = false;
-  if (m_ComparePickTarget == 2) transform = pdfalign::FromOnePoint(m_ComparePicks[1], m_ComparePicks[0]), ok = true;
+  if (m_ComparePickTarget == 2) { transform = pdfalign::FromOnePoint(m_ComparePicks[1], m_ComparePicks[0]); ok = true; }
   else ok = pdfalign::FromTwoPoints(m_ComparePicks[1], m_ComparePicks[3], m_ComparePicks[0], m_ComparePicks[2], transform, why);
   m_ComparePicking = false;
   if (!ok) { m_CompareStatus->setText(QString("Could not align the picked points: %1").arg(QString::fromUtf8(why.c_str()))); return; }

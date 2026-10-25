@@ -27,10 +27,9 @@ protected:
     QPainter painter(this);
     if (paintStrip && paintStrip(painter, event->rect())) return;
     if (image.isNull()) { if (!placeholder.isEmpty()) painter.drawText(rect(), Qt::AlignCenter, placeholder); return; }
-    // A picture of another zoom is stretched to the page's current size until the new render arrives, so zooming
-    // never blanks the page.
     // A picture covers the whole page or, when the page is too large to draw whole, only the window of it around the
-    // view (imageOrigin, in the pixels of a page imageFull big); it is scaled to the page's current size.
+    // view (imageOrigin, in the pixels of a page imageFull big). It is scaled to the page's current size, so a picture
+    // of another zoom stands in until the new render arrives and zooming never blanks the page.
     const QSize full = imageFull.isEmpty() ? image.size() : imageFull;
     const double factor = static_cast<double>(width()) / std::max(1, full.width());
     if (!imageFull.isEmpty()) painter.fillRect(rect(), Qt::white);
