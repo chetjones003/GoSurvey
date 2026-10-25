@@ -10943,6 +10943,9 @@ int main(int argc, char** argv) {
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
   QSurfaceFormat::setDefaultFormat(format);
+  // GUI tests run on a hidden desktop and inspect dialogs as Qt widgets. Avoid
+  // platform-native dialogs, which are not reliably discoverable there.
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   QApplication app(argc, argv);
   app.setOrganizationName("GoSurveyTests");
   const QString shard = qEnvironmentVariable("GOSURVEY_QT_TEST_SHARD");
