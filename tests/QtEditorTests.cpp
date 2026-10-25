@@ -4646,6 +4646,48 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  // GitHub #1024 / REQ-120 / REQ-123: ZOOMEXTENTS only sets a pending flag, so the Qt viewport has to
+  // consume it when it paints. The headless transcripts call the zoom function directly and cannot
+  // see this; only the real viewport can.
+  void issue1024QtZoomExtentsFramesTheDrawing() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    for (const char* line : {"LINE", "0,0", "400,200"}) window.Submit(line);
+    window.CancelDraftingInput();
+    QVERIFY(st.userLinesFlat.size() >= 6);
+    const std::size_t o = st.userLinesFlat.size() - 6;
+    const double cx = 0.5 * (st.userLinesFlat[o] + st.userLinesFlat[o + 3]);
+    const double cy = 0.5 * (st.userLinesFlat[o + 1] + st.userLinesFlat[o + 4]);
+
+    // Put the camera somewhere that cannot be mistaken for the extents framing.
+    st.viewportPanX = -5000.0; st.viewportPanY = 7000.0; st.viewportZoom = 1.f;
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(st.viewportPanX - cx) < 1.0);
+    QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
+    QVERIFY(st.viewportZoom > 0.f && st.viewportZoom != 1.f);  // 400 x 200 needs a wider view than the reset one
+    bool logged = false;
+    for (const auto& entry : window.m_Log) logged = logged || entry.find("Zoom extents applied") != std::string::npos;
+    QVERIFY(logged);
+
+    // An empty drawing says why nothing moved (REQ-201) and leaves the view alone.
+    EditorWindow empty; empty.CreateDrawingFromTemplate(); empty.resize(1280, 800); empty.show();
+    QVERIFY(QTest::qWaitForWindowActive(&empty));
+    auto& es = empty.State();
+    QVERIFY(es.userLinesFlat.empty());
+    es.viewportPanX = 123.0; es.viewportPanY = 456.0; es.viewportZoom = 2.f;
+    empty.m_Log.clear();
+    empty.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!es.pendingZoomExtents);
+    QCOMPARE(es.viewportPanX, 123.0);
+    QCOMPARE(es.viewportPanY, 456.0);
+    QCOMPARE(es.viewportZoom, 2.f);
+    bool refused = false;
+    for (const auto& entry : empty.m_Log) refused = refused || entry.find("nothing to frame") != std::string::npos;
+    QVERIFY(refused);
+  }
+
   void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
     window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
@@ -6894,10 +6936,9 @@ private Q_SLOTS:
     QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-edit-prompt.png"));
     window.Submit("F"); window.Submit("2:1"); window.Submit("");
     QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
-    // Frame the 200 ft test site directly. Qt's ZOOMEXTENTS never reaches the viewport (a separate
-    // defect; the pending zoom is not consumed by the Qt viewport), so this capture sets the view.
+    // Frame the 200 ft test site with the real ZOOMEXTENTS (GitHub #1024).
     state.selection.clear();
-    state.viewportPanX = 100.0; state.viewportPanY = 100.0; state.viewportZoom = 0.3f;
+    window.Submit("ZOOMEXTENTS");
     QApplication::processEvents(); QTest::qWait(100);
     QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
     QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts + "qt-997-grading-result-viewport.png"));

@@ -213,6 +213,11 @@ void EditorViewport::paintGL() {
   if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
+  // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport
+  // size, so it happens here, before the camera below is built from the result (REQ-120, REQ-123).
+  // The pan/zoom out-pointers are optional: the function writes them into the state itself.
+  ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
+      static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
   const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
