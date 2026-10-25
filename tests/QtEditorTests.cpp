@@ -9162,32 +9162,30 @@ private Q_SLOTS:
     const auto size = window.m_Document->Sizes()[1];
     QVERIFY(std::abs(made.x0 - 100.0 * size.wPt / second.width()) < 0.5);
     QVERIFY(std::abs(made.y0 - (second.height() - 150.0) * size.hPt / second.height()) < 0.5);
-    // Check the visible scroll viewport. Grabbing the entire canvas asks Windows to paint a
-    // taller-than-window child widget, which can omit off-screen pixels on hosted desktops.
-    const auto hasRedOnPage = [&](int page, QImage* capture = nullptr) {
-      const auto size = window.m_Document->Sizes()[static_cast<std::size_t>(page)];
-      const QRect pageRect = window.PageRect(page);
-      // Keep the same page-relative area visible on all three pages, including the last page,
-      // which cannot be scrolled all the way to the top when it is taller than the viewport.
-      window.CenterOnPagePoint(page, 200.0 * size.wPt / pageRect.width(),
-                               (pageRect.height() - 250.0) * size.hPt / pageRect.height());
-      QWidget* viewport = window.m_Scroll->viewport();
-      const QRect pageInViewport(window.m_Page->mapTo(viewport, pageRect.topLeft()), pageRect.size());
-      const QRect visiblePage = pageInViewport.intersected(viewport->rect());
-      const QRect visibleCanvas(window.m_Page->mapFrom(viewport, visiblePage.topLeft()), visiblePage.size());
-      window.m_Page->repaint(visibleCanvas); // flush the queued continuous-layout overlay paint before sampling
-      const QImage shot = viewport->grab().toImage();
-      if (capture) *capture = shot;
-      const double ratio = static_cast<double>(shot.width()) / viewport->width();
-      const QRect device(qRound(visiblePage.x() * ratio), qRound(visiblePage.y() * ratio),
-                         qRound(visiblePage.width() * ratio), qRound(visiblePage.height() * ratio));
-      return Issue906HasPixelNear(shot.copy(device), QColor(255, 0, 0), 40);
-    };
-    QImage shot;
-    QTRY_VERIFY_WITH_TIMEOUT(hasRedOnPage(1, &shot), 5000);
+    // Paint at a deterministic 1x scale through the production strip renderer so antialiasing does
+    // not depend on the host display's device-pixel ratio.
+    QImage shot(window.m_Page->size(), QImage::Format_ARGB32_Premultiplied);
+    shot.fill(Qt::transparent);
+    {
+      QPainter painter(&shot);
+      QVERIFY(window.PaintStrip(painter, window.m_Page->rect()));
+    }
     QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
-    QTRY_VERIFY_WITH_TIMEOUT(!hasRedOnPage(0), 5000);
-    QTRY_VERIFY_WITH_TIMEOUT(!hasRedOnPage(2), 5000);
+    const auto hasRedInk = [&](const QRect& rect) {
+      const QImage page = shot.copy(rect);
+      for (int y = 0; y < page.height(); ++y) {
+        for (int x = 0; x < page.width(); ++x) {
+          const QColor pixel = page.pixelColor(x, y);
+          // A one-DIP outline at 1x blends with white; test its red hue instead of requiring a
+          // pixel nearly equal to pure red as a higher-DPI capture might produce.
+          if (pixel.red() >= 200 && pixel.red() - pixel.green() >= 20 && pixel.red() - pixel.blue() >= 20) return true;
+        }
+      }
+      return false;
+    };
+    QVERIFY(hasRedInk(second));
+    QVERIFY(!hasRedInk(window.PageRect(0)));
+    QVERIFY(!hasRedInk(window.PageRect(2)));
     // A pick on one page and a click on another do not mix: the draft restarts on the new page.
     Issue906Action(window, "Line")->trigger();
     QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));

@@ -95,29 +95,27 @@
   the unsupported entry-count assertion. No viewer behavior or SPEC changes.
 - CI follow-up verification: `.\build.bat` passed. The three affected Qt tests passed in one hidden-
   desktop run (5 total QtTest cases including setup/cleanup); no production code changed.
-- CI follow-up (PR #1101, 2026-10-25): `full / build and test` failed three times on hosted Windows in
+- CI follow-up (PR #1101, 2026-10-25): `full / build and test` failed repeatedly on hosted Windows in
   `issue1037ContinuousLayoutAnnotatesTheSecondPage`, at the red-pixel assertion. The standalone test
-  and all six Qt shards passed locally, but the first viewport-capture change still failed on hosted
-  Windows. This rules out off-screen canvas clipping as the sole cause. The test samples immediately
-  after annotation input and a scroll change; the remaining hypothesis is that it observes the
-  viewport before the queued canvas repaint is flushed under hosted load. The hosted screenshot is
-  not included in the CI artifact, so this remains an inference.
+  and all six Qt shards passed locally. Neither switching from a full-canvas capture to a viewport
+  capture nor explicitly repainting and retrying fixed the hosted failure. The CI artifact omits the
+  PNG, so its pixels cannot be inspected there. Rendering through `PdfWindow::PaintStrip` into an
+  off-screen image reproduced the failure locally and exposed the cause: at 1x, the thin red outline is
+  antialiased against white (for example, saved PNG pixels are 255,124,124), outside the test's strict
+  ±40 pure-red threshold. This is a test tolerance issue, not a viewer defect.
   - Authority: REQ-455 clause 7 and Acceptance 7 (annotation is drawn on its owning continuous-layout
     page only); REQ-433 high-DPI clause 3.
-  - Plan: keep the regression assertion on the visible scroll viewport, map each page rectangle from
-    canvas coordinates into viewport/device pixels, synchronously repaint the visible canvas region,
-    and retry the pixel check for a bounded interval. Center the same area on pages 0, 1 and 2 and
-    assert red appears only on page 1. Keep the change test-only; no viewer behavior or SPEC change.
+  - Plan: keep the deterministic `PaintStrip` off-screen render and classify red-dominant pixels with
+    enough tolerance for antialiasing against white. Inspect each `PageRect` and assert red appears
+    only on page 1. Keep the change test-only; no viewer behavior or SPEC change.
   - Files: `tests/QtEditorTests.cpp` and this task record.
   - Verification: Release build; the focused Qt test; shard 3; all six Qt editor shards in parallel;
     `git diff --check`.
   - Architectural boundary: existing widget/test seams only; no new dependency, production API,
     layer, or data format.
-  - Verification result: `build.bat` passed; the focused test passed (3 QtTest cases including
-    setup/cleanup); shard 3 passed; all six Qt shards passed together (6/6); `git diff --check` passed.
-    The test now samples the page through the visible viewport after centering the same page area.
-    No production code or SPEC changed.
-  - Follow-up result after the viewport-only change failed again in hosted CI: the focused test passed
-    ten consecutive local runs, then all six Qt shards passed together after the test began explicitly
-    repainting the visible canvas region and waiting up to five seconds for each expected pixel state.
-    `build.bat` and `git diff --check` passed; no production code or SPEC changed.
+  - First viewport iteration: `build.bat`, the focused test, shard 3, all six Qt shards, and
+    `git diff --check` passed locally. This viewport-only implementation was later superseded after
+    hosted CI still failed; no production code or SPEC changed.
+  - Verification result: `build.bat` passed; the focused test passed ten consecutive 1x runs; all six
+    Qt editor shards passed together (6/6); `git diff --check` passed. The antialias-aware predicate
+    detects the red stroke and still rejects red pixels on pages 0 and 2. No production code or SPEC changed.
