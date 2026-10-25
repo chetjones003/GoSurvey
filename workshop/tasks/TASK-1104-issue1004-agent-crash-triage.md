@@ -51,6 +51,7 @@
 - 2026-10-25 — Added crash report ID and clipboard prompt to the admin dashboard. Added one-ID PowerShell retrieval for report text and referenced private objects, local manifest, and exact PDB identity validation. Added the agent skill and user-initiated AI sharing disclosure.
 - 2026-10-25 — Product documentation review: `README.md` reviewed, no change; `PRIVACY.md` updated; `resources/wiki/` crash/troubleshooting pages reviewed, no change because this is an owner/developer workflow and D-2026-10-25-b keeps diagnostic disclosures out of the in-app troubleshooting manual; public [Troubleshooting wiki](https://github.com/chetjones003/GoSurvey/wiki/Troubleshooting) reviewed, no change for the same scope reason.
 - 2026-10-25 — Verification: PowerShell helper tests PASS, including mocked one-SELECT/two-keyed-GET success, report-only case, and mismatched-PDB rejection; admin Worker `npm test` PASS; actual local PDB GUID/age parser PASS; authenticated remote `SELECT 1` PASS; authenticated absent-report lookup PASS and created no artifact directory; `git diff --check` PASS for both repositories. No app build or Worker deployment run; neither repository runtime is deployed by this task.
+- 2026-10-25 — Follow-up review fixed older reports with `commit: unknown`: text and manifest now remain available while PDB retrieval is marked unavailable. Regression test PASS.
 
 ## 9. Self-verification
 - [ ] build-project — n/a (no application build changes)
