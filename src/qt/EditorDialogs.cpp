@@ -782,6 +782,8 @@ void EditorWindow::ServiceUiRequests() {
   }
   if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
   else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
+  if (m_State.pipeFittingPaletteOpen) ShowPipeFittingPalette();
+  else if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible()) palette->close();
   if (m_State.showConnectionModesWindow) ShowConnectionModes();
   else if (auto* modes = findChild<QDialog*>("connectionModes")) modes->close();
   if (m_State.addDrawingToProjectUid != 0) {

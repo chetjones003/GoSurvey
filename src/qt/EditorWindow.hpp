@@ -29,6 +29,7 @@ class QMenu;
 class QPoint;
 class QGridLayout;
 class QWidget;
+class QDialog;
 class FloatingCommandBar;
 class QFrame;
 class QTimer;
@@ -151,6 +152,9 @@ private:
   void ShowRightClickCustomization();
   void ShowSelectionList();
   void ShowBlockAuthoringPalette();
+  // Issue #1084: the REQ-350 Pipe Fittings palette (EditorPipePalette.cpp).
+  void ShowPipeFittingPalette();
+  void RefreshPipeFittingPalette(QDialog* dialog);
   void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();

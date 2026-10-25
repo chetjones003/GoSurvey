@@ -716,6 +716,13 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { ResetDraftingInput(); Refresh(); };
+  // Issue #1084: a part picture finished inside the viewport's paint; update the palette afterwards.
+  m_Viewport->partThumbnailsChanged = [this] {
+    QTimer::singleShot(0, this, [this] {
+      if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible())
+        RefreshPipeFittingPalette(palette);
+    });
+  };
   m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
