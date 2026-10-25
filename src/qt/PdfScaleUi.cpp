@@ -296,6 +296,7 @@ void PdfWindow::EscapeTool() {
 void PdfWindow::SceneChanged() {
   ++m_Revision;
   m_SelectedCheck = -1;
+  m_SelectedMore.clear();
   setWindowModified(HasUnsavedChanges());
   UpdateScaleDisplay();
   m_Page->update();
@@ -496,7 +497,7 @@ void PdfWindow::UpdateSnap(QPointF point) {
     else if (found != m_SnapPages.end() && found->second.failed) status = "this page has nothing to snap to";
   }
   if (m_SnapStatus->text() != status) m_SnapStatus->setText(status);
-  if (hadHit != m_SnapHit || (m_SnapHit && (oldX != m_SnapX || oldY != m_SnapY)) || m_Tool == kToolCheck) m_Page->update();
+  if (hadHit != m_SnapHit || (m_SnapHit && (oldX != m_SnapX || oldY != m_SnapY)) || m_Tool == kToolCheck || ((placing || m_Tool == -2) && !m_Draft.empty())) m_Page->update();
 }
 
 // ---------------------------------------------------------------------------------------------------

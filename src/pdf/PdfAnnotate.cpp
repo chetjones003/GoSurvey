@@ -291,6 +291,44 @@ void MeasureText(const std::string& family, const std::string& utf8, float size,
   hPt = static_cast<float>(lines) * size * kStrokeLineSpacing;
 }
 
+std::vector<CloudArc> RevCloudArcs(const Annot& a) {
+  std::vector<CloudArc> arcs;
+  const auto& pts = a.pts;
+  if (pts.size() < 3)
+    return arcs;
+  double area2 = 0.0; // twice the signed area: positive when the corners run counter-clockwise
+  for (size_t i = 0; i < pts.size(); ++i) {
+    const auto& p = pts[i];
+    const auto& q = pts[(i + 1) % pts.size()];
+    area2 += static_cast<double>(p.first) * q.second - static_cast<double>(q.first) * p.second;
+  }
+  const float outward = area2 >= 0.0 ? -1.f : 1.f; // which side of each edge is the outside
+  const float chord = std::max(6.f, a.thickness * 8.f + 8.f);
+  for (size_t i = 0; i < pts.size(); ++i) {
+    const auto& p = pts[i];
+    const auto& q = pts[(i + 1) % pts.size()];
+    const float dx = q.first - p.first, dy = q.second - p.second, len = std::hypot(dx, dy);
+    if (len < 1e-3f)
+      continue;
+    const int n = std::max(1, static_cast<int>(std::lround(len / chord)));
+    const float nx = outward * -dy / len, ny = outward * dx / len;
+    const float h = 0.5f * (len / n) * (4.f / 3.f) * 0.8f; // control offset: the arc rises about 0.4 of its chord
+    for (int k = 0; k < n; ++k) {
+      CloudArc c;
+      c.x0 = p.first + dx * k / n;
+      c.y0 = p.second + dy * k / n;
+      c.x1 = p.first + dx * (k + 1) / n;
+      c.y1 = p.second + dy * (k + 1) / n;
+      c.c1x = c.x0 + nx * h;
+      c.c1y = c.y0 + ny * h;
+      c.c2x = c.x1 + nx * h;
+      c.c2y = c.y1 + ny * h;
+      arcs.push_back(c);
+    }
+  }
+  return arcs;
+}
+
 LeaderGeom LeaderLine(const Annot& a) {
   LeaderGeom g;
   const float tx = a.pts.empty() ? a.x0 : a.pts[0].first, ty = a.pts.empty() ? a.y0 : a.pts[0].second;
@@ -946,6 +984,51 @@ bool AddLeader(FPDF_DOCUMENT doc, FPDF_PAGE page, const Annot& a, int serial, st
   return ok;
 }
 
+// A revision cloud: a Square annotation (so any reader shows a markup) whose appearance is the scalloped outline;
+// GSRevCloud keeps the corners and the stroke width for our own reader.
+bool AddRevCloud(FPDF_PAGE page, const Annot& a) {
+  const std::vector<CloudArc> arcs = RevCloudArcs(a);
+  if (arcs.empty())
+    return false;
+  const float t = std::max(0.1f, a.thickness);
+  float l = 1e30f, b = 1e30f, r = -1e30f, tp = -1e30f;
+  const auto grow = [&](float x, float y) {
+    l = std::min(l, x);
+    r = std::max(r, x);
+    b = std::min(b, y);
+    tp = std::max(tp, y);
+  };
+  for (const CloudArc& c : arcs) {
+    grow(c.x0, c.y0);
+    grow(c.x1, c.y1);
+    grow(c.c1x, c.c1y);
+    grow(c.c2x, c.c2y);
+  }
+  FPDF_ANNOTATION an = FPDFPage_CreateAnnot(page, FPDF_ANNOT_SQUARE);
+  if (an == nullptr)
+    return false;
+  const Rgb c = Split(a.color);
+  FS_RECTF rc{l - t, tp + t, r + t, b - t};
+  bool ok = FPDFAnnot_SetRect(an, &rc) != 0;
+  ok = ok && FPDFAnnot_SetColor(an, FPDFANNOT_COLORTYPE_Color, c.r, c.g, c.b, 255) != 0;
+  ok = ok && FPDFAnnot_SetBorder(an, 0.f, 0.f, t) != 0;
+  std::ostringstream ap;
+  ap << "q " << Comp(c.r) << " " << Comp(c.g) << " " << Comp(c.b) << " RG " << Num(t) << " w 1 j ";
+  ap << Num(arcs.front().x0) << " " << Num(arcs.front().y0) << " m ";
+  for (const CloudArc& arc : arcs)
+    ap << Num(arc.c1x) << " " << Num(arc.c1y) << " " << Num(arc.c2x) << " " << Num(arc.c2y) << " " << Num(arc.x1) << " "
+       << Num(arc.y1) << " c ";
+  ap << "S Q";
+  std::string corners = Num(t);
+  for (const auto& p : a.pts)
+    corners += " " + Num(p.first) + " " + Num(p.second);
+  ok = ok && SetString(an, "GSRevCloud", corners);
+  const std::vector<unsigned short> w = Utf16(ap.str());
+  ok = ok && FPDFAnnot_SetAP(an, FPDF_ANNOT_APPEARANCEMODE_NORMAL, reinterpret_cast<FPDF_WIDESTRING>(w.data())) != 0;
+  FPDFPage_CloseAnnot(an);
+  return ok;
+}
+
 // Viewer page coordinates (points from the displayed page's bottom-left) -> page user space, found by asking
 // PDFium where three viewer points land. Identity for an ordinary unrotated page that starts at zero.
 struct ViewerToUser {
@@ -1123,6 +1206,9 @@ std::string SaveAnnotated(const std::filesystem::path& source, const std::vector
         case Annot::Kind::Text:
           ok = AddText(doc, page, *a, ++serial, patches, error);
           break;
+        case Annot::Kind::RevCloud:
+          ok = AddRevCloud(page, *a);
+          break;
         case Annot::Kind::Leader:
           ok = AddLeader(doc, page, *a, ++serial, patches, error);
           break;
@@ -1282,6 +1368,14 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
           FPDFAnnot_GetVertices(an, v2.data(), count);
         for (const FS_POINTF& p : v2)
           a.pts.push_back({p.x, p.y});
+        a.text = GetString(an, "Contents");
+      } else if (st == FPDF_ANNOT_SQUARE && FPDFAnnot_HasKey(an, "GSRevCloud")) {
+        std::istringstream in(GetString(an, "GSRevCloud"));
+        float x = 0.f, y = 0.f;
+        in >> a.thickness;
+        while (in >> x >> y)
+          a.pts.push_back({x, y});
+        a.kind = Annot::Kind::RevCloud;
         a.text = GetString(an, "Contents");
       } else if (st == FPDF_ANNOT_SQUARE || st == FPDF_ANNOT_CIRCLE) {
         a.kind = st == FPDF_ANNOT_SQUARE ? Annot::Kind::Rect : Annot::Kind::Ellipse;

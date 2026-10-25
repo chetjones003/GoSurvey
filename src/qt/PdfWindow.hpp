@@ -92,6 +92,7 @@ public:
   void ZoomBy(double factor, QPoint viewportPoint);
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 private:
@@ -164,7 +165,9 @@ private:
   int m_ScrollDirection = 1, m_LastScrollY = 0;
   bool m_ProgrammaticScroll = false;
   bool m_SyncingPage = false;
+  bool m_CloudPolygon = false; ///< the revision-cloud button's mode: false = rectangle (two clicks), true = polygon (Enter)
   bool m_Panning = false;
+  Qt::MouseButton m_PanButton = Qt::MiddleButton; ///< the button that started the pan: middle, or left under Browse
   QPoint m_PanLast;
   QComboBox* m_LayoutBox = nullptr;
   QSpinBox* m_ZoomBox = nullptr;
@@ -199,6 +202,7 @@ private:
   int m_Tool = -2;
   std::vector<std::pair<float, float>> m_Draft;
   int m_SelectedAnnotation = -1;
+  std::vector<int> m_SelectedMore; ///< the other marks a box select picked; m_SelectedAnnotation is the last one
   bool m_AnnotationDragging = false;
   int m_AnnotationHandle = -1;
   QPointF m_DragStart;
@@ -260,6 +264,9 @@ private:
   QPointF PageToCanvas(float x, float y) const;
   int HitAnnotation(QPointF pagePoint, float tolerance) const;
   void ApplyAnnotationStyle(pdfview::Annot& annotation) const;
+  void SelectInBox(QPointF first, QPointF second);
+  bool IsSelected(int index) const;
+  static void FitLeaderBox(pdfview::Annot& annotation); ///< a callout's box follows its text
   void DrawAnnotations(QPainter& painter);
   void DrawExtractOverlay(QPainter& painter);
   void BeginExtract(QPointF point, Qt::MouseButton button);
@@ -360,7 +367,7 @@ private:
     bool ok = false;
     std::string error;
     std::unique_ptr<pdfview::PdfDocument> openedRevision;
-    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView;
+    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView, marks, revMarks;
     pdfalign::AutoResult alignment;
     pdfalign::Transform automaticTransform;
     bool hasAlignment = false;
@@ -373,6 +380,8 @@ private:
     pdfalign::Transform transform;
     pdfalign::Transform automatic;
     QImage overlay;
+    QImage revMarks; ///< only the marks that are new in the revision, in red
+    QImage marksOverlay; ///< only the differing marks, transparent elsewhere: drawn over the crisp page in Tint
     QImage revisionOverlay;
     QImage baseView;
     QImage revisionView;
@@ -386,8 +395,25 @@ private:
   };
   std::unique_ptr<CompareSession> m_Compare;
   std::future<CompareOutcome> m_CompareWork;
+  // A sharp picture of the revision for the part of the page on screen (Revision and Opacity views at high zoom): the
+  // fixed-resolution comparison images alone go soft once the page is shown much larger than they were made.
+  struct CompareDetail { pdfview::Bitmap bitmap, marks, redMarks; QRect rect; int pageWidthPx = 0; double ratio = 1.0; };
+  std::future<CompareDetail> m_CompareDetailWork;
+  std::atomic<bool> m_CompareDetailCancel{false};
+  bool m_CompareDetailAgain = false;
+  QTimer* m_CompareDetailTimer = nullptr;
+  QTimer* m_CompareDetailPoll = nullptr;
+  QImage m_CompareDetailImage;
+  QImage m_CompareDetailMarks;    ///< the differing marks redrawn sharp for the visible part (blue base-only, red revision-only)
+  QImage m_CompareDetailRedMarks; ///< only the red ones, for the Revision view
+  QRect m_CompareDetailRect;
+  int m_CompareDetailPageWidthPx = 0;
+  void RequestCompareDetail();
+  void PollCompareDetail();
+  void StopCompareDetail();
   QTimer* m_ComparePoll = nullptr;
-  QDialog* m_CompareDialog = nullptr;
+  QWidget* m_ComparePanel = nullptr; ///< the Compare tab of the side panel
+  void ShowComparePanel();
   QComboBox* m_CompareMode = nullptr;
   QSlider* m_CompareOpacity = nullptr;
   QSpinBox* m_CompareBasePage = nullptr;

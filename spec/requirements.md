@@ -13730,19 +13730,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   REQ-429 (thumbnails, search), REQ-430 and REQ-433 keep their behaviour: controls move, semantics do not.
 - Depends on: REQ-387 (bounded cache, off-thread rendering), REQ-388, REQ-429, REQ-430, REQ-433, REQ-436 (Qt accent), REQ-201.
 - Statement:
-  1. **Command ribbon.** The stacked toolbars are replaced by a ribbon built like the main window's (REQ-436
-     look; large and small buttons, captioned panels, `src/qt/PdfRibbon.hpp`): a panel that does not fit
-     collapses into a menu holding the same actions and live controls, and collapsed panels move into a
-     "More" menu, so narrowing the window never loses a command. The tabs above the page are:
-     **Open/View** (Open, Save As, Extract pages, Find, thumbnail strip toggle, page box, Previous/Next, layout,
-     Zoom out/in, zoom percentage, Fit width, Fit page), **Annotate** (Select, Browse, Text, Line, Rectangle,
-     Ellipse, colour, width, text size, font, Bold, Italic, Fill, Apply style, Undo, Redo), **Measure** (Length,
-     Polyline length, Area, Angle, Check, Undo, Redo, Set scale, scale readout, Scale checks, Show on sheet,
-     Snap) and **Review** (Extract coordinates, Audit scale, Compare revisions), each grouped into captioned
-     panels. Every control the window had
-     is still reachable, with the same names, tooltips, shortcuts and behaviour. The tabs use the Qt graphite
-     appearance and amber accent (REQ-436); the selected tab is marked by an accent underline. The dockable
-     thumbnail strip and the find bar keep their places.
+  1. **Command surface.** The stacked toolbars are replaced by a ribbon built like the main window's (REQ-436
+     look; captioned panels, `src/qt/PdfRibbon.hpp`): a panel that does not fit collapses into a menu holding
+     the same actions and live controls, so narrowing the window never loses a command. The tabs are
+     **Open/View** (Open, Save As, Extract pages, layout, Find, Side panel toggle), **Annotate** (Select,
+     Browse, Text, Line, Rectangle, Ellipse, Callout, Revision cloud, colour, width, text size, font, Bold,
+     Italic, Fill, Apply style, Undo, Redo), **Measure** (Length, Polyline length, Area, Angle, Check, Undo,
+     Redo, Set scale, scale readout, Scale checks, Show on sheet, Snap) and **Review** (Extract coordinates,
+     Audit scale, Compare revisions). Page navigation, the page box, Previous/Next, zoom out/in, the zoom
+     percentage, Fit width and Fit page sit in the status bar. The **side panel** at the left holds a strip of
+     tabs: **Thumbnails**, **Tool Chest**, **Properties** and, while a comparison runs, **Compare**. Every
+     control the window had is still reachable with the same names, tooltips and behaviour. The tabs use the
+     Qt graphite appearance and amber accent (REQ-436).
   2. **Layouts.** A layout box offers **Page by page** (the default; one page, as before) and **Continuous**
      (every page stacked top to bottom with a small gap, centred). Switching keeps the current page.
   3. **Wheel.** In the continuous layout the plain mouse wheel scrolls continuously through the document, from
@@ -13775,6 +13774,25 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the window cancels and waits for the worker.
   9. **Honest failure (REQ-201).** A page that cannot be drawn keeps its blank sheet and the window stays
      usable; nothing in this requirement changes what is saved to a PDF.
+  10. **Tool hotkeys and Browse.** Select (S), Browse (B), Text (T), Line (L), Rectangle (R), Ellipse (E),
+      Callout (D), Revision cloud (K), Length (G), Polyline length (P), Area (A) and Angle (H) have single-key
+      shortcuts shown in their tooltips; Esc returns to Browse. With Browse selected the left button drags the
+      document like the middle button.
+  11. **Previews.** After the first click of Text, Line, Rectangle, Ellipse, Callout and Revision cloud a
+      preview follows the pointer; no connector line is drawn for the two-point tools.
+  12. **Callout.** Click the target, click where the text box goes, type the text; the mark is a PDF
+      FreeText callout (an arrow from the box to the target) that can be selected, moved by its target or its
+      box, restyled and deleted (REQ-396).
+  13. **Revision cloud.** The Revision cloud button has a drop-down offering **Rectangle cloud** (two clicks,
+      the default) and **Polygon cloud** (a click per vertex, Enter finishes); the button shows and uses the
+      last mode chosen. The cloud is saved as a standard PDF Square annotation with a scalloped appearance and
+      is read back as a revision cloud.
+  14. **Box select.** With Select, two clicks define a box: left to right is a window (blue, solid; marks
+      wholly inside) and right to left a crossing (green, dashed; marks touched). The selection may hold
+      several marks; Delete and Apply style act on all of them.
+  15. **Compare in the side panel.** Compare revisions opens as the Compare tab of the side panel, aligns
+      the sheets and lists the changes at once. The overlay follows the zoom: at high zoom Tint, Revision and
+      Opacity views redraw the visible part at screen resolution so the marks stay sharp.
 - Acceptance:
   1. `GoSurveyQtTests` `issue1037*` (command surface): the window has the four tabs named in clause 1 in that
      order, no standalone toolbar row remains outside the ribbon except the find bar, every action the window
@@ -13800,10 +13818,16 @@ capability that does not exist. They are recorded here rather than quietly dropp
   9. Screenshots of the four tabs, the continuous layout, a zoomed page and a pan in progress are saved under
      `build/artifacts/` and shown to the user for approval before the issue is closed.
   10. Existing PDF window tests (`pdf*`, `issue905*`, `issue906*`) still pass with the page-by-page default.
+  11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`, `issue1037BrowseDragPansTheDocument`
+      and `issue1037SelectBoxWindowAndCrossing`: hotkeys and Esc, Browse drag pan, callout and both cloud modes
+      saved and read back, window versus crossing selection including a cloud.
+  12. (compare, clause 15) the compare tests list the changes in the `pdfComparePanel` side-panel tab and, at 600%,
+      produce the sharp detail picture and sharp marks.
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
   `src/pdf/PdfDocument` (unchanged).
 - Status: accepted (2026-10-22) - D-2026-10-22-c, GitHub issue #1037.
 - Revisions: 2026-10-22 - catalogued and accepted (D-2026-10-22-c, GitHub issue #1037).
+  2026-10-24 - final design: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).
 
 ## Quality requirements
 

@@ -8,7 +8,7 @@
 
 class PdfCanvas final : public QWidget {
 public:
-  explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); setMouseTracking(true); }
+  explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); setMouseTracking(true); setFocusPolicy(Qt::ClickFocus); }
   QImage image;
   QPoint imageOrigin;  ///< where the picture sits in a page imageFull big
   QSize imageFull;     ///< empty: the picture is the whole page

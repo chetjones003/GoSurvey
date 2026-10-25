@@ -1,7 +1,7 @@
 # TASK-1037 - Redesign the Qt PDF editor and complete zoom/pan navigation
 
 - Type:    feature
-- Status:  self-verify
+- Status:  done (user approved UI 2026-10-25)
 - Opened:  2026-10-22
 - Owner:   Claude
 
@@ -36,4 +36,5 @@
 - Test approach: `issue1037*` Qt tests (tabs, continuous sync, Ctrl+wheel anchor in both layouts, middle pan with tools, fit/typed/keyboard, second-page annotation, cache bound + close-while-rendering) plus the existing `pdf*`/`issue905*`/`issue906*` suites.
 
 ## 11. Outcome
-- Done: pending verification and user visual approval
+- Done: user-approved after live testing. Beyond the original scope (directed by the user during review): side panel tabs, tool hotkeys, Callout and Revision cloud tools, box select, Compare as a side-panel tab with sharp zoomed overlays (REQ-455 clauses 10-15).
+- Known limits: box-selected marks cannot be moved together; Audit scale is still a dialog.
