@@ -58,10 +58,13 @@
 #include <E57SimpleWriter.h>
 #include <array>
 #include <QPdfWriter>
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QListView>
+#include <QScrollBar>
 #include <QToolBar>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -80,8 +83,6 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QLabel>
-#include <QCompleter>
-#include <QAbstractItemView>
 #include <QMouseEvent>
 #include <QDialogButtonBox>
 #include <QListWidget>
@@ -1792,42 +1793,6 @@ private Q_SLOTS:
     QVERIFY(!window.HasUnsavedChanges());
   }
 
-  void settingsAccountSupportsLaterSignInAndReadOnlyStatus() {
-    EditorWindow window;
-    auto *viewMenu = window.findChild<QMenu *>("viewMenu");
-    QVERIFY(viewMenu);
-    QAction *settings = nullptr;
-    for (auto *action : viewMenu->actions())
-      if (action->text() == "Settings…")
-        settings = action;
-    QVERIFY(settings);
-    settings->trigger();
-    auto *dialog = window.findChild<QDialog *>("applicationSettings");
-    QVERIFY(dialog);
-    auto *heading = dialog->findChild<QLabel *>("accountSettingsHeading");
-    QVERIFY(heading);
-    QCOMPARE(heading->text(), QString("Account"));
-    QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
-    QVERIFY(dialog->findChild<QWidget *>("settingsPageAccount")->findChildren<QLineEdit *>().isEmpty());
-    auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
-    auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
-    QVERIFY(action);
-    QVERIFY(status);
-    QTRY_COMPARE(action->text(), QString("Sign In"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    window.State().authSignInRequested = false;
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
-    QTRY_COMPARE(action->text(), QString("Sign Out"));
-    const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-account-final.png"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignOutRequested);
-  }
-
   void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -2271,46 +2236,6 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
   }
 
-  void startupGateUsesApplicationLogoAndRequiresAChoice() {
-    EditorWindow window;
-    window.State().authGateResolved = false;
-    window.show();
-    window.ShowSignInGate();
-    auto *gate = window.findChild<QDialog *>("signInGate");
-    QVERIFY(gate);
-    QTRY_VERIFY(gate->isVisible());
-    QCOMPARE(gate->windowModality(), Qt::ApplicationModal);
-    QVERIFY(!(gate->windowFlags() & Qt::WindowCloseButtonHint));
-    auto *logo = gate->findChild<QLabel *>("signInLogo");
-    QVERIFY(logo);
-    QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
-    const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-startup-final.png"));
-    gate->close();
-    QVERIFY(gate->isVisible());
-    QTest::keyClick(gate, Qt::Key_Escape);
-    QVERIFY(gate->isVisible());
-    QTest::mouseClick(gate->findChild<QPushButton *>("signInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    QTest::mouseClick(gate->findChild<QPushButton *>("declineSignInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authDeclineRequested);
-  }
-
-  void savedOptOutResolvesQtLaunchWithoutAuthAttempt() {
-    EditorWindow window;
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QVERIFY(window.State().authGateResolved);
-    QVERIFY(!window.State().authBusy);
-    QCoreApplication::processEvents();
-    QVERIFY(!window.findChild<QDialog *>("signInGate"));
-  }
-
-  // ---- REQ-080 usage ping / REQ-425 crash and startup-failure reports (issue #883) -----------
-
   static QString SampleCrashReport() {
     return QString(
         "GoSurvey stopped because of an unexpected error.\n\n"
@@ -2330,7 +2255,6 @@ private Q_SLOTS:
         "Use \"Send This Report\" to copy this text and open GitHub to file an issue.";
   }
 
-  /// Clicks OK on the next message box and hands back what it said.
   static void CaptureNextMessage(QString& text) {
     QTimer::singleShot(0, [&text] {
       for (auto* widget : QApplication::topLevelWidgets())
@@ -2339,77 +2263,6 @@ private Q_SLOTS:
           message->button(QMessageBox::Ok)->click();
         }
     });
-  }
-
-  void telemetryPingWaitsForLaunchGateAndFiresOnce() {
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping before the launch sequence starts");
-    window.m_AuthStarted = true;
-    window.State().authGateResolved = false;
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping while the sign-in gate is unresolved");
-    window.State().authGateResolved = true;
-    window.ServiceTelemetry();
-    window.ServiceTelemetry();
-    QCOMPARE(sent.size(), std::size_t(1));
-    QCOMPARE(sent[0], std::string());  // signed out: no email
-
-    EditorWindow signedIn;
-    std::vector<std::string> signedInSent;
-    signedIn.m_SendTelemetry = [&signedInSent](const std::string& email) { signedInSent.push_back(email); };
-    signedIn.m_AuthStarted = true;
-    signedIn.State().authGateResolved = true;
-    signedIn.State().authSignedIn = true;
-    signedIn.State().authEmail = "surveyor@example.com";
-    signedIn.ServiceTelemetry();
-    QCOMPARE(signedInSent, std::vector<std::string>{"surveyor@example.com"});
-  }
-
-  void telemetryPingFollowsTheRealLaunchPathOnlyWhenEnabled() {
-    // The saved opt-out resolves the gate at once; the window's own service loop sends the ping.
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QTRY_COMPARE(sent.size(), std::size_t(1));
-    QTest::qWait(150);
-    QCOMPARE(sent.size(), std::size_t(1));
-
-    // A window the entry point did not enable never sends one (so tests stay off the network).
-    EditorWindow quiet;
-    quiet.State().authOptedOut = true;
-    quiet.StartAuth();
-    QTest::qWait(150);
-    QVERIFY(!quiet.m_SendTelemetry);
-    QVERIFY(!quiet.m_TelemetryTask);
-  }
-
-  void settingsUsageDisclosureIsAccurateAndFollowsSignIn() {
-    EditorWindow window;
-    window.ShowSettings();
-    auto* dialog = window.findChild<QDialog*>("applicationSettings");
-    QVERIFY(dialog);
-    auto* heading = dialog->findChild<QLabel*>("usageDataHeading");
-    auto* summary = dialog->findChild<QLabel*>("usageDataSummary");
-    auto* email = dialog->findChild<QLabel*>("usageDataEmail");
-    auto* crash = dialog->findChild<QLabel*>("usageDataCrashReports");
-    QVERIFY(heading && summary && email && crash);
-    // REQ-080 as amended: a ping every launch. The 0.7.4 "at most once a day" is no longer true.
-    QVERIFY(summary->text().contains("each time you start GoSurvey"));
-    QVERIFY(!summary->text().contains("once a day"));
-    // A disclosure, not a control: ADR-032 has no opt-out.
-    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection")->findChild<QCheckBox*>());
-    QVERIFY(email->text().contains("currently signed out"));
-    // REQ-425 §6.
-    QVERIFY(crash->text().contains("crashes or cannot start"));
-    QVERIFY(crash->text().contains("file locations"));
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_VERIFY(email->text().contains("your email is included too"));
   }
 
   void failureReportWindowSendsWithoutClosingAndCloseSendsNothing() {
@@ -3013,18 +2866,13 @@ private Q_SLOTS:
     UpdateButton(dialog, "updateRemindButton")->click();
   }
 
-  void updateOfferIsShownBeforeTheSignInGate() {
+  void startupHasNoSignInGate() {
     EditorWindow window;
-    window.State().authGateResolved = false;
-    window.m_AuthStarted = true;
-    window.m_Update->phase = update::Phase::Checking;
-    window.ServiceAuth();
+    window.show();
+    QApplication::processEvents();
     QVERIFY(!window.findChild<QDialog*>("signInGate"));
-    window.m_Update->phase = update::Phase::Idle;
-    window.ServiceAuth();
-    if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/task-1043-startup.png"));
   }
-
   void settingsUpdatesAreStagedUntilApply() {
     IsolatedUserData userData;
     EditorWindow window;
@@ -3093,7 +2941,9 @@ private Q_SLOTS:
     QVERIFY(categories);
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
-    QCOMPARE(names, (QStringList{"Account", "Updates and Privacy", "Display", "Drafting", "Survey Points"}));
+    QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
+    QVERIFY(!dialog->findChild<QWidget*>("settingsPageAccount"));
+    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection"));
     auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
     auto* undo = dialog->findChild<QSpinBox*>("settingsUndoHistory");
     auto* angle = dialog->findChild<QComboBox*>("settingsAngleType");
@@ -3110,7 +2960,6 @@ private Q_SLOTS:
       const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
       auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
       ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
-      window.State().authSignedIn = false;
       dialog->resize(780, 600);
       for (int i = 0; i < categories->count(); ++i) {
         categories->setCurrentRow(i);
@@ -3329,15 +3178,12 @@ private Q_SLOTS:
     QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
     QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
     QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
-
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
 
     EditorWindow firstRun;
-    // What's New follows the Start-screen conditions; an unresolved launch sign-in choice must
-    // not suppress its display.
+    // What's New follows the Start-screen conditions without a sign-in gate.
     firstRun.State().whatsNewDismissedVersion.clear();
     firstRun.InitializeStartup();
     auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
@@ -3376,7 +3222,6 @@ private Q_SLOTS:
 
   void directDrawingStartupDoesNotAutoOpenWhatsNew() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.CreateDrawingFromTemplate(0);
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
@@ -3384,16 +3229,13 @@ private Q_SLOTS:
 
   void updateOfferSuppressesWhatsNewForTheLaunch() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion.clear();   // would otherwise auto-open
     auto* dialog = OfferUpdate(window, OfferedManifest());
     QVERIFY(dialog);
     window.InitializeStartup();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
     UpdateButton(dialog, "updateRemindButton")->click();
     window.ServiceUpdate();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
   }
 
@@ -4327,8 +4169,8 @@ private Q_SLOTS:
     viewport->setFocus();
     QTest::keyClicks(viewport, "l");
     QCOMPARE(input->text(), QString("l"));
-    QTRY_VERIFY(input->completer()->completionCount() > 0);
-    input->completer()->popup()->hide();
+    QTRY_VERIFY(window.m_CommandSuggestionModel->rowCount() > 0);
+    window.m_CommandSuggestions->hide();
     input->setText("LINE");
     QTest::keyClick(input, Qt::Key_Return);
     QCOMPARE(window.State().active, AppCommandState::Kind::Line);
@@ -4555,6 +4397,244 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  void issue1039CommandLineAndDynamicFieldsShareOneDraft() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& state = window.State();
+    state.objectSnapEnabled = false;
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* x = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(x);
+    auto* y = window.findChild<QLineEdit*>("dynamicField1"); QVERIFY(y);
+
+    // A command-line point answer is parsed into the same coordinate fields and Enter advances once.
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "12,34");
+    QTRY_COMPARE(x->text(), QString("12"));
+    QTRY_COMPARE(y->text(), QString("34"));
+    QCOMPARE(command->text(), QString("12,34"));
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(state.activeDrawingIdx > 0);
+    QCOMPARE(window.DraftingInputText(), QString("12,34"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-commandline-draft.png")));
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.m_CommandHistory.last(), QString("12,34"));
+    QVERIFY(!state.cmdEnteredHistory.empty());
+    QCOMPARE(QString::fromStdString(state.cmdEnteredHistory.back()), QString("12,34"));
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QVERIFY(std::abs(state.anchorX - 12) < 1e-5);
+    QVERIFY(std::abs(state.anchorY - 34) < 1e-5);
+
+    // A polar dynamic-input pair is shown in the command line using the same entered distance
+    // and angle, while submission still composes the equivalent point for existing command parsing.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "40");
+    y->setFocus(); y->selectAll(); QTest::keyClicks(y, "45");
+    QTRY_COMPARE(command->text(), QString("@40<45"));
+    QCOMPARE(window.DraftingInputText(), QString("@28.284271,28.284271"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/polar-draft-shared.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+
+    // A dynamic-field edit is reflected by the command line, whose Enter submits that same draft.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTRY_VERIFY(!command->text().isEmpty());
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-dynamic-field-draft.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(12));
+
+    // Enter in the dynamic field also submits once and keeps the LINE prompt active.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTest::keyClick(x, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(18));
+
+    // Cancel clears an unsubmitted draft; a later command starts with its own empty prompt state.
+    command->setFocus(); QTest::keyClicks(command, "99,99");
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(command->text(), QString());
+    command->setFocus(); command->setText("CIRCLE"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Circle);
+    command->setFocus(); QTest::keyClicks(command, "0,0"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.circlePhase, AppCommandState::CirclePhase::WaitRadius);
+    auto* radius = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(radius);
+    command->setFocus(); QTest::keyClicks(command, "5");
+    QTRY_COMPARE(radius->text(), QString("5"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/radius-commandline-draft.png")));
+    radius->setFocus(); radius->selectAll(); QTest::keyClicks(radius, "6");
+    QTRY_COMPARE(command->text(), QString("6"));
+    QTest::keyClick(radius, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.userCirclesCxCyZR.size(), std::size_t(4));
+    window.CancelDraftingInput();
+  }
+
+  void issue1040QtCommandFinderFuzzyKeyboardAndMouseSelection() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    auto& state = window.State();
+
+    // Real typing goes to the command field for the first character, then must keep going there
+    // even after suggestions appear instead of being captured by a popup keyboard grab.
+    command->setFocus(); QTest::keyClick(command, Qt::Key_T);
+    QTRY_VERIFY(popup->isVisible());
+    QWidget* typingTarget = QApplication::activePopupWidget();
+    if (!typingTarget) typingTarget = QApplication::focusWidget();
+    QVERIFY(typingTarget);
+    QTest::keyClicks(typingTarget, "raverse");
+    QCOMPARE(command->text(), QString("traverse"));
+    QVERIFY(!FuzzyCommandSuggestions(command->text().toStdString(), 30).empty());
+    QCOMPARE(QString::fromStdString(FuzzyCommandSuggestions(command->text().toStdString(), 30).front().name),
+             QString("TRAVERSE"));
+    QPixmap traverseAndSuggestions = window.grab();
+    {
+      QPainter painter(&traverseAndSuggestions);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(traverseAndSuggestions.save(Issue886Shot("issue1040/traverse-query-kept.png")));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(30, 30));
+    QVERIFY(!popup->isVisible());
+    popup->hide(); command->clear();
+
+    // Subsequence and prefix queries both rank LINE first, and rows carry icons.
+    const auto typoSuggestions = FuzzyCommandSuggestions("lne", 30);
+    QVERIFY(!typoSuggestions.empty());
+    QCOMPARE(QString::fromStdString(typoSuggestions.front().name), QString("LINE"));
+    QVERIFY(!window.m_DynamicInput->isVisible());
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QCOMPARE(command->text(), QString("lne"));
+    QVERIFY(model->rowCount() > 0);
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(popup, Qt::Key_Down);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MKLINE"));
+    QTest::keyClick(popup, Qt::Key_Up);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    const auto firstIcon = model->index(0, 0).data(Qt::DecorationRole);
+    QVERIFY(!qvariant_cast<QIcon>(firstIcon).isNull());
+    QVERIFY(popup->styleSheet().contains("border-radius"));
+    QPixmap editorAndPopup = window.grab();
+    {
+      QPainter painter(&editorAndPopup);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(editorAndPopup.save(Issue886Shot("issue1040/command-finder-fuzzy-results.png")));
+    // A visible Qt::Popup takes the keyboard grab on the real UI path. Deliver Enter through
+    // the popup itself as well as the line edit so this covers the native popup event route.
+    QTest::keyClick(popup, Qt::Key_Return);
+    QVERIFY(!window.m_CommandHistory.isEmpty());
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+
+    // A normal prefix query also ranks LINE first; Escape dismisses the finder without launching it.
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    command->setFocus(); QTest::keyClicks(command, "lin");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(command, Qt::Key_Escape);
+    QVERIFY(!popup->isVisible());
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    // A query with no ranked result hides the prior highlight; Enter submits the typed text unchanged.
+    command->setFocus(); QTest::keyClicks(command, "zzzz");
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(window.m_CommandHistory.last(), QString("zzzz"));
+
+    // The registered `l` alias ranks LINE first; scrolling and clicking launch it.
+    command->setFocus(); QTest::keyClicks(command, "l");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    auto* scroll = popup->verticalScrollBar(); QVERIFY(scroll);
+    QVERIFY(scroll->maximum() > 0);
+    const int beforeScroll = scroll->value();
+    QWheelEvent down(QPointF(popup->viewport()->rect().center()),
+                     popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, -240),
+                     Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &down);
+    QVERIFY(scroll->value() > beforeScroll);
+    const int afterScroll = scroll->value();
+    QWheelEvent up(QPointF(popup->viewport()->rect().center()),
+                   popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, 240),
+                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &up);
+    QVERIFY(scroll->value() < afterScroll);
+    const QModelIndex line = model->index(0, 0);
+    QCOMPARE(line.data().toString(), QString("LINE"));
+    QTest::mouseClick(popup->viewport(), Qt::LeftButton, Qt::NoModifier, popup->visualRect(line).center());
+    QTRY_COMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    window.CancelDraftingInput();
+
+    // Empty input and an active drafting prompt must not leave a stale command result available.
+    command->clear();
+    QVERIFY(!popup->isVisible());
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    const QImage generic = window.style()->standardIcon(QStyle::SP_CommandLink).pixmap(18, 18).toImage();
+
+    for (const auto& primary : RegisteredCommandPrimariesForTest()) {
+      const QString query = QString::fromStdString(primary);
+      command->setText(query);
+      QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                        Q_ARG(QString, query)));
+      QCoreApplication::processEvents();
+      QCOMPARE(model->rowCount() > 0, true);
+      QCOMPARE(model->index(0, 0).data().toString(), query.toUpper());
+      const QIcon icon = qvariant_cast<QIcon>(model->index(0, 0).data(Qt::DecorationRole));
+      QVERIFY2(!icon.isNull(), primary.c_str());
+      QVERIFY2(icon.pixmap(18, 18).toImage() != generic, primary.c_str());
+    }
+
+    command->setText("massprop");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("massprop"))));
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MASSPROP"));
+    QPixmap generatedIconState = window.grab();
+    {
+      QPainter painter(&generatedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(generatedIconState.save(Issue886Shot("issue1041/generated-massprop-icon.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/generated-massprop-popup.png")));
+
+    command->setText("l");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("l"))));
+    QTRY_VERIFY(popup->isVisible());
+    QPixmap mixedIconState = window.grab();
+    {
+      QPainter painter(&mixedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(mixedIconState.save(Issue886Shot("issue1041/mixed-command-icons.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/mixed-command-icons-popup.png")));
+  }
+
   void issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto& state = window.State();
@@ -4576,32 +4656,6 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
     QVERIFY(DoUndo(state, window.m_Log));
     QVERIFY(state.userLinesFlat.empty());
-  }
-
-  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
-    QTemporaryFile blocker;
-    QVERIFY(blocker.open());
-    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
-    EditorWindow window;
-    auto& state = window.State();
-    window.m_AuthStarted = true;
-    state.authGateResolved = false;
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(!state.authOptedOut);
-    QVERIFY(!state.authGateResolved);
-    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
-
-    IsolatedUserData writable;
-    state.authError.clear();
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(state.authOptedOut);
-    QVERIFY(state.authGateResolved);
-    QVERIFY(state.authError.empty());
-    AppCommandState reloaded;
-    LoadUserStartupPrefSettings(reloaded);
-    QVERIFY(reloaded.authOptedOut);
   }
 
   void issue903PolarSettingsAndOneShotSnap() {
@@ -4792,16 +4846,16 @@ private Q_SLOTS:
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
     QTest::keyClicks(tree, "l");
     QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     tabs->setFocus(); QTRY_VERIFY(tabs->hasFocus());
     QTest::keyClicks(tabs, "c");
     QCOMPARE(input->text(), QString("c")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     auto* tool = window.findChild<QToolButton*>("quick_NEW"); QVERIFY(tool);
     tool->setFocus(); QTRY_VERIFY(tool->hasFocus());
     QTest::keyClicks(tool, "p");
     QCOMPARE(input->text(), QString("p")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     // An editable property keeps text input rather than turning it into a CAD command.
     window.State().userLinesFlat = {0, 0, 0, 10, 0, 0};
     EnsureAttrCounts(window.State());
@@ -4815,7 +4869,7 @@ private Q_SLOTS:
     panel->ToggleConsole(); auto* console = panel->Transcript(); console->setFocus();
     QTRY_VERIFY(console->hasFocus()); QTest::keyClicks(console, "u");
     QCOMPARE(input->text(), QString("u")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     QDialog dialog(&window); auto* field = new QLineEdit(&dialog);
     dialog.setModal(true); dialog.show(); dialog.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&dialog)); field->setFocus();
@@ -4828,10 +4882,9 @@ private Q_SLOTS:
     QVERIFY(QTest::qWaitForWindowActive(dock)); tree->setFocus();
     QTRY_VERIFY(tree->hasFocus()); QTest::keyClicks(tree, "z");
     QCOMPARE(input->text(), QString("z"));
-    // Zoom commands open the completer popup, which can own focus while the command edit still
-    // receives the typed prefix.
-    QTRY_VERIFY(input->hasFocus() || input->completer()->popup()->isVisible());
-    input->completer()->popup()->hide(); input->clear();
+    // Zoom commands open the command suggestion popup while the command edit receives the prefix.
+    QTRY_VERIFY(input->hasFocus() || window.m_CommandSuggestions->isVisible());
+    window.m_CommandSuggestions->hide(); input->clear();
     dock->setFloating(false);
   }
 

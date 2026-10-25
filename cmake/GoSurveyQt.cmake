@@ -94,10 +94,6 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
-  src/platform/OAuthListener.cpp
-  src/platform/CredentialStore.cpp
-  src/auth/AuthService.cpp
-  src/auth/AuthPing.cpp
   src/update/UpdateService.cpp
   # REQ-080 usage ping; REQ-425 crash and startup-failure reports
   src/telemetry/TelemetryPing.cpp

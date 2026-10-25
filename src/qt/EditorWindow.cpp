@@ -31,7 +31,6 @@
 #include "ThumbnailCache.hpp"
 #include "WhatsNewLogic.hpp"
 #include "Project.hpp"
-#include "auth/AuthService.hpp"
 #include "update/UpdateService.hpp"
 #include "telemetry/TelemetryService.hpp"
 #include "platform/HttpFetch.hpp"
@@ -47,8 +46,9 @@
 #include <QCloseEvent>
 #include <QEvent>
 #include <QComboBox>
-#include <QCompleter>
-#include <QStringListModel>
+#include <QAbstractItemView>
+#include <QHash>
+#include <QListView>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
@@ -304,6 +304,42 @@ QIcon CadCommandIcon(const QString& icon) {
     }
   }
   return QIcon(QPixmap::fromImage(image));
+}
+
+QString NormalizedCommandIconName(QString name) {
+  name = name.toLower();
+  name.remove(QRegularExpression("[^a-z0-9]"));
+  return name;
+}
+
+QString GeneratedCommandIconFamily(const QString& name, const QString& description) {
+  const QString text = (name + " " + description).toLower();
+  if (text.contains("surface") || text.contains("terrain") || text.contains("grading") ||
+      text.contains("contour") || text.contains("watershed") || text.contains("catchment")) return "terrain";
+  if (text.contains("point") || text.contains("survey") || text.contains("traverse") ||
+      text.contains("station") || text.contains("bearing") || text.contains("elevation")) return "survey";
+  if (text.contains("layer")) return "layers";
+  if (text.contains("dimension") || text.contains("measure") || text.contains("distance") ||
+      text.contains("volume") || text.contains("massprop") || text.contains("angle")) return "dimension";
+  if (text.contains("block") || text.contains("solid") || text.contains("mesh") ||
+      text.contains("box") || text.contains("cylinder") || text.contains("sphere")) return "solid";
+  if (text.contains("import") || text.contains("export") || text.contains("open") ||
+      text.contains("save") || text.contains("file") || text.contains("project")) return "file";
+  if (text.contains("view") || text.contains("zoom") || text.contains("orbit") ||
+      text.contains("camera") || text.contains("perspective") || text.contains("fov")) return "view";
+  if (text.contains("setting") || text.contains("option") || text.contains("unit") ||
+      text.contains("style") || text.contains("config")) return "settings";
+  if (text.contains("delete") || text.contains("erase") || text.contains("trim") ||
+      text.contains("remove") || text.contains("purge")) return "edit";
+  if (text.contains("move") || text.contains("copy") || text.contains("rotate") ||
+      text.contains("scale") || text.contains("mirror") || text.contains("array") ||
+      text.contains("offset")) return "transform";
+  if (text.contains("line") || text.contains("poly") || text.contains("curve") ||
+      text.contains("spline") || text.contains("arc")) return "geometry";
+  if (text.contains("list") || text.contains("table") || text.contains("report") ||
+      text.contains("search") || text.contains("stats") || text.contains("catalog")) return "data";
+  if (text.contains("pipe") || text.contains("fitting")) return "pipe";
+  return "utility";
 }
 
 EditorWindow::EditorWindow(QString developmentBranchLabel)
@@ -755,7 +791,6 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   auto* service = new QTimer(this);
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
-    ServiceAuth();
     ServiceTelemetry();
     ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
@@ -822,115 +857,20 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   return action;
 }
 
-void EditorWindow::ServiceAuth() {
-  if (!m_AuthStarted)
-    return;
-  if (m_State.authSignOutRequested) {
-    m_State.authSignOutRequested = false;
-    auth::SignOut();
-    m_State.authSignedIn = false;
-    m_State.authEmail.clear();
-    m_State.authError.clear();
-    Refresh();
-  }
-  if (m_State.authSignInRequested) {
-    m_State.authSignInRequested = false;
-    if (!m_AuthTask) {
-      m_AuthTask = auth::BeginInteractiveSignIn();
-      m_AuthLastAttemptInteractive = true;
-      m_State.authBusy = true;
-      m_State.authInteractiveBusy = true;
-      m_State.authError.clear();
-    }
-  }
-  if (m_State.authDeclineRequested) {
-    m_State.authDeclineRequested = false;
-    m_State.authOptedOut = true;
-    if (SaveUserStartupPrefs(m_State)) {
-      m_State.authGateResolved = true;
-    } else {
-      m_State.authOptedOut = false;
-      m_State.authError = "Your sign-in choice could not be saved. It may "
-                          "appear again next time.";
-    }
-  }
-  if (m_AuthTask && m_AuthTask->done.load(std::memory_order_acquire)) {
-    m_State.authBusy = false;
-    m_State.authInteractiveBusy = false;
-    m_State.authSignedIn = m_AuthTask->ok;
-    m_State.authEmail = m_AuthTask->email;
-    m_State.authError = (!m_AuthTask->ok && m_AuthLastAttemptInteractive)
-                            ? m_AuthTask->error
-                            : "";
-    if (m_AuthTask->ok || m_AuthTask->skippedNoNetwork)
-      m_State.authGateResolved = true;
-    if (m_AuthTask->ok && m_State.authOptedOut) {
-      m_State.authOptedOut = false;
-      if (!SaveUserStartupPrefs(m_State))
-        m_State.authError =
-            "Signed in, but the saved sign-in preference could not be updated.";
-    }
-    m_AuthTask.reset();
-    Refresh();
-  }
-  if (m_State.authGateResolved) {
-    if (auto *gate = findChild<QDialog *>("signInGate"))
-      gate->accept();
-  } else if (!UpdateBlocksLaunch() && HasInternetConnectivity()) {
-    ShowSignInGate();
-  }
-  MaybeAutoOpenWhatsNew();
-}
-
 void EditorWindow::EnableTelemetry() {
-  // The launch-time channel ensures a Settings change applies from the next launch.
-  // A literal, not a std::string: the stored lambda is copied by std::function, and a capture
-  // whose copy can allocate (and so throw) is what bugprone-exception-escape rejects.
+  if (m_TelemetryTask)
+    return;
   const char* channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
-  m_SendTelemetry = [this, channel](const std::string& email) {
-    // REQ-080: the ping must never fail the application. Starting its worker can throw (no thread
-    // or memory available); that is logged like a failed ping and the session carries on.
-    try {
-      m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
-    } catch (const std::exception& error) {
-      qWarning() << "[telemetry] ping not started:" << error.what();
-    } catch (...) {
-      qWarning() << "[telemetry] ping not started: unknown exception.";
-    }
-  };
+  try {
+    m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel);
+  } catch (...) {
+    // Telemetry is best effort; even worker creation failure is invisible to the user.
+  }
 }
 
 void EditorWindow::ServiceTelemetry() {
   telemetry::PollTelemetryTask(m_TelemetryTask);
-  // REQ-080: one ping per launch, fired once the launch gate resolves (signed in, opted out, or
-  // the offline exception) so the sign-in state it reports is known. It never waits on sign-in
-  // beyond that and never shows anything; failures are dropped inside the worker.
-  if (!m_AuthStarted || !m_State.authGateResolved || m_TelemetrySent || !m_SendTelemetry)
-    return;
-  m_TelemetrySent = true;
-  m_SendTelemetry(m_State.authSignedIn ? m_State.authEmail : std::string());
 }
-
-void EditorWindow::StartAuth(bool previewSignIn) {
-  if (m_AuthStarted)
-    return;
-  m_AuthStarted = true;
-  if (previewSignIn) {
-    m_State.authGateResolved = false;
-    m_State.authSignedIn = false;
-    m_State.authBusy = false;
-    m_State.authOptedOut = false;
-    ShowSignInGate();
-    return;
-  }
-  if (!m_State.authOptedOut) {
-    m_AuthTask = auth::BeginSilentRefresh();
-    m_State.authBusy = true;
-  } else {
-    m_State.authGateResolved = true;
-  }
-}
-
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
   // The entry point exits its splash wait when the worker marks the task done, before the UI
@@ -1072,24 +1012,120 @@ void EditorWindow::BuildDocks() {
   connect(toggleCommand, &QAction::triggered, this, [this] { m_CommandBar->ToggleVisible(); });
   if (auto* view = findChild<QMenu*>("viewMenu")) view->addAction(toggleCommand);
   m_Command->setPlaceholderText("Type a command or coordinates");
-  QStringList names;
-  for (const auto& suggestion : FuzzyCommandSuggestions("", 10000))
-    names.push_back(QString::fromUtf8(suggestion.name.c_str()));
-  auto* completer = new QCompleter(names, m_Command);
-  completer->setCaseSensitivity(Qt::CaseInsensitive);
-  m_Command->setCompleter(completer);
-  connect(m_Command, &QLineEdit::textEdited, this, [completer](const QString& text) {
-    QStringList matches;
-    for (const auto& suggestion : FuzzyCommandSuggestions(text.toUtf8().toStdString(), 30))
-      matches.push_back(QString::fromUtf8(suggestion.name.c_str()));
-    static_cast<QStringListModel*>(completer->model())->setStringList(matches);
-    completer->setCompletionPrefix(text);
-    if (!matches.isEmpty()) completer->complete();
+  m_CommandSuggestions = new QListView(this);
+  m_CommandSuggestions->setObjectName("commandSuggestionPopup");
+  // A Qt::Popup grabs subsequent key presses after the first character opened suggestions,
+  // preventing the focused command line from receiving the rest of a typed query.
+  m_CommandSuggestions->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+  m_CommandSuggestions->setAttribute(Qt::WA_ShowWithoutActivating);
+  m_CommandSuggestions->setFocusPolicy(Qt::NoFocus);
+  m_CommandSuggestions->setFrameShape(QFrame::NoFrame);
+  m_CommandSuggestions->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_CommandSuggestions->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_CommandSuggestions->setIconSize(QSize(18, 18));
+  m_CommandSuggestions->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  m_CommandSuggestions->setStyleSheet(
+      "QListView#commandSuggestionPopup { background: palette(base); color: palette(text); "
+      "border: 1px solid palette(mid); border-radius: 8px; padding: 4px; outline: none; }"
+      "QListView#commandSuggestionPopup::item { padding: 6px 9px; min-height: 22px; border-radius: 4px; }"
+      "QListView#commandSuggestionPopup::item:selected { background: palette(highlight); "
+      "color: palette(highlighted-text); }");
+  m_CommandSuggestionModel = new QStandardItemModel(m_CommandSuggestions);
+  m_CommandSuggestions->setModel(m_CommandSuggestionModel);
+
+  QHash<QString, QIcon> commandIcons;
+  for (const auto* action : findChildren<QAction*>()) {
+    QString name = action->property("ribbonCommand").toString();
+    if (name.isEmpty() && action->objectName().startsWith("command_"))
+      name = action->objectName().mid(QString("command_").size());
+    if (name.isEmpty()) continue;
+    const QString iconName = action->property("cadIcon").toString();
+    const QIcon icon = iconName.isEmpty() ? action->icon() : CadCommandIcon(iconName);
+    if (!icon.isNull()) commandIcons.insert(name.toUpper(), icon);
+  }
+  static const QHash<QString, QString> resourceIcons = [] {
+    QHash<QString, QString> icons;
+    const QDir commandIconDirectory(QtAsset("icons"));
+    for (const auto& entry : commandIconDirectory.entryInfoList({"*.png", "*.svg"}, QDir::Files)) {
+      const QString key = NormalizedCommandIconName(entry.completeBaseName());
+      if (!key.isEmpty() && !icons.contains(key)) icons.insert(key, entry.fileName());
+    }
+    return icons;
+  }();
+  const QHash<QString, QString> semanticIconNames{
+      {"CIRCLE", "Circle_Center_Radius.png"}, {"3DPOLY", "3D_Polyline.png"},
+      {"FEATURELINE", "c3d_featureline.png"}, {"GRADING", "c3d_grading.png"},
+      {"TRIMSTATE", "Auto_Trimming.png"}, {"EXPORTPTS", "c3d_exportpoints.png"},
+      {"EXPORTPOINTS", "c3d_exportpoints.png"}, {"QUICKPROFILE", "c3d_quickprofile.png"},
+      {"SURFACECREATE", "c3d_surfaces.png"}, {"ZOOMEXTENTS", "Zoom_Extensis.png"},
+      {"MOVESEL", "3D_Move.png"}, {"ROTATESEL", "3D_Rotate.png"},
+      {"SCALESEL", "Scale.png"}, {"MIRRORSEL", "3D_Mirror.png"},
+      {"DELETE", "erase.png"}, {"MATCHPROP", "Match_Properties.png"},
+      {"DRAWINGSETTINGS", "c3d_dwgsettings.png"}, {"PROJECTSETTINGS", "settings.png"},
+      {"PROJECTHEALTH", "settings.png"}, {"PACKPROJECT", "Save.png"},
+      {"TURNOVER", "Active_File.png"}, {"OPENPACK", "Open.png"},
+      {"BLOCKLIST", "Blocks_Palette.png"}, {"BLOCKLIB", "Blocks_Palette.png"},
+      {"BLOCKFAV", "Blocks_Palette.png"}, {"BLOCKRECENT", "Blocks_Palette.png"},
+      {"COPYCLIP", "Copy_Clip.png"}, {"PASTEBLOCK", "Paste.png"},
+      {"PDFATTACH", "Pdf.png"}, {"PDFVIEW", "Pdf.png"}, {"PDFSPLIT", "Pdf.png"},
+      {"IMPORTPOINTS", "c3d_transferpoints.png"}, {"EXPORTLANDXML", "c3d_exportto.png"},
+      {"VOLDASH", "c3d_surfaces.png"}, {"SURFACEIMPORTFILE", "c3d_surfaces.png"},
+      {"PIPERUN", "c3d_pipenet.png"}, {"PIPESYS", "c3d_pipenet.png"},
+      {"PIPECATALOG", "c3d_pipenet.png"}, {"BEDIT", "Block_Editor.png"},
+      {"BSAVE", "Save.png"}, {"BSAVEAS", "Save_As.png"}};
+  connect(m_Command, &QLineEdit::textEdited, this,
+          [this, commandIcons, semanticIconNames](const QString& text) mutable {
+    if (m_DynamicInput && m_DynamicInput->isVisible()) {
+      m_CommandSuggestions->hide();
+      UpdateDraftingInputFromCommandLine(text);
+      return;
+    }
+    m_CommandSuggestionModel->clear();
+    const QString query = text.trimmed();
+    const auto suggestions = query.isEmpty()
+        ? std::vector<CommandSuggestion>{}
+        : FuzzyCommandSuggestions(query.toUtf8().toStdString(), 30);
+    for (const auto& suggestion : suggestions) {
+      const QString name = QString::fromUtf8(suggestion.name.c_str());
+      QIcon icon = commandIcons.value(name);
+      if (icon.isNull()) {
+        const QString semanticFile = semanticIconNames.value(name);
+        if (!semanticFile.isEmpty()) icon = CadCommandIcon(semanticFile);
+      }
+      if (icon.isNull()) {
+        const QString resourceFile = resourceIcons.value(NormalizedCommandIconName(name));
+        if (!resourceFile.isEmpty()) icon = CadCommandIcon(resourceFile);
+      }
+      if (icon.isNull()) {
+        const QString generated = GeneratedCommandIconFamily(name, QString::fromUtf8(suggestion.description.c_str()));
+        icon = CadCommandIcon("commands/" + generated + ".svg");
+      }
+      commandIcons.insert(name, icon);
+      auto* item = new QStandardItem(icon, name);
+      item->setEditable(false);
+      item->setToolTip(QString::fromUtf8(suggestion.description.c_str()));
+      m_CommandSuggestionModel->appendRow(item);
+    }
+    const int rows = m_CommandSuggestionModel->rowCount();
+    if (rows == 0) { m_CommandSuggestions->hide(); return; }
+    const int visibleRows = std::min(rows, 8);
+    const int popupHeight = visibleRows * 32 + 10;
+    const QPoint inputTop = m_Command->mapToGlobal(QPoint(0, 0));
+    m_CommandSuggestions->setGeometry(inputTop.x(), inputTop.y() - popupHeight,
+                                      m_Command->width(), popupHeight);
+    const QModelIndex first = m_CommandSuggestionModel->index(0, 0);
+    m_CommandSuggestions->setCurrentIndex(first);
+    m_CommandSuggestions->scrollToTop();
+    m_CommandSuggestions->show();
+    m_CommandSuggestions->raise();
   });
-  connect(m_Command, &QLineEdit::returnPressed, this, [this] {
-    const QString line = m_Command->text();
+  connect(m_CommandSuggestions, &QListView::clicked, this, [this](const QModelIndex& index) {
+    if (!index.isValid() || (m_DynamicInput && m_DynamicInput->isVisible())) return;
+    const QString command = index.data(Qt::DisplayRole).toString();
+    m_CommandSuggestions->hide();
     m_Command->clear();
-    Submit(line);
+    Submit(command);
+    m_Command->setFocus(Qt::OtherFocusReason);
   });
   connect(m_Toolspace, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
     const auto index = item->data(0, Qt::UserRole);
@@ -1453,17 +1489,42 @@ void EditorWindow::ShowViewportsManager() {
 }
 
 bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::MouseButtonPress && m_CommandSuggestions && m_CommandSuggestions->isVisible()) {
+    auto* clicked = qobject_cast<QWidget*>(watched);
+    const bool inSuggestions = clicked &&
+        (clicked == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(clicked));
+    const bool inCommand = clicked && (clicked == m_Command || m_Command->isAncestorOf(clicked));
+    if (!inSuggestions && !inCommand) m_CommandSuggestions->hide();
+  }
   if (DraftingInputEvent(watched, event)) return true;
-  if (watched == m_Command && event->type() == QEvent::KeyPress) {
+  auto* keyWidget = qobject_cast<QWidget*>(watched);
+  const bool suggestionPopupWidget = keyWidget && m_CommandSuggestions &&
+      (keyWidget == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(keyWidget));
+  if ((watched == m_Command || suggestionPopupWidget) && event->type() == QEvent::KeyPress) {
     auto* key = static_cast<QKeyEvent*>(event);
     if (key->key() == Qt::Key_Escape) {
+      if (m_CommandSuggestions && m_CommandSuggestions->isVisible()) {
+        m_CommandSuggestions->hide();
+        m_Command->clear();
+        return true;
+      }
       m_State.showCreatePointsWindow = false;
       CancelActiveCommand(m_State, m_Log);
       m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
       return true;
     }
     if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
-      if (m_Command->completer() && m_Command->completer()->popup()->isVisible()) return QMainWindow::eventFilter(watched, event);
+      if (m_CommandSuggestions && m_CommandSuggestions->isVisible() && m_CommandSuggestionModel &&
+          m_CommandSuggestionModel->rowCount() > 0) {
+        int row = m_CommandSuggestions->currentIndex().row();
+        if (row < 0) row = 0;
+        else row = std::clamp(row + (key->key() == Qt::Key_Up ? -1 : 1), 0,
+                              m_CommandSuggestionModel->rowCount() - 1);
+        const QModelIndex next = m_CommandSuggestionModel->index(row, 0);
+        m_CommandSuggestions->setCurrentIndex(next);
+        m_CommandSuggestions->scrollTo(next);
+        return true;
+      }
       m_HistoryIndex = std::clamp(m_HistoryIndex + (key->key() == Qt::Key_Up ? -1 : 1), 0, static_cast<int>(m_CommandHistory.size()));
       m_Command->setText(m_HistoryIndex < m_CommandHistory.size() ? m_CommandHistory[m_HistoryIndex] : QString{});
       return true;
@@ -1978,19 +2039,6 @@ void EditorWindow::Refresh() {
     const auto title = m_DevelopmentBranchLabel.isEmpty()
         ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
     m_WindowTitle->setText(title); setWindowTitle(title);
-  }
-  if (auto* signedIn = findChild<QWidget*>("startSignedInAccount")) {
-    signedIn->setVisible(m_State.authSignedIn);
-    if (auto* signedOut = findChild<QWidget*>("startSignedOutAccount"))
-      signedOut->setVisible(!m_State.authSignedIn);
-    if (m_State.authSignedIn) {
-      QString accountName = QString::fromUtf8(m_State.authEmail.c_str()).section('@', 0, 0);
-      if (!accountName.isEmpty()) accountName[0] = accountName[0].toUpper();
-      if (auto* welcome = findChild<QLabel*>("startAccountWelcome"))
-        welcome->setText("Welcome " + (accountName.isEmpty() ? QString("GoSurvey user") : accountName) + "!");
-      if (auto* email = findChild<QLabel*>("startAccountEmail"))
-        email->setText(QString::fromUtf8(m_State.authEmail.c_str()));
-    }
   }
   RefreshProperties();
   RefreshToolspace();
