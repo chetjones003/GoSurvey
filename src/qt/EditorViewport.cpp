@@ -213,6 +213,14 @@ void EditorViewport::paintGL() {
   if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
+  // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport
+  // size, so it happens here, before the camera below is built from the result (REQ-120, REQ-123).
+  // The pan/zoom out-pointers are optional: the function writes them into the state itself.
+  // Imports fit the drawing to the last painted size (DxfIo/LibreDwgCad read these).
+  m_State.viewportLastFbW = w;
+  m_State.viewportLastFbH = h;
+  ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
+      static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
   const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
@@ -1260,6 +1268,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
+  // REQ-120: a middle double-click zooms to extents, even mid-command and even over the ViewCube
+  // (a middle press passes through the cube to orbit/pan, so this does too). It writes the camera
+  // only (paintGL consumes the flag), so the active command's phase, points and draft are untouched.
+  if (event->button() == Qt::MiddleButton) {
+    RequestZoomExtents(m_State);
+    event->accept();
+    update();
+    return;
+  }
   // Qt delivers a quick second press as a double click; over the ViewCube it is just another click.
   if (viewcube::Contains(CubeScene(), event->position().x(), event->position().y())) {
     mousePressEvent(event);

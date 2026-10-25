@@ -6558,6 +6558,11 @@ void ClearPendingViewportZoom(AppCommandState& st) {
   st.pendingZoomWindow = false;
 }
 
+void RequestZoomExtents(AppCommandState& st) {
+  ClearPendingViewportZoom(st);
+  st.pendingZoomExtents = true;
+}
+
 namespace CadCmdGeom {
 
 [[nodiscard]] float DistSqPointSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -42267,8 +42272,7 @@ void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log)
     log.push_back("ZOOM EXTENTS — finish or cancel the active command first.");
     return;
   }
-  ClearPendingViewportZoom(st);
-  st.pendingZoomExtents = true;
+  RequestZoomExtents(st);
 }
 
 void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) {
