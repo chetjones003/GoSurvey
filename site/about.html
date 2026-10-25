@@ -29,25 +29,21 @@ main{padding:clamp(2.5rem,6vw,5rem) 0}h1,h2,h3{font-family:"IBM Plex Sans Conden
   <h1>Survey drafting and COGO for Windows.</h1>
   <p class="lede">GoSurvey is an independent CAD platform for land surveyors, built by Chet Jones. This page explains how the application and website handle information.</p>
   <article class="policy" id="privacy">
-    <p class="label">Privacy policy · Effective October 22, 2026</p>
+    <p class="label">Privacy policy · Effective October 24, 2026</p>
     <p>The complete policy is also available in the <a href="https://github.com/chetjones003/GoSurvey/blob/master/PRIVACY.md">GoSurvey repository</a>.</p>
 
     <section><h2>Information the desktop app sends</h2>
       <h3>Usage data</h3>
-      <p>GoSurvey sends one usage ping over HTTPS on every launch. The first successful ping for an installation is marked <code>install</code>; later launches are marked <code>active</code>. Each ping contains a randomly generated installation ID, event type, app version, release channel, and operating system. When you are signed in, it also contains your account email. When signed out, the email field is empty. This is automatic, and there is currently no in-app setting to turn it off. Usage pings do not contain drawing contents, names, or paths.</p>
+      <p>GoSurvey sends a usage ping over HTTPS on a background thread. The first ping for an installation is marked <code>install</code>; later launches are marked <code>active</code>. Each ping contains a randomly generated installation ID, event type, app version, release channel, and operating system. It contains no email or other account identity, user name, computer name, local path, drawing information, or hardware fingerprint. The ping never blocks the app. If it cannot reach the service, nothing is shown and the app continues normally. There is no in-app setting to turn it off.</p>
       <p>The ping goes to a GoSurvey-operated Cloudflare Worker and is stored in a Cloudflare D1 database with a server timestamp, date, and country-level location derived by Cloudflare. The installation ID is random and is not based on your hardware, user name, or machine name. The Worker does not store request IP addresses, and request logging is disabled; Cloudflare may still process IP addresses and other request metadata to deliver the service.</p>
       <h3>Startup and crash diagnostics</h3>
       <p>When startup fails or the app crashes, GoSurvey automatically attempts to send a diagnostic report when it can reach the internet. Reports are stored in separate tables in the same Cloudflare D1 database. They can include the app version and channel, failure type, technical error details, stack addresses and module paths, and the local path of the diagnostic log. A local path may reveal your Windows account name or other machine-specific directory names. Reports are limited to 16 KB before sending. Diagnostic details are also appended to local logs in the GoSurvey user-data folder.</p>
       <p>The “Send This Report” action opens a prefilled GitHub issue for you to review and submit. Review its contents before submitting.</p>
     </section>
 
-    <section><h2>Sign-in and account data</h2>
-      <p>Sign-in is handled by Auth0 in your system browser. You can use Google, Microsoft, or an email and password account configured through Auth0. GoSurvey does not receive or store your password. Auth0 and the selected social sign-in provider process sign-in information under their own privacy terms.</p>
-      <p>The refresh token is stored in Windows Credential Manager; short-lived access tokens are held in memory. After sign-in, GoSurvey sends an access token and your email to its account service for a tier lookup. That service stores Auth0's stable account identifier, email, tier, and account creation time in a separate Cloudflare D1 database. There is no in-app account deletion control at this time.</p>
-    </section>
-
     <section><h2>Information kept on your device</h2>
-      <p>Application preferences and the random installation ID are kept in a local <code>gosurvey-user.json</code> file. Sign-in refresh credentials are kept separately in Windows Credential Manager. Startup and crash details are appended to local log files. Drawings are saved where you choose; ordinary local editing does not upload drawing files to GoSurvey.</p>
+      <p>Application preferences and the random installation ID are kept in a local <code>gosurvey-user.json</code> file. Previous GoSurvey versions may have saved a sign-in refresh token in Windows Credential Manager; the current application no longer reads or uses it. Startup and crash details are appended to local log files. Drawings are saved where you choose; ordinary local editing does not upload drawing files to GoSurvey.</p>
+      <p>Earlier versions also offered account sign-in and sent account details to a separate tier lookup service. The current application no longer signs in or sends new account lookups. Account records submitted by earlier versions may remain in that service; no automatic deletion schedule is established.</p>
       <p>If you use the online map feature, GoSurvey requests map tiles from the USGS National Map service. Those requests reveal the requested map area to that service. Retrieved tiles may be cached locally.</p>
     </section>
 
@@ -56,7 +52,7 @@ main{padding:clamp(2.5rem,6vw,5rem) 0}h1,h2,h3{font-family:"IBM Plex Sans Conden
     </section>
 
     <section><h2>Retention and privacy requests</h2>
-      <p>The current telemetry and account database configurations do not define an automatic deletion schedule. Database records remain until the operator deletes them or removes the database. Local preferences and diagnostic logs remain on your device until you delete them. Auth0, GitHub, Google, Cloudflare, and the USGS may retain information under their own policies and settings.</p>
+      <p>The current telemetry database configuration does not define an automatic deletion schedule. Records remain until the operator deletes them or removes the database. Local preferences and diagnostic logs remain on your device until you delete them. GitHub, Google Fonts, Cloudflare, and the USGS may retain information under their own policies and settings.</p>
       <p>For privacy questions or requests about GoSurvey-managed records, contact <a href="mailto:chet@gosurveycad.com">chet@gosurveycad.com</a>.</p>
     </section>
     <p class="callout">This policy will be updated when GoSurvey's data handling changes. The effective date above identifies the current version.</p>
