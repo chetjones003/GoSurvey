@@ -214,6 +214,31 @@ jobs:
             Write-Host "OK: $path present"
           }
 
+      - name: Stage app-local Microsoft VC runtime (x64)
+        shell: pwsh
+        run: |
+          # ADR-073: bootstrap and in-app updates are non-elevated, so ship the licensed
+          # release CRT DLLs beside GoSurvey.exe. Keep this sourced from the active MSVC
+          # redist directory and refresh it on every release build.
+          $redistRoot = Join-Path $env:VCToolsRedistDir 'x64'
+          $crtDirs = @(Get-ChildItem -LiteralPath $redistRoot -Directory -Filter 'Microsoft.VC*.CRT' |
+            Sort-Object Name -Descending)
+          if ($crtDirs.Count -eq 0) {
+            throw "No x64 Microsoft VC CRT redistributable folder found under '$redistRoot'."
+          }
+          $crtDir = $crtDirs[0].FullName
+          $crtDlls = @(Get-ChildItem -LiteralPath $crtDir -File -Filter '*.dll')
+          if ($crtDlls.Count -eq 0) { throw "No runtime DLLs found in '$crtDir'." }
+          foreach ($required in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+            if (-not ($crtDlls.Name -contains $required)) {
+              throw "Required app-local runtime '$required' is missing from '$crtDir'."
+            }
+          }
+          foreach ($dll in $crtDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination 'build' -Force
+          }
+          Write-Host "Staged $($crtDlls.Count) runtime DLLs from $crtDir"
+
       - name: sccache stats
         if: always()
         shell: pwsh

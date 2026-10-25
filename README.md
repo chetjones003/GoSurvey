@@ -14,6 +14,18 @@ GoSurvey is a fast, modern CAD platform built for land surveyors. Draw linework 
 
 GoSurvey is free to install. After setup it checks for updates on startup and asks before downloading anything. Stable and beta channels are available in *Settings → System → Updates*.
 
+### Install on Windows
+
+Paste this command into PowerShell and press Enter to install the latest stable release for your
+Windows user:
+
+```powershell
+irm https://raw.githubusercontent.com/chetjones003/GoSurvey/master/scripts/install.ps1 | iex
+```
+
+See [`docs/install.md`](docs/install.md) for installation details, migration behavior, and Windows
+security-warning limitations.
+
 ---
 
 ## Documentation
