@@ -211,11 +211,6 @@ void EditorViewport::paintGL() {
   // A named-view restore starts an orientation animation without going through this widget; make
   // sure something is ticking it (REQ-059).
   if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
-  // ZOOM EXTENTS / ZOOM WINDOW only set a request; this frame is where the framebuffer size is known, so it is where
-  // the camera is framed. (The Qt viewport never called this after the ImGui front end was removed, so the commands
-  // did nothing.)
-  if (m_Ready && (m_State.pendingZoomExtents || m_State.pendingZoomWindow))
-    ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h, static_cast<float>(w) / static_cast<float>(h), m_Log);
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
   // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport

@@ -3143,7 +3143,16 @@ void PdfWindow::PollCompareDetail() {
 
 void PdfWindow::StopCompareDetail() {
   m_CompareDetailCancel = true;
-  if (m_CompareDetailWork.valid()) { try { m_CompareDetailWork.wait(); } catch (...) {} m_CompareDetailWork = {}; }
+  if (m_CompareDetailWork.valid()) {
+    try {
+      m_CompareDetailWork.wait();
+    } catch (const std::exception& error) {
+      qWarning() << "PDF compare: waiting for detail rendering during shutdown failed:" << error.what();
+    } catch (...) {
+      qWarning() << "PDF compare: waiting for detail rendering during shutdown failed with an unknown error.";
+    }
+    m_CompareDetailWork = {};
+  }
   if (m_CompareDetailPoll) m_CompareDetailPoll->stop();
   ClearCompareDetail();
   m_CompareDetailAgain = false;

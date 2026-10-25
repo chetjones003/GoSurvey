@@ -1,7 +1,7 @@
 # TASK-1037 - Redesign the Qt PDF editor and complete zoom/pan navigation
 
 - Type:    feature
-- Status:  implementation complete; awaiting updated visual approval (2026-10-25)
+- Status:  implementation complete; review fixes applied, awaiting re-review (2026-10-25)
 - Opened:  2026-10-22
 - Owner:   Claude
 
@@ -79,3 +79,6 @@
 - Verification complete 2026-10-25: `build.bat`; full Release CTest (191/191); final screenshot shards 3
   and 5 passed after adding the narrow-status, overflow, and cloud captures. The refreshed visual review
   includes the corrected 560 px status bar; `git diff --check` reports no whitespace errors.
+- Code-review fixes 2026-10-25: removed the unrelated extra viewport zoom call; compare-detail wait failures
+  are logged; revision-cloud corner bounds share one helper. The Release build passed after these fixes;
+  the 191-test suite above predates this review-fix pass.

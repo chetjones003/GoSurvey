@@ -333,6 +333,21 @@ std::vector<CloudArc> RevCloudArcs(const Annot& a) {
   return arcs;
 }
 
+namespace {
+void SetBoundsFromPoints(Annot& annotation) {
+  if (annotation.pts.empty())
+    return;
+  annotation.x0 = annotation.x1 = annotation.pts.front().first;
+  annotation.y0 = annotation.y1 = annotation.pts.front().second;
+  for (const auto& point : annotation.pts) {
+    annotation.x0 = std::min(annotation.x0, point.first);
+    annotation.x1 = std::max(annotation.x1, point.first);
+    annotation.y0 = std::min(annotation.y0, point.second);
+    annotation.y1 = std::max(annotation.y1, point.second);
+  }
+}
+} // namespace
+
 LeaderGeom LeaderLine(const Annot& a) {
   LeaderGeom g;
   const float tx = a.pts.empty() ? a.x0 : a.pts[0].first, ty = a.pts.empty() ? a.y0 : a.pts[0].second;
@@ -1065,14 +1080,7 @@ struct ViewerToUser {
     } else if (m.kind == Annot::Kind::RevCloud && !m.pts.empty()) {
       // The viewer-to-user rotation can reverse either axis. Rebuild the box from every transformed corner;
       // RevCloud's saved PDF rectangle is only an envelope and its original diagonal may now be reversed.
-      m.x0 = m.x1 = m.pts.front().first;
-      m.y0 = m.y1 = m.pts.front().second;
-      for (const auto& p : m.pts) {
-        m.x0 = std::min(m.x0, p.first);
-        m.x1 = std::max(m.x1, p.first);
-        m.y0 = std::min(m.y0, p.second);
-        m.y1 = std::max(m.y1, p.second);
-      }
+      SetBoundsFromPoints(m);
     }
   }
 };
@@ -1391,14 +1399,7 @@ std::vector<Annot> ReadAnnotations(const std::filesystem::path& file) {
         while (in >> x >> y)
           a.pts.push_back({x, y});
         a.kind = Annot::Kind::RevCloud;
-        if (!a.pts.empty()) { // the bounding box of the corners, for anything that reads x0..y1 of a mark
-          a.x0 = a.x1 = a.pts.front().first;
-          a.y0 = a.y1 = a.pts.front().second;
-          for (const auto& p : a.pts) {
-            a.x0 = std::min(a.x0, p.first); a.x1 = std::max(a.x1, p.first);
-            a.y0 = std::min(a.y0, p.second); a.y1 = std::max(a.y1, p.second);
-          }
-        }
+        SetBoundsFromPoints(a); // bounding box for callers that read x0..y1
       } else if (st == FPDF_ANNOT_SQUARE || st == FPDF_ANNOT_CIRCLE) {
         a.kind = st == FPDF_ANNOT_SQUARE ? Annot::Kind::Rect : Annot::Kind::Ellipse;
         a.x0 = rc.left + bw / 2;
