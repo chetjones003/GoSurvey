@@ -85,3 +85,13 @@
   the 191-test suite above predates this review-fix pass.
 - Refactor 2026-10-25: moved the comparison workflow methods and detail-rendering helpers into
   `PdfWindowCompare.cpp`; behavior and ownership stay on `PdfWindow`.
+- CI follow-up 2026-10-25: `full / build and test` failed only in Qt shards 4 and 5. The attached
+  test logs show the hosted desktop clamps an 860 px window to 749 px; two thumbnail assertions
+  assumed four rows were visible instead of checking the viewport. The cache test's `<10` entry
+  assertion also exceeded REQ-455 clause 8: the cache is bounded by bytes, and visible pages are
+  retained. The CI log shows its per-page off-screen byte-cap assertions passed. The three failed
+  tests pass together on this worktree's hidden desktop. Follow-up change is test-only: assert the
+  unreadable row is visible, wait for all rows actually visible in the screenshot test, and remove
+  the unsupported entry-count assertion. No viewer behavior or SPEC changes.
+- CI follow-up verification: `.\build.bat` passed. The three affected Qt tests passed in one hidden-
+  desktop run (5 total QtTest cases including setup/cleanup); no production code changed.

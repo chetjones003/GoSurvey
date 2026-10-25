@@ -9210,7 +9210,7 @@ private Q_SLOTS:
           if (entry.first < first || entry.first > last) outside += static_cast<std::size_t>(entry.second.sizeInBytes());
         QVERIFY2(outside <= PdfWindow::kStripCacheBytes, "pages outside the view stay within the cap");
       }
-      QVERIFY(window.m_StripCache.size() < 10); // the farthest pages were dropped
+      // The cache is byte-bounded, not entry-bounded; visible pages can keep ten or more images.
       window.ScrollToPage(30); // a render is now in flight; the window is destroyed while it runs
     }
   }
@@ -9465,7 +9465,7 @@ private Q_SLOTS:
     QVERIFY(list);
     QCOMPARE(list->model()->rowCount(), 6);
     const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
-    QVERIFY(lastVisible >= 3); // the unreadable page 3 is on screen
+    QVERIFY(lastVisible >= 2); // the unreadable page 3 (row 2) is on screen
     QTRY_COMPARE_WITH_TIMEOUT(window.ThumbnailsKept(), lastVisible, 20000); // every visible page but page 3 (rows 0..lastVisible)
     QTest::qWait(300);
     QCOMPARE(window.ThumbnailsKept(), lastVisible);
@@ -9477,11 +9477,15 @@ private Q_SLOTS:
   void qtPdfSearchAndThumbnailScreenshotEvidenceForIssue905() {
     QTemporaryDir directory;
     PdfWindow window(nullptr);
-    window.resize(1000, 860); // the PDF window has two more toolbar rows since #906, so it needs the height to show four thumbnails
+    window.resize(1000, 860);
     window.show();
     QString error;
     QVERIFY2(window.LoadFile(Issue905WritePdf(directory, "evidence.pdf", pdfview::MakeSyntheticPdf(24, 60, 6)), error), qPrintable(error));
-    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= 4, 20000);
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    QVERIFY(list);
+    const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
+    QVERIFY(lastVisible >= 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= lastVisible + 1, 20000);
     QVERIFY(window.grab().save(Issue905Shot("qt-905-final-thumbnails.png"))); // find bar closed
     window.findChild<QAction*>("pdfFindAction")->trigger();
     auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
