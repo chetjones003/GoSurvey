@@ -5081,6 +5081,53 @@ private Q_SLOTS:
     QCOMPARE(state.openProjects.front().readOnly, true);
   }
 
+  void qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure() {
+    IsolatedUserData userData;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString drawingPath = directory.filePath("Existing.dwg");
+    AppCommandState source;
+    source.userLinesFlat = {12.0, 4.0, 0.0, 18.0, 4.0, 0.0};
+    source.userLineAttrs.push_back(EntityAttributes{});
+    std::vector<std::string> saveLog;
+    const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
+    QVERIFY(SaveDrawingDocument(source, drawingPathUtf8.constData(), saveLog));
+
+    EditorWindow window;
+    const auto initialTabs = window.State().drawingTabs.size();
+    bool chooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        chooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!chooserAppeared);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+    QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
+    QVERIFY(window.State().activeDrawingIdx > 0);
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+    QCOMPARE(window.State().drawingTabs[static_cast<std::size_t>(window.State().activeDrawingIdx)].name,
+             std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    const auto activeIndex = window.State().activeDrawingIdx;
+    const auto tabsBeforeFailure = window.State().drawingTabs.size();
+    const auto linesBeforeFailure = window.State().userLinesFlat;
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+    });
+    window.OpenDrawing(directory.filePath("Missing.dwg"));
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeFailure);
+    QCOMPARE(window.State().activeDrawingIdx, activeIndex);
+    QCOMPARE(window.State().userLinesFlat, linesBeforeFailure);
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+  }
+
   void qtDrawingTemplateScreenshotEvidenceForIssue885() {
     IsolatedUserData userData;
     const auto templateDir = UserDataDirectory() / "drawing-templates";
