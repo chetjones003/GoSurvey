@@ -101,6 +101,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/telemetry/TelemetryService.cpp
   src/platform/CrashReporter.cpp
   src/platform/CrashReporterWireReason.cpp
+  src/platform/CrashBuildInfo.cpp
   src/platform/StartupFailure.cpp
   src/platform/FailureReportUi.cpp
 )

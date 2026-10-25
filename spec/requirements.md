@@ -12630,15 +12630,18 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. **Background send.** Crash and startup reports are POSTed once, when the machine has connectivity, to `CrashReportEndpoint` / `StartupReportEndpoint` with `installId`, `version`, `channel`, `os`, `reason` (crash) or `stage` (startup), and `report` (cut at 16 KB). There is no opt-out, consistent with REQ-080. Any network failure is dropped silently (REQ-201 exception, same reason as REQ-080).
   6. **Disclosure.** The Settings privacy disclosure required by REQ-080 also states that crash and startup error reports are sent automatically and can include file locations on this computer.
   7. **Test hook.** `--gosurvey-test-crash` deliberately crashes the process so §1–§3 can be checked by hand.
+  8. **Build identification.** Every crash report states `commit:` (the short git commit the build was made from, or `unknown`) and `pdb:` (the running executable's PDB GUID and age, as `<32 hex digits>,<age>`, or `unavailable`) beside `version:` and `channel:`, so the report can be matched to the one archived PDB for that build.
+  9. **Exception detail.** For a C++ `throw` that escapes (exception code `0xE06D7363`) the report names the thrown type and, when it derives from `std::exception`, its `what()` message. For `std::terminate` it does the same for the active exception. An abort or terminate with no exception record still carries a stack trace captured at the handler.
 - Acceptance:
   - `[req425]` Qt test: the report window shows the report read-only with Send This Report and Close; Send copies the report to the clipboard, opens a GitHub new-issue URL with the title and report, reports the outcome, and leaves the window open; Close sends nothing further.
   - `[req425]` Qt test: a crash bundle in the documented format is read back to its report and deleted; a malformed bundle is rejected.
   - `[req425]` Qt test: the Settings disclosure mentions crash and startup reports.
-  - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window.
+  - `[req425]` Unit test: `PdbIdentityOfModule` returns `<32 hex>,<age>` for the running executable and `unavailable` for no module or a non-image; `DescribeThrownCppException` returns the type and `what()` of a thrown `std::runtime_error`, only the type for a non-std type, and nothing for other exceptions.
+  - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window, including `commit:` and `pdb:` lines.
 - Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`, Settings).
 - Status: accepted.
 - Known gap: the ImGui Settings disclosure predates §6 (and still says "at most once a day", which REQ-080 no longer describes); it is updated separately from the Qt port.
-- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b).
+- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b). 2026-10-25 — §8–§9 added: build identification and exception detail (issue #1004, first slice). Minidumps, private PDB archiving and the report-window restyle in #1004 remain unspecified (SPEC GAP, awaiting a decision on privacy and consent).
 
 ### REQ-426 — Qt Pipe Network and Feature Line ribbon workflows (GitHub issue #896)
 

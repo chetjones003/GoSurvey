@@ -1,6 +1,7 @@
 #include "CrashReporter.hpp"
 
 #include "AppPaths.hpp"
+#include "CrashBuildInfo.hpp"
 #include "FailureReportUi.hpp"
 #include "HttpFetch.hpp"
 #include "TelemetryPing.hpp"
@@ -16,6 +17,7 @@
 #include <cstring>
 #include <ctime>
 #include <exception>
+#include <typeinfo>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -155,7 +157,7 @@ std::filesystem::path CrashLogPath() {
 }
 
 CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTERS* ep,
-                                   const char* fallbackReasonWire) {
+                                   const char* fallbackReasonWire, const std::string& extraDetail) {
   assert(fallbackReasonWire != nullptr);
 
   CrashReportBundle bundle;
@@ -175,6 +177,9 @@ CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTE
   } else {
     body += "The process aborted without a structured exception record.\n";
   }
+  if (ep && ep->ExceptionRecord)
+    body += DescribeThrownCppException(ep->ExceptionRecord);
+  body += extraDetail;
 
   if (ep && ep->ExceptionRecord) {
     body += "Fault address: ";
@@ -193,6 +198,10 @@ CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTE
   body += GOSURVEY_VERSION_FULL;
   body += "\nchannel: ";
   body += g_reportChannel;
+  body += "\ncommit: ";
+  body += GOSURVEY_GIT_COMMIT;
+  body += "\npdb: ";
+  body += PdbIdentityOfModule(::GetModuleHandleW(nullptr));
   body += "\n\n";
   AppendStackTrace(ep, body);
 
@@ -323,12 +332,23 @@ std::filesystem::path MakePendingCrashBundlePath() {
   return std::filesystem::path(full);
 }
 
-void HandleCrash(unsigned long exceptionCode, EXCEPTION_POINTERS* ep, const char* fallbackReasonWire) {
+void HandleCrash(unsigned long exceptionCode, EXCEPTION_POINTERS* ep, const char* fallbackReasonWire,
+                 const std::string& extraDetail = std::string()) {
   static volatile LONG handled = 0;
   if (::InterlockedExchange(&handled, 1) != 0)
     return;
 
-  const CrashReportBundle bundle = BuildCrashReport(exceptionCode, ep, fallbackReasonWire);
+  // abort() and std::terminate() arrive without an exception record: capture where we are now so
+  // the report still has a stack.
+  CONTEXT            here{};
+  EXCEPTION_POINTERS captured{};
+  if (!ep) {
+    ::RtlCaptureContext(&here);
+    captured.ContextRecord = &here;
+    ep                     = &captured;
+  }
+
+  const CrashReportBundle bundle = BuildCrashReport(exceptionCode, ep, fallbackReasonWire, extraDetail);
   AppendCrashLog(bundle.wireReason, bundle.reportUtf8);
 
   const std::filesystem::path bundlePath = MakePendingCrashBundlePath();
@@ -350,8 +370,21 @@ void AbortSignalHandler(int) {
   std::_Exit(3);
 }
 
+// std::terminate usually means an exception nobody caught: name it and keep its what().
+std::string DescribeCurrentException() {
+  if (!std::current_exception())
+    return std::string();
+  try {
+    throw;
+  } catch (const std::exception& e) {
+    return std::string("Uncaught C++ exception: ") + typeid(e).name() + "\nwhat(): " + e.what() + "\n";
+  } catch (...) {
+    return "Uncaught C++ exception of a non-standard type.\n";
+  }
+}
+
 void TerminateHandler() {
-  HandleCrash(0, nullptr, "cpp_terminate");
+  HandleCrash(0, nullptr, "cpp_terminate", DescribeCurrentException());
   std::_Exit(3);
 }
 
