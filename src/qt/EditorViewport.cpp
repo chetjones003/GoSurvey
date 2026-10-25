@@ -883,6 +883,7 @@ void EditorViewport::DrawCursor(QPainter& painter) {
 void EditorViewport::enterEvent(QEnterEvent* event) {
   m_PointerInside = true;
   m_Last = event->position();
+  RefreshCommandCursor();
   update();
   QOpenGLWidget::enterEvent(event);
 }
@@ -923,6 +924,11 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) ClickViewCube(m_Last);
     event->accept();
     update();
+    return;
+  }
+  if (event->button() == Qt::LeftButton &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit)) {
+    event->accept();
     return;
   }
   if (event->button() == Qt::LeftButton &&
@@ -1305,18 +1311,24 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
-  if (event->buttons() & Qt::MiddleButton) {
-    if (event->modifiers() & Qt::ShiftModifier) {
-      m_State.viewAnimActive = false;  // a manual orbit takes over from any ViewCube animation (REQ-059)
-      m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
-      m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg + static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
-    } else {
-      ray3d::Vec3 before, after;
-      if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
-        m_State.viewportPanX += before.x - after.x;
-        m_State.viewportPanY += before.y - after.y;
-        m_State.viewportPanZ += before.z - after.z;
-      }
+  const bool leftCommandDrag = (event->buttons() & Qt::LeftButton) &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit);
+  const bool commandOrbitDrag = leftCommandDrag && m_State.active == AppCommandState::Kind::Orbit;
+  const bool middleOrbitDrag = (event->buttons() & Qt::MiddleButton) &&
+      (event->modifiers() & Qt::ShiftModifier);
+  const bool panDrag = (leftCommandDrag && m_State.active == AppCommandState::Kind::Pan) ||
+      ((event->buttons() & Qt::MiddleButton) && !(event->modifiers() & Qt::ShiftModifier));
+  if (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex)) {
+    m_State.viewAnimActive = false;  // A manual ORBIT takes over from any ViewCube animation (REQ-059).
+    m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
+    m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg +
+        static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
+  } else if (panDrag) {
+    ray3d::Vec3 before, after;
+    if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
+      m_State.viewportPanX += before.x - after.x;
+      m_State.viewportPanY += before.y - after.y;
+      m_State.viewportPanZ += before.z - after.z;
     }
   }
   m_Last = event->position();
@@ -1324,9 +1336,16 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   // the control, and nothing picked or snapped behind it. A held button (box select, grip drag) keeps
   // tracking so a gesture that started in the drawing is not interrupted.
   const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
-  setCursor(overCube ? Qt::ArrowCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor));
+  RefreshCommandCursor();
   if (overCube && event->buttons() == Qt::NoButton) {
     update();
+    return;
+  }
+  if (leftCommandDrag) {
+    m_Last = event->position();
+    if (changed) changed();
+    update();
+    event->accept();
     return;
   }
   ClearTransientInput();
@@ -1649,6 +1668,12 @@ void EditorViewport::SetOrientation(float azimuth, float elevation) {
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
   update();
+}
+
+void EditorViewport::RefreshCommandCursor() {
+  const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  setCursor(overCube ? Qt::ArrowCursor : (m_PointerInside && m_State.active == AppCommandState::Kind::Pan
+      ? Qt::OpenHandCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor)));
 }
 
 // REQ-059: the widget's orientation changes ease to the target instead of snapping.
