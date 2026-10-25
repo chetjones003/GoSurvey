@@ -2900,7 +2900,13 @@ requirements is a planning failure, not a sign of rigor.
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
   it routes through the existing unsaved-changes path, so a user with a dirty drawing is asked to
   save rather than losing it to the restart. The installer is then run non-interactively and the
-  application exits; the installer replaces the files and relaunches the application.
+  application exits; the installer replaces the files and relaunches the application. All GoSurvey
+  installs use the current user's per-user installation at `%LOCALAPPDATA%\Programs\GoSurvey`. If
+  this update is initiated by an older machine-wide Program Files install, the in-app update routes
+  through the hash-checking bootstrap, which migrates that copy with one-time Windows UAC consent and
+  relaunches GoSurvey from the per-user copy; subsequent updates apply there without elevation. The
+  bootstrap and in-app update install the licensed Visual C++ runtime files beside GoSurvey and skip
+  the shared runtime installer; each release must refresh those app-local runtime DLLs.
 
   The hash is an **integrity** check, not an authenticity one: it and the installer come from the same
   host over the same TLS connection, so it detects corruption and a truncated download, not a
@@ -2932,8 +2938,10 @@ requirements is a planning failure, not a sign of rigor.
   - a drawing with unsaved changes triggers the existing unsaved-changes modal before the application
     exits, and cancelling there cancels the update;
   - after the installer runs, the previous versioned executables (`GoSurvey-0.*.exe`) are gone from
-    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts and the `.gs`
-    file association still resolve;
+    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts still resolve;
+  - an update from a Program Files installation migrates it to the per-user installation with one-time
+    UAC consent, preserving user settings and data; later updates install to that same per-user copy
+    without elevation;
   - a partially downloaded file left by a killed process does not block or corrupt the next attempt.
 - Owner-layer: UI (dialog), Platform (download, hash, process launch), IO (`UserPrefs` skip state)
 - Status: accepted (2026-08-15)
@@ -13837,6 +13845,60 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-23, D-2026-10-23-c)
 - Revisions: 2026-10-23 — initial, D-2026-10-23-c.
 
+### REQ-454 — One-command bootstrap installs the latest stable GoSurvey per-user
+- Purpose: let a Windows user install GoSurvey with one PowerShell command, without GoSurvey setup
+  screens or routine administrator approval.
+- Priority: must
+- Type: functional
+- Statement: GoSurvey publishes `scripts/install.ps1` in the repository and documents a one-line
+  `irm … | iex` command that runs it. The bootstrap obtains the latest **stable** release manifest
+  from the stable release URL defined by ADR-029, downloads the manifest's `installerUrl`,
+  and verifies the downloaded bytes against the manifest's SHA-256 before execution. A missing
+  manifest field, invalid hash, failed download, or hash mismatch stops installation, prints a clear
+  console error, and never runs the installer. SHA-256 detects corruption but does not authenticate
+  the publisher.
+
+  A fresh installation is silent and per-user at `%LOCALAPPDATA%\Programs\GoSurvey`; it does not
+  request elevation or show GoSurvey setup UI and does not ask the user to choose installation
+  options. A legacy machine-wide Program Files copy is migrated to this per-user location with
+  one-time Windows UAC consent so the protected copy can be removed. The bootstrap and user-approved
+  in-app update use the release's app-local Visual C++ runtime DLLs and do not launch the shared
+  redistributable installer. Migration preserves GoSurvey
+  settings and user data and leaves one working installation with its supported shortcuts. Following
+  migration, the user's explicit in-app update choice remains required under REQ-078 and applies the
+  update to this per-user copy without elevation.
+
+  The script prints the approved GoSurvey ASCII banner and progress/result messages in a readable
+  PowerShell console. Windows-controlled SmartScreen or Defender warnings are outside this feature's
+  guarantee; the script cannot sign the installer or suppress those operating-system warnings.
+  Standalone `.gs` drawings are retired under D-2026-10-20-d and no `.gs` file association is
+  required or restored by this feature.
+- Acceptance:
+  - the documented one-line PowerShell command installs the latest stable release, never the beta
+    channel;
+  - the installer runs only after the release manifest and SHA-256 are present and valid; a failed
+    download, missing/invalid manifest data, or hash mismatch reports a clear error and does not run
+    the installer;
+  - a fresh install completes under `%LOCALAPPDATA%\Programs\GoSurvey` without GoSurvey setup UI,
+    UAC, or installation-choice prompts;
+  - migration from Program Files completes after one UAC consent, preserves user data/settings,
+    leaves one working per-user installation, and restores the Start-menu shortcut and any existing
+    desktop shortcut;
+  - the migrated copy opens normally with its bundled app-local Visual C++ runtime, and future
+    user-approved REQ-078 updates replace that same per-user installation without elevation or
+    launching the shared runtime installer;
+  - the ASCII banner is readable in Windows PowerShell and matches the approved output preview
+    in `docs/install.md`;
+  - the documentation explicitly says Windows-controlled SmartScreen/Defender warnings are not
+    suppressed or guaranteed away.
+- Owner-layer: Build/Platform (bootstrap, installer, release manifest), UI/Platform (REQ-078 update
+  handoff)
+- Status: accepted (2026-10-24, D-2026-10-24-c)
+- Revisions: 2026-10-24 — initial, D-2026-10-24-c; `.gs` association removed from migration
+  acceptance following clarification that standalone `.gs` drawings are retired. D-2026-10-24-d
+  selects app-local Visual C++ runtime DLLs for bootstrap and in-app updates to avoid shared-runtime
+  UAC; the Microsoft Store redistributable flow remains under REQ-453.
+
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
   security issue automatically, before either reaches a reviewer or a release, without adding a new
@@ -14595,6 +14657,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-454 | Build/Platform/UI | Verify stable-manifest bootstrap; valid and invalid hashes; failed download; fresh silent per-user install; Program Files migration (settings/data and supported shortcuts preserved, one install); in-app update without elevation; output matches `docs/install.md` | accepted |
 | REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) **Amended 2026-09-25 (D-2026-09-25-a, TASK-277): (f)'s connection-port snapping is now actually performed, and a palette click always places the part.** `CadPipePaletteArmPart` armed a one-click INSERT and never enabled any snap, so the off-run half of (f) was a plain drop at the click point with the identity rotation the part was authored with - reported with screenshots as "the blind flange is not aligning correctly". A blind flange bolts onto another flange's FACE and can never splice into a run, so that path was the only one it had. The click now resolves in three ordered outcomes: **on a run** -> the existing `PIPEFIT` splice, unchanged; **otherwise, within 2 ft of a connection port or pipe end** -> `SubmitInsertBlockConnectorPick` (REQ-107 / issue #496, unchanged, including TASK-269's exact-match-before-default two-pass search - which is what makes a blind flange prefer the flange FACE over the pipe end also in reach, since its only mode targets `flange-face` exactly and accepts `pipe-end` merely as an `isDefault` fallback); **otherwise** -> a free placement at the point, reported as such. A REFUSED splice also falls through to the snap/placement rather than ending the click (D-2026-09-25-a): the bundled blind flange has ONE connection point and `PickElbowPorts` needs two, so a run click used to be consumed with nothing placed at all. `SubmitInsertBlockConnectorPick` gains a defaulted `optional` parameter - when set, the two not-found paths return false WITHOUT logging a refusal, so a caller with a legitimate fallback can take it; every other caller is unchanged and keeps its named refusals (REQ-201). Arming also clears `insertBlockConnectorName` and the stale dialog rotations, so every port on the part is a snap candidate rather than whichever one an earlier INSERT dialog left named. `CadBlockImportTests` gains 3 `[connectorsnap]` cases (a blind flange clicked on a placed flange's gasket face landing ON that face with its own face turned INTO it; nothing within 2 ft still placing, and saying why it is unoriented; a part that cannot splice still landing where it was clicked with the splice's own refusal logged). All three fail against the code they were written for. Full suite green: `GoSurveySnapTests` 437/437 (up from 434), `GoSurveyTests` 1218/1219, ctest 1809/1817 - the same 8 pre-existing failures named under TASK-275/276. **Deliberately out of scope, by name**: enforcing `CadBlockConnectionMode::compatibilityTag` (a CS150 part snapping to a CS300 face is not refused), and the 2 ft `kSnap` tolerance itself, which is REQ-107's existing figure. | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |

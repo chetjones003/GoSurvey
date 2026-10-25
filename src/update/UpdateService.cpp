@@ -9,7 +9,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 // shellapi.h is excluded by WIN32_LEAN_AND_MEAN and must be asked for explicitly; it is where
-// ShellExecuteExW lives, which is how the installer is launched with elevation.
+// ShellExecuteExW lives, which starts the per-user installer with the app's token.
 #include <shellapi.h>
 #include <shlobj.h>
 
@@ -48,6 +48,40 @@ std::string LocalAppDataDir()
     ::CoTaskMemFree(raw);
   }
   return result;
+}
+
+bool IsRunningFromProgramFiles()
+{
+  // Keep the large Windows path buffer on the heap; /analyze treats oversized stack frames as
+  // errors in this translation unit.
+  std::wstring executable(32768, L'\0');
+  const DWORD executableLength =
+      ::GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+  if (executableLength == 0 || executableLength >= executable.size())
+    return false;
+
+  executable.resize(executableLength);
+  const std::wstring& executablePath = executable;
+  for (const wchar_t* variable : {L"ProgramW6432", L"ProgramFiles", L"ProgramFiles(x86)"})
+  {
+    const DWORD required = ::GetEnvironmentVariableW(variable, nullptr, 0);
+    if (required == 0)
+      continue;
+
+    std::wstring root(required, L'\0');
+    const DWORD copied = ::GetEnvironmentVariableW(variable, root.data(), required);
+    if (copied == 0 || copied >= required)
+      continue;
+    root.resize(copied);
+    if (root.back() != L'\\' && root.back() != L'/')
+      root.push_back(L'\\');
+
+    if (executablePath.size() > root.size() &&
+        ::CompareStringOrdinal(executablePath.data(), static_cast<int>(root.size()), root.data(),
+                               static_cast<int>(root.size()), TRUE) == CSTR_EQUAL)
+      return true;
+  }
+  return false;
 }
 
 }  // namespace
@@ -251,9 +285,35 @@ bool LaunchInstallerAndExit(UpdateState& st)
   if (st.phase != Phase::ReadyToLaunch)
     return false;
 
+  // The first update from a legacy machine-wide install must remove its protected copy with the
+  // one-time UAC consent approved in ADR-072. Route that first handoff through the same hash-
+  // verifying bootstrap used by the one-line install command; later per-user updates use Inno.
+  if (IsRunningFromProgramFiles())
+  {
+    constexpr wchar_t kPowerShell[] = L"powershell.exe";
+    constexpr wchar_t kBootstrapArgs[] =
+        L"-NoLogo -NoProfile -ExecutionPolicy Bypass -Command \"$env:GOSURVEY_INAPP_UPDATE='1'; irm "
+        L"https://raw.githubusercontent.com/chetjones003/GoSurvey/master/scripts/install.ps1 | iex\"";
+    SHELLEXECUTEINFOW bootstrap{};
+    bootstrap.cbSize       = sizeof(bootstrap);
+    bootstrap.fMask        = SEE_MASK_NOASYNC;
+    bootstrap.lpVerb       = L"open";
+    bootstrap.lpFile       = kPowerShell;
+    bootstrap.lpParameters = kBootstrapArgs;
+    bootstrap.nShow        = SW_SHOWNORMAL;
+    if (!::ShellExecuteExW(&bootstrap))
+    {
+      const DWORD err = ::GetLastError();
+      st.lastError = "could not start the per-user migration bootstrap (error " + std::to_string(err) + ")";
+      st.phase     = Phase::Failed;
+      return false;
+    }
+    return true;
+  }
+
   const std::wstring exe = std::filesystem::u8path(st.available.installerUrl).wstring();
 
-  // /SILENT shows only a progress window. /CLOSEAPPLICATIONS lets Inno shut down any GoSurvey
+  // /VERYSILENT avoids GoSurvey Setup UI. /CLOSEAPPLICATIONS lets Inno shut down any GoSurvey
   // still running (via the AppMutex) rather than failing on a locked file.
   //
   // /RELAUNCH=1 is what actually brings the app back, and it is not interchangeable with
@@ -262,15 +322,14 @@ bool LaunchInstallerAndExit(UpdateState& st)
   // scan — so nothing is ever registered for it to restart. The first live update proved it:
   // the app closed, updated, and never reopened. The installer's [Run] entry keyed on this
   // parameter does the relaunch instead, as the original (non-elevated) user.
-  const std::wstring args = L"/SILENT /CLOSEAPPLICATIONS /RELAUNCH=1";
+  const std::wstring args = L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CLOSEAPPLICATIONS /RELAUNCH=1 /SKIPVCREDIST=1";
 
-  // ShellExecuteEx rather than CreateProcess: the installer needs elevation (the install lives
-  // in Program Files), and "runas" is what raises the UAC prompt. CreateProcess would simply
-  // fail with ERROR_ELEVATION_REQUIRED.
+  // GoSurvey now installs in the current user's profile (ADR-072), so an update runs with the
+  // same token as the app. Do not use "runas": future per-user updates must not request UAC.
   SHELLEXECUTEINFOW info{};
   info.cbSize       = sizeof(info);
   info.fMask        = SEE_MASK_NOASYNC;
-  info.lpVerb       = L"runas";
+  info.lpVerb       = L"open";
   info.lpFile       = exe.c_str();
   info.lpParameters = args.c_str();
   info.nShow        = SW_SHOWNORMAL;
@@ -278,13 +337,6 @@ bool LaunchInstallerAndExit(UpdateState& st)
   if (!::ShellExecuteExW(&info))
   {
     const DWORD err = ::GetLastError();
-    // ERROR_CANCELLED is the user declining the UAC prompt — an ordinary choice, not a fault,
-    // so it returns to the offer rather than to an error.
-    if (err == ERROR_CANCELLED)
-    {
-      st.phase = Phase::UpdateReady;
-      return false;
-    }
     st.lastError = "could not start the installer (error " + std::to_string(err) + ")";
     st.phase     = Phase::Failed;
     return false;
