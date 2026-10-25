@@ -7091,6 +7091,8 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
     state.userLineAttrs.resize(2);
+    // Direct fixture edits must invalidate the revision-gated identity/display caches.
+    BumpCadGpuCache(state);
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
     window.Submit("ISOLATEOBJECTS");
     QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
@@ -10400,6 +10402,40 @@ private Q_SLOTS:
     create->trigger();
     QCOMPARE(window.State().cadSurfaces.size(), count);
     QCOMPARE(CanUndo(window.State()), couldUndo);
+  }
+
+  void newlyCreatedSurfaceDisplaysWithoutAnotherCommand() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st, false);
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
+    QVERIFY(viewport);
+    window.Submit("ZOOMEXTENTS");
+    QTest::qWait(100);
+    QVERIFY(viewport->grabFramebuffer().save(Issue893Shot("qt-1080-before-create.png")));
+
+    window.Submit("SURFACECREATE First surface, Ground");
+    QCOMPARE(st.cadSurfaces.size(), size_t(1));
+    QVERIFY(st.cadSurfaces[0].tin);
+    // Paint without another command/undo snapshot: that used to leave id zero forever.
+    const QImage created = viewport->grabFramebuffer();
+    QVERIFY(created.save(Issue893Shot("qt-1080-created.png")));
+    QCOMPARE(st.cadSurfaceAttrs.size(), size_t(1));
+    QVERIFY(st.cadSurfaceAttrs[0].id != 0);
+    QVERIFY(!st.surfaceDisplayGeometry.empty());
+    QCOMPARE(st.surfaceDisplayCache.size(), size_t(1));
+    const auto id = st.cadSurfaceAttrs[0].id;
+    const auto nextId = st.nextEntityId;
+    const auto regenerations = st.surfaceDisplayRegenCount;
+    for (int i = 0; i < 3; ++i) {
+      QVERIFY(!viewport->grabFramebuffer().isNull());
+      QCOMPARE(st.cadSurfaceAttrs[0].id, id);
+      QCOMPARE(st.nextEntityId, nextId);
+      QCOMPARE(st.surfaceDisplayRegenCount, regenerations);
+    }
   }
 
   void homeSurfacesCreatedSurfaceSurvivesSaveAndReopen() {
