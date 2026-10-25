@@ -1128,7 +1128,6 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TelemetryPingTests.cpp
     tests/CrashReporterTests.cpp
     src/platform/CrashReporterWireReason.cpp
-    tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
@@ -1234,14 +1233,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-079 document-payload schema migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
     # logic is testable without the command layer that GsIo.cpp drags in.
     src/io/GsMigrate.cpp
-    # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
+    # REQ-080 telemetry. Pure by ADR-032 (b) — payload building and event decision —
     # no network, so the timing logic is testable without HttpFetch or WinHTTP.
     src/telemetry/TelemetryPing.cpp
-    # REQ-091 accounts sign-in. Pure by ADR-037 (d) — PKCE construction, base64url, the authorize
-    # URL, and the silent-refresh-vs-interactive decision — no network/window, same split as
-    # TelemetryPing above. The BCrypt SHA-256 call PKCE needs is in HttpFetch and is exercised by
-    # AuthService, not by this pure module or its tests.
-    src/auth/AuthPing.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -1265,7 +1259,6 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
