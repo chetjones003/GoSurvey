@@ -538,6 +538,8 @@ void EditorWindow::ServiceUiRequests() {
   }
   if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
   else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
+  if (m_State.pipeFittingPaletteOpen) ShowPipeFittingPalette();
+  else if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible()) palette->close();
   if (m_State.showConnectionModesWindow) ShowConnectionModes();
   else if (auto* modes = findChild<QDialog*>("connectionModes")) modes->close();
   if (m_State.addDrawingToProjectUid != 0) {
@@ -1048,6 +1050,7 @@ void EditorWindow::ShowUnits() {
       const int zoneIndex = systems->findData(QString::fromUtf8(initialZoneCode.c_str()));
       if (zoneIndex >= 0) { systems->setCurrentIndex(zoneIndex); staged.zoneCode = initialZoneCode; }
     } else staged.zoneCode = initialZoneCode;
+    updateDetails();
   }
   zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str()));
   connect(category, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, populateSystems](int) {

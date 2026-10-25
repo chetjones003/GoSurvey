@@ -16,6 +16,7 @@
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
+#include <utility>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -353,14 +354,17 @@ void EditorWindow::LoadCoordinateSystemDictionaries() {
   geo::LoadDictionaries(directory);
 }
 
-EditorWindow::EditorWindow() {
+EditorWindow::EditorWindow(QString developmentBranchLabel)
+    : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
   InitUpdates();
   setObjectName("GoSurveyQtEditor");
-  setWindowTitle("GoSurvey");
+  const QString title = m_DevelopmentBranchLabel.isEmpty()
+      ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
+  setWindowTitle(title);
   setWindowFlag(Qt::FramelessWindowHint);
   setMinimumSize(820, 540);
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
@@ -730,6 +734,13 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { ResetDraftingInput(); Refresh(); };
+  // Issue #1084: a part picture finished inside the viewport's paint; update the palette afterwards.
+  m_Viewport->partThumbnailsChanged = [this] {
+    QTimer::singleShot(0, this, [this] {
+      if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible())
+        RefreshPipeFittingPalette(palette);
+    });
+  };
   m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
@@ -2047,7 +2058,8 @@ void EditorWindow::Refresh() {
   m_CommandBar->SetHint(commandHint);
   RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {
-    const auto title = QString("GoSurvey");
+    const auto title = m_DevelopmentBranchLabel.isEmpty()
+        ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
     m_WindowTitle->setText(title); setWindowTitle(title);
   }
   RefreshProperties();
