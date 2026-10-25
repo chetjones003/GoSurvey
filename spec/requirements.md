@@ -3008,12 +3008,12 @@ requirements is a planning failure, not a sign of rigor.
   Amended rather than the code changed, and the weaker promise replaced with a **stronger, testable
   one** (idempotence) so the amendment is not simply an exemption. Decision D-2026-08-17-a.
 
-### REQ-080 — Anonymous install and active-usage telemetry
-- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+### REQ-080 — Anonymous install and open telemetry
+- Purpose: measure first runs and application opens without identifying users
 - Priority: should
 - Type: functional
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
-  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  persists it in the user preferences file. It sends two fire-and-forget events:
   - `install` — exactly once, when the install ID is generated
   - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
     This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
@@ -3024,28 +3024,16 @@ requirements is a planning failure, not a sign of rigor.
     already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
     numbers are unaffected — only a query counting rows would be.
 
-  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
-  `email`.
+  The events are sent via HTTPS POST to the configured endpoint as a JSON payload containing
+  exactly `installId`, `event`, `version`, `channel`, and `os`.
 
-  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
-  The original "no personally identifiable information" promise is reversed by explicit,
-  informed user decision — not discovered as a defect, not a Workshop judgment call. When
-  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
-  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
-  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
-  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
-  telemetry, only an optional enrichment of it when both happen to be true at once. No
-  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
-  and only when known.
+  **Amended 2026-10-24 (D-2026-10-24-a):** the payload is anonymous and has no email field.
+  No username, hostname, local path, drawing data, or hardware fingerprint is sent.
 
   The telemetry fires in a detached one-shot worker thread once per launch, independent of
-  any other background task's own success/failure — but its own firing point is no longer
-  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
-  the offline exception), so that whatever sign-in state is true at that moment is known
-  before the payload is built. This costs no perceptible delay in practice, since the gate
-  already blocks all other interaction until it resolves. It must never block the UI, gate a
-  session on its OWN account, or fail the application if the network is unavailable. Any
+  any other background task's own success/failure. It starts at application launch and never
+  waits for or depends on sign-in, license lookup, or internet connectivity. It must never
+  block the UI, gate a session, or fail the application if the network is unavailable. Any
   network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
   sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
   background reporting call has no actionable user recourse for its own failure.
@@ -3058,22 +3046,15 @@ requirements is a planning failure, not a sign of rigor.
   - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
     per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
     1; this REPLACES the original "at most once per rolling 24-hour period" condition;
-  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
-    channel, os, email);
-  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
-    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
-    for, or is skipped because of sign-in state;
-  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
-    included — `email` is the only field this requirement adds beyond the original five;
+  - the payload JSON is well-formed and contains exactly five fields (installId, event, version,
+    channel, os), with no personally identifying or machine-specific data;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the settings panel accurately describing current
-    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
+  - no usage or privacy notice for this ping appears in application settings;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
-  email, read not owned), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
@@ -3089,6 +3070,9 @@ requirements is a planning failure, not a sign of rigor.
   per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
   one day (see D-2026-08-23-e above) — each recorded separately because each was its own
   explicit ask, not one bundled decision.
+  2026-10-24 — removed signed-in email and sign-in-gate dependency; install/open reporting is
+  anonymous, background-only, and has no settings notice (D-2026-10-24-a). Startup/crash
+  diagnostics remain governed separately by REQ-425.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -3942,6 +3926,8 @@ requirements is a planning failure, not a sign of rigor.
 ---
 
 ### REQ-091 — User accounts and sign-in (Auth0)
+- **Retired 2026-10-24 by D-2026-10-24-a.** The acceptance conditions below are historical
+  records only and no longer authorize sign-in, account UI, credential storage, or launch gating.
 - Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
   telemetry is deliberately unable to do
 - Priority: should
@@ -4028,7 +4014,7 @@ requirements is a planning failure, not a sign of rigor.
     the signed-in email and a "more coming soon" note — no tier, no editable fields.
 - Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
   (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
                Credential-Manager technical shape and the REQ-300 dependency decision.
                2026-08-23 — added the blocking launch gate with an offline exception
@@ -4045,6 +4031,8 @@ requirements is a planning failure, not a sign of rigor.
                Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
+- **Retired 2026-10-24 by D-2026-10-24-a.** The endpoint is no longer part of the desktop
+  application's supported account or gating flow. The acceptance conditions below are historical.
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
   of any requirement naming what that entitlement controls
 - Priority: should
@@ -4061,7 +4049,7 @@ requirements is a planning failure, not a sign of rigor.
   - the endpoint's data store is separate from the telemetry Worker's, so a defect in
     one cannot read or corrupt the other's data.
 - Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
 
 ---

@@ -9,8 +9,8 @@ separately to work on it:
 git clone https://github.com/chetjones003/gosurveycad-site.git
 ```
 
-It's deployed by hand with `wrangler`, the same CLI already used for the telemetry and
-accounts Workers (see `docs/cloudflare-telemetry-setup.md`), to Cloudflare Pages, and served
+It's deployed by hand with `wrangler`, the same CLI already used for the telemetry Worker
+(see `docs/cloudflare-telemetry-setup.md`), to Cloudflare Pages, and served
 at **gosurveycad.com**.
 
 | | |
