@@ -5128,6 +5128,56 @@ private Q_SLOTS:
     QVERIFY(std::abs(window.State().viewportPanY) < 0.001);
   }
 
+  void orbitCommandLeftDragTumblesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    StartOrbitCommand(state, log);
+    QCOMPARE(state.active, AppCommandState::Kind::Orbit);
+    const float azimuth = state.viewportAzimuthDeg;
+    const float elevation = state.viewportElevationDeg;
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    const QPoint finish = start + QPoint(25, -20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportAzimuthDeg - azimuth) > 0.1f);
+    QVERIFY(std::abs(state.viewportElevationDeg - elevation) > 0.1f);
+  }
+
+  void panCommandLeftDragMovesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    StartPanCommand(state, log);
+    QCOMPARE(state.active, AppCommandState::Kind::Pan);
+    const double panX = state.viewportPanX;
+    const double panY = state.viewportPanY;
+    const double panZ = state.viewportPanZ;
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    const QPoint finish = start + QPoint(25, 20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportPanX - panX) > 0.01);
+    QVERIFY(std::abs(state.viewportPanY - panY) > 0.01 ||
+        std::abs(state.viewportPanZ - panZ) > 0.01);
+  }
+
   void viewportCubeIsVisibleInFramebuffer() {
     EditorWindow window;
     window.show();
