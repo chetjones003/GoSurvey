@@ -78,21 +78,27 @@ A new tab appears named `Drawing 2`, `Drawing 3`, and so on. Each tab is a **com
 document**: its own geometry, layers, survey points, paper layouts, plot scale, and undo history.
 Switching tabs switches all of it.
 
-There is no "new from template" dialog. New drawings start from the bundled template
-(`resources/default-template.gst`) if one is present — see **Settings → Files**.
+When no project drawing is active, **File → New** opens the **New Drawing** chooser. Choose
+**Blank Drawing** for an empty drawing, or select one of the bundled or personal `.gst` templates
+to load its contents into a fresh tab. The source template is not changed. When a drawing in an
+open project is active, a new drawing starts empty with that project's defaults instead.
+
+The startup workspace template in **Settings → Files** is a separate setting; it is not the source
+of the choices in the New Drawing chooser.
 
 ## Opening an existing drawing
 
-**File → Open** → choose a DWG drawing.
+**File → Open** (or **Ctrl+O**) → choose a DWG drawing. Opening an existing drawing does not show
+the **New Drawing** template chooser.
 
-The drawing opens **in a new tab**, named after the file. Opening does not replace what you are
-working on.
+The drawing opens **in a new, active tab**, named after the file. Opening does not replace what you
+are working on.
 
 GoSurvey opens drawings saved by any older version, converting them as it loads. The file on disk
 is not modified until you save.
 
-To bring in an external drawing, use **File → Import DXF…** or **File → Import DWG…** — see
-[[Import and Export]].
+To bring another drawing's contents into the current drawing instead, use **File → Import DXF…** or
+**File → Import DWG…** — see [[Import and Export]].
 
 ## Saving
 

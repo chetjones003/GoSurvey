@@ -5081,6 +5081,73 @@ private Q_SLOTS:
     QCOMPARE(state.openProjects.front().readOnly, true);
   }
 
+  void qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure() {
+    IsolatedUserData userData;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString drawingPath = directory.filePath("Existing.dwg");
+    AppCommandState source;
+    source.userLinesFlat = {12.0, 4.0, 0.0, 18.0, 4.0, 0.0};
+    source.userLineAttrs.push_back(EntityAttributes{});
+    std::vector<std::string> saveLog;
+    const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
+    QVERIFY(SaveDrawingDocument(source, drawingPathUtf8.constData(), saveLog));
+
+    EditorWindow window;
+    const auto initialTabs = window.State().drawingTabs.size();
+    QVERIFY(initialTabs >= 2);
+    QCOMPARE(window.State().activeDrawingIdx, 0);
+    bool chooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        chooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!chooserAppeared);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+    QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(initialTabs));
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+    QCOMPARE(window.State().drawingTabs[static_cast<std::size_t>(window.State().activeDrawingIdx)].name,
+             std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    window.SwitchDrawing(1);
+    const auto tabsBeforeSecondOpen = window.State().drawingTabs.size();
+    bool secondChooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        secondChooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!secondChooserAppeared);
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeSecondOpen + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(tabsBeforeSecondOpen));
+    QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
+    QCOMPARE(window.State().drawingTabs.back().name, std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    const auto activeIndex = window.State().activeDrawingIdx;
+    const auto tabsBeforeFailure = window.State().drawingTabs.size();
+    const auto linesBeforeFailure = window.State().userLinesFlat;
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+    });
+    window.OpenDrawing(directory.filePath("Missing.dwg"));
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeFailure);
+    QCOMPARE(window.State().activeDrawingIdx, activeIndex);
+    QCOMPARE(window.State().userLinesFlat, linesBeforeFailure);
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+  }
+
   void qtDrawingTemplateScreenshotEvidenceForIssue885() {
     IsolatedUserData userData;
     const auto templateDir = UserDataDirectory() / "drawing-templates";
@@ -10876,6 +10943,9 @@ int main(int argc, char** argv) {
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
   QSurfaceFormat::setDefaultFormat(format);
+  // GUI tests run on a hidden desktop and inspect dialogs as Qt widgets. Avoid
+  // platform-native dialogs, which are not reliably discoverable there.
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   QApplication app(argc, argv);
   app.setOrganizationName("GoSurveyTests");
   const QString shard = qEnvironmentVariable("GOSURVEY_QT_TEST_SHARD");

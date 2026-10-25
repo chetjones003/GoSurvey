@@ -1786,7 +1786,7 @@ void EditorWindow::OpenDrawing(const QString& path) {
     if (!uid) return;
   }
   const int previous = m_State.activeDrawingIdx;
-  NewDrawing(uid);
+  CreateDrawingFromTemplate(uid);
   // Decide shared versus detached points from the loaded DWG, never from the
   // empty tab's initial database view. Otherwise opening could look like deletions.
   auto& openingTab = m_State.drawingTabs[m_State.activeDrawingIdx];
