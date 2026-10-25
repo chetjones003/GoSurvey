@@ -946,15 +946,7 @@ void EditorWindow::ShowUnits() {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     m_Log.push_back("DRAWINGSETTINGS — open or create a drawing first."); Refresh(); return;
   }
-  if (!geo::DictionariesLoaded()) {
-    std::string directory;
-    try {
-      directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
-    } catch (const std::exception& error) {
-      qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
-    }
-    geo::LoadDictionaries(directory);
-  }
+  LoadCoordinateSystemDictionaries();
   const bool coordinateSystemsAvailable = geo::DictionariesLoaded();
   auto* dialog = new QDialog(this);
   dialog->setObjectName("drawingSettingsDialog");
