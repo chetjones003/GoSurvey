@@ -4,14 +4,11 @@
 #include "UserPrefs.hpp"
 #include "HttpFetch.hpp"
 
-#include <iostream>
-
 namespace telemetry {
 
 void TelemetryWorker(TelemetryTask*       task,
                      const std::string&   version,
-                     const std::string&   channel,
-                     const std::string&   signedInEmail) {
+                     const std::string&   channel) {
   if (!task)
     return;
 
@@ -21,13 +18,14 @@ void TelemetryWorker(TelemetryTask*       task,
   // already exists, so generating one first makes every first run look like a returning one: the
   // "install" event becomes unreachable and every launch reports as a brand-new machine.
   //
-  // REQ-080 (amended, D-2026-08-23-f): always returns a real event now — there is no longer a
-  // 24h-throttle empty-string case to handle, by explicit user decision (a ping fires every
-  // launch).
+  // REQ-080 (amended, D-2026-08-23-f): a ping fires on every launch, without a daily throttle.
   std::string event = DecideEventToSend(ids.installId);
 
   if (ids.installId.empty()) {
     ids.installId = GenerateInstallId();
+    // Preserve the install identity even when the service is unreachable. Telemetry failure must
+    // not change the next run's event choice or mint a different ID for an offline installation.
+    (void)UpdateTelemetryIds(ids.installId);
   }
 
   // Build and send the payload
@@ -37,13 +35,12 @@ void TelemetryWorker(TelemetryTask*       task,
   payload.version = version;
   payload.channel = channel;
   payload.os = "windows";
-  payload.email = signedInEmail;
 
   std::string json = BuildTelemetryJson(payload);
   std::string errorOut;
   std::string response;
 
-  // POST to the telemetry endpoint. Network errors are logged and swallowed (REQ-201 exception).
+  // POST to the telemetry endpoint. Network errors are discarded silently (REQ-080).
   bool ok = HttpPostJson(TelemetryEndpoint, json, 5000, errorOut, &response);
 
   // A 2xx is necessary but not sufficient. The Cloudflare Worker does return honest status codes
@@ -60,22 +57,9 @@ void TelemetryWorker(TelemetryTask*       task,
   }
 
   if (ok) {
-    // Persist the id, and only once the ping is acknowledged. Writing it here rather than before
-    // the POST is what makes it stable: an id was previously stored only on the "install" path,
-    // so an "active" ping left nothing behind and the next launch minted a fresh identity — every
-    // run would have counted as a new machine.
-    //
-    // Storing on success (not on attempt) also lets a first ping that never landed be retried as
-    // "install" next launch instead of being silently downgraded to "active" forever. The cost is
-    // a duplicate install row in the narrow case where the row is written but the reply is lost.
-    UpdateTelemetryIds(ids.installId);
     task->ok = true;
   } else {
-    // Log the error but don't fail — this is a background call with no user recourse.
-    // A network timeout on a job site with no signal is normal, not an error the user should see.
-    std::cerr << "[telemetry] ping failed: " << errorOut << "\n";
-    task->error = errorOut;
-    // Don't set task->ok = false; we treat network errors as non-fatal
+    // A network failure is expected in offline environments and has no user action.
     task->ok = true;
   }
 
@@ -83,13 +67,17 @@ void TelemetryWorker(TelemetryTask*       task,
 }
 
 std::unique_ptr<TelemetryTask> BeginTelemetryPing(const std::string& version,
-                                                   const std::string& channel,
-                                                   const std::string& signedInEmail) {
+                                                   const std::string& channel) {
   auto task = std::make_unique<TelemetryTask>();
   TelemetryTask* taskPtr = task.get();
 
-  task->worker = std::thread([taskPtr, version, channel, signedInEmail]() {
-    TelemetryWorker(taskPtr, version, channel, signedInEmail);
+  task->worker = std::thread([taskPtr, version, channel]() {
+    try {
+      TelemetryWorker(taskPtr, version, channel);
+    } catch (...) {
+      // Telemetry has no user-facing failure path, including unexpected worker errors.
+      taskPtr->done.store(true, std::memory_order_release);
+    }
   });
 
   return task;

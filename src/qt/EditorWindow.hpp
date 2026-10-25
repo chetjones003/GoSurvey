@@ -7,7 +7,6 @@
 #include "WikiContent.hpp"
 #include "PdfCoordExtract.hpp"
 
-namespace auth { struct AuthTask; }
 namespace update { struct UpdateState; }
 namespace telemetry { struct TelemetryTask; }
 
@@ -40,7 +39,6 @@ public:
   void Submit(const QString& command);
   void BeginInteractiveResize();
   void EndInteractiveResize();
-  void StartAuth(bool previewSignIn = false);
   /// REQ-077: begins the unattended startup check. Called by the application entry
   /// point (not the constructor) so test windows never touch the network.
   void StartUpdateCheck();
@@ -154,8 +152,6 @@ private:
   void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();
-  void ShowSignInGate();
-  void ServiceAuth();
   void ServiceTelemetry();
   void InitUpdates();
   void ServiceUpdate();
@@ -197,23 +193,16 @@ private:
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
   bool m_TextDialogOpen = false;
-  bool m_AuthLastAttemptInteractive = false;
-  bool m_AuthStarted = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
   bool m_RecentListView = false;
   bool m_RecentShowAll = false;
   bool m_ShowAllProjects = false;
-  std::unique_ptr<auth::AuthTask> m_AuthTask;
   std::unique_ptr<update::UpdateState> m_Update;
   /// Hands the verified installer to the OS; replaceable so tests never run one.
   std::function<bool(update::UpdateState&)> m_LaunchInstaller;
   bool m_UpdateExitPending = false;
   std::unique_ptr<telemetry::TelemetryTask> m_TelemetryTask;
-  /// Sends the REQ-080 ping with the signed-in email (or empty). Unset until EnableTelemetry;
-  /// replaceable so tests never send one.
-  std::function<void(const std::string& email)> m_SendTelemetry;
-  bool m_TelemetrySent = false;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };

@@ -24,7 +24,7 @@ std::filesystem::path MapTileCacheDirectory() {
 
 MapTileStatus FetchMapTileOverWinHttp(const std::string& url, std::string& body, std::string& error) {
   int status = 0;
-  if (HttpGetString(url, 10000, body, error, std::string(), &status))
+  if (HttpGetString(url, 10000, body, error, &status))
     return MapTileStatus::Ok;
   return status == 404 ? MapTileStatus::NotFound : MapTileStatus::Failed;
 }

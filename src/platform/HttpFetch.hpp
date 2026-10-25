@@ -2,7 +2,6 @@
 
 #include <functional>
 #include <string>
-#include <vector>
 
 /// HTTPS fetch and file hashing for the REQ-077/REQ-078 update check (ADR-029 (e)).
 ///
@@ -32,17 +31,12 @@ bool HasInternetConnectivity();
 /// than 200 — with a short reason in \p errorOut. For the REQ-077 startup check that reason is
 /// logged and never shown (ADR-029 (h)).
 ///
-/// \p bearerToken, when non-empty, is sent as an `Authorization: Bearer <token>` header — used by
-/// REQ-092's license lookup (`AuthService::FetchLicenseTier`), which is the only caller that
-/// needs a header at all.
-///
 /// \p httpStatusOut, when non-null, receives the HTTP status (0 when no response arrived) — used by
 /// the online map (REQ-363) to tell "no tile here" (404) from "could not reach the server".
 bool HttpGetString(const std::string& url,
                    int               timeoutMs,
                    std::string&      out,
                    std::string&      errorOut,
-                   const std::string& bearerToken = std::string(),
                    int*              httpStatusOut = nullptr);
 
 /// Downloads \p url to \p destPathUtf8, overwriting it.
@@ -68,16 +62,6 @@ bool ComputeFileSha256(const std::string& pathUtf8,
                        std::string&       hexOut,
                        std::string&       errorOut);
 
-/// Computes the SHA-256 digest of \p data as raw bytes (not hex).
-///
-/// Used by REQ-091's PKCE code challenge (ADR-037 (d)): the challenge is
-/// BASE64URL(SHA256(code_verifier)), and base64url needs the raw digest, not a hex string. Shares
-/// the same BCrypt provider as `ComputeFileSha256`; this is the in-memory counterpart for a
-/// verifier string rather than a file on disk.
-bool ComputeSha256Bytes(const std::vector<unsigned char>& data,
-                        std::vector<unsigned char>&       digestOut,
-                        std::string&                      errorOut);
-
 /// POSTs a JSON body to \p url and returns true on 2xx, false on any other status or network error.
 ///
 /// When \p responseOut is non-null the response body is stored there (capped at 64 KiB, which no
@@ -85,8 +69,8 @@ bool ComputeSha256Bytes(const std::vector<unsigned char>& data,
 /// Script answers 200 even when its handler throws, reporting the failure only in the body. So
 /// the caller that cares must read the body, which is why this parameter exists.
 ///
-/// Used by REQ-080 telemetry (ADR-032) to send anonymous usage pings. Failures are logged but
-/// not surfaced, the same silent-failure exception as REQ-077 (ADR-029 (h)).
+/// Used by REQ-080 telemetry and REQ-425 diagnostics. Callers decide how to handle failures;
+/// telemetry discards them silently.
 bool HttpPostJson(const std::string& url,
                   const std::string& jsonBody,
                   int                timeoutMs,
