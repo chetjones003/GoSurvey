@@ -108,123 +108,6 @@ public:
 };
 }  // namespace
 
-void EditorWindow::ShowSignInGate() {
-  if (findChild<QDialog *>("signInGate"))
-    return;
-  auto *dialog = new NonDismissableDialog(this);
-  dialog->setObjectName("signInGate");
-  dialog->setAttribute(Qt::WA_DeleteOnClose);
-  dialog->setWindowTitle("Sign in to GoSurvey");
-  dialog->setWindowModality(Qt::ApplicationModal);
-  dialog->setWindowFlag(Qt::WindowCloseButtonHint, false);
-  dialog->setFixedSize(700, 370);
-  auto *layout = new QHBoxLayout(dialog);
-  layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(0);
-
-  auto *brandPanel = new QWidget(dialog);
-  brandPanel->setObjectName("signInBrandPanel");
-  brandPanel->setFixedWidth(250);
-  const bool darkAppearance = palette().color(QPalette::Window).lightness() < 128;
-  brandPanel->setStyleSheet(QString("QWidget#signInBrandPanel { background:%1; }")
-                                .arg(darkAppearance ? "#30373c" : "#243a53"));
-  auto *brandLayout = new QVBoxLayout(brandPanel);
-  brandLayout->setContentsMargins(26, 28, 26, 24);
-  auto *logo = new QLabel(brandPanel);
-  logo->setObjectName("signInLogo");
-  logo->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(54, 54));
-  brandLayout->addWidget(logo);
-  auto *brand = new QLabel("GoSurvey", brandPanel);
-  brand->setObjectName("signInBrand");
-  brand->setStyleSheet("color:#f4f7fb;");
-  QFont brandFont = brand->font();
-  brandFont.setPointSize(21);
-  brandFont.setBold(true);
-  brand->setFont(brandFont);
-  brandLayout->addWidget(brand);
-  auto *brandTitle = new QLabel("Make GoSurvey yours", brandPanel);
-  brandTitle->setStyleSheet("color:#f4f7fb;");
-  QFont brandTitleFont = brandTitle->font();
-  brandTitleFont.setPointSize(14);
-  brandTitleFont.setBold(true);
-  brandTitle->setFont(brandTitleFont);
-  brandTitle->setWordWrap(true);
-  brandLayout->addSpacing(8);
-  brandLayout->addWidget(brandTitle);
-  auto *brandBody = new QLabel("Sign in to identify your account and prepare "
-                               "for future cloud-sync features.",
-                               brandPanel);
-  brandBody->setWordWrap(true);
-  brandBody->setStyleSheet("color:#d0d9e4;");
-  brandLayout->addWidget(brandBody);
-  brandLayout->addStretch();
-  layout->addWidget(brandPanel);
-
-  auto *choicePanel = new QWidget(dialog);
-  auto *choiceLayout = new QVBoxLayout(choicePanel);
-  choiceLayout->setContentsMargins(32, 30, 32, 26);
-  choiceLayout->setSpacing(12);
-  auto *title = new QLabel("Sign in to GoSurvey", choicePanel);
-  QFont titleFont = title->font();
-  titleFont.setPointSize(17);
-  titleFont.setBold(true);
-  title->setFont(titleFont);
-  choiceLayout->addWidget(title);
-  auto *body = new QLabel(
-      "Choose an option to continue. GoSurvey opens the secure sign-in page in "
-      "your browser. "
-      "Google, Microsoft, and email/password sign-in are available there.",
-      choicePanel);
-  body->setWordWrap(true);
-  choiceLayout->addWidget(body);
-  choiceLayout->addStretch();
-  auto *error = new QLabel(choicePanel);
-  error->setObjectName("signInError");
-  error->setWordWrap(true);
-  error->setStyleSheet("color:#c54646;");
-  choiceLayout->addWidget(error);
-  auto *signIn = new QPushButton("Sign In", choicePanel);
-  signIn->setObjectName("signInButton");
-  signIn->setDefault(true);
-  signIn->setMinimumHeight(40);
-  signIn->setStyleSheet(QString(
-      "QPushButton { background:%1; color:white; font-weight:600; "
-      "padding:9px; border:0; border-radius:4px; } QPushButton:hover { "
-      "background:%2; }").arg(QtAccentFor(darkAppearance).fill, QtAccentFor(darkAppearance).fillHover));
-  choiceLayout->addWidget(signIn);
-  auto *decline = new QPushButton("Don't Sign In", choicePanel);
-  decline->setObjectName("declineSignInButton");
-  decline->setMinimumHeight(38);
-  choiceLayout->addWidget(decline);
-  auto *state = new QLabel("You will not be asked again if you skip. You can "
-                           "sign in later from Settings → Account.",
-                           choicePanel);
-  state->setWordWrap(true);
-  state->setStyleSheet("color:#777f89;");
-  choiceLayout->addWidget(state);
-  layout->addWidget(choicePanel, 1);
-  connect(signIn, &QPushButton::clicked, this,
-          [this] { m_State.authSignInRequested = true; });
-  connect(decline, &QPushButton::clicked, this,
-          [this] { m_State.authDeclineRequested = true; });
-  auto *refresh = new QTimer(dialog);
-  refresh->setInterval(50);
-  connect(refresh, &QTimer::timeout, dialog,
-          [this, dialog, signIn, decline, error] {
-            error->setText(QString::fromUtf8(m_State.authError.c_str()));
-            const bool busy = m_State.authBusy;
-            signIn->setEnabled(!busy);
-            decline->setEnabled(!busy);
-            signIn->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
-                                                        : "Sign In");
-            if (m_State.authGateResolved)
-              dialog->accept();
-          });
-  refresh->start();
-  dialog->show();
-}
-
 void EditorWindow::ShowSettings() {
   if (findChild<QDialog *>("applicationSettings")) {
     auto *existing = findChild<QDialog *>("applicationSettings");
@@ -268,112 +151,15 @@ void EditorWindow::ShowSettings() {
     sidebar->addItem(title);
     return pageLayout;
   };
-  QVBoxLayout *layout = newPage("Account", "settingsPageAccount");
-  auto *heading = new QLabel("Account", dialog);
-  heading->setObjectName("accountSettingsHeading");
-  QFont headingFont = heading->font();
-  headingFont.setPointSize(16);
-  headingFont.setBold(true);
-  heading->setFont(headingFont);
-  layout->addWidget(heading);
-  auto *description = new QLabel(dialog);
-  description->setWordWrap(true);
-  description->setText(
-      "Sign in with Google, Microsoft, or an email and password to identify "
-      "this account. Nothing in GoSurvey is currently gated on signing in.");
-  layout->addWidget(description);
-
-  auto *identityCard = new QFrame(dialog);
-  identityCard->setObjectName("accountIdentityCard");
-  identityCard->setFrameShape(QFrame::StyledPanel);
-  auto *identityLayout = new QHBoxLayout(identityCard);
-  identityLayout->setContentsMargins(14, 12, 14, 12);
-  auto *logo = new QLabel(identityCard);
-  logo->setObjectName("accountSettingsLogo");
-  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(40, 40));
-  identityLayout->addWidget(logo);
-  auto *identityText = new QVBoxLayout();
-  auto *brand = new QLabel("GoSurvey", identityCard);
-  QFont accountBrandFont = brand->font();
-  accountBrandFont.setBold(true);
-  brand->setFont(accountBrandFont);
-  identityText->addWidget(brand);
-  auto *status = new QLabel(identityCard);
-  status->setObjectName("accountSignInStatus");
-  identityText->addWidget(status);
-  identityLayout->addLayout(identityText, 1);
-  auto *action = new QPushButton(identityCard);
-  action->setObjectName("accountSignInAction");
-  action->setMinimumWidth(100);
-  identityLayout->addWidget(action, 0, Qt::AlignVCenter);
-  layout->addWidget(identityCard);
-
-  auto *error = new QLabel(dialog);
-  error->setObjectName("accountSignInError");
-  error->setWordWrap(true);
-  error->setStyleSheet("color:#c54646;");
-  layout->addWidget(error);
-
-  // REQ-080 / REQ-425 §6: what leaves this machine, in plain words. Text, not a checkbox: there is
-  // no opt-out by decision (ADR-032), and a toggle that did nothing — or wording that implied
-  // consent nobody is asked for — would be worse than saying so plainly. The email sentence
-  // follows the live sign-in state, so the notice is never a stale promise.
-  auto *usageBox = new QFrame(dialog);
-  usageBox->setObjectName("usageDataSection");
-  auto *usageLayout = new QVBoxLayout(usageBox);
-  usageLayout->setSpacing(8);
-  auto *usageHeading = new QLabel("What GoSurvey sends", usageBox);
-  usageHeading->setObjectName("usageDataHeading");
-  QFont usageHeadingFont = headingFont;
-  usageHeadingFont.setPointSize(12);
-  usageHeading->setFont(usageHeadingFont);
-  auto *usageSummary = new QLabel(
-      "GoSurvey reports usage so development can be aimed at what people actually run. Every "
-      "report includes a random ID that identifies this installation, the version, whether you "
-      "are on stable or beta, and that you are on Windows — once when installed, and each time "
-      "you start GoSurvey after that.",
-      usageBox);
-  usageSummary->setObjectName("usageDataSummary");
-  usageSummary->setWordWrap(true);
-  auto *usageEmail = new QLabel(usageBox);
-  usageEmail->setObjectName("usageDataEmail");
-  usageEmail->setWordWrap(true);
-  auto *usageCrash = new QLabel(
-      "If GoSurvey crashes or cannot start, it also sends the error report it shows you. That "
-      "report can include file locations on this computer, such as your user folder.",
-      usageBox);
-  usageCrash->setObjectName("usageDataCrashReports");
-  usageCrash->setWordWrap(true);
-  auto syncUsage = [this, usageEmail] {
-    usageEmail->setText(
-        m_State.authSignedIn
-            ? "Because you are signed in (see Account above), your email is included too. Sign "
-              "out and usage reports go back to fully anonymous."
-            : "Usage reports never send your name, company, computer name, file names, "
-              "drawings, survey data, or location. Your email is included only when you are "
-              "signed in — you are currently signed out, so they stay fully anonymous.");
-  };
-  syncUsage();
-  // Framed like the account card, so it reads as a notice rather than a setting.
-  usageBox->setFrameShape(QFrame::StyledPanel);
-  usageLayout->setContentsMargins(14, 12, 14, 12);
-  auto *titleRow = new QHBoxLayout();
-  auto *mark = new QLabel(usageBox);
-  mark->setPixmap(style()->standardIcon(QStyle::SP_MessageBoxInformation).pixmap(22, 22));
-  titleRow->addWidget(mark);
-  titleRow->addWidget(usageHeading, 1);
-  usageLayout->addLayout(titleRow);
-  usageLayout->addWidget(usageSummary);
-  usageLayout->addWidget(usageEmail);
-  usageLayout->addWidget(usageCrash);
-
   // REQ-077: the update check is switchable, and switching it off means no network request is
   // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
   // problem has somewhere to read it off.
-  layout->addStretch();
-  layout = newPage("Updates and Privacy", "settingsPageUpdates");
+  QVBoxLayout *layout = newPage("Updates", "settingsPageUpdates");
   auto *updatesHeading = new QLabel("Updates", dialog);
   updatesHeading->setObjectName("updatesSettingsHeading");
+  QFont headingFont = updatesHeading->font();
+  headingFont.setPointSize(16);
+  headingFont.setBold(true);
   updatesHeading->setFont(headingFont);
   layout->addWidget(updatesHeading);
   auto *versionLabel = new QLabel(QString("Version ") + GOSURVEY_VERSION_FULL, dialog);
@@ -430,8 +216,6 @@ void EditorWindow::ShowSettings() {
   });
   updatesSync->start();
 
-  // Next to Updates: the other thing here that talks to the network.
-  layout->addWidget(usageBox);
   layout->addStretch();
 
   // ---- Display page (REQ-449) ------------------------------------------------------------
@@ -642,34 +426,6 @@ void EditorWindow::ShowSettings() {
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   connect(sidebar, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
   sidebar->setCurrentRow(0);
-  connect(action, &QPushButton::clicked, this, [this] {
-    if (m_State.authSignedIn)
-      m_State.authSignOutRequested = true;
-    else
-      m_State.authSignInRequested = true;
-  });
-  auto *refresh = new QTimer(dialog);
-  refresh->setInterval(100);
-  connect(refresh, &QTimer::timeout, dialog, [this, status, error, action, syncUsage] {
-    syncUsage();
-    if (m_State.authSignedIn) {
-      status->setText("Signed in as " +
-                      QString::fromUtf8(m_State.authEmail.c_str()));
-      action->setText("Sign Out");
-    } else {
-      status->setText(m_State.authOptedOut
-                          ? "You chose not to sign in at startup."
-                          : "Not signed in.");
-      action->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
-                                                  : "Sign In");
-    }
-    action->setEnabled(!m_State.authBusy);
-    error->setText(QString::fromUtf8(m_State.authError.c_str()));
-  });
-  refresh->start();
-  // The wrapped notices need more height than the fixed starting size; open tall enough that
-  // no paragraph is squeezed (about 670 px at this width, which still fits a 720 px screen).
-  dialog->resize(dialog->width(), std::max(dialog->height(), dialog->heightForWidth(dialog->width())));
   dialog->show();
 }
 

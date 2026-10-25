@@ -1,6 +1,6 @@
 # GoSurvey Privacy Policy
 
-**Effective date: October 22, 2026**
+**Effective date: October 24, 2026**
 
 This policy describes information handled by the GoSurvey Windows application and the GoSurvey website at [gosurveycad.com](https://gosurveycad.com/). It reflects the current application and site implementation.
 
@@ -8,7 +8,7 @@ This policy describes information handled by the GoSurvey Windows application an
 
 ### Usage data
 
-GoSurvey sends a small usage ping over HTTPS once on every launch. The first successful ping for an installation is marked `install`; later launches are marked `active`. Each ping contains a randomly generated installation ID, event type, GoSurvey version, release channel, and operating system. When you are signed in, it also contains the email address associated with that signed-in session. When you are signed out, the email field is empty.
+GoSurvey sends a small usage ping over HTTPS on a background thread. The first ping for an installation is marked `install`; later launches are marked `active`. Each ping contains a randomly generated installation ID, event type, GoSurvey version, release channel, and operating system. It contains no email address or other account identity, user name, computer name, local path, drawing information, or hardware fingerprint. The ping never blocks the app. If it cannot reach the service, nothing is shown and the app continues normally. There is no in-app setting to turn it off.
 
 The installation ID is generated randomly and is not derived from your computer, hardware, user name, or drawing files. The ping is automatic; GoSurvey currently has no in-app setting to turn it off. The application does not include drawing contents, drawing names, or drawing paths in this usage ping.
 
@@ -20,15 +20,11 @@ If GoSurvey fails during startup or encounters a crash, it automatically attempt
 
 Startup and crash reports are stored in separate tables in the Cloudflare D1 database. The application also appends startup and crash details to local log files in its GoSurvey user-data folder. Review diagnostic text before sharing it yourself through GitHub; the app's “Send This Report” action opens a prefilled GitHub issue for you to review and submit.
 
-## Sign-in and account information
-
-GoSurvey sign-in is handled by Auth0 in your system browser. You can sign in with Google, Microsoft, or an email and password account configured through Auth0. GoSurvey does not receive or store your password. Auth0 processes sign-in information under its own privacy terms and, for social sign-in, the selected provider's terms.
-
-The application stores the refresh token in Windows Credential Manager. Short-lived access tokens are held in memory. After sign-in, GoSurvey sends an access token and the account email to its account service to look up the account tier. The account service stores Auth0's stable account identifier, email, tier, and account creation time in a separate Cloudflare D1 database. GoSurvey does not currently provide an in-app account deletion control; contact the project using the address below to request help.
-
 ## Information kept on your device
 
-GoSurvey keeps application preferences and the random installation ID in a local `gosurvey-user.json` file under your GoSurvey user-data folder. Sign-in refresh credentials are kept separately in Windows Credential Manager. Startup and crash diagnostic logs are stored locally in that folder. Your drawings are saved to locations you choose; ordinary local editing does not upload drawing files to GoSurvey. If you use the online map feature, GoSurvey requests map tiles from the USGS National Map service. Those requests reveal the requested map area to that service and may be subject to its own logging and privacy practices. Retrieved tiles may be cached locally.
+GoSurvey keeps application preferences and the random installation ID in a local `gosurvey-user.json` file under your GoSurvey user-data folder. Previous GoSurvey versions may have saved a sign-in refresh token in Windows Credential Manager; the current application no longer reads or uses it. Startup and crash diagnostic logs are stored locally in the user-data folder. Your drawings are saved to locations you choose; ordinary local editing does not upload drawing files to GoSurvey. If you use the online map feature, GoSurvey requests map tiles from the USGS National Map service. Those requests reveal the requested map area to that service and may be subject to its own logging and privacy practices. Retrieved tiles may be cached locally.
+
+Earlier GoSurvey versions also offered account sign-in and sent account details to a separate tier lookup service. The current application no longer signs in or sends new account lookups. Account records already submitted by earlier versions may remain in that service; the project has no confirmed automatic deletion schedule for those records. Contact the address below with a request about GoSurvey-managed records.
 
 ## Website and update services
 
@@ -38,7 +34,7 @@ The desktop application checks GitHub Releases for update information and downlo
 
 ## Retention and requests
 
-The current telemetry and account database configurations do not define an automatic deletion schedule. Records remain in their respective Cloudflare D1 databases until the operator deletes them or removes the database. Local preferences and diagnostic logs remain on your device until you delete them. Auth0, GitHub, Google, Cloudflare, and the USGS may retain information according to their own policies and settings.
+The current telemetry database configuration does not define an automatic deletion schedule. Records remain in the Cloudflare D1 database until the operator deletes them or removes the database. Local preferences and diagnostic logs remain on your device until you delete them. GitHub, Google Fonts, Cloudflare, and the USGS may retain information according to their own policies and settings.
 
 For privacy questions or requests about GoSurvey-managed records, contact [chet@gosurveycad.com](mailto:chet@gosurveycad.com).
 

@@ -10,8 +10,7 @@ std::string BuildTelemetryJson(const TelemetryPayload& payload) {
       << "\"event\":\"" << payload.event << "\","
       << "\"version\":\"" << payload.version << "\","
       << "\"channel\":\"" << payload.channel << "\","
-      << "\"os\":\"" << payload.os << "\","
-      << "\"email\":\"" << payload.email << "\""
+      << "\"os\":\"" << payload.os << "\""
       << "}";
   return oss.str();
 }
