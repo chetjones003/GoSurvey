@@ -10,8 +10,14 @@
 #include <QString>
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <future>
+#include <map>
 #include <memory>
+#include <vector>
+#include <QImage>
+#include <QPoint>
+#include <QRect>
 class PdfCanvas;
 class PdfScaleDialogs;
 class QAction;
@@ -28,12 +34,17 @@ class QPainter;
 class QToolBar;
 class QSpinBox;
 class QScrollArea;
+class QScrollBar;
 class QTimer;
 class QDialog;
 class QSlider;
 class QDoubleSpinBox;
 class QProgressBar;
 class QTableWidget;
+class QTabWidget;
+class QStackedWidget;
+class QEvent;
+class QResizeEvent;
 class EditorWindow;
 
 class PdfWindow final : public QMainWindow {
@@ -65,13 +76,112 @@ public:
     int calUnit = 1;
   };
   void SetEditor(EditorWindow* editor) { m_Editor = editor; }
+  /// REQ-387 clause 2 / REQ-455: page-by-page (default) or continuous vertical scrolling through every page.
+  enum class Layout { PageByPage, Continuous };
+  enum class CompareMode { Tint, Opacity, Base, Revision };
+  enum class ComparePickCount { None = 0, OnePair = 2, TwoPairs = 4 };
+  void SetLayout(Layout layout);
+  Layout CurrentLayout() const { return m_Layout; }
+  /// The zero-based page the controls and the thumbnail strip are on (the page at the middle of the view when continuous).
+  int CurrentPage() const;
+  void ScrollToPage(int page);
+  /// The displayed width of the current page as a percentage of its actual size (100% = 96 dpi).
+  double ZoomPercent() const;
+  void SetZoomPercent(double percent);
+  void FitWidth();
+  void FitPage();
+  /// Zoom by a factor keeping the page point under a point of the scroll area's viewport fixed.
+  void ZoomBy(double factor, QPoint viewportPoint);
 protected:
+  void resizeEvent(QResizeEvent* event) override;
   void closeEvent(QCloseEvent* event) override;
+  void keyPressEvent(QKeyEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 private:
   friend class QtEditorTests;
   struct SaveResult { bool succeeded = false; std::string error; };
-  void RequestRender();
+  void RequestRender(bool keepPicture = false);
   void PollRender();
+  // REQ-387 / REQ-455: layout, zoom and the continuous strip. Page rectangles are in canvas coordinates.
+  struct StripResult { int page = -1, w = 0, h = 0, x = 0, y = 0; bool ok = false; pdfview::Bitmap bitmap; };
+  static bool Windowed(QSize full);                 ///< too big to render whole: only the window around the view is drawn
+  QRect NeededRegion(int page) const;               ///< the part of page \p page (in its pixels) the view needs drawn
+  bool PageWindowCovers() const;                    ///< page-by-page: does the picture cover the view?
+  QRect m_WorkRegion; QSize m_WorkFull;             ///< what the page-by-page render in flight is drawing
+  std::map<int, QSize> m_StripFull;                 ///< continuous: the page size each cached picture was drawn for
+  std::map<int, QPoint> m_StripOrigin;              ///< ... and where in that page it sits
+  struct ZoomAnchor { int page = 0; double fx = 0, fy = 0; };
+  QSize PagePx(int page) const;
+  QSize RenderPx(int page) const;
+  double WidthAtZoomOne(int page) const;
+  QRect PageRect(int page) const;
+  int PageAtY(int y) const;
+  void RebuildLayout();
+  void ApplyScrollRange(QScrollBar* bar, int canvasLength, int viewLength);
+  ZoomAnchor CaptureAnchor(QPoint viewportPoint) const;
+  void RestoreAnchor(const ZoomAnchor& anchor, QPoint viewportPoint);
+  void SetZoom(double zoom, QPoint viewportPoint);
+  void UpdateZoomUi();
+  void CenterOnPagePoint(int page, double xPt, double yPt);
+  bool PaintStrip(QPainter& painter, const QRect& exposed);
+  void ScheduleStrip();
+  void PollStrip();
+  void CancelStrip(bool wait);
+  void OnScrolled();
+  std::pair<int, int> VisiblePages() const;
+  bool HandleViewportEvent(QObject* watched, QEvent* event);
+  // The page the input or the overlay being handled belongs to: the current page unless the continuous layout
+  // routed the pointer (or the painter) to another one. Everything that used "the" page uses these.
+  int ActivePage() const;
+  int PageWidthPxOf(int page) const;
+  int PageHeightPxOf(int page) const;
+  int PageWidthPx() const { return PageWidthPxOf(ActivePage()); }
+  int PageHeightPx() const { return PageHeightPxOf(ActivePage()); }
+  bool PageReady() const;
+  struct PageScope {
+    PdfWindow& window; int saved;
+    PageScope(PdfWindow& w, int page) : window(w), saved(w.m_CtxPage) { window.m_CtxPage = page; }
+    ~PageScope() { window.m_CtxPage = saved; }
+  };
+  int InputPageFor(QPointF canvasPoint, bool buttonsDown) const;
+  void DispatchInput(QPointF canvasPoint, bool buttonsDown, const std::function<void(QPointF)>& handler);
+  void RefreshSnap();
+  Layout m_Layout = Layout::PageByPage;
+  std::vector<int> m_PageTop, m_PageWpx, m_PageHpx; ///< continuous layout, one entry per page
+  double m_MaxPageWidthPt = 1.0;
+  int m_CtxPage = -1;     ///< see ActivePage()
+  int m_InputPage = -1;   ///< the page a pointer press landed on, until the release
+  int m_DraftPage = -1;   ///< the page the picks in m_Draft belong to
+  int m_PointerPage = -1; ///< the page the pointer (snap marker, rubber band) is over
+  int m_ExtractPage = -1;
+  static constexpr int kPageGap = 10;
+  static constexpr int kReadAhead = 3;                          ///< pages rendered ahead of the scroll direction
+  static constexpr std::size_t kStripCacheBytes = 256u << 20;   ///< bounded page-image cache (REQ-387 clause 4)
+  std::map<int, QImage> m_StripCache;
+  std::future<StripResult> m_StripWork;
+  int m_StripWorkPage = -1;
+  std::atomic<bool> m_StripCancel{false};
+  QTimer* m_StripPoll = nullptr;
+  QTimer* m_ResizeTimer = nullptr;
+  QTimer* m_ZoomSettle = nullptr; ///< renders at the new zoom once the wheel/buttons stop
+  int m_ScrollDirection = 1, m_LastScrollY = 0;
+  bool m_ProgrammaticScroll = false;
+  bool m_SyncingPage = false;
+  bool m_CloudPolygon = false; ///< the revision-cloud button's mode: false = rectangle (two clicks), true = polygon (Enter)
+  bool m_Panning = false;
+  Qt::MouseButton m_PanButton = Qt::MiddleButton; ///< the button that started the pan: middle, or left under Browse
+  QPoint m_PanLast;
+  QComboBox* m_LayoutBox = nullptr;
+  QSpinBox* m_ZoomBox = nullptr;
+  QTabWidget* m_CommandTabs = nullptr;
+  QStackedWidget* m_SidePages = nullptr;
+  QLabel* m_StatusPageCount = nullptr;
+  QLabel* m_ToolStatus = nullptr;  ///< bottom bar: the active tool and how to leave it
+  QToolButton* m_StatusMore = nullptr;
+  void UpdateToolStatus();
+  void UpdateStatusBarLayout();
+  void SyncPageNav();
+  void UpdatePropertiesPanel();
   void PollOpen();
   bool AdoptDocument(std::unique_ptr<pdfview::PdfDocument> document, const QString& path, QString& error);
   std::unique_ptr<pdfview::PdfDocument> m_Document;
@@ -96,6 +206,7 @@ private:
   int m_Tool = -2;
   std::vector<std::pair<float, float>> m_Draft;
   int m_SelectedAnnotation = -1;
+  std::vector<int> m_SelectedMore; ///< the other marks a box select picked; m_SelectedAnnotation is the last one
   bool m_AnnotationDragging = false;
   int m_AnnotationHandle = -1;
   QPointF m_DragStart;
@@ -110,6 +221,7 @@ private:
   bool m_AnnotationItalic = false;
   EditorWindow* m_Editor = nullptr;
   bool m_ExtractMode = false;
+  bool m_ExtractBox = false;  ///< the yellow source box stays up while its candidates are under review
   bool m_ExtractDragging = false;
   QPointF m_ExtractStart;
   QPointF m_ExtractEnd;
@@ -156,6 +268,9 @@ private:
   QPointF PageToCanvas(float x, float y) const;
   int HitAnnotation(QPointF pagePoint, float tolerance) const;
   void ApplyAnnotationStyle(pdfview::Annot& annotation) const;
+  void SelectInBox(QPointF first, QPointF second);
+  bool IsSelected(int index) const;
+  static void FitLeaderBox(pdfview::Annot& annotation); ///< a callout's box follows its text
   void DrawAnnotations(QPainter& painter);
   void DrawExtractOverlay(QPainter& painter);
   void BeginExtract(QPointF point, Qt::MouseButton button);
@@ -173,6 +288,7 @@ private:
 
   // REQ-430: scale display, calibration, scale checks and snapping (src/qt/PdfScaleUi.cpp).
   friend class PdfScaleDialogs;
+  static constexpr int kToolSelect = -2, kToolBrowse = -1;
   static constexpr int kToolCalibrate = 20; ///< m_Tool values beyond the annotation kinds
   static constexpr int kToolCheck = 21;
   struct SnapPage {
@@ -182,12 +298,13 @@ private:
     bool started = false;
     bool failed = false;
   };
-  void BuildScaleToolbar();
+  void BuildScaleControls();
   void SetTool(int tool, const QString& status);
   void ClearPending();
   void EscapeTool();
   void UpdateScaleDisplay();
   void SceneChanged();                         ///< after anything the scale display or overlay depends on
+  void ClearAnnotationSelection();
   void ShowSetScale();
   void BeginCalibrate();
   void FinishCalibrationPicks();
@@ -202,6 +319,7 @@ private:
   std::map<int, pdfview::PageScale> ScalesInForce() const;
   QActionGroup* m_ToolGroup = nullptr;
   QAction* m_SnapAction = nullptr;
+  QAction* m_SetScaleAction = nullptr;
   QLabel* m_ScaleLabel = nullptr;
   QLabel* m_SnapStatus = nullptr;
   QPushButton* m_ChecksButton = nullptr;
@@ -255,7 +373,7 @@ private:
     bool ok = false;
     std::string error;
     std::unique_ptr<pdfview::PdfDocument> openedRevision;
-    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView;
+    pdfview::Bitmap base, revision, aligned, tint, baseView, revisionView, marks, revMarks;
     pdfalign::AutoResult alignment;
     pdfalign::Transform automaticTransform;
     bool hasAlignment = false;
@@ -268,11 +386,13 @@ private:
     pdfalign::Transform transform;
     pdfalign::Transform automatic;
     QImage overlay;
+    QImage revMarks; ///< only the marks that are new in the revision, in red
+    QImage marksOverlay; ///< only the differing marks, transparent elsewhere: drawn over the crisp page in Tint
     QImage revisionOverlay;
     QImage baseView;
     QImage revisionView;
     std::vector<pdfdiff::Region> changes;
-    int mode = 0; // Tint, Opacity, Base, Revision
+    CompareMode mode = CompareMode::Tint;
     int opacity = 50;
     bool busy = false, aligned = false, haveChanges = false, lowConfidence = false;
     bool manualAlignment = false;
@@ -281,8 +401,28 @@ private:
   };
   std::unique_ptr<CompareSession> m_Compare;
   std::future<CompareOutcome> m_CompareWork;
+  // A sharp picture of the revision for the part of the page on screen (Revision and Opacity views at high zoom): the
+  // fixed-resolution comparison images alone go soft once the page is shown much larger than they were made.
+  struct CompareDetail { pdfview::Bitmap bitmap, marks, redMarks; QRect rect; int pageWidthPx = 0; double ratio = 1.0; bool failed = false; };
+  static bool KeepCompareRevisionWhenMarksFail(CompareDetail& detail, bool cancelled);
+  std::future<CompareDetail> m_CompareDetailWork;
+  std::atomic<bool> m_CompareDetailCancel{false};
+  bool m_CompareDetailAgain = false;
+  QTimer* m_CompareDetailTimer = nullptr;
+  QTimer* m_CompareDetailPoll = nullptr;
+  QImage m_CompareDetailImage;
+  QImage m_CompareDetailMarks;    ///< the differing marks redrawn sharp for the visible part (blue base-only, red revision-only)
+  QImage m_CompareDetailRedMarks; ///< only the red ones, for the Revision view
+  QRect m_CompareDetailRect;
+  int m_CompareDetailPageWidthPx = 0;
+  void ClearCompareDetail();
+  pdfview::PageSize BasePageSize() const { return m_Document->Sizes()[static_cast<std::size_t>(m_Compare->basePage)]; }
+  void RequestCompareDetail();
+  void PollCompareDetail();
+  void StopCompareDetail();
   QTimer* m_ComparePoll = nullptr;
-  QDialog* m_CompareDialog = nullptr;
+  QWidget* m_ComparePanel = nullptr; ///< the Compare tab of the side panel
+  void ShowComparePanel();
   QComboBox* m_CompareMode = nullptr;
   QSlider* m_CompareOpacity = nullptr;
   QSpinBox* m_CompareBasePage = nullptr;
@@ -296,7 +436,7 @@ private:
   bool m_ComparePicking = false;
   bool m_CompareClosePending = false;
   int m_ComparePickCount = 0;
-  int m_ComparePickTarget = 0;
+  ComparePickCount m_ComparePickTarget = ComparePickCount::None;
   pdfalign::Pt m_ComparePicks[4];
   void BeginCompare();
   void StartCompare(bool findChanges);

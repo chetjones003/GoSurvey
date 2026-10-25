@@ -4,6 +4,7 @@
 #include "PdfWindow.hpp"
 #include "QtAccent.hpp"
 #include "PdfCanvas.hpp"
+#include "PdfRibbon.hpp"
 #include "PdfScaleCheck.hpp"
 #include "PdfSplit.hpp"
 
@@ -220,52 +221,42 @@ std::map<int, PageScale> PdfWindow::ScalesInForce() const {
   return inForce;
 }
 
-QPointF PdfWindow::PageToCanvas(float x, float y) const {
-  const auto size = m_Document->Sizes()[static_cast<std::size_t>(m_PageNumber->value() - 1)];
-  const double scaleX = static_cast<double>(m_Page->width()) / size.wPt;
-  const double scaleY = static_cast<double>(m_Page->height()) / size.hPt;
+QPointF PdfWindow::PageToCanvas(float x, float y) const { // in the active page's own pixels
+  const auto size = m_Document->Sizes()[static_cast<std::size_t>(ActivePage())];
+  const double scaleX = static_cast<double>(PageWidthPx()) / size.wPt;
+  const double scaleY = static_cast<double>(PageHeightPx()) / size.hPt;
   return {x * scaleX, (size.hPt - y) * scaleY};
 }
 
-void PdfWindow::BuildScaleToolbar() {
-  addToolBarBreak(Qt::TopToolBarArea);
-  auto* bar = addToolBar("PDF scale");
-  bar->setObjectName("pdfScaleTools");
-  bar->setMovable(false);
-  auto* setScale = bar->addAction("Set scale...", this, [this] { ShowSetScale(); });
-  setScale->setObjectName("pdfSetScaleAction");
-  setScale->setToolTip("Set the drawing scale of this page (preset, typed ratio, or calibrate from two points)");
-  m_ScaleLabel = new QLabel("Open a PDF", bar);
+// The scale and snap controls; the ribbon's Measure tab places them.
+void PdfWindow::BuildScaleControls() {
+  m_SetScaleAction = new QAction(CadCommandIcon("Scale_List.png"), "Set scale...", this);
+  m_SetScaleAction->setObjectName("pdfSetScaleAction");
+  m_SetScaleAction->setToolTip("Set the drawing scale of this page (preset, typed ratio, or calibrate from two points)");
+  connect(m_SetScaleAction, &QAction::triggered, this, [this] { ShowSetScale(); });
+  m_ScaleLabel = new QLabel("Open a PDF", this);
   m_ScaleLabel->setObjectName("pdfScaleLabel");
   m_ScaleLabel->setMinimumWidth(180);
-  bar->addWidget(m_ScaleLabel);
-  m_ChecksButton = new QPushButton("Scale checks (0)", bar);
+  m_ChecksButton = new QPushButton("Scale checks (0)", this);
   m_ChecksButton->setObjectName("pdfScaleChecksButton");
   m_ChecksButton->setToolTip("See how this page's scale agrees with the dimensions you checked,\ncorrect it, or run a robust calibration");
   connect(m_ChecksButton, &QPushButton::clicked, this, [this] { ShowChecks(0); });
-  bar->addWidget(m_ChecksButton);
-  m_ShowChecksBox = new QCheckBox("Show on sheet", bar);
+  m_ShowChecksBox = new QCheckBox("Show on sheet", this);
   m_ShowChecksBox->setObjectName("pdfShowChecks");
   m_ShowChecksBox->setChecked(true);
   m_ShowChecksBox->setToolTip("Show or hide the check lines and labels drawn on the sheet");
   connect(m_ShowChecksBox, &QCheckBox::toggled, this, [this] { m_Page->update(); });
-  bar->addWidget(m_ShowChecksBox);
-  bar->addSeparator();
-  m_SnapAction = bar->addAction("Snap: off");
+  m_SnapAction = new QAction(CadCommandIcon("Snap_Mode.png"), "Snap: off", this);
   m_SnapAction->setObjectName("pdfSnapAction");
   m_SnapAction->setCheckable(true);
   m_SnapAction->setShortcut(QKeySequence(Qt::Key_F3));
   m_SnapAction->setToolTip("Snap to the ends and corners of the drawing (F3)");
   connect(m_SnapAction, &QAction::toggled, this, [this] { ToggleSnap(); });
-  m_SnapStatus = new QLabel(bar);
+  m_SnapStatus = new QLabel(this);
   m_SnapStatus->setObjectName("pdfSnapStatus");
-  bar->addWidget(m_SnapStatus);
-  bar->setStyleSheet(
-      "QLabel#pdfScaleLabel{background:#30373c;border:1px solid #41494e;border-radius:10px;padding:3px 12px;color:#d8e3e4;font-weight:600;}"
-      "QToolButton:checked{background:#1f7a3e;color:white;border-radius:4px;} QLabel#pdfSnapStatus{color:#f5b73a;}");
   m_SnapPoll = new QTimer(this);
   m_SnapPoll->setInterval(30);
-  connect(m_SnapPoll, &QTimer::timeout, this, [this] { UpdateSnap(m_LastPointer); });
+  connect(m_SnapPoll, &QTimer::timeout, this, [this] { RefreshSnap(); });
 }
 
 void PdfWindow::SetTool(int tool, const QString& status) {
@@ -274,8 +265,48 @@ void PdfWindow::SetTool(int tool, const QString& status) {
   m_SnapPrevValid = false;
   for (QAction* action : m_ToolGroup->actions())
     if (action->data().toInt() == tool) action->setChecked(true);
+  UpdateToolStatus();
   statusBar()->showMessage(status);
   m_Page->update();
+}
+
+void PdfWindow::UpdateStatusBarLayout() {
+  if (!m_ToolStatus || !m_StatusMore) return;
+  const bool compact = width() < 760;
+  const auto hideInCompact = [this, compact](const char* name) {
+    if (auto* button = statusBar()->findChild<QToolButton*>(QString("pdfStatus_") + name))
+      button->setVisible(!compact);
+  };
+  hideInCompact("pdfFirstPage");
+  hideInCompact("pdfLastPage");
+  hideInCompact("pdfFitPage");
+  m_StatusMore->setVisible(compact);
+  m_ToolStatus->setMinimumWidth(compact ? 64 : 0);
+  m_PageNumber->setMinimumWidth(compact ? 52 : 70);
+  m_StatusPageCount->setMinimumWidth(compact ? 32 : 48);
+  m_ZoomBox->setMinimumWidth(compact ? 78 : 96);
+}
+
+// The bottom bar always names the tool in use; a drawing tool (and Extract Coordinates) also says how to leave it.
+void PdfWindow::UpdateToolStatus() {
+  if (!m_ToolStatus) return;
+  QString name = "Select";
+  bool leavable = false;
+  if (m_ExtractMode || m_ExtractDragging) { name = "Extract coordinates"; leavable = true; }
+  else {
+    for (QAction* action : m_ToolGroup->actions())
+      if (action->data().toInt() == m_Tool) { name = action->text(); leavable = m_Tool >= 0; break; }
+  }
+  const QString fullText = leavable ? QString("Tool: %1  (Esc to cancel)").arg(name) : QString("Tool: %1").arg(name);
+  m_ToolStatus->setToolTip(fullText);
+  QString compactName = name;
+  if (name == "Rectangle") compactName = "Rect";
+  else if (name == "Revision cloud") compactName = "Cloud";
+  else if (name == "Polyline length") compactName = "Polyline";
+  else if (name == "Extract coordinates") compactName = "Extract";
+  const QString visibleText = width() < 760 ? compactName : fullText;
+  m_ToolStatus->setText(QFontMetrics(m_ToolStatus->font()).elidedText(
+      visibleText, Qt::ElideRight, std::max(32, m_ToolStatus->width() - 8)));
 }
 
 // Esc: a pick in progress first, then the tool.
@@ -291,12 +322,14 @@ void PdfWindow::EscapeTool() {
 void PdfWindow::SceneChanged() {
   ++m_Revision;
   m_SelectedCheck = -1;
+  m_SelectedMore.clear();
   setWindowModified(HasUnsavedChanges());
   UpdateScaleDisplay();
   m_Page->update();
 }
 
 void PdfWindow::UpdateScaleDisplay() {
+  UpdatePropertiesPanel();
   if (!m_ScaleLabel) return;
   if (!m_Document) {
     m_ScaleLabel->setText("Open a PDF");
@@ -340,7 +373,7 @@ void PdfWindow::BeginCalibrate() {
 }
 
 void PdfWindow::FinishCalibrationPicks() {
-  m_CalPage = m_PageNumber->value() - 1;
+  m_CalPage = ActivePage();
   for (int i = 0; i < 2; ++i) {
     m_CalX[i] = m_Draft[static_cast<std::size_t>(i)].first;
     m_CalY[i] = m_Draft[static_cast<std::size_t>(i)].second;
@@ -412,7 +445,7 @@ void PdfWindow::ToggleSnap() {
   m_SnapHit = false;
   m_SnapPrevValid = false;
   if (m_SnapOn && m_Document) StartSnapRead(m_PageNumber->value() - 1);
-  UpdateSnap(m_LastPointer);
+  RefreshSnap();
   m_Page->update();
 }
 
@@ -449,11 +482,12 @@ void PdfWindow::UpdateSnap(QPointF point) {
   const bool hadHit = m_SnapHit;
   const float oldX = m_SnapX, oldY = m_SnapY;
   m_LastPointer = point;
+  m_PointerPage = ActivePage();
   m_PointerIn = true;
   m_SnapHit = false;
   const bool placing = m_Tool >= 0;
-  if (m_SnapOn && m_Document && !m_Page->image.isNull()) {
-    const int page = m_PageNumber->value() - 1;
+  if (m_SnapOn && m_Document && PageReady()) {
+    const int page = ActivePage();
     SnapPage& snap = m_SnapPages[page];
     if (!snap.started) StartSnapRead(page);
     if (snap.reading.valid() && snap.reading.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
@@ -463,7 +497,7 @@ void PdfWindow::UpdateSnap(QPointF point) {
     if (!snap.reading.valid()) m_SnapPoll->stop();
     if (placing && snap.index) {
       const auto size = m_Document->Sizes()[static_cast<std::size_t>(page)];
-      const float k = static_cast<float>(m_Page->width()) / size.wPt; // screen pixels per point
+      const float k = static_cast<float>(PageWidthPx()) / size.wPt; // screen pixels per point
       const float px = static_cast<float>(point.x()) / k, py = size.hPt - static_cast<float>(point.y()) / k;
       SnapIndex::Pt hit;
       const float radius = 10.f / k;
@@ -484,12 +518,12 @@ void PdfWindow::UpdateSnap(QPointF point) {
   if (!m_SnapHit) m_SnapPrevValid = false;
   QString status;
   if (m_SnapOn && m_Document) {
-    const auto found = m_SnapPages.find(m_PageNumber->value() - 1);
+    const auto found = m_SnapPages.find(ActivePage());
     if (found != m_SnapPages.end() && found->second.reading.valid()) status = "reading this page...";
     else if (found != m_SnapPages.end() && found->second.failed) status = "this page has nothing to snap to";
   }
   if (m_SnapStatus->text() != status) m_SnapStatus->setText(status);
-  if (hadHit != m_SnapHit || (m_SnapHit && (oldX != m_SnapX || oldY != m_SnapY)) || m_Tool == kToolCheck) m_Page->update();
+  if (hadHit != m_SnapHit || (m_SnapHit && (oldX != m_SnapX || oldY != m_SnapY)) || m_Tool == kToolCheck || ((placing || m_Tool == kToolSelect) && !m_Draft.empty())) m_Page->update();
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -497,9 +531,11 @@ void PdfWindow::UpdateSnap(QPointF point) {
 // ---------------------------------------------------------------------------------------------------
 
 void PdfWindow::DrawScaleOverlay(QPainter& painter) {
-  if (!m_Document || m_Page->image.isNull()) return;
-  const int page = m_PageNumber->value() - 1;
+  if (!m_Document || !PageReady()) return;
+  const int page = ActivePage();
   const PageScale* scale = EffectiveScale(page);
+  const bool draftHere = m_DraftPage < 0 || m_DraftPage == page; // picks in progress belong to one page
+  const bool pointerHere = m_PointerPage < 0 || m_PointerPage == page;
   auto at = [&](float x, float y) { return PageToCanvas(x, y); };
   // A label as a solid chip in the check's colour with dark text, so it reads on any drawing.
   auto chip = [&](QPointF where, const QString& text, const QColor& colour) {
@@ -545,15 +581,15 @@ void PdfWindow::DrawScaleOverlay(QPainter& painter) {
                 Q("#" + std::to_string(i + 1) + "  " + FormatValue(check.stated, 3) + " " + UnitLabel(check.unit)), false);
     }
   }
-  if (m_Tool == kToolCheck && !m_Draft.empty()) { // the dimension being picked
+  if (draftHere && m_Tool == kToolCheck && !m_Draft.empty()) { // the dimension being picked
     const QPointF first = at(m_Draft[0].first, m_Draft[0].second);
-    const QPointF second = m_Draft.size() == 2 ? at(m_Draft[1].first, m_Draft[1].second) : m_SnapHit ? at(m_SnapX, m_SnapY) : m_LastPointer;
+    const QPointF second = m_Draft.size() == 2 ? at(m_Draft[1].first, m_Draft[1].second) : m_SnapHit && pointerHere ? at(m_SnapX, m_SnapY) : m_LastPointer;
     painter.setPen(QPen(QColor(60, 140, 255), 2));
     painter.drawLine(first, second);
     painter.setBrush(QColor(60, 140, 255));
     painter.drawEllipse(first, 4, 4);
   }
-  if (m_Tool == kToolCalibrate && !m_Draft.empty()) { // the calibration points picked so far
+  if (draftHere && m_Tool == kToolCalibrate && !m_Draft.empty()) { // the calibration points picked so far
     const QColor orange(255, 160, 0);
     if (m_Draft.size() == 2) {
       painter.setPen(QPen(orange, 2));
@@ -565,7 +601,7 @@ void PdfWindow::DrawScaleOverlay(QPainter& painter) {
       painter.drawEllipse(at(pt.first, pt.second), 5, 5);
     }
   }
-  if (m_SnapHit) { // the end or corner the next click will take
+  if (m_SnapHit && pointerHere) { // the end or corner the next click will take
     const QPointF c = at(m_SnapX, m_SnapY);
     const QRectF box(c.x() - 6, c.y() - 6, 12, 12);
     painter.setBrush(Qt::NoBrush);
@@ -714,7 +750,7 @@ int PdfScaleDialogs::KnownDistance(PdfWindow& w) {
   PdfWindow::ScaleForm& form = w.m_ScaleForm;
   const double points = std::hypot(static_cast<double>(w.m_CalX[1] - w.m_CalX[0]), static_cast<double>(w.m_CalY[1] - w.m_CalY[0]));
   const auto pageSize = w.m_Document->Sizes()[static_cast<std::size_t>(w.m_CalPage)];
-  const double pointsPerPixel = pageSize.wPt / std::max(1, w.m_Page->width());
+  const double pointsPerPixel = pageSize.wPt / std::max(1, w.PageWidthPxOf(w.m_CalPage));
   QDialog dialog(&w);
   dialog.setObjectName("pdfKnownDistanceDialog");
   dialog.setWindowTitle("Known distance");
@@ -833,7 +869,7 @@ int PdfScaleDialogs::KnownDistance(PdfWindow& w) {
 // ---------------------------------------------------------------------------------------------------
 
 bool PdfScaleDialogs::CheckPopup(PdfWindow& w) {
-  const int page = w.m_PageNumber->value() - 1;
+  const int page = w.ActivePage();
   const PageScale* scale = w.EffectiveScale(page);
   const double points = std::hypot(static_cast<double>(w.m_Draft[1].first - w.m_Draft[0].first),
                                    static_cast<double>(w.m_Draft[1].second - w.m_Draft[0].second));
