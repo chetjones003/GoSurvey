@@ -105,6 +105,9 @@ private:
   void ShowPdf();
   void ShowAdjustment();
   void ShowProjectSettings(std::uint32_t projectUid);
+  /// REQ-358 / REQ-363 (issue #1083): load the bundled CS-MAP dictionary if it is not loaded yet.
+  /// A failed load leaves geo::DictionaryError() set for the Zone group and the online map to report.
+  void LoadCoordinateSystemDictionaries();
   void ShowProjectHealth(std::uint32_t projectUid);
   void ShowProjectPack(std::uint32_t projectUid);
   void ShowProjectTurnover(std::uint32_t projectUid);
