@@ -14,7 +14,6 @@
 #include <shlobj.h>
 
 #include <filesystem>
-#include <array>
 
 namespace update {
 namespace {
@@ -53,12 +52,16 @@ std::string LocalAppDataDir()
 
 bool IsRunningFromProgramFiles()
 {
-  std::array<wchar_t, 32768> executable{};
-  const DWORD executableLength = ::GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+  // Keep the large Windows path buffer on the heap; /analyze treats oversized stack frames as
+  // errors in this translation unit.
+  std::wstring executable(32768, L'\0');
+  const DWORD executableLength =
+      ::GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
   if (executableLength == 0 || executableLength >= executable.size())
     return false;
 
-  const std::wstring executablePath(executable.data(), executableLength);
+  executable.resize(executableLength);
+  const std::wstring& executablePath = executable;
   for (const wchar_t* variable : {L"ProgramW6432", L"ProgramFiles", L"ProgramFiles(x86)"})
   {
     const DWORD required = ::GetEnvironmentVariableW(variable, nullptr, 0);
