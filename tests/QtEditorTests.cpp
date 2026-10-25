@@ -6295,6 +6295,30 @@ private Q_SLOTS:
     drawingSettings->trigger();
   }
 
+  void drawingSettingsZoneDetailsDescribeTheDrawingsZoneOnOpen() {
+    QVERIFY(geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string()));
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.State().drawingSettings.zoneCode = "HARN/NB.NB";
+    auto* drawingSettings = window.findChild<QAction*>("command_DRAWINGSETTINGS"); QVERIFY(drawingSettings);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(dialog);
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      auto* systems = dialog->findChild<QComboBox*>("drawingZoneSystem"); QVERIFY(systems);
+      auto* code = dialog->findChild<QLineEdit*>("drawingZoneCode"); QVERIFY(code);
+      auto* details = dialog->findChild<QLabel*>("drawingZoneDetails"); QVERIFY(details);
+      QCOMPARE(systems->currentData().toString(), QString("HARN/NB.NB"));
+      QCOMPARE(code->text(), QString("HARN/NB.NB"));
+      const auto info = geo::FindCoordinateSystem("HARN/NB.NB"); QVERIFY(info);
+      QCOMPARE(details->text(), QString("%1\nProjection: %2\nDatum: %3").arg(QString::fromUtf8(info->description.c_str()),
+               QString::fromUtf8(info->projection.c_str()), QString::fromUtf8(info->datum.c_str())));
+      QVERIFY(!details->text().contains("NAD27"));
+      QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-1085-drawing-settings-zone-details.png"));
+      dialog->reject();
+    });
+    drawingSettings->trigger();
+  }
+
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1500, 950); window.show(); auto& state = window.State();
     if (auto* viewPage = window.findChild<QWidget*>("ribbonPage_View")) {
