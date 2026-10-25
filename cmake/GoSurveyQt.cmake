@@ -74,6 +74,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
+  src/qt/PdfWindowCompare.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp

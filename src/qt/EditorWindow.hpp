@@ -53,6 +53,7 @@ public:
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
+  std::size_t CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates); ///< one redraw for the lot; returns how many were created
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
@@ -62,6 +63,8 @@ protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:
+  bool CreatePdfCoordinate(const pdfview::CoordCandidate& candidate); ///< creates the geometry; no redraw
+  void FinishPdfCoordinates();                                         ///< frame the view, redraw, focus
   friend class QtEditorTests;
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
