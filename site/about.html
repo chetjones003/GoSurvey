@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>About &amp; Privacy — GoSurvey</title>
+<meta name="description" content="About GoSurvey and its privacy policy.">
+<link rel="canonical" href="https://gosurveycad.com/about.html">
+<link rel="icon" href="favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{color-scheme:light dark;--paper:#f2f4f6;--surface:#fff;--ink:#12161a;--ink-2:#3d4753;--ink-3:#69747f;--rule:#c9d2da;--accent:#c2551b;--steel:#2f4f6b}
+@media(prefers-color-scheme:dark){:root{--paper:#0f1317;--surface:#161b21;--ink:#e8edf2;--ink-2:#b3bfca;--ink-3:#8492a0;--rule:#2b343d;--accent:#f0803c;--steel:#7fa8cc}}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.65 "IBM Plex Sans",system-ui,sans-serif}
+a{color:var(--steel);text-underline-offset:.2em}.wrap{width:min(100% - 2rem,72rem);margin:auto}
+header{border-bottom:1px solid var(--rule);background:var(--surface)}header .wrap,footer .wrap{display:flex;align-items:center;justify-content:space-between;gap:1rem;min-height:4rem}
+.brand{font:700 1.25rem "IBM Plex Sans Condensed",sans-serif;color:var(--ink);text-decoration:none}.brand span{color:var(--accent)}nav{display:flex;gap:1.25rem}nav a{color:var(--ink-2);text-decoration:none}
+main{padding:clamp(2.5rem,6vw,5rem) 0}h1,h2,h3{font-family:"IBM Plex Sans Condensed",sans-serif;line-height:1.15}h1{font-size:clamp(2.5rem,6vw,4rem);margin:0}h2{font-size:2rem;margin:0 0 1rem}h3{font-size:1.2rem;margin:1.5rem 0 .5rem}
+.lede{max-width:60ch;color:var(--ink-2);font-size:1.1rem;margin:1rem 0 2.5rem}.policy{max-width:74ch;background:var(--surface);border:1px solid var(--rule);padding:clamp(1.25rem,4vw,2.5rem)}.policy section{margin-top:2rem}.policy p,.policy ul{margin:.65rem 0}.policy li+li{margin-top:.45rem}.label{font:500 .72rem "IBM Plex Mono",monospace;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3)}.callout{border-left:3px solid var(--accent);padding:.8rem 1rem;background:var(--paper);color:var(--ink-2)}footer{border-top:1px solid var(--rule);color:var(--ink-3);font-size:.9rem}footer a{color:var(--ink-2)}
+@media(max-width:36rem){header .wrap,footer .wrap{align-items:flex-start;flex-direction:column;padding:.8rem 0}nav{gap:.8rem}}
+</style>
+</head>
+<body>
+<header><div class="wrap"><a class="brand" href="./">GoSurvey<span>·</span></a><nav><a href="./">Home</a><a href="./#downloads">Download</a><a href="https://github.com/chetjones003/GoSurvey">GitHub</a></nav></div></header>
+<main class="wrap">
+  <p class="label">About GoSurvey</p>
+  <h1>Survey drafting and COGO for Windows.</h1>
+  <p class="lede">GoSurvey is an independent CAD platform for land surveyors, built by Chet Jones. This page explains how the application and website handle information.</p>
+  <article class="policy" id="privacy">
+    <p class="label">Privacy policy · Effective October 24, 2026</p>
+    <p>The complete policy is also available in the <a href="https://github.com/chetjones003/GoSurvey/blob/master/PRIVACY.md">GoSurvey repository</a>.</p>
+
+    <section><h2>Information the desktop app sends</h2>
+      <h3>Usage data</h3>
+      <p>GoSurvey sends a usage ping over HTTPS on a background thread. The first ping for an installation is marked <code>install</code>; later launches are marked <code>active</code>. Each ping contains a randomly generated installation ID, event type, app version, release channel, and operating system. It contains no email or other account identity, user name, computer name, local path, drawing information, or hardware fingerprint. The ping never blocks the app. If it cannot reach the service, nothing is shown and the app continues normally. There is no in-app setting to turn it off.</p>
+      <p>The ping goes to a GoSurvey-operated Cloudflare Worker and is stored in a Cloudflare D1 database with a server timestamp, date, and country-level location derived by Cloudflare. The installation ID is random and is not based on your hardware, user name, or machine name. The Worker does not store request IP addresses, and request logging is disabled; Cloudflare may still process IP addresses and other request metadata to deliver the service.</p>
+      <h3>Startup and crash diagnostics</h3>
+      <p>When startup fails or the app crashes, GoSurvey automatically attempts to send a diagnostic report when it can reach the internet. Reports are stored in separate tables in the same Cloudflare D1 database. They can include the app version and channel, failure type, technical error details, stack addresses and module paths, and the local path of the diagnostic log. A local path may reveal your Windows account name or other machine-specific directory names. Reports are limited to 16 KB before sending. Diagnostic details are also appended to local logs in the GoSurvey user-data folder.</p>
+      <p>The “Send This Report” action opens a prefilled GitHub issue for you to review and submit. Review its contents before submitting.</p>
+    </section>
+
+    <section><h2>Information kept on your device</h2>
+      <p>Application preferences and the random installation ID are kept in a local <code>gosurvey-user.json</code> file. Previous GoSurvey versions may have saved a sign-in refresh token in Windows Credential Manager; the current application no longer reads or uses it. Startup and crash details are appended to local log files. Drawings are saved where you choose; ordinary local editing does not upload drawing files to GoSurvey.</p>
+      <p>Earlier versions also offered account sign-in and sent account details to a separate tier lookup service. The current application no longer signs in or sends new account lookups. Account records submitted by earlier versions may remain in that service; no automatic deletion schedule is established.</p>
+      <p>If you use the online map feature, GoSurvey requests map tiles from the USGS National Map service. Those requests reveal the requested map area to that service. Retrieved tiles may be cached locally.</p>
+    </section>
+
+    <section><h2>Website and update services</h2>
+      <p>The website is hosted by Cloudflare, requests release information from GitHub's public API, and loads web fonts from Google Fonts. The desktop app checks GitHub Releases for update information and downloads an installer from GitHub when you choose to update. Cloudflare, GitHub, and Google receive the request information needed to serve their services, which may include your IP address and browser or network metadata. They handle it under their own privacy terms.</p>
+    </section>
+
+    <section><h2>Retention and privacy requests</h2>
+      <p>The current telemetry database configuration does not define an automatic deletion schedule. Records remain until the operator deletes them or removes the database. Local preferences and diagnostic logs remain on your device until you delete them. GitHub, Google Fonts, Cloudflare, and the USGS may retain information under their own policies and settings.</p>
+      <p>For privacy questions or requests about GoSurvey-managed records, contact <a href="mailto:chet@gosurveycad.com">chet@gosurveycad.com</a>.</p>
+    </section>
+    <p class="callout">This policy will be updated when GoSurvey's data handling changes. The effective date above identifies the current version.</p>
+  </article>
+</main>
+<footer><div class="wrap"><span>GoSurvey — built by Chet Jones</span><a href="https://github.com/chetjones003/GoSurvey">Source code</a></div></footer>
+</body>
+</html>

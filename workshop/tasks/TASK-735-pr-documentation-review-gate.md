@@ -7,7 +7,7 @@
 
 ## 1. Authority
 - Goal:         Product documentation accuracy (project goal identifiers are not defined in `spec/project.md`)
-- Requirements: REQ-453 (accepted by D-2026-10-22-d)
+- Requirements: REQ-453 (accepted by D-2026-10-24-b)
 - Constraints:  None identified
 - Acceptance:   Before a pull request is created, its task log or description records inspection of all four sources and lists updates made, or states that no update was needed for each. Every source found to require an update is updated before pull request creation.
 - Owning subsystem: Repository contributor workflow documentation
@@ -34,7 +34,7 @@
 - Files/functions to touch: `spec/requirements.md`, `spec/project.md`, `CLAUDE.md`, `AGENTS.md`, this task log.
 - Test approach: Inspect the changed text and diff for all four required sources, the before-PR timing, update condition, access block, and per-source record. No executable test applies.
 - Steps:
-  - [x] Add accepted REQ-453 and record D-2026-10-22-d.
+  - [x] Add accepted REQ-453 and record D-2026-10-24-b.
   - [x] Verify scope, ownership, risks, and acceptance observability.
   - [x] Add the pre-PR documentation review gate to `CLAUDE.md` and `AGENTS.md`.
   - [x] Review the final diff against REQ-453.
@@ -47,7 +47,8 @@
   - Public manual wiki (linked by `README.md` and gosurveycad.com) — reviewed its Home page; no user-help update needed for this governance change.
 
 ## 8. Implementation log
-- 2026-10-22 — REQ-453 accepted and D-2026-10-22-d recorded after user selected the SPEC requirement path and confirmed scope. The original number REQ-400 was already assigned on `beta`.
+- 2026-10-22 — REQ-453 accepted after user selected the SPEC requirement path and confirmed scope. The original number REQ-400 was already assigned on `beta`.
+- 2026-10-24 — During conflict resolution, assigned D-2026-10-24-b because D-2026-10-22-d was already used by the command finder decision on `beta`.
 - 2026-10-22 — Verification: APPROVE. The requirement is measurable from the task log or PR description; the change stays within repository documentation ownership and introduces no architectural or runtime risks.
 - 2026-10-22 — Added the gate to both governance files; checked each requirement source and completion condition in the final diff.
 - 2026-10-22 — Completed REQ-453's four-source review for this change; the README, privacy policy, and both user manuals need no content change for a contributor-workflow rule.

@@ -283,11 +283,18 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          if (-not (Test-Path 'build\GoSurvey.exe')) {
-            throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
-          }
-          if (-not (Test-Path 'build\vc_redist.x64.exe')) {
-            throw 'Expected build\vc_redist.x64.exe — the installer must ship the VC++ runtime.'
+          # Keep these runtime requirements aligned with tools/verify-qt-deployment.ps1. The
+          # installer must remain usable after the Store downloads it once and the machine goes
+          # offline; checking for any DLL is not enough to prove the Qt runtime is complete.
+          foreach ($path in @('build\GoSurvey.exe', 'build\Qt6Core.dll', 'build\Qt6Gui.dll',
+                              'build\Qt6Widgets.dll', 'build\Qt6OpenGL.dll',
+                              'build\Qt6OpenGLWidgets.dll', 'build\pdfium.dll',
+                              'build\qt.conf', 'build\qt-plugins\platforms\qwindows.dll',
+                              'build\resources\default-template.gst',
+                              'build\vc_redist.x64.exe')) {
+            if (-not (Test-Path $path)) {
+              throw "Expected $path in packaging inputs; offline installer would be incomplete."
+            }
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
@@ -446,6 +453,14 @@ jobs:
             notes       = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
+          if ($env:GITHUB_REF_NAME -eq 'master') {
+            @(
+              "Installer URL: $url"
+              "SHA-256: $sha"
+              'Install parameters: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
+              'UAC: A Windows UAC prompt is permitted.'
+            ) | Set-Content -Path installer\Output\store-submission.txt -Encoding UTF8
+          }
           # Same text, as Markdown, for the GitHub release page body (see the publish steps).
           Set-Content -Path installer\Output\release-body.md -Value $notes -Encoding UTF8
           "installer=$($installer.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
@@ -521,6 +536,7 @@ jobs:
           gh release create "v${{ needs.build.outputs.version }}" `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" `
+            "installer\Output\store-submission.txt" `
             --title "GoSurvey ${{ needs.build.outputs.version }}" `
             --notes-file installer\Output\release-body.md
 

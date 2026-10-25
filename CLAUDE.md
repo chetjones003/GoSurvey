@@ -53,6 +53,13 @@ the task log or pull request description, record each source as reviewed and
 either identify its update or state that no update was needed. If an affected
 external wiki cannot be updated due to missing access, keep the pull request
 unopened until access is available and the update is made.
+### Emergency repository-admin bypass
+
+When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin
+may use GitHub's existing branch-protection bypass to push or merge directly, including bypassing
+required reviews and checks. Follow [the emergency admin bypass procedure](docs/emergency-admin-bypass.md)
+to record the action. This is an explicit exception to the normal branch workflow; agents must not
+infer emergency authorization from urgency alone.
 
 ### Issues and pull request labels
 
@@ -105,6 +112,14 @@ For Debug, use `.\build.bat debug`, then run
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows
 CMake/CTest and `gh` executables. Keep the Windows-native toolchain.
+
+### Agent worktree isolation
+
+Build and run only from the root of the worktree assigned to the current agent, using that
+checkout's `./build.bat` (or `./build.bat debug`) and `./run.bat` (or `./run.bat debug`).
+Each worktree has its own `build/` directory and application path. Leave GoSurvey instances
+started from other worktrees untouched; do not close them or interfere with their builds or
+runtime files.
 
 ### Keep build output clean
 

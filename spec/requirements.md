@@ -715,9 +715,12 @@ requirements is a planning failure, not a sign of rigor.
   (recent lines, scrollable) and F2 again collapses it; (4) ESC cancels the active
   command whether or not the console is open; (5) console/history text can be
   selected with the mouse and copied; (6) × hides the bar and Ctrl+9 (or the menu)
-  restores it; (7) autocomplete, the dynamic-cursor input, and the clickable
-  `[A]`/`[2P]` hints still work; (8) the dockable Command line window is still
-  available.
+  restores it; (7) the command-name autocomplete popup ranks fuzzy command matches,
+  displays each result's relevant associated command icon and name in a rounded, scrollable list, and
+  supports keyboard and mouse selection; Enter or clicking a result runs the
+  selected command; every registered command result uses a relevant associated icon, reusing suitable existing art and generating missing artwork instead of showing the generic green Qt command-link icon; `l` ranks `LINE` first by its registered alias and `lin`
+  ranks `LINE` first by name; the dynamic-cursor input and clickable `[A]`/`[2P]`
+  hints still work; (8) the dockable Command line window is still available.
 - Owner-layer: UI
 - Status: accepted
 - Revisions: 2026-06-19 — initial (floating command bar + fading history + F2
@@ -727,7 +730,7 @@ requirements is a planning failure, not a sign of rigor.
   keyword options); idle shows a "Type a command" placeholder. 2026-06-19 — the bar is
   **pinned to the viewport bottom edge** (vertical position locked); the user slides it
   left/right and resizes its **width** (right-edge grip) and the F2 console **height**
-  (top-edge grip); position/width/console-height persist.
+  (top-edge grip); position/width/console-height persist. 2026-10-22 — D-2026-10-22-d: command autocomplete uses ranked fuzzy matches, shows command icons and names in a rounded scrollable popup, and runs the highlighted or clicked result. 2026-10-23 — D-2026-10-23-b: every registered command result has a relevant associated icon; suitable existing artwork is reused and missing artwork is generated instead of using the generic green fallback.
 
 ### REQ-041 — Import Points pre-import validation with specific diagnostics
 - Purpose: data integrity and no silent failure for CSV point import, surfaced to
@@ -2889,8 +2892,9 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: When REQ-077 finds a newer version, the application **presents it and waits**. It
   displays the new version, the current version, and the release notes carried in the manifest,
   offering exactly three outcomes: install now, be reminded at the next launch, or skip this version
-  permanently. There is no silent download and no silent install — this application holds unsaved
-  drawings, and an unannounced restart destroys work.
+  permanently. No update download or install starts without the user's explicit choice — this
+  application holds unsaved drawings, and an unannounced restart destroys work. A silent installer
+  mode for deployment does not change this rule.
 
   On the user's choice to install, the application downloads the installer, **verifies it against the
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
@@ -3004,12 +3008,12 @@ requirements is a planning failure, not a sign of rigor.
   Amended rather than the code changed, and the weaker promise replaced with a **stronger, testable
   one** (idempotence) so the amendment is not simply an exemption. Decision D-2026-08-17-a.
 
-### REQ-080 — Anonymous install and active-usage telemetry
-- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+### REQ-080 — Anonymous install and open telemetry
+- Purpose: measure first runs and application opens without identifying users
 - Priority: should
 - Type: functional
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
-  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  persists it in the user preferences file. It sends two fire-and-forget events:
   - `install` — exactly once, when the install ID is generated
   - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
     This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
@@ -3020,28 +3024,16 @@ requirements is a planning failure, not a sign of rigor.
     already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
     numbers are unaffected — only a query counting rows would be.
 
-  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
-  `email`.
+  The events are sent via HTTPS POST to the configured endpoint as a JSON payload containing
+  exactly `installId`, `event`, `version`, `channel`, and `os`.
 
-  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
-  The original "no personally identifiable information" promise is reversed by explicit,
-  informed user decision — not discovered as a defect, not a Workshop judgment call. When
-  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
-  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
-  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
-  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
-  telemetry, only an optional enrichment of it when both happen to be true at once. No
-  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
-  and only when known.
+  **Amended 2026-10-24 (D-2026-10-24-a):** the payload is anonymous and has no email field.
+  No username, hostname, local path, drawing data, or hardware fingerprint is sent.
 
   The telemetry fires in a detached one-shot worker thread once per launch, independent of
-  any other background task's own success/failure — but its own firing point is no longer
-  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
-  the offline exception), so that whatever sign-in state is true at that moment is known
-  before the payload is built. This costs no perceptible delay in practice, since the gate
-  already blocks all other interaction until it resolves. It must never block the UI, gate a
-  session on its OWN account, or fail the application if the network is unavailable. Any
+  any other background task's own success/failure. It starts at application launch and never
+  waits for or depends on sign-in, license lookup, or internet connectivity. It must never
+  block the UI, gate a session, or fail the application if the network is unavailable. Any
   network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
   sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
   background reporting call has no actionable user recourse for its own failure.
@@ -3054,22 +3046,15 @@ requirements is a planning failure, not a sign of rigor.
   - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
     per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
     1; this REPLACES the original "at most once per rolling 24-hour period" condition;
-  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
-    channel, os, email);
-  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
-    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
-    for, or is skipped because of sign-in state;
-  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
-    included — `email` is the only field this requirement adds beyond the original five;
+  - the payload JSON is well-formed and contains exactly five fields (installId, event, version,
+    channel, os), with no personally identifying or machine-specific data;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the settings panel accurately describing current
-    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
+  - no usage or privacy notice for this ping appears in application settings;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
-  email, read not owned), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
@@ -3085,6 +3070,9 @@ requirements is a planning failure, not a sign of rigor.
   per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
   one day (see D-2026-08-23-e above) — each recorded separately because each was its own
   explicit ask, not one bundled decision.
+  2026-10-24 — removed signed-in email and sign-in-gate dependency; install/open reporting is
+  anonymous, background-only, and has no settings notice (D-2026-10-24-a). Startup/crash
+  diagnostics remain governed separately by REQ-425.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -3938,6 +3926,8 @@ requirements is a planning failure, not a sign of rigor.
 ---
 
 ### REQ-091 — User accounts and sign-in (Auth0)
+- **Retired 2026-10-24 by D-2026-10-24-a.** The acceptance conditions below are historical
+  records only and no longer authorize sign-in, account UI, credential storage, or launch gating.
 - Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
   telemetry is deliberately unable to do
 - Priority: should
@@ -4024,7 +4014,7 @@ requirements is a planning failure, not a sign of rigor.
     the signed-in email and a "more coming soon" note — no tier, no editable fields.
 - Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
   (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
                Credential-Manager technical shape and the REQ-300 dependency decision.
                2026-08-23 — added the blocking launch gate with an offline exception
@@ -4041,6 +4031,8 @@ requirements is a planning failure, not a sign of rigor.
                Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
+- **Retired 2026-10-24 by D-2026-10-24-a.** The endpoint is no longer part of the desktop
+  application's supported account or gating flow. The acceptance conditions below are historical.
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
   of any requirement naming what that entitlement controls
 - Priority: should
@@ -4057,7 +4049,7 @@ requirements is a planning failure, not a sign of rigor.
   - the endpoint's data store is separate from the telemetry Worker's, so a defect in
     one cannot read or corrupt the other's data.
 - Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
 
 ---
@@ -12299,13 +12291,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. The existing autocomplete precedent is unchanged by this requirement: when the typed text is not itself an exact match, the highlighted suggestion (ranked as REQ-040's popup already ranks it) still wins on Enter.
   4. A single token that matches no command exactly and has no ranked suggestion at all is submitted unchanged and reported as an unknown command (REQ-201) — it is never silently replaced by an unrelated leftover highlight.
   5. A multi-token line (a command plus arguments) is never rewritten by this resolution; only a single bare token is in scope.
+  6. Idle Qt command suggestions use ranked fuzzy matching, with an exact primary name or alias ahead of prefix matches and prefix matches ahead of subsequence matches. `l` ranks `LINE` first by its registered alias; `lin` ranks `LINE` first by its name. Enter launches the currently highlighted result, and clicking a result launches it; the popup remains scrollable so results beyond the visible rows can be selected.
 - Acceptance:
   - Driven through the real command-bar widget (a unit test on the dispatcher alone cannot see this defect — it lives in which text the UI writes into the submit buffer, not in the dispatcher): typing `ERASE` and pressing Enter starts `DELETE`, even immediately after an unrelated query left a different suggestion highlighted.
   - Typing `RENAME` or `TABLE` (bare words that name no top-level command — `RENAME` is only a `LAYER` sub-verb, `TABLE` only a volume-report sub-verb) and pressing Enter never starts `SURFACERENAME` or runs `VOLTABLE`; the command line stays idle and reports the line as unrecognized.
   - `headless`/DevShell test `req766-fuzzy-exact-wins`.
+  - Qt integration coverage verifies `l` and `lin` rank `LINE` first, Enter launches the highlighted result, and mouse selection from a scrolled popup launches the clicked result.
 - Owner-layer: UI (`src/ui/CadUi.cpp` `DrawCommandLinePanel`), Commands (`src/commands/CadCommands.cpp`/`.hpp` `ResolveCommandLineSubmission`, built on the existing `FuzzyCommandSuggestions`).
 - Status: accepted.
-- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted.
+- Revisions: 2026-10-10 — initial (D-2026-10-10-a). 2026-10-10 — accepted. 2026-10-22 — D-2026-10-22-d: Qt suggestions expose the existing ranked fuzzy behavior through a selectable, icon-bearing popup; Enter and mouse activation run the selected result.
 
 ### REQ-401 — Traverse Editor: reduce ground distances to grid using the drawing's projection (GitHub issue #828)
 
@@ -12725,11 +12719,14 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - POLAR increment and additional angles use existing preferences. Native controls support editing and visible save failure without losing the previous settings.
   - Shift+right-click offers the existing temporary snap kinds, with Perpendicular offered only when a reference exists. An override survives hover, ignores persistent per-kind toggles, and clears on pick/cancel without changing preferences.
   - Native cursor input uses the shared dynamic-input model: coordinate/distance-angle fields, Tab, locked values, mode characters and keywords; command and cursor prompts agree. Preserve cancellation, validation, blank Enter defaults and one submission per keypress. Show existing polar/pipe compass guidance and segment bearing-pick interaction.
+  - While a command prompt is active, the command line and at-cursor dynamic-input fields edit one shared draft. Typing or editing in either surface updates the draft shown by the other. Enter in either surface submits that draft once and advances the active command to its next prompt. Command cancellation or completion clears the draft before any later prompt or command; when no command prompt is active, command-line command-name and option entry remains unchanged. Preserve REQ-024 field groups, locks, Tab navigation, supported relative/bearing-distance syntax, Enter submission, and viewport-click placement.
+  - When that shared draft uses a distance/angle pair, the command line displays the same polar representation as the fields (for example, `@40<45`). Submission still resolves through the existing shared draft and coordinate conversion, so matching display text does not change the point the command receives.
   - Fixed shortcuts reach existing commands; text editors retain editing keys and clipboard/undo ownership. Typing from editor chrome reaches command entry; modal dialogs and other windows keep their input. Escape cancels the current gesture before the enclosing command, including bearing-pick and live section/gizmo drags.
   - Preserve existing undo and read-only semantics through shared commands. Do not add geometry/persistence models or change the production frontend.
   - Add focused Qt workflow coverage and update the parity ledger honestly. Present 2–3 integrated visual options for each major affected surface, apply the user's choice and show final meaningful states before completion.
 - Owner-layer: Qt UI; existing command/domain/persistence services retain behavior ownership.
 - Status: accepted (2026-10-19) — D-2026-10-19-a, GitHub issue #903.
+- Revisions: 2026-10-22 — D-2026-10-22-c / GitHub issue #1039: command-line and dynamic-cursor prompt edits share one draft and submit once; no-prompt command entry and REQ-024 input semantics are preserved. 2026-10-23 — D-2026-10-23-a: a shared distance/angle draft is displayed in the command line using the same polar form as its fields; submission remains resolved from the shared draft.
 ### REQ-429 — Qt PDF viewer: thumbnail strip and text search (GitHub issue #905)
 
 - Purpose: bring the 0.7.4 PDF viewer's page thumbnail strip to Qt, and give the Qt viewer text search, so a Qt user can move around a long plan set and find a word in it without leaving GoSurvey.
@@ -13809,6 +13806,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
                unchanged.
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
+
+### REQ-453 — Microsoft Store installs run without installer UI
+- Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
+- Priority: must
+- Type: functional
+- Statement: The existing Inno Setup EXE supports a Microsoft Store install invocation that does
+  not display setup UI. Store submission uses `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-`;
+  the allowed UAC prompt may still appear. The bundled VC++ redistributable also runs quietly.
+  Once the user has obtained the installer file, installation requires no network connection:
+  application files, Qt runtime, resources, PDFium, and VC++ runtime are included in that file.
+  The normal direct-download installer remains interactive. Silent deployment must not launch
+  GoSurvey after installation. Store submissions use a versioned, immutable stable-release asset;
+  the rolling beta asset is not eligible because its binary changes after publication.
+- Acceptance:
+  - the installer compiles and accepts the Store invocation without showing setup, progress, or
+    completion UI; a UAC consent prompt remains permitted;
+  - the VC++ redistributable is invoked with `/install /quiet /norestart`;
+  - packaging fails if the VC++ redistributable is missing, and the resulting installer contains it;
+  - the release workflow checks for the required Qt runtime DLLs, Qt platform plugin, `qt.conf`,
+    bundled template, PDFium, and VC++ redistributable before compiling;
+  - installation succeeds with network access disabled after the installer file is present locally;
+  - no post-install application launch occurs in the Store invocation;
+  - the ordinary direct-download invocation still displays the interactive setup wizard;
+  - Partner Center points to a versioned stable-release installer URL whose bytes are not replaced
+    after that submission;
+  - each stable release publishes a regenerated Store submission note containing the immutable
+    installer URL, SHA-256, and exact install parameters; beta releases do not publish this note;
+- Owner-layer: Build/Platform
+- Status: accepted (2026-10-23, D-2026-10-23-c)
+- Revisions: 2026-10-23 — initial, D-2026-10-23-c.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
