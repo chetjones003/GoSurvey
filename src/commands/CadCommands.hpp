@@ -8482,6 +8482,7 @@ std::vector<std::string> FuzzyCommandMatches(const std::string& query, int maxRe
 struct CommandSuggestion {
   std::string name;         ///< primary command name, uppercased (e.g. "LINE")
   std::string description;  ///< short human description shown in parentheses
+  bool exactMatch = false;  ///< query exactly names the primary command or one of its aliases
 };
 
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
