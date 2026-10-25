@@ -58,8 +58,8 @@ adjuster — new**
   confirm against — if you hit an issue importing one, please send us the file.
 
 - Fixed a second case of the command line running a different command than what was typed.
-- The sign-in prompt at launch is now a real choice: sign in now, or choose "Don't Sign In" to
-  skip it for good. You can still sign in later any time from Settings.
+- GoSurvey no longer asks you to sign in. Anonymous install and open pings run in the background
+  and never block the app, including when you are offline.
 
 ## 0.7.3
 

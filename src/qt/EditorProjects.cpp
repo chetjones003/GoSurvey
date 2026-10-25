@@ -2,7 +2,6 @@
 #include "QtAccent.hpp"
 #include "update/UpdateService.hpp"
 #include "telemetry/TelemetryService.hpp"  // ~EditorWindow owns the in-flight ping
-#include "auth/AuthService.hpp"
 #include "ProjectSettings.hpp"
 #include "ProjectPoints.hpp"
 #include "ProjectWarnings.hpp"

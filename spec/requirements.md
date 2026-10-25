@@ -2900,7 +2900,13 @@ requirements is a planning failure, not a sign of rigor.
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
   it routes through the existing unsaved-changes path, so a user with a dirty drawing is asked to
   save rather than losing it to the restart. The installer is then run non-interactively and the
-  application exits; the installer replaces the files and relaunches the application.
+  application exits; the installer replaces the files and relaunches the application. All GoSurvey
+  installs use the current user's per-user installation at `%LOCALAPPDATA%\Programs\GoSurvey`. If
+  this update is initiated by an older machine-wide Program Files install, the in-app update routes
+  through the hash-checking bootstrap, which migrates that copy with one-time Windows UAC consent and
+  relaunches GoSurvey from the per-user copy; subsequent updates apply there without elevation. The
+  bootstrap and in-app update install the licensed Visual C++ runtime files beside GoSurvey and skip
+  the shared runtime installer; each release must refresh those app-local runtime DLLs.
 
   The hash is an **integrity** check, not an authenticity one: it and the installer come from the same
   host over the same TLS connection, so it detects corruption and a truncated download, not a
@@ -2932,8 +2938,10 @@ requirements is a planning failure, not a sign of rigor.
   - a drawing with unsaved changes triggers the existing unsaved-changes modal before the application
     exits, and cancelling there cancels the update;
   - after the installer runs, the previous versioned executables (`GoSurvey-0.*.exe`) are gone from
-    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts and the `.gs`
-    file association still resolve;
+    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts still resolve;
+  - an update from a Program Files installation migrates it to the per-user installation with one-time
+    UAC consent, preserving user settings and data; later updates install to that same per-user copy
+    without elevation;
   - a partially downloaded file left by a killed process does not block or corrupt the next attempt.
 - Owner-layer: UI (dialog), Platform (download, hash, process launch), IO (`UserPrefs` skip state)
 - Status: accepted (2026-08-15)
@@ -3008,12 +3016,12 @@ requirements is a planning failure, not a sign of rigor.
   Amended rather than the code changed, and the weaker promise replaced with a **stronger, testable
   one** (idempotence) so the amendment is not simply an exemption. Decision D-2026-08-17-a.
 
-### REQ-080 — Anonymous install and active-usage telemetry
-- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+### REQ-080 — Anonymous install and open telemetry
+- Purpose: measure first runs and application opens without identifying users
 - Priority: should
 - Type: functional
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
-  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  persists it in the user preferences file. It sends two fire-and-forget events:
   - `install` — exactly once, when the install ID is generated
   - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
     This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
@@ -3024,28 +3032,16 @@ requirements is a planning failure, not a sign of rigor.
     already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
     numbers are unaffected — only a query counting rows would be.
 
-  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
-  `email`.
+  The events are sent via HTTPS POST to the configured endpoint as a JSON payload containing
+  exactly `installId`, `event`, `version`, `channel`, and `os`.
 
-  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
-  The original "no personally identifiable information" promise is reversed by explicit,
-  informed user decision — not discovered as a defect, not a Workshop judgment call. When
-  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
-  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
-  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
-  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
-  telemetry, only an optional enrichment of it when both happen to be true at once. No
-  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
-  and only when known.
+  **Amended 2026-10-24 (D-2026-10-24-a):** the payload is anonymous and has no email field.
+  No username, hostname, local path, drawing data, or hardware fingerprint is sent.
 
   The telemetry fires in a detached one-shot worker thread once per launch, independent of
-  any other background task's own success/failure — but its own firing point is no longer
-  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
-  the offline exception), so that whatever sign-in state is true at that moment is known
-  before the payload is built. This costs no perceptible delay in practice, since the gate
-  already blocks all other interaction until it resolves. It must never block the UI, gate a
-  session on its OWN account, or fail the application if the network is unavailable. Any
+  any other background task's own success/failure. It starts at application launch and never
+  waits for or depends on sign-in, license lookup, or internet connectivity. It must never
+  block the UI, gate a session, or fail the application if the network is unavailable. Any
   network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
   sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
   background reporting call has no actionable user recourse for its own failure.
@@ -3058,22 +3054,15 @@ requirements is a planning failure, not a sign of rigor.
   - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
     per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
     1; this REPLACES the original "at most once per rolling 24-hour period" condition;
-  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
-    channel, os, email);
-  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
-    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
-    for, or is skipped because of sign-in state;
-  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
-    included — `email` is the only field this requirement adds beyond the original five;
+  - the payload JSON is well-formed and contains exactly five fields (installId, event, version,
+    channel, os), with no personally identifying or machine-specific data;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the settings panel accurately describing current
-    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
+  - no usage or privacy notice for this ping appears in application settings;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
-  email, read not owned), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
@@ -3089,6 +3078,9 @@ requirements is a planning failure, not a sign of rigor.
   per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
   one day (see D-2026-08-23-e above) — each recorded separately because each was its own
   explicit ask, not one bundled decision.
+  2026-10-24 — removed signed-in email and sign-in-gate dependency; install/open reporting is
+  anonymous, background-only, and has no settings notice (D-2026-10-24-a). Startup/crash
+  diagnostics remain governed separately by REQ-425.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -3942,6 +3934,8 @@ requirements is a planning failure, not a sign of rigor.
 ---
 
 ### REQ-091 — User accounts and sign-in (Auth0)
+- **Retired 2026-10-24 by D-2026-10-24-a.** The acceptance conditions below are historical
+  records only and no longer authorize sign-in, account UI, credential storage, or launch gating.
 - Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
   telemetry is deliberately unable to do
 - Priority: should
@@ -4028,7 +4022,7 @@ requirements is a planning failure, not a sign of rigor.
     the signed-in email and a "more coming soon" note — no tier, no editable fields.
 - Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
   (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
                Credential-Manager technical shape and the REQ-300 dependency decision.
                2026-08-23 — added the blocking launch gate with an offline exception
@@ -4045,6 +4039,8 @@ requirements is a planning failure, not a sign of rigor.
                Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
+- **Retired 2026-10-24 by D-2026-10-24-a.** The endpoint is no longer part of the desktop
+  application's supported account or gating flow. The acceptance conditions below are historical.
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
   of any requirement naming what that entitlement controls
 - Priority: should
@@ -4061,7 +4057,7 @@ requirements is a planning failure, not a sign of rigor.
   - the endpoint's data store is separate from the telemetry Worker's, so a defect in
     one cannot read or corrupt the other's data.
 - Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
 
 ---
@@ -13848,6 +13844,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ## Quality requirements
 
+### REQ-453 — Review product documentation before opening a pull request
+- Purpose: keep product and user-facing documentation accurate and consistent
+- Priority: must
+- Type: quality
+- Statement: Before creating a pull request, the contributor reviews `README.md`,
+  `PRIVACY.md`, the in-app help wiki in `resources/wiki/`, and the public user
+  manual wiki linked from `gosurveycad.com` (currently the GitHub Wiki). The
+  contributor updates each source affected by the change before opening the
+  pull request. The task log or pull request description records the review and
+  either names the documentation updated or states that no update was needed.
+  If an affected external wiki cannot be updated because the contributor lacks
+  access, the pull request remains unopened until access is available and the
+  update is made.
+- Acceptance: before a pull request is created, its task log or description
+  records inspection of all four sources and lists updates made, or states that
+  no update was needed for each. Every source found to require an update is
+  updated before pull request creation.
+- Owner-layer: all contributors
+- Status: accepted
+- Revisions: 2026-10-22 — accepted by user (D-2026-10-22-d).
+
 ### REQ-200 — Deterministic, reproducible build
 - Purpose: maintainability
 - Priority: must
@@ -13959,6 +13976,60 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-10-23, D-2026-10-23-c)
 - Revisions: 2026-10-23 — initial, D-2026-10-23-c.
+
+### REQ-454 — One-command bootstrap installs the latest stable GoSurvey per-user
+- Purpose: let a Windows user install GoSurvey with one PowerShell command, without GoSurvey setup
+  screens or routine administrator approval.
+- Priority: must
+- Type: functional
+- Statement: GoSurvey publishes `scripts/install.ps1` in the repository and documents a one-line
+  `irm … | iex` command that runs it. The bootstrap obtains the latest **stable** release manifest
+  from the stable release URL defined by ADR-029, downloads the manifest's `installerUrl`,
+  and verifies the downloaded bytes against the manifest's SHA-256 before execution. A missing
+  manifest field, invalid hash, failed download, or hash mismatch stops installation, prints a clear
+  console error, and never runs the installer. SHA-256 detects corruption but does not authenticate
+  the publisher.
+
+  A fresh installation is silent and per-user at `%LOCALAPPDATA%\Programs\GoSurvey`; it does not
+  request elevation or show GoSurvey setup UI and does not ask the user to choose installation
+  options. A legacy machine-wide Program Files copy is migrated to this per-user location with
+  one-time Windows UAC consent so the protected copy can be removed. The bootstrap and user-approved
+  in-app update use the release's app-local Visual C++ runtime DLLs and do not launch the shared
+  redistributable installer. Migration preserves GoSurvey
+  settings and user data and leaves one working installation with its supported shortcuts. Following
+  migration, the user's explicit in-app update choice remains required under REQ-078 and applies the
+  update to this per-user copy without elevation.
+
+  The script prints the approved GoSurvey ASCII banner and progress/result messages in a readable
+  PowerShell console. Windows-controlled SmartScreen or Defender warnings are outside this feature's
+  guarantee; the script cannot sign the installer or suppress those operating-system warnings.
+  Standalone `.gs` drawings are retired under D-2026-10-20-d and no `.gs` file association is
+  required or restored by this feature.
+- Acceptance:
+  - the documented one-line PowerShell command installs the latest stable release, never the beta
+    channel;
+  - the installer runs only after the release manifest and SHA-256 are present and valid; a failed
+    download, missing/invalid manifest data, or hash mismatch reports a clear error and does not run
+    the installer;
+  - a fresh install completes under `%LOCALAPPDATA%\Programs\GoSurvey` without GoSurvey setup UI,
+    UAC, or installation-choice prompts;
+  - migration from Program Files completes after one UAC consent, preserves user data/settings,
+    leaves one working per-user installation, and restores the Start-menu shortcut and any existing
+    desktop shortcut;
+  - the migrated copy opens normally with its bundled app-local Visual C++ runtime, and future
+    user-approved REQ-078 updates replace that same per-user installation without elevation or
+    launching the shared runtime installer;
+  - the ASCII banner is readable in Windows PowerShell and matches the approved output preview
+    in `docs/install.md`;
+  - the documentation explicitly says Windows-controlled SmartScreen/Defender warnings are not
+    suppressed or guaranteed away.
+- Owner-layer: Build/Platform (bootstrap, installer, release manifest), UI/Platform (REQ-078 update
+  handoff)
+- Status: accepted (2026-10-24, D-2026-10-24-c)
+- Revisions: 2026-10-24 — initial, D-2026-10-24-c; `.gs` association removed from migration
+  acceptance following clarification that standalone `.gs` drawings are retired. D-2026-10-24-d
+  selects app-local Visual C++ runtime DLLs for bootstrap and in-app updates to avoid shared-runtime
+  UAC; the Microsoft Store redistributable flow remains under REQ-453.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
@@ -14718,6 +14789,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-454 | Build/Platform/UI | Verify stable-manifest bootstrap; valid and invalid hashes; failed download; fresh silent per-user install; Program Files migration (settings/data and supported shortcuts preserved, one install); in-app update without elevation; output matches `docs/install.md` | accepted |
 | REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) **Amended 2026-09-25 (D-2026-09-25-a, TASK-277): (f)'s connection-port snapping is now actually performed, and a palette click always places the part.** `CadPipePaletteArmPart` armed a one-click INSERT and never enabled any snap, so the off-run half of (f) was a plain drop at the click point with the identity rotation the part was authored with - reported with screenshots as "the blind flange is not aligning correctly". A blind flange bolts onto another flange's FACE and can never splice into a run, so that path was the only one it had. The click now resolves in three ordered outcomes: **on a run** -> the existing `PIPEFIT` splice, unchanged; **otherwise, within 2 ft of a connection port or pipe end** -> `SubmitInsertBlockConnectorPick` (REQ-107 / issue #496, unchanged, including TASK-269's exact-match-before-default two-pass search - which is what makes a blind flange prefer the flange FACE over the pipe end also in reach, since its only mode targets `flange-face` exactly and accepts `pipe-end` merely as an `isDefault` fallback); **otherwise** -> a free placement at the point, reported as such. A REFUSED splice also falls through to the snap/placement rather than ending the click (D-2026-09-25-a): the bundled blind flange has ONE connection point and `PickElbowPorts` needs two, so a run click used to be consumed with nothing placed at all. `SubmitInsertBlockConnectorPick` gains a defaulted `optional` parameter - when set, the two not-found paths return false WITHOUT logging a refusal, so a caller with a legitimate fallback can take it; every other caller is unchanged and keeps its named refusals (REQ-201). Arming also clears `insertBlockConnectorName` and the stale dialog rotations, so every port on the part is a snap candidate rather than whichever one an earlier INSERT dialog left named. `CadBlockImportTests` gains 3 `[connectorsnap]` cases (a blind flange clicked on a placed flange's gasket face landing ON that face with its own face turned INTO it; nothing within 2 ft still placing, and saying why it is unoriented; a part that cannot splice still landing where it was clicked with the splice's own refusal logged). All three fail against the code they were written for. Full suite green: `GoSurveySnapTests` 437/437 (up from 434), `GoSurveyTests` 1218/1219, ctest 1809/1817 - the same 8 pre-existing failures named under TASK-275/276. **Deliberately out of scope, by name**: enforcing `CadBlockConnectionMode::compatibilityTag` (a CS150 part snapping to a CS300 face is not refused), and the 2 ft `kSnap` tolerance itself, which is REQ-107's existing figure. | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
@@ -14759,6 +14831,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
 | REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel, continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout, Revision cloud, box select, previews, compare panel, cache bound and render cancellation, screenshots | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
+| REQ-453 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14977,6 +15050,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22, user approved scope)
 
 ---
+
+### REQ-453 — Identify development windows by worktree branch
+- Purpose: let a developer distinguish simultaneously running GoSurvey instances built from separate agent worktrees, and keep their build and launch artifacts isolated
+- Priority: should
+- Type: functional
+- Statement: When GoSurvey is launched through the worktree's `run.bat`, the main application window must visibly identify the current Git branch alongside its normal GoSurvey/document title. Build and launch instructions for agents must require building and launching from the assigned worktree root and using that worktree's own `build/` output. The executable filename remains `GoSurvey.exe`; build output and launch paths remain worktree-local. A detached checkout with no branch name may use the ordinary title without a branch label. This increment does not include a standalone window manager or a build/restart watcher.
+- Acceptance:
+  1. Launching with `run.bat` from a named branch displays that exact branch name in the main application's native window title and custom title area, including after title refreshes triggered by document changes.
+  2. Launching without a development branch label keeps the existing `GoSurvey` and document title behavior.
+  3. `run.bat` derives the label from the Git branch in its own worktree and passes it only to the launched process; no branch-specific executable name or build-script output path is introduced.
+  4. Agent build/launch documentation says to run `build.bat` and `run.bat` from the assigned worktree, preserve that checkout's standard `build/` outputs, and not close an application running from another worktree to unblock a build.
+  5. The normal executable filename remains `GoSurvey.exe`; this increment adds neither the standalone manager nor a build/restart watcher.
+- Owner-layer: Application / Qt UI / Build documentation
+- Status: accepted (2026-10-23, user approved scope)
 
 ## Anti-requirements
 

@@ -55,7 +55,7 @@ the drawing.
 | Key | Effect |
 |---|---|
 | `↑` / `↓` | Move the highlight |
-| `Enter` | Run the highlighted command |
+| `Enter` | Run the exact command or alias if it matches; otherwise run the highlighted suggestion |
 | `Tab` | Complete to the highlighted entry |
 | Click a row | Run it directly |
 | `Esc` | Dismiss the popup |

@@ -6558,6 +6558,11 @@ void ClearPendingViewportZoom(AppCommandState& st) {
   st.pendingZoomWindow = false;
 }
 
+void RequestZoomExtents(AppCommandState& st) {
+  ClearPendingViewportZoom(st);
+  st.pendingZoomExtents = true;
+}
+
 namespace CadCmdGeom {
 
 [[nodiscard]] float DistSqPointSegment(float px, float py, float ax, float ay, float bx, float by) {
@@ -42267,8 +42272,7 @@ void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log)
     log.push_back("ZOOM EXTENTS — finish or cancel the active command first.");
     return;
   }
-  ClearPendingViewportZoom(st);
-  st.pendingZoomExtents = true;
+  RequestZoomExtents(st);
 }
 
 void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -47478,6 +47482,7 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   struct Scored {
     const CmdEntry* entry;
     int score;
+    bool exactMatch;
   };
   std::vector<Scored> ranked;
   const std::string qlow = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(query));
@@ -47492,7 +47497,8 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   for (const CmdEntry& e : kRegistry) {
     int best = -1;
     const std::string nameLow = StringUtil::toLowerAsciiCopy(e.primary);
-    if (nameLow == qlow)
+    bool exactMatch = nameLow == qlow;
+    if (exactMatch)
       best = 5000000;
     else if (isPrefix(qlow, e.primary))
       best = 3000000 + FuzzySubsequenceScore(qlow, nameLow);
@@ -47506,14 +47512,15 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
         if (a.empty())
           continue;
         const std::string aliasLow = StringUtil::toLowerAsciiCopy(a);
-        if (aliasLow == qlow)
+        if (aliasLow == qlow) {
+          exactMatch = true;
           best = std::max(best, 4000000);
-        else if (isPrefix(qlow, a))
+        } else if (isPrefix(qlow, a))
           best = std::max(best, 2000000 + FuzzySubsequenceScore(qlow, aliasLow));
       }
     }
     if (best >= 1000000)
-      ranked.push_back({&e, best});
+      ranked.push_back({&e, best, exactMatch});
   }
   std::sort(ranked.begin(), ranked.end(), [](const Scored& a, const Scored& b) {
     if (a.score != b.score)
@@ -47528,6 +47535,7 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
     for (char& ch : s.name)
       ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));  // NAME in caps (nanoCAD style)
     s.description = ranked[i].entry->description ? ranked[i].entry->description : "";
+    s.exactMatch = ranked[i].exactMatch;
     out.push_back(std::move(s));
   }
   return out;

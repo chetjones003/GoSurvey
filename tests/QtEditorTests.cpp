@@ -1,6 +1,7 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "io/DwgIo.hpp"
+#include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "ViewportRenderer.hpp"
@@ -128,6 +129,7 @@
 #include <QTemporaryFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -211,6 +213,11 @@ QString OpenTraverseCommands() {
       "HDIST 2 3 100\n");
 }
 QString Issue914Shot(const char* name) {
+  const QString directory = QtTestArtifactDirectory();
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
+QString Req453Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
@@ -645,6 +652,40 @@ class QtEditorTests final : public QObject {
   }
 
 private Q_SLOTS:
+  void req453DevelopmentBranchAppearsInBothWindowTitlesAndSurvivesRefresh() {
+    EditorWindow window(QStringLiteral("feature/window-label"));
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-development-branch-title.png")));
+  }
+
+  void req453WindowTitleWithoutDevelopmentBranchStaysUnchanged() {
+    EditorWindow window;
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-normal-title.png")));
+  }
+
   void issue803SplineRibbonPreviewAndSelectionScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
@@ -2006,42 +2047,6 @@ private Q_SLOTS:
     QVERIFY(!window.HasUnsavedChanges());
   }
 
-  void settingsAccountSupportsLaterSignInAndReadOnlyStatus() {
-    EditorWindow window;
-    auto *viewMenu = window.findChild<QMenu *>("viewMenu");
-    QVERIFY(viewMenu);
-    QAction *settings = nullptr;
-    for (auto *action : viewMenu->actions())
-      if (action->text() == "Settings…")
-        settings = action;
-    QVERIFY(settings);
-    settings->trigger();
-    auto *dialog = window.findChild<QDialog *>("applicationSettings");
-    QVERIFY(dialog);
-    auto *heading = dialog->findChild<QLabel *>("accountSettingsHeading");
-    QVERIFY(heading);
-    QCOMPARE(heading->text(), QString("Account"));
-    QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
-    QVERIFY(dialog->findChild<QWidget *>("settingsPageAccount")->findChildren<QLineEdit *>().isEmpty());
-    auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
-    auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
-    QVERIFY(action);
-    QVERIFY(status);
-    QTRY_COMPARE(action->text(), QString("Sign In"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    window.State().authSignInRequested = false;
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
-    QTRY_COMPARE(action->text(), QString("Sign Out"));
-    const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-account-final.png"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignOutRequested);
-  }
-
   void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -2485,46 +2490,6 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
   }
 
-  void startupGateUsesApplicationLogoAndRequiresAChoice() {
-    EditorWindow window;
-    window.State().authGateResolved = false;
-    window.show();
-    window.ShowSignInGate();
-    auto *gate = window.findChild<QDialog *>("signInGate");
-    QVERIFY(gate);
-    QTRY_VERIFY(gate->isVisible());
-    QCOMPARE(gate->windowModality(), Qt::ApplicationModal);
-    QVERIFY(!(gate->windowFlags() & Qt::WindowCloseButtonHint));
-    auto *logo = gate->findChild<QLabel *>("signInLogo");
-    QVERIFY(logo);
-    QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
-    const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-startup-final.png"));
-    gate->close();
-    QVERIFY(gate->isVisible());
-    QTest::keyClick(gate, Qt::Key_Escape);
-    QVERIFY(gate->isVisible());
-    QTest::mouseClick(gate->findChild<QPushButton *>("signInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    QTest::mouseClick(gate->findChild<QPushButton *>("declineSignInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authDeclineRequested);
-  }
-
-  void savedOptOutResolvesQtLaunchWithoutAuthAttempt() {
-    EditorWindow window;
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QVERIFY(window.State().authGateResolved);
-    QVERIFY(!window.State().authBusy);
-    QCoreApplication::processEvents();
-    QVERIFY(!window.findChild<QDialog *>("signInGate"));
-  }
-
-  // ---- REQ-080 usage ping / REQ-425 crash and startup-failure reports (issue #883) -----------
-
   static QString SampleCrashReport() {
     return QString(
         "GoSurvey stopped because of an unexpected error.\n\n"
@@ -2544,7 +2509,6 @@ private Q_SLOTS:
         "Use \"Send This Report\" to copy this text and open GitHub to file an issue.";
   }
 
-  /// Clicks OK on the next message box and hands back what it said.
   static void CaptureNextMessage(QString& text) {
     QTimer::singleShot(0, [&text] {
       for (auto* widget : QApplication::topLevelWidgets())
@@ -2553,77 +2517,6 @@ private Q_SLOTS:
           message->button(QMessageBox::Ok)->click();
         }
     });
-  }
-
-  void telemetryPingWaitsForLaunchGateAndFiresOnce() {
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping before the launch sequence starts");
-    window.m_AuthStarted = true;
-    window.State().authGateResolved = false;
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping while the sign-in gate is unresolved");
-    window.State().authGateResolved = true;
-    window.ServiceTelemetry();
-    window.ServiceTelemetry();
-    QCOMPARE(sent.size(), std::size_t(1));
-    QCOMPARE(sent[0], std::string());  // signed out: no email
-
-    EditorWindow signedIn;
-    std::vector<std::string> signedInSent;
-    signedIn.m_SendTelemetry = [&signedInSent](const std::string& email) { signedInSent.push_back(email); };
-    signedIn.m_AuthStarted = true;
-    signedIn.State().authGateResolved = true;
-    signedIn.State().authSignedIn = true;
-    signedIn.State().authEmail = "surveyor@example.com";
-    signedIn.ServiceTelemetry();
-    QCOMPARE(signedInSent, std::vector<std::string>{"surveyor@example.com"});
-  }
-
-  void telemetryPingFollowsTheRealLaunchPathOnlyWhenEnabled() {
-    // The saved opt-out resolves the gate at once; the window's own service loop sends the ping.
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QTRY_COMPARE(sent.size(), std::size_t(1));
-    QTest::qWait(150);
-    QCOMPARE(sent.size(), std::size_t(1));
-
-    // A window the entry point did not enable never sends one (so tests stay off the network).
-    EditorWindow quiet;
-    quiet.State().authOptedOut = true;
-    quiet.StartAuth();
-    QTest::qWait(150);
-    QVERIFY(!quiet.m_SendTelemetry);
-    QVERIFY(!quiet.m_TelemetryTask);
-  }
-
-  void settingsUsageDisclosureIsAccurateAndFollowsSignIn() {
-    EditorWindow window;
-    window.ShowSettings();
-    auto* dialog = window.findChild<QDialog*>("applicationSettings");
-    QVERIFY(dialog);
-    auto* heading = dialog->findChild<QLabel*>("usageDataHeading");
-    auto* summary = dialog->findChild<QLabel*>("usageDataSummary");
-    auto* email = dialog->findChild<QLabel*>("usageDataEmail");
-    auto* crash = dialog->findChild<QLabel*>("usageDataCrashReports");
-    QVERIFY(heading && summary && email && crash);
-    // REQ-080 as amended: a ping every launch. The 0.7.4 "at most once a day" is no longer true.
-    QVERIFY(summary->text().contains("each time you start GoSurvey"));
-    QVERIFY(!summary->text().contains("once a day"));
-    // A disclosure, not a control: ADR-032 has no opt-out.
-    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection")->findChild<QCheckBox*>());
-    QVERIFY(email->text().contains("currently signed out"));
-    // REQ-425 §6.
-    QVERIFY(crash->text().contains("crashes or cannot start"));
-    QVERIFY(crash->text().contains("file locations"));
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_VERIFY(email->text().contains("your email is included too"));
   }
 
   void failureReportWindowSendsWithoutClosingAndCloseSendsNothing() {
@@ -3227,18 +3120,13 @@ private Q_SLOTS:
     UpdateButton(dialog, "updateRemindButton")->click();
   }
 
-  void updateOfferIsShownBeforeTheSignInGate() {
+  void startupHasNoSignInGate() {
     EditorWindow window;
-    window.State().authGateResolved = false;
-    window.m_AuthStarted = true;
-    window.m_Update->phase = update::Phase::Checking;
-    window.ServiceAuth();
+    window.show();
+    QApplication::processEvents();
     QVERIFY(!window.findChild<QDialog*>("signInGate"));
-    window.m_Update->phase = update::Phase::Idle;
-    window.ServiceAuth();
-    if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/task-1043-startup.png"));
   }
-
   void settingsUpdatesAreStagedUntilApply() {
     IsolatedUserData userData;
     EditorWindow window;
@@ -3307,7 +3195,9 @@ private Q_SLOTS:
     QVERIFY(categories);
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
-    QCOMPARE(names, (QStringList{"Account", "Updates and Privacy", "Display", "Drafting", "Survey Points"}));
+    QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
+    QVERIFY(!dialog->findChild<QWidget*>("settingsPageAccount"));
+    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection"));
     auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
     auto* undo = dialog->findChild<QSpinBox*>("settingsUndoHistory");
     auto* angle = dialog->findChild<QComboBox*>("settingsAngleType");
@@ -3324,7 +3214,6 @@ private Q_SLOTS:
       const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
       auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
       ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
-      window.State().authSignedIn = false;
       dialog->resize(780, 600);
       for (int i = 0; i < categories->count(); ++i) {
         categories->setCurrentRow(i);
@@ -3543,15 +3432,12 @@ private Q_SLOTS:
     QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
     QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
     QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
-
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
 
     EditorWindow firstRun;
-    // What's New follows the Start-screen conditions; an unresolved launch sign-in choice must
-    // not suppress its display.
+    // What's New follows the Start-screen conditions without a sign-in gate.
     firstRun.State().whatsNewDismissedVersion.clear();
     firstRun.InitializeStartup();
     auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
@@ -3590,7 +3476,6 @@ private Q_SLOTS:
 
   void directDrawingStartupDoesNotAutoOpenWhatsNew() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.CreateDrawingFromTemplate(0);
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
@@ -3598,16 +3483,13 @@ private Q_SLOTS:
 
   void updateOfferSuppressesWhatsNewForTheLaunch() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion.clear();   // would otherwise auto-open
     auto* dialog = OfferUpdate(window, OfferedManifest());
     QVERIFY(dialog);
     window.InitializeStartup();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
     UpdateButton(dialog, "updateRemindButton")->click();
     window.ServiceUpdate();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
   }
 
@@ -4878,6 +4760,13 @@ private Q_SLOTS:
     const auto typoSuggestions = FuzzyCommandSuggestions("lne", 30);
     QVERIFY(!typoSuggestions.empty());
     QCOMPARE(QString::fromStdString(typoSuggestions.front().name), QString("LINE"));
+    const auto aliasSuggestions = FuzzyCommandSuggestions("l", 1);
+    QVERIFY(!aliasSuggestions.empty());
+    QCOMPARE(QString::fromStdString(aliasSuggestions.front().name), QString("LINE"));
+    QVERIFY(aliasSuggestions.front().exactMatch);
+    const auto prefixSuggestions = FuzzyCommandSuggestions("lin", 1);
+    QVERIFY(!prefixSuggestions.empty());
+    QVERIFY(!prefixSuggestions.front().exactMatch);
     QVERIFY(!window.m_DynamicInput->isVisible());
     command->setFocus(); QTest::keyClicks(command, "lne");
     QCOMPARE(command->text(), QString("lne"));
@@ -4958,6 +4847,312 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::None);
   }
 
+  void issue1081QtExactOpenWinsOverOpenPackSuggestion() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+
+    command->setFocus(); QTest::keyClicks(command, "OPEN");
+    QTRY_VERIFY(popup->isVisible());
+    const auto openSuggestions = FuzzyCommandSuggestions("OPEN", 1);
+    QCOMPARE(QString::fromStdString(openSuggestions.front().name), QString("OPENPACK"));
+    QVERIFY(!openSuggestions.front().exactMatch);
+    QCOMPARE(model->index(0, 0).data().toString(), QString("OPENPACK"));
+    QModelIndex packRow;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("OPENPACK")) {
+        packRow = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(packRow.isValid());
+    popup->setCurrentIndex(packRow);
+
+    QString dialogTitle;
+    QStringList dialogFilters;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialogTitle = dialog->windowTitle();
+      dialogFilters = dialog->nameFilters();
+      dialog->reject();
+    });
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(dialogTitle, QString("Open drawing"));
+    QVERIFY(dialogFilters.contains(QString("Drawing (*.dwg)")));
+
+    command->setFocus(); QTest::keyClicks(command, "LINE");
+    QTRY_VERIFY(popup->isVisible());
+    QModelIndex otherCommand;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("MKLINE")) {
+        otherCommand = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(otherCommand.isValid());
+    popup->setCurrentIndex(otherCommand);
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.State().active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
+  }
+
+private:
+  // GitHub #1024: helpers for the Qt zoom tests. Friends of EditorWindow, so they can reach its log
+  // and cancel path; a free function could not.
+  static constexpr std::size_t kFlatLineStride = 6;  // x0 y0 z0 x1 y1 z1
+  static constexpr double kExtentsMargin = 0.08;      // REQ-122: the binding axis leaves 8% free
+  static constexpr double kFitMin = 0.98, kFitMax = 1.001;  // "framed": the binding axis is within 2% of the margin
+  static constexpr double kParkedPanX = -5000.0, kParkedPanY = 7000.0;  // a camera nothing could frame
+  static constexpr double kLineW = 400.0, kLineH = 200.0;               // the line DrawLine("0,0", "400,200") makes
+  static constexpr double kThinLineScale = 13.587;  // req123-viewport-zoom-extents.txt: 2 * (100 / 3.68) / 4 in
+
+  static void DrawLine(EditorWindow& window, const char* from, const char* to) {
+    for (const char* text : {"LINE", from, to}) window.Submit(text);
+    window.CancelDraftingInput();
+  }
+  static void DrawWideLine(EditorWindow& window) { DrawLine(window, "0,0", "400,200"); }
+  static void ParkCamera(AppCommandState& st) {
+    st.viewportPanX = kParkedPanX; st.viewportPanY = kParkedPanY; st.viewportZoom = 1.f;
+  }
+  static bool LogHas(const std::vector<std::string>& log, const char* text) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& e) { return e.find(text) != std::string::npos; });
+  }
+  // 1.0 means the box exactly fills the view minus the margin on its binding axis; > 1 clips it and
+  // a value well under 1 means the view is wider than REQ-122 asks. Independent of the framing code.
+  static double FrameFit(const AppCommandState& st, const QWidget& view, double spanX, double spanY) {
+    const Camera camera = CadViewCamera(st);
+    const double halfH = camera.orthoHalfH;
+    const double halfW = halfH * view.width() / view.height();
+    return std::max(0.5 * spanX / (halfW * (1.0 - kExtentsMargin)), 0.5 * spanY / (halfH * (1.0 - kExtentsMargin)));
+  }
+  static bool IsFramed(const AppCommandState& st, const QWidget& view, double spanX, double spanY) {
+    const double fit = FrameFit(st, view, spanX, spanY);
+    return fit > kFitMin && fit <= kFitMax;
+  }
+  static EditorViewport* PaintedViewport(EditorWindow& window) {
+    window.m_Viewport->grabFramebuffer();
+    return window.m_Viewport;
+  }
+
+private Q_SLOTS:
+  // GitHub #1024 / REQ-120 / REQ-122: ZOOMEXTENTS only sets a pending flag, so the Qt viewport has to
+  // consume it when it paints. The headless transcripts call the zoom function directly and cannot
+  // see this; only the real viewport can. Wide, tall and ultra-wide windows move the binding axis.
+  void issue1024QtZoomExtentsFramesTheDrawing() {
+    for (const QSize size : {QSize(1280, 800), QSize(600, 900), QSize(1600, 500)}) {
+      EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(size); window.show();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      auto& st = window.State();
+      DrawWideLine(window);
+      QVERIFY(st.userLinesFlat.size() >= kFlatLineStride);
+      const std::size_t o = st.userLinesFlat.size() - kFlatLineStride;
+      const double cx = 0.5 * (st.userLinesFlat[o] + st.userLinesFlat[o + 3]);
+      const double cy = 0.5 * (st.userLinesFlat[o + 1] + st.userLinesFlat[o + 4]);
+
+      ParkCamera(st);
+      window.Submit("ZOOMEXTENTS");
+      QTRY_VERIFY(!st.pendingZoomExtents);
+      QVERIFY(std::abs(st.viewportPanX - cx) < 1.0);
+      QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
+      QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+      // The whole line fits, and the axis that binds leaves 8% free (REQ-122).
+      QVERIFY2(IsFramed(st, *window.m_Viewport, kLineW, kLineH),
+               qPrintable(QString("window %1x%2").arg(size.width()).arg(size.height())));
+    }
+  }
+
+  // REQ-122: an orbited camera frames the model's 3D box by its silhouette, not the plan rectangle.
+  void issue1024QtZoomExtentsFramesTheDrawingWhenOrbited() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    PaintedViewport(window)->SetOrientation(30.f, 40.f);
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied (3D)"));
+    QVERIFY(std::abs(st.viewportPanX - kLineW / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanZ) < 1.0);
+    QVERIFY(st.viewportZoom > 0.f && st.viewportZoom != 1.f);
+  }
+
+  // REQ-120: the middle double-click is the same operation as the typed command, is transparent
+  // mid-command, and works over the ViewCube too (a middle press passes through the cube).
+  void issue1024QtMiddleDoubleClickZoomsExtentsMidCommand() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    window.Submit("LINE"); window.Submit("10,10");
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    QCOMPARE(st.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    const std::size_t lines = st.userLinesFlat.size();
+
+    // The typed route stays refused mid-command; nothing about it is relaxed. (REQ-120 quotes the
+    // older "Could not parse point" wording; today the LINE prompt names itself, same refusal.)
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QApplication::processEvents(); QTest::qWait(50);
+    QVERIFY(LogHas(window.m_Log, "still running"));
+    QVERIFY(!st.pendingZoomExtents);
+    QCOMPARE(st.viewportPanX, kParkedPanX);
+
+    // Off the cube, and on its centre, home button and bottom-right corner.
+    const viewcube::Scene scene = ViewCubeSceneOf(window.m_Viewport, st);
+    const QPoint cubeCorner(qRound(scene.originX + scene.sizePx - 3), qRound(scene.originY + scene.sizePx - 3));
+    for (const QPoint& at : {QPoint(300, 300), Px(scene.center), Px(scene.home), cubeCorner}) {
+      ParkCamera(st);
+      QTest::mouseDClick(window.m_Viewport, Qt::MiddleButton, Qt::NoModifier, at);
+      QTRY_VERIFY2(std::abs(st.viewportPanX - kLineW / 2) < 1.0, qPrintable(QString("%1,%2").arg(at.x()).arg(at.y())));
+      QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+      QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+    }
+    // The LINE in progress kept its first point: the next point completes a segment from (10,10).
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    QCOMPARE(st.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    window.Submit("50,60");
+    QCOMPARE(st.userLinesFlat.size(), lines + kFlatLineStride);
+    QCOMPARE(st.userLinesFlat[lines], 10.0);
+    QCOMPARE(st.userLinesFlat[lines + 1], 10.0);
+    QCOMPARE(st.userLinesFlat[lines + 3], 50.0);
+    QCOMPARE(st.userLinesFlat[lines + 4], 60.0);
+    window.CancelDraftingInput();
+  }
+
+  // REQ-122: a queued ZOOM WINDOW is applied by the viewport too. Its pending request was stranded
+  // the same way. The request is queued directly: the Qt viewport never starts ZOOM WINDOW's first
+  // corner from a click (a separate defect, #1100), so no click can queue it yet.
+  void issue1024QtQueuedZoomWindowFramesTheRectangle() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    ParkCamera(st);
+    st.pendingZoomMnX = 100.f; st.pendingZoomMxX = 300.f;
+    st.pendingZoomMnY = 50.f; st.pendingZoomMxY = 150.f;
+    st.pendingZoomWindow = true;
+    window.m_Viewport->update();
+    QTRY_VERIFY(!st.pendingZoomWindow);
+    QVERIFY(LogHas(window.m_Log, "Zoom window applied"));
+    QVERIFY(std::abs(st.viewportPanX - 200.0) < 0.5);
+    QVERIFY(std::abs(st.viewportPanY - 100.0) < 0.5);
+    QVERIFY(IsFramed(st, *window.m_Viewport, 200.0, 100.0));
+  }
+
+  // REQ-201: with nothing to frame, say so and leave the view alone.
+  void issue1024QtZoomExtentsOnAnEmptyDrawingSaysWhyAndKeepsTheView() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    QVERIFY(st.userLinesFlat.empty());
+    st.viewportPanX = 123.0; st.viewportPanY = 456.0; st.viewportZoom = 2.f;
+    window.m_Log.clear();
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QCOMPARE(st.viewportPanX, 123.0);
+    QCOMPARE(st.viewportPanY, 456.0);
+    QCOMPARE(st.viewportZoom, 2.f);
+    QVERIFY(LogHas(window.m_Log, "nothing to frame"));
+  }
+
+  // REQ-120: in paper space the gesture frames the SHEET, not the paper entities on it.
+  void issue1024QtZoomExtentsInPaperSpaceFramesTheSheet() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    const int layout = AddPaperLayout(st);
+    SetActiveSpace(st, layout);
+    window.Refresh();
+    const double sheetW = st.paperLayouts[static_cast<std::size_t>(layout)].sheetWidthIn();
+    const double sheetH = st.paperLayouts[static_cast<std::size_t>(layout)].sheetHeightIn();
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(st.viewportPanX - 0.5 * sheetW) < 0.01);
+    QVERIFY(std::abs(st.viewportPanY - 0.5 * sheetH) < 0.01);
+    QVERIFY(IsFramed(st, *window.m_Viewport, sheetW, sheetH));
+  }
+
+  // REQ-123: inside an activated viewport the model is framed into the VIEWPORT's own rectangle, and
+  // with the zoom lock on the sheet is framed instead.
+  void issue1024QtZoomExtentsInAFloatingViewportFramesTheViewport() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawLine(window, "0,0", "100,20");
+    const int layout = AddPaperLayout(st);
+    SetActiveSpace(st, layout);
+    const int vpIndex = AddViewportRect(st, layout, 1.f, 1.f, 9.f, 5.f);  // 8 in x 4 in: aspect 2
+    EnterFloatingModelSpace(st, layout, vpIndex, window.m_Log);
+    QVERIFY(InFloatingModelSpace(st));
+    window.Refresh();
+    auto& vp = st.paperLayouts[static_cast<std::size_t>(layout)].viewports[static_cast<std::size_t>(vpIndex)];
+    vp.modelCenterX = -900.0; vp.modelCenterY = 900.0; vp.scaleModelPerPaperIn = 1.f;
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(vp.modelCenterX - 50.0) < 0.01);
+    QVERIFY(std::abs(vp.modelCenterY - 10.0) < 0.01);
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);
+
+    st.viewportZoomLocked = true;
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);  // the viewport was left alone
+    const auto& sheet = st.paperLayouts[static_cast<std::size_t>(layout)];
+    QVERIFY(std::abs(st.viewportPanX - 0.5 * sheet.sheetWidthIn()) < 0.01);
+    QVERIFY(std::abs(st.viewportPanY - 0.5 * sheet.sheetHeightIn()) < 0.01);
+  }
+
+  // Entering BEDIT queues a zoom extents of the block's own content; it was dead in Qt until the
+  // viewport consumed the request, so the editor now opens framed on the block.
+  void issue1024QtBlockEditFramesTheBlockContent() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    CadBlockDefinition block;
+    block.name = "Issue1024Block";
+    block.content.lines = {0.f, 0.f, 0.f, static_cast<float>(kLineW), static_cast<float>(kLineH), 0.f};
+    block.content.lineAttrs.resize(1);
+    block.content.lineVis.resize(1);
+    st.blockDefs.push_back(block);
+    ParkCamera(st);
+    window.Submit("BEDIT Issue1024Block");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(st.blockEditActive);
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+  }
+
+  // Imports fit the drawing to the size the viewport last painted at (DxfIo/LibreDwgCad read it);
+  // before the Qt viewport published it they always fit to a stale 900 x 650.
+  void issue1024QtViewportPublishesItsPixelSizeAndImportsFitToIt() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString path = directory.filePath("wide.dxf");
+    {
+      EditorWindow source; source.CreateDrawingFromTemplate(); source.resize(1280, 800); source.show();
+      QVERIFY(QTest::qWaitForWindowActive(&source));
+      DrawWideLine(source);
+      std::vector<std::string> log;
+      QVERIFY(ExportDxfFile(source.State(), path.toUtf8().constData(), log));
+    }
+    // Aspect 3.2: the wide line is height-bound here but width-bound at the stale 900 x 650 (1.38).
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1600, 500); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    PaintedViewport(window);
+    QCOMPARE(st.viewportLastFbW, qRound(window.m_Viewport->width() * window.m_Viewport->devicePixelRatioF()));
+    QCOMPARE(st.viewportLastFbH, qRound(window.m_Viewport->height() * window.m_Viewport->devicePixelRatioF()));
+    std::vector<std::string> log;
+    QVERIFY(ImportDxfFile(st, path.toUtf8().constData(), log));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+  }
+
   void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
     window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
@@ -5028,32 +5223,6 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
     QVERIFY(DoUndo(state, window.m_Log));
     QVERIFY(state.userLinesFlat.empty());
-  }
-
-  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
-    QTemporaryFile blocker;
-    QVERIFY(blocker.open());
-    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
-    EditorWindow window;
-    auto& state = window.State();
-    window.m_AuthStarted = true;
-    state.authGateResolved = false;
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(!state.authOptedOut);
-    QVERIFY(!state.authGateResolved);
-    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
-
-    IsolatedUserData writable;
-    state.authError.clear();
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(state.authOptedOut);
-    QVERIFY(state.authGateResolved);
-    QVERIFY(state.authError.empty());
-    AppCommandState reloaded;
-    LoadUserStartupPrefSettings(reloaded);
-    QVERIFY(reloaded.authOptedOut);
   }
 
   void issue903PolarSettingsAndOneShotSnap() {
@@ -5419,6 +5588,73 @@ private Q_SLOTS:
     QCOMPARE(state.openProjects.front().readOnly, true);
   }
 
+  void qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure() {
+    IsolatedUserData userData;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString drawingPath = directory.filePath("Existing.dwg");
+    AppCommandState source;
+    source.userLinesFlat = {12.0, 4.0, 0.0, 18.0, 4.0, 0.0};
+    source.userLineAttrs.push_back(EntityAttributes{});
+    std::vector<std::string> saveLog;
+    const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
+    QVERIFY(SaveDrawingDocument(source, drawingPathUtf8.constData(), saveLog));
+
+    EditorWindow window;
+    const auto initialTabs = window.State().drawingTabs.size();
+    QVERIFY(initialTabs >= 2);
+    QCOMPARE(window.State().activeDrawingIdx, 0);
+    bool chooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        chooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!chooserAppeared);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+    QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(initialTabs));
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+    QCOMPARE(window.State().drawingTabs[static_cast<std::size_t>(window.State().activeDrawingIdx)].name,
+             std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    window.SwitchDrawing(1);
+    const auto tabsBeforeSecondOpen = window.State().drawingTabs.size();
+    bool secondChooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        secondChooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!secondChooserAppeared);
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeSecondOpen + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(tabsBeforeSecondOpen));
+    QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
+    QCOMPARE(window.State().drawingTabs.back().name, std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    const auto activeIndex = window.State().activeDrawingIdx;
+    const auto tabsBeforeFailure = window.State().drawingTabs.size();
+    const auto linesBeforeFailure = window.State().userLinesFlat;
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+    });
+    window.OpenDrawing(directory.filePath("Missing.dwg"));
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeFailure);
+    QCOMPARE(window.State().activeDrawingIdx, activeIndex);
+    QCOMPARE(window.State().userLinesFlat, linesBeforeFailure);
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+  }
+
   void qtDrawingTemplateScreenshotEvidenceForIssue885() {
     IsolatedUserData userData;
     const auto templateDir = UserDataDirectory() / "drawing-templates";
@@ -5524,6 +5760,75 @@ private Q_SLOTS:
     QVERIFY(std::abs(window.State().viewportPanX) > 0.01);
     QVERIFY(std::abs(window.State().viewportPanZ) > 0.01);
     QVERIFY(std::abs(window.State().viewportPanY) < 0.001);
+  }
+
+  void orbitCommandLeftDragTumblesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    StartOrbitCommand(state, log);
+    QCOMPARE(state.active, AppCommandState::Kind::Orbit);
+    const float azimuth = state.viewportAzimuthDeg;
+    const float elevation = state.viewportElevationDeg;
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    const QPoint finish = start + QPoint(25, -20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportAzimuthDeg - azimuth) > 0.1f);
+    QVERIFY(std::abs(state.viewportElevationDeg - elevation) > 0.1f);
+
+    state.activeSpaceIndex = 0;
+    const float paperAzimuth = state.viewportAzimuthDeg;
+    const float paperElevation = state.viewportElevationDeg;
+    QMouseEvent paperPress(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperPress);
+    QMouseEvent paperMove(QEvent::MouseMove, finish, finish, Qt::NoButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperMove);
+    QMouseEvent paperRelease(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperRelease);
+    QCOMPARE(state.viewportAzimuthDeg, paperAzimuth);
+    QCOMPARE(state.viewportElevationDeg, paperElevation);
+  }
+
+  void panCommandLeftDragMovesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    QEnterEvent enter(start, start, start);
+    QApplication::sendEvent(&viewport, &enter);
+    StartPanCommand(state, log);
+    viewport.RefreshCommandCursor();
+    QCOMPARE(state.active, AppCommandState::Kind::Pan);
+    QCOMPARE(viewport.cursor().shape(), Qt::OpenHandCursor);
+    const double panX = state.viewportPanX;
+    const double panY = state.viewportPanY;
+    const double panZ = state.viewportPanZ;
+    const QPoint finish = start + QPoint(25, 20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportPanX - panX) > 0.01);
+    QVERIFY(std::abs(state.viewportPanY - panY) > 0.01 ||
+        std::abs(state.viewportPanZ - panZ) > 0.01);
   }
 
   void viewportCubeIsVisibleInFramebuffer() {
@@ -6489,6 +6794,21 @@ private Q_SLOTS:
     QCOMPARE(state.active, AppCommandState::Kind::None);
   }
 
+  void issue1083CoordinateSystemDictionaryLoadsWithTheWindow() {
+    // Issue #1083: the zone, grid readouts and the online map need the dictionary before Drawing
+    // Settings has ever been opened. Start from an unloaded dictionary, as a fresh session does.
+    QVERIFY(!geo::LoadDictionaries("C:/no/such/folder"));
+    QVERIFY(!geo::DictionariesLoaded());
+    EditorWindow window;
+    QVERIFY2(geo::DictionariesLoaded(), geo::DictionaryError().c_str());
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.drawingInsUnits = 2;
+    state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+    const auto factors = ResolveDrawingTransform(state.drawingSettings, state.drawingInsUnits, false);
+    QVERIFY2(factors.ok, factors.error.c_str());
+  }
+
   void drawingSettingsFileMenuLoadsCoordinateSystemCategories() {
     EditorWindow window;
     auto* fileMenu = window.findChild<QMenu*>("fileMenu"); QVERIFY(fileMenu);
@@ -6542,6 +6862,30 @@ private Q_SLOTS:
       QCOMPARE(code->text(), QString("HARN/TX.TX-C"));
       const QString artifacts = QtTestArtifactDirectory() + "/";
       QVERIFY(dialog->grab().save(artifacts + "qt-1035-drawing-settings-coordinate-systems.png"));
+      dialog->reject();
+    });
+    drawingSettings->trigger();
+  }
+
+  void drawingSettingsZoneDetailsDescribeTheDrawingsZoneOnOpen() {
+    QVERIFY(geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string()));
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.State().drawingSettings.zoneCode = "HARN/NB.NB";
+    auto* drawingSettings = window.findChild<QAction*>("command_DRAWINGSETTINGS"); QVERIFY(drawingSettings);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(dialog);
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      auto* systems = dialog->findChild<QComboBox*>("drawingZoneSystem"); QVERIFY(systems);
+      auto* code = dialog->findChild<QLineEdit*>("drawingZoneCode"); QVERIFY(code);
+      auto* details = dialog->findChild<QLabel*>("drawingZoneDetails"); QVERIFY(details);
+      QCOMPARE(systems->currentData().toString(), QString("HARN/NB.NB"));
+      QCOMPARE(code->text(), QString("HARN/NB.NB"));
+      const auto info = geo::FindCoordinateSystem("HARN/NB.NB"); QVERIFY(info);
+      QCOMPARE(details->text(), QString("%1\nProjection: %2\nDatum: %3").arg(QString::fromUtf8(info->description.c_str()),
+               QString::fromUtf8(info->projection.c_str()), QString::fromUtf8(info->datum.c_str())));
+      QVERIFY(!details->text().contains("NAD27"));
+      QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-1085-drawing-settings-zone-details.png"));
       dialog->reject();
     });
     drawingSettings->trigger();
@@ -6651,6 +6995,179 @@ private Q_SLOTS:
     QTest::keyClick(commandInput, Qt::Key_Escape);
     QCOMPARE(state.active, AppCommandState::Kind::None);
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
+  }
+
+private:
+  // Issue #1084 / REQ-350: the Pipe Fittings palette shows in the Qt editor. Names of the rows a tab lists.
+  static QStringList PipePaletteRows(QDialog* palette, int tab) {
+    QStringList names;
+    auto* list = palette->findChild<QListWidget*>(QString("pipeFittingList%1").arg(tab));
+    if (!list || !list->isVisible()) return names;
+    for (int i = 0; i < list->count(); ++i) names << list->item(i)->data(Qt::UserRole).toString();
+    return names;
+  }
+  // A real part picture, not the empty placeholder box: it has drawn pixels well inside its border.
+  static bool PipePaletteRowHasPicture(QListWidget* list, int row) {
+    const QImage image = list->item(row)->icon().pixmap(64, 64).toImage().convertToFormat(QImage::Format_ARGB32);
+    int drawn = 0;
+    for (int y = 8; y < 56; ++y)
+      for (int x = 8; x < 56; ++x)
+        if (qAlpha(image.pixel(x, y)) > 0) ++drawn;
+    return drawn > 150;
+  }
+
+private Q_SLOTS:
+  void issue1084PipeRunOpensPaletteWithSizeMatchedParts() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    QVERIFY(!window.findChild<QDialog*>("pipeFittingPalette"));
+
+    window.Submit("PIPERUN");  // opens the palette by itself (REQ-350 (a))
+    QVERIFY(state.pipeFittingPaletteOpen);
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    QVERIFY(palette->isVisible());
+    QVERIFY(!palette->isModal());  // a palette, never a modal
+    window.Submit("2in");
+    window.Submit("");  // schedule 40
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    QVERIFY(tabs);
+    QCOMPARE(tabs->tabPosition(), QTabWidget::East);
+    QCOMPARE(tabs->count(), 5);
+    QCOMPARE(tabs->tabText(0), QString("Fittings"));
+    QCOMPARE(tabs->tabText(1), QString("Flanges"));
+    tabs->setCurrentIndex(1);
+
+    // A 2in run lists the two 2in flanges and not the 4in one (size match is exact).
+    const QStringList twoInch = PipePaletteRows(palette, 1);
+    QVERIFY(twoInch.contains("2IN_BLIND_FLANGE"));
+    QVERIFY(twoInch.contains("2in_WELD_NECK_FLANGE"));
+    QVERIFY(!twoInch.contains("CJ_4in_WELD_NECK_FLANGE"));
+    QCOMPARE(palette->findChild<QLabel*>("pipeFittingRun")->text(), QString("Pipe run: 2in"));
+
+    // Route something and finish: the palette stays open after the run is committed.
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+
+    // A 4in run re-filters the same window, live.
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QCOMPARE(PipePaletteRows(palette, 1), QStringList{"CJ_4in_WELD_NECK_FLANGE"});
+
+    // A category with nothing at this size says so, naming the size.
+    tabs->setCurrentIndex(2);
+    auto* empty = palette->findChild<QLabel*>("pipeFittingEmpty2");
+    QVERIFY(empty && empty->isVisible());
+    QVERIFY(empty->text().contains("4in"));
+    QVERIFY(empty->text().contains("valves"));
+    QVERIFY(PipePaletteRows(palette, 2).isEmpty());
+    QCOMPARE(state.pipeFittingPaletteTab, 2);
+
+    // Cancel the run in progress (the palette stays open), then: the close box closes it and the
+    // reopen command shows it again where it was.
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+    QVERIFY(state.pipeFittingPaletteOpen);
+    const QPoint before = palette->pos();
+    palette->close();
+    QVERIFY(!palette->isVisible());
+    QVERIFY(!state.pipeFittingPaletteOpen);
+    window.Submit("PIPEPALETTE");
+    QVERIFY(state.pipeFittingPaletteOpen);
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QVERIFY(palette->isVisible());
+    QCOMPARE(palette->pos(), before);
+    window.Submit("PIPEPALETTE");  // the same command closes it again
+    QVERIFY(!palette->isVisible());
+  }
+
+  void issue1084PaletteRowsShowShadedPicturesAndArmThePart() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    palette->findChild<QTabWidget*>("pipeFittingTabs")->setCurrentIndex(1);
+    auto* list = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(list && list->isVisible());
+    QCOMPARE(list->count(), 2);
+
+    // Each row's picture is rendered once by the renderer and then shown.
+    for (int row = 0; row < list->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(list, row), 10000);
+    QCOMPARE(window.m_Viewport->PartThumbnails().size(), std::size_t(2));
+    QVERIFY(list->item(0)->text().contains('\n'));  // the name, with size and type beneath
+
+    // Picking a row arms the part for the next viewport click and does not place anything yet.
+    const QString name = list->item(0)->data(Qt::UserRole).toString();
+    const auto refsBefore = state.cadBlockRefs.size();
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(0)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    QCOMPARE(QString::fromUtf8(state.insertBlockName), name);
+    QVERIFY(state.insertBlockPipeSpliceArmed);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore);
+
+    // A click off every run places it as an ordinary block INSERT.
+    window.Submit("500,500,0");  // the same placement a viewport click makes, typed
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+    QCOMPARE(QString::fromUtf8(state.cadBlockRefs.back().defName.c_str()), name);
+    QVERIFY(!state.insertBlockPipeSpliceArmed);
+
+    // ESC disarms an armed part.
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(1)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+  }
+
+  void qt1084PipeFittingPaletteScreenshots() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    auto shoot = [&](const QString& file) {
+      QApplication::processEvents();
+      QVERIFY(palette->grab().save(artifacts + file));
+    };
+    // Before any picture exists: name-only rows with placeholder boxes.
+    tabs->setCurrentIndex(1);
+    auto* flanges = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(flanges);
+    for (int row = 0; row < flanges->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges, row), 10000);
+    shoot("qt-1084-palette-2in-flanges.png");
+    tabs->setCurrentIndex(2);
+    shoot("qt-1084-palette-2in-valves-empty.png");
+    window.Submit("");
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    tabs->setCurrentIndex(1);
+    auto* flanges4 = palette->findChild<QListWidget*>("pipeFittingList1");
+    for (int row = 0; row < flanges4->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges4, row), 10000);
+    shoot("qt-1084-palette-4in-flanges.png");
+    QVERIFY(window.grab().save(artifacts + "qt-1084-palette-in-window.png"));
   }
 
   void issue1002RibbonExportsLandXmlThroughTheCommand() {
@@ -6951,10 +7468,9 @@ private Q_SLOTS:
     QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-edit-prompt.png"));
     window.Submit("F"); window.Submit("2:1"); window.Submit("");
     QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
-    // Frame the 200 ft test site directly. Qt's ZOOMEXTENTS never reaches the viewport (a separate
-    // defect; the pending zoom is not consumed by the Qt viewport), so this capture sets the view.
+    // Frame the 200 ft test site with the real ZOOMEXTENTS (GitHub #1024).
     state.selection.clear();
-    state.viewportPanX = 100.0; state.viewportPanY = 100.0; state.viewportZoom = 0.3f;
+    window.Submit("ZOOMEXTENTS");
     QApplication::processEvents(); QTest::qWait(100);
     QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
     QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts + "qt-997-grading-result-viewport.png"));
@@ -7208,6 +7724,8 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
     state.userLineAttrs.resize(2);
+    // Direct fixture edits must invalidate the revision-gated identity/display caches.
+    BumpCadGpuCache(state);
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
     window.Submit("ISOLATEOBJECTS");
     QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
@@ -10994,6 +11512,40 @@ private Q_SLOTS:
     QCOMPARE(CanUndo(window.State()), couldUndo);
   }
 
+  void newlyCreatedSurfaceDisplaysWithoutAnotherCommand() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st, false);
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
+    QVERIFY(viewport);
+    window.Submit("ZOOMEXTENTS");
+    QTest::qWait(100);
+    QVERIFY(viewport->grabFramebuffer().save(Issue893Shot("qt-1080-before-create.png")));
+
+    window.Submit("SURFACECREATE First surface, Ground");
+    QCOMPARE(st.cadSurfaces.size(), size_t(1));
+    QVERIFY(st.cadSurfaces[0].tin);
+    // Paint without another command/undo snapshot: that used to leave id zero forever.
+    const QImage created = viewport->grabFramebuffer();
+    QVERIFY(created.save(Issue893Shot("qt-1080-created.png")));
+    QCOMPARE(st.cadSurfaceAttrs.size(), size_t(1));
+    QVERIFY(st.cadSurfaceAttrs[0].id != 0);
+    QVERIFY(!st.surfaceDisplayGeometry.empty());
+    QCOMPARE(st.surfaceDisplayCache.size(), size_t(1));
+    const auto id = st.cadSurfaceAttrs[0].id;
+    const auto nextId = st.nextEntityId;
+    const auto regenerations = st.surfaceDisplayRegenCount;
+    for (int i = 0; i < 3; ++i) {
+      QVERIFY(!viewport->grabFramebuffer().isNull());
+      QCOMPARE(st.cadSurfaceAttrs[0].id, id);
+      QCOMPARE(st.nextEntityId, nextId);
+      QCOMPARE(st.surfaceDisplayRegenCount, regenerations);
+    }
+  }
+
   void homeSurfacesCreatedSurfaceSurvivesSaveAndReopen() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -11372,6 +11924,9 @@ int main(int argc, char** argv) {
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
   QSurfaceFormat::setDefaultFormat(format);
+  // GUI tests run on a hidden desktop and inspect dialogs as Qt widgets. Avoid
+  // platform-native dialogs, which are not reliably discoverable there.
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   QApplication app(argc, argv);
   app.setOrganizationName("GoSurveyTests");
   const QString shard = qEnvironmentVariable("GOSURVEY_QT_TEST_SHARD");

@@ -37,8 +37,8 @@ Tabs can be hidden with **Settings → Display → Display File Tabs**.
 
 | Action | How | Behaviour |
 |---|---|---|
-| **New** | File → New | Opens an empty drawing **in a new tab**, named `Drawing N` |
-| **Open** | File → Open | Opens a DWG drawing **in a new tab**, named after the file. Does not replace what you are working on |
+| **New** | File → New | Opens the **New Drawing** chooser. Choose Blank Drawing or a template; the result opens in a new, active tab |
+| **Open** | File → Open or `Ctrl+O` | Opens the selected DWG directly in a new, active tab, named after the file. Does not show the New Drawing chooser or replace what you are working on |
 | **Save** | `Ctrl+S`, File → Save | Writes to the current path. With no path yet, the Save-As dialog opens first |
 | **Save As** | File → Save As… | New name and location; the tab is renamed to the file stem and later saves go to the new path |
 
@@ -70,7 +70,13 @@ disk for the next offer.
 
 ## Templates
 
-New drawings start from a **startup template**.
+The standalone **New Drawing** chooser offers **Blank Drawing** and `.gst` templates discovered in
+the bundled and personal template folders. Selecting a template loads its content into a fresh
+drawing tab; it does not modify the source template. If a drawing in an open project is active,
+creating a new drawing starts empty with that project's defaults and skips the standalone chooser.
+
+The startup workspace template is a separate setting. It is used for the startup workspace and is
+not automatically listed in the New Drawing chooser.
 
 **Settings → Files:**
 

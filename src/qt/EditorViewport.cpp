@@ -205,6 +205,9 @@ void EditorViewport::paintGL() {
   const int w = qRound(width() * devicePixelRatioF());
   const int h = qRound(height() * devicePixelRatioF());
   if (w <= 0 || h <= 0) return;
+  // New entities still have id zero after their command's pre-edit undo snapshot.
+  // Assign identities before display caches and selection overlays consume them (REQ-076).
+  EnsureEntityIds(m_State);
   // A named-view restore starts an orientation animation without going through this widget; make
   // sure something is ticking it (REQ-059).
   if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
@@ -215,6 +218,14 @@ void EditorViewport::paintGL() {
     ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h, static_cast<float>(w) / static_cast<float>(h), m_Log);
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
+  // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport
+  // size, so it happens here, before the camera below is built from the result (REQ-120, REQ-123).
+  // The pan/zoom out-pointers are optional: the function writes them into the state itself.
+  // Imports fit the drawing to the last painted size (DxfIo/LibreDwgCad read these).
+  m_State.viewportLastFbW = w;
+  m_State.viewportLastFbH = h;
+  ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
+      static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
   const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
@@ -413,6 +424,15 @@ void EditorViewport::paintGL() {
       glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
       glDeleteFramebuffers(1, &readFbo);
     }
+  }
+  // REQ-350 (e): the Pipe Fittings palette's part pictures are rendered here, after the scene pass
+  // (the one point in a paint where binding another framebuffer is safe), a few per paint.
+  if (m_Ready && (!m_State.pipeFittingThumbRequests.empty() || !m_State.pipeFittingThumbStale.empty())) {
+    const bool changed = ServicePipeFittingThumbnails(m_State, *m_Renderer, m_PartThumbs);
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    glViewport(0, 0, w, h);
+    if (!m_State.pipeFittingThumbRequests.empty()) update();
+    if (changed && partThumbnailsChanged) partThumbnailsChanged();
   }
   QPainter painter(this);
   const Camera overlayCamera = CadViewCamera(m_State);
@@ -876,6 +896,7 @@ void EditorViewport::DrawCursor(QPainter& painter) {
 void EditorViewport::enterEvent(QEnterEvent* event) {
   m_PointerInside = true;
   m_Last = event->position();
+  RefreshCommandCursor();
   update();
   QOpenGLWidget::enterEvent(event);
 }
@@ -916,6 +937,11 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     if (event->button() == Qt::LeftButton) ClickViewCube(m_Last);
     event->accept();
     update();
+    return;
+  }
+  if (event->button() == Qt::LeftButton &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit)) {
+    event->accept();
     return;
   }
   if (event->button() == Qt::LeftButton &&
@@ -1247,6 +1273,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
+  // REQ-120: a middle double-click zooms to extents, even mid-command and even over the ViewCube
+  // (a middle press passes through the cube to orbit/pan, so this does too). It writes the camera
+  // only (paintGL consumes the flag), so the active command's phase, points and draft are untouched.
+  if (event->button() == Qt::MiddleButton) {
+    RequestZoomExtents(m_State);
+    event->accept();
+    update();
+    return;
+  }
   // Qt delivers a quick second press as a double click; over the ViewCube it is just another click.
   if (viewcube::Contains(CubeScene(), event->position().x(), event->position().y())) {
     mousePressEvent(event);
@@ -1298,18 +1333,24 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
-  if (event->buttons() & Qt::MiddleButton) {
-    if (event->modifiers() & Qt::ShiftModifier) {
-      m_State.viewAnimActive = false;  // a manual orbit takes over from any ViewCube animation (REQ-059)
-      m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
-      m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg + static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
-    } else {
-      ray3d::Vec3 before, after;
-      if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
-        m_State.viewportPanX += before.x - after.x;
-        m_State.viewportPanY += before.y - after.y;
-        m_State.viewportPanZ += before.z - after.z;
-      }
+  const bool leftCommandDrag = (event->buttons() & Qt::LeftButton) &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit);
+  const bool commandOrbitDrag = leftCommandDrag && m_State.active == AppCommandState::Kind::Orbit;
+  const bool middleOrbitDrag = (event->buttons() & Qt::MiddleButton) &&
+      (event->modifiers() & Qt::ShiftModifier);
+  const bool panDrag = (leftCommandDrag && m_State.active == AppCommandState::Kind::Pan) ||
+      ((event->buttons() & Qt::MiddleButton) && !(event->modifiers() & Qt::ShiftModifier));
+  if (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex)) {
+    m_State.viewAnimActive = false;  // A manual ORBIT takes over from any ViewCube animation (REQ-059).
+    m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
+    m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg +
+        static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
+  } else if (panDrag) {
+    ray3d::Vec3 before, after;
+    if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
+      m_State.viewportPanX += before.x - after.x;
+      m_State.viewportPanY += before.y - after.y;
+      m_State.viewportPanZ += before.z - after.z;
     }
   }
   m_Last = event->position();
@@ -1317,9 +1358,16 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   // the control, and nothing picked or snapped behind it. A held button (box select, grip drag) keeps
   // tracking so a gesture that started in the drawing is not interrupted.
   const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
-  setCursor(overCube ? Qt::ArrowCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor));
+  RefreshCommandCursor();
   if (overCube && event->buttons() == Qt::NoButton) {
     update();
+    return;
+  }
+  if (leftCommandDrag) {
+    m_Last = event->position();
+    if (changed) changed();
+    update();
+    event->accept();
     return;
   }
   ClearTransientInput();
@@ -1642,6 +1690,12 @@ void EditorViewport::SetOrientation(float azimuth, float elevation) {
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
   update();
+}
+
+void EditorViewport::RefreshCommandCursor() {
+  const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  setCursor(overCube ? Qt::ArrowCursor : (m_PointerInside && m_State.active == AppCommandState::Kind::Pan
+      ? Qt::OpenHandCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor)));
 }
 
 // REQ-059: the widget's orientation changes ease to the target instead of snapping.
