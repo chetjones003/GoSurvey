@@ -1,6 +1,6 @@
 # GoSurvey Privacy Policy
 
-**Effective date: October 24, 2026**
+**Effective date: October 25, 2026**
 
 This policy describes information handled by the GoSurvey Windows application and the GoSurvey website at [gosurveycad.com](https://gosurveycad.com/). It reflects the current application and site implementation.
 
@@ -19,6 +19,8 @@ The ping is received by a GoSurvey-operated Cloudflare Worker and stored in a Cl
 If GoSurvey fails during startup or encounters a crash, it automatically attempts to send a diagnostic report to a separate route on the same GoSurvey-operated Cloudflare Worker. The application does this when it can reach the internet; there is no in-app opt-out setting. A report can include the GoSurvey version and release channel, the failure type, technical error details, stack addresses and module paths, and the local path of the diagnostic log. A local path can contain your Windows account name or other machine-specific directory names. Reports are limited to 16 KB before sending.
 
 Startup and crash reports are stored in separate tables in the Cloudflare D1 database. The application also appends startup and crash details to local log files in its GoSurvey user-data folder. Review diagnostic text before sharing it yourself through GitHub; the app's “Send This Report” action opens a prefilled GitHub issue for you to review and submit.
+
+For a runtime crash, GoSurvey also attempts to create a stack-focused Windows minidump. A minidump is a snapshot of some application memory and can include parts of an open drawing or other personal information that happened to be in memory. When available and no larger than 10 MB, the dump is uploaded automatically with the text report. If it cannot be created or is larger than 10 MB, GoSurvey still sends the text report without the dump. Uploaded dump files are kept in private Cloudflare R2 storage and expire after 30 days; the text report remains in D1 under the current database retention configuration.
 
 ## Information kept on your device
 

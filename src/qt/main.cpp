@@ -20,6 +20,10 @@
 #include <string>
 
 int main(int argc, char** argv) {
+  int minidumpWriterExitCode = 1;
+  if (crashReporter::RunMinidumpWriterMode(minidumpWriterExitCode))
+    return minidumpWriterExitCode;
+
   // REQ-425 §2: a process relaunched by the crash handler only shows the report. It is read (and
   // sent) before the handler is installed, so a fault here cannot recurse.
   std::string crashTitle;

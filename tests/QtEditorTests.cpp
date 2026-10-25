@@ -2348,9 +2348,29 @@ private Q_SLOTS:
       QVERIFY(file.open(QIODevice::WriteOnly));
       file.write("not a crash bundle\n");
     }
+    const QString malformedDump = directory.filePath("gosurvey-crash-3-4.dmp");
+    {
+      QFile file(malformedDump);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("MDMP");
+    }
     crashReporter::CrashReport rejected;
     QVERIFY(!crashReporter::ReadCrashBundle(malformed.toStdWString(), rejected));
     QVERIFY2(!QFileInfo::exists(malformed), "a malformed bundle is not left in the temp folder");
+    QVERIFY2(!QFileInfo::exists(malformedDump), "a malformed bundle's paired dump is also removed");
+  }
+
+  void helperProcessWritesAStackFocusedMinidump() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("crash-test.dmp");
+    QVERIFY(crashReporter::WriteMinidumpWithHelper(path.toStdWString(), nullptr));
+    QFile dump(path);
+    QVERIFY(dump.open(QIODevice::ReadOnly));
+    QCOMPARE(dump.read(4), QByteArray("MDMP", 4));
+    QVERIFY(dump.size() <= 10 * 1024 * 1024);
+    dump.close();
+    QVERIFY(QFile::remove(path));
   }
 
   void startupGraphicsCheckPassesOnAWorkingDriver() {
@@ -2940,6 +2960,7 @@ private Q_SLOTS:
     QVERIFY(dialog);
     auto* categories = dialog->findChild<QListWidget*>("settingsCategories");
     QVERIFY(categories);
+    QVERIFY(!dialog->findChild<QLabel*>("crashDiagnosticsDisclosure"));
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
     QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
@@ -2969,6 +2990,7 @@ private Q_SLOTS:
       }
       QVERIFY(stack);
       categories->setCurrentRow(0);
+      QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
     const float wheelBefore = window.State().displayWheelZoomFactor;
     wheel->setValue(1.5);
@@ -10939,6 +10961,10 @@ private Q_SLOTS:
 };
 
 int main(int argc, char** argv) {
+  int minidumpWriterExitCode = 1;
+  if (crashReporter::RunMinidumpWriterMode(minidumpWriterExitCode))
+    return minidumpWriterExitCode;
+
   QSurfaceFormat format;
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);

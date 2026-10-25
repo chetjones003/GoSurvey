@@ -76,3 +76,12 @@ bool HttpPostJson(const std::string& url,
                   int                timeoutMs,
                   std::string&       errorOut,
                   std::string*       responseOut = nullptr);
+
+/// POSTs an arbitrary byte body to an HTTPS endpoint using the supplied content type.
+/// Used by REQ-425 multipart uploads; callers bound the body before calling.
+bool HttpPostBody(const std::string& url,
+                  const std::string& contentType,
+                  const std::string& body,
+                  int                timeoutMs,
+                  std::string&       errorOut,
+                  std::string*       responseOut = nullptr);
