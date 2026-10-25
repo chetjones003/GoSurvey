@@ -2345,6 +2345,7 @@ struct AppCommandState {
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
   float viewportLastSurveyLayoutOrthoHalfH = 50.f;
   float viewportLastSurveyLayoutHeightPx = 600.f;
+  /// Pixel size of the model viewport; the Qt viewport publishes it every paint. Imports fit to it.
   int viewportLastFbW = 900;
   int viewportLastFbH = 650;
   /// Last ortho half-height / viewport height / MUP used for survey MTEXT auto-layout (re-run when zoom/size/MUP changes).
@@ -7716,6 +7717,13 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
 /// Live offset preview from cursor (through mode or typed distance + side); clears vectors first.
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
+
+/// Drops any queued ZOOM EXTENTS / ZOOM WINDOW request.
+void ClearPendingViewportZoom(AppCommandState& st);
+/// Queues a ZOOM EXTENTS for the viewport's next paint, replacing any queued zoom. Unlike
+/// StartZoomExtentsCommand it has no active-command guard: the REQ-120 middle double-click is a
+/// transparent view operation and changes the camera only.
+void RequestZoomExtents(AppCommandState& st);
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
 

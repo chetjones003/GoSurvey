@@ -261,7 +261,7 @@ void EditorWindow::CancelDraftingInput() {
   else if (m_State.active != AppCommandState::Kind::None || m_State.paperLengthenPhase || m_State.paperExtendPhase ||
            m_State.paperBreakPhase || m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase)
     CancelActiveCommand(m_State, m_Log);
-  else { ClearSelection(m_State); m_State.pendingZoomExtents = m_State.pendingZoomWindow = false; }
+  else { ClearSelection(m_State); ClearPendingViewportZoom(m_State); }
   ClearPendingOneShotObjectSnap(m_State);
   ResetDraftingInput(); m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
 }
