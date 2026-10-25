@@ -6,6 +6,7 @@
 // that is a by-eye check.
 
 #include "CadBlocks.hpp"
+#include "CadCommands.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -228,4 +229,24 @@ TEST_CASE("Palette tab labels are present for every category", "[issue486][req35
     CHECK_FALSE(CadPipePaletteCategoryLabel(c).empty());
     CHECK_FALSE(CadPipePaletteCategoryPlural(c).empty());
   }
+}
+
+TEST_CASE("The bundled startup sweep keeps the 4in flange's sidecar tags, so a 4in run can list it",
+          "[issue1084][req350][palette]") {
+  // The sweep imports fittings/*.sat as ordinary blocks. Before issue #1084 the same-stem .json was
+  // ignored on that path, the block came in untyped, and the library scan then skipped its sidecar
+  // because the name was already in the drawing: no 4in part ever reached the palette.
+  AppCommandState st;
+  std::vector<std::string> log;
+  LoadBundledBlockLibrary(st, log);
+  const int di = CadBlockFindDef(st.blockDefs, "CJ_4in_WELD_NECK_FLANGE");
+  REQUIRE(di >= 0);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::Flange);
+  CHECK(st.blockDefs[static_cast<size_t>(di)].nominalSize == "4in");
+
+  std::vector<CadBlockLibraryEntry> library;
+  CadBlocksCollectLibraryEntries(st, &library);
+  std::vector<CadBlockLibraryEntry> rows;
+  CadPipePaletteCollectRows(library, "4in", CadPipePressureClass::None, CadPipePaletteCategory::Flanges, &rows);
+  CHECK(NamesOf(rows) == std::vector<std::string>{"CJ_4in_WELD_NECK_FLANGE"});
 }

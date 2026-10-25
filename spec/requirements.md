@@ -13712,6 +13712,27 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ## Quality requirements
 
+### REQ-453 — Review product documentation before opening a pull request
+- Purpose: keep product and user-facing documentation accurate and consistent
+- Priority: must
+- Type: quality
+- Statement: Before creating a pull request, the contributor reviews `README.md`,
+  `PRIVACY.md`, the in-app help wiki in `resources/wiki/`, and the public user
+  manual wiki linked from `gosurveycad.com` (currently the GitHub Wiki). The
+  contributor updates each source affected by the change before opening the
+  pull request. The task log or pull request description records the review and
+  either names the documentation updated or states that no update was needed.
+  If an affected external wiki cannot be updated because the contributor lacks
+  access, the pull request remains unopened until access is available and the
+  update is made.
+- Acceptance: before a pull request is created, its task log or description
+  records inspection of all four sources and lists updates made, or states that
+  no update was needed for each. Every source found to require an update is
+  updated before pull request creation.
+- Owner-layer: all contributors
+- Status: accepted
+- Revisions: 2026-10-22 — accepted by user (D-2026-10-22-d).
+
 ### REQ-200 — Deterministic, reproducible build
 - Purpose: maintainability
 - Priority: must

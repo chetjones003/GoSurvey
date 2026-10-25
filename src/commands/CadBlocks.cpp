@@ -406,6 +406,31 @@ bool ImportSatFileToScratch(AppCommandState& scratch, const char* pathUtf8, std:
   return true;
 }
 
+/// The piping metadata in \p libraryFile's same-stem `.json` sidecar (`LIBEXPORT` writes one; a part
+/// dropped in by hand needs one — resources/blocks/fittings/README.md). False when there is no
+/// readable sidecar; the outputs are then untouched.
+bool ReadFittingSidecar(const std::filesystem::path& libraryFile, CadPipePartType* partType,
+                        std::string* nominalSize, CadPipePressureClass* pressureClass) {
+  std::filesystem::path sidecar = libraryFile;
+  sidecar.replace_extension(".json");
+  std::error_code ec;
+  if (!std::filesystem::is_regular_file(sidecar, ec))
+    return false;
+  std::ifstream in(sidecar, std::ios::binary);
+  if (!in)
+    return false;
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  try {
+    const nlohmann::json j = nlohmann::json::parse(text);
+    *partType = ParseCadPipePartType(j.value("partType", std::string()));
+    *nominalSize = j.value("nominalSize", std::string());
+    *pressureClass = ParseCadPipePressureClass(j.value("pressureClass", std::string()));
+    return true;
+  } catch (...) {
+    return false;  // malformed sidecar — the part still imports, just without filter metadata
+  }
+}
+
 int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std::vector<std::string>& log,
                                 bool dropLooseSatGeometry) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
@@ -470,6 +495,24 @@ int ImportCadBlocksFromPathImpl(AppCommandState& dest, const char* pathUtf8, std
   }
   for (CadBlockDefinition& d : dest.blockDefs)
     CadBlockAuthorMatchlineDynamics(&d);
+  // A part that came in without piping metadata of its own takes its sidecar's. Without this the
+  // bundled startup sweep (which imports `fittings/*.sat`) turns a tagged 4in flange into an untyped
+  // block, and the library scan then skips its sidecar because the name is already in the drawing —
+  // so the Pipe Fittings palette could never list it (issue #1084).
+  {
+    CadPipePartType sidecarType = CadPipePartType::None;
+    std::string sidecarSize;
+    CadPipePressureClass sidecarClass = CadPipePressureClass::None;
+    const int di = CadBlockFindDef(dest.blockDefs, FileStemUtf8(pathUtf8));
+    if (di >= 0 && dest.blockDefs[static_cast<size_t>(di)].partType == CadPipePartType::None &&
+        ReadFittingSidecar(std::filesystem::u8path(pathUtf8), &sidecarType, &sidecarSize, &sidecarClass) &&
+        sidecarType != CadPipePartType::None) {
+      CadBlockDefinition& d = dest.blockDefs[static_cast<size_t>(di)];
+      d.partType = sidecarType;
+      d.nominalSize = sidecarSize;
+      d.pressureClass = sidecarClass;
+    }
+  }
   log.push_back("BLOCKIMPORT — imported " + std::to_string(n) + " definition(s) from " +
                 std::string(pathUtf8) + ".");
   return n;
@@ -814,23 +857,9 @@ void CadBlocksCollectLibraryEntries(const AppCommandState& st, std::vector<CadBl
     e.isFitting = fitting;
     // LIBEXPORT (issue #486 increment A3) writes a same-stem `.json` sidecar summarizing the
     // fitting metadata — read it here so the library pane can filter/label without importing.
-    fs::path sidecar = p;
-    sidecar.replace_extension(".json");
-    std::error_code sideEc;
-    if (fitting && fs::is_regular_file(sidecar, sideEc)) {
-      std::ifstream in(sidecar, std::ios::binary);
-      if (in) {
-        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        try {
-          const nlohmann::json j = nlohmann::json::parse(text);
-          e.partType = ParseCadPipePartType(j.value("partType", std::string()));
-          e.nominalSize = j.value("nominalSize", std::string());
-          e.pressureClass = ParseCadPipePressureClass(j.value("pressureClass", std::string()));
-        } catch (...) {
-          // Malformed/missing sidecar — the entry still lists, just without filter metadata.
-        }
-      }
-    }
+    // A malformed or missing sidecar leaves the entry listed, just without filter metadata.
+    if (fitting)
+      (void)ReadFittingSidecar(p, &e.partType, &e.nominalSize, &e.pressureClass);
     out->push_back(std::move(e));
   };
   for (const fs::directory_entry& ent : fs::directory_iterator(dir, ec)) {

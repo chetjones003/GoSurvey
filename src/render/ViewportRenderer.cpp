@@ -3650,6 +3650,30 @@ unsigned int ViewportRenderer::PartThumbnailTexture(const std::string& key) cons
   return 0;
 }
 
+bool ViewportRenderer::ReadPartThumbnailPixels(const std::string& key, std::vector<unsigned char>* rgba,
+                                               int* px) const {
+  if (rgba == nullptr || px == nullptr)
+    return false;
+  for (const PartThumbnailEntry& e : partThumbs_) {
+    if (e.key != key || e.fbo == 0 || e.px <= 0)
+      continue;
+    const std::size_t n = static_cast<std::size_t>(e.px);
+    std::vector<unsigned char> bottomUp(n * n * 4);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, e.fbo);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, e.px, e.px, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    // GL reads the bottom row first; every image API a frontend hands this to wants the top row first.
+    rgba->resize(bottomUp.size());
+    for (std::size_t row = 0; row < n; ++row)
+      std::copy_n(bottomUp.begin() + static_cast<std::ptrdiff_t>((n - 1 - row) * n * 4),
+                  static_cast<std::ptrdiff_t>(n * 4), rgba->begin() + static_cast<std::ptrdiff_t>(row * n * 4));
+    *px = e.px;
+    return true;
+  }
+  return false;
+}
+
 void ViewportRenderer::InvalidatePartThumbnail(const std::string& key) {
   for (std::size_t i = 0; i < partThumbs_.size(); ++i) {
     if (partThumbs_[i].key != key)

@@ -12,6 +12,7 @@
 #include "CadOnlineMap.hpp"
 #include "CadSnap.hpp"
 #include "ViewCube.hpp"
+#include "EditorPipePalette.hpp"
 
 class ViewportRenderer;
 class QPainter;
@@ -24,6 +25,10 @@ public:
   ~EditorViewport() override;
   std::function<void()> changed;
   std::function<void()> thumbnailReady;
+  /// The Pipe Fittings palette's part pictures changed (REQ-350 (e)); called from inside a paint.
+  std::function<void()> partThumbnailsChanged;
+  /// Part pictures rendered for the Pipe Fittings palette, by block name.
+  const PartThumbnailImages& PartThumbnails() const { return m_PartThumbs; }
   std::function<void(double, double, double)> cursorChanged;
   std::function<void(const QString&)> textEntered;
   /// The right-click verdict (REQ-084) is "open the shortcut menu"; the window builds the menu.
@@ -72,6 +77,7 @@ private:
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;
   std::unique_ptr<OnlineMapController> m_OnlineMap;
+  PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
   QElapsedTimer m_ViewAnimClock;

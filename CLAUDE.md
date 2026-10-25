@@ -38,6 +38,21 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Pre-PR product documentation review (REQ-453)
+
+Before creating any pull request, inspect all four product documentation sources:
+
+1. `README.md`
+2. `PRIVACY.md`
+3. The in-app help wiki in `resources/wiki/`
+4. The public user manual wiki linked from `gosurveycad.com` (currently the
+   [GoSurvey GitHub Wiki](https://github.com/chetjones003/GoSurvey/wiki))
+
+Update every source affected by the change before opening the pull request. In
+the task log or pull request description, record each source as reviewed and
+either identify its update or state that no update was needed. If an affected
+external wiki cannot be updated due to missing access, keep the pull request
+unopened until access is available and the update is made.
 ### Emergency repository-admin bypass
 
 When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin
