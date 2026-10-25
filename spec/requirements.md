@@ -13773,7 +13773,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the page farthest from the view first; pages in view are never dropped. Opening another file or closing
      the window cancels and waits for the worker.
   9. **Honest failure (REQ-201).** A page that cannot be drawn keeps its blank sheet and the window stays
-     usable; nothing in this requirement changes what is saved to a PDF.
+     usable. Existing marks and measurements are saved exactly as before; the only new saved content is the
+     Callout and Revision cloud marks (clauses 12-13), written as standard PDF annotations.
   10. **Tool hotkeys and Browse.** Select (S), Browse (B), Text (T), Line (L), Rectangle (R), Ellipse (E),
       Callout (D), Revision cloud (K), Length (G), Polyline length (P), Area (A) and Angle (H) have single-key
       shortcuts shown in their tooltips; Esc returns to Browse. With Browse selected the left button drags the
@@ -13821,10 +13822,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`, `issue1037BrowseDragPansTheDocument`
       and `issue1037SelectBoxWindowAndCrossing`: hotkeys and Esc, Browse drag pan, callout and both cloud modes
       saved and read back, window versus crossing selection including a cloud.
+  13. (clause 3, clause 8) `issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled`: the plain wheel scrolls a page-by-page
+      document without zooming, and a render overtaken by a zoom change is cancelled and redone.
   12. (compare, clause 15) the compare tests list the changes in the `pdfComparePanel` side-panel tab and, at 600%,
       produce the sharp detail picture and sharp marks.
 - Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
-  `src/pdf/PdfDocument` (unchanged).
+  `src/pdf` layer, which gains only `PdfDocument::RenderRegion` (windowed rendering) and the Callout and Revision cloud
+  annotation kinds in `PdfAnnotate`.
 - Status: accepted (2026-10-22) - D-2026-10-22-c, GitHub issue #1037.
 - Revisions: 2026-10-22 - catalogued and accepted (D-2026-10-22-c, GitHub issue #1037).
   2026-10-24 - final design: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).

@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QWidget>
 #include <QWidgetAction>
+#include <type_traits>
 #include <algorithm>
 #include <vector>
 
@@ -42,6 +43,18 @@ class Page final : public QWidget {
   QToolButton* m_More;
   QMenu* m_Overflow;
 
+  // The integer and decimal spin boxes mirror the same way; only the decimals differ.
+  template <class Spin>
+  void MirrorSpinBoxes(QWidget* panel, QMenu* menu) {
+    for (auto* source : panel->findChildren<Spin*>()) {
+      auto* mirror = new Spin(menu); mirror->setRange(source->minimum(), source->maximum());
+      if constexpr (std::is_same_v<Spin, QDoubleSpinBox>) mirror->setDecimals(source->decimals());
+      mirror->setSingleStep(source->singleStep()); mirror->setPrefix(source->prefix()); mirror->setSuffix(source->suffix());
+      auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);
+      connect(menu, &QMenu::aboutToShow, mirror, [source, mirror] { const QSignalBlocker block(mirror); mirror->setValue(source->value()); mirror->setEnabled(source->isEnabled()); });
+      connect(mirror, &Spin::valueChanged, source, &Spin::setValue);
+    }
+  }
   // A collapsed panel keeps its live controls in its menu: each gets a mirror that reads the real control when the
   // menu opens and writes back to it, so no state is duplicated and no widget leaves the ribbon's layout.
   void MirrorControls(QWidget* panel, QMenu* menu) {
@@ -58,20 +71,8 @@ class Page final : public QWidget {
       });
       connect(mirror, &QComboBox::activated, source, [source](int index) { source->setCurrentIndex(index); });
     }
-    for (auto* source : panel->findChildren<QDoubleSpinBox*>()) {
-      auto* mirror = new QDoubleSpinBox(menu); mirror->setRange(source->minimum(), source->maximum());
-      mirror->setDecimals(source->decimals()); mirror->setSingleStep(source->singleStep()); mirror->setPrefix(source->prefix()); mirror->setSuffix(source->suffix());
-      auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);
-      connect(menu, &QMenu::aboutToShow, mirror, [source, mirror] { const QSignalBlocker block(mirror); mirror->setValue(source->value()); mirror->setEnabled(source->isEnabled()); });
-      connect(mirror, &QDoubleSpinBox::valueChanged, source, &QDoubleSpinBox::setValue);
-    }
-    for (auto* source : panel->findChildren<QSpinBox*>()) {
-      auto* mirror = new QSpinBox(menu); mirror->setRange(source->minimum(), source->maximum());
-      mirror->setSingleStep(source->singleStep()); mirror->setPrefix(source->prefix()); mirror->setSuffix(source->suffix());
-      auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);
-      connect(menu, &QMenu::aboutToShow, mirror, [source, mirror] { const QSignalBlocker block(mirror); mirror->setValue(source->value()); mirror->setEnabled(source->isEnabled()); });
-      connect(mirror, &QSpinBox::valueChanged, source, &QSpinBox::setValue);
-    }
+    MirrorSpinBoxes<QDoubleSpinBox>(panel, menu);
+    MirrorSpinBoxes<QSpinBox>(panel, menu);
     for (auto* source : panel->findChildren<QCheckBox*>()) {
       auto* mirror = new QCheckBox(source->text(), menu);
       auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);

@@ -78,6 +78,7 @@ public:
   void SetEditor(EditorWindow* editor) { m_Editor = editor; }
   /// REQ-387 clause 2 / REQ-455: page-by-page (default) or continuous vertical scrolling through every page.
   enum class Layout { PageByPage, Continuous };
+  enum class CompareMode { Tint, Opacity, Base, Revision }; ///< the order of the Compare panel's View box
   void SetLayout(Layout layout);
   Layout CurrentLayout() const { return m_Layout; }
   /// The zero-based page the controls and the thumbnail strip are on (the page at the middle of the view when continuous).
@@ -386,7 +387,7 @@ private:
     QImage baseView;
     QImage revisionView;
     std::vector<pdfdiff::Region> changes;
-    int mode = 0; // Tint, Opacity, Base, Revision
+    CompareMode mode = CompareMode::Tint;
     int opacity = 50;
     bool busy = false, aligned = false, haveChanges = false, lowConfidence = false;
     bool manualAlignment = false;
@@ -397,7 +398,7 @@ private:
   std::future<CompareOutcome> m_CompareWork;
   // A sharp picture of the revision for the part of the page on screen (Revision and Opacity views at high zoom): the
   // fixed-resolution comparison images alone go soft once the page is shown much larger than they were made.
-  struct CompareDetail { pdfview::Bitmap bitmap, marks, redMarks; QRect rect; int pageWidthPx = 0; double ratio = 1.0; };
+  struct CompareDetail { pdfview::Bitmap bitmap, marks, redMarks; QRect rect; int pageWidthPx = 0; double ratio = 1.0; bool failed = false; };
   std::future<CompareDetail> m_CompareDetailWork;
   std::atomic<bool> m_CompareDetailCancel{false};
   bool m_CompareDetailAgain = false;
@@ -408,6 +409,8 @@ private:
   QImage m_CompareDetailRedMarks; ///< only the red ones, for the Revision view
   QRect m_CompareDetailRect;
   int m_CompareDetailPageWidthPx = 0;
+  void ClearCompareDetail();
+  pdfview::PageSize BasePageSize() const { return m_Document->Sizes()[static_cast<std::size_t>(m_Compare->basePage)]; }
   void RequestCompareDetail();
   void PollCompareDetail();
   void StopCompareDetail();

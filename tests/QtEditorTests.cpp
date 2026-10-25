@@ -8432,6 +8432,36 @@ private Q_SLOTS:
     }
   }
 
+  void issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "wheel.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    // REQ-455 clause 3: in page-by-page the plain wheel scrolls within the page and never changes the zoom.
+    window.SetZoomPercent(300);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    const double zoom = window.ZoomPercent();
+    const int before = window.m_Scroll->verticalScrollBar()->value();
+    Issue1037Wheel(window.m_Scroll->viewport(), QPoint(300, 200), -120, Qt::NoModifier);
+    QVERIFY(window.m_Scroll->verticalScrollBar()->value() > before);
+    QCOMPARE(window.ZoomPercent(), zoom);
+    // REQ-455 clause 8: a render whose view has changed is cancelled and redone for the new view.
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex()); // the worker cannot finish while this is held
+      window.SetZoomPercent(150);
+      QTRY_VERIFY_WITH_TIMEOUT(window.IsBusy(), 5000); // the render starts once the zooming settles
+      window.SetZoomPercent(200);
+      QVERIFY(window.m_Cancel.load());
+      QVERIFY(window.m_Pending);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.m_Page->imageFull, window.RenderPx(window.CurrentPage()));
+  }
+
   // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----
   void pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations() {
     QTemporaryDir directory;

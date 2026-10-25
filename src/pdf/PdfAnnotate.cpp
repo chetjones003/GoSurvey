@@ -291,6 +291,10 @@ void MeasureText(const std::string& family, const std::string& utf8, float size,
   hPt = static_cast<float>(lines) * size * kStrokeLineSpacing;
 }
 
+// Revision cloud shape: scallop length grows with the line width; each scallop bulges out about 0.4 of its chord (a cubic
+// Bezier's control points sit 4/3 of the rise away from the chord).
+constexpr float kCloudMinChord = 6.f, kCloudChordPerWidth = 8.f, kCloudChordBase = 8.f, kCloudBulge = 0.4f, kBezierArc = 4.f / 3.f;
+
 std::vector<CloudArc> RevCloudArcs(const Annot& a) {
   std::vector<CloudArc> arcs;
   const auto& pts = a.pts;
@@ -303,7 +307,7 @@ std::vector<CloudArc> RevCloudArcs(const Annot& a) {
     area2 += static_cast<double>(p.first) * q.second - static_cast<double>(q.first) * p.second;
   }
   const float outward = area2 >= 0.0 ? -1.f : 1.f; // which side of each edge is the outside
-  const float chord = std::max(6.f, a.thickness * 8.f + 8.f);
+  const float chord = std::max(kCloudMinChord, a.thickness * kCloudChordPerWidth + kCloudChordBase);
   for (size_t i = 0; i < pts.size(); ++i) {
     const auto& p = pts[i];
     const auto& q = pts[(i + 1) % pts.size()];
@@ -312,7 +316,7 @@ std::vector<CloudArc> RevCloudArcs(const Annot& a) {
       continue;
     const int n = std::max(1, static_cast<int>(std::lround(len / chord)));
     const float nx = outward * -dy / len, ny = outward * dx / len;
-    const float h = 0.5f * (len / n) * (4.f / 3.f) * 0.8f; // control offset: the arc rises about 0.4 of its chord
+    const float h = kCloudBulge * (len / n) * kBezierArc; // control offset: the arc rises about 0.4 of its chord
     for (int k = 0; k < n; ++k) {
       CloudArc c;
       c.x0 = p.first + dx * k / n;

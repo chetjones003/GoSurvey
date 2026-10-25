@@ -10,7 +10,7 @@
 - Requirements: REQ-455 (new, accepted by D-2026-10-23-e, directed by the issue), REQ-387 clause 2 (amended), REQ-388, REQ-429, REQ-430, REQ-433 (unchanged semantics)
 - Constraints:  REQ-387 clauses 4-5 (off-UI-thread rendering, bounded cache), REQ-201 (honest failure), REQ-300 (no new dependency)
 - Acceptance:  REQ-455 acceptance 1-10 (command tabs, continuous layout and page sync, wheel and Ctrl+wheel zoom, middle-button pan with tools active, fit/typed zoom, keyboard pages, tools on later pages, bounded cache, screenshots, old tests still pass)
-- Owning subsystem: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`); the shared `src/pdf/PdfDocument` is unchanged.
+- Owning subsystem: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`); the shared `src/pdf` layer gains only `PdfDocument::RenderRegion` and the Callout / Revision cloud annotation kinds.
 
 ## 2. Scope
 - In scope: four command tabs replacing the stacked toolbars; page-by-page and continuous layouts; wheel scroll, Ctrl+wheel pointer-anchored zoom, middle-button pan; fit width / fit page / typed percentage; Page Up/Down/Home/End; page, thumbnail and scale readout following the scroll; tools, highlights and snap working on every visible page; bounded off-thread page cache; spec update.

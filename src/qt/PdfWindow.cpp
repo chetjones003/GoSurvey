@@ -970,7 +970,7 @@ PdfWindow::PdfWindow(QWidget* parent) : QMainWindow(parent, Qt::Window) {
   compareLayout->addLayout(compareButtons);
   connect(chooseRevision, &QPushButton::clicked, this, [this] { BeginCompare(); });
   connect(m_CompareMode, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int mode) {
-    if (m_Compare) { m_Compare->mode = mode; UpdateCompareOverlay(); }
+    if (m_Compare) { m_Compare->mode = static_cast<CompareMode>(mode); UpdateCompareOverlay(); }
   });
   connect(m_CompareOpacity, &QSlider::valueChanged, this, [this](int value) { if (m_Compare) { m_Compare->opacity = value; m_Page->update(); } });
   connect(m_CompareShowHighlights, &QCheckBox::toggled, this, [this] { m_Page->update(); });
@@ -2696,7 +2696,7 @@ void PdfWindow::BeginCompare() {
     m_CompareBasePage->setValue(m_Compare->basePage + 1);
     m_CompareRevisionPage->setRange(1, 1); m_CompareRevisionPage->setValue(1);
   }
-  m_Compare->mode = m_CompareMode->currentIndex();
+  m_Compare->mode = static_cast<CompareMode>(m_CompareMode->currentIndex());
   ShowComparePanel();
   StartCompare(true); // align and list the changes straight away; Find changes re-runs it after a setting changes
 }
@@ -2807,6 +2807,7 @@ void PdfWindow::PollCompare() {
     return;
   }
   if (out.openedRevision) {
+    StopCompareDetail(); // a worker reads the revision through a raw pointer
     m_Compare->revision = std::move(out.openedRevision);
     const QSignalBlocker block(m_CompareRevisionPage);
     m_CompareRevisionPage->setRange(1, m_Compare->revision->PageCount());
@@ -2841,45 +2842,45 @@ void PdfWindow::PollCompare() {
       for (int column = 0; column < 4; ++column) m_CompareTable->setItem(row, column, new QTableWidgetItem(values[column]));
     }
   }
-  m_CompareDetailImage = {}; m_CompareDetailMarks = {}; m_CompareDetailRedMarks = {};
+  ClearCompareDetail();
   RequestCompareDetail();
   m_Page->update();
 }
 
 void PdfWindow::UpdateCompareOverlay() {
   if (!m_Compare || !m_Compare->revision) return;
-  m_Compare->mode = m_CompareMode->currentIndex();
+  m_Compare->mode = static_cast<CompareMode>(m_CompareMode->currentIndex());
   RequestCompareDetail();
   m_Page->update();
 }
 
 void PdfWindow::DrawCompareOverlay(QPainter& painter) {
   if (!m_Compare || m_Compare->overlay.isNull() || ActivePage() != m_Compare->basePage) return;
-  if (m_Compare->mode == 2) return; // Base mode is the original page.
+  if (m_Compare->mode == CompareMode::Base) return; // Base mode is the original page.
   painter.save();
   painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-  if (m_Compare->mode == 1) painter.setOpacity(std::clamp(m_Compare->opacity / 100.0, 0.0, 1.0));
+  if (m_Compare->mode == CompareMode::Opacity) painter.setOpacity(std::clamp(m_Compare->opacity / 100.0, 0.0, 1.0));
   // The comparison images have a fixed resolution; they are stretched over the page at whatever zoom it is shown.
   const QRect pageRect(0, 0, PageWidthPx(), PageHeightPx());
-  const bool detailHere = (m_Compare->mode == 0 ? !m_CompareDetailMarks.isNull() : (m_Compare->mode == 1 || m_Compare->mode == 3) && !m_CompareDetailImage.isNull()) &&
+  const bool detailHere = (m_Compare->mode == CompareMode::Tint ? !m_CompareDetailMarks.isNull() : !m_CompareDetailImage.isNull()) &&
                           m_CompareDetailPageWidthPx == PageWidthPx() && m_Layout == Layout::PageByPage;
   if (detailHere) { // the sharp part, with the soft picture only round it
     painter.setClipRegion(QRegion(pageRect).subtracted(QRegion(m_CompareDetailRect)));
   }
-  if (m_Compare->mode == 1) painter.drawImage(pageRect, m_Compare->revisionOverlay);
-  else if (m_Compare->mode == 2) painter.drawImage(pageRect, m_Compare->baseView);
-  else if (m_Compare->mode == 3) painter.drawImage(pageRect, m_Compare->revisionView);
+  if (m_Compare->mode == CompareMode::Opacity) painter.drawImage(pageRect, m_Compare->revisionOverlay);
+  else if (m_Compare->mode == CompareMode::Base) painter.drawImage(pageRect, m_Compare->baseView);
+  else if (m_Compare->mode == CompareMode::Revision) painter.drawImage(pageRect, m_Compare->revisionView);
   else painter.drawImage(pageRect, m_Compare->marksOverlay.isNull() ? m_Compare->overlay : m_Compare->marksOverlay); // Tint: the page stays crisp underneath
   if (detailHere) {
     painter.setClipping(false);
-    if (m_Compare->mode == 0) painter.drawImage(m_CompareDetailRect, m_CompareDetailMarks);
+    if (m_Compare->mode == CompareMode::Tint) painter.drawImage(m_CompareDetailRect, m_CompareDetailMarks);
     else {
       painter.drawImage(m_CompareDetailRect, m_CompareDetailImage);
-      if (m_Compare->mode == 3 && !m_CompareDetailRedMarks.isNull()) { painter.setOpacity(1.0); painter.drawImage(m_CompareDetailRect, m_CompareDetailRedMarks); }
+      if (m_Compare->mode == CompareMode::Revision && !m_CompareDetailRedMarks.isNull()) { painter.setOpacity(1.0); painter.drawImage(m_CompareDetailRect, m_CompareDetailRedMarks); }
     }
   }
   if (m_Compare->haveChanges && m_CompareShowHighlights->isChecked()) {
-    const auto size = m_Document->Sizes()[m_Compare->basePage];
+    const auto size = BasePageSize();
     const double factor = static_cast<double>(PageWidthPx()) / std::max(1.f, size.wPt); // the regions are in page points
     for (const auto& region : m_Compare->changes) {
       const QColor color = region.kind == pdfdiff::Kind::Added ? QColor(45, 205, 105, 90) :
@@ -2892,120 +2893,164 @@ void PdfWindow::DrawCompareOverlay(QPainter& painter) {
   painter.restore();
 }
 
-// A sharp picture of the revision for the visible part of the page, in the base page's frame: the revision is rendered at
-// the zoom on screen (just the part the alignment maps onto the view) and resampled through the alignment.
+namespace {
+// The comparison's colours (BGR): blue is on the base only, red on the revision only.
+constexpr uint8_t kBaseOnlyBgr[3] = {255, 55, 30};
+constexpr uint8_t kRevisionOnlyBgr[3] = {30, 55, 255};
+constexpr double kSoftEnoughShare = 0.9;     // the low-resolution picture is used as is once it is this close to the screen width
+constexpr double kMaxDetailPixels = 12.0e6;  // the sharp picture of the visible part
+constexpr double kMaxSourcePixels = 24.0e6;  // the revision render that picture is made from
+constexpr int kPaperLuminance = 245, kInkSpan = 185; // paper is this bright; this much darker is full ink
+constexpr int kRevisionMargin = 3;           // extra revision pixels rendered round the visible part, for the resampling
+
+/// The visible part of the base page at screen resolution: a rectangle of device pixels, and how many make one point.
+struct DetailView {
+  int x0 = 0, y0 = 0, w = 0, h = 0;
+  double pxPerPt = 1.0;
+  float pageWPt = 0, pageHPt = 0;
+  int FullW() const { return std::max(1, static_cast<int>(std::lround(pageWPt * pxPerPt))); }
+  int FullH() const { return std::max(1, static_cast<int>(std::lround(pageHPt * pxPerPt))); }
+};
+
+int InkCoverage(const uint8_t* bgra) { // white 0, dark 255
+  const int luminance = (bgra[0] + bgra[1] * 2 + bgra[2]) / 4;
+  return std::clamp((kPaperLuminance - luminance) * 255 / kInkSpan, 0, 255);
+}
+
+void PutMark(std::vector<uint8_t>& bgra, std::size_t at, const uint8_t bgr[3], int alpha) {
+  bgra[at] = bgr[0]; bgra[at + 1] = bgr[1]; bgra[at + 2] = bgr[2]; bgra[at + 3] = static_cast<uint8_t>(alpha);
+}
+
+/// The revision rendered at the screen's zoom and carried through the alignment onto the view's pixels (bilinear). False when
+/// cancelled or when the render failed; a view that would need an unreasonably large render is left as blank paper.
+bool ResampleRevision(pdfview::PdfDocument& revision, int page, const pdfview::PageSize& size, const pdfalign::Transform& xf,
+                      const DetailView& view, const std::function<bool()>& cancel, pdfview::Bitmap& out) {
+  const double scale = xf.Scale();
+  if (scale < 1e-9) return false;
+  const pdfalign::Transform inv = xf.Inverse();
+  const double k = view.pxPerPt, kr = k * scale; // kr: revision pixels per revision point, about one to one with the screen
+  const int fullW = std::max(1, static_cast<int>(std::lround(size.wPt * kr))), fullH = std::max(1, static_cast<int>(std::lround(size.hPt * kr)));
+  double minX = 1e30, maxX = -1e30, minY = 1e30, maxY = -1e30; // the view's corners, carried into the revision
+  for (const int cx : {0, view.w}) for (const int cy : {0, view.h}) {
+    const auto corner = inv.Apply({(view.x0 + cx) / k, view.pageHPt - (view.y0 + cy) / k});
+    minX = std::min(minX, corner.x * kr); maxX = std::max(maxX, corner.x * kr);
+    minY = std::min(minY, (size.hPt - corner.y) * kr); maxY = std::max(maxY, (size.hPt - corner.y) * kr);
+  }
+  const int rx = std::clamp(static_cast<int>(std::floor(minX)) - kRevisionMargin, 0, fullW), ry = std::clamp(static_cast<int>(std::floor(minY)) - kRevisionMargin, 0, fullH);
+  const int rw = std::clamp(static_cast<int>(std::ceil(maxX)) + kRevisionMargin, 0, fullW) - rx, rh = std::clamp(static_cast<int>(std::ceil(maxY)) + kRevisionMargin, 0, fullH) - ry;
+  out.w = view.w; out.h = view.h;
+  out.bgra.assign(static_cast<std::size_t>(view.w) * view.h * 4u, 255);
+  if (rw <= 0 || rh <= 0 || static_cast<double>(rw) * rh > kMaxSourcePixels) return true;
+  pdfview::Bitmap source;
+  if (!revision.RenderRegion(page, fullW, fullH, rx, ry, rw, rh, source, cancel) || source.w <= 0) return false;
+  for (int y = 0; y < view.h; ++y) {
+    if (cancel()) return false;
+    uint8_t* row = &out.bgra[static_cast<std::size_t>(y) * view.w * 4u];
+    for (int x = 0; x < view.w; ++x) {
+      const auto r = inv.Apply({(view.x0 + x + 0.5) / k, view.pageHPt - (view.y0 + y + 0.5) / k});
+      const double fx = r.x * kr - 0.5 - rx, fy = (size.hPt - r.y) * kr - 0.5 - ry;
+      const int x0 = static_cast<int>(std::floor(fx)), y0 = static_cast<int>(std::floor(fy));
+      if (x0 < -1 || y0 < -1 || x0 >= source.w || y0 >= source.h) continue;
+      const double tx = fx - x0, ty = fy - y0;
+      for (int c = 0; c < 3; ++c) {
+        const auto at = [&](int px, int py) -> double {
+          if (px < 0 || py < 0 || px >= source.w || py >= source.h) return 255.0;
+          return source.bgra[(static_cast<std::size_t>(py) * source.w + px) * 4u + static_cast<std::size_t>(c)];
+        };
+        const double v = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+        row[x * 4 + c] = static_cast<uint8_t>(std::clamp(v + 0.5, 0.0, 255.0));
+      }
+    }
+  }
+  return true;
+}
+
+/// The differing marks again, sharp: the low-resolution comparison says WHERE (it also dropped specks and grouped letters), and
+/// the ink there is redrawn from the screen-resolution renders, coloured by how dark it is. \p marks holds both colours,
+/// \p redMarks only the revision's. False when cancelled or the base render failed.
+bool BuildDetailMarks(pdfview::PdfDocument& base, int page, const QImage& lowMarks, const pdfview::Bitmap& aligned, const DetailView& view,
+                      const std::function<bool()>& cancel, pdfview::Bitmap& marks, pdfview::Bitmap& redMarks) {
+  const int fullW = view.FullW(), fullH = view.FullH();
+  pdfview::Bitmap baseSource;
+  if (!base.RenderRegion(page, fullW, fullH, view.x0, view.y0, view.w, view.h, baseSource, cancel) || baseSource.w != view.w || baseSource.h != view.h) return false;
+  const int lw = lowMarks.width(), lh = lowMarks.height();
+  std::vector<uint8_t> found(static_cast<std::size_t>(lw) * lh, 0), margin(found.size(), 0); // 1: blue, 2: red
+  for (int y = 0; y < lh; ++y) {
+    const auto* line = reinterpret_cast<const QRgb*>(lowMarks.constScanLine(y));
+    for (int x = 0; x < lw; ++x) if (qAlpha(line[x])) found[static_cast<std::size_t>(y) * lw + x] = qBlue(line[x]) > qRed(line[x]) ? 1 : 2;
+  }
+  for (int y = 0; y < lh; ++y)
+    for (int x = 0; x < lw; ++x) { // one low-resolution pixel of margin round every mark
+      uint8_t bits = 0;
+      for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
+        const int nx = x + dx, ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < lw && ny < lh) bits |= found[static_cast<std::size_t>(ny) * lw + nx];
+      }
+      margin[static_cast<std::size_t>(y) * lw + x] = bits;
+    }
+  marks.w = redMarks.w = view.w; marks.h = redMarks.h = view.h;
+  marks.bgra.assign(static_cast<std::size_t>(view.w) * view.h * 4u, 0);
+  redMarks.bgra.assign(marks.bgra.size(), 0);
+  for (int y = 0; y < view.h; ++y) {
+    if (cancel()) return false;
+    const int ly = std::min(lh - 1, static_cast<int>((view.y0 + y + 0.5) * lh / fullH));
+    for (int x = 0; x < view.w; ++x) {
+      const uint8_t bits = margin[static_cast<std::size_t>(ly) * lw + std::min(lw - 1, static_cast<int>((view.x0 + x + 0.5) * lw / fullW))];
+      if (!bits) continue;
+      const std::size_t at = (static_cast<std::size_t>(y) * view.w + x) * 4u;
+      const int blue = (bits & 1) ? InkCoverage(&baseSource.bgra[at]) : 0, red = (bits & 2) ? InkCoverage(&aligned.bgra[at]) : 0;
+      if (red > 0) PutMark(redMarks.bgra, at, kRevisionOnlyBgr, red);
+      if (red > blue) PutMark(marks.bgra, at, kRevisionOnlyBgr, red);
+      else if (blue > 0) PutMark(marks.bgra, at, kBaseOnlyBgr, blue);
+    }
+  }
+  return true;
+}
+} // namespace
+
+void PdfWindow::ClearCompareDetail() {
+  m_CompareDetailImage = {};
+  m_CompareDetailMarks = {};
+  m_CompareDetailRedMarks = {};
+}
+
+// A sharp picture of the visible part of the page, in the base page's frame, for when the page is shown much larger than the
+// comparison images were made: the revision (Revision and Opacity views) and the differing marks (all views) are redrawn at the
+// zoom on screen.
 void PdfWindow::RequestCompareDetail() {
   if (!m_Compare || !m_Compare->revision || m_Compare->busy || !m_Document || !PageReady()) return;
-  const int mode = m_Compare->mode;
-  if (mode == 2 || m_Layout != Layout::PageByPage || m_Compare->basePage != CurrentPage()) { m_CompareDetailImage = {}; m_CompareDetailMarks = {}; m_CompareDetailRedMarks = {}; return; }
+  if (m_Compare->mode == CompareMode::Base || m_Layout != Layout::PageByPage || m_Compare->basePage != CurrentPage()) { ClearCompareDetail(); return; }
   if (m_CompareDetailWork.valid()) { m_CompareDetailCancel = true; m_CompareDetailAgain = true; return; }
   const double ratio = m_Page->devicePixelRatioF();
-  const auto baseSize = m_Document->Sizes()[static_cast<std::size_t>(m_Compare->basePage)];
-  const double k = PageWidthPx() * ratio / std::max(1.f, baseSize.wPt); // device pixels per base point
-  if (m_Compare->overlay.width() >= PageWidthPx() * ratio * 0.9) { m_CompareDetailImage = {}; m_CompareDetailMarks = {}; m_CompareDetailRedMarks = {}; return; } // the soft picture is already sharp enough
+  const auto baseSize = BasePageSize();
+  if (m_Compare->overlay.width() >= PageWidthPx() * ratio * kSoftEnoughShare) { ClearCompareDetail(); return; }
   const QRect visible = m_Page->visibleRegion().boundingRect().intersected(QRect(0, 0, PageWidthPx(), PageHeightPx()));
   if (visible.isEmpty()) return;
-  const int ox0 = static_cast<int>(std::floor(visible.x() * ratio)), oy0 = static_cast<int>(std::floor(visible.y() * ratio));
-  const int ow = static_cast<int>(std::ceil(visible.width() * ratio)), oh = static_cast<int>(std::ceil(visible.height() * ratio));
-  if (static_cast<double>(ow) * oh > 16.0e6) return;
-  auto* revision = m_Compare->revision.get();
+  DetailView view;
+  view.x0 = static_cast<int>(std::floor(visible.x() * ratio)); view.y0 = static_cast<int>(std::floor(visible.y() * ratio));
+  view.w = static_cast<int>(std::ceil(visible.width() * ratio)); view.h = static_cast<int>(std::ceil(visible.height() * ratio));
+  view.pxPerPt = PageWidthPx() * ratio / std::max(1.f, baseSize.wPt); // device pixels per base point
+  view.pageWPt = baseSize.wPt; view.pageHPt = baseSize.hPt;
+  if (static_cast<double>(view.w) * view.h > kMaxDetailPixels) return;
   const int rp = m_Compare->revisionPage;
-  if (rp < 0 || rp >= revision->PageCount()) return;
-  const auto revSize = revision->Sizes()[static_cast<std::size_t>(rp)];
+  if (rp < 0 || rp >= m_Compare->revision->PageCount()) return;
+  // The worker owns copies of everything it reads except the two documents; StopCompareDetail waits for it before either goes.
+  auto* revision = m_Compare->revision.get();
+  auto* baseDocument = m_Document.get();
+  const auto revisionSize = revision->Sizes()[static_cast<std::size_t>(rp)];
   const pdfalign::Transform xf = m_Compare->transform;
-  const float baseH = baseSize.hPt;
-  const int pageWidthPx = PageWidthPx();
+  const int basePageIndex = m_Compare->basePage, pageWidthPx = PageWidthPx();
+  const QImage lowMarks = m_Compare->marksOverlay; // where the comparison found differences, at low resolution
   m_CompareDetailCancel = false;
   m_CompareDetailAgain = false;
-  auto* baseDocument = m_Document.get();
-  const int basePageIndex = m_Compare->basePage;
-  const QImage lowMarks = m_Compare->marksOverlay; // where the comparison found differences (blue base-only, red revision-only), at low resolution
-  m_CompareDetailWork = std::async(std::launch::async, [this, revision, rp, revSize, xf, baseH, k, ox0, oy0, ow, oh, visible, pageWidthPx, ratio, baseDocument, basePageIndex, lowMarks, baseW = baseSize.wPt]() noexcept {
+  m_CompareDetailWork = std::async(std::launch::async, [this, revision, baseDocument, rp, revisionSize, xf, view, visible, pageWidthPx, ratio, basePageIndex, lowMarks]() noexcept {
     CompareDetail out;
+    const auto cancelled = [this] { return m_CompareDetailCancel.load(); };
     try {
-      const double scale = xf.Scale();
-      if (scale < 1e-9) return out;
-      const pdfalign::Transform inv = xf.Inverse();
-      const double kr = k * scale; // revision pixels per revision point: about one to one with the screen
-      const int fullW = std::max(1, static_cast<int>(std::lround(revSize.wPt * kr))), fullH = std::max(1, static_cast<int>(std::lround(revSize.hPt * kr)));
-      double minX = 1e30, maxX = -1e30, minY = 1e30, maxY = -1e30; // the output rectangle's corners, carried into the revision
-      for (const int cx : {0, ow}) for (const int cy : {0, oh}) {
-        const auto rp2 = inv.Apply({(ox0 + cx) / k, baseH - (oy0 + cy) / k});
-        minX = std::min(minX, rp2.x * kr); maxX = std::max(maxX, rp2.x * kr);
-        minY = std::min(minY, (revSize.hPt - rp2.y) * kr); maxY = std::max(maxY, (revSize.hPt - rp2.y) * kr);
-      }
-      const int rx = std::clamp(static_cast<int>(std::floor(minX)) - 3, 0, fullW), ry = std::clamp(static_cast<int>(std::floor(minY)) - 3, 0, fullH);
-      const int rx1 = std::clamp(static_cast<int>(std::ceil(maxX)) + 3, 0, fullW), ry1 = std::clamp(static_cast<int>(std::ceil(maxY)) + 3, 0, fullH);
-      const int rw = rx1 - rx, rh = ry1 - ry;
-      out.bitmap.w = ow; out.bitmap.h = oh;
-      out.bitmap.bgra.assign(static_cast<std::size_t>(ow) * oh * 4u, 255);
-      if (rw > 0 && rh > 0 && static_cast<double>(rw) * rh <= 40.0e6) {
-        pdfview::Bitmap source;
-        if (!revision->RenderRegion(rp, fullW, fullH, rx, ry, rw, rh, source, [this] { return m_CompareDetailCancel.load(); }) || source.w <= 0) return CompareDetail{};
-        for (int y = 0; y < oh; ++y) {
-          if (m_CompareDetailCancel.load()) return CompareDetail{};
-          uint8_t* row = &out.bitmap.bgra[static_cast<std::size_t>(y) * ow * 4u];
-          for (int x = 0; x < ow; ++x) {
-            const auto r = inv.Apply({(ox0 + x + 0.5) / k, baseH - (oy0 + y + 0.5) / k});
-            const double fx = r.x * kr - 0.5 - rx, fy = (revSize.hPt - r.y) * kr - 0.5 - ry;
-            const int x0 = static_cast<int>(std::floor(fx)), y0 = static_cast<int>(std::floor(fy));
-            if (x0 < -1 || y0 < -1 || x0 >= source.w || y0 >= source.h) continue;
-            const double tx = fx - x0, ty = fy - y0;
-            for (int c = 0; c < 3; ++c) {
-              const auto at = [&](int px, int py) -> double {
-                if (px < 0 || py < 0 || px >= source.w || py >= source.h) return 255.0;
-                return source.bgra[(static_cast<std::size_t>(py) * source.w + px) * 4u + static_cast<std::size_t>(c)];
-              };
-              const double v = (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty) + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
-              row[x * 4 + c] = static_cast<uint8_t>(std::clamp(v + 0.5, 0.0, 255.0));
-            }
-          }
-        }
-        // The differing marks again, sharp: the low-resolution comparison says WHERE (it also cleaned up specks and grouped
-        // letters), and the ink there is redrawn from the screen-resolution renders, coloured by how dark it is.
-        pdfview::Bitmap baseSource;
-        const int fullBW = std::max(1, static_cast<int>(std::lround(baseW * k))), fullBH = std::max(1, static_cast<int>(std::lround(baseH * k)));
-        if (!lowMarks.isNull() && baseDocument->RenderRegion(basePageIndex, fullBW, fullBH, ox0, oy0, ow, oh, baseSource, [this] { return m_CompareDetailCancel.load(); }) &&
-            baseSource.w == ow && baseSource.h == oh) {
-          const int lw = lowMarks.width(), lh = lowMarks.height();
-          std::vector<uint8_t> found(static_cast<std::size_t>(lw) * lh, 0), margin(found.size(), 0);
-          for (int y = 0; y < lh; ++y) {
-            const auto* line = reinterpret_cast<const QRgb*>(lowMarks.constScanLine(y));
-            for (int x = 0; x < lw; ++x) if (qAlpha(line[x])) found[static_cast<std::size_t>(y) * lw + x] = qBlue(line[x]) > qRed(line[x]) ? 1 : 2;
-          }
-          for (int y = 0; y < lh; ++y)
-            for (int x = 0; x < lw; ++x) { // one low-resolution pixel of margin round every mark
-              uint8_t bits = 0;
-              for (int dy = -1; dy <= 1; ++dy) for (int dx = -1; dx <= 1; ++dx) {
-                const int nx = x + dx, ny = y + dy;
-                if (nx >= 0 && ny >= 0 && nx < lw && ny < lh) bits |= found[static_cast<std::size_t>(ny) * lw + nx];
-              }
-              margin[static_cast<std::size_t>(y) * lw + x] = bits;
-            }
-          out.marks.w = out.redMarks.w = ow; out.marks.h = out.redMarks.h = oh;
-          out.marks.bgra.assign(static_cast<std::size_t>(ow) * oh * 4u, 0);
-          out.redMarks.bgra.assign(out.marks.bgra.size(), 0);
-          const auto coverage = [](const uint8_t* p) { // how much ink a pixel has: white 0, dark 255
-            const int luminance = (p[0] + p[1] * 2 + p[2]) / 4;
-            return static_cast<int>(std::clamp((245 - luminance) * 255 / 185, 0, 255));
-          };
-          for (int y = 0; y < oh; ++y) {
-            if (m_CompareDetailCancel.load()) return CompareDetail{};
-            const int ly = std::min(lh - 1, static_cast<int>((oy0 + y + 0.5) * lh / fullBH));
-            for (int x = 0; x < ow; ++x) {
-              const uint8_t bits = margin[static_cast<std::size_t>(ly) * lw + std::min(lw - 1, static_cast<int>((ox0 + x + 0.5) * lw / fullBW))];
-              if (!bits) continue;
-              const std::size_t at = (static_cast<std::size_t>(y) * ow + x) * 4u;
-              const int blue = (bits & 1) ? coverage(&baseSource.bgra[at]) : 0, red = (bits & 2) ? coverage(&out.bitmap.bgra[at]) : 0;
-              if (red > 0) { const uint8_t px[4] = {30, 55, 255, static_cast<uint8_t>(red)}; std::copy_n(px, 4, &out.redMarks.bgra[at]); }
-              if (red > blue) { const uint8_t px[4] = {30, 55, 255, static_cast<uint8_t>(red)}; std::copy_n(px, 4, &out.marks.bgra[at]); }
-              else if (blue > 0) { const uint8_t px[4] = {255, 55, 30, static_cast<uint8_t>(blue)}; std::copy_n(px, 4, &out.marks.bgra[at]); }
-            }
-          }
-        }
-      }
+      if (!ResampleRevision(*revision, rp, revisionSize, xf, view, cancelled, out.bitmap)) { const bool failed = !cancelled(); out = {}; out.failed = failed; return out; }
+      if (!lowMarks.isNull() && !BuildDetailMarks(*baseDocument, basePageIndex, lowMarks, out.bitmap, view, cancelled, out.marks, out.redMarks)) { const bool failed = !cancelled(); out = {}; out.failed = failed; return out; }
       out.rect = visible; out.pageWidthPx = pageWidthPx; out.ratio = ratio;
-    } catch (...) { return CompareDetail{}; }
+    } catch (...) { out = {}; out.failed = true; }
     return out;
   });
   m_CompareDetailPoll->start();
@@ -3015,7 +3060,8 @@ void PdfWindow::PollCompareDetail() {
   if (!m_CompareDetailWork.valid() || m_CompareDetailWork.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
   m_CompareDetailPoll->stop();
   CompareDetail out;
-  try { out = m_CompareDetailWork.get(); } catch (...) {}
+  try { out = m_CompareDetailWork.get(); } catch (const std::exception& error) { qWarning() << "PDF compare: the sharp picture failed:" << error.what(); }
+  if (out.failed) qWarning() << "PDF compare: the sharp picture of the visible part could not be drawn; the comparison picture stays.";
   if (m_CompareDetailAgain) { RequestCompareDetail(); return; } // the view moved while it drew
   if (!m_Compare || out.bitmap.w <= 0) return;
   const auto toImage = [&](const pdfview::Bitmap& bitmap) {
@@ -3026,9 +3072,7 @@ void PdfWindow::PollCompareDetail() {
   };
   m_CompareDetailMarks = toImage(out.marks);
   m_CompareDetailRedMarks = toImage(out.redMarks);
-  QImage image(out.bitmap.bgra.data(), out.bitmap.w, out.bitmap.h, static_cast<qsizetype>(out.bitmap.w) * 4, QImage::Format_ARGB32);
-  m_CompareDetailImage = image.copy();
-  m_CompareDetailImage.setDevicePixelRatio(out.ratio);
+  m_CompareDetailImage = toImage(out.bitmap);
   m_CompareDetailRect = out.rect;
   m_CompareDetailPageWidthPx = out.pageWidthPx;
   m_Page->update();
@@ -3038,9 +3082,7 @@ void PdfWindow::StopCompareDetail() {
   m_CompareDetailCancel = true;
   if (m_CompareDetailWork.valid()) { try { m_CompareDetailWork.wait(); } catch (...) {} m_CompareDetailWork = {}; }
   if (m_CompareDetailPoll) m_CompareDetailPoll->stop();
-  m_CompareDetailImage = {}; m_CompareDetailMarks = {}; m_CompareDetailRedMarks = {};
-  m_CompareDetailMarks = {};
-  m_CompareDetailRedMarks = {};
+  ClearCompareDetail();
   m_CompareDetailAgain = false;
 }
 
