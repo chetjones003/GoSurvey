@@ -31,15 +31,10 @@ struct TelemetryPayload {
   std::string version;
   std::string channel;  // "stable" or "beta"
   std::string os;  // "windows" on all platforms we support
-  /// REQ-080 (amended 2026-08-23, D-2026-08-23-e): the REQ-091 signed-in email at the moment
-  /// this ping fires, or empty if signed out. This is the one deliberate, user-directed
-  /// exception to "no PII" — everything else about this payload is unchanged and still fires
-  /// regardless of sign-in state.
-  std::string email;
 };
 
 /// Build the telemetry payload as a JSON string.
-/// Returns: {"installId":"...","event":"install|active",...,"email":"..."}
+/// Returns a JSON object with exactly the five REQ-080 fields.
 std::string BuildTelemetryJson(const TelemetryPayload& payload);
 
 /// Generate a random 128-bit hex install ID (32 hex characters).

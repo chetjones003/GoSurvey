@@ -1754,42 +1754,6 @@ private Q_SLOTS:
     QVERIFY(!window.HasUnsavedChanges());
   }
 
-  void settingsAccountSupportsLaterSignInAndReadOnlyStatus() {
-    EditorWindow window;
-    auto *viewMenu = window.findChild<QMenu *>("viewMenu");
-    QVERIFY(viewMenu);
-    QAction *settings = nullptr;
-    for (auto *action : viewMenu->actions())
-      if (action->text() == "Settings…")
-        settings = action;
-    QVERIFY(settings);
-    settings->trigger();
-    auto *dialog = window.findChild<QDialog *>("applicationSettings");
-    QVERIFY(dialog);
-    auto *heading = dialog->findChild<QLabel *>("accountSettingsHeading");
-    QVERIFY(heading);
-    QCOMPARE(heading->text(), QString("Account"));
-    QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
-    QVERIFY(dialog->findChild<QWidget *>("settingsPageAccount")->findChildren<QLineEdit *>().isEmpty());
-    auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
-    auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
-    QVERIFY(action);
-    QVERIFY(status);
-    QTRY_COMPARE(action->text(), QString("Sign In"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    window.State().authSignInRequested = false;
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
-    QTRY_COMPARE(action->text(), QString("Sign Out"));
-    const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-account-final.png"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignOutRequested);
-  }
-
   void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -2233,46 +2197,6 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
   }
 
-  void startupGateUsesApplicationLogoAndRequiresAChoice() {
-    EditorWindow window;
-    window.State().authGateResolved = false;
-    window.show();
-    window.ShowSignInGate();
-    auto *gate = window.findChild<QDialog *>("signInGate");
-    QVERIFY(gate);
-    QTRY_VERIFY(gate->isVisible());
-    QCOMPARE(gate->windowModality(), Qt::ApplicationModal);
-    QVERIFY(!(gate->windowFlags() & Qt::WindowCloseButtonHint));
-    auto *logo = gate->findChild<QLabel *>("signInLogo");
-    QVERIFY(logo);
-    QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
-    const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-startup-final.png"));
-    gate->close();
-    QVERIFY(gate->isVisible());
-    QTest::keyClick(gate, Qt::Key_Escape);
-    QVERIFY(gate->isVisible());
-    QTest::mouseClick(gate->findChild<QPushButton *>("signInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    QTest::mouseClick(gate->findChild<QPushButton *>("declineSignInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authDeclineRequested);
-  }
-
-  void savedOptOutResolvesQtLaunchWithoutAuthAttempt() {
-    EditorWindow window;
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QVERIFY(window.State().authGateResolved);
-    QVERIFY(!window.State().authBusy);
-    QCoreApplication::processEvents();
-    QVERIFY(!window.findChild<QDialog *>("signInGate"));
-  }
-
-  // ---- REQ-080 usage ping / REQ-425 crash and startup-failure reports (issue #883) -----------
-
   static QString SampleCrashReport() {
     return QString(
         "GoSurvey stopped because of an unexpected error.\n\n"
@@ -2292,7 +2216,6 @@ private Q_SLOTS:
         "Use \"Send This Report\" to copy this text and open GitHub to file an issue.";
   }
 
-  /// Clicks OK on the next message box and hands back what it said.
   static void CaptureNextMessage(QString& text) {
     QTimer::singleShot(0, [&text] {
       for (auto* widget : QApplication::topLevelWidgets())
@@ -2301,77 +2224,6 @@ private Q_SLOTS:
           message->button(QMessageBox::Ok)->click();
         }
     });
-  }
-
-  void telemetryPingWaitsForLaunchGateAndFiresOnce() {
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping before the launch sequence starts");
-    window.m_AuthStarted = true;
-    window.State().authGateResolved = false;
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping while the sign-in gate is unresolved");
-    window.State().authGateResolved = true;
-    window.ServiceTelemetry();
-    window.ServiceTelemetry();
-    QCOMPARE(sent.size(), std::size_t(1));
-    QCOMPARE(sent[0], std::string());  // signed out: no email
-
-    EditorWindow signedIn;
-    std::vector<std::string> signedInSent;
-    signedIn.m_SendTelemetry = [&signedInSent](const std::string& email) { signedInSent.push_back(email); };
-    signedIn.m_AuthStarted = true;
-    signedIn.State().authGateResolved = true;
-    signedIn.State().authSignedIn = true;
-    signedIn.State().authEmail = "surveyor@example.com";
-    signedIn.ServiceTelemetry();
-    QCOMPARE(signedInSent, std::vector<std::string>{"surveyor@example.com"});
-  }
-
-  void telemetryPingFollowsTheRealLaunchPathOnlyWhenEnabled() {
-    // The saved opt-out resolves the gate at once; the window's own service loop sends the ping.
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QTRY_COMPARE(sent.size(), std::size_t(1));
-    QTest::qWait(150);
-    QCOMPARE(sent.size(), std::size_t(1));
-
-    // A window the entry point did not enable never sends one (so tests stay off the network).
-    EditorWindow quiet;
-    quiet.State().authOptedOut = true;
-    quiet.StartAuth();
-    QTest::qWait(150);
-    QVERIFY(!quiet.m_SendTelemetry);
-    QVERIFY(!quiet.m_TelemetryTask);
-  }
-
-  void settingsUsageDisclosureIsAccurateAndFollowsSignIn() {
-    EditorWindow window;
-    window.ShowSettings();
-    auto* dialog = window.findChild<QDialog*>("applicationSettings");
-    QVERIFY(dialog);
-    auto* heading = dialog->findChild<QLabel*>("usageDataHeading");
-    auto* summary = dialog->findChild<QLabel*>("usageDataSummary");
-    auto* email = dialog->findChild<QLabel*>("usageDataEmail");
-    auto* crash = dialog->findChild<QLabel*>("usageDataCrashReports");
-    QVERIFY(heading && summary && email && crash);
-    // REQ-080 as amended: a ping every launch. The 0.7.4 "at most once a day" is no longer true.
-    QVERIFY(summary->text().contains("each time you start GoSurvey"));
-    QVERIFY(!summary->text().contains("once a day"));
-    // A disclosure, not a control: ADR-032 has no opt-out.
-    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection")->findChild<QCheckBox*>());
-    QVERIFY(email->text().contains("currently signed out"));
-    // REQ-425 §6.
-    QVERIFY(crash->text().contains("crashes or cannot start"));
-    QVERIFY(crash->text().contains("file locations"));
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_VERIFY(email->text().contains("your email is included too"));
   }
 
   void failureReportWindowSendsWithoutClosingAndCloseSendsNothing() {
@@ -2975,18 +2827,13 @@ private Q_SLOTS:
     UpdateButton(dialog, "updateRemindButton")->click();
   }
 
-  void updateOfferIsShownBeforeTheSignInGate() {
+  void startupHasNoSignInGate() {
     EditorWindow window;
-    window.State().authGateResolved = false;
-    window.m_AuthStarted = true;
-    window.m_Update->phase = update::Phase::Checking;
-    window.ServiceAuth();
+    window.show();
+    QApplication::processEvents();
     QVERIFY(!window.findChild<QDialog*>("signInGate"));
-    window.m_Update->phase = update::Phase::Idle;
-    window.ServiceAuth();
-    if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/task-1043-startup.png"));
   }
-
   void settingsUpdatesAreStagedUntilApply() {
     IsolatedUserData userData;
     EditorWindow window;
@@ -3055,7 +2902,9 @@ private Q_SLOTS:
     QVERIFY(categories);
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
-    QCOMPARE(names, (QStringList{"Account", "Updates and Privacy", "Display", "Drafting", "Survey Points"}));
+    QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
+    QVERIFY(!dialog->findChild<QWidget*>("settingsPageAccount"));
+    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection"));
     auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
     auto* undo = dialog->findChild<QSpinBox*>("settingsUndoHistory");
     auto* angle = dialog->findChild<QComboBox*>("settingsAngleType");
@@ -3072,7 +2921,6 @@ private Q_SLOTS:
       const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
       auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
       ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
-      window.State().authSignedIn = false;
       dialog->resize(780, 600);
       for (int i = 0; i < categories->count(); ++i) {
         categories->setCurrentRow(i);
@@ -3291,15 +3139,12 @@ private Q_SLOTS:
     QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
     QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
     QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
-
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
 
     EditorWindow firstRun;
-    // What's New follows the Start-screen conditions; an unresolved launch sign-in choice must
-    // not suppress its display.
+    // What's New follows the Start-screen conditions without a sign-in gate.
     firstRun.State().whatsNewDismissedVersion.clear();
     firstRun.InitializeStartup();
     auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
@@ -3338,7 +3183,6 @@ private Q_SLOTS:
 
   void directDrawingStartupDoesNotAutoOpenWhatsNew() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.CreateDrawingFromTemplate(0);
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
@@ -3346,16 +3190,13 @@ private Q_SLOTS:
 
   void updateOfferSuppressesWhatsNewForTheLaunch() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion.clear();   // would otherwise auto-open
     auto* dialog = OfferUpdate(window, OfferedManifest());
     QVERIFY(dialog);
     window.InitializeStartup();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
     UpdateButton(dialog, "updateRemindButton")->click();
     window.ServiceUpdate();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
   }
 
@@ -4776,32 +4617,6 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
     QVERIFY(DoUndo(state, window.m_Log));
     QVERIFY(state.userLinesFlat.empty());
-  }
-
-  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
-    QTemporaryFile blocker;
-    QVERIFY(blocker.open());
-    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
-    EditorWindow window;
-    auto& state = window.State();
-    window.m_AuthStarted = true;
-    state.authGateResolved = false;
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(!state.authOptedOut);
-    QVERIFY(!state.authGateResolved);
-    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
-
-    IsolatedUserData writable;
-    state.authError.clear();
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(state.authOptedOut);
-    QVERIFY(state.authGateResolved);
-    QVERIFY(state.authError.empty());
-    AppCommandState reloaded;
-    LoadUserStartupPrefSettings(reloaded);
-    QVERIFY(reloaded.authOptedOut);
   }
 
   void issue903PolarSettingsAndOneShotSnap() {
