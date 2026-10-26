@@ -89,8 +89,30 @@
     FIELD_RL (vbaproj_address, 0);
     FIELD_RL (r2004_header_address, 0); /* mostly 128/0x80 */
     ENCODER {
+      unsigned char slack[54] = { 0 };
+      size_t slack_start = dat->byte;
+      /* AutoCAD stores fixed format markers in the otherwise unused header
+         slack.  LibreDWG's zero fill here produces R2018 DWGs that AutoCAD
+         rejects before section decoding. */
+      if (slack_start <= 0x34 && slack_start + sizeof (slack) >= 0x38)
+        {
+          size_t p = 0x34 - slack_start;
+          slack[p] = 0x02; slack[p + 1] = 0x02;
+        }
+      if (slack_start <= 0x38 && slack_start + sizeof (slack) >= 0x3c)
+        {
+          size_t p = 0x38 - slack_start;
+          slack[p] = 0xac; slack[p + 1] = 0x01;
+        }
+      if (dat->version >= R_2013 && slack_start <= 0x3c
+          && slack_start + sizeof (slack) >= 0x44)
+        {
+          size_t p = 0x3c - slack_start;
+          slack[p] = 0x7a; slack[p + 1] = 0x01;
+          slack[p + 4] = 0x7a; slack[p + 5] = 0x01;
+        }
       for (i = 0; i < 54; i++)
-        bit_write_RC (dat, 0);
+        bit_write_RC (dat, slack[i]);
     }
     else {
       dat->byte += 54; // empty slack
