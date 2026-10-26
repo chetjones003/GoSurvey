@@ -1,7 +1,7 @@
 # TASK-1106 — Explain the 0.7.5 install migration
 
 - Type: feature
-- Status: verify
+- Status: in review
 - Opened: 2026-10-25
 - Owner: Workshop
 
@@ -40,8 +40,8 @@ None.
   distinct, word-wrapped migration message above the scrolling release notes when true; add a plain
   language 0.7.5 release note sourced by the existing release workflow.
 - Files/functions to touch: `spec/project.md`, `spec/requirements.md`, this task, a plan review,
-  `src/update/UpdateService.hpp/.cpp`, `src/qt/EditorUpdate.cpp`, updater/Qt tests, and
-  `RELEASE_NOTES.md`.
+  `src/update/UpdateService.hpp/.cpp`, `src/qt/EditorUpdate.cpp`, updater/Qt tests,
+  `resources/wiki/`, and `RELEASE_NOTES.md`.
 - Test approach: reuse the same Program Files predicate used by the migration handoff; test that the
   update dialog shows the notice only for legacy installs and above the notes without changing its
   three choices; ensure release-note text is in the version section used by the release workflow.
@@ -80,6 +80,9 @@ None.
   `945b4c54d3c423bce383c901ddbf746c7e222a08` and
   `d86ef2eb3b4fd00ee17038dcaaa20b3212697079`; `docs/install.md` reviewed and already describes the
   bootstrap and migration. No external documentation update remains pending.
+- 2026-10-26: Opened [PR #1102](https://github.com/chetjones003/GoSurvey/pull/1102) against `beta`
+  with `feature` and `needs review` labels. Required CI checks are running; merge and check review
+  remain.
 
 ## 9. Self-verification
 - [x] build-project — `build.bat` passed.
@@ -102,5 +105,5 @@ None.
   placement, visibility, and unchanged actions.
 - Docs updated: `RELEASE_NOTES.md`, four in-app wiki pages, four public wiki pages; README,
   PRIVACY.md, and `docs/install.md` reviewed with no changes required.
-- Done: implementation, verification, documentation review, and screenshot approval complete;
-  branch and PR preparation remain.
+- Done: implementation, verification, documentation review, screenshot approval, and PR creation
+  complete; required CI and PR review remain.
