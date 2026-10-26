@@ -44,8 +44,8 @@ No application behavior, release workflow, installer, PDB, or data-handling chan
 - Public manual wiki: reviewed; paper-space and import/export pages were updated for PR #1111.
   Stale DXF paper-space import statements and the obsolete DWG multi-layout export limitation are
   being corrected before the promotion PR.
-- In-app What's New billboard: update through 0.7.6; obtain the review approval required by REQ-336
-  before committing or pushing the content.
+- In-app What's New billboard: updated through 0.7.6 and explicitly reviewed and approved by the
+  user on 2026-10-26, satisfying REQ-336's authoring lock.
 
 ## 5. Verification plan
 
