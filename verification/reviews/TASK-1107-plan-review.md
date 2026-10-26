@@ -40,3 +40,11 @@ prerequisites while ensuring the temporary Mesa DLLs are restored or removed bef
 runtime staging from full validation, apply the same Qt environment and CTest parallelism, and
 restore test-only DLLs even on failure. Keep CTest before all PDB and installer publication steps.
 Retain CTest's failure as a hard stop; do not skip or weaken any test.
+
+## Second follow-up — optional Mesa DLLs
+
+Release run 40270411644 built successfully but stopped at Mesa staging because the pinned package
+does not contain `libglapi.dll`. The full-validation workflow intentionally stages optional
+dependencies only when present. **Plan verdict: PASS WITH FIX REQUIRED.** Require `opengl32.dll`,
+back up existing destination files before examining source availability, copy other Mesa DLLs only
+when present, and retain `finally` cleanup so original Qt files are restored.

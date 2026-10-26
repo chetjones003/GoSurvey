@@ -154,7 +154,8 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
 ### Implementation and verification status
 
 - Updated `.github/workflows/release.yml` to download the same checksum-pinned Mesa build as
-  full-validation, stage its four test DLLs, set the validated desktop OpenGL/llvmpipe environment,
+  full-validation, stage the Mesa test DLLs that are present, set the validated desktop
+  OpenGL/llvmpipe environment,
   and run the complete suite with eight workers. A `finally` block restores pre-existing Qt DLLs
   or removes Mesa-only files before symbol archiving or packaging, even after a failed test run.
 - Updated the full-validation workflow header comment to reflect the shared test prerequisites.
@@ -163,3 +164,24 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
   archiving. `git diff --check` passed.
 - Product sources are unchanged; the full hosted build/test and release publication check remain
   pending the PR checks and the next intentional stable workflow dispatch after merge.
+
+## 12. Mesa staging follow-up (2026-10-26)
+
+- **Observed:** Release run [#40270411644](https://github.com/chetjones003/GoSurvey/actions/runs/40270411644)
+  completed its build but failed before CTest. The staging step required `libglapi.dll`, which is
+  absent from the pinned Mesa package's x64 directory. CTest and publication were skipped.
+- **Root cause:** The release fix treated all four DLLs as mandatory, while the passing
+  full-validation workflow stages each dependency only when the package contains it. The required
+  OpenGL entry point is `opengl32.dll`; the other runtime dependencies are optional for this Mesa
+  package.
+- **Updated plan:** Back up any existing app DLLs first. Require `opengl32.dll`, but stage each
+  additional Mesa dependency only when present; leave absent ones alone. The existing `finally`
+  block then restores all pre-existing DLLs and removes only Mesa-only files after CTest.
+- **Verification:** Re-run the workflow contract check for required-versus-optional staging and
+  cleanup, then validate the full Windows release path with a new master dispatch. No release was
+  published by run #40270411644.
+- Updated release staging so existing destination DLLs are backed up first; `opengl32.dll` is
+  required, while the other three Mesa DLLs are copied only when present. The `finally` restore
+  logic remains unchanged.
+- Workflow contract verification and `git diff --check` pass. The hosted build/test and stable
+  release remain pending this correction's PR and a subsequent intentional master dispatch.
