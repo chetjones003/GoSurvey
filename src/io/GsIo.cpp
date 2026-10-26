@@ -1305,6 +1305,8 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        if (!v.annotationScaleName.empty())
+          vo["annotationScaleName"] = v.annotationScaleName;
         vo["visualStyle"] = static_cast<int>(v.visualStyle);  // REQ-371 (additive)
         vo["camAzimuthDeg"] = v.camAzimuthDeg;      // REQ-061: per-viewport camera (additive)
         vo["camElevationDeg"] = v.camElevationDeg;
@@ -2627,6 +2629,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          v.annotationScaleName = vo.value("annotationScaleName", v.annotationScaleName);
           if (vo.contains("visualStyle") && vo["visualStyle"].is_number_integer()) {
             const int vsRaw = vo["visualStyle"].get<int>();
             v.visualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))

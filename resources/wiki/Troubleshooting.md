@@ -109,7 +109,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Problem | Cause | Solution |
 |---|---|---|
 | DXF import brings in nothing | Binary DXF | *"Binary DXF is not supported — in AutoCAD use Save As → ASCII DXF."* |
-| DXF import brings in nothing, and the log mentions group 67 | The geometry is all in paper space, which is not imported | Move it to model space in the source program |
+| DXF import brings in nothing, and the log mentions group 67 | No supported paper-space entities were found | Check the log for unsupported types; move unsupported content to model space in the source program |
 | CSV import brings in nothing | The column order does not match | Check the **File preview** and change **Column order** |
 | Civil 3D points did not import | They are custom objects, absent from the DXF | Export a PNEZD CSV from Civil 3D |
 | Point IDs collided | Two sources numbered from 1 | Choose **Renumber** in the duplicate policy, or **offset** at the DXF merge prompt |
@@ -126,7 +126,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 |---|---|---|
 | Some entities are missing from the DXF | Those types have no export branch yet | Read the `DXF export — excluded …` log line; see [[Known Limitations]] |
 | Dimensions are not live in AutoCAD | Aligned dimensions export as **exploded lines plus text** | Expected. Recreate them in the receiving program if they must be associative |
-| DWG export lost blocks and layouts | Documented; the dialog warns before writing | Use DXF where possible |
+| DWG export lost blocks | Block definitions and inserts are written as exploded geometry | Recreate blocks in the receiving program if needed |
 | `DXF export — could not open file for writing` | The path is not writable, or the file is open elsewhere | Close it and retry |
 
 ---

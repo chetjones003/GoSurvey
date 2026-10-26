@@ -19,6 +19,18 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.7.6
+
+**Paper-space viewport state**
+- Paper-space viewports now keep their camera, UCS, layer color overrides, and independent annotation
+  scale when you save and reopen R2018 DWG or DXF drawings. Set a viewport's scale independently
+  from zoom; new viewports start with the drawing's current annotation scale.
+
+**Installer**
+- The PowerShell install command now recognizes published stable releases and continues with setup.
+
+---
+
 ## 0.7.5
 
 **Moving GoSurvey to your user profile**

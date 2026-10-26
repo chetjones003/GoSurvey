@@ -465,6 +465,8 @@ int AddViewport(AppCommandState& cmd, int layoutIdx) {
   vp.modelCenterX = cmd.worldDocumentOriginX;
   vp.modelCenterY = cmd.worldDocumentOriginY;
   vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                        nullptr, cmd.modelUnitsPerPlottedInch);
   L.viewports.push_back(vp);
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;
@@ -486,6 +488,8 @@ int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In,
   vp.modelCenterX = cmd.worldDocumentOriginX;
   vp.modelCenterY = cmd.worldDocumentOriginY;
   vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  vp.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                        nullptr, cmd.modelUnitsPerPlottedInch);
   L.viewports.push_back(vp);
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;

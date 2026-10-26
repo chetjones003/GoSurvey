@@ -26,6 +26,10 @@ The main exchange route with AutoCAD, Civil 3D, and everything else.
 
 Writes **ASCII DXF tagged AC1032** (AutoCAD 2018 class).
 
+Paper-space viewport state round-trips using native CAD viewport data, including its camera,
+view direction, visual style, frozen layers and layer color overrides, UCS, lock/on-off state, and
+independent annotative scale. DXF export uses the R2018 format so this viewport state is retained.
+
 | Section | Contents |
 |---|---|
 | **HEADER** | Drawing limits, extents, system variables, `$HANDSEED`, `$INSUNITS` from the `UNITS` insertion-units setting, and — when survey points are present — `$PDMODE` / `$PDSIZE` so POINT entities display as an X |
@@ -51,7 +55,7 @@ Brings in model-space geometry: lines, circles, arcs, ellipses, polylines, and c
 
 | Behaviour | Detail |
 |---|---|
-| **Paper space** | `N paper-space-only ENTITIES (group 67); layouts/title blocks not imported.` |
+| **Paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported entity types are reported in the log. |
 | **Unsupported types** | `N unsupported ENTITIES record(s).` — reported, never silently dropped |
 | **No ENTITIES section** | Falls back to the `*MODEL_SPACE` block and says so |
 | **Large coordinates** | State-plane values are imported at **full precision**; an internal local origin is set automatically |
@@ -113,7 +117,6 @@ Because DWG is written **through DXF**, export is lossy, and GoSurvey says so be
 
 > *GoSurvey writes DWG through DXF, so this export drops:*
 > - block definitions and inserts (geometry is written exploded)
-> - paper-space layouts beyond the first
 > - elevations, block attributes, multileaders and tables
 > - Civil 3D objects, proxies and anything else GoSurvey does not model
 
@@ -249,7 +252,7 @@ Set the visual style to **Shaded** and use `ORBIT` to look at an imported model.
 | DXF import wiped my points | It should not — points are kept by design | Check the log; if IDs collided you were prompted to overwrite or offset |
 | Some entities did not export | The type has no export branch yet | Read the `DXF export — excluded …` line; see [[Known Limitations]] |
 | DWG menu items are greyed out | No converter found | Install the ODA File Converter, or set `GOSURVEY_DWG_CONVERTER` |
-| DWG export lost blocks and layouts | Documented and warned about before writing | Use DXF where the receiving program accepts it |
+| DWG export lost blocks | Block definitions and inserts are written as exploded geometry | Recreate blocks in the receiving program if needed |
 | `IMPORTMODEL` refuses the scale | Zero or non-finite | Give a non-zero finite number |
 | A DXF import zoomed out to nothing | An outlier entity at a wild coordinate | The log prints both the full and the outlier-excluded bounding box — find and delete it, then `ZE` |
 

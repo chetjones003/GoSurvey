@@ -142,9 +142,14 @@ Per viewport:
 | **W**, **H** | Size in paper inches |
 | **Center X**, **Center Y** | The model point shown at the viewport centre |
 | **Scale (model/in)** | Model units per paper inch — the AutoCAD viewport scale. `50` gives 1" = 50' |
+| **Annotative scale** | The annotation scale used by this viewport, selected independently from its zoom scale. New viewports start with the drawing's current annotation scale |
 | **Layer** | The viewport's own layer. **If that layer is not plottable, the viewport border is omitted from plots** — this is how you get a borderless viewport |
 
 **+ Add viewport** and **Delete viewport** manage the list.
+
+The viewport's **Annotative scale** controls which scale-dependent annotations appear through that
+viewport. It is separate from **Scale (model/in)**, which controls the model framing. Choose it from
+the drawing's annotation scale list; changing it does not zoom the viewport.
 
 ### Editing the model through a viewport
 

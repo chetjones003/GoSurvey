@@ -1461,6 +1461,16 @@ void EditorWindow::ShowViewportsManager() {
   QDialog dialog(this); dialog.setObjectName("viewportsManager"); dialog.setWindowTitle("Viewports — " + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str())); dialog.resize(450, 350);
   auto* outer = new QVBoxLayout(&dialog);
   auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList"); outer->addWidget(list, 1);
+  auto* annotationScaleRow = new QHBoxLayout(); outer->addLayout(annotationScaleRow);
+  annotationScaleRow->addWidget(new QLabel("Annotative scale:", &dialog));
+  auto* annotationScale = new QComboBox(&dialog); annotationScale->setObjectName("viewportAnnotationScale");
+  for (const CadAnnotationScale& scale : m_State.annotationScales)
+    annotationScale->addItem(QString::fromUtf8(scale.name.c_str()), QString::fromUtf8(scale.name.c_str()));
+  if (annotationScale->count() == 0) {
+    annotationScale->addItem("No annotation scales");
+    annotationScale->setEnabled(false);
+  }
+  annotationScaleRow->addWidget(annotationScale, 1);
   auto* row = new QHBoxLayout(); outer->addLayout(row);
   auto* add = new QPushButton("Add viewport", &dialog); add->setObjectName("viewportAdd");
   auto* scale = new QPushButton("Set scale…", &dialog); scale->setObjectName("viewportScale");
@@ -1477,12 +1487,47 @@ void EditorWindow::ShowViewportsManager() {
           .arg(vp.paperWIn, 0, 'f', 2).arg(vp.paperHIn, 0, 'f', 2));
     }
     if (list->count() > 0) list->setCurrentRow(std::clamp(m_State.selectedViewportIndex, 0, list->count() - 1));
+    const int selected = list->currentRow();
+    const bool hasViewport = selected >= 0 && static_cast<size_t>(selected) < viewports.size();
+    const std::string effectiveScale = hasViewport
+        ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
+                                       &viewports[static_cast<size_t>(selected)], m_State.modelUnitsPerPlottedInch)
+        : std::string{};
+    const QSignalBlocker block(annotationScale);
+    const int scaleIndex = annotationScale->findData(QString::fromUtf8(effectiveScale.c_str()));
+    annotationScale->setCurrentIndex(scaleIndex);
+    annotationScale->setEnabled(writable && hasViewport && scaleIndex >= 0);
     scale->setEnabled(writable && list->currentRow() >= 0); remove->setEnabled(writable && list->currentRow() >= 0);
   };
   refill();
   connect(list, &QListWidget::currentRowChanged, &dialog, [&, writable](int rowIndex) {
     if (rowIndex >= 0) SelectViewport(m_State, rowIndex, false);
     scale->setEnabled(writable && rowIndex >= 0); remove->setEnabled(writable && rowIndex >= 0);
+    const auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    const bool hasViewport = rowIndex >= 0 && static_cast<size_t>(rowIndex) < viewports.size();
+    const std::string effectiveScale = hasViewport
+        ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
+                                       &viewports[static_cast<size_t>(rowIndex)], m_State.modelUnitsPerPlottedInch)
+        : std::string{};
+    const QSignalBlocker block(annotationScale);
+    annotationScale->setCurrentIndex(annotationScale->findData(QString::fromUtf8(effectiveScale.c_str())));
+    annotationScale->setEnabled(writable && hasViewport && annotationScale->currentIndex() >= 0);
+  });
+  connect(annotationScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
+    const int viewportIndex = list->currentRow();
+    if (!writable || index < 0 || viewportIndex < 0)
+      return;
+    auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    if (static_cast<size_t>(viewportIndex) >= viewports.size())
+      return;
+    const std::string name = annotationScale->itemData(index).toString().toUtf8().toStdString();
+    Viewport& viewport = viewports[static_cast<size_t>(viewportIndex)];
+    if (viewport.annotationScaleName == name)
+      return;
+    PushUndoSnapshot(m_State, "Viewport annotative scale");
+    viewport.annotationScaleName = name;
+    BumpCadGpuCache(m_State);
+    Refresh();
   });
   connect(add, &QPushButton::clicked, &dialog, [&] {
     PushUndoSnapshot(m_State, "Create viewport");

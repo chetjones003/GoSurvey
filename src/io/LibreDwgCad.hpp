@@ -10,8 +10,8 @@ struct _dwg_struct;  // LibreDWG's drawing handle; Dwg_Data is a typedef of it (
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
                         bool asDxf);
 
-/// Save through GNU LibreDWG. DWG is R2000 (the encoder this pin actually supports). DXF is ASCII
-/// from the same in-memory drawing.
+/// Save through GNU LibreDWG. DWG uses the selected save version; DXF is ASCII R2018 from the same
+/// in-memory drawing so native viewport annotation scales are available (D-2026-10-25-c).
 bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log,
                         bool asDxf);
 

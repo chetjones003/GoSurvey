@@ -1656,6 +1656,9 @@ dwg_free_acds (Dwg_Data *dwg)
   BITCODE_RL rcount3 = 0, rcount4, vcount;
   int error = 0;
 
+  FREE_IF (_obj->raw_data);
+  _obj->raw_size = 0;
+
   // clang-format off
   #include "acds.spec"
   // clang-format on

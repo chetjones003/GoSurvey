@@ -135,7 +135,10 @@
         LOG_POS                                                               \
       }                                                                       \
     } else {                                                                  \
-      bit_write_T (str_dat, _obj->nam);                                       \
+      if (obj && dat->version >= R_2007)                                      \
+        bit_write_TU_no_null (str_dat, (BITCODE_TU)_obj->nam);                \
+      else                                                                    \
+        bit_write_T (str_dat, _obj->nam);                                     \
       if (IS_FROM_TU (dat)) {                                                 \
         LOG_TRACE_TU (#nam, _obj->nam, dxf);                                  \
       } else {                                                                \
@@ -206,7 +209,12 @@
 #define FIELD_TU(nam, dxf)                                                    \
   {                                                                           \
     if (_obj->nam)                                                            \
-      bit_write_TU (str_dat, (BITCODE_TU)_obj->nam);                          \
+      {                                                                       \
+        if (dat->version >= R_2007)                                           \
+          bit_write_TU_no_null (str_dat, (BITCODE_TU)_obj->nam);              \
+        else                                                                  \
+          bit_write_TU (str_dat, (BITCODE_TU)_obj->nam);                      \
+      }                                                                       \
     LOG_TRACE_TU (#nam, (BITCODE_TU)_obj->nam, dxf);                          \
   }
 #define FIELD_TU16(nam, dxf)                                                  \
