@@ -3296,6 +3296,62 @@ private Q_SLOTS:
     whatsNew->hide();
   }
 
+  void issue1079OpeningDwGWithoutProjectCreatesFocusedTab() {
+    EditorWindow window;
+    const auto previousTabCount = window.State().drawingTabs.size();
+    const QString drawingPath = QString::fromUtf8(GOSURVEY_SOURCE_DIR) + "/samples/surface-demo.dwg";
+    bool chooserShown = false;
+    QTimer dialogPoll(&window);
+    dialogPoll.setInterval(10);
+    connect(&dialogPoll, &QTimer::timeout, &window, [&] {
+      if (auto* chooser = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+          chooser && chooser->objectName() == "drawingTemplateDialog") {
+        chooserShown = true;
+        chooser->reject();
+      } else if (auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) message->accept();
+    });
+    dialogPoll.start();
+
+    window.OpenDrawing(drawingPath);
+    dialogPoll.stop();
+
+    QVERIFY2(!chooserShown, "Opening an existing drawing must not show the New Drawing chooser");
+    QCOMPARE(window.State().drawingTabs.size(), previousTabCount + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(previousTabCount));
+    const auto& openedTab = window.State().drawingTabs[previousTabCount];
+    QCOMPARE(QString::fromStdString(openedTab.name), QString("surface-demo"));
+    QCOMPARE(openedTab.projectUid, std::uint32_t(0));
+    QCOMPARE(QString::fromStdString(window.State().activeDocFilePath), drawingPath);
+  }
+
+  void issue1079FailedOpenKeepsPreviousDrawingAndTab() {
+    EditorWindow window;
+    const auto initialTabCount = window.State().drawingTabs.size();
+    window.CreateDrawingFromTemplate();
+    const std::vector<double> previousLines = {1.0, 2.0, 0.0, 3.0, 4.0, 0.0};
+    window.State().userLinesFlat = previousLines;
+    const auto previousIndex = window.State().activeDrawingIdx;
+    const auto previousName = window.State().drawingTabs[static_cast<size_t>(previousIndex)].name;
+    const auto previousActivePath = window.State().activeDocFilePath;
+    const auto previousDocumentCount = window.State().documents.size();
+    QTimer dialogPoll(&window);
+    dialogPoll.setInterval(10);
+    connect(&dialogPoll, &QTimer::timeout, &window, [] {
+      if (auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) message->accept();
+    });
+    dialogPoll.start();
+
+    window.OpenDrawing(QDir::temp().filePath("issue-1079-missing.dwg"));
+    dialogPoll.stop();
+
+    QCOMPARE(window.State().drawingTabs.size(), initialTabCount + 1);
+    QCOMPARE(window.State().documents.size(), previousDocumentCount);
+    QCOMPARE(window.State().activeDrawingIdx, previousIndex);
+    QCOMPARE(window.State().drawingTabs[static_cast<size_t>(previousIndex)].name, previousName);
+    QCOMPARE(window.State().activeDocFilePath, previousActivePath);
+    QCOMPARE(window.State().userLinesFlat, previousLines);
+  }
+
   void updateOfferSuppressesWhatsNewForTheLaunch() {
     EditorWindow window;
     window.State().authGateResolved = true;
