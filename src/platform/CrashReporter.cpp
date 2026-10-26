@@ -1,6 +1,7 @@
 #include "CrashReporter.hpp"
 
 #include "AppPaths.hpp"
+#include "CrashBuildInfo.hpp"
 #include "FailureReportUi.hpp"
 #include "HttpFetch.hpp"
 #include "TelemetryPing.hpp"
@@ -18,6 +19,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -37,7 +39,9 @@ namespace {
 
 #ifdef _WIN32
 constexpr wchar_t kCrashReportArgPrefix[] = L"--gosurvey-crash-report=";
+constexpr wchar_t kMinidumpWriterArg[]   = L"--gosurvey-minidump-writer";
 constexpr wchar_t kTestCrashArg[]         = L"--gosurvey-test-crash";
+constexpr uintmax_t kMaxCrashDumpBytes   = 10u * 1024u * 1024u;
 
 char g_reportChannel[16] = "stable";
 
@@ -147,6 +151,12 @@ struct CrashReportBundle {
   std::string reportUtf8;
 };
 
+std::filesystem::path MinidumpPathForBundle(const std::filesystem::path& bundlePath) {
+  std::filesystem::path dumpPath = bundlePath;
+  dumpPath.replace_extension(".dmp");
+  return dumpPath;
+}
+
 std::filesystem::path CrashLogPath() {
   const std::filesystem::path dir = UserDataDirectory();
   if (dir.empty())
@@ -155,7 +165,7 @@ std::filesystem::path CrashLogPath() {
 }
 
 CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTERS* ep,
-                                   const char* fallbackReasonWire) {
+                                   const char* fallbackReasonWire, const std::string& extraDetail) {
   assert(fallbackReasonWire != nullptr);
 
   CrashReportBundle bundle;
@@ -175,6 +185,9 @@ CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTE
   } else {
     body += "The process aborted without a structured exception record.\n";
   }
+  if (ep && ep->ExceptionRecord)
+    body += DescribeThrownCppException(ep->ExceptionRecord);
+  body += extraDetail;
 
   if (ep && ep->ExceptionRecord) {
     body += "Fault address: ";
@@ -193,6 +206,10 @@ CrashReportBundle BuildCrashReport(unsigned long exceptionCode, EXCEPTION_POINTE
   body += GOSURVEY_VERSION_FULL;
   body += "\nchannel: ";
   body += g_reportChannel;
+  body += "\ncommit: ";
+  body += GOSURVEY_GIT_COMMIT;
+  body += "\npdb: ";
+  body += PdbIdentityOfModule(::GetModuleHandleW(nullptr));
   body += "\n\n";
   AppendStackTrace(ep, body);
 
@@ -246,6 +263,67 @@ void TryPostCrashReportSilent(const std::string& wireReason, const std::string& 
   std::string error;
   std::string response;
   (void)HttpPostJson(CrashReportEndpoint, body.dump(), 8000, error, &response);
+}
+
+bool ReadBoundedCrashDump(const std::filesystem::path& path, std::string& bytes) {
+  std::error_code ec;
+  const uintmax_t size = std::filesystem::file_size(path, ec);
+  if (ec || size == 0 || size > kMaxCrashDumpBytes)
+    return false;
+
+  std::ifstream in(path, std::ios::binary);
+  if (!in)
+    return false;
+  bytes.resize(static_cast<size_t>(size));
+  in.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+  return in.good() || (in.eof() && static_cast<size_t>(in.gcount()) == bytes.size());
+}
+
+void TryPostCrashReportSilent(const std::string& wireReason, const std::string& reportUtf8,
+                              const std::filesystem::path& dumpPath) {
+  std::string dumpBytes;
+  if (!ReadBoundedCrashDump(dumpPath, dumpBytes)) {
+    TryPostCrashReportSilent(wireReason, reportUtf8);
+    return;
+  }
+
+  if (!HasInternetConnectivity())
+    return;
+
+  std::string report = reportUtf8;
+  constexpr size_t kMaxReport = 16384;
+  if (report.size() > kMaxReport)
+    report.resize(kMaxReport);
+
+  const TelemetryIds ids = GetTelemetryIds();
+  nlohmann::json metadata;
+  metadata["installId"] = ids.installId.empty() ? "unknown" : ids.installId;
+  metadata["version"]   = GOSURVEY_VERSION_FULL;
+  metadata["channel"]   = g_reportChannel;
+  metadata["os"]        = "windows";
+  metadata["reason"]    = wireReason;
+  metadata["report"]    = report;
+
+  std::string boundary = "----------------gosurvey-crash-" +
+                         std::to_string(::GetCurrentProcessId()) + "-" +
+                         std::to_string(::GetTickCount64());
+  while (dumpBytes.find(boundary) != std::string::npos)
+    boundary.push_back('x');
+
+  std::string multipart;
+  multipart.reserve(dumpBytes.size() + report.size() + 1024);
+  multipart += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"metadata\"\r\n";
+  multipart += "Content-Type: application/json\r\n\r\n";
+  multipart += metadata.dump();
+  multipart += "\r\n--" + boundary + "\r\nContent-Disposition: form-data; name=\"dump\"; filename=\"crash.dmp\"\r\n";
+  multipart += "Content-Type: application/octet-stream\r\n\r\n";
+  multipart += dumpBytes;
+  multipart += "\r\n--" + boundary + "--\r\n";
+
+  std::string error;
+  std::string response;
+  const std::string contentType = "multipart/form-data; boundary=" + boundary;
+  (void)HttpPostBody(CrashReportEndpoint, contentType, multipart, 30000, error, &response);
 }
 
 std::wstring Utf8PathToWide(const std::filesystem::path& path) {
@@ -323,18 +401,74 @@ std::filesystem::path MakePendingCrashBundlePath() {
   return std::filesystem::path(full);
 }
 
-void HandleCrash(unsigned long exceptionCode, EXCEPTION_POINTERS* ep, const char* fallbackReasonWire) {
+void HandleCrash(unsigned long exceptionCode, EXCEPTION_POINTERS* ep, const char* fallbackReasonWire,
+                 const std::string& extraDetail = std::string()) {
   static volatile LONG handled = 0;
   if (::InterlockedExchange(&handled, 1) != 0)
     return;
 
-  const CrashReportBundle bundle = BuildCrashReport(exceptionCode, ep, fallbackReasonWire);
+  // abort() and std::terminate() arrive without an exception record: capture where we are now so
+  // the report still has a stack.
+  CONTEXT            here{};
+  EXCEPTION_POINTERS captured{};
+  if (!ep) {
+    ::RtlCaptureContext(&here);
+    captured.ContextRecord = &here;
+    ep                     = &captured;
+  }
+
+  CrashReportBundle bundle = BuildCrashReport(exceptionCode, ep, fallbackReasonWire, extraDetail);
+  const std::filesystem::path bundlePath = MakePendingCrashBundlePath();
+  bool minidumpCreated = false;
+  uintmax_t minidumpSize = 0;
+  if (!bundlePath.empty()) {
+    const std::filesystem::path dumpPath = MinidumpPathForBundle(bundlePath);
+    minidumpCreated = WriteMinidumpWithHelper(dumpPath, ep);
+    if (minidumpCreated) {
+      std::error_code ec;
+      minidumpSize = std::filesystem::file_size(dumpPath, ec);
+      minidumpCreated = !ec;
+    }
+  }
+  if (minidumpCreated) {
+    bundle.reportUtf8 += "\nminidump: captured locally (" + std::to_string(minidumpSize) + " bytes)\n";
+  } else {
+    bundle.reportUtf8 += "\nminidump: unavailable (capture failed or exceeded 10 MB)\n";
+  }
   AppendCrashLog(bundle.wireReason, bundle.reportUtf8);
 
-  const std::filesystem::path bundlePath = MakePendingCrashBundlePath();
-  if (!bundlePath.empty() && WriteCrashBundleFile(bundlePath, bundle.wireReason, bundle.reportUtf8)) {
-    (void)SpawnCrashReportUi(bundlePath);
+  if (!bundlePath.empty()) {
+    if (WriteCrashBundleFile(bundlePath, bundle.wireReason, bundle.reportUtf8)) {
+      (void)SpawnCrashReportUi(bundlePath);
+    } else {
+      std::error_code ec;
+      std::filesystem::remove(MinidumpPathForBundle(bundlePath), ec);
+    }
   }
+}
+
+bool WriteMinidumpInHelper(DWORD processId, DWORD threadId, uintptr_t exceptionPointersAddress,
+                           const std::filesystem::path& dumpPath) {
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, processId);
+  if (!process)
+    return false;
+  HANDLE file = ::CreateFileW(dumpPath.c_str(), GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+                              CREATE_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, nullptr);
+  if (file == INVALID_HANDLE_VALUE) {
+    ::CloseHandle(process);
+    return false;
+  }
+
+  MINIDUMP_EXCEPTION_INFORMATION exceptionInfo{};
+  exceptionInfo.ThreadId = threadId;
+  exceptionInfo.ExceptionPointers = reinterpret_cast<PEXCEPTION_POINTERS>(exceptionPointersAddress);
+  exceptionInfo.ClientPointers = TRUE;
+  const BOOL ok = ::MiniDumpWriteDump(process, processId, file, MiniDumpNormal,
+                                      exceptionPointersAddress ? &exceptionInfo : nullptr,
+                                      nullptr, nullptr);
+  ::CloseHandle(file);
+  ::CloseHandle(process);
+  return ok != FALSE;
 }
 
 LONG WINAPI UnhandledExceptionFilterHandler(EXCEPTION_POINTERS* ep) {
@@ -350,8 +484,13 @@ void AbortSignalHandler(int) {
   std::_Exit(3);
 }
 
+// std::terminate usually means an exception nobody caught: name it and keep its what().
+std::string DescribeCurrentException() {
+  return crashReporter::DescribeCppException(std::current_exception());
+}
+
 void TerminateHandler() {
-  HandleCrash(0, nullptr, "cpp_terminate");
+  HandleCrash(0, nullptr, "cpp_terminate", DescribeCurrentException());
   std::_Exit(3);
 }
 
@@ -396,6 +535,7 @@ bool ParseBundleFile(const std::filesystem::path& path, CrashReport& out) {
   std::ostringstream body;
   body << in.rdbuf();
   out.reportUtf8 = body.str();
+  out.dumpPath = MinidumpPathForBundle(path);
   return !out.reportUtf8.empty();
 }
 
@@ -431,6 +571,93 @@ void SetReportChannel(std::string_view channel) {
   }
 }
 
+bool WriteMinidumpWithHelper(const std::filesystem::path& dumpPath, void* exceptionPointers) {
+  if (dumpPath.empty())
+    return false;
+
+  wchar_t exePath[MAX_PATH] = L"";
+  const DWORD exeLen = ::GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+  if (exeLen == 0 || exeLen >= MAX_PATH)
+    return false;
+
+  std::error_code ec;
+  if (!dumpPath.parent_path().empty())
+    std::filesystem::create_directories(dumpPath.parent_path(), ec);
+  std::filesystem::remove(dumpPath, ec);
+
+  std::wstring command = L"\"";
+  command += exePath;
+  command += L"\" ";
+  command += kMinidumpWriterArg;
+  command += L" ";
+  command += std::to_wstring(::GetCurrentProcessId());
+  command += L" ";
+  command += std::to_wstring(::GetCurrentThreadId());
+  command += L" ";
+  command += std::to_wstring(reinterpret_cast<uintptr_t>(exceptionPointers));
+  command += L" \"";
+  command += dumpPath.native();
+  command += L"\"";
+
+  std::vector<wchar_t> mutableCommand(command.begin(), command.end());
+  mutableCommand.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!::CreateProcessW(nullptr, mutableCommand.data(), nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+                        &startup, &process))
+    return false;
+  ::CloseHandle(process.hThread);
+
+  constexpr DWORD kWriterTimeoutMs = 20000;
+  const DWORD wait = ::WaitForSingleObject(process.hProcess, kWriterTimeoutMs);
+  DWORD exitCode = 1;
+  if (wait == WAIT_TIMEOUT) {
+    ::TerminateProcess(process.hProcess, 1);
+    (void)::WaitForSingleObject(process.hProcess, 5000);
+  } else if (wait == WAIT_OBJECT_0) {
+    (void)::GetExitCodeProcess(process.hProcess, &exitCode);
+  }
+  ::CloseHandle(process.hProcess);
+
+  const uintmax_t dumpSize = std::filesystem::file_size(dumpPath, ec);
+  if (wait != WAIT_OBJECT_0 || exitCode != 0 || ec || dumpSize == 0 ||
+      dumpSize > kMaxCrashDumpBytes) {
+    std::filesystem::remove(dumpPath, ec);
+    return false;
+  }
+  return true;
+}
+
+bool RunMinidumpWriterMode(int& exitCode) {
+  exitCode = 1;
+  int argc = 0;
+  LPWSTR* argvW = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+  if (!argvW)
+    return false;
+  const bool isWriter = argc > 1 && wcscmp(argvW[1], kMinidumpWriterArg) == 0;
+  if (!isWriter) {
+    ::LocalFree(argvW);
+    return false;
+  }
+
+  if (argc == 6) {
+    wchar_t* endPid = nullptr;
+    wchar_t* endThread = nullptr;
+    wchar_t* endPointers = nullptr;
+    const unsigned long processId = wcstoul(argvW[2], &endPid, 10);
+    const unsigned long threadId = wcstoul(argvW[3], &endThread, 10);
+    const unsigned long long pointers = wcstoull(argvW[4], &endPointers, 10);
+    if (endPid && *endPid == L'\0' && processId != 0 && endThread && *endThread == L'\0' &&
+        threadId != 0 && endPointers && *endPointers == L'\0' &&
+        WriteMinidumpInHelper(static_cast<DWORD>(processId), static_cast<DWORD>(threadId),
+                              static_cast<uintptr_t>(pointers), std::filesystem::path(argvW[5])))
+      exitCode = 0;
+  }
+  ::LocalFree(argvW);
+  return true;
+}
+
 void InstallHandler() {
   assert(g_reportChannel[0] != '\0');
   ::SetUnhandledExceptionFilter(UnhandledExceptionFilterHandler);
@@ -449,6 +676,10 @@ bool ReadCrashBundle(const std::filesystem::path& bundlePath, CrashReport& out) 
   const bool ok = ParseBundleFile(bundlePath, out);
   std::error_code ec;
   std::filesystem::remove(bundlePath, ec);
+  if (!ok) {
+    ec.clear();
+    std::filesystem::remove(MinidumpPathForBundle(bundlePath), ec);
+  }
   return ok;
 }
 
@@ -482,7 +713,9 @@ bool TakeCrashReportFromCommandLine(std::string& titleUtf8, std::string& reportU
   std::strncpy(g_reportChannel, parsed.channel.c_str(), sizeof(g_reportChannel) - 1);
   g_reportChannel[sizeof(g_reportChannel) - 1] = '\0';
 
-  TryPostCrashReportSilent(parsed.wireReason, parsed.reportUtf8);
+  TryPostCrashReportSilent(parsed.wireReason, parsed.reportUtf8, parsed.dumpPath);
+  std::error_code ec;
+  std::filesystem::remove(parsed.dumpPath, ec);
   titleUtf8  = "GoSurvey encountered a problem";
   reportUtf8 = std::move(parsed.reportUtf8);
   return true;

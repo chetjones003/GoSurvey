@@ -12,6 +12,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -453,8 +454,9 @@ bool ComputeFileSha256(const std::string& pathUtf8, std::string& hexOut, std::st
   return ok;
 }
 
-bool HttpPostJson(const std::string& url,
-                  const std::string& jsonBody,
+bool HttpPostBody(const std::string& url,
+                  const std::string& contentType,
+                  const std::string& body,
                   int                timeoutMs,
                   std::string&       errorOut,
                   std::string*       responseOut)
@@ -520,11 +522,22 @@ bool HttpPostJson(const std::string& url,
   ::WinHttpSetOption(s.request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy,
                      sizeof(redirectPolicy));
 
-  const std::wstring contentTypeHeader = L"Content-Type: application/json";
-  const DWORD bodySize = static_cast<DWORD>(jsonBody.size());
+  const std::wstring contentTypeWide = Widen(contentType);
+  if (contentTypeWide.empty() || contentType.find_first_of("\r\n") != std::string::npos)
+  {
+    errorOut = "content type is empty, invalid UTF-8, or contains a line break";
+    return false;
+  }
+  const std::wstring contentTypeHeader = L"Content-Type: " + contentTypeWide;
+  if (body.size() > std::numeric_limits<DWORD>::max())
+  {
+    errorOut = "request body is too large";
+    return false;
+  }
+  const DWORD bodySize = static_cast<DWORD>(body.size());
 
   if (!::WinHttpSendRequest(s.request, contentTypeHeader.c_str(), -1,
-                            const_cast<char*>(jsonBody.data()), bodySize, bodySize, 0))
+                            const_cast<char*>(body.data()), bodySize, bodySize, 0))
   {
     errorOut = LastErrorText("WinHttpSendRequest");
     return false;
@@ -574,4 +587,13 @@ bool HttpPostJson(const std::string& url,
 
   errorOut = "HTTP " + std::to_string(status);
   return false;
+}
+
+bool HttpPostJson(const std::string& url,
+                  const std::string& jsonBody,
+                  int                timeoutMs,
+                  std::string&       errorOut,
+                  std::string*       responseOut)
+{
+  return HttpPostBody(url, "application/json", jsonBody, timeoutMs, errorOut, responseOut);
 }

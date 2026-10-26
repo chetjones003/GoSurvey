@@ -202,6 +202,26 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Test release PDB archive validation
+        shell: pwsh
+        run: ./tools/test-archive-release-pdb.ps1
+
+      - name: Archive private release PDB
+        # REQ-425 / issue #1004: archive symbols from this exact build before any package
+        # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
+        if: github.ref_name == 'beta' || (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ./tools/archive-release-pdb.ps1 `
+            -ExecutablePath 'build/GoSurvey.exe' `
+            -PdbPath 'build/.cmake/release/symbols/GoSurvey.pdb' `
+            -Version '${{ steps.ver.outputs.version }}' `
+            -Commit (git rev-parse --short=12 HEAD)
+
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
         shell: pwsh

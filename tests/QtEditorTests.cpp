@@ -2690,6 +2690,11 @@ private Q_SLOTS:
     dialog->show();
     QTRY_VERIFY(dialog->isVisible());
     QCOMPARE(dialog->windowTitle(), QString("GoSurvey encountered a problem"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportNextStepsHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportExplanation"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportNextSteps"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportHeader"));
     auto* text = dialog->findChild<QPlainTextEdit*>("failureReportText");
     QVERIFY(text);
     QVERIFY(text->isReadOnly());
@@ -2762,9 +2767,29 @@ private Q_SLOTS:
       QVERIFY(file.open(QIODevice::WriteOnly));
       file.write("not a crash bundle\n");
     }
+    const QString malformedDump = directory.filePath("gosurvey-crash-3-4.dmp");
+    {
+      QFile file(malformedDump);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("MDMP");
+    }
     crashReporter::CrashReport rejected;
     QVERIFY(!crashReporter::ReadCrashBundle(malformed.toStdWString(), rejected));
     QVERIFY2(!QFileInfo::exists(malformed), "a malformed bundle is not left in the temp folder");
+    QVERIFY2(!QFileInfo::exists(malformedDump), "a malformed bundle's paired dump is also removed");
+  }
+
+  void helperProcessWritesAStackFocusedMinidump() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("crash-test.dmp");
+    QVERIFY(crashReporter::WriteMinidumpWithHelper(path.toStdWString(), nullptr));
+    QFile dump(path);
+    QVERIFY(dump.open(QIODevice::ReadOnly));
+    QCOMPARE(dump.read(4), QByteArray("MDMP", 4));
+    QVERIFY(dump.size() <= 10 * 1024 * 1024);
+    dump.close();
+    QVERIFY(QFile::remove(path));
   }
 
   void startupGraphicsCheckPassesOnAWorkingDriver() {
@@ -2982,20 +3007,25 @@ private Q_SLOTS:
 
   void failureReportAndUsageNoticeScreenshots() {
     const QString dir = QtTestArtifactDirectory();
-    std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
-                                                              SampleCrashReport()));
-    dialog->resize(dialog->minimumSize());
-    dialog->show();
-    QTest::qWait(50);
-    QVERIFY(dialog->grab().save(dir + "/qt-883-report-final.png"));
-    std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
-        "GoSurvey could not start",
-        "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
-        "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
-    startup->resize(startup->minimumSize());
-    startup->show();
-    QTest::qWait(50);
-    QVERIFY(startup->grab().save(dir + "/qt-883-startup-final.png"));
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      const QString appearance = light ? "light" : "dark";
+      std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
+                                                                SampleCrashReport()));
+      dialog->resize(dialog->minimumSize());
+      dialog->show();
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(dir + "/qt-1004-crash-" + appearance + ".png"));
+      std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
+          "GoSurvey could not start",
+          "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
+          "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
+      startup->resize(startup->minimumSize());
+      startup->show();
+      QTest::qWait(50);
+      QVERIFY(startup->grab().save(dir + "/qt-1004-startup-" + appearance + ".png"));
+    }
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window;
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
@@ -3354,6 +3384,7 @@ private Q_SLOTS:
     QVERIFY(dialog);
     auto* categories = dialog->findChild<QListWidget*>("settingsCategories");
     QVERIFY(categories);
+    QVERIFY(!dialog->findChild<QLabel*>("crashDiagnosticsDisclosure"));
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
     QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
@@ -3383,6 +3414,7 @@ private Q_SLOTS:
       }
       QVERIFY(stack);
       categories->setCurrentRow(0);
+      QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
     const float wheelBefore = window.State().displayWheelZoomFactor;
     wheel->setValue(1.5);
@@ -9130,17 +9162,30 @@ private Q_SLOTS:
     const auto size = window.m_Document->Sizes()[1];
     QVERIFY(std::abs(made.x0 - 100.0 * size.wPt / second.width()) < 0.5);
     QVERIFY(std::abs(made.y0 - (second.height() - 150.0) * size.hPt / second.height()) < 0.5);
-    // It is drawn on the second page only.
-    const QImage shot = window.m_Page->grab().toImage();
+    // Paint at a deterministic 1x scale through the production strip renderer so antialiasing does
+    // not depend on the host display's device-pixel ratio.
+    QImage shot(window.m_Page->size(), QImage::Format_ARGB32_Premultiplied);
+    shot.fill(Qt::transparent);
+    {
+      QPainter painter(&shot);
+      QVERIFY(window.PaintStrip(painter, window.m_Page->rect()));
+    }
     QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
-    const double ratio = static_cast<double>(shot.width()) / window.m_Page->width(); // the grab is in device pixels
-    const auto hasRed = [&](const QRect& rect) {
-      const QRect device(qRound(rect.x() * ratio), qRound(rect.y() * ratio), qRound(rect.width() * ratio), qRound(rect.height() * ratio));
-      return Issue906HasPixelNear(shot.copy(device), QColor(255, 0, 0), 40);
+    const auto hasRedInk = [&](const QRect& rect) {
+      const QImage page = shot.copy(rect);
+      for (int y = 0; y < page.height(); ++y) {
+        for (int x = 0; x < page.width(); ++x) {
+          const QColor pixel = page.pixelColor(x, y);
+          // A one-DIP outline at 1x blends with white; test its red hue instead of requiring a
+          // pixel nearly equal to pure red as a higher-DPI capture might produce.
+          if (pixel.red() >= 200 && pixel.red() - pixel.green() >= 20 && pixel.red() - pixel.blue() >= 20) return true;
+        }
+      }
+      return false;
     };
-    QVERIFY(hasRed(second));
-    QVERIFY(!hasRed(window.PageRect(0)));
-    QVERIFY(!hasRed(window.PageRect(2)));
+    QVERIFY(hasRedInk(second));
+    QVERIFY(!hasRedInk(window.PageRect(0)));
+    QVERIFY(!hasRedInk(window.PageRect(2)));
     // A pick on one page and a click on another do not mix: the draft restarts on the new page.
     Issue906Action(window, "Line")->trigger();
     QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));
@@ -12206,6 +12251,10 @@ private Q_SLOTS:
 };
 
 int main(int argc, char** argv) {
+  int minidumpWriterExitCode = 1;
+  if (crashReporter::RunMinidumpWriterMode(minidumpWriterExitCode))
+    return minidumpWriterExitCode;
+
   QSurfaceFormat format;
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
