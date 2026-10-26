@@ -9,8 +9,8 @@
 # anything — that stays in release.yml (REQ-202/ADR-029), which is manual-dispatch only.
 #
 # MSVC analysis remains a blocking diff-scoped check with a fail-closed full-project fallback.
-# release.yml stays
-# unchanged and manual-dispatch only (REQ-202/ADR-029).
+# release.yml remains a separate, manual-dispatch publication pipeline (REQ-202). It uses the
+# same hosted Mesa/OpenGL test prerequisites so release CTest exercises the validated app path.
 
 name: full-validation
 

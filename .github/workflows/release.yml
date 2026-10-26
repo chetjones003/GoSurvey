@@ -202,8 +202,80 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Set up Mesa OpenGL for hosted release tests
+        shell: pwsh
+        run: |
+          # Qt's bundled software OpenGL driver only reports OpenGL 3.0. GoSurvey needs 3.3,
+          # so use the same pinned Mesa llvmpipe runtime as full-validation.yml.
+          $version = '26.2.4'
+          $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$version-release-msvc.7z"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/mesa3d-$version-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $expectedHash = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Mesa archive SHA256 mismatch: $actualHash" }
+
+          $sevenZipPath = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZipPath) { $sevenZipPath = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path -LiteralPath $sevenZipPath)) { throw '7-Zip was not found on this Windows runner' }
+          $extractDir = Join-Path $env:RUNNER_TEMP "mesa3d-$version"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          & $sevenZipPath x $archive "-o$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract Mesa (exit $LASTEXITCODE)" }
+
+          $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
+          Add-Content -Path $env:GITHUB_ENV -Value "GOSURVEY_MESA_BIN=$($mesaOpenGl.DirectoryName)"
+          Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
+
+      - name: Stage Mesa runtime dependencies for release tests
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
+          if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $backup | Out-Null
+
+          foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $env:GOSURVEY_MESA_BIN $dependency
+            if (-not (Test-Path -LiteralPath $source)) {
+              throw "Pinned Mesa runtime dependency is missing: $source"
+            }
+            $destination = Join-Path $runtime $dependency
+            if (Test-Path -LiteralPath $destination) {
+              Copy-Item -LiteralPath $destination -Destination (Join-Path $backup $dependency) -Force
+            }
+            Copy-Item -LiteralPath $source -Destination $destination -Force
+          }
+
       - name: Test release (REQ-202)
-        run: ctest --preset ninja-release --output-on-failure
+        shell: pwsh
+        env:
+          QT_OPENGL: desktop
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
+          $dependencies = @('opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll')
+          $testExit = 1
+          try {
+            ctest --preset ninja-release --parallel 8 --output-on-failure
+            $testExit = $LASTEXITCODE
+          } finally {
+            # Mesa is only a test driver. Restore Qt's original DLLs (or remove Mesa-only files)
+            # before later steps stage the application for publication, including on test failure.
+            foreach ($dependency in $dependencies) {
+              $saved = Join-Path $backup $dependency
+              $staged = Join-Path $runtime $dependency
+              if (Test-Path -LiteralPath $saved) {
+                Copy-Item -LiteralPath $saved -Destination $staged -Force
+              } elseif (Test-Path -LiteralPath $staged) {
+                Remove-Item -LiteralPath $staged -Force
+              }
+            }
+          }
+          if ($testExit -ne 0) { throw "CTest failed with exit code $testExit." }
 
       - name: Test release PDB archive validation
         shell: pwsh
