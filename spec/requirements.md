@@ -2922,7 +2922,9 @@ requirements is a planning failure, not a sign of rigor.
     author**, because a semantic break need not move the format version and so cannot be detected
     automatically.
 
-  A warning informs the choice; it never removes it. The three buttons are unchanged.
+  A warning informs the choice; it never removes it. The three buttons are unchanged. If the
+  application is running from Program Files, the offer also displays the REQ-454 migration notice
+  before the release notes and before the user chooses whether to update.
 - Acceptance:
   - no download begins, and no installer runs, without an explicit user click;
   - an offered build writing a newer `.gs` format shows the forward-only notice; one at the same
@@ -2930,6 +2932,8 @@ requirements is a planning failure, not a sign of rigor.
   - a manifest with no compatibility information (one published before the field existed) warns
     about nothing rather than treating absence as risk;
   - the compatibility notice appears **above** the release notes, not below them;
+  - an offer from Program Files displays the migration notice above the release notes; an offer from
+    the per-user location does not;
   - "Skip this version" suppresses that version permanently but a *later* version still prompts;
   - "Remind me later" prompts again on the next launch;
   - a deliberately corrupted download fails the hash check, is deleted, does not execute, and reports
@@ -2945,7 +2949,7 @@ requirements is a planning failure, not a sign of rigor.
   - a partially downloaded file left by a killed process does not block or corrupt the next attempt.
 - Owner-layer: UI (dialog), Platform (download, hash, process launch), IO (`UserPrefs` skip state)
 - Status: accepted (2026-08-15)
-- Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+- Revisions: 2026-08-15 — initial; D-2026-10-25-f adds the Program Files migration notice. See ADR-029 and the decision log.
 
 ### REQ-079 — `.gs` files carry a format version and are migrated forward on load
 - Purpose: an old drawing opens in a new build, always, and the rare case where it cannot is stated
@@ -14032,6 +14036,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   migration, the user's explicit in-app update choice remains required under REQ-078 and applies the
   update to this per-user copy without elevation.
 
+  An update offered to a process running from Program Files shows a prominent migration notice above
+  the release notes before choosing whether to update. It explains the per-user destination, the
+  one-time Windows approval to remove the protected old copy, preservation of settings and user data,
+  and that later updates do not need elevation. The 0.7.5 release notes state the same migration.
+
   The script prints the approved GoSurvey ASCII banner and progress/result messages in a readable
   PowerShell console. Windows-controlled SmartScreen or Defender warnings are outside this feature's
   guarantee; the script cannot sign the installer or suppress those operating-system warnings.
@@ -14051,6 +14060,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - the migrated copy opens normally with its bundled app-local Visual C++ runtime, and future
     user-approved REQ-078 updates replace that same per-user installation without elevation or
     launching the shared runtime installer;
+  - an update offer shown by a Program Files install displays the migration notice above the release
+    notes before the user chooses; the notice explains the destination, preserved settings/data, and
+    one-time approval, and is absent for an install already in the per-user location;
+  - the 0.7.5 release notes explain the Program Files to `%LOCALAPPDATA%\\Programs\\GoSurvey`
+    migration and its one-time approval;
   - the ASCII banner is readable in Windows PowerShell and matches the approved output preview
     in `docs/install.md`;
   - the documentation explicitly says Windows-controlled SmartScreen/Defender warnings are not
@@ -14061,7 +14075,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-24 — initial, D-2026-10-24-c; `.gs` association removed from migration
   acceptance following clarification that standalone `.gs` drawings are retired. D-2026-10-24-d
   selects app-local Visual C++ runtime DLLs for bootstrap and in-app updates to avoid shared-runtime
-  UAC; the Microsoft Store redistributable flow remains under REQ-453.
+  UAC; the Microsoft Store redistributable flow remains under REQ-453. D-2026-10-25-f requires the
+  0.7.5 notes and Program Files update offer to explain the migration.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of

@@ -22,10 +22,15 @@ Survey points move through **CSV** in PNEZD/PENZD order.
 
 1. Open the [Releases](https://github.com/chetjones003/GoSurvey/releases) page.
 2. Download the **`.exe` installer** from the latest release.
-3. Run it. GoSurvey installs to `%ProgramFiles%\GoSurvey` and adds a Start Menu entry. A desktop
-   shortcut is offered.
+3. Run it. GoSurvey installs for your Windows user at
+   `%LOCALAPPDATA%\Programs\GoSurvey` and adds a Start Menu entry. A desktop shortcut is offered.
 4. **SmartScreen** — the installer is not code-signed yet, so Windows may show *"Windows protected
    your PC"*. Choose **More info → Run anyway** if you trust the release.
+
+If you already have GoSurvey in Program Files, the 0.7.5 update explains the move before you
+choose **Update Now**. Windows asks once for permission to remove the protected old copy. Your
+settings and user data stay in place. Later updates use the per-user installation and do not need
+administrator approval.
 
 **If the program will not start with a missing-DLL error**, install the
 The installer installs the **Microsoft Visual C++ runtime** automatically. You only need a [manual VC++ install](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if an IT policy blocked the install step or you copied `GoSurvey.exe` without running the installer.
@@ -41,7 +46,9 @@ you can press **Continue without checking**.
 Nothing downloads or installs on its own. When an update exists you choose **Update Now**,
 **Remind Me Later**, or **Skip This Version**. Choosing to update downloads the installer, verifies
 it against a SHA-256 published with the release, prompts you to save open drawings, then installs
-and reopens GoSurvey.
+and reopens GoSurvey. Since 0.7.5, installs and updates use
+`%LOCALAPPDATA%\Programs\GoSurvey`; the first update from Program Files asks once for permission
+to remove that older copy and preserves your settings and user data.
 
 Both update settings live in **View → Settings… → System**:
 

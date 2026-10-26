@@ -3039,8 +3039,10 @@ private Q_SLOTS:
 
   // ---- REQ-077 / REQ-078 software update (issue #882) ----------------------------------------
 
-  static QDialog* OfferUpdate(EditorWindow& window, const update::Manifest& manifest) {
+  static QDialog* OfferUpdate(EditorWindow& window, const update::Manifest& manifest,
+                              bool requiresPerUserMigration = false) {
     window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->requiresPerUserMigration = requiresPerUserMigration;
     window.m_Update->available = manifest;
     window.m_Update->phase = update::Phase::UpdateReady;
     window.ServiceUpdate();
@@ -3071,11 +3073,43 @@ private Q_SLOTS:
     // Notes are rendered, and the compatibility notice sits ABOVE them.
     auto* notes = dialog->findChild<QTextBrowser*>("updateNotes");
     auto* compatibility = dialog->findChild<QLabel*>("updateCompatibility");
+    auto* migration = dialog->findChild<QLabel*>("updateMigrationNotice");
     QVERIFY(notes->isVisibleTo(dialog));
     QVERIFY(notes->toPlainText().contains("Faster point import"));
     QVERIFY(compatibility->isVisibleTo(dialog));
+    QVERIFY(!migration->isVisibleTo(dialog));
     QVERIFY(compatibility->mapTo(dialog, QPoint()).y() < notes->mapTo(dialog, QPoint()).y());
     UpdateButton(dialog, "updateRemindButton")->click();
+  }
+
+  void updateOfferExplainsProgramFilesMigrationBeforeReleaseNotes() {
+    EditorWindow legacyWindow;
+    auto* legacyDialog = OfferUpdate(legacyWindow, OfferedManifest(), true);
+    QVERIFY(legacyDialog);
+    auto* legacyNotice = legacyDialog->findChild<QLabel*>("updateMigrationNotice");
+    auto* legacyNotes = legacyDialog->findChild<QTextBrowser*>("updateNotes");
+    QVERIFY(legacyNotice->isVisibleTo(legacyDialog));
+    QVERIFY(legacyNotice->text().contains("%LOCALAPPDATA%\\Programs\\GoSurvey"));
+    QVERIFY(legacyNotice->text().contains("ask once"));
+    QVERIFY(legacyNotice->text().contains("settings and user data"));
+    QVERIFY(legacyNotice->mapTo(legacyDialog, QPoint()).y() <
+            legacyNotes->mapTo(legacyDialog, QPoint()).y());
+    for (const char* name : {"updateNowButton", "updateRemindButton", "updateSkipButton"})
+      QVERIFY(UpdateButton(legacyDialog, name)->isVisibleTo(legacyDialog));
+    QTest::qWait(100);
+    QVERIFY(legacyDialog->grab().save(Issue914Shot("qt-1106-update-migration-legacy.png")));
+    UpdateButton(legacyDialog, "updateRemindButton")->click();
+    QTRY_VERIFY(!legacyWindow.findChild<QDialog*>("softwareUpdate"));
+
+    EditorWindow perUserWindow;
+    auto* perUserDialog = OfferUpdate(perUserWindow, OfferedManifest(), false);
+    QVERIFY(perUserDialog);
+    auto* perUserNotice = perUserDialog->findChild<QLabel*>("updateMigrationNotice");
+    QVERIFY(!perUserNotice->isVisibleTo(perUserDialog));
+    QTest::qWait(100);
+    QVERIFY(perUserDialog->grab().save(Issue914Shot("qt-1106-update-migration-per-user.png")));
+    UpdateButton(perUserDialog, "updateRemindButton")->click();
+    QTRY_VERIFY(!perUserWindow.findChild<QDialog*>("softwareUpdate"));
   }
 
   void updateCompatibilityNoticesAreDistinguishedAndAbsentWhenUndeclared() {
