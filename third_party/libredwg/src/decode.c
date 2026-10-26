@@ -1466,8 +1466,10 @@ read_R2004_section_map (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
     }
 
   section_address = sec.byte;
+
   error = decompress_R2004_section (&sec, &dec);
   dat->byte = sec.byte;
+
 #ifdef DEBUG
   if (DWG_LOGLEVEL >= DWG_LOGLEVEL_INSANE)
     {
@@ -1702,12 +1704,14 @@ read_R2004_section_info (Bit_Chain *restrict dat, Dwg_Data *restrict dwg,
       return DWG_ERR_OUTOFMEM;
     }
 
+
   error = decompress_R2004_section (dat, &dec);
   if (error > DWG_ERR_CRITICAL || error == DWG_ERR_VALUEOUTOFBOUNDS)
     {
       free (dec.chain);
       return error;
     }
+
   dec.byte = 0;
   LOG_TRACE ("\n#### Read 2004 section_infohdr ####\n");
   {
@@ -2147,6 +2151,8 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
       LOG_HANDLE ("data_crc:         0x%X\n", (unsigned)es.fields.data_crc);
       LOG_TRACE ("Section start:    %" PRIuSIZE "\n\n", dat->byte);
 
+
+
       // GH #126 part 4
       LOG_INSANE ("info[%d]->max_decomp_size: %" PRIu32 " (0x%" PRIx32 ")\n",
                   i, info->max_decomp_size, info->max_decomp_size);
@@ -2190,6 +2196,7 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
 #endif
           error = decompress_R2004_section (dat, &dec);
           sec_dat->chain = dec.chain; // may be realloced
+
           dat->size = orig_size;
           if (error > DWG_ERR_CRITICAL)
             {
@@ -2225,6 +2232,7 @@ read_2004_compressed_section (Bit_Chain *dat, Dwg_Data *restrict dwg,
         }
     }
   sec_dat->size = info->size;
+
   return error;
 }
 
@@ -2249,6 +2257,7 @@ read_2004_section_classes (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
         free (sec_dat.chain);
       return error;
     }
+
 #ifdef DEBUG
   if (DWG_LOGLEVEL >= DWG_LOGLEVEL_INSANE)
     {
@@ -2334,20 +2343,7 @@ read_2004_section_classes (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
                   = bit_read_TU_len (&str_dat, &dxflen);
               dwg->dwg_class[i].dxfname
                   = bit_TU_to_utf8_len (dwg->dwg_class[i].dxfname_u, dxflen);
-              if (DWG_LOGLEVEL >= DWG_LOGLEVEL_TRACE)
-                {
-                  char *appu8 = bit_TU_to_utf8_len (
-                      (BITCODE_TU)dwg->dwg_class[i].appname, applen);
-                  LOG_TRACE ("Application name: \"%s\" [TU 0 (as utf-8)]\n",
-                             appu8);
-                  // LOG_TRACE_TU ("Application name",
-                  // dwg->dwg_class[i].appname, 0)
-                  LOG_TRACE_TU ("C++ class name  ", dwg->dwg_class[i].cppname,
-                                0);
-                  LOG_TRACE_TU ("DXF record name ",
-                                dwg->dwg_class[i].dxfname_u, 0);
-                  free (appu8);
-                }
+
             }
           else
             {
@@ -2418,6 +2414,7 @@ read_2004_section_header (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
         free (sec_dat.chain);
       return error;
     }
+
 #ifdef DEBUG
   if (DWG_LOGLEVEL >= DWG_LOGLEVEL_INSANE)
     {
@@ -2508,6 +2505,7 @@ read_2004_section_handles (Bit_Chain *restrict dat, Dwg_Data *restrict dwg)
         free (hdl_dat.chain);
       return error;
     }
+
 #ifdef DEBUG
   if (DWG_LOGLEVEL >= DWG_LOGLEVEL_INSANE)
     {
@@ -4847,9 +4845,7 @@ dwg_decode_header_variables (Bit_Chain *dat, Bit_Chain *hdl_dat,
   Dwg_Object *obj = NULL;
   int error = 0;
 
-  // clang-format off
   #include "header_variables.spec"
-  // clang-format on
 
   if (!dwg->header_vars.BLOCK_RECORD_MSPACE)
     return error | DWG_ERR_INVALIDDWG;

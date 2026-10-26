@@ -60,6 +60,9 @@ struct Viewport {
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
+  // Independent annotative scale selection (REQ-113 / issue #1013). Empty on legacy/imported state
+  // means use the existing zoom-derived scale until the user or a new viewport supplies a choice.
+  std::string annotationScaleName;
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
@@ -180,13 +183,32 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   if (scales == nullptr || scales->empty())
     return {};
   int ix = currentScaleIndex;
-  if (vp != nullptr)
+  if (vp != nullptr) {
+    if (!vp->annotationScaleName.empty()) {
+      for (int i = 0; i < static_cast<int>(scales->size()); ++i)
+        if ((*scales)[static_cast<size_t>(i)].name == vp->annotationScaleName)
+          return vp->annotationScaleName;
+    }
     ix = CadAnnotationScaleIndexClosestToMup(*scales, vp->safeScale());
+  }
   else if (ix < 0 || ix >= static_cast<int>(scales->size()))
     ix = CadAnnotationScaleIndexClosestToMup(*scales, drawingModelUnitsPerPlottedInch);
   if (ix < 0 || ix >= static_cast<int>(scales->size()))
     return {};
   return (*scales)[static_cast<size_t>(ix)].name;
+}
+
+[[nodiscard]] inline float ViewportAnnotationScaleModelUnitsPerPaperInch(
+    const Viewport& vp, const std::vector<CadAnnotationScale>* scales) {
+  if (scales != nullptr && !vp.annotationScaleName.empty()) {
+    for (const CadAnnotationScale& scale : *scales)
+      if (scale.name == vp.annotationScaleName) {
+        const float mup = CadAnnotationScaleModelUnitsPerPlottedInch(scale);
+        if (mup > 0.f)
+          return mup;
+      }
+  }
+  return vp.safeScale();
 }
 
 /// Per-scale visibility gate for annotative objects (empty list = visible at all scales).
@@ -230,7 +252,7 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   if (!a.annotative)
     return drawingModelUnitsPerPlottedInch;
   if (vp != nullptr)
-    return vp->safeScale();
+    return ViewportAnnotationScaleModelUnitsPerPaperInch(*vp, scales);
   return ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingModelUnitsPerPlottedInch, scales, currentScaleIndex);
 }
 
@@ -239,7 +261,7 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
     const std::vector<CadAnnotationScale>* scales = nullptr, int currentScaleIndex = -1) {
   if (drawingModelUnitsPerPlottedInch <= 0.f)
     return 1.f;
-  const float activeMup = vp != nullptr ? vp->safeScale()
+  const float activeMup = vp != nullptr ? ViewportAnnotationScaleModelUnitsPerPaperInch(*vp, scales)
                                         : ModelSpaceAnnotativeModelUnitsPerPlottedInch(drawingModelUnitsPerPlottedInch,
                                                                                        scales, currentScaleIndex);
   return activeMup / drawingModelUnitsPerPlottedInch;

@@ -26,6 +26,10 @@ The main exchange route with AutoCAD, Civil 3D, and everything else.
 
 Writes **ASCII DXF tagged AC1032** (AutoCAD 2018 class).
 
+Paper-space viewport state round-trips using native CAD viewport data, including its camera,
+view direction, visual style, frozen layers and layer color overrides, UCS, lock/on-off state, and
+independent annotative scale. DXF export uses the R2018 format so this viewport state is retained.
+
 | Section | Contents |
 |---|---|
 | **HEADER** | Drawing limits, extents, system variables, `$HANDSEED`, `$INSUNITS` from the `UNITS` insertion-units setting, and — when survey points are present — `$PDMODE` / `$PDSIZE` so POINT entities display as an X |

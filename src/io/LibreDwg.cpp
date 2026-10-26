@@ -71,7 +71,6 @@ bool LibreDwgWriteMinimalLine(Dwg_Version_Type version, const char* pathUtf8) {
   if (dwg == nullptr) {
     return false;
   }
-
   Dwg_Object* mspace = dwg_model_space_object(dwg);
   if (mspace == nullptr || mspace->tio.object == nullptr) {
     FreeDocument(dwg);
@@ -85,7 +84,8 @@ bool LibreDwgWriteMinimalLine(Dwg_Version_Type version, const char* pathUtf8) {
 
   dwg_point_3d startPt = {0.0, 0.0, 0.0};
   dwg_point_3d endPt = {10.0, 0.0, 0.0};
-  if (dwg_add_LINE(hdr, &startPt, &endPt) == nullptr) {
+  if (!std::getenv("GOSURVEY_SKIP_MINIMAL_LINE")
+      && dwg_add_LINE(hdr, &startPt, &endPt) == nullptr) {
     FreeDocument(dwg);
     return false;
   }

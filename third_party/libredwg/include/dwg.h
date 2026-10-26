@@ -11128,6 +11128,10 @@ typedef struct _dwg_AcDs
   Dwg_AcDs_SchemaData schdat;
   Dwg_AcDs_Search search;
   Dwg_AcDs_Segment *segments;
+  /* Preserved decompressed AcDs payload for lossless round-trip of sections
+     whose proprietary segment schemas are not modeled by LibreDWG. */
+  size_t raw_size;
+  BITCODE_RC *raw_data;
 } Dwg_AcDs;
 
 typedef struct _dwg_header
@@ -11487,6 +11491,9 @@ typedef struct _dwg_struct
 #define DWG_OPTS_INDXF    0x40
 #define DWG_OPTS_INJSON   0x80
 #define DWG_OPTS_IN       (DWG_OPTS_INDXF | DWG_OPTS_INJSON)
+/* API-created R2007+ documents store native strings as TU even though the
+   API ownership flags also mark them as input. */
+#define DWG_OPTS_TU       0x100
 
 typedef enum RESBUF_VALUE_TYPE
 {

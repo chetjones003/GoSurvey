@@ -687,10 +687,16 @@
 
   SINCE (R_14)
     {
-      FIELD_BS (unknown_54, 0); /* (type 5/6 only) these do not seem to be required */
-      FIELD_BS (unknown_55, 0);
-      FIELD_BS (unknown_56, 0);
-      FIELD_BS (unknown_57, 0);
+      /* These optional values occur in legacy Header variables but are absent
+         from AutoCAD R2018 headers. Leaving them out also keeps the declared
+         split-stream bit size aligned with the following string stream. */
+      PRE (R_2018)
+        {
+          FIELD_BS (unknown_54, 0);
+          FIELD_BS (unknown_55, 0);
+          FIELD_BS (unknown_56, 0);
+          FIELD_BS (unknown_57, 0);
+        }
     }
 
   IF_FREE_OR_SINCE (R_2007a) {

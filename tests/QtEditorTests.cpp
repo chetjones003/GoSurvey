@@ -1952,9 +1952,13 @@ private Q_SLOTS:
   void viewportScaleWorkflowValidatesAndSupportsUndo() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
+    window.State().annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    window.State().currentAnnotationScaleIndex = 0;
     if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
     window.State().activeSpaceIndex = 0;
     const int viewport = AddViewport(window.State(), 0);
+    QCOMPARE(QString::fromUtf8(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].annotationScaleName.c_str()),
+             QString("1:50"));
     const float initial = window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn;
     window.Submit("VPSCALE 1:25");
     QVERIFY(std::fabs(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn - 25.f) < 1e-4f);
@@ -1964,7 +1968,11 @@ private Q_SLOTS:
     QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, initial);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("viewportsManager"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-viewports-manager.png")));
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-default.png")));
+      auto* annotationScale = dialog->findChild<QComboBox*>("viewportAnnotationScale"); QVERIFY(annotationScale);
+      QCOMPARE(annotationScale->currentText(), QString("1:50"));
+      annotationScale->setCurrentText("1:100");
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-selected.png")));
       QTimer::singleShot(0, [&] {
         for (auto* widget : QApplication::topLevelWidgets())
           if (auto* scaleDialog = qobject_cast<QInputDialog*>(widget); scaleDialog && scaleDialog->windowTitle() == "Viewport Scale") {
@@ -1978,6 +1986,8 @@ private Q_SLOTS:
       dialog->findChild<QPushButton*>("viewportClose")->click();
     });
     window.ShowViewportsManager();
+    QCOMPARE(QString::fromUtf8(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].annotationScaleName.c_str()),
+             QString("1:100"));
   }
 
   void paperSpaceRendersSheetTablesAndViewportModelContent() {

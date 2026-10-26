@@ -1048,7 +1048,7 @@ bit_read_UMC (Bit_Chain *dat)
 {
   int i, j;
 // eg handle FD485E65F
-#define MAX_BYTE_UMC 8
+#define MAX_BYTE_UMC 10
   unsigned char byte[MAX_BYTE_UMC] = { 0, 0, 0, 0, 0, 0, 0, 0 };
   BITCODE_UMC result;
 
@@ -1084,28 +1084,21 @@ bit_read_UMC (Bit_Chain *dat)
 void
 bit_write_UMC (Bit_Chain *dat, BITCODE_UMC val)
 {
-  int i, j;
-  unsigned char byte[MAX_BYTE_UMC];
-  BITCODE_UMC mask;
-  BITCODE_UMC value;
-
-  value = val;
-  mask = 0x0000007f;
-  for (i = MAX_BYTE_UMC - 1, j = 0; i >= 0; i--, j += 7)
+  unsigned char bytes[MAX_BYTE_UMC];
+  unsigned count = 0;
+  do
     {
-      byte[i] = (unsigned char)((value & mask) >> j);
-      byte[i] |= 0x80;
-      mask = mask << 7;
+      BITCODE_RC byte = (BITCODE_RC)(val & 0x7f);
+      val >>= 7;
+      if (val)
+        byte |= 0x80;
+      bytes[count++] = byte;
     }
-  for (i = 0; i < 4; i++)
-    if (byte[i] & 0x7f)
-      break;
+  while (val && count < MAX_BYTE_UMC);
 
-  if (byte[i] & 0x40 && i > 0)
-    i--;
-  byte[i] &= 0x7f;
-  for (j = MAX_BYTE_UMC - 1; j >= i; j--)
-    bit_write_RC (dat, byte[j]);
+  /* UMC stores least-significant 7-bit groups first. */
+  for (unsigned i = 0; i < count; i++)
+    bit_write_RC (dat, bytes[i]);
 }
 
 /** Read 1 modular short (max 2 words).
@@ -2298,7 +2291,7 @@ bit_write_T (Bit_Chain *restrict dat, BITCODE_T restrict s)
         }
       else
         {
-          bit_write_TU (dat, (BITCODE_TU)s);
+          bit_write_TU_no_null (dat, (BITCODE_TU)s);
         }
     }
   else
@@ -2681,28 +2674,39 @@ bit_read_TU32 (Bit_Chain *restrict dat)
     }
 }
 
-/** Write UCS-2 unicode text. Must be zero-delimited.
- */
-void
-bit_write_TU (Bit_Chain *restrict dat, BITCODE_TU restrict chain)
+static void
+bit_write_TU_internal (Bit_Chain *restrict dat, BITCODE_TU restrict chain,
+                       const bool include_null)
 {
   size_t i, length;
 
-  if (chain)
-    length = bit_wcs2len (chain) + 1;
-  else
-    length = 0;
+  length = chain ? bit_wcs2len (chain) + (include_null ? 1 : 0) : 0;
   if (length > UINT16_MAX)
     {
       loglevel = dat->opts & DWG_OPTS_LOGLEVEL;
       LOG_WARN ("Overlong string truncated (len=%" PRIuSIZE ")", length);
       length = UINT16_MAX;
-      chain[UINT16_MAX - 1] = '\0';
+      if (include_null)
+        chain[UINT16_MAX - 1] = '\0';
     }
 
   bit_write_BS (dat, (BITCODE_BS)length);
   for (i = 0; i < length; i++)
     bit_write_RS (dat, chain[i]);
+}
+
+/** Write zero-delimited UCS-2 text, as used by section string streams. */
+void
+bit_write_TU (Bit_Chain *restrict dat, BITCODE_TU restrict chain)
+{
+  bit_write_TU_internal (dat, chain, true);
+}
+
+/** Write length-delimited UCS-2 text without a trailing NUL code unit. */
+void
+bit_write_TU_no_null (Bit_Chain *restrict dat, BITCODE_TU restrict chain)
+{
+  bit_write_TU_internal (dat, chain, false);
 }
 
 // Unicode with RS length

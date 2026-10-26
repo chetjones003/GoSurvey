@@ -24761,7 +24761,7 @@ add_obj_reactor (Dwg_Object_Object *obj, BITCODE_RLL absolute_ref)
       return NULL;                                                            \
     }
 
-/* Convert UTF-8 strings to BITCODE_T fields */
+/* Convert UTF-8 strings to BITCODE_T fields. */
 EXPORT __nonnull_all BITCODE_T
 dwg_add_u8_input (Dwg_Data *restrict dwg, const char *restrict u8str)
 {
@@ -24983,6 +24983,44 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
   dwg->header_vars.SPLINETYPE = 6;
   dwg->header_vars.SHADEDGE = 3;
   dwg->header_vars.SHADEDIF = 70;
+  /* Header variables introduced by newer DWG versions must have the same
+     nonzero defaults when creating a document as when promoting an older
+     document. IF_ENCODE_FROM_EARLIER in header_variables.spec only handles
+     version conversion, not a document created at its target version. */
+  if (version >= R_2004a)
+    {
+      dwg->header_vars.DIMFXL = 1.0;
+      dwg->header_vars.DIMJOGANG = 0.7853981633974483;
+      dwg->header_vars.DIMALTMZF = 100.0;
+      dwg->header_vars.DIMMZF = 100.0;
+      dwg->header_vars.SORTENTS = 0x7f;
+      dwg->header_vars.XCLIPFRAME = 2;
+      dwg->header_vars.DIMASSOC = 1;
+      dwg->header_vars.OBSCOLOR = 257;
+      dwg->header_vars.INTERSECTIONCOLOR = 257;
+    }
+  if (version >= R_2007a)
+    {
+      dwg->header_vars.STEPSPERSEC = 2.0;
+      dwg->header_vars.STEPSIZE = 50.0;
+      dwg->header_vars.LENSLENGTH = 50.0;
+      dwg->header_vars._3DDWFPREC = 2.0;
+      dwg->header_vars.PSOLWIDTH = 5.0;
+      dwg->header_vars.PSOLHEIGHT = 80.0;
+      dwg->header_vars.LOFTANG1 = 1.5707963267948966;
+      dwg->header_vars.LOFTANG2 = 1.5707963267948966;
+      dwg->header_vars.LOFTPARAM = 7;
+      dwg->header_vars.LOFTNORMALS = 1;
+      dwg->header_vars.LATITUDE = 1.0;
+      dwg->header_vars.LONGITUDE = 1.0;
+      dwg->header_vars.TIMEZONE = -8000;
+      dwg->header_vars.LIGHTGLYPHDISPLAY = 1;
+      dwg->header_vars.TILEMODELIGHTSYNCH = 1;
+      dwg->header_vars.SOLIDHIST = 1;
+      dwg->header_vars.SHOWHIST = 1;
+      dwg->header_vars.DWFFRAME = 2;
+      dwg->header_vars.REALWORLDSCALE = 1;
+    }
   if (version <= R_11)
     dwg->header_vars.MAXACTVP = 16;
   else
@@ -25407,6 +25445,48 @@ dwg_add_Document (Dwg_Data *restrict dwg, const int imperial)
       pspace->layout = dwg_add_handleref (dwg, 5, obj->handle.value, NULL);
     }
 
+  /* AutoCAD stores its default layer-filter tree in the LAYER_CONTROL
+     extension dictionary: ACAD_LAYERFILTERS -> A -> empty DICTIONARY. Keep
+     this native default graph on newly created R2000+ documents so the layer
+     control has the same extension-dictionary shape as AutoCAD-authored DWGs. */
+  if (version >= R_2000)
+    {
+      Dwg_Object_DICTIONARY *filter_dict
+          = dwg_add_DICTIONARY (dwg, NULL, NULL, 0);
+      Dwg_Object *filter_obj
+          = dwg_obj_generic_to_object (filter_dict, &error);
+      Dwg_Object *layer_ctrl = dwg_get_first_object (dwg, DWG_TYPE_LAYER_CONTROL);
+      BITCODE_RLL filter_handle;
+      BITCODE_RLL layer_ctrl_handle;
+      Dwg_Object_DICTIONARY *default_filter
+          = dwg_add_DICTIONARY (dwg, NULL, NULL, 0);
+      Dwg_Object *default_filter_obj
+          = dwg_obj_generic_to_object (default_filter, &error);
+      if (!filter_obj || !layer_ctrl || !default_filter_obj)
+        return DWG_ERR_OUTOFMEM;
+      filter_handle = filter_obj->handle.value;
+      layer_ctrl_handle = layer_ctrl->handle.value;
+      filter_obj = dwg_resolve_handle (dwg, filter_handle);
+      layer_ctrl = dwg_resolve_handle (dwg, layer_ctrl_handle);
+      default_filter_obj = dwg_obj_generic_to_object (default_filter, &error);
+      if (!filter_obj || !layer_ctrl || !default_filter_obj)
+        return DWG_ERR_INVALIDDWG;
+
+      filter_obj->tio.object->ownerhandle
+          = dwg_add_handleref (dwg, 4, layer_ctrl->handle.value, filter_obj);
+      layer_ctrl->tio.object->xdicobjhandle
+          = dwg_add_handleref (dwg, 3, filter_obj->handle.value, layer_ctrl);
+      layer_ctrl->tio.object->is_xdic_missing = 0;
+
+      default_filter_obj->tio.object->ownerhandle
+          = dwg_add_handleref (dwg, 4, filter_obj->handle.value,
+                               default_filter_obj);
+      add_obj_reactor (default_filter_obj->tio.object,
+                       filter_obj->handle.value);
+      dwg_add_DICTIONARY_item (filter_obj->tio.object->tio.DICTIONARY, "A",
+                               default_filter_obj->handle.value);
+    }
+
   // a non-invasive variant of resolve_objectref_vector()
   for (unsigned i = 0; i < dwg->num_object_refs; i++)
     {
@@ -25429,7 +25509,7 @@ dwg_new_Document (const Dwg_Version_Type version, const int imperial,
 {
   Dwg_Data *dwg = (Dwg_Data *)calloc (1, sizeof (Dwg_Data));
   dwg->header.version = version;
-  dwg->opts = log_level;
+  dwg->opts = log_level | (version >= R_2007 ? DWG_OPTS_TU : 0);
 
   (void)dwg_add_Document (dwg, imperial); // ignores errors
   return dwg;
@@ -25462,8 +25542,13 @@ dwg_add_class (Dwg_Data *restrict dwg, const char *const restrict dxfname,
   klass->dxfname = strdup (dxfname);
   if (dwg->header.version >= R_2007)
     klass->dxfname_u = bit_utf8_to_TU ((char *restrict)dxfname, 0);
-  klass->appname = dwg_add_u8_input (dwg, appname);
-  klass->cppname = dwg_add_u8_input (dwg, cppname);
+  // encode_classes writes appname and cppname through bit_write_T(), which
+  // expects UTF-8 in API-created documents. dxfname has its own TU field
+  // below; storing these two fields as TU makes R2007+ output truncate them
+  // to their first ASCII character (for example, "ObjectDBX Classes" to
+  // "O"), so AutoCAD loads the class as a proxy.
+  klass->appname = strdup (appname);
+  klass->cppname = strdup (cppname);
   klass->item_class_id = is_entity ? 0x1f2 : 0x1f3;
   dwg->num_classes++;
   return klass->number;
@@ -27519,7 +27604,12 @@ dwg_add_DICTIONARY_item (Dwg_Object_DICTIONARY *_obj, const char *restrict key,
           _obj->itemhandles, (_obj->numitems + 1) * sizeof (BITCODE_H));
     }
 
-  _obj->texts[_obj->numitems] = dwg_add_u8_input (dwg, key);
+  // Dictionary item keys are FIELD_T values. API-created R2007+ objects use
+  // UTF-8 in those fields; dwg_add_u8_input returns TU storage for that target
+  // version and bit_write_T then truncates the key to its first character.
+  // Keep the imported-document path's existing TU representation unchanged.
+  _obj->texts[_obj->numitems]
+      = (dwg->opts & DWG_OPTS_IN) ? dwg_add_u8_input (dwg, key) : strdup (key);
   _obj->itemhandles[_obj->numitems]
       = dwg_add_handleref (dwg, 2, absolute_ref, NULL);
   LOG_TRACE ("add DICTIONARY_item %s => " FORMAT_REF "\n", key,

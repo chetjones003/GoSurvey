@@ -8,12 +8,21 @@
 #endif
 extern "C" {
 #include <dwg.h>
+#include "../third_party/libredwg/src/bits.h"
 }
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+extern "C" unsigned int loglevel;
+extern "C" uint32_t dwg_section_page_checksum(uint32_t seed, Bit_Chain* dat, int32_t size, bool skip_checksum);
 #include <string>
 
 namespace {
@@ -53,6 +62,67 @@ TEST_CASE("LibreDwgReadVersionName refuses a missing file", "[dwg][libredwg]") {
   REQUIRE(LibreDwgReadVersionName("Z:/gosurvey-no-such-file.dwg").empty());
 }
 
+TEST_CASE("LibreDWG UMC encoding uses canonical unsigned continuation bytes",
+          "[dwg][libredwg][bits]") {
+  const struct Row {
+    BITCODE_UMC value;
+    std::array<unsigned char, 10> bytes;
+    std::size_t length;
+  } rows[] = {
+      {0x3f, {0x3f}, 1},
+      {0x40, {0x40}, 1},
+      {0x41, {0x41}, 1},
+      {0x7f, {0x7f}, 1},
+      {0x80, {0x80, 0x01}, 2},
+      {0x4000, {0x80, 0x80, 0x01}, 3},
+      {0xffffffffffffffffULL, {0xff, 0xff, 0xff, 0xff, 0xff,
+                    0xff, 0xff, 0xff, 0xff, 0x01}, 10},
+  };
+  for (const Row& row : rows) {
+    std::array<unsigned char, 10> storage{};
+    Bit_Chain chain{};
+    chain.chain = storage.data();
+    chain.size = storage.size();
+    bit_write_UMC(&chain, row.value);
+    REQUIRE(chain.byte == row.length);
+    REQUIRE(std::equal(row.bytes.begin(), row.bytes.begin() + row.length,
+                       storage.begin()));
+    chain.byte = 0;
+    REQUIRE(bit_read_UMC(&chain) == row.value);
+    REQUIRE(chain.byte == row.length);
+  }
+}
+
+TEST_CASE("LibreDWG TU encoders preserve section and object string conventions",
+          "[dwg][libredwg][bits]") {
+  std::array<BITCODE_RS, 3> text = {'1', ':', '1'};
+  std::array<unsigned char, 16> storage{};
+  Bit_Chain chain{};
+  chain.chain = storage.data();
+  chain.size = storage.size();
+  bit_write_TU(&chain, text.data());
+  REQUIRE(bit_position(&chain) == 74);
+  chain.byte = 0;
+  chain.bit = 0;
+  REQUIRE(bit_read_BS(&chain) == 4);
+
+  storage.fill(0);
+  chain.byte = 0;
+  chain.bit = 0;
+  bit_write_TU_no_null(&chain, text.data());
+  REQUIRE(bit_position(&chain) == 58);
+
+  chain.byte = 0;
+  chain.bit = 0;
+  BITCODE_TU decoded = bit_read_TU(&chain);
+  REQUIRE(decoded);
+  REQUIRE(decoded[0] == '1');
+  REQUIRE(decoded[1] == ':');
+  REQUIRE(decoded[2] == '1');
+  REQUIRE(decoded[3] == 0);
+  free(decoded);
+}
+
 TEST_CASE("LibreDwg writes R2000 that the in-process reader and DwgProbe both see",
           "[dwg][libredwg]") {
   ScratchDir dir("r2000");
@@ -82,7 +152,6 @@ TEST_CASE("LibreDwg writes R2004 that the in-process reader sees (issue #600)",
 
   REQUIRE(LibreDwgWriteMinimalR2004(pathUtf8.c_str()));
   REQUIRE(std::filesystem::file_size(dwgPath) > 6);
-
   std::ifstream in(dwgPath, std::ios::binary);
   char magic[7] = {};
   in.read(magic, 6);

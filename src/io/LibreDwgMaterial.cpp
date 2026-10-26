@@ -169,8 +169,14 @@ void DwgImportApplyEntityMaterial(_dwg_struct* dwgIn, const void* entity, Entity
     at->materialDiffuseR = r;
     at->materialDiffuseG = g;
     at->materialDiffuseB = b;
-    const bool utf16Name =
+    bool utf16Name =
         dwg->header.from_version >= R_2007 && !(dwg->opts & DWG_OPTS_IN);
+    // Some R2007+ readers leave MATERIAL's BITCODE_T name as UCS-2 even though the
+    // document is marked as an input. Detect that representation directly; for a one-letter
+    // name this also produces the same result as decoding it as a byte string.
+    const auto* nameBytes = reinterpret_cast<const unsigned char*>(mat->name);
+    if (!utf16Name && nameBytes != nullptr && nameBytes[0] != 0 && nameBytes[1] == 0)
+      utf16Name = true;
     const std::string decoded =
         libredwgcad_detail::DecodeDwgString(mat->name, utf16Name);
     if (!decoded.empty())
