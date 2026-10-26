@@ -10,7 +10,7 @@ if(POLICY CMP0141)
   endif()
 endif()
 
-project(GoSurvey VERSION 0.7.4 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.5 LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
