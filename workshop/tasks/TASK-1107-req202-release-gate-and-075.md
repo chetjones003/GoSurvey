@@ -91,6 +91,8 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
   in-app and public wiki already describe the 0.7.5 install path and migration from TASK-1106.
   `docs/install.md` and the public release PDB guide match the release workflow. No additional doc
   edits are needed for this release-preparation PR.
+- 2026-10-26: Opened [PR #1103](https://github.com/chetjones003/GoSurvey/pull/1103) to `beta` with
+  `bug` and `needs review` labels. Required CI checks are running.
 
 ## 9. Self-verification
 
@@ -111,5 +113,5 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
 - Requirements satisfied: REQ-202's build/test-before-publication gate and user-selected 0.7.5
   version source; CI still needs to validate the PR.
 - Tests: all 191 passed locally; PDB archive validation passed.
-- Release-preparation PR: pending creation/checks.
+- Release-preparation PR: #1103 open; required CI checks pending.
 - Beta-to-master release PR: pending until 0.7.5 preparation lands in beta.
