@@ -19,6 +19,13 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.7.5
+
+**Moving GoSurvey to your user profile**
+- GoSurvey now installs under `%LOCALAPPDATA%\Programs\GoSurvey`. Updating from Program Files moves
+  the old copy after one Windows approval and keeps your settings and user data. Future updates use
+  the per-user install and do not need elevation.
+
 ## 0.7.4
 
 **Traverse Editor: unit scaling, ground-to-grid, curvature and refraction, and a new LSA

@@ -97,6 +97,7 @@ std::string UpdateDownloadDir()
 void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo)
 {
   st.runningVersion = GOSURVEY_VERSION_FULL;
+  st.requiresPerUserMigration = IsRunningFromProgramFiles();
 
   if (!st.prefs.enabled)
     return;                              // REQ-077: disabled means no network request, at all

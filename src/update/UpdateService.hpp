@@ -57,6 +57,7 @@ struct UpdateState {
   Manifest                    available;     ///< valid from UpdateReady onward
   std::string                 runningVersion;
   std::string                 lastError;     ///< shown only in Phase::Failed
+  bool                        requiresPerUserMigration = false; ///< source install is under Program Files
   std::unique_ptr<UpdateTask> task;
 
   /// Set when the user confirms the update but the drawing has unsaved changes, so the
