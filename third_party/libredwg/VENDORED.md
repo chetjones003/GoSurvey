@@ -37,6 +37,7 @@ Each change is its own commit. Keep this list current.
 | 11 | `src/out_dxf.c` (`SAB_RD1`) | SAB → SAT writes doubles with `%.17g` (exact round trip), not `%g`'s six digits, which made full-circle edges read back as 6.28318 and closed solids fail exact closure checks (issue #786). | not yet |
 | 12 | `src/decode.c`, `src/decode_r2007.c` (class section) | The class record's `dwg_version` / `maint_version` are read as `BL` (as the R13–R2000 reader and `Dwg_Class` already have them), not `BS`: a value ≥ 256 mis-framed every later class, so R2018 Plant 3D classes lost their entity flag and decoded as objects (D-2026-10-08-b, issue #786). The encoder still writes `BS`, identical for values < 256. | not yet |
 | 13 | `src/bits.c`, `src/bits.h`, `src/encode.c` | Correct R2007+ UMC variable-length integer output and distinguish zero-terminated TU strings from length-delimited TU strings; encode length-delimited class names without a null terminator. These low-level encodings are used by the R2018 writer and are validated by AutoCAD-authored controls (TASK-1013). | not yet |
+| 14 | `include/dwg.h`, `src/acds.spec`, `src/decode.c`, `src/free.c` | Preserve decompressed AcDs payload bytes when a segment schema is not modeled, and release that retained data with the drawing. This keeps unsupported AcDs schemas intact through read/write instead of silently dropping them (TASK-1013). | not yet |
 
 ## Moving to a newer upstream release
 A recorded decision (ADR-041 (h)). Replace `src/` and `include/` with the new tag's tracked files,
