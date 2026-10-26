@@ -26,3 +26,17 @@ the concrete defect TASK-1107 addresses.
 
 **Plan verdict: PASS WITH FIX REQUIRED.** Implement only the CTest gate and the user-selected
 0.7.5 version bump. Do not dispatch the stable workflow as part of the preparation PR.
+
+## Follow-up review — hosted release test environment
+
+**Finding: FAIL — CTest prerequisites differ between release and full validation.** Release run
+40261704780 built successfully but failed 7/191 tests. The Qt shards found OpenGL 3.0, below the
+application's OpenGL 3.3 requirement, and the clean deployment smoke test exited 2. Full validation
+passed the same revision with a pinned Mesa runtime, `QT_OPENGL=desktop`,
+`GALLIUM_DRIVER=llvmpipe`, and eight CTest workers. The release gate must reproduce those test
+prerequisites while ensuring the temporary Mesa DLLs are restored or removed before packaging.
+
+**Updated plan verdict: PASS WITH FIX REQUIRED.** Reuse the pinned, checksummed Mesa setup and
+runtime staging from full validation, apply the same Qt environment and CTest parallelism, and
+restore test-only DLLs even on failure. Keep CTest before all PDB and installer publication steps.
+Retain CTest's failure as a hard stop; do not skip or weaken any test.

@@ -113,5 +113,53 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
 - Requirements satisfied: REQ-202's build/test-before-publication gate and user-selected 0.7.5
   version source; CI still needs to validate the PR.
 - Tests: all 191 passed locally; PDB archive validation passed.
-- Release-preparation PR: #1103 open; required CI checks pending.
-- Beta-to-master release PR: pending until 0.7.5 preparation lands in beta.
+- PR #1103 merged into beta; beta-to-master PR #1104 merged into master after all required checks
+  passed. The first manual 0.7.5 release attempt then exposed the test-environment defect recorded
+  in §11; no stable tag or release was published.
+
+## 11. Release-run failure follow-up (2026-10-26)
+
+- **Observed:** After PR #1104 merged 0.7.5 to `master`, the manual release run
+  [#40261704780](https://github.com/chetjones003/GoSurvey/actions/runs/40261704780) built
+  successfully but failed its new CTest gate: 7/191 tests failed. The Qt editor shards could not
+  initialize the required OpenGL 3.3 renderer (the hosted runner exposed OpenGL 3.0); shard 2 also
+  exited with `0xc0000409`. `qt.deployment` reported that its clean-copy smoke test exited 2.
+  Publication and symbol upload were skipped, as required.
+- **Expected:** REQ-202's release gate must run the full test suite in an environment capable of
+  exercising the same supported application path as PR validation; a genuine test failure must
+  still stop publication.
+- **Reproduction/evidence:** The Test release log shows OpenGL 3.0 where GoSurvey requires 3.3,
+  all six Qt editor shards failing, and the deployment smoke-test exit 2. The full-validation
+  workflow on the same source revision passed all required checks after downloading a SHA256-pinned
+  Mesa build, staging its runtime dependencies for isolated deployment, setting
+  `QT_OPENGL=desktop`/`GALLIUM_DRIVER=llvmpipe`, and running CTest with eight workers. The release
+  workflow had none of that setup and ran CTest serially.
+- **Root cause:** The release workflow added CTest without carrying over full-validation's required
+  hosted OpenGL setup. Its tests therefore exercised a weaker runner graphics driver than the
+  validated PR job. The isolated deployment test inherits this environment mismatch. The shard-2
+  abnormal exit is observed in the same failing editor run; this change will retest it under the
+  known-good pinned driver and matching test concurrency rather than suppressing it.
+- **Updated plan:** Reuse full-validation's pinned Mesa version and checksum in release CI; stage
+  only its test runtime dependencies before CTest, set the same OpenGL environment, and run CTest
+  with eight workers. Save any colliding Qt runtime files and restore/remove staged test files in
+  a `finally` path even when CTest fails, so Mesa test DLLs cannot enter the installer. Keep the
+  gate fail-closed and before PDB archival/package publication.
+- **Regression verification:** Run a workflow contract check confirming matching Mesa URL/hash,
+  OpenGL environment, eight-worker CTest, test-only DLL cleanup, and ordering before publication;
+  then dispatch the release workflow from the merged master version and require all tests to pass
+  before accepting the release artifacts.
+- **Product documentation review:** README, PRIVACY.md, in-app wiki and public wiki were reviewed
+  for this CI-only correction; no product-facing documentation changes are needed.
+
+### Implementation and verification status
+
+- Updated `.github/workflows/release.yml` to download the same checksum-pinned Mesa build as
+  full-validation, stage its four test DLLs, set the validated desktop OpenGL/llvmpipe environment,
+  and run the complete suite with eight workers. A `finally` block restores pre-existing Qt DLLs
+  or removes Mesa-only files before symbol archiving or packaging, even after a failed test run.
+- Updated the full-validation workflow header comment to reflect the shared test prerequisites.
+- Workflow contract verification passed: PyYAML parsed the workflow; assertions confirmed Mesa
+  version/hash, required DLLs, test environment, CTest parallelism, cleanup, and ordering before PDB
+  archiving. `git diff --check` passed.
+- Product sources are unchanged; the full hosted build/test and release publication check remain
+  pending the PR checks and the next intentional stable workflow dispatch after merge.
