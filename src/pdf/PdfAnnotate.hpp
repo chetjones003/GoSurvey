@@ -22,7 +22,7 @@ namespace pdfview {
 struct Annot {
   /// Length, PolyLength, Area and Angle are the REQ-391 scaled dimensions: their geometry is `pts`, and their
   /// label is worked out from the page's scale (it is never stored, so a scale change keeps it true).
-  enum class Kind { Text, Line, Rect, Ellipse, Leader, Length, PolyLength, Area, Angle };
+  enum class Kind { Text, Line, Rect, Ellipse, Leader, Length, PolyLength, Area, Angle, RevCloud };
   Kind kind = Kind::Rect;
   int page = 0; ///< zero-based
   /// Line: start and end. Rect / Ellipse / Text: two opposite corners of the box (any order).
@@ -34,7 +34,9 @@ struct Annot {
   /// Length only: how far the dimension line sits from the two measured points, perpendicular to them. Positive is
   /// to the left of the direction from the first point to the second; 0 puts the line on the points.
   float offset = 0.f;
-  bool IsDimension() const { return kind >= Kind::Length; }
+  bool IsDimension() const { return kind >= Kind::Length && kind <= Kind::Angle; }
+  /// RevCloud: `pts` are the corners of the outlined area (3 or more, closed); the scallops are worked out from them.
+  bool UsesPoints() const { return IsDimension() || kind == Kind::RevCloud; }
   unsigned color = 0xFF0000; ///< 0xRRGGBB: the stroke, and the text colour
   float thickness = 1.f;     ///< stroke width in points (Line, Rect, Ellipse)
   bool fill = false;         ///< Rect / Ellipse: fill with `color`
@@ -132,6 +134,12 @@ struct LeaderGeom {
   float w1x = 0.f, w1y = 0.f, w2x = 0.f, w2y = 0.f; ///< the arrowhead's two back corners
 };
 LeaderGeom LeaderLine(const Annot& a);
+
+/// A revision cloud's outline as cubic Bezier arcs, one per scallop, bulging outward from the closed polygon `pts`.
+struct CloudArc {
+  float x0 = 0.f, y0 = 0.f, c1x = 0.f, c1y = 0.f, c2x = 0.f, c2y = 0.f, x1 = 0.f, y1 = 0.f;
+};
+std::vector<CloudArc> RevCloudArcs(const Annot& a);
 
 /// REQ-397: the line pitch of stroke (SHX) text, as a multiple of its text height (CAD's 5/3 is too loose for notes).
 constexpr float kStrokeLineSpacing = 1.5f;

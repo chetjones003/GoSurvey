@@ -261,7 +261,7 @@ void EditorWindow::CancelDraftingInput() {
   else if (m_State.active != AppCommandState::Kind::None || m_State.paperLengthenPhase || m_State.paperExtendPhase ||
            m_State.paperBreakPhase || m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase)
     CancelActiveCommand(m_State, m_Log);
-  else { ClearSelection(m_State); m_State.pendingZoomExtents = m_State.pendingZoomWindow = false; }
+  else { ClearSelection(m_State); ClearPendingViewportZoom(m_State); }
   ClearPendingOneShotObjectSnap(m_State);
   ResetDraftingInput(); m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
 }
@@ -300,7 +300,23 @@ bool EditorWindow::DraftingInputEvent(QObject* watched, QEvent* event) {
         m_CommandSuggestionModel && m_CommandSuggestionModel->rowCount() > 0) {
       QModelIndex selected = m_CommandSuggestions->currentIndex();
       if (!selected.isValid()) selected = m_CommandSuggestionModel->index(0, 0);
-      const QString command = selected.data(Qt::DisplayRole).toString();
+      const QString typedLine = m_Command->text();
+      const QString typedCommand = typedLine.trimmed();
+      const auto exactSuggestions = FuzzyCommandSuggestions(typedCommand.toStdString(), 1);
+      const bool exactRegisteredCommand = !exactSuggestions.empty() && exactSuggestions.front().exactMatch;
+      // OPEN is routed by EditorWindow::Submit rather than the command registry, so it needs the
+      // same exact-name precedence when a registered prefix such as OPENPACK is highlighted.
+      const bool exactOpen = typedCommand.compare(QStringLiteral("OPEN"), Qt::CaseInsensitive) == 0;
+      const bool hasArguments = typedCommand.contains(' ') || typedCommand.contains('\t');
+      QString command;
+      if (exactOpen)
+        command = QStringLiteral("OPEN");
+      else if (exactRegisteredCommand)
+        command = QString::fromStdString(exactSuggestions.front().name);
+      else if (hasArguments)
+        command = typedLine;
+      else
+        command = selected.data(Qt::DisplayRole).toString();
       m_CommandSuggestions->hide();
       m_Command->clear();
       Submit(command);

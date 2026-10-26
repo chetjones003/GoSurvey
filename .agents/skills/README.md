@@ -6,5 +6,6 @@ Reusable agent workflows for this repository. Each skill lives in its own direct
 - `bug-fix` — diagnose and fix a bug using the project workflow.
 - `implement-issue` — review and implement a GitHub issue through PR review.
 - `review-issue` — review an issue and its associated implementation.
+- `crash-report-triage` — fetch and diagnose one user-requested crash report by dashboard ID.
 
 Agents should read the relevant `.agents/skills/<name>/SKILL.md` before starting matching work. Project-wide guidance remains in `CLAUDE.md`.

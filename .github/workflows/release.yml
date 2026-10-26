@@ -202,6 +202,29 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Test release (REQ-202)
+        run: ctest --preset ninja-release --output-on-failure
+
+      - name: Test release PDB archive validation
+        shell: pwsh
+        run: ./tools/test-archive-release-pdb.ps1
+
+      - name: Archive private release PDB
+        # REQ-425 / issue #1004: archive symbols from this exact build before any package
+        # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
+        if: github.ref_name == 'beta' || (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ./tools/archive-release-pdb.ps1 `
+            -ExecutablePath 'build/GoSurvey.exe' `
+            -PdbPath 'build/.cmake/release/symbols/GoSurvey.pdb' `
+            -Version '${{ steps.ver.outputs.version }}' `
+            -Commit (git rev-parse --short=12 HEAD)
+
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
         shell: pwsh
@@ -213,6 +236,31 @@ jobs:
             }
             Write-Host "OK: $path present"
           }
+
+      - name: Stage app-local Microsoft VC runtime (x64)
+        shell: pwsh
+        run: |
+          # ADR-073: bootstrap and in-app updates are non-elevated, so ship the licensed
+          # release CRT DLLs beside GoSurvey.exe. Keep this sourced from the active MSVC
+          # redist directory and refresh it on every release build.
+          $redistRoot = Join-Path $env:VCToolsRedistDir 'x64'
+          $crtDirs = @(Get-ChildItem -LiteralPath $redistRoot -Directory -Filter 'Microsoft.VC*.CRT' |
+            Sort-Object Name -Descending)
+          if ($crtDirs.Count -eq 0) {
+            throw "No x64 Microsoft VC CRT redistributable folder found under '$redistRoot'."
+          }
+          $crtDir = $crtDirs[0].FullName
+          $crtDlls = @(Get-ChildItem -LiteralPath $crtDir -File -Filter '*.dll')
+          if ($crtDlls.Count -eq 0) { throw "No runtime DLLs found in '$crtDir'." }
+          foreach ($required in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+            if (-not ($crtDlls.Name -contains $required)) {
+              throw "Required app-local runtime '$required' is missing from '$crtDir'."
+            }
+          }
+          foreach ($dll in $crtDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination 'build' -Force
+          }
+          Write-Host "Staged $($crtDlls.Count) runtime DLLs from $crtDir"
 
       - name: sccache stats
         if: always()

@@ -20,6 +20,10 @@
 #include <string>
 
 int main(int argc, char** argv) {
+  int minidumpWriterExitCode = 1;
+  if (crashReporter::RunMinidumpWriterMode(minidumpWriterExitCode))
+    return minidumpWriterExitCode;
+
   // REQ-425 §2: a process relaunched by the crash handler only shows the report. It is read (and
   // sent) before the handler is installed, so a fault here cannot recurse.
   std::string crashTitle;
@@ -54,7 +58,6 @@ int main(int argc, char** argv) {
       return 1;
     }
   }
-  const bool previewSignIn = app.arguments().contains("--preview-sign-in");
   const QPixmap splashBackdrop = qtsplash::MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
   QSplashScreen splash(qtsplash::MakeFrame(splashBackdrop, 0.0, qtsplash::PhaseLabelAt(0)));
   // REQ-093: the bar and phase label follow wall-clock time on splashClock (restarted once the window is built).
@@ -72,14 +75,17 @@ int main(int argc, char** argv) {
   }
   int result = 0;
   {
-    EditorWindow window;
+    EditorWindow window(qEnvironmentVariable("GOSURVEY_DEV_BRANCH"));
     LoadUserStartupPrefSettings(window.State());
     // REQ-093: the minimum display time counts from here, so the bar animates for its whole span
     // instead of sitting still while the window above is being built.
     if (!smoke) { splashClock.restart(); advanceSplash(); }
     crashReporter::SetReportChannel(window.State().updatePrefs.useBetaChannel ? "beta" : "stable");
     if (!smoke) {
-      // Started before sign-in so the update offer, when there is one, is shown first (REQ-077).
+      // REQ-080: launch the anonymous ping on its own worker immediately; no network result
+      // participates in splash timing, update handling, or opening the editor.
+      window.EnableTelemetry();
+      // The update offer, when there is one, is shown before the editor (REQ-077).
       window.StartUpdateCheck();
       // REQ-077: the check gates the session. The splash stays up until it has an answer
       // (bounded by the check's own short timeout), so no drawing can begin on a build that is
@@ -89,9 +95,6 @@ int main(int argc, char** argv) {
         QThread::msleep(15);
       }
       advanceSplash();
-      // REQ-080: the ping goes out once the sign-in gate below resolves.
-      window.EnableTelemetry();
-      window.StartAuth(previewSignIn);
     }
     window.showMaximized();
     splash.finish(&window);
@@ -106,8 +109,7 @@ int main(int argc, char** argv) {
       });
     } else {
       for (const auto& argument : app.arguments().mid(1))
-        if (argument != "--default-style" && argument != "--light-style" &&
-            argument != "--preview-sign-in") { window.OpenDrawing(argument); break; }
+        if (argument != "--default-style" && argument != "--light-style") { window.OpenDrawing(argument); break; }
       // Load a command-line drawing before deciding whether the Start screen should auto-open
       // What's New. The window is visible now, so startup dialogs have a valid owner.
       window.InitializeStartup();

@@ -70,9 +70,11 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorContextMenu.cpp
   src/qt/EditorPointTransfer.cpp
   src/qt/EditorBlockAuthoring.cpp
+  src/qt/EditorPipePalette.cpp
   src/qt/AdjustmentWindow.cpp
   src/qt/AdjustmentEditor.cpp
   src/qt/PdfWindow.cpp
+  src/qt/PdfWindowCompare.cpp
   src/qt/PdfScaleUi.cpp
   src/qt/FailureReport.cpp
   src/render/ViewportRenderer.cpp
@@ -94,16 +96,13 @@ add_library(gosurvey_qt_frontend STATIC
   src/platform/WinFileDialogs.cpp
   src/platform/MapTilePlatform.cpp
   src/platform/HttpFetch.cpp
-  src/platform/OAuthListener.cpp
-  src/platform/CredentialStore.cpp
-  src/auth/AuthService.cpp
-  src/auth/AuthPing.cpp
   src/update/UpdateService.cpp
   # REQ-080 usage ping; REQ-425 crash and startup-failure reports
   src/telemetry/TelemetryPing.cpp
   src/telemetry/TelemetryService.cpp
   src/platform/CrashReporter.cpp
   src/platform/CrashReporterWireReason.cpp
+  src/platform/CrashBuildInfo.cpp
   src/platform/StartupFailure.cpp
   src/platform/FailureReportUi.cpp
 )

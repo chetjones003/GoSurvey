@@ -60,14 +60,17 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+; ADR-072: every install belongs to the current Windows user. This also keeps normal updates
+; writable without elevation and gives new installs a stable per-user path.
+DefaultDirName={localappdata}\Programs\{#MyAppName}
+UsePreviousAppDir=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 LicenseFile=License.txt
 InfoAfterFile=InfoAfter.txt
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequired=lowest
 OutputDir={#OutputDir}
 OutputBaseFilename=GoSurvey-{#AppVersion}-Installer
 SetupIconFile=..\resources\icons\app.ico
@@ -77,8 +80,8 @@ WizardStyle=modern dynamic
 ; REQ-078 / ADR-029 (f): the running application publishes these mutexes (see
 ; PublishInstallerDetectionMutex in src/app/main.cpp). Without them a silent update
 ; cannot tell that GoSurvey is running, and fails trying to replace a locked .exe.
-; Both namespaces are listed because the installer runs elevated and may not share the
-; local one with the user's session.
+; Both namespaces are published so the legacy elevated build and the per-user build can
+; detect the same running app during migration/update.
 AppMutex=GoSurveyAppMutex,Global\GoSurveyAppMutex
 CloseApplications=yes
 RestartApplications=yes
@@ -132,15 +135,19 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
+// The per-user bootstrap and in-app updater carry the licensed app-local CRT DLLs beside the
+// executable. The Microsoft Store installation keeps using the shared redistributable.
+function WantsRuntimeRedist: Boolean;
+begin
+  Result := ExpandConstant('{param:SKIPVCREDIST|0}') <> '1';
+end;
+
 [Run]
-; Idempotent on machines that already have the runtime; required for GoSurvey.exe (/MD).
-Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated
+; Store path retains the shared redistributable. Per-user bootstrap/updater paths carry local CRT DLLs.
+Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: WantsRuntimeRedist
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-; The updater's relaunch, routed through Explorer.
-;
-; Launching non-elevated is the requirement, not a nicety: Setup runs elevated, so a direct exec
-; would bring GoSurvey back as administrator and it would then write prefs and drawings with admin
-; ownership that the user's own session cannot modify.
+; The updater's relaunch, routed through Explorer to keep the app in the current user's shell.
+; Setup is now per-user under ADR-072; the Explorer launch remains the established update route.
 ;
 ; `runasoriginaluser` is the flag meant for this and it was tried first. Setup's log showed it
 ; accepted the entry ("Run as: Original user", "Type: Exec", correct Filename) and then silently

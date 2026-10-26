@@ -42,22 +42,7 @@ TEST_CASE("TelemetryPing: BuildTelemetryJson creates valid JSON", "[telemetry]")
   REQUIRE(json.find("\"version\":\"0.5.2\"") != std::string::npos);
   REQUIRE(json.find("\"channel\":\"stable\"") != std::string::npos);
   REQUIRE(json.find("\"os\":\"windows\"") != std::string::npos);
-  // REQ-080 amended (D-2026-08-23-e): email is present but empty for a signed-out user — the
-  // default-constructed payload.email is "", not absent.
-  REQUIRE(json.find("\"email\":\"\"") != std::string::npos);
-}
-
-TEST_CASE("TelemetryPing: BuildTelemetryJson includes the signed-in email when present", "[telemetry]") {
-  TelemetryPayload payload;
-  payload.installId = "abc123def456";
-  payload.event     = "active";
-  payload.version   = "0.5.4";
-  payload.channel   = "stable";
-  payload.os        = "windows";
-  payload.email     = "surveyor@example.com";
-  const std::string json = BuildTelemetryJson(payload);
-
-  REQUIRE(json.find("\"email\":\"surveyor@example.com\"") != std::string::npos);
+  REQUIRE(json.find("\"email\"") == std::string::npos);
 }
 
 TEST_CASE("TelemetryPing: BuildTelemetryJson escapes special characters", "[telemetry]") {

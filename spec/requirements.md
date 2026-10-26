@@ -2900,7 +2900,13 @@ requirements is a planning failure, not a sign of rigor.
   SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
   it routes through the existing unsaved-changes path, so a user with a dirty drawing is asked to
   save rather than losing it to the restart. The installer is then run non-interactively and the
-  application exits; the installer replaces the files and relaunches the application.
+  application exits; the installer replaces the files and relaunches the application. All GoSurvey
+  installs use the current user's per-user installation at `%LOCALAPPDATA%\Programs\GoSurvey`. If
+  this update is initiated by an older machine-wide Program Files install, the in-app update routes
+  through the hash-checking bootstrap, which migrates that copy with one-time Windows UAC consent and
+  relaunches GoSurvey from the per-user copy; subsequent updates apply there without elevation. The
+  bootstrap and in-app update install the licensed Visual C++ runtime files beside GoSurvey and skip
+  the shared runtime installer; each release must refresh those app-local runtime DLLs.
 
   The hash is an **integrity** check, not an authenticity one: it and the installer come from the same
   host over the same TLS connection, so it detects corruption and a truncated download, not a
@@ -2916,7 +2922,9 @@ requirements is a planning failure, not a sign of rigor.
     author**, because a semantic break need not move the format version and so cannot be detected
     automatically.
 
-  A warning informs the choice; it never removes it. The three buttons are unchanged.
+  A warning informs the choice; it never removes it. The three buttons are unchanged. If the
+  application is running from Program Files, the offer also displays the REQ-454 migration notice
+  before the release notes and before the user chooses whether to update.
 - Acceptance:
   - no download begins, and no installer runs, without an explicit user click;
   - an offered build writing a newer `.gs` format shows the forward-only notice; one at the same
@@ -2924,6 +2932,8 @@ requirements is a planning failure, not a sign of rigor.
   - a manifest with no compatibility information (one published before the field existed) warns
     about nothing rather than treating absence as risk;
   - the compatibility notice appears **above** the release notes, not below them;
+  - an offer from Program Files displays the migration notice above the release notes; an offer from
+    the per-user location does not;
   - "Skip this version" suppresses that version permanently but a *later* version still prompts;
   - "Remind me later" prompts again on the next launch;
   - a deliberately corrupted download fails the hash check, is deleted, does not execute, and reports
@@ -2932,12 +2942,14 @@ requirements is a planning failure, not a sign of rigor.
   - a drawing with unsaved changes triggers the existing unsaved-changes modal before the application
     exits, and cancelling there cancels the update;
   - after the installer runs, the previous versioned executables (`GoSurvey-0.*.exe`) are gone from
-    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts and the `.gs`
-    file association still resolve;
+    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts still resolve;
+  - an update from a Program Files installation migrates it to the per-user installation with one-time
+    UAC consent, preserving user settings and data; later updates install to that same per-user copy
+    without elevation;
   - a partially downloaded file left by a killed process does not block or corrupt the next attempt.
 - Owner-layer: UI (dialog), Platform (download, hash, process launch), IO (`UserPrefs` skip state)
 - Status: accepted (2026-08-15)
-- Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+- Revisions: 2026-08-15 — initial; D-2026-10-25-f adds the Program Files migration notice. See ADR-029 and the decision log.
 
 ### REQ-079 — `.gs` files carry a format version and are migrated forward on load
 - Purpose: an old drawing opens in a new build, always, and the rare case where it cannot is stated
@@ -3008,12 +3020,12 @@ requirements is a planning failure, not a sign of rigor.
   Amended rather than the code changed, and the weaker promise replaced with a **stronger, testable
   one** (idempotence) so the amendment is not simply an exemption. Decision D-2026-08-17-a.
 
-### REQ-080 — Anonymous install and active-usage telemetry
-- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+### REQ-080 — Anonymous install and open telemetry
+- Purpose: measure first runs and application opens without identifying users
 - Priority: should
 - Type: functional
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
-  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  persists it in the user preferences file. It sends two fire-and-forget events:
   - `install` — exactly once, when the install ID is generated
   - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
     This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
@@ -3024,28 +3036,16 @@ requirements is a planning failure, not a sign of rigor.
     already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
     numbers are unaffected — only a query counting rows would be.
 
-  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
-  `email`.
+  The events are sent via HTTPS POST to the configured endpoint as a JSON payload containing
+  exactly `installId`, `event`, `version`, `channel`, and `os`.
 
-  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
-  The original "no personally identifiable information" promise is reversed by explicit,
-  informed user decision — not discovered as a defect, not a Workshop judgment call. When
-  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
-  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
-  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
-  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
-  telemetry, only an optional enrichment of it when both happen to be true at once. No
-  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
-  and only when known.
+  **Amended 2026-10-24 (D-2026-10-24-a):** the payload is anonymous and has no email field.
+  No username, hostname, local path, drawing data, or hardware fingerprint is sent.
 
   The telemetry fires in a detached one-shot worker thread once per launch, independent of
-  any other background task's own success/failure — but its own firing point is no longer
-  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
-  the offline exception), so that whatever sign-in state is true at that moment is known
-  before the payload is built. This costs no perceptible delay in practice, since the gate
-  already blocks all other interaction until it resolves. It must never block the UI, gate a
-  session on its OWN account, or fail the application if the network is unavailable. Any
+  any other background task's own success/failure. It starts at application launch and never
+  waits for or depends on sign-in, license lookup, or internet connectivity. It must never
+  block the UI, gate a session, or fail the application if the network is unavailable. Any
   network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
   sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
   background reporting call has no actionable user recourse for its own failure.
@@ -3058,22 +3058,15 @@ requirements is a planning failure, not a sign of rigor.
   - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
     per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
     1; this REPLACES the original "at most once per rolling 24-hour period" condition;
-  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
-    channel, os, email);
-  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
-    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
-    for, or is skipped because of sign-in state;
-  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
-    included — `email` is the only field this requirement adds beyond the original five;
+  - the payload JSON is well-formed and contains exactly five fields (installId, event, version,
+    channel, os), with no personally identifying or machine-specific data;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the settings panel accurately describing current
-    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
+  - no usage or privacy notice for this ping appears in application settings;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
-  email, read not owned), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
@@ -3089,6 +3082,9 @@ requirements is a planning failure, not a sign of rigor.
   per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
   one day (see D-2026-08-23-e above) — each recorded separately because each was its own
   explicit ask, not one bundled decision.
+  2026-10-24 — removed signed-in email and sign-in-gate dependency; install/open reporting is
+  anonymous, background-only, and has no settings notice (D-2026-10-24-a). Startup/crash
+  diagnostics remain governed separately by REQ-425.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -3942,6 +3938,8 @@ requirements is a planning failure, not a sign of rigor.
 ---
 
 ### REQ-091 — User accounts and sign-in (Auth0)
+- **Retired 2026-10-24 by D-2026-10-24-a.** The acceptance conditions below are historical
+  records only and no longer authorize sign-in, account UI, credential storage, or launch gating.
 - Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
   telemetry is deliberately unable to do
 - Priority: should
@@ -4028,7 +4026,7 @@ requirements is a planning failure, not a sign of rigor.
     the signed-in email and a "more coming soon" note — no tier, no editable fields.
 - Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
   (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
                Credential-Manager technical shape and the REQ-300 dependency decision.
                2026-08-23 — added the blocking launch gate with an offline exception
@@ -4045,6 +4043,8 @@ requirements is a planning failure, not a sign of rigor.
                Credential-Manager mechanism and REQ-092 unchanged.
 
 ### REQ-092 — License-tier lookup endpoint
+- **Retired 2026-10-24 by D-2026-10-24-a.** The endpoint is no longer part of the desktop
+  application's supported account or gating flow. The acceptance conditions below are historical.
 - Purpose: give the application a place to learn a signed-in user's entitlement, ahead
   of any requirement naming what that entitlement controls
 - Priority: should
@@ -4061,7 +4061,7 @@ requirements is a planning failure, not a sign of rigor.
   - the endpoint's data store is separate from the telemetry Worker's, so a defect in
     one cannot read or corrupt the other's data.
 - Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
-- Status:      accepted
+- Status:      retired (2026-10-24, D-2026-10-24-a)
 - Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
 
 ---
@@ -11750,8 +11750,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      list, the recent-files list, or an attached PDF underlay's "open" action opens the **PDF Viewer
      window** (a real Windows window of its own, clause 7, ADR-067 (a)). No route may hand a `.pdf` to
      `ShellExecute` any more. Opening a file already open in a viewer window focuses that window.
-  2. **View.** Page-by-page and continuous-scroll layouts; zoom (wheel, fit-width, fit-page, typed %);
-     pan; Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
+  2. **View.** Page-by-page and continuous-scroll layouts; zoom (Ctrl+wheel around the pointer, fit-width,
+     fit-page, typed %; the plain wheel scrolls the document, REQ-455); pan (scroll bars and middle-button
+     drag, REQ-455); Page Up/Down, Home/End and a page-number box; a thumbnail strip that is itself virtualised
      (only visible thumbnails exist). A password-protected, damaged or unreadable file shows a stated
      reason in the window (REQ-201) and never crashes or hangs the app.
   3. **Speed — open.** The **first page is on screen within 250 ms of the open request** for a 500-page
@@ -11799,7 +11800,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/PdfDocument`, pure), Renderer (page textures), UI (window), Commands
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 7 added and the
-  "separate operating-system window" exclusion removed (D-2026-10-06-b).
+  "separate operating-system window" exclusion removed (D-2026-10-06-b). 2026-10-22 — clause 2 amended
+  (D-2026-10-23-e, GitHub issue #1037): the wheel scrolls and Ctrl+wheel zooms around the pointer; the
+  middle button pans. The Qt viewer's command surface and navigation details are REQ-455.
 
 ### REQ-388 — PDF annotations: text, lines, shapes, colour, thickness, font (GitHub issue #732, phase 2)
 
@@ -11834,7 +11837,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Domain/IO (`src/pdf/`), UI, Commands
 - Status: accepted
 - Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-a). 2026-10-06 — clause 2: Line is a true Line written by a post-save patch because PDFium
-  cannot create one (D-2026-10-06-e).
+  cannot create one (D-2026-10-06-e). 2026-10-25 — REQ-455 (GitHub issue #1037) adds the Revision cloud kind (a standard Square annotation with a scalloped appearance, clause 13) and the Callout (clause 12); the existing kinds are saved as before.
 
 ### REQ-389 — Split a PDF: save chosen pages as a new PDF (GitHub issue #732, phase 3)
 
@@ -12217,7 +12220,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
     tool draws an arrow with a boxed note and the saved PDF shows it in a second reader.
 - Owner-layer: Domain/IO (`src/pdf/`), UI
 - Status: accepted
-- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool).
+- Revisions: 2026-10-06 — initial (issue #732; D-2026-10-06-j; the user asked for the fixes and the Leader tool). 2026-10-25 — the Qt viewer's Callout tool (C) revives this Leader as a PDF FreeText callout with the target-then-box click order (REQ-455 clause 12).
 
 ### REQ-397 — PDF viewer defaults: opens maximized; Arial is the default font; romans.shx available (GitHub issue #732)
 
@@ -12269,7 +12272,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
      - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
      Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
-  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created.
   6. **What Accept creates.**
      - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
      - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
@@ -12288,7 +12291,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
 - Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
 - Status: accepted
-- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted.
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing.
 
 ### REQ-400 — Command-line resolution: an exact typed command or alias always wins (GitHub issue #766)
 
@@ -12625,24 +12628,37 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: functional
 - Decision: D-2026-10-17-b. Records the behaviour shipped in 0.7.4 (commits 61680b60, d048dc59, 5579a3ec, 8738b8a8), which had no requirement; it adds no new behaviour except the Qt port and the disclosure sentence in §6.
-- Depends on: REQ-080 (install ID, endpoint pattern, settings disclosure), REQ-201 (silent-failure exception).
+- Depends on: REQ-080 (install ID, endpoint pattern, reporting policy), REQ-201 (silent-failure exception).
 - Statement:
-  1. **Crash capture.** An unhandled structured exception, an abort signal, or `std::terminate` in either front end (ImGui `GoSurvey.exe`, Qt `GoSurveyQt.exe`) builds a plain-text report: a one-line summary, the exception code and fault address when known, the version, the update channel, and a module + offset stack trace. The report is appended to `%APPDATA%\GoSurvey\crash.log`, written to a temporary bundle file, and the same executable is relaunched with `--gosurvey-crash-report=<bundle>`. The crashing process shows no UI.
-  2. **Crash report window.** A process started with `--gosurvey-crash-report=` does not open the editor. It reads the bundle, sends the report once in the background (§5), deletes the bundle, and shows a report window titled "GoSurvey encountered a problem" with the full report read-only and two buttons: **Send This Report** and **Close**. A bundle that cannot be read shows "GoSurvey could not read the crash report file." instead.
+  1. **Crash capture.** An unhandled structured exception, an abort signal, or `std::terminate` in either front end (ImGui `GoSurvey.exe`, Qt `GoSurveyQt.exe`) builds a plain-text report: a one-line summary, the exception code and fault address when known, the version, the update channel, and a module + offset stack trace. The Qt front end also attempts to write a stack-focused Windows minidump using `MiniDumpNormal` from a helper process, alongside the temporary text bundle. The report is appended to `%APPDATA%\GoSurvey\crash.log`; the same executable is relaunched with `--gosurvey-crash-report=<bundle>`. The crashing process shows no UI. Dump creation failure does not prevent the text report.
+  2. **Crash report window.** A process started with `--gosurvey-crash-report=` does not open the editor. It reads the bundle, sends the report once in the background (§5), deletes the bundle, and shows a modern branded, theme-aware report window titled "GoSurvey encountered a problem". The visual hierarchy distinguishes the problem heading, next-step explanation, full report in a bounded read-only pane, and actions: **Send This Report** is primary and **Close** is secondary. Colors and surfaces follow the active Qt Light or Dark appearance. The same visual system is used for startup failures. A bundle that cannot be read shows "GoSurvey could not read the crash report file." instead.
   3. **Send This Report.** Copies the full report to the clipboard and opens the browser at a new GitHub issue on `chetjones003/GoSurvey`, with the title "GoSurvey report (<version>)" and the report as the body (the body is cut at about 5,200 characters with a note that the full text is on the clipboard). It then tells the user which of the two steps worked (both, clipboard only, browser only, neither) and how to finish by hand. It does not close the report window. **Close** is the cancel: it closes the window and sends nothing further.
   4. **Startup failure.** When the graphics stack cannot start (the display library, a window with an OpenGL 3.3 context, or the viewport renderer), the application appends the reason to `%APPDATA%\GoSurvey\startup-failure.log`, sends it (§5), shows the same report window titled "GoSurvey could not start", and exits with code 1 when the window is closed. The stage names on the wire stay `glfw_init`, `glfw_window`, `opengl_init`; the Qt build reports a missing OpenGL 3.3 context as `glfw_window` and a renderer failure as `opengl_init`.
-  5. **Background send.** Crash and startup reports are POSTed once, when the machine has connectivity, to `CrashReportEndpoint` / `StartupReportEndpoint` with `installId`, `version`, `channel`, `os`, `reason` (crash) or `stage` (startup), and `report` (cut at 16 KB). There is no opt-out, consistent with REQ-080. Any network failure is dropped silently (REQ-201 exception, same reason as REQ-080).
-  6. **Disclosure.** The Settings privacy disclosure required by REQ-080 also states that crash and startup error reports are sent automatically and can include file locations on this computer.
+  5. **Background send.** Crash and startup reports are POSTed once, when the machine has connectivity, to `CrashReportEndpoint` / `StartupReportEndpoint` with `installId`, `version`, `channel`, `os`, `reason` (crash) or `stage` (startup), and `report` (cut at 16 KB). A crash report also includes its minidump when one was created and it is no larger than 10 MB. If dump capture fails or the dump exceeds 10 MB, the text report is still sent without it. There is no opt-out, consistent with REQ-080. Any network failure is dropped silently (REQ-201 exception, same reason as REQ-080).
+  6. **Disclosure.** `PRIVACY.md` states that crash and startup error reports are sent automatically and can include file locations. It also states that a crash minidump may include information held in memory, including drawing or personal information; available dumps up to 10 MB are uploaded automatically and deleted from the server after 30 days. This information is not shown in the Settings window.
   7. **Test hook.** `--gosurvey-test-crash` deliberately crashes the process so §1–§3 can be checked by hand.
+  8. **Build identification.** Every crash report states `commit:` (the short git commit the build was made from, or `unknown`) and `pdb:` (the running executable's PDB GUID and age, as `<32 hex digits>,<age>`, or `unavailable`) beside `version:` and `channel:`, so the report can be matched to the one archived PDB for that build.
+  9. **Exception detail.** For a C++ `throw` that escapes (exception code `0xE06D7363`) the report names the thrown type and, when it derives from `std::exception`, its `what()` message. For `std::terminate`, report the active exception's type and `what()` when it derives from `std::exception`; use a generic non-standard-exception message otherwise, since standard C++ catch-all handling does not expose that type name. An abort or terminate with no exception record still carries a stack trace captured at the handler.
+  10. **Private release symbols.** For every beta build published to the rolling release and every newly published stable release, the release workflow archives the full PDB produced alongside that exact executable build in the private `gosurvey-crash-dumps` Cloudflare R2 bucket. The object key includes the version, short commit, and PDB GUID/age from the executable's CodeView record. The PDB is not included in the installer, GitHub release assets, Pages assets, or downloaded by the application.
+  11. **Agent-assisted triage.** The Access-protected admin dashboard shows each crash report's ID and provides a **Copy agent prompt** action. A local read-only triage tool accepts one numeric report ID, fetches only that report's text from `gosurvey-telemetry`, and retrieves only its referenced minidump and exact-build PDB from the private `gosurvey-crash-dumps` bucket when available. It verifies the PDB object identity against the report, saves the files and a metadata manifest under `build/artifacts/crash-triage/<report-id>/`, and reports missing artifacts without hiding failures. The copied prompt asks the agent to use this tool; fetching occurs only when a user asks the agent to diagnose that report. Once fetched for diagnosis, report text, minidump, and PDB may be sent to the AI provider selected for that task. The dashboard copy action alone sends no crash files to an AI provider. Local triage artifacts remain until the user deletes them.
 - Acceptance:
   - `[req425]` Qt test: the report window shows the report read-only with Send This Report and Close; Send copies the report to the clipboard, opens a GitHub new-issue URL with the title and report, reports the outcome, and leaves the window open; Close sends nothing further.
+  - `[req425]` Qt test: crash and startup report windows use the same branded hierarchy in Light and Dark appearances, with theme-appropriate surfaces, a bounded read-only full-report pane, a primary Send This Report button, and a secondary Close button; screenshots cover both report types in both appearances.
   - `[req425]` Qt test: a crash bundle in the documented format is read back to its report and deleted; a malformed bundle is rejected.
-  - `[req425]` Qt test: the Settings disclosure mentions crash and startup reports.
-  - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window.
-- Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`, Settings).
+  - `[req425]` Qt test: the Settings window does not contain a crash diagnostics disclosure; `PRIVACY.md` documents automatic sending, possible memory contents, upload limits, fallback behavior, and retention.
+  - `[req425]` Unit tests: `PdbIdentityOfModule` returns `<32 hex>,<age>` for the running executable and `unavailable` for no module or a non-image; `DescribeThrownCppException` returns the type and `what()` of a thrown `std::runtime_error`, only the type for a non-std type, and nothing for other exceptions; `DescribeCppException` reports type and `what()` for a captured `std::exception`, a generic message for a non-standard exception, and an empty string for no exception.
+  - `[req425]` Windows helper-process test writes a valid `MiniDumpNormal` file for the current process; a missing or over-10-MB dump never prevents posting the text report.
+  - `[req425]` Worker tests accept a valid bounded multipart report, store its dump in R2 and its key in D1, reject malformed or oversized uploads, and keep dump download behind the admin Worker.
+  - `[req425]` R2 lifecycle configuration expires objects under the crash-dump prefix after 30 days without affecting other bucket objects.
+  - `[req425]` Release-workflow verification confirms that beta and newly published stable builds upload the PDB from the same build under a key containing version, commit, and matching PDB GUID/age; feature refs and stable builds rejected by the release gate do not upload; the PDB remains absent from all public/package artifacts.
+  - `[req425]` Admin Worker tests confirm crash rows expose the report ID, the dashboard copies a prompt containing only that ID, and no crash content is sent by the copy action.
+  - `[req425]` Triage-tool tests confirm a numeric ID performs one D1 `SELECT` and at most two R2 object reads for the matching crash-dump and PDB keys; malformed IDs and mismatched PDB identities are rejected; missing artifacts are reported while the text report is retained; no remote writes occur.
+  - `[req425]` `PRIVACY.md` explains the user-initiated agent handoff, the possibility that report text, memory contents, and symbols are sent to the selected AI provider, and the local artifact location/retention.
+  - manual: `GoSurveyQt.exe --gosurvey-test-crash` (and `GoSurvey.exe --gosurvey-test-crash`) appends `crash.log` and opens the report window, including `commit:` and `pdb:` lines.
+- Owner-layer: Platform (`src/platform/CrashReporter`, `StartupFailure`, `FailureReportUi`), UI (`src/qt/FailureReport`), Release pipeline (`.github/workflows/release.yml`).
 - Status: accepted.
-- Known gap: the ImGui Settings disclosure predates §6 (and still says "at most once a day", which REQ-080 no longer describes); it is updated separately from the Qt port.
-- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b).
+- Scope note: crash minidump capture applies to the Qt front end in this increment; both front ends continue to produce and send their existing text reports.
+- Revisions: 2026-10-17 — initial, recording 0.7.4 behaviour for the Qt port (issue #883, D-2026-10-17-b). 2026-10-25 — build identification and exception detail added for issue #1004's first slice. 2026-10-25 — user decisions: `MiniDumpNormal`; automatically upload each available dump with the text report; 30-day server dump retention; 10 MB per-dump upload cap with text-only fallback. Minidumps and privacy are now specified. 2026-10-25 — a non-standard exception active at `std::terminate` is reported generically; name reporting is required for `std::exception` types, avoiding MSVC-specific runtime metadata. 2026-10-25 — disclosure location decision D-2026-10-25-b: keep minidump disclosure in `PRIVACY.md` only, not in Settings or troubleshooting manuals. 2026-10-25 — private PDB archiving for published release builds added per issue #1004 decision 2 and pipeline note; exact-build identity matching and exclusion from shipped/public artifacts are acceptance conditions. 2026-10-25 — D-2026-10-25-d adds user-initiated, report-ID-based agent triage through a local read-only tool; the report, optional dump, and matching PDB are sent to the selected AI provider only when the user requests diagnosis. 2026-10-25 — D-2026-10-25-e specifies a modern branded, theme-aware hierarchy for both crash and startup report windows while preserving their existing report and action behavior.
 
 ### REQ-426 — Qt Pipe Network and Feature Line ribbon workflows (GitHub issue #896)
 
@@ -13714,7 +13730,176 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22)
 - Revisions: 2026-10-22 — catalogued and accepted (D-2026-10-22-a, GitHub issue #1036).
 
+### REQ-455 — Qt PDF window: command tabs and continuous zoom/pan navigation (GitHub issue #1037)
+
+- Purpose: the Qt PDF window had grown five stacked toolbar rows, showed one page at a time, and zoomed only
+  through buttons. A drafter reading a plan set wants the commands grouped by task and the document to move the
+  way every PDF viewer moves: the wheel scrolls, Ctrl+wheel zooms where the pointer is, and the middle button
+  drags the sheet, even while a measuring tool is selected.
+- Priority: must
+- Type: functional (UI)
+- Decision: D-2026-10-23-e. This amends REQ-387 clause 2 for the Qt viewer and adds the command-surface
+  layout; REQ-388 (annotations), REQ-390/391/394 (scale), REQ-395 (dimension audit), REQ-392/393 (comparison),
+  REQ-429 (thumbnails, search), REQ-430 and REQ-433 keep their behaviour: controls move, semantics do not.
+- Depends on: REQ-387 (bounded cache, off-thread rendering), REQ-388, REQ-429, REQ-430, REQ-433, REQ-436 (Qt accent), REQ-201.
+- Statement:
+  1. **Command surface.** The stacked toolbars are replaced by a ribbon built like the main window's (REQ-436
+     look; captioned panels, `src/qt/PdfRibbon.hpp`): a panel that does not fit collapses into a menu holding
+     the same actions and live controls, so narrowing the window never loses a command. The tabs are
+     **Open/View** (Open, Save As, Extract pages, layout, Find, Side panel toggle), **Annotate** (Select,
+     Browse, Text, Line, Rectangle, Ellipse, Callout, Revision cloud, colour, width, text size, font, Bold,
+     Italic, Fill, Apply style, Undo, Redo), **Measure** (Length, Polyline length, Area, Angle, Check, Undo,
+     Redo, Set scale, scale readout, Scale checks, Show on sheet, Snap) and **Review** (Extract coordinates,
+     Audit scale, Compare revisions). Page navigation, the page box, Previous/Next, zoom out/in, the zoom
+     percentage, Fit width and Fit page sit in the status bar. The **side panel** at the left holds a strip of
+     tabs: **Thumbnails**, **Tool Chest**, **Properties** and, while a comparison runs, **Compare**. Every
+     control the window had is still reachable with the same names, tooltips and behaviour. The **Tool Chest**
+     tab holds one-click buttons for every markup, measurement and review command, grouped Markup, Measurement
+     and Review; **Properties** shows, read-only, the open file and page count and the current page's number,
+     size and scale. The tabs use the Qt graphite appearance and amber accent (REQ-436).
+  2. **Layouts.** A layout box offers **Page by page** (the default; one page, as before) and **Continuous**
+     (every page stacked top to bottom with a small gap, centred). Switching keeps the current page.
+  3. **Wheel.** In the continuous layout the plain mouse wheel scrolls continuously through the document, from
+     the first page to the last with no page boundary. In page-by-page the wheel scrolls within the page.
+  4. **Zoom around the pointer.** Ctrl+wheel zooms by a fixed ratio per notch, clamped to the same range as the
+     zoom buttons; the page point under the pointer stays under the pointer as the zoom changes (to within a
+     pixel, except where the document edge stops the scroll), in both layouts. The Zoom buttons anchor at the
+     centre of the view. **Fit width** and **Fit page** fit the current page; the **zoom box** shows the
+     current page's displayed width as a percentage of its actual size (100% = 96 dpi) and a typed
+     percentage sets it.
+  5. **Middle-button pan.** Dragging with the middle button moves the document with the pointer, over the page
+     and over the margin around it, in both layouts and with any tool selected. A pan never creates, selects,
+     moves or edits an annotation or measurement, never adds a pick to a measurement in progress, never starts
+     or ends a coordinate-extraction drag, and leaves the active tool, its draft and the selection unchanged.
+     The cursor is a closed hand while panning.
+  6. **Synchronised page.** While scrolling in the continuous layout the page box, the thumbnail strip, the
+     scale readout and the status bar follow the page in the middle of the view; choosing a page in the page
+     box, the strip, Previous/Next, Page Up/Down, Home/End or a search hit scrolls that page to the top.
+     A measurement draft survives scrolling but is cleared by a click on another page (a measurement belongs
+     to one page).
+  7. **Tools on every visible page.** Annotations, measurements, scale checks, search highlights and the snap
+     marker are drawn on each visible page, and a click, drag or snap always acts on the page under the
+     pointer, exactly as in page-by-page. Dialogs that act on "the page" (Set scale, Audit scale, Compare
+     revisions) act on the current page.
+  8. **Responsive and bounded (REQ-387 clauses 4-5).** In the continuous layout pages are rendered off the UI
+     thread, one worker at a time, visible pages first, then a read-ahead window ahead of the scroll direction;
+     a render whose page left the window is cancelled; a page not ready shows its blank sheet (or the previous
+     zoom's picture scaled as a stand-in), never a stall. The rendered-page cache is bounded (256 MB) and drops
+     the page farthest from the view first; pages in view are never dropped. Opening another file or closing
+     the window cancels and waits for the worker.
+  9. **Honest failure (REQ-201).** A page that cannot be drawn keeps its blank sheet and the window stays
+     usable. Existing marks and measurements are saved exactly as before; the only new saved content is the
+     Callout and Revision cloud marks (clauses 12-13), written as standard PDF annotations.
+  10. **Tool hotkeys and Browse.** Select (S), Browse (B), Text (T), Line (L), Rectangle (R), Ellipse (E),
+      Callout (C), Revision cloud (K), Length (D), Polyline length (P), Area (A), Angle (G) and Check (H) have single-key
+      shortcuts shown in their tooltips; Esc returns to Browse. With Browse selected the left button drags the
+      document like the middle button.
+  11. **Previews.** After the first click of Text, Line, Rectangle, Ellipse, Callout and Revision cloud a
+      preview follows the pointer; no connector line is drawn for the two-point tools.
+  12. **Callout.** Click the target, click where the text box goes, type the text; the mark is a PDF
+      FreeText callout (an arrow from the box to the target) that can be selected, moved by its target or its
+      box, restyled and deleted (REQ-396).
+  13. **Revision cloud.** The Revision cloud button has a drop-down offering **Rectangle cloud** (two clicks,
+      the default) and **Polygon cloud** (at least three clicks, Enter finishes); the button shows and uses the
+      last mode chosen. The cloud is saved as a standard PDF Square annotation with a scalloped appearance and
+      is read back as a revision cloud.
+  14. **Box select.** With Select, two clicks define a box: left to right is a window (blue, solid; marks
+      wholly inside) and right to left a crossing (green, dashed; marks touched). The selection may hold
+      several marks; Delete and Apply style act on all of them. Moving or resizing acts on one mark: clicking a
+      mark selects only that one.
+  15. **Compare in the side panel.** Compare revisions opens as the Compare tab of the side panel, aligns
+      the sheets and lists the changes at once. The overlay follows the zoom: at high zoom Tint, Revision and
+      Opacity views redraw the visible part at screen resolution so the marks stay sharp.
+  16. **Coordinate review.** The extract-coordinates review panel (REQ-399) has **Accept all** and **Deny all**
+      for the whole candidate list.
+  17. **Window ownership.** The PDF window is its own top-level window rather than a child of the main window
+      (an owned window stayed above its owner and stopped the main window being focused); it closes with the
+      main window unless the user keeps unsaved marks.
+- Acceptance:
+  1. `GoSurveyQtTests` `issue1037*` (command surface): the window has the four tabs named in clause 1 in that
+     order, no standalone toolbar row remains outside the ribbon except the find bar, every action the window
+     had before (by name) is found in the tab clause 1 puts it in, every panel has a caption, and at a narrow
+     window width the panels collapse into menus that still hold the same actions and live controls; the
+     Annotate overflow menu is inspected for Rectangle and Color actions, and the status-bar controls remain
+     within the bar without overlap while less common navigation actions move into More.
+  2. (layout) a multi-page file in the continuous layout has a canvas as tall as its pages plus gaps; scrolling
+     moves the page box and the thumbnail selection to the page in the middle of the view; choosing a page
+     scrolls it to the top and the page box keeps it; switching to page-by-page and back keeps the page.
+  3. (wheel) a plain wheel event scrolls the continuous document; a Ctrl+wheel event changes the zoom and does
+     not scroll by itself; the page point under the pointer before and after a Ctrl+wheel zoom is the same
+     within one pixel, in both layouts.
+  4. (pan) a middle-button press, drag and release scrolls the document by the pointer movement, shows the closed-hand
+     cursor while held, and with Rectangle, Length, Select and coordinate extraction selected, leaves the annotation
+     list, draft, selection, extraction drag and unsaved-changes state unchanged.
+  5. (zoom) Fit width makes the current page as wide as the view; Fit page makes it fit in the view; a typed
+     percentage sets the displayed width to that percentage of 96 dpi.
+  6. (keyboard and page sync) Page Up/Down and Home/End move the current page; choosing a page by box, thumbnail or
+     search hit scrolls that page to the top. `issue1037ContinuousLayoutScrollsAndStaysSynchronized`,
+     `pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations` and
+     `issue1037ContinuousSearchAndSnapOnLaterPage` cover page and search navigation.
+  7. (tools) in the continuous layout an annotation drawn on the second page lands on the second page, at the
+     point clicked, and is drawn there only; a pick started on one page restarts when the next click lands on
+     another page. `issue1037ContinuousLayoutAnnotatesTheSecondPage` covers annotation input;
+     `issue1037ContinuousSearchAndSnapOnLaterPage` covers later-page search highlights and the snap marker.
+  8. (bounds) rendering a long file top to bottom keeps the cached pages within the cap, and closing the
+     window while a page renders waits for the worker (no crash).
+  9. Screenshots of the four tabs, the continuous layout, a zoomed page and a pan in progress are saved under
+     `build/artifacts/` and shown to the user for approval before the issue is closed. Refreshed captures
+     presented for approval on 2026-10-25 include `qt-1037-tab-open-view.png`, `qt-1037-tab-annotate.png`, `qt-1037-tab-measure.png`,
+     `qt-1037-tab-review.png`, `qt-1037-continuous.png`, `qt-1037-zoomed-page.png`, `qt-1037-pan-page.png`,
+     `qt-1037-status-narrow.png`, `qt-1037-ribbon-narrow.png`, `qt-1037-ribbon-overflow-actions.png`, `qt-1037-cloud-default.png`,
+     `qt-1037-cloud-menu.png` and `qt-1037-cloud-polygon-mode.png`.
+  10. Existing PDF window tests (`pdf*`, `issue905*`, `issue906*`) still pass with the page-by-page default.
+  11. (tools, clauses 10-14) `issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip`,
+      `issue1037RevisionCloudReadBackKeepsBoundsOnRotatedPages`, `issue1037BrowseDragPansTheDocument` and
+      `issue1037SelectBoxWindowAndCrossing`: all hotkeys and Esc, Browse drag pan, callout and both cloud modes
+      saved and read back, rotated cloud bounds, window versus crossing selection including a cloud, single-click
+      selection, Delete and Apply style across a selection.
+  12. (compare, clause 15) `pdfCompareRunsDiffAndSupportsManualAlignmentAndFailure` and
+      `issue1037CompareDetailKeepsRevisionWhenDetailMarksFail` list changes in the `pdfComparePanel` tab and, at
+      600%, produce the sharp detail picture and sharp marks; a failed detail-mark render keeps the sharp revision.
+  13. (clause 3, clause 8) `issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled`: the plain wheel scrolls a page-by-page
+      document without zooming, and a render overtaken by a zoom change is cancelled and redone.
+  14. (clauses 1, 11, 13) `issue1037ToolChestCloudMenuAndPreviews` verifies Tool Chest commands, both cloud modes,
+      last-mode display, drawing previews, and access to collapsed panel actions at a narrow width.
+      `issue1037RibbonSidePanelAndStatusBarNavigation` covers the status controls and side tabs, checks
+      narrow status-bar bounds and the More menu, and captures both separately from the ribbon.
+  15. (clause 16; REQ-399) `pdfCoordinateReviewAcceptAllAndDenyAll` verifies both batch actions;
+      `pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate` verifies Accept all stops at the first failure.
+  16. (clause 17) `issue1037PdfWindowIsTopLevelAndClosesWithEditor` verifies the PDF window can be focused
+      independently and closes with its editor owner.
+- Owner-layer: Qt UI (`src/qt/PdfWindow`, `src/qt/PdfCanvas.hpp`, `src/qt/PdfScaleUi.cpp`) over the shared
+  `src/pdf` layer, which gains only `PdfDocument::RenderRegion` (windowed rendering) and the Callout and Revision cloud
+  annotation kinds in `PdfAnnotate`.
+- Status: accepted (2026-10-23) - D-2026-10-23-e, GitHub issue #1037.
+- Revisions: 2026-10-23 - catalogued and accepted (D-2026-10-23-e, GitHub issue #1037).
+  2026-10-25 - final design, directed by the user while testing: side panel, tool hotkeys, Callout, Revision cloud, box select, compare panel (clauses 10-15).
+  2026-10-25 - user confirmed the implementation hotkeys (Callout C, Length D, Angle G, Check H); clause 10 now
+  matches the implementation and the REQ-396 Callout note. Added evidence for rotated cloud bounds, failed compare
+  detail marks, extraction-pan isolation, page ownership, batch-stop behavior and the exact approval captures.
+
 ## Quality requirements
+
+### REQ-453 — Review product documentation before opening a pull request
+- Purpose: keep product and user-facing documentation accurate and consistent
+- Priority: must
+- Type: quality
+- Statement: Before creating a pull request, the contributor reviews `README.md`,
+  `PRIVACY.md`, the in-app help wiki in `resources/wiki/`, and the public user
+  manual wiki linked from `gosurveycad.com` (currently the GitHub Wiki). The
+  contributor updates each source affected by the change before opening the
+  pull request. The task log or pull request description records the review and
+  either names the documentation updated or states that no update was needed.
+  If an affected external wiki cannot be updated because the contributor lacks
+  access, the pull request remains unopened until access is available and the
+  update is made.
+- Acceptance: before a pull request is created, its task log or description
+  records inspection of all four sources and lists updates made, or states that
+  no update was needed for each. Every source found to require an update is
+  updated before pull request creation.
+- Owner-layer: all contributors
+- Status: accepted
+- Revisions: 2026-10-22 — accepted by user (D-2026-10-22-d).
 
 ### REQ-200 — Deterministic, reproducible build
 - Purpose: maintainability
@@ -13827,6 +14012,71 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Build/Platform
 - Status: accepted (2026-10-23, D-2026-10-23-c)
 - Revisions: 2026-10-23 — initial, D-2026-10-23-c.
+
+### REQ-454 — One-command bootstrap installs the latest stable GoSurvey per-user
+- Purpose: let a Windows user install GoSurvey with one PowerShell command, without GoSurvey setup
+  screens or routine administrator approval.
+- Priority: must
+- Type: functional
+- Statement: GoSurvey publishes `scripts/install.ps1` in the repository and documents a one-line
+  `irm … | iex` command that runs it. The bootstrap obtains the latest **stable** release manifest
+  from the stable release URL defined by ADR-029, downloads the manifest's `installerUrl`,
+  and verifies the downloaded bytes against the manifest's SHA-256 before execution. A missing
+  manifest field, invalid hash, failed download, or hash mismatch stops installation, prints a clear
+  console error, and never runs the installer. SHA-256 detects corruption but does not authenticate
+  the publisher.
+
+  A fresh installation is silent and per-user at `%LOCALAPPDATA%\Programs\GoSurvey`; it does not
+  request elevation or show GoSurvey setup UI and does not ask the user to choose installation
+  options. A legacy machine-wide Program Files copy is migrated to this per-user location with
+  one-time Windows UAC consent so the protected copy can be removed. The bootstrap and user-approved
+  in-app update use the release's app-local Visual C++ runtime DLLs and do not launch the shared
+  redistributable installer. Migration preserves GoSurvey
+  settings and user data and leaves one working installation with its supported shortcuts. Following
+  migration, the user's explicit in-app update choice remains required under REQ-078 and applies the
+  update to this per-user copy without elevation.
+
+  An update offered to a process running from Program Files shows a prominent migration notice above
+  the release notes before choosing whether to update. It explains the per-user destination, the
+  one-time Windows approval to remove the protected old copy, preservation of settings and user data,
+  and that later updates do not need elevation. The 0.7.5 release notes state the same migration.
+
+  The script prints the approved GoSurvey ASCII banner and progress/result messages in a readable
+  PowerShell console. Windows-controlled SmartScreen or Defender warnings are outside this feature's
+  guarantee; the script cannot sign the installer or suppress those operating-system warnings.
+  Standalone `.gs` drawings are retired under D-2026-10-20-d and no `.gs` file association is
+  required or restored by this feature.
+- Acceptance:
+  - the documented one-line PowerShell command installs the latest stable release, never the beta
+    channel;
+  - the installer runs only after the release manifest and SHA-256 are present and valid; a failed
+    download, missing/invalid manifest data, or hash mismatch reports a clear error and does not run
+    the installer;
+  - a fresh install completes under `%LOCALAPPDATA%\Programs\GoSurvey` without GoSurvey setup UI,
+    UAC, or installation-choice prompts;
+  - migration from Program Files completes after one UAC consent, preserves user data/settings,
+    leaves one working per-user installation, and restores the Start-menu shortcut and any existing
+    desktop shortcut;
+  - the migrated copy opens normally with its bundled app-local Visual C++ runtime, and future
+    user-approved REQ-078 updates replace that same per-user installation without elevation or
+    launching the shared runtime installer;
+  - an update offer shown by a Program Files install displays the migration notice above the release
+    notes before the user chooses; the notice explains the destination, preserved settings/data, and
+    one-time approval, and is absent for an install already in the per-user location;
+  - the 0.7.5 release notes explain the Program Files to `%LOCALAPPDATA%\\Programs\\GoSurvey`
+    migration and its one-time approval;
+  - the ASCII banner is readable in Windows PowerShell and matches the approved output preview
+    in `docs/install.md`;
+  - the documentation explicitly says Windows-controlled SmartScreen/Defender warnings are not
+    suppressed or guaranteed away.
+- Owner-layer: Build/Platform (bootstrap, installer, release manifest), UI/Platform (REQ-078 update
+  handoff)
+- Status: accepted (2026-10-24, D-2026-10-24-c)
+- Revisions: 2026-10-24 — initial, D-2026-10-24-c; `.gs` association removed from migration
+  acceptance following clarification that standalone `.gs` drawings are retired. D-2026-10-24-d
+  selects app-local Visual C++ runtime DLLs for bootstrap and in-app updates to avoid shared-runtime
+  UAC; the Microsoft Store redistributable flow remains under REQ-453. D-2026-10-25-f requires the
+  0.7.5 notes and Program Files update offer to explain the migration.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of
@@ -14586,6 +14836,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
+| REQ-454 | Build/Platform/UI | Verify stable-manifest bootstrap; valid and invalid hashes; failed download; fresh silent per-user install; Program Files migration (settings/data and supported shortcuts preserved, one install); in-app update without elevation; output matches `docs/install.md` | accepted |
 | REQ-350 | UI/Commands/Render | `CadPipePaletteTests` (category → part-type grouping incl. the new `Nozzle`; exact size match accepts `2in`/`2 in`/`2.0in` and rejects `1.5in`/`4in`; class-agnostic parts match either class while an exact class wins; a non-fitting library entry never lists; empty-category reason names the filtered size; armed-part placement routes to the splice on a run and to INSERT off one) **Amended 2026-09-25 (D-2026-09-25-a, TASK-277): (f)'s connection-port snapping is now actually performed, and a palette click always places the part.** `CadPipePaletteArmPart` armed a one-click INSERT and never enabled any snap, so the off-run half of (f) was a plain drop at the click point with the identity rotation the part was authored with - reported with screenshots as "the blind flange is not aligning correctly". A blind flange bolts onto another flange's FACE and can never splice into a run, so that path was the only one it had. The click now resolves in three ordered outcomes: **on a run** -> the existing `PIPEFIT` splice, unchanged; **otherwise, within 2 ft of a connection port or pipe end** -> `SubmitInsertBlockConnectorPick` (REQ-107 / issue #496, unchanged, including TASK-269's exact-match-before-default two-pass search - which is what makes a blind flange prefer the flange FACE over the pipe end also in reach, since its only mode targets `flange-face` exactly and accepts `pipe-end` merely as an `isDefault` fallback); **otherwise** -> a free placement at the point, reported as such. A REFUSED splice also falls through to the snap/placement rather than ending the click (D-2026-09-25-a): the bundled blind flange has ONE connection point and `PickElbowPorts` needs two, so a run click used to be consumed with nothing placed at all. `SubmitInsertBlockConnectorPick` gains a defaulted `optional` parameter - when set, the two not-found paths return false WITHOUT logging a refusal, so a caller with a legitimate fallback can take it; every other caller is unchanged and keeps its named refusals (REQ-201). Arming also clears `insertBlockConnectorName` and the stale dialog rotations, so every port on the part is a snap candidate rather than whichever one an earlier INSERT dialog left named. `CadBlockImportTests` gains 3 `[connectorsnap]` cases (a blind flange clicked on a placed flange's gasket face landing ON that face with its own face turned INTO it; nothing within 2 ft still placing, and saying why it is unoriented; a part that cannot splice still landing where it was clicked with the splice's own refusal logged). All three fail against the code they were written for. Full suite green: `GoSurveySnapTests` 437/437 (up from 434), `GoSurveyTests` 1218/1219, ctest 1809/1817 - the same 8 pre-existing failures named under TASK-275/276. **Deliberately out of scope, by name**: enforcing `CadBlockConnectionMode::compatibilityTag` (a CS150 part snapping to a CS300 face is not refused), and the 2 ft `kSnap` tolerance itself, which is REQ-107's existing figure. | accepted |
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-330 | Viewport/UI/Render/IO | `CadSnapTests` `[CadSnap][issue401]` (TOP+world N/E/S/W within REQ-101; rotated UCS follows the axes; orbited camera + tilted circle all four on the circle; circle plane ⟂ UCS plane falls back to the curve's local axes with four distinct points; arc offers only in-sweep quadrants; F3 master gate + per-type toggle; Shift+right-click "snap once" override reaches it when the toggle is off) | accepted |
@@ -14602,7 +14853,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
 | REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
-| REQ-425 | Platform/UI | `GoSurveyQtTests` `[req425]` report window send/close, bundle read-back, Settings disclosure; manual `--gosurvey-test-crash` | accepted |
+| REQ-425 | Platform/UI/Release/Agent tooling | Qt `[req425]` crash reporting and identity; Worker dump/PDB storage; release PDB archive; admin report-ID prompt; PowerShell triage read/identity/missing-artifact tests; manual `--gosurvey-test-crash` | accepted |
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
 | REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |
 | REQ-429 | Qt UI/PDF | `PdfViewerTests` `[req429]` search hits, case, empty/none/cancel, no text layer; `GoSurveyQtTests` `pdfFindBar*`, `pdfThumbnail*` | accepted |
@@ -14625,7 +14876,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-447 | Commands/Domain | undo/redo order test across model and paper space — to be added with the implementing PR | accepted |
 | REQ-449 | Qt UI | `QtEditorTests` `issue1032SettingsWindowStagesAndPersists`, `issue1032WheelZoomUsesPreference` | accepted |
 | REQ-450 | Qt UI/Commands/IO | `QtEditorTests` `issue1033CursorSettingsPreviewAndCancel`, `issue1033StoredCursorValuesAreClamped`, `ViewportPickPolicyTests` REQ-450 cursor shape | accepted |
+| REQ-455 | Qt UI/PDF | `GoSurveyQtTests` `issue1037*`: command tabs and side panel (including narrow-width overflow actions), continuous layout and page sync, wheel/Ctrl+wheel pointer-anchored zoom, middle-button and Browse pan, fit/typed zoom, keyboard pages, tools on later pages, tool hotkeys, Callout and Revision cloud save/read-back, box select, previews, compare panel and detail failure, cache bound and render cancellation, top-level ownership | accepted |
 | REQ-451 | Qt UI | `QtEditorTests` `issue1036LayerManager*` (sort-then-edit, viewport columns, swatches, current layer) + screenshots | accepted |
+| REQ-453 | Application/Qt UI/Build docs | `GoSurveyQtTests` `[req453]` branch label in native/custom titles and retained after title refresh; launcher branch propagation; docs review of worktree-local build/launch rule | accepted |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
@@ -14844,6 +15097,20 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Status: accepted (2026-10-22, user approved scope)
 
 ---
+
+### REQ-453 — Identify development windows by worktree branch
+- Purpose: let a developer distinguish simultaneously running GoSurvey instances built from separate agent worktrees, and keep their build and launch artifacts isolated
+- Priority: should
+- Type: functional
+- Statement: When GoSurvey is launched through the worktree's `run.bat`, the main application window must visibly identify the current Git branch alongside its normal GoSurvey/document title. Build and launch instructions for agents must require building and launching from the assigned worktree root and using that worktree's own `build/` output. The executable filename remains `GoSurvey.exe`; build output and launch paths remain worktree-local. A detached checkout with no branch name may use the ordinary title without a branch label. This increment does not include a standalone window manager or a build/restart watcher.
+- Acceptance:
+  1. Launching with `run.bat` from a named branch displays that exact branch name in the main application's native window title and custom title area, including after title refreshes triggered by document changes.
+  2. Launching without a development branch label keeps the existing `GoSurvey` and document title behavior.
+  3. `run.bat` derives the label from the Git branch in its own worktree and passes it only to the launched process; no branch-specific executable name or build-script output path is introduced.
+  4. Agent build/launch documentation says to run `build.bat` and `run.bat` from the assigned worktree, preserve that checkout's standard `build/` outputs, and not close an application running from another worktree to unblock a build.
+  5. The normal executable filename remains `GoSurvey.exe`; this increment adds neither the standalone manager nor a build/restart watcher.
+- Owner-layer: Application / Qt UI / Build documentation
+- Status: accepted (2026-10-23, user approved scope)
 
 ## Anti-requirements
 

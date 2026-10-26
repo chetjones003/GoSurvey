@@ -8,8 +8,11 @@
 
 class PdfCanvas final : public QWidget {
 public:
-  explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); setMouseTracking(true); }
+  explicit PdfCanvas(QWidget* parent) : QWidget(parent) { setObjectName("pdfCanvas"); resize(250, 100); setMouseTracking(true); setFocusPolicy(Qt::ClickFocus); }
   QImage image;
+  QPoint imageOrigin;  ///< where the picture sits in a page imageFull big
+  QSize imageFull;     ///< empty: the picture is the whole page
+  QString placeholder = "Open a PDF to begin"; ///< drawn only while there is no picture and no document
   std::function<void(QPointF, Qt::MouseButton)> clicked;
   std::function<void()> doubleClicked;
   std::function<void(QPointF)> moved;   ///< REQ-430: the pointer moved (snap marker)
@@ -17,11 +20,22 @@ public:
   std::function<void(QPointF, Qt::MouseButton)> pressed;  ///< coordinate extraction: drag start
   std::function<void(QPointF, Qt::MouseButton)> released; ///< coordinate extraction: drag end
   std::function<void(QPainter&)> overlay;
+  /// Continuous layout: paints every page that meets the exposed rectangle itself and returns true.
+  std::function<bool(QPainter&, const QRect&)> paintStrip;
 protected:
-  void paintEvent(QPaintEvent*) override {
+  void paintEvent(QPaintEvent* event) override {
     QPainter painter(this);
-    if (image.isNull()) { painter.drawText(rect(), Qt::AlignCenter, "Open a PDF to begin"); return; }
-    painter.drawImage(QPoint(0, 0), image);
+    if (paintStrip && paintStrip(painter, event->rect())) return;
+    if (image.isNull()) { if (!placeholder.isEmpty()) painter.drawText(rect(), Qt::AlignCenter, placeholder); return; }
+    // A picture covers the whole page or, when the page is too large to draw whole, only the window of it around the
+    // view (imageOrigin, in the pixels of a page imageFull big). It is scaled to the page's current size, so a picture
+    // of another zoom stands in until the new render arrives and zooming never blanks the page.
+    const QSize full = imageFull.isEmpty() ? image.size() : imageFull;
+    const double factor = static_cast<double>(width()) / std::max(1, full.width());
+    if (!imageFull.isEmpty()) painter.fillRect(rect(), Qt::white);
+    const QRectF target(imageOrigin.x() * factor, imageOrigin.y() * factor, image.width() * factor, image.height() * factor);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, factor != 1.0);
+    painter.drawImage(target, image);
     painter.setRenderHint(QPainter::Antialiasing);
     if (overlay) overlay(painter);
   }

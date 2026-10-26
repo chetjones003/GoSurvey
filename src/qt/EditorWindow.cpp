@@ -16,6 +16,7 @@
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
+#include <utility>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -25,12 +26,12 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "UserPrefs.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "WhatsNewLogic.hpp"
 #include "Project.hpp"
-#include "auth/AuthService.hpp"
 #include "update/UpdateService.hpp"
 #include "telemetry/TelemetryService.hpp"
 #include "platform/HttpFetch.hpp"
@@ -342,11 +343,28 @@ QString GeneratedCommandIconFamily(const QString& name, const QString& descripti
   return "utility";
 }
 
-EditorWindow::EditorWindow() {
+void EditorWindow::LoadCoordinateSystemDictionaries() {
+  if (geo::DictionariesLoaded()) return;
+  std::string directory;
+  try {
+    directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+  } catch (const std::exception& error) {
+    qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
+  }
+  geo::LoadDictionaries(directory);
+}
+
+EditorWindow::EditorWindow(QString developmentBranchLabel)
+    : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
+  // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
+  // without Drawing Settings having been opened first.
+  LoadCoordinateSystemDictionaries();
   InitUpdates();
   setObjectName("GoSurveyQtEditor");
-  setWindowTitle("GoSurvey");
+  const QString title = m_DevelopmentBranchLabel.isEmpty()
+      ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
+  setWindowTitle(title);
   setWindowFlag(Qt::FramelessWindowHint);
   setMinimumSize(820, 540);
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
@@ -716,6 +734,13 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { ResetDraftingInput(); Refresh(); };
+  // Issue #1084: a part picture finished inside the viewport's paint; update the palette afterwards.
+  m_Viewport->partThumbnailsChanged = [this] {
+    QTimer::singleShot(0, this, [this] {
+      if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible())
+        RefreshPipeFittingPalette(palette);
+    });
+  };
   m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
@@ -788,7 +813,6 @@ EditorWindow::EditorWindow() {
   auto* service = new QTimer(this);
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
-    ServiceAuth();
     ServiceTelemetry();
     ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
@@ -855,115 +879,20 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   return action;
 }
 
-void EditorWindow::ServiceAuth() {
-  if (!m_AuthStarted)
-    return;
-  if (m_State.authSignOutRequested) {
-    m_State.authSignOutRequested = false;
-    auth::SignOut();
-    m_State.authSignedIn = false;
-    m_State.authEmail.clear();
-    m_State.authError.clear();
-    Refresh();
-  }
-  if (m_State.authSignInRequested) {
-    m_State.authSignInRequested = false;
-    if (!m_AuthTask) {
-      m_AuthTask = auth::BeginInteractiveSignIn();
-      m_AuthLastAttemptInteractive = true;
-      m_State.authBusy = true;
-      m_State.authInteractiveBusy = true;
-      m_State.authError.clear();
-    }
-  }
-  if (m_State.authDeclineRequested) {
-    m_State.authDeclineRequested = false;
-    m_State.authOptedOut = true;
-    if (SaveUserStartupPrefs(m_State)) {
-      m_State.authGateResolved = true;
-    } else {
-      m_State.authOptedOut = false;
-      m_State.authError = "Your sign-in choice could not be saved. It may "
-                          "appear again next time.";
-    }
-  }
-  if (m_AuthTask && m_AuthTask->done.load(std::memory_order_acquire)) {
-    m_State.authBusy = false;
-    m_State.authInteractiveBusy = false;
-    m_State.authSignedIn = m_AuthTask->ok;
-    m_State.authEmail = m_AuthTask->email;
-    m_State.authError = (!m_AuthTask->ok && m_AuthLastAttemptInteractive)
-                            ? m_AuthTask->error
-                            : "";
-    if (m_AuthTask->ok || m_AuthTask->skippedNoNetwork)
-      m_State.authGateResolved = true;
-    if (m_AuthTask->ok && m_State.authOptedOut) {
-      m_State.authOptedOut = false;
-      if (!SaveUserStartupPrefs(m_State))
-        m_State.authError =
-            "Signed in, but the saved sign-in preference could not be updated.";
-    }
-    m_AuthTask.reset();
-    Refresh();
-  }
-  if (m_State.authGateResolved) {
-    if (auto *gate = findChild<QDialog *>("signInGate"))
-      gate->accept();
-  } else if (!UpdateBlocksLaunch() && HasInternetConnectivity()) {
-    ShowSignInGate();
-  }
-  MaybeAutoOpenWhatsNew();
-}
-
 void EditorWindow::EnableTelemetry() {
-  // The launch-time channel ensures a Settings change applies from the next launch.
-  // A literal, not a std::string: the stored lambda is copied by std::function, and a capture
-  // whose copy can allocate (and so throw) is what bugprone-exception-escape rejects.
+  if (m_TelemetryTask)
+    return;
   const char* channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
-  m_SendTelemetry = [this, channel](const std::string& email) {
-    // REQ-080: the ping must never fail the application. Starting its worker can throw (no thread
-    // or memory available); that is logged like a failed ping and the session carries on.
-    try {
-      m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
-    } catch (const std::exception& error) {
-      qWarning() << "[telemetry] ping not started:" << error.what();
-    } catch (...) {
-      qWarning() << "[telemetry] ping not started: unknown exception.";
-    }
-  };
+  try {
+    m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel);
+  } catch (...) {
+    // Telemetry is best effort; even worker creation failure is invisible to the user.
+  }
 }
 
 void EditorWindow::ServiceTelemetry() {
   telemetry::PollTelemetryTask(m_TelemetryTask);
-  // REQ-080: one ping per launch, fired once the launch gate resolves (signed in, opted out, or
-  // the offline exception) so the sign-in state it reports is known. It never waits on sign-in
-  // beyond that and never shows anything; failures are dropped inside the worker.
-  if (!m_AuthStarted || !m_State.authGateResolved || m_TelemetrySent || !m_SendTelemetry)
-    return;
-  m_TelemetrySent = true;
-  m_SendTelemetry(m_State.authSignedIn ? m_State.authEmail : std::string());
 }
-
-void EditorWindow::StartAuth(bool previewSignIn) {
-  if (m_AuthStarted)
-    return;
-  m_AuthStarted = true;
-  if (previewSignIn) {
-    m_State.authGateResolved = false;
-    m_State.authSignedIn = false;
-    m_State.authBusy = false;
-    m_State.authOptedOut = false;
-    ShowSignInGate();
-    return;
-  }
-  if (!m_State.authOptedOut) {
-    m_AuthTask = auth::BeginSilentRefresh();
-    m_State.authBusy = true;
-  } else {
-    m_State.authGateResolved = true;
-  }
-}
-
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
   // The entry point exits its splash wait when the worker marks the task done, before the UI
@@ -1857,7 +1786,7 @@ void EditorWindow::OpenDrawing(const QString& path) {
     if (!uid) return;
   }
   const int previous = m_State.activeDrawingIdx;
-  NewDrawing(uid);
+  CreateDrawingFromTemplate(uid);
   // Decide shared versus detached points from the loaded DWG, never from the
   // empty tab's initial database view. Otherwise opening could look like deletions.
   auto& openingTab = m_State.drawingTabs[m_State.activeDrawingIdx];
@@ -2129,25 +2058,14 @@ void EditorWindow::Refresh() {
   m_CommandBar->SetHint(commandHint);
   RefreshDraftingInput(commandHint);
   if (m_WindowTitle) {
-    const auto title = QString("GoSurvey");
+    const auto title = m_DevelopmentBranchLabel.isEmpty()
+        ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
     m_WindowTitle->setText(title); setWindowTitle(title);
-  }
-  if (auto* signedIn = findChild<QWidget*>("startSignedInAccount")) {
-    signedIn->setVisible(m_State.authSignedIn);
-    if (auto* signedOut = findChild<QWidget*>("startSignedOutAccount"))
-      signedOut->setVisible(!m_State.authSignedIn);
-    if (m_State.authSignedIn) {
-      QString accountName = QString::fromUtf8(m_State.authEmail.c_str()).section('@', 0, 0);
-      if (!accountName.isEmpty()) accountName[0] = accountName[0].toUpper();
-      if (auto* welcome = findChild<QLabel*>("startAccountWelcome"))
-        welcome->setText("Welcome " + (accountName.isEmpty() ? QString("GoSurvey user") : accountName) + "!");
-      if (auto* email = findChild<QLabel*>("startAccountEmail"))
-        email->setText(QString::fromUtf8(m_State.authEmail.c_str()));
-    }
   }
   RefreshProperties();
   RefreshToolspace();
   RefreshRibbon();
+  m_Viewport->RefreshCommandCursor();
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();
@@ -2531,9 +2449,42 @@ void EditorWindow::RefreshRecentProjects() {
     grid->addWidget(new QLabel("No recent projects. Use New Project or Open Project.", m_ProjectTiles), 0, 0);
 }
 
-void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->SetEditor(this); window->show(); }
+// The viewer is its own top-level window, not an owned child: an owned window is kept above its owner, which stopped
+// the main window being focused (or alt-tabbed to) while a PDF was open. It closes with the main window; if the user
+// declines to discard unsaved marks the close is refused and the viewer stays open on its own, which keeps their work.
+void EditorWindow::ShowPdf() {
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+}
 
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
+  if (!CreatePdfCoordinate(c)) return false;
+  FinishPdfCoordinates();
+  return true;
+}
+
+// Accept all: every candidate is created first and the view is framed and redrawn once at the end, so a long list
+// does not flash the drawing once per point. Stops at the first candidate that could not be created.
+std::size_t EditorWindow::CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates) {
+  std::size_t created = 0;
+  for (const auto& candidate : candidates) {
+    if (!CreatePdfCoordinate(candidate)) break;
+    ++created;
+  }
+  if (created) FinishPdfCoordinates();
+  return created;
+}
+
+void EditorWindow::FinishPdfCoordinates() {
+  StartZoomExtentsCommand(m_State, m_Log);
+  m_State.requestMainWindowFocus = true;
+  Refresh();
+  raise(); activateWindow();
+}
+
+bool EditorWindow::CreatePdfCoordinate(const pdfview::CoordCandidate& c) {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     QMessageBox::information(this, "Extract Coordinates", "Open a drawing before accepting extracted coordinates.");
     return false;
@@ -2581,10 +2532,6 @@ bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
                          static_cast<float>(c.northing - m_State.worldDocumentOriginY),
                          static_cast<float>(c.elevation.value_or(0.0)), radius, 0.f, 0.f, 1.f, m_Log);
   }
-  StartZoomExtentsCommand(m_State, m_Log);
-  m_State.requestMainWindowFocus = true;
-  Refresh();
-  raise(); activateWindow();
   return true;
 }
 void EditorWindow::ShowAdjustment() {

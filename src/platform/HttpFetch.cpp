@@ -12,6 +12,7 @@
 
 #include <cstdio>
 #include <filesystem>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -212,18 +213,15 @@ bool HasInternetConnectivity()
 }
 
 bool HttpGetString(const std::string& url, int timeoutMs, std::string& out, std::string& errorOut,
-                   const std::string& bearerToken, int* httpStatusOut)
+                   int* httpStatusOut)
 {
   out.clear();
   errorOut.clear();
   if (httpStatusOut)
     *httpStatusOut = 0;
 
-  const std::wstring extraHeaders =
-      bearerToken.empty() ? std::wstring() : L"Authorization: Bearer " + Widen(bearerToken) + L"\r\n";
-
   WinHttpSession s;
-  if (!OpenRequest(url, timeoutMs, s, errorOut, extraHeaders, httpStatusOut))
+  if (!OpenRequest(url, timeoutMs, s, errorOut, std::wstring(), httpStatusOut))
     return false;
 
   // A manifest is a few hundred bytes. The cap stops a wrong or hostile URL from being read
@@ -456,8 +454,9 @@ bool ComputeFileSha256(const std::string& pathUtf8, std::string& hexOut, std::st
   return ok;
 }
 
-bool HttpPostJson(const std::string& url,
-                  const std::string& jsonBody,
+bool HttpPostBody(const std::string& url,
+                  const std::string& contentType,
+                  const std::string& body,
                   int                timeoutMs,
                   std::string&       errorOut,
                   std::string*       responseOut)
@@ -523,11 +522,22 @@ bool HttpPostJson(const std::string& url,
   ::WinHttpSetOption(s.request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy,
                      sizeof(redirectPolicy));
 
-  const std::wstring contentTypeHeader = L"Content-Type: application/json";
-  const DWORD bodySize = static_cast<DWORD>(jsonBody.size());
+  const std::wstring contentTypeWide = Widen(contentType);
+  if (contentTypeWide.empty() || contentType.find_first_of("\r\n") != std::string::npos)
+  {
+    errorOut = "content type is empty, invalid UTF-8, or contains a line break";
+    return false;
+  }
+  const std::wstring contentTypeHeader = L"Content-Type: " + contentTypeWide;
+  if (body.size() > std::numeric_limits<DWORD>::max())
+  {
+    errorOut = "request body is too large";
+    return false;
+  }
+  const DWORD bodySize = static_cast<DWORD>(body.size());
 
   if (!::WinHttpSendRequest(s.request, contentTypeHeader.c_str(), -1,
-                            const_cast<char*>(jsonBody.data()), bodySize, bodySize, 0))
+                            const_cast<char*>(body.data()), bodySize, bodySize, 0))
   {
     errorOut = LastErrorText("WinHttpSendRequest");
     return false;
@@ -579,70 +589,11 @@ bool HttpPostJson(const std::string& url,
   return false;
 }
 
-bool ComputeSha256Bytes(const std::vector<unsigned char>& data,
-                        std::vector<unsigned char>&       digestOut,
-                        std::string&                      errorOut)
+bool HttpPostJson(const std::string& url,
+                  const std::string& jsonBody,
+                  int                timeoutMs,
+                  std::string&       errorOut,
+                  std::string*       responseOut)
 {
-  digestOut.clear();
-  errorOut.clear();
-
-  BCRYPT_ALG_HANDLE  alg  = nullptr;
-  BCRYPT_HASH_HANDLE hash = nullptr;
-  std::vector<UCHAR> hashObject;
-  bool               ok = false;
-
-  auto cleanup = [&]() {
-    if (hash) ::BCryptDestroyHash(hash);
-    if (alg)  ::BCryptCloseAlgorithmProvider(alg, 0);
-  };
-
-  if (::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
-  {
-    errorOut = "BCryptOpenAlgorithmProvider failed";
-    cleanup();
-    return false;
-  }
-
-  DWORD objectSize = 0, digestSize = 0, copied = 0;
-  if (::BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectSize),
-                          sizeof(objectSize), &copied, 0) < 0 ||
-      ::BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&digestSize),
-                          sizeof(digestSize), &copied, 0) < 0)
-  {
-    errorOut = "BCryptGetProperty failed";
-    cleanup();
-    return false;
-  }
-
-  hashObject.resize(objectSize);
-  digestOut.resize(digestSize);
-
-  if (::BCryptCreateHash(alg, &hash, hashObject.data(), objectSize, nullptr, 0, 0) < 0)
-  {
-    errorOut = "BCryptCreateHash failed";
-    cleanup();
-    return false;
-  }
-
-  // An empty input is valid (SHA-256 of zero bytes is well-defined); BCryptHashData with a
-  // zero-length buffer is a no-op, not an error, so no special-casing is needed here.
-  if (!data.empty() &&
-      ::BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()),
-                       0) < 0)
-  {
-    errorOut = "BCryptHashData failed";
-    cleanup();
-    return false;
-  }
-
-  if (::BCryptFinishHash(hash, digestOut.data(), digestSize, 0) < 0)
-  {
-    errorOut = "BCryptFinishHash failed";
-    cleanup();
-    return false;
-  }
-
-  ok = true;
-  cleanup();
-  return ok;
+  return HttpPostBody(url, "application/json", jsonBody, timeoutMs, errorOut, responseOut);
 }

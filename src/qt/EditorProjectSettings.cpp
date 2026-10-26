@@ -81,15 +81,7 @@ void EditorWindow::ShowProjectSettings(std::uint32_t projectUid) {
     return;
   }
 
-  if (!geo::DictionariesLoaded()) {
-    std::string directory;
-    try {
-      directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
-    } catch (const std::exception& error) {
-      qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
-    }
-    geo::LoadDictionaries(directory);
-  }
+  LoadCoordinateSystemDictionaries();
 
   ProjectSettings staged = *session->settings;
   staged.defaults.overridden = 0;
