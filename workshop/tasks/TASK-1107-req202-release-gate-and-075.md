@@ -154,7 +154,8 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
 ### Implementation and verification status
 
 - Updated `.github/workflows/release.yml` to download the same checksum-pinned Mesa build as
-  full-validation, stage its four test DLLs, set the validated desktop OpenGL/llvmpipe environment,
+  full-validation, stage the Mesa test DLLs that are present, set the validated desktop
+  OpenGL/llvmpipe environment,
   and run the complete suite with eight workers. A `finally` block restores pre-existing Qt DLLs
   or removes Mesa-only files before symbol archiving or packaging, even after a failed test run.
 - Updated the full-validation workflow header comment to reflect the shared test prerequisites.
@@ -163,3 +164,46 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
   archiving. `git diff --check` passed.
 - Product sources are unchanged; the full hosted build/test and release publication check remain
   pending the PR checks and the next intentional stable workflow dispatch after merge.
+
+## 12. Mesa staging follow-up (2026-10-26)
+
+- **Observed:** Release run [#40270411644](https://github.com/chetjones003/GoSurvey/actions/runs/40270411644)
+  completed its build but failed before CTest. The staging step required `libglapi.dll`, which is
+  absent from the pinned Mesa package's x64 directory. CTest and publication were skipped.
+- **Root cause:** The release fix treated all four DLLs as mandatory, while the passing
+  full-validation workflow stages each dependency only when the package contains it. The required
+  OpenGL entry point is `opengl32.dll`; the other runtime dependencies are optional for this Mesa
+  package.
+- **Updated plan:** Back up any existing app DLLs first. Require `opengl32.dll`, but stage each
+  additional Mesa dependency only when present; leave absent ones alone. The existing `finally`
+  block then restores all pre-existing DLLs and removes only Mesa-only files after CTest.
+- **Verification:** Re-run the workflow contract check for required-versus-optional staging and
+  cleanup, then validate the full Windows release path with a new master dispatch. No release was
+  published by run #40270411644.
+- Updated release staging so existing destination DLLs are backed up first; `opengl32.dll` is
+  required, while the other three Mesa DLLs are copied only when present. The `finally` restore
+  logic remains unchanged.
+- Workflow contract verification and `git diff --check` pass. The hosted build/test and stable
+  release remain pending this correction's PR and a subsequent intentional master dispatch.
+
+## 13. Trivy database mirror follow-up (2026-10-26)
+
+- **Observed:** PR #1108's dependency scan failed on both the initial run and its retry before
+  scanning the repository. Both attempts failed fetching Trivy's vulnerability database layer
+  from `mirror.gcr.io` with HTTP 404; no dependency finding was reported.
+- **Expected:** REQ-437 requires the Trivy dependency scan to run and block on actual findings. A
+  broken mirror must not prevent the scanner from obtaining its database when the official source
+  is available.
+- **Root cause:** Trivy's default database source order starts with `mirror.gcr.io`; the observed
+  mirror returned 404 twice and Trivy exited before falling back. Trivy supports an explicit
+  database repository, and its official documentation lists `ghcr.io/aquasecurity/trivy-db` as a
+  published database location.
+- **Plan:** Set `TRIVY_DB_REPOSITORY` for the existing Trivy action to the official GHCR repository
+  (`ghcr.io/aquasecurity/trivy-db:2`). Keep scan type, severity threshold, ignore-unfixed behavior,
+  and nonzero finding exit code unchanged.
+- **Verification:** Parse/contract-check workflow env and preserve all existing Trivy inputs;
+  require PR CI to complete a successful scan before merging. The prior two failures are
+  infrastructure failures, not evidence that a vulnerability scan passed.
+- Updated `.github/workflows/pr-checks.yml` with the explicit official GHCR database repository;
+  Trivy's filesystem scan, CRITICAL/HIGH gate, and exit behavior remain unchanged.
+- Workflow YAML and contract assertions pass locally; CI verification is pending.

@@ -239,14 +239,17 @@ jobs:
 
           foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
             $source = Join-Path $env:GOSURVEY_MESA_BIN $dependency
-            if (-not (Test-Path -LiteralPath $source)) {
-              throw "Pinned Mesa runtime dependency is missing: $source"
-            }
             $destination = Join-Path $runtime $dependency
             if (Test-Path -LiteralPath $destination) {
               Copy-Item -LiteralPath $destination -Destination (Join-Path $backup $dependency) -Force
             }
-            Copy-Item -LiteralPath $source -Destination $destination -Force
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination $destination -Force
+            } elseif ($dependency -eq 'opengl32.dll') {
+              throw "Pinned Mesa OpenGL entry point is missing: $source"
+            } else {
+              Write-Host "Optional Mesa dependency is absent; retaining the existing runtime file if present: $dependency"
+            }
           }
 
       - name: Test release (REQ-202)
