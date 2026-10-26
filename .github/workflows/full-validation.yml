@@ -117,6 +117,9 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Test installer manifest parsing
+        run: ./tests/powershell/install-manifest-parser.tests.ps1
+
       - name: Load installed laptop tools and owned build cache
         if: runner.environment == 'self-hosted'
         shell: pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ". '{0}'"
