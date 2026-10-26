@@ -1,4 +1,4 @@
-# GoSurvey 0.7.6
+# GoSurvey 0.7.7
 
 This release is built around **Projects** — one place for every drawing, point file, PDF, and cloud
 that belongs to a job. The sections below walk through what is new and how it fits together.
@@ -133,6 +133,10 @@ a project folder with shared survey points and tracked files.
 - Paper-space viewports keep their camera, UCS, layer colors, and independent annotation scale when
   you save and reopen R2018 DWG and DXF drawings.
 - The PowerShell install command now recognizes stable releases and continues with setup.
+
+**0.7.7**
+- Moving an older Program Files installation to your user profile now recognizes and removes the old version, so the Start Menu opens the updated copy.
+- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
 
 ---
 

@@ -3702,6 +3702,11 @@ private Q_SLOTS:
     QApplication::processEvents();
     QVERIFY(notes->grab().save(
         QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-projects-image.png")));
+    notes->verticalScrollBar()->setValue(notes->verticalScrollBar()->maximum());
+    QApplication::processEvents();
+    QVERIFY(notes->toPlainText().contains("0.7.7"));
+    QVERIFY(whatsNew->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue-update-migration-whats-new-077.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewReleasesLink"));
     QVERIFY(whatsNew->findChild<QCheckBox*>("whatsNewDontShowAgain"));
     auto* about = firstRun.findChild<QAction*>("aboutGoSurveyAction");

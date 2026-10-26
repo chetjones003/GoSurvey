@@ -11,11 +11,15 @@ the release manifest, and installs silently for the current Windows user at
 `%LOCALAPPDATA%\Programs\GoSurvey`. A fresh install does not show GoSurvey setup windows or ask
 for administrator approval. The script does not ask you to choose setup options.
 
+If the same or a newer version is already installed for this Windows user, the script reports that
+and skips the installer download. The installer also checks both per-user and machine-wide
+registrations before replacing an installation of the exact same version.
+
 If GoSurvey is currently installed under Program Files, Windows asks once for approval to remove
 that protected copy. The migration moves the installation to your user profile and preserves your
-settings and data. Choosing Update from an older Program Files install uses the same migration
-bootstrap. Future in-app updates still wait for your choice and update that per-user copy without
-elevation.
+settings and data, and removes any leftover shared Start Menu shortcut to the old copy. Choosing
+Update from an older Program Files install uses the same migration bootstrap. Future in-app updates
+still wait for your choice and update that per-user copy without elevation.
 
 For these per-user paths, the installer carries Microsoft's licensed app-local Visual C++ runtime
 DLLs beside GoSurvey and refreshes them with each release. It skips the shared runtime installer,
