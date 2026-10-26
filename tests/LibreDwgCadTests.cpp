@@ -4561,6 +4561,23 @@ TEST_CASE("DXF native camera and UCS import without viewport XRECORDs", "[dxf][d
   CHECK(ucs::FramesMatch(result.activeUcs, vp.activeUcs, 0.01));
 }
 
+TEST_CASE("DXF native viewport detection reports malformed group values", "[dxf][issue1013]") {
+  ScratchDir dir("dxf-native-vp-malformed");
+  const auto path = (dir.path / "malformed.dxf").string();
+  for (const std::string& malformedGroup : {"90\nnot-an-integer", "bad-code\nvalue"}) {
+    {
+      std::ofstream output(path, std::ios::binary);
+      REQUIRE(output.good());
+      output << "0\nSECTION\n2\nENTITIES\n0\nVIEWPORT\n" << malformedGroup << "\n";
+    }
+    std::vector<std::string> log;
+    AppCommandState imported;
+    CHECK_FALSE(ImportDxfFile(imported, path.c_str(), log));
+    CHECK(LogContains(log, malformedGroup.starts_with("90") ? "invalid integer for group code 90"
+                                                              : "invalid group code: bad-code"));
+  }
+}
+
 TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #624)",
           "[dwg][libredwg][issue624][req371]") {
   ScratchDir dir("dwg-vp-visualstyle");

@@ -25,6 +25,7 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -5679,16 +5680,27 @@ bool HasAutoCadViewportState(const AppCommandState& st) {
   return false;
 }
 
-bool HasAutoCadViewportState(const char* pathUtf8) {
-  if (pathUtf8 == nullptr || pathUtf8[0] == '\0')
+bool HasAutoCadViewportState(const char* pathUtf8, bool& hasState, std::string& error) {
+  hasState = false;
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0') {
+    error = "DXF path is empty while checking native viewport state.";
     return false;
+  }
   std::ifstream input(pathUtf8, std::ios::binary);
-  if (!input)
+  if (!input) {
+    error = "Could not read DXF while checking native viewport state.";
     return false;
+  }
   const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (input.bad()) {
+    error = "Failed while reading DXF native viewport state.";
+    return false;
+  }
   if (text.find("ASDK_XREC_ANNOTATION_SCALE_INFO") != std::string::npos ||
-      text.find("ADSK_XREC_LAYER_COLOR_OVR") != std::string::npos)
+      text.find("ADSK_XREC_LAYER_COLOR_OVR") != std::string::npos) {
+    hasState = true;
     return true;
+  }
 
   // Camera projection and UCS are native VIEWPORT fields and do not require XRECORDs.
   // Detect those fields within VIEWPORT entities so the native-property overlay below runs
@@ -5700,23 +5712,37 @@ bool HasAutoCadViewportState(const char* pathUtf8) {
   bool perspective = false;
   bool ucsViewport = false;
   bool viewportUcsData = false;
-  while (std::getline(lines, codeLine) && std::getline(lines, valueLine)) {
-    while (!valueLine.empty() && std::isspace(static_cast<unsigned char>(valueLine.back())))
-      valueLine.pop_back();
-    size_t valueStart = 0;
-    while (valueStart < valueLine.size() && std::isspace(static_cast<unsigned char>(valueLine[valueStart])))
-      ++valueStart;
-    if (valueStart != 0)
-      valueLine.erase(0, valueStart);
-    int code = -1;
+  const auto trim = [](std::string& value) {
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back())))
+      value.pop_back();
+    const size_t first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos)
+      value.clear();
+    else if (first != 0)
+      value.erase(0, first);
+  };
+  while (std::getline(lines, codeLine)) {
+    if (!std::getline(lines, valueLine)) {
+      error = "DXF ends with a group code that has no value.";
+      return false;
+    }
+    trim(codeLine);
+    trim(valueLine);
+    int code = 0;
     try {
-      code = std::stoi(codeLine);
-    } catch (...) {
-      continue;
+      size_t parsed = 0;
+      code = std::stoi(codeLine, &parsed);
+      if (parsed != codeLine.size())
+        throw std::invalid_argument("trailing characters");
+    } catch (const std::exception&) {
+      error = "DXF contains an invalid group code: " + codeLine;
+      return false;
     }
     if (code == 0) {
-      if (inViewport && (perspective || (ucsViewport && viewportUcsData)))
+      if (inViewport && (perspective || (ucsViewport && viewportUcsData))) {
+        hasState = true;
         return true;
+      }
       inViewport = valueLine == "VIEWPORT";
       perspective = false;
       ucsViewport = false;
@@ -5725,25 +5751,41 @@ bool HasAutoCadViewportState(const char* pathUtf8) {
     }
     if (!inViewport)
       continue;
-    try {
+    if (code == 90 || code == 71) {
+      int value = 0;
+      try {
+        size_t parsed = 0;
+        value = std::stoi(valueLine, &parsed);
+        if (parsed != valueLine.size())
+          throw std::invalid_argument("trailing characters");
+      } catch (const std::exception&) {
+        error = "DXF VIEWPORT contains an invalid integer for group code " + std::to_string(code) + ".";
+        return false;
+      }
       if (code == 90)
-        perspective = (std::stoi(valueLine) & 1) != 0;
-      else if (code == 71)
-        ucsViewport = std::stoi(valueLine) != 0;
-      else if (code >= 110 && code <= 132)
-        viewportUcsData = true;
-    } catch (...) {
+        perspective = (value & 1) != 0;
+      else
+        ucsViewport = value != 0;
+    } else if (code >= 110 && code <= 132) {
+      viewportUcsData = true;
     }
   }
-  return inViewport && (perspective || (ucsViewport && viewportUcsData));
+  hasState = inViewport && (perspective || (ucsViewport && viewportUcsData));
+  return true;
 }
 
 } // namespace
 
 bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  bool hasNativeViewportState = false;
+  std::string viewportStateError;
+  if (!HasAutoCadViewportState(pathUtf8, hasNativeViewportState, viewportStateError)) {
+    log.push_back("DXF import failed: " + viewportStateError);
+    return false;
+  }
   if (!ImportDxfFile_Impl(st, pathUtf8, log))
     return false;
-  if (!HasAutoCadViewportState(pathUtf8))
+  if (!hasNativeViewportState)
     return true;
 
   // Keep all ordinary entities from the established GoSurvey reader, whose entity coverage is
