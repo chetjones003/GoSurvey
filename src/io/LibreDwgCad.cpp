@@ -210,6 +210,14 @@ std::string FromT(const Dwg_Data* dwg, BITCODE_T t) {
   return libredwgcad_detail::DecodeDwgString(t, dwg != nullptr && IS_FROM_TU_DWG(dwg));
 }
 
+static std::string LayoutNameFromT(const Dwg_Data* dwg, BITCODE_T t) {
+  // LibreDWG's DXF LAYOUT reader stores layout_name as TU even though the rest of the
+  // DXF-imported text remains UTF-8. DWG_OPTS_INDXF disables IS_FROM_TU_DWG globally.
+  const bool utf16le = dwg != nullptr &&
+                       (IS_FROM_TU_DWG(dwg) || (dwg->opts & DWG_OPTS_INDXF) != 0);
+  return libredwgcad_detail::DecodeDwgString(t, utf16le);
+}
+
 std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   if (dwg == nullptr || ent == nullptr || ent->layer == nullptr)
     return "0";
@@ -219,7 +227,7 @@ std::string LayerName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
   if (ly == nullptr)
     return "0";
-  const std::string n = FromT(dwg, ly->name);
+  const std::string n = LayoutNameFromT(dwg, ly->name);
   return n.empty() ? std::string("0") : n;
 }
 
@@ -2272,7 +2280,7 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     if (o->fixedtype != DWG_TYPE_LAYER || o->tio.object == nullptr || o->tio.object->tio.LAYER == nullptr)
       continue;
     const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
-    const std::string name = FromT(dwg, ly->name);
+    const std::string name = LayoutNameFromT(dwg, ly->name);
     if (name == "0")
       continue;
     if (name.empty()) {
@@ -2504,6 +2512,18 @@ struct TableWriter {
   }
 
   void BuildLayerTable(const AppCommandState& st) {
+    // `dwg_new_Document` supplies layer 0, and the user layer table omits it.
+    // Normalize the built-in record explicitly: LibreDWG's default CMC can
+    // serialize as ACI 0 (BYBLOCK), which AutoCAD rejects for a layer record.
+    if (BITCODE_H layer0Ref = dwg_find_tablehandle(dwg, "0", "LAYER")) {
+      Dwg_Object* layer0Obj = dwg_resolve_handle_silent(dwg, layer0Ref->absolute_ref);
+      if (layer0Obj != nullptr && layer0Obj->fixedtype == DWG_TYPE_LAYER &&
+          layer0Obj->tio.object != nullptr && layer0Obj->tio.object->tio.LAYER != nullptr) {
+        Dwg_Object_LAYER* layer0 = layer0Obj->tio.object->tio.LAYER;
+        ApplyLayerTableColor(layer0, "#FFFFFF", true, useTrueColor, 0.0f);
+        layers["0"] = layer0Obj->index;
+      }
+    }
     for (const CadLayerRow& row : st.drawingLayerTable) {
       if (row.name.empty() || LowerAscii(row.name) == "0")
         continue;
@@ -2575,6 +2595,121 @@ struct TableWriter {
     ent->linewt = LineweightDwgIndexFromMm(a.lineweightMm, /*layerRow=*/false);
   }
 };
+
+// AutoCAD uses an extension dictionary owned by a LAYER for its native per-viewport
+// color override XRECORD. Both the scale record on a VIEWPORT and this record use this
+// ownership shape, so keep the DWG object/link setup in one place.
+static Dwg_Object_DICTIONARY* EnsureExtensionDictionary(Dwg_Data* dwg, BITCODE_BL ownerIndex) {
+  if (dwg == nullptr || ownerIndex < 0 || static_cast<BITCODE_BL>(ownerIndex) >= dwg->num_objects)
+    return nullptr;
+  Dwg_Object* owner = &dwg->object[ownerIndex];
+  BITCODE_H xdic = owner->supertype == DWG_SUPERTYPE_ENTITY && owner->tio.entity != nullptr
+                       ? owner->tio.entity->xdicobjhandle
+                       : owner->tio.object != nullptr ? owner->tio.object->xdicobjhandle : nullptr;
+  if (xdic != nullptr) {
+    Dwg_Object* dictObj = dwg_resolve_handle_silent(dwg, xdic->absolute_ref);
+    if (dictObj != nullptr && dictObj->fixedtype == DWG_TYPE_DICTIONARY && dictObj->tio.object != nullptr)
+      return dictObj->tio.object->tio.DICTIONARY;
+  }
+
+  Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(dwg, nullptr, nullptr, 0);
+  int error = 0;
+  Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &error) : nullptr;
+  owner = &dwg->object[ownerIndex];  // adding the dictionary can move dwg->object[]
+  if (dictObj == nullptr || error != 0 || owner->handle.value == 0)
+    return nullptr;
+  const BITCODE_HV ownerHandle = owner->handle.value;
+  dictObj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, ownerHandle, nullptr);
+  dictObj->tio.object->num_reactors = 1;
+  dictObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+  if (dictObj->tio.object->reactors != nullptr)
+    dictObj->tio.object->reactors[0] = dwg_add_handleref(dwg, 4, ownerHandle, nullptr);
+  const BITCODE_HV dictHandle = dictObj->handle.value;
+  if (owner->supertype == DWG_SUPERTYPE_ENTITY && owner->tio.entity != nullptr) {
+    owner->tio.entity->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+    owner->tio.entity->is_xdic_missing = 0;
+  } else if (owner->tio.object != nullptr) {
+    owner->tio.object->xdicobjhandle = dwg_add_handleref(dwg, 3, dictHandle, nullptr);
+    owner->tio.object->is_xdic_missing = 0;
+  }
+  dict->is_hardowner = 1;
+  return dict;
+}
+
+static bool AddNativeLayerViewportColor(TableWriter& tw, const std::string& layerName,
+                                        BITCODE_HV viewportHandle, const std::string& colorStorage) {
+  if (tw.dwg == nullptr || layerName.empty() || viewportHandle == 0)
+    return false;
+  const std::string layerKey = LowerAscii(layerName);
+  auto layer = tw.layers.find(layerKey);
+  if (layer == tw.layers.end()) {
+    Dwg_Object_LAYER* addedLayer = dwg_add_LAYER(tw.dwg, layerName.c_str());
+    if (addedLayer == nullptr || addedLayer->parent == nullptr)
+      return false;
+    // New layers need a valid base ACI even when the viewport override is the
+    // only source of color. AutoCAD treats ACI 0 as an invalid layer color.
+    addedLayer->color.index = 7;
+    addedLayer->color.method = DWG_COLOR_METHOD_ACI;
+    addedLayer->color.rgb = 0xC2FFFFFFu;
+    tw.layers[layerKey] = addedLayer->parent->objid;
+    layer = tw.layers.find(layerKey);
+  }
+  Dwg_Object* layerObj = tw.ObjectAt(layer->second);
+  if (layerObj == nullptr || layerObj->fixedtype != DWG_TYPE_LAYER)
+    return false;
+  Dwg_Object_DICTIONARY* dict = EnsureExtensionDictionary(tw.dwg, layerObj->index);
+  if (dict == nullptr)
+    return false;
+
+  Dwg_Object_XRECORD* xr = nullptr;
+  const BITCODE_BL count = dict->numitems;
+  for (BITCODE_BL i = 0; i < count; ++i) {
+    if (dict->texts[i] == nullptr || FromT(tw.dwg, dict->texts[i]) != "ADSK_XREC_LAYER_COLOR_OVR" ||
+        dict->itemhandles[i] == nullptr)
+      continue;
+    Dwg_Object* xrObj = dwg_resolve_handle_silent(tw.dwg, dict->itemhandles[i]->absolute_ref);
+    if (xrObj != nullptr && xrObj->fixedtype == DWG_TYPE_XRECORD && xrObj->tio.object != nullptr)
+      xr = xrObj->tio.object->tio.XRECORD;
+    break;
+  }
+  if (xr == nullptr)
+    xr = dwg_add_XRECORD(dict, "ADSK_XREC_LAYER_COLOR_OVR");
+  if (xr == nullptr || xr->parent == nullptr)
+    return false;
+
+  BITCODE_BL xrIndex = xr->parent->objid;
+  const BITCODE_BL dictIndex = dict->parent->objid;
+  const BITCODE_HV dictHandle = dictIndex >= 0 && static_cast<BITCODE_BL>(dictIndex) < tw.dwg->num_objects
+                                    ? tw.dwg->object[dictIndex].handle.value : 0;
+  if (dictHandle == 0)
+    return false;
+  Dwg_Object* xrObj = &tw.dwg->object[xrIndex];
+  xrObj->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+  xrObj->tio.object->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, 0, nullptr);
+  if (xrObj->tio.object->num_reactors == 0) {
+    xrObj->tio.object->num_reactors = 1;
+    xrObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+    if (xrObj->tio.object->reactors != nullptr)
+      xrObj->tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+  }
+
+  uint32_t rgb = 0;
+  if (!DxfColorStringToRgbPacked(colorStorage, &rgb))
+    return false;
+  xr = tw.dwg->object[xrIndex].tio.object->tio.XRECORD;
+  const char* const open = "{ADSK_LYR_COLOR_OVERRIDE";
+  const char* const close = "}";
+  if (dwg_add_XRECORD_string(xr, 102, static_cast<BITCODE_BS>(std::strlen(open)), open) == nullptr)
+    return false;
+  Dwg_Handle viewportRef{};
+  viewportRef.code = 4;
+  viewportRef.value = viewportHandle;
+  if (dwg_add_XRECORD_handle(xr, 335, viewportRef) == nullptr ||
+      dwg_add_XRECORD_int32(xr, 420, static_cast<BITCODE_BL>(0xC3000000u | (rgb & 0xFFFFFFu))) == nullptr ||
+      dwg_add_XRECORD_string(xr, 102, 1, close) == nullptr)
+    return false;
+  return true;
+}
 
 // REQ-170, issue #604: LibreDWG 0.13.4's pre-R2007 string writer (dwg_add_u8_input) does not
 // encode non-ASCII UTF-8 as the `\U+XXXX` escape AutoCAD expects for an ANSI-codepage DWG (R2000
@@ -4089,7 +4224,8 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
 
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
                                     const AppCommandState& st, DwgExportFieldContext* fldCtx,
-                                    DwgExportVisualStyleContext* vsCtx) {
+                                    DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
+                                    bool flattenPaperMultileaders) {
   if (ps == nullptr)
     return;
   auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
@@ -4125,6 +4261,17 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     vp->height = static_cast<double>(gv.paperHIn);
     vp->on_off = gv.on ? 1 : 0;
     vp->id = static_cast<BITCODE_RS>(nextVpId++);
+    vp->render_mode = gv.visualStyle == VisualStyle::Shaded
+                          ? 4
+                          : (gv.visualStyle == VisualStyle::Hidden ? 2 : 0);
+    // AutoCAD-authored paper viewports carry default 3D lighting even when
+    // their visual style is 2D Wireframe. Leaving these fields zero makes
+    // AutoCAD reject the visual-style link on the active paper viewport.
+    vp->use_default_lights = 1;
+    vp->default_lighting_type = 1;
+    vp->ambient_color.index = 250;
+    vp->ambient_color.method = DWG_COLOR_METHOD_ACI;
+    vp->ambient_color.rgb = 0x00333333u;
     const double ox = st.worldDocumentOriginX;
     const double oy = st.worldDocumentOriginY;
     vp->view_target.x = gv.modelCenterX + ox;
@@ -4143,9 +4290,11 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     vp->VIEWCTR.y = gv.modelCenterY + oy;
     const float sc = gv.safeScale();
     vp->VIEWSIZE = static_cast<double>(gv.paperHIn) * static_cast<double>(sc);
-    vp->LENSLENGTH = 50.0;
-    // 32768 = viewport on, 16384 = display locked, 32 = UCS icon visible (the DWG keeps on/off here too).
-    vp->status_flag = 32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0);
+    vp->LENSLENGTH = gv.camPerspective
+                          ? 35.0 / (2.0 * std::tan(std::clamp(static_cast<double>(gv.camFovDeg), 1.0, 179.0) *
+                                                  (kPi / 360.0)))
+                          : 50.0;
+    vp->status_flag = (gv.camPerspective ? 1 : 0) | 32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0);
     {
       std::vector<BITCODE_H> frozen;
       for (const std::string& name : gv.frozenLayers)
@@ -4160,8 +4309,71 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
       }
     }
     vp->UCSVP = 1;
-    vp->ucsxdir.x = 1.0;
-    vp->ucsydir.y = 1.0;
+    vp->ucsorg.x = gv.activeUcs.origin.x + ox;
+    vp->ucsorg.y = gv.activeUcs.origin.y + oy;
+    vp->ucsorg.z = gv.activeUcs.origin.z;
+    vp->ucsxdir.x = gv.activeUcs.xAxis.x;
+    vp->ucsxdir.y = gv.activeUcs.xAxis.y;
+    vp->ucsxdir.z = gv.activeUcs.xAxis.z;
+    vp->ucsydir.x = gv.activeUcs.yAxis.x;
+    vp->ucsydir.y = gv.activeUcs.yAxis.y;
+    vp->ucsydir.z = gv.activeUcs.yAxis.z;
+    // Annotation scale is an AutoCAD viewport extension-dictionary XRECORD referencing
+    // the drawing's native SCALE object (ASDK_XREC_ANNOTATION_SCALE_INFO).
+    if (tw.annotContext != nullptr && !gv.annotationScaleName.empty()) {
+      const auto scale = tw.annotContext->scaleNameToHandle.find(gv.annotationScaleName);
+      if (scale != tw.annotContext->scaleNameToHandle.end() && vp->parent != nullptr) {
+        const BITCODE_BL ownerIndex = vp->parent->objid;
+        Dwg_Object* owner = ownerIndex >= 0 && static_cast<BITCODE_BL>(ownerIndex) < tw.dwg->num_objects
+                                ? &tw.dwg->object[ownerIndex] : nullptr;
+        if (owner != nullptr && owner->tio.entity->xdicobjhandle == nullptr) {
+          Dwg_Object_DICTIONARY* dict = dwg_add_DICTIONARY(tw.dwg, nullptr, nullptr, 0);
+          int err = 0;
+          Dwg_Object* dictObj = dict != nullptr ? dwg_obj_generic_to_object(dict, &err) : nullptr;
+          owner = &tw.dwg->object[ownerIndex];
+          if (dictObj != nullptr && err == 0) {
+            dictObj->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, owner->handle.value, nullptr);
+            dictObj->tio.object->num_reactors = 1;
+            dictObj->tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+            if (dictObj->tio.object->reactors != nullptr)
+              dictObj->tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, owner->handle.value, nullptr);
+            owner->tio.entity->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, dictObj->handle.value, nullptr);
+            owner->tio.entity->is_xdic_missing = 0;
+            dict->is_hardowner = 1;
+          }
+        }
+        owner = &tw.dwg->object[ownerIndex];
+        Dwg_Object* dictObj = owner->tio.entity->xdicobjhandle != nullptr
+                                  ? dwg_resolve_handle_silent(tw.dwg, owner->tio.entity->xdicobjhandle->absolute_ref)
+                                  : nullptr;
+        if (dictObj != nullptr && dictObj->tio.object != nullptr && dictObj->tio.object->tio.DICTIONARY != nullptr) {
+          const BITCODE_HV dictHandle = dictObj->handle.value;
+          Dwg_Object_XRECORD* xr = dwg_add_XRECORD(dictObj->tio.object->tio.DICTIONARY,
+                                                   "ASDK_XREC_ANNOTATION_SCALE_INFO");
+          if (xr != nullptr) {
+            const BITCODE_BL xrIndex = xr->parent->objid;
+            dwg_add_XRECORD_int32(xr, 90, 1);
+            Dwg_Handle h{};
+            h.code = 4;
+            h.value = scale->second;
+            dwg_add_XRECORD_handle(tw.dwg->object[xrIndex].tio.object->tio.XRECORD, 340, h);
+            tw.dwg->object[xrIndex].tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+            tw.dwg->object[xrIndex].tio.object->xdicobjhandle = dwg_add_handleref(tw.dwg, 3, 0, nullptr);
+            tw.dwg->object[xrIndex].tio.object->num_reactors = 1;
+            tw.dwg->object[xrIndex].tio.object->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+            if (tw.dwg->object[xrIndex].tio.object->reactors != nullptr)
+              tw.dwg->object[xrIndex].tio.object->reactors[0] = dwg_add_handleref(tw.dwg, 4, dictHandle, nullptr);
+          }
+        }
+      }
+    }
+    if (vp->parent != nullptr) {
+      const BITCODE_BL viewportIndex = vp->parent->objid;
+      const BITCODE_HV viewportHandle = viewportIndex >= 0 && static_cast<BITCODE_BL>(viewportIndex) < tw.dwg->num_objects
+                                            ? tw.dwg->object[viewportIndex].handle.value : 0;
+      for (size_t ci = 0; ci < gv.vpColorLayers.size() && ci < gv.vpColorValues.size(); ++ci)
+        AddNativeLayerViewportColor(tw, gv.vpColorLayers[ci], viewportHandle, gv.vpColorValues[ci]);
+    }
     if (!gv.layer.empty() && gv.layer != "0") {
       EntityAttributes layerOnly;
       layerOnly.layer = gv.layer;
@@ -4201,7 +4413,7 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   for (size_t i = 0; i < L.paperFilledRegions.size(); ++i)
     WriteFilledRegionHatch(tw.dwg, ps, tw, st, L.paperFilledRegions[i], AttrAt(L.paperFilledRegionAttrs, i), 0.0,
                            0.0, false, noAnnot);
-  const bool nativeLeaders = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
+  const bool nativeLeaders = LibreDwgVersionFromExport(outputVersion) >= R_2010 && !flattenPaperMultileaders;
   for (size_t i = 0; i < L.paperMultileaders.size(); ++i)
     WriteMultileaderEntity(tw.dwg, ps, tw, st, L.paperMultileaders[i], AttrAt(L.paperMultileaderAttrs, i), 0.0, 0.0,
                            false, nativeLeaders, 1.f, noAnnot);
@@ -4214,7 +4426,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
 
 static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, TableWriter& tw,
                                       std::vector<std::string>& log, DwgExportFieldContext* fldCtx,
-                                      DwgExportVisualStyleContext* vsCtx) {
+                                      DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
+                                      bool flattenPaperMultileaders) {
   if (st.paperLayouts.empty())
     return;
   for (const PaperLayout& L : st.paperLayouts) {
@@ -4241,7 +4454,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
       continue;
     SetDwgLayoutTabName(dwg, ps, L.name.empty() ? "Layout" : L.name);
     SetDwgLayoutPaperSetup(dwg, ps, L);
-    WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx);
+    WritePaperLayoutContent(L, ps, tw, st, fldCtx, vsCtx, outputVersion, flattenPaperMultileaders);
     ++nWritten;
   }
   if (nWritten > 0) {
@@ -4257,6 +4470,27 @@ static Dwg_Object* LayoutPaperBlockObject(Dwg_Data* dwg, const Dwg_Object_LAYOUT
   if (o == nullptr)
     o = dwg_resolve_handle_silent(dwg, lo->block_header->absolute_ref);
   return o;
+}
+
+static bool IsPaperLayoutEntity(const Dwg_Data* dwg, const Dwg_Object* entityObj) {
+  if (dwg == nullptr || entityObj == nullptr || entityObj->supertype != DWG_SUPERTYPE_ENTITY ||
+      entityObj->tio.entity == nullptr || entityObj->tio.entity->ownerhandle == nullptr)
+    return false;
+  const BITCODE_HV ownerHandle = entityObj->tio.entity->ownerhandle->absolute_ref;
+  if (ownerHandle == 0)
+    return false;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object* layoutObj = &dwg->object[i];
+    if (layoutObj->fixedtype != DWG_TYPE_LAYOUT || layoutObj->tio.object == nullptr ||
+        layoutObj->tio.object->tio.LAYOUT == nullptr)
+      continue;
+    const Dwg_Object_LAYOUT* layout = layoutObj->tio.object->tio.LAYOUT;
+    if (LayoutNameFromT(dwg, layout->layout_name) == "Model" || layout->block_header == nullptr)
+      continue;
+    if (layout->block_header->absolute_ref == ownerHandle)
+      return true;
+  }
+  return false;
 }
 
 static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj,
@@ -4288,6 +4522,77 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     // Issue #768: view direction, twist, on/off, lock and per-viewport frozen layers.
     vp.on = e->on_off != 0 && (e->status_flag & 32768) != 0;
     vp.locked = (e->status_flag & 16384) != 0;
+    vp.camPerspective = (e->status_flag & 1) != 0;
+    if (vp.camPerspective && e->LENSLENGTH > 1.e-6)
+      vp.camFovDeg = static_cast<float>(2.0 * std::atan(35.0 / (2.0 * e->LENSLENGTH)) * (180.0 / kPi));
+    if (e->UCSVP) {
+      vp.activeUcs.origin = {e->ucsorg.x - st.worldDocumentOriginX, e->ucsorg.y - st.worldDocumentOriginY,
+                             e->ucsorg.z};
+      vp.activeUcs.xAxis = {e->ucsxdir.x, e->ucsxdir.y, e->ucsxdir.z};
+      vp.activeUcs.yAxis = {e->ucsydir.x, e->ucsydir.y, e->ucsydir.z};
+      vp.activeUcs.zAxis = ray3d::Normalize(ray3d::Cross(vp.activeUcs.xAxis, vp.activeUcs.yAxis));
+    }
+    if (e->parent != nullptr && e->parent->xdicobjhandle != nullptr) {
+      Dwg_Object* xdict = dwg_resolve_handle_silent(dwg, e->parent->xdicobjhandle->absolute_ref);
+      if (xdict != nullptr && xdict->tio.object != nullptr && xdict->tio.object->tio.DICTIONARY != nullptr) {
+        Dwg_Object_DICTIONARY* dict = xdict->tio.object->tio.DICTIONARY;
+        for (BITCODE_BL di = 0; di < dict->numitems; ++di) {
+          if (dict->texts[di] == nullptr || FromT(dwg, dict->texts[di]) != "ASDK_XREC_ANNOTATION_SCALE_INFO")
+            continue;
+          Dwg_Object* xrObj = dict->itemhandles[di] != nullptr
+                                  ? dwg_resolve_handle_silent(dwg, dict->itemhandles[di]->absolute_ref) : nullptr;
+          if (xrObj == nullptr || xrObj->tio.object == nullptr || xrObj->tio.object->tio.XRECORD == nullptr)
+            continue;
+          for (Dwg_Resbuf* rb = xrObj->tio.object->tio.XRECORD->xdata; rb != nullptr; rb = rb->nextrb) {
+            if (rb->type != 340) continue;
+            Dwg_Object* scaleObj = dwg_resolve_handle_silent(dwg, rb->value.absref);
+            if (scaleObj != nullptr && scaleObj->fixedtype == DWG_TYPE_SCALE && scaleObj->tio.object != nullptr &&
+                scaleObj->tio.object->tio.SCALE != nullptr)
+              vp.annotationScaleName = LayoutNameFromT(dwg, scaleObj->tio.object->tio.SCALE->name);
+          }
+        }
+      }
+    }
+    // AutoCAD stores viewport color overrides on each LAYER extension dictionary, keyed by the
+    // viewport handle. This is independent of an entity's own color and survives outside GoSurvey.
+    for (BITCODE_BL oi = 0; oi < dwg->num_objects; ++oi) {
+      Dwg_Object* layerObj = &dwg->object[oi];
+      if (layerObj->fixedtype != DWG_TYPE_LAYER || layerObj->tio.object == nullptr ||
+          layerObj->tio.object->tio.LAYER == nullptr || layerObj->tio.object->xdicobjhandle == nullptr)
+        continue;
+      Dwg_Object* layerDictObj = dwg_resolve_handle_silent(dwg, layerObj->tio.object->xdicobjhandle->absolute_ref);
+      if (layerDictObj == nullptr || layerDictObj->tio.object == nullptr ||
+          layerDictObj->tio.object->tio.DICTIONARY == nullptr)
+        continue;
+      Dwg_Object_DICTIONARY* layerDict = layerDictObj->tio.object->tio.DICTIONARY;
+      for (BITCODE_BL di = 0; di < layerDict->numitems; ++di) {
+        if (layerDict->texts[di] == nullptr || FromT(dwg, layerDict->texts[di]) != "ADSK_XREC_LAYER_COLOR_OVR")
+          continue;
+        Dwg_Object* xrObj = layerDict->itemhandles[di] != nullptr
+                                ? dwg_resolve_handle_silent(dwg, layerDict->itemhandles[di]->absolute_ref) : nullptr;
+        if (xrObj == nullptr || xrObj->tio.object == nullptr || xrObj->tio.object->tio.XRECORD == nullptr)
+          continue;
+        bool inOverride = false;
+        BITCODE_HV overrideViewport = 0;
+        for (Dwg_Resbuf* rb = xrObj->tio.object->tio.XRECORD->xdata; rb != nullptr; rb = rb->nextrb) {
+          if (rb->type == 102 && rb->value.str.u.data != nullptr) {
+            const std::string tag = libredwgcad_detail::DecodeDwgString(rb->value.str.u.data, rb->value.str.is_tu != 0);
+            if (tag.find("ADSK_LYR_COLOR_OVERRIDE") != std::string::npos)
+              inOverride = true;
+            else if (tag.find("}") != std::string::npos)
+              inOverride = false;
+          } else if (inOverride && rb->type == 335) {
+            overrideViewport = rb->value.absref;
+          } else if (inOverride && rb->type == 420 && overrideViewport == obj->handle.value) {
+            char color[16];
+            const unsigned rgb = static_cast<unsigned>(rb->value.i32) & 0xFFFFFFu;
+            std::snprintf(color, sizeof(color), "#%06X", rgb);
+            vp.vpColorLayers.push_back(LayoutNameFromT(dwg, layerObj->tio.object->tio.LAYER->name));
+            vp.vpColorValues.emplace_back(color);
+          }
+        }
+      }
+    }
     {
       const double len = std::sqrt(e->VIEWDIR.x * e->VIEWDIR.x + e->VIEWDIR.y * e->VIEWDIR.y +
                                    e->VIEWDIR.z * e->VIEWDIR.z);
@@ -4306,7 +4611,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
         lo = dwg_resolve_handle_silent(dwg, e->frozen_layers[fi]->absolute_ref);
       if (lo != nullptr && lo->fixedtype == DWG_TYPE_LAYER && lo->tio.object != nullptr &&
           lo->tio.object->tio.LAYER != nullptr)
-        vp.frozenLayers.push_back(FromT(dwg, lo->tio.object->tio.LAYER->name));
+        vp.frozenLayers.push_back(LayoutNameFromT(dwg, lo->tio.object->tio.LAYER->name));
     }
     L.viewports.push_back(vp);
     return;
@@ -4370,7 +4675,7 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
         o->tio.object->tio.LAYOUT == nullptr)
       continue;
     Dwg_Object_LAYOUT* lo = o->tio.object->tio.LAYOUT;
-    const std::string name = FromT(dwg, lo->layout_name);
+    const std::string name = LayoutNameFromT(dwg, lo->layout_name);
     if (name == "Model")
       continue;
     rows.push_back({static_cast<int>(lo->tab_order), o, name});
@@ -4404,9 +4709,9 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
     }
     Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
     if (blk != nullptr) {
-      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr;
-           e = get_next_owned_entity(blk, e))
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
         ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions);
+      }
     }
     st.paperLayouts.push_back(std::move(pl));
   }
@@ -4470,10 +4775,10 @@ static bool AppendDwgAnnotationScaleObject(Dwg_Data* dwg, const CadAnnotationSca
 
 static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
                                            std::vector<std::string>& log,
-                                           DwgExportAnnotContext* annotCtx) {
+                                           DwgExportAnnotContext* annotCtx, DwgSaveVersion outputVersion) {
   if (dwg == nullptr || st.annotationScales.empty())
     return;
-  if (LibreDwgVersionFromExport(st.dwgExportVersion) < R_2007)
+  if (LibreDwgVersionFromExport(outputVersion) < R_2007)
     return;
   size_t nWritten = 0;
   for (const CadAnnotationScale& s : st.annotationScales) {
@@ -4491,26 +4796,26 @@ static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* 
 }
 
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
-                   std::vector<std::string>& log) {
+                   std::vector<std::string>& log, DwgSaveVersion outputVersion, bool asDxf) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
     p->x = static_cast<double>(lx) + st.worldDocumentOriginX;
     p->y = static_cast<double>(ly) + st.worldDocumentOriginY;
     p->z = z;
   };
 
-  const bool r2018Write = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2018;
+  const bool r2018Write = LibreDwgVersionFromExport(outputVersion) >= R_2018;
 
   DwgExportAnnotContext annotCtx;
-  DwgExportAnnotContextInit(&annotCtx, dwg, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010);
+  DwgExportAnnotContextInit(&annotCtx, dwg, LibreDwgVersionFromExport(outputVersion) >= R_2010);
 
   TableWriter tw;
   tw.dwg = dwg;
-  tw.useTrueColor = DwgSaveVersionUsesR2004Features(st.dwgExportVersion);
+  tw.useTrueColor = DwgSaveVersionUsesR2004Features(outputVersion);
   tw.layerState = &st;
   tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
-  WriteAnnotationScalesFromState(st, dwg, log, &annotCtx);
+  WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -4525,11 +4830,11 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   };
 
   DwgExportFieldContext fldCtx;
-  DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(st.dwgExportVersion));
+  DwgExportFieldContextInit(&fldCtx, DwgSaveVersionUsesR2004Features(outputVersion));
   DwgExportVisualStyleContext vsCtx;
-  DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
+  DwgExportVisualStyleContextInit(&vsCtx, LibreDwgVersionFromExport(outputVersion) >= R_2007);
   DwgExportMaterialContext matCtx;
-  DwgExportMaterialContextInit(&matCtx, LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2007);
+  DwgExportMaterialContextInit(&matCtx, LibreDwgVersionFromExport(outputVersion) >= R_2007);
   std::uint64_t blockOwnerHandle = 0;
   {
     int hdrErr = 0;
@@ -5089,7 +5394,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     }
   }
   // REQ-367 / issue #619: R2010+ native MULTILEADER; older saves use LEADER + MTEXT fallback.
-  const bool nativeMultileaderExport = LibreDwgVersionFromExport(st.dwgExportVersion) >= R_2010;
+  const bool nativeMultileaderExport = LibreDwgVersionFromExport(outputVersion) >= R_2010;
   for (size_t i = 0; i < st.cadMultileaders.size(); ++i)
     WriteMultileaderEntity(dwg, hdr, tw, st, st.cadMultileaders[i], AttrAt(st.cadMultileaderAttrs, i),
                            st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
@@ -5183,7 +5488,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   }
   for (const auto& kv : blockHdrByName)
     dwg_add_ENDBLK(kv.second);
-  if (DwgSaveVersionUsesR2004Features(st.dwgExportVersion)) {
+  if (DwgSaveVersionUsesR2004Features(outputVersion)) {
     for (const CadBlockDefinition& def : st.blockDefs) {
       const auto hdrIt = blockHdrByName.find(def.name);
       if (hdrIt != blockHdrByName.end())
@@ -5402,7 +5707,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
 
   DwgExportImportedLightsAndSun(st, dwg, static_cast<void*>(hdr), log);
 
-  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx);
+  FillPaperLayoutsFromState(st, dwg, tw, log, &fldCtx, &vsCtx, outputVersion, asDxf);
   DwgExportSetModelVisualStyle(dwg, &vsCtx, st.viewportVisualStyle);
 
   DwgExportFinalizeFieldObjects(&fldCtx, dwg, log);
@@ -5744,7 +6049,7 @@ void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
     if (sc->flag != 0)
       continue;  // skip temporary scales
     CadAnnotationScale entry;
-    entry.name = FromT(dwg, sc->name);
+    entry.name = LayoutNameFromT(dwg, sc->name);
     entry.paperUnits = static_cast<float>(sc->paper_units);
     entry.drawingUnits = static_cast<float>(sc->drawing_units);
     if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
@@ -5815,8 +6120,10 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const Xf2 id{};
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
-    for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e))
-      ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+    for (Dwg_Object* e = get_first_owned_entity(mspace); e != nullptr; e = get_next_owned_entity(mspace, e)) {
+      if (!IsPaperLayoutEntity(&dwg, e))
+        ImportObject(st, &dwg, e, id, 0, &skipHist, &degenerateExtrusions, nullptr);
+    }
     ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
@@ -5829,7 +6136,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
       Dwg_Object* o = &dwg.object[i];
       if (o->supertype != DWG_SUPERTYPE_ENTITY || o->tio.entity == nullptr)
         continue;
-      if (o->tio.entity->entmode == 1)
+      if (o->tio.entity->entmode == 1 || IsPaperLayoutEntity(&dwg, o))
         continue;
       const Dwg_Object_Type ty = o->fixedtype;
       if (ty == DWG_TYPE_VERTEX_2D || ty == DWG_TYPE_VERTEX_3D || ty == DWG_TYPE_VERTEX_MESH ||
@@ -5936,7 +6243,10 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     return false;
   }
 
-  const Dwg_Version_Type libVer = LibreDwgVersionFromExport(st.dwgExportVersion);
+  // DXF carries the drawing's native annotation scale list only in the R2018 format selected for
+  // issue #1013. This is independent of the user's DWG save-version preference.
+  const DwgSaveVersion outputVersion = asDxf ? DwgSaveVersion::R2018 : st.dwgExportVersion;
+  const Dwg_Version_Type libVer = LibreDwgVersionFromExport(outputVersion);
   Dwg_Data* dwg = dwg_new_Document(libVer, /*imperial=*/0, /*loglevel=*/0);
   if (dwg == nullptr) {
     log.push_back("CAD export — LibreDWG could not create a drawing.");
@@ -5956,7 +6266,7 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
   }
   AppendSaveTrace("export: fill from state");
-  FillFromState(st, dwg, hdr, log);
+  FillFromState(st, dwg, hdr, log, outputVersion, asDxf);
   dwg_resolve_objectrefs_silent(dwg);
   if (!asDxf) {  // REQ-362 item 2: the map pin other programs read (DWG only)
     DwgGeoData geo;
@@ -5979,13 +6289,27 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   bool ok = false;
   if (asDxf) {
     ok = WriteDxfFile(pathUtf8, dwg, log);
-    if (ok)
-      log.push_back("DXF export complete (LibreDWG ASCII).");
+    if (ok) {
+      size_t nPaperTables = 0;
+      size_t nPaperMultileaders = 0;
+      for (const PaperLayout& layout : st.paperLayouts)
+        {
+          nPaperTables += layout.paperTables.size();
+          nPaperMultileaders += layout.paperMultileaders.size();
+        }
+      if (nPaperMultileaders > 0)
+        log.push_back("DXF export — " + std::to_string(nPaperMultileaders) +
+                      " paper-space multileader(s) written as LEADER plus MTEXT.");
+      if (nPaperTables > 0)
+        log.push_back("DXF export — " + std::to_string(nPaperTables) +
+                      " paper-space table(s) written as grid lines plus cell text (REQ-113). Table identity is not retained.");
+      log.push_back("DXF export complete: R2018 (LibreDWG ASCII; independent of the DWG save-version preference).");
+    }
   } else {
     ok = WriteDwgFile(pathUtf8, dwg, log);
     if (ok) {
-      log.push_back(std::string("DWG export complete: ") + DwgSaveVersionDisplayName(st.dwgExportVersion) +
-                    " (" + DwgSaveVersionAcTag(st.dwgExportVersion) + ") via LibreDWG.");
+      log.push_back(std::string("DWG export complete: ") + DwgSaveVersionDisplayName(outputVersion) +
+                    " (" + DwgSaveVersionAcTag(outputVersion) + ") via LibreDWG.");
     }
   }
   dwg_free(dwg);

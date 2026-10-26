@@ -4413,13 +4413,18 @@ TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
   REQUIRE(heavy != nullptr);
   CHECK(heavy->lineweightMm == Catch::Approx(0.35f).margin(0.02f));
 }
-
 // REQ-037 / REQ-170, issue #610: paper layouts, sheet lines, and viewport scales survive DWG save/open.
 TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #610)",
           "[dwg][libredwg][req170][issue610]") {
   ScratchDir dir("roundtrip-paper");
   const auto p = (dir.path / "rt-paper.dwg").string();
   AppCommandState st;
+  st.annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+  st.currentAnnotationScaleIndex = 0;
+  // Ordinary model entities share the DXF file with the native viewport records. This exercises
+  // the established DXF reader's entity coverage while the LibreDWG overlay restores viewport state.
+  st.userLinesFlat = {100.0, 200.0, 0.0, 300.0, 400.0, 0.0};
+  st.userCirclesCxCyZR = {50.0, 60.0, 0.0, 5.0};
 
   PaperLayout sheetA;
   sheetA.name = "Plot A";
@@ -4430,6 +4435,16 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   vp20.paperWIn = 4.f;
   vp20.paperHIn = 3.f;
   vp20.scaleModelPerPaperIn = 240.f;
+  vp20.annotationScaleName = "1:100"; // deliberately independent from the viewport zoom
+  vp20.camAzimuthDeg = 32.f;
+  vp20.camElevationDeg = 55.f;
+  vp20.camPerspective = true;
+  vp20.camFovDeg = 62.f;
+  vp20.activeUcs.origin = {12.0, 15.0, 3.0};
+  vp20.activeUcs.xAxis = {0.0, 1.0, 0.0};
+  vp20.activeUcs.yAxis = {-1.0, 0.0, 0.0};
+  vp20.activeUcs.zAxis = {0.0, 0.0, 1.0};
+  SetViewportLayerColor(vp20, "Roads", "#12AB34");
   vp20.modelCenterX = 100.0;
   vp20.modelCenterY = 50.0;
   Viewport vp50;
@@ -4470,9 +4485,80 @@ TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #61
   REQUIRE(plotA->viewports.size() == 2);
   CHECK(plotA->paperLines.size() == 6);
   CHECK(plotA->viewports[0].scaleModelPerPaperIn == Catch::Approx(240.f).margin(1.f));
+  CHECK(plotA->viewports[0].annotationScaleName == "1:100");
+  CHECK(plotA->viewports[0].camAzimuthDeg == Catch::Approx(32.f).margin(0.01f));
+  CHECK(plotA->viewports[0].camElevationDeg == Catch::Approx(55.f).margin(0.01f));
+  CHECK(plotA->viewports[0].camPerspective);
+  CHECK(plotA->viewports[0].camFovDeg == Catch::Approx(62.f).margin(0.1f));
+  CHECK(ucs::FramesMatch(plotA->viewports[0].activeUcs, vp20.activeUcs, 0.01));
+  REQUIRE(ViewportLayerColorOverride(plotA->viewports[0], "Roads") != nullptr);
+  CHECK(*ViewportLayerColorOverride(plotA->viewports[0], "Roads") == "#12AB34");
   CHECK(plotA->viewports[1].scaleModelPerPaperIn == Catch::Approx(600.f).margin(1.f));
   CHECK(plotA->viewports[0].modelCenterX == Catch::Approx(100.0).margin(0.01));
   CHECK(plotB->paperLines.size() == 6);
+
+  const auto dxfPath = (dir.path / "rt-paper.dxf").string();
+  REQUIRE(ExportDxfFile(st, dxfPath.c_str(), log));
+  {
+    std::ifstream dxf(dxfPath, std::ios::binary);
+    const std::string header((std::istreambuf_iterator<char>(dxf)), {});
+    CHECK(header.find("AC1032") != std::string::npos);  // DXF always uses R2018.
+    CHECK(header.find("ASDK_XREC_ANNOTATION_SCALE_INFO") != std::string::npos);
+    CHECK(header.find("ADSK_XREC_LAYER_COLOR_OVR") != std::string::npos);
+  }
+  AppCommandState dxfIn;
+  REQUIRE(ImportDxfFile(dxfIn, dxfPath.c_str(), log));
+  REQUIRE(dxfIn.userLinesFlat.size() == 6);
+  CHECK(dxfIn.userLinesFlat[0] == Catch::Approx(100.0));
+  CHECK(dxfIn.userLinesFlat[4] == Catch::Approx(400.0));
+  REQUIRE(dxfIn.userCirclesCxCyZR.size() == 4);
+  CHECK(dxfIn.userCirclesCxCyZR[0] == Catch::Approx(50.0));
+  CHECK(dxfIn.userCirclesCxCyZR[3] == Catch::Approx(5.0));
+  REQUIRE(dxfIn.paperLayouts.size() == 2);
+  const PaperLayout* dxfPlotA = nullptr;
+  for (const PaperLayout& L : dxfIn.paperLayouts)
+    if (L.name == "Plot A")
+      dxfPlotA = &L;
+  REQUIRE(dxfPlotA != nullptr);
+  REQUIRE(dxfPlotA->viewports.size() == 2);
+  CHECK(dxfPlotA->viewports[0].annotationScaleName == "1:100");
+  CHECK(dxfPlotA->viewports[0].camPerspective);
+  CHECK(dxfPlotA->viewports[0].camFovDeg == Catch::Approx(62.f).margin(0.1f));
+  CHECK(ucs::FramesMatch(dxfPlotA->viewports[0].activeUcs, vp20.activeUcs, 0.01));
+  REQUIRE(ViewportLayerColorOverride(dxfPlotA->viewports[0], "Roads") != nullptr);
+  CHECK(*ViewportLayerColorOverride(dxfPlotA->viewports[0], "Roads") == "#12AB34");
+}
+
+TEST_CASE("DXF native camera and UCS import without viewport XRECORDs", "[dxf][dwg][issue1013]") {
+  ScratchDir dir("dxf-native-vp-no-xrecords");
+  const auto path = (dir.path / "native-vp.dxf").string();
+  AppCommandState st;
+  PaperLayout layout;
+  layout.name = "Camera UCS";
+  Viewport vp;
+  vp.camPerspective = true;
+  vp.camFovDeg = 67.f;
+  vp.camAzimuthDeg = 42.f;
+  vp.camElevationDeg = 31.f;
+  vp.activeUcs.origin = {12.0, 15.0, 3.0};
+  vp.activeUcs.xAxis = {0.0, 1.0, 0.0};
+  vp.activeUcs.yAxis = {-1.0, 0.0, 0.0};
+  vp.activeUcs.zAxis = {0.0, 0.0, 1.0};
+  layout.viewports.push_back(vp);
+  st.paperLayouts.push_back(layout);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDxfFile(st, path.c_str(), log));
+  AppCommandState imported;
+  REQUIRE(ImportDxfFile(imported, path.c_str(), log));
+  REQUIRE(imported.paperLayouts.size() == 1);
+  REQUIRE(imported.paperLayouts[0].viewports.size() == 1);
+  const Viewport& result = imported.paperLayouts[0].viewports[0];
+  CHECK(result.camPerspective);
+  CHECK(result.camFovDeg == Catch::Approx(67.f).margin(0.1f));
+  CHECK(result.camAzimuthDeg == Catch::Approx(42.f).margin(0.1f));
+  CHECK(result.camElevationDeg == Catch::Approx(31.f).margin(0.1f));
+  CHECK(ucs::FramesMatch(result.activeUcs, vp.activeUcs, 0.01));
 }
 
 TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #624)",
@@ -4503,6 +4589,71 @@ TEST_CASE("R2018 DWG round-trips paper viewport visual style (REQ-371, issue #62
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
   CHECK(CountDwgFixedType(p.c_str(), DWG_TYPE_VISUALSTYLE) >= 1);
+  {
+    Dwg_Data exported{};
+    REQUIRE(dwg_read_file(p.c_str(), &exported) == 0);
+    BITCODE_BS visualStyleClass = 0;
+    unsigned visualStyleClasses = 0;
+    for (BITCODE_BS i = 0; i < exported.num_classes; ++i) {
+      const Dwg_Class& klass = exported.dwg_class[i];
+      if (klass.dxfname && std::strcmp(klass.dxfname, "VISUALSTYLE") == 0) {
+        visualStyleClass = klass.number;
+        ++visualStyleClasses;
+      }
+    }
+    CHECK(visualStyleClasses == 1);
+    REQUIRE(visualStyleClass != 0);
+    bool foundNativeShadedStyle = false;
+    for (BITCODE_BL i = 0; i < exported.num_objects; ++i) {
+      const Dwg_Object& object = exported.object[i];
+      if (object.fixedtype == DWG_TYPE_VISUALSTYLE) {
+        CHECK(object.type == visualStyleClass);
+        const Dwg_Object_VISUALSTYLE* style = object.tio.object->tio.VISUALSTYLE;
+        REQUIRE(style != nullptr);
+        if (style->style_type == 27) {
+          foundNativeShadedStyle = true;
+          CHECK(style->description != nullptr);
+          CHECK(style->edge_model == 0);
+          CHECK(style->edge_style == 4);
+          CHECK(style->display_settings == 5);
+          CHECK(style->face_mono_color.index == 7);
+          CHECK(style->face_mono_color.method == DWG_COLOR_METHOD_ACI);
+          CHECK(style->edge_intersection_color.rgb == 0xC3000007u);
+          CHECK(style->edge_obscured_color.method == DWG_COLOR_METHOD_NONE);
+        }
+      }
+      if (object.fixedtype == DWG_TYPE_VIEWPORT && object.tio.entity &&
+          object.tio.entity->tio.VIEWPORT) {
+        const Dwg_Entity_VIEWPORT* viewport = object.tio.entity->tio.VIEWPORT;
+        CHECK(object.tio.entity->has_full_visualstyle == 1);
+        const Dwg_Object* baseStyleObject =
+            viewport->visualstyle
+                ? dwg_resolve_handle_silent(&exported, viewport->visualstyle->absolute_ref)
+                : nullptr;
+        REQUIRE(baseStyleObject != nullptr);
+        REQUIRE(baseStyleObject->tio.object != nullptr);
+        REQUIRE(baseStyleObject->tio.object->tio.VISUALSTYLE != nullptr);
+        CHECK(baseStyleObject->tio.object->tio.VISUALSTYLE->style_type == 4);
+        CHECK(viewport->use_default_lights == 1);
+        CHECK(viewport->default_lighting_type == 1);
+        CHECK(viewport->ambient_color.index == 250);
+        CHECK(viewport->ambient_color.rgb == 0xC2333333u);
+        const Dwg_Object* styleObject = object.tio.entity->full_visualstyle
+                                            ? dwg_resolve_handle_silent(
+                                                  &exported, object.tio.entity->full_visualstyle->absolute_ref)
+                                            : nullptr;
+        REQUIRE(styleObject != nullptr);
+        REQUIRE(styleObject->tio.object != nullptr);
+        REQUIRE(styleObject->tio.object->tio.VISUALSTYLE != nullptr);
+        CHECK(viewport->render_mode ==
+              (styleObject->tio.object->tio.VISUALSTYLE->style_type == 27
+                   ? 4
+                   : (styleObject->tio.object->tio.VISUALSTYLE->style_type == 6 ? 2 : 0)));
+      }
+    }
+    CHECK(foundNativeShadedStyle);
+    dwg_free(&exported);
+  }
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.paperLayouts.size() == 1);
@@ -5535,6 +5686,7 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
   CadLayerRow walls;
   walls.name = "Walls";
   st.drawingLayerTable.push_back(walls);
+  st.annotationScales = {{"1:50", 1.f, 50.f}};
   PaperLayout sheet;
   sheet.name = "Big";
   sheet.portraitWidthIn = 60.f;  // a custom 60 x 80 in landscape sheet, not a preset
@@ -5547,6 +5699,7 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
   vp.paperWIn = 60.f;  // wider than 50 in: used to be dropped as "chrome"
   vp.paperHIn = 40.f;
   vp.scaleModelPerPaperIn = 20.f;
+  vp.annotationScaleName = "1:50";
   vp.camAzimuthDeg = 30.f;
   vp.camElevationDeg = 40.f;
   vp.camRollDeg = 10.f;
@@ -5591,7 +5744,7 @@ TEST_CASE("Paper size, orientation and viewport state round-trip through DWG (is
 
 // Issue #768 / REQ-113 (D-2026-10-20-a): the DXF path (DxfIo, the app's own DXF reader and writer)
 // carries the whole paper-space set: fills, sheet size and orientation, viewport state, and layouts
-// beyond the first. A multileader has no DXF form here, so it comes back as its lines plus its label.
+// beyond the first. Its paper-space multileader comes back as a LEADER plus its label.
 TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (issue #768)",
           "[dxf][req113][issue768]") {
   ScratchDir dir("dxf-paper-768");
@@ -5600,6 +5753,7 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   CadLayerRow walls;
   walls.name = "Walls";
   st.drawingLayerTable.push_back(walls);
+  st.annotationScales = {{"1:50", 1.f, 50.f}};
   PaperLayout sheet;
   sheet.name = "Big";
   sheet.portraitWidthIn = 24.f;
@@ -5627,6 +5781,7 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   vp.paperWIn = 20.f;
   vp.paperHIn = 12.f;
   vp.scaleModelPerPaperIn = 20.f;
+  vp.annotationScaleName = "1:50";
   vp.camAzimuthDeg = 30.f;
   vp.camElevationDeg = 40.f;
   vp.camRollDeg = 10.f;
@@ -5656,7 +5811,9 @@ TEST_CASE("DXF round-trips paper-space fills, sheet setup and viewport state (is
   CHECK(big.landscape);
   REQUIRE(big.paperFilledRegions.size() == 1);
   CHECK(big.paperFilledRegions[0].vertsXyz[0] == Catch::Approx(1.f).margin(0.001f));
-  CHECK(big.paperLines.size() == 6);  // the leader's one segment
+  CHECK(big.paperLines.empty());
+  REQUIRE(big.paperMultileaders.size() == 1);
+  CHECK(big.paperMultileaders[0].pathXyz.size() == 6);
   bool hasLabel = false;
   for (const CadAnnotation& a : big.paperTexts)
     hasLabel = hasLabel || a.text.find("SEE NOTE") != std::string::npos;

@@ -1,5 +1,7 @@
 #include "DxfIo.hpp"
 
+#include "LibreDwgCad.hpp"
+
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "PolylineTiltedArc.hpp"
@@ -10,6 +12,7 @@
 #include "MtextRichFormat.hpp"
 #include "TextStyle.hpp"
 #include "util/cadtable.hpp"
+#include "util/ucs.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -5665,12 +5668,118 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   return true;
 }
 
+bool HasAutoCadViewportState(const AppCommandState& st) {
+  for (const PaperLayout& layout : st.paperLayouts) {
+    for (const Viewport& vp : layout.viewports) {
+      if (!vp.annotationScaleName.empty() || !vp.vpColorLayers.empty() || !vp.cameraIsPlan() ||
+          !ucs::IsWorld(vp.activeUcs))
+        return true;
+    }
+  }
+  return false;
+}
+
+bool HasAutoCadViewportState(const char* pathUtf8) {
+  if (pathUtf8 == nullptr || pathUtf8[0] == '\0')
+    return false;
+  std::ifstream input(pathUtf8, std::ios::binary);
+  if (!input)
+    return false;
+  const std::string text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (text.find("ASDK_XREC_ANNOTATION_SCALE_INFO") != std::string::npos ||
+      text.find("ADSK_XREC_LAYER_COLOR_OVR") != std::string::npos)
+    return true;
+
+  // Camera projection and UCS are native VIEWPORT fields and do not require XRECORDs.
+  // Detect those fields within VIEWPORT entities so the native-property overlay below runs
+  // even when a file contains only a perspective camera or a per-viewport UCS.
+  std::istringstream lines(text);
+  std::string codeLine;
+  std::string valueLine;
+  bool inViewport = false;
+  bool perspective = false;
+  bool ucsViewport = false;
+  bool viewportUcsData = false;
+  while (std::getline(lines, codeLine) && std::getline(lines, valueLine)) {
+    while (!valueLine.empty() && std::isspace(static_cast<unsigned char>(valueLine.back())))
+      valueLine.pop_back();
+    size_t valueStart = 0;
+    while (valueStart < valueLine.size() && std::isspace(static_cast<unsigned char>(valueLine[valueStart])))
+      ++valueStart;
+    if (valueStart != 0)
+      valueLine.erase(0, valueStart);
+    int code = -1;
+    try {
+      code = std::stoi(codeLine);
+    } catch (...) {
+      continue;
+    }
+    if (code == 0) {
+      if (inViewport && (perspective || (ucsViewport && viewportUcsData)))
+        return true;
+      inViewport = valueLine == "VIEWPORT";
+      perspective = false;
+      ucsViewport = false;
+      viewportUcsData = false;
+      continue;
+    }
+    if (!inViewport)
+      continue;
+    try {
+      if (code == 90)
+        perspective = (std::stoi(valueLine) & 1) != 0;
+      else if (code == 71)
+        ucsViewport = std::stoi(valueLine) != 0;
+      else if (code >= 110 && code <= 132)
+        viewportUcsData = true;
+    } catch (...) {
+    }
+  }
+  return inViewport && (perspective || (ucsViewport && viewportUcsData));
+}
+
 } // namespace
 
 bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
-  return ImportDxfFile_Impl(st, pathUtf8, log);
+  if (!ImportDxfFile_Impl(st, pathUtf8, log))
+    return false;
+  if (!HasAutoCadViewportState(pathUtf8))
+    return true;
+
+  // Keep all ordinary entities from the established GoSurvey reader, whose entity coverage is
+  // broader. LibreDWG supplies only the viewport-native state that the established reader cannot
+  // yet decode: independent annotation scale, layer colors, UCS and camera projection/lens.
+  AppCommandState nativeState;
+  std::vector<std::string> nativeLog;
+  if (!ImportLibreCadFile(nativeState, pathUtf8, nativeLog, true))
+    return false;
+  for (PaperLayout& layout : st.paperLayouts) {
+    const auto nativeLayout = std::find_if(nativeState.paperLayouts.begin(), nativeState.paperLayouts.end(),
+                                           [&](const PaperLayout& candidate) {
+                                             return candidate.name == layout.name;
+                                           });
+    if (nativeLayout == nativeState.paperLayouts.end())
+      continue;
+    // The established DXF reader does not yet retain every paper-space VIEWPORT entity. Take the
+    // complete viewport list from LibreDWG, while keeping its ordinary model/paper entities above.
+    layout.viewports = nativeLayout->viewports;
+    // Native MULTILEADER DXF records are not decoded by the established reader yet. Preserve that
+    // entity class from LibreDWG when the ordinary reader did not produce a paper-space leader.
+    if (layout.paperMultileaders.empty() && !nativeLayout->paperMultileaders.empty()) {
+      layout.paperMultileaders = nativeLayout->paperMultileaders;
+      layout.paperMultileaderAttrs = nativeLayout->paperMultileaderAttrs;
+    }
+  }
+  if (st.cadMultileaders.empty() && !nativeState.cadMultileaders.empty()) {
+    st.cadMultileaders = nativeState.cadMultileaders;
+    st.cadMultileaderAttrs = nativeState.cadMultileaderAttrs;
+  }
+  return true;
 }
 
 bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
-  return ExportDxfFile_Impl(st, pathUtf8, log);
+  // Both writers emit R2018. Use LibreDWG for #1013's native viewport SCALE/XRECORD data; retain
+  // the established writer for drawings that do not need those records.
+  return HasAutoCadViewportState(st) ? ExportLibreCadFile(st, pathUtf8, log, true)
+                                     : ExportDxfFile_Impl(st, pathUtf8, log);
 }
