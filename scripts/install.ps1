@@ -332,6 +332,15 @@ function Copy-UserDataBack {
     Get-ChildItem -LiteralPath $Backup -Force | Copy-Item -Destination $Source -Recurse -Force
 }
 
+function ConvertFrom-ReleaseManifestContent {
+    param([object]$Content)
+
+    if ($Content -is [byte[]]) {
+        $Content = [Text.Encoding]::UTF8.GetString($Content)
+    }
+    return (ConvertFrom-Json -InputObject $Content)
+}
+
 # ---------------------------------------------------------------------------------------------
 # Install
 # ---------------------------------------------------------------------------------------------
@@ -365,7 +374,7 @@ try {
     if ($manifestResponse.StatusCode -ne 200) {
         throw "Stable release manifest request returned HTTP $($manifestResponse.StatusCode)."
     }
-    $manifest = $manifestResponse.Content | ConvertFrom-Json
+    $manifest = ConvertFrom-ReleaseManifestContent -Content $manifestResponse.Content
     if ([string]$manifest.channel -ne 'stable') {
         throw 'The release manifest is not marked as stable. Installation stopped.'
     }
