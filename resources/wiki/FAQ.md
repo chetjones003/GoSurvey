@@ -183,7 +183,7 @@ network requests at all.
 
 ### Where are my settings stored?
 
-`gosurvey-user.json`, beside the executable. Plot scale and insertion units are stored in the DWG
+`%APPDATA%\GoSurvey\gosurvey-user.json`. Plot scale and insertion units are stored in the DWG
 drawing instead. The undo history log is at `%APPDATA%\GoSurvey\history.log`.
 
 ### The program says something I do not understand. Where do I look?

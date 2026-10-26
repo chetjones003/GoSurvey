@@ -10,7 +10,7 @@ if(POLICY CMP0141)
   endif()
 endif()
 
-project(GoSurvey VERSION 0.7.4 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.7.7 LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
@@ -35,6 +35,13 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols")
 set(CMAKE_COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/symbols")
+if(MSVC)
+  # REQ-425 §8: every build, Release included, links a PDB and records its GUID in the executable so a
+  # crash report can be matched to the one archived PDB. /Z7 keeps the compiler side compatible with
+  # sccache; /OPT:REF /OPT:ICF restore the size optimisations that /DEBUG would otherwise switch off.
+  add_compile_options(/Z7)
+  add_link_options(/DEBUG /OPT:REF /OPT:ICF)
+endif()
 if(CMAKE_CONFIGURATION_TYPES)
   foreach(_config IN LISTS CMAKE_CONFIGURATION_TYPES)
     string(TOUPPER "${_config}" _upper)
@@ -83,6 +90,80 @@ set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
     "Prerelease suffix appended to the version, e.g. -beta.7 (empty for a stable build)")
 set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
     "Fourth field of the Windows VERSIONINFO quad; the beta number, or 0 for a stable build")
+
+set(GOSURVEY_GIT_COMMIT "" CACHE STRING
+    "Short git commit recorded in crash reports (empty: read from git at configure time)")
+if(NOT GOSURVEY_GIT_COMMIT)
+  find_package(Git QUIET)
+  if(GIT_FOUND)
+    # Reconfigure an incremental CMake build when HEAD or its current ref moves, so
+    # generated crash reports keep identifying the commit used to build the binary.
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE GOSURVEY_GIT_HEAD_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" symbolic-ref --quiet HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE GOSURVEY_GIT_HEAD_REF
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+    if(GOSURVEY_GIT_HEAD_PATH)
+      get_filename_component(GOSURVEY_GIT_HEAD_PATH "${GOSURVEY_GIT_HEAD_PATH}" ABSOLUTE
+                             BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+      if(EXISTS "${GOSURVEY_GIT_HEAD_PATH}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOSURVEY_GIT_HEAD_PATH}")
+      endif()
+    endif()
+    if(GOSURVEY_GIT_HEAD_REF)
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path "${GOSURVEY_GIT_HEAD_REF}"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GOSURVEY_GIT_REF_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(GOSURVEY_GIT_REF_PATH)
+        get_filename_component(GOSURVEY_GIT_REF_PATH "${GOSURVEY_GIT_REF_PATH}" ABSOLUTE
+                               BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(EXISTS "${GOSURVEY_GIT_REF_PATH}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${GOSURVEY_GIT_REF_PATH}")
+        endif()
+        get_filename_component(GOSURVEY_GIT_REF_DIRECTORY "${GOSURVEY_GIT_REF_PATH}" DIRECTORY)
+        if(IS_DIRECTORY "${GOSURVEY_GIT_REF_DIRECTORY}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                       "${GOSURVEY_GIT_REF_DIRECTORY}")
+        endif()
+      endif()
+      execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path packed-refs
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        OUTPUT_VARIABLE GOSURVEY_GIT_PACKED_REFS_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(GOSURVEY_GIT_PACKED_REFS_PATH)
+        get_filename_component(GOSURVEY_GIT_PACKED_REFS_PATH "${GOSURVEY_GIT_PACKED_REFS_PATH}" ABSOLUTE
+                               BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        if(EXISTS "${GOSURVEY_GIT_PACKED_REFS_PATH}")
+          set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                       "${GOSURVEY_GIT_PACKED_REFS_PATH}")
+        endif()
+      endif()
+    endif()
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" rev-parse --short=12 HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE GOSURVEY_GIT_COMMIT_FOUND
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET)
+  endif()
+  if(GOSURVEY_GIT_COMMIT_FOUND)
+    set(GOSURVEY_GIT_COMMIT "${GOSURVEY_GIT_COMMIT_FOUND}")
+  else()
+    set(GOSURVEY_GIT_COMMIT "unknown")
+  endif()
+endif()
 
 configure_file(
   "${CMAKE_CURRENT_SOURCE_DIR}/src/app/Version.hpp.in"
@@ -660,6 +741,7 @@ set(GOSURVEY_WHATS_NEW_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new-bg.pn
 set(GOSURVEY_WHATS_NEW_IMG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/whats-new")
 file(GLOB GOSURVEY_WHATS_NEW_IMAGES CONFIGURE_DEPENDS "${GOSURVEY_WHATS_NEW_IMG_DIR}/*.png")
 set(GOSURVEY_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/splash-bg.png")
+set(GOSURVEY_QT_SPLASH_BG "${CMAKE_CURRENT_SOURCE_DIR}/resources/qt-splash-bg.png")
 # REQ-336: the billboard content must exist at configure time so a missing file fails the build,
 # not only a packaged installer.
 if(NOT EXISTS "${GOSURVEY_WHATS_NEW_MD}")
@@ -670,6 +752,9 @@ if(NOT EXISTS "${GOSURVEY_WHATS_NEW_BG}")
 endif()
 if(NOT EXISTS "${GOSURVEY_SPLASH_BG}")
   message(FATAL_ERROR "REQ-093: resources/splash-bg.png is required (startup splash backdrop).")
+endif()
+if(NOT EXISTS "${GOSURVEY_QT_SPLASH_BG}")
+  message(FATAL_ERROR "REQ-093: resources/qt-splash-bg.png is required (Qt startup splash backdrop).")
 endif()
 set(GOSURVEY_WIKI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources/wiki")
 if(NOT EXISTS "${GOSURVEY_WIKI_DIR}/Home.md")
@@ -691,6 +776,7 @@ set(GOSURVEY_BUNDLED_RESOURCE_FILES
   "${GOSURVEY_WHATS_NEW_MD}"
   "${GOSURVEY_WHATS_NEW_BG}"
   "${GOSURVEY_SPLASH_BG}"
+  "${GOSURVEY_QT_SPLASH_BG}"
   ${GOSURVEY_WHATS_NEW_IMAGES}
   ${GOSURVEY_RESOURCE_DIR_FILES})
 set(_GOSURVEY_RESOURCE_STAMP "${CMAKE_CURRENT_BINARY_DIR}/.gosurvey_resources-$<CONFIG>.stamp")
@@ -722,6 +808,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_SPLASH_BG}"
           "$<TARGET_FILE_DIR:GoSurveyQt>/resources/splash-bg.png"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_QT_SPLASH_BG}"
+          "$<TARGET_FILE_DIR:GoSurveyQt>/resources/qt-splash-bg.png"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurveyQt>/resources/icons"
@@ -910,6 +999,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UcsTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-059 / #1034: the ViewCube is header-only and pure, like Camera.
+    tests/ViewCubeTests.cpp
     # REQ-341 live section clip (GitHub #149 acceptance 6). Header-only and pure for the same reason
     # Camera is, and for one more: the plane the shader receives is NOT in world coordinates, and a
     # version that forgets that is exact at the origin and 2,196,000 ft out at state-plane
@@ -1118,7 +1209,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TelemetryPingTests.cpp
     tests/CrashReporterTests.cpp
     src/platform/CrashReporterWireReason.cpp
-    tests/AuthPingTests.cpp
+    src/platform/CrashBuildInfo.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
@@ -1224,14 +1315,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-079 document-payload schema migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
     # logic is testable without the command layer that GsIo.cpp drags in.
     src/io/GsMigrate.cpp
-    # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
+    # REQ-080 telemetry. Pure by ADR-032 (b) — payload building and event decision —
     # no network, so the timing logic is testable without HttpFetch or WinHTTP.
     src/telemetry/TelemetryPing.cpp
-    # REQ-091 accounts sign-in. Pure by ADR-037 (d) — PKCE construction, base64url, the authorize
-    # URL, and the silent-refresh-vs-interactive decision — no network/window, same split as
-    # TelemetryPing above. The BCrypt SHA-256 call PKCE needs is in HttpFetch and is exercised by
-    # AuthService, not by this pure module or its tests.
-    src/auth/AuthPing.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -1255,7 +1341,6 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.

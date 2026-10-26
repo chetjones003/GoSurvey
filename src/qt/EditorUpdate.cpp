@@ -126,6 +126,13 @@ void EditorWindow::ShowUpdateDialog() {
   compatibility->setObjectName("updateCompatibility");
   compatibility->setWordWrap(true);
   layout->addWidget(compatibility);
+  auto* migrationNotice = new QLabel(dialog);
+  migrationNotice->setObjectName("updateMigrationNotice");
+  migrationNotice->setWordWrap(true);
+  migrationNotice->setTextFormat(Qt::RichText);
+  migrationNotice->setStyleSheet(
+      "border: 1px solid palette(mid); border-radius: 6px; padding: 8px;");
+  layout->addWidget(migrationNotice);
   auto* notesCaption = new QLabel("What's new:", dialog);
   notesCaption->setObjectName("updateNotesCaption");
   layout->addWidget(notesCaption);
@@ -191,9 +198,9 @@ void EditorWindow::ShowUpdateDialog() {
     m_Update->phase = Phase::Idle;
   });
 
-  auto refresh = [this, dialog, headline, detail, compatibility, notesCaption, notes, progress,
-                  error, footnote, updateNow, remindLater, skipVersion, cancelDownload, install,
-                  notNow, closeFailure] {
+  auto refresh = [this, dialog, headline, detail, compatibility, migrationNotice, notesCaption,
+                  notes, progress, error, footnote, updateNow, remindLater, skipVersion,
+                  cancelDownload, install, notNow, closeFailure] {
     const auto& state = *m_Update;
     const QString version = QString::fromUtf8(state.available.version.c_str());
     const QString running = QString::fromUtf8(state.runningVersion.c_str());
@@ -250,6 +257,14 @@ void EditorWindow::ShowUpdateDialog() {
     compatibility->setStyleSheet(warningStyle);
     compatibility->setText(warning);
     compatibility->setVisible(!warning.isEmpty());
+
+    migrationNotice->setText(
+        "<b>Moving GoSurvey to your user profile</b><br>"
+        "This update moves GoSurvey to "
+        "<code>%LOCALAPPDATA%\\Programs\\GoSurvey</code>. Windows will ask once to remove the "
+        "Program Files copy. Your settings and user data stay in place; future updates will not "
+        "need elevation.");
+    migrationNotice->setVisible(m_Update->requiresPerUserMigration);
 
     // Set the notes only when the offer changes: re-setting every tick would reset the scroll
     // position under a user who is reading them.

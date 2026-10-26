@@ -161,6 +161,11 @@ session 0 remains unsupported for the GUI test launcher.
 
 ## 5. Select production routing
 
+> **Temporarily pinned to hosted (2026-10-24).** `full-validation.yml` currently ignores
+> `GOSURVEY_PR_RUNNERS` and always uses hosted Windows runners, because the self-hosted workers were
+> leaving jobs queued. To resume self-hosted routing, restore the commented-out expression in the
+> workflow's `Select Windows worker pool` step, then set the variable as described below.
+
 After all three role labels are online, set `GOSURVEY_PR_RUNNERS=self-hosted` in
 the repository's Actions variables. `full-validation.yml` then routes
 owner-authored same-repository PRs to the role workers. Other PRs, including

@@ -2,9 +2,9 @@
 
 **View → Settings…**, **`OPTIONS`** / **`OP`** / **`SETTINGS`**, or right-click in the viewport ▸ **Options…**
 
-The dialog has eleven tabs. **Apply** writes the settings to `gosurvey-user.json` beside the
-executable and confirms `Settings applied (gosurvey-user.json).`; a failure says
-*Error: failed to write gosurvey-user.json (check directory permissions).*
+The dialog has eleven tabs. **Apply** writes the settings to
+`%APPDATA%\GoSurvey\gosurvey-user.json` and confirms `Settings applied (gosurvey-user.json).`;
+a failure says *Error: failed to write gosurvey-user.json (check directory permissions).*
 
 The top of the dialog reports the **Current profile** (`<<GoSurvey>>`) and the **Current drawing**.
 
@@ -282,7 +282,7 @@ The angle **entry** convention — north is 0°, clockwise — never changes. Th
 
 | File | Contents |
 |---|---|
-| `gosurvey-user.json` — beside the executable | Display precision, angle format, startup template, update settings, and the rest of the Options dialog |
+| `%APPDATA%\GoSurvey\gosurvey-user.json` | Display precision, angle format, startup template, update settings, and the rest of the Options dialog |
 | The DWG drawing | Plot scale, insertion units, layers, text styles, layouts |
 | `%APPDATA%\GoSurvey\history.log` | Undo history log |
 | `resources/layouts/*.ini` | Saved panel layouts |

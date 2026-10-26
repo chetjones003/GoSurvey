@@ -202,6 +202,104 @@ jobs:
       - name: Build
         run: cmake --build --preset ninja-release
 
+      - name: Set up Mesa OpenGL for hosted release tests
+        shell: pwsh
+        run: |
+          # Qt's bundled software OpenGL driver only reports OpenGL 3.0. GoSurvey needs 3.3,
+          # so use the same pinned Mesa llvmpipe runtime as full-validation.yml.
+          $version = '26.2.4'
+          $archive = Join-Path $env:RUNNER_TEMP "mesa3d-$version-release-msvc.7z"
+          $url = "https://github.com/pal1000/mesa-dist-win/releases/download/$version/mesa3d-$version-release-msvc.7z"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          $expectedHash = '351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695'
+          $actualHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) { throw "Mesa archive SHA256 mismatch: $actualHash" }
+
+          $sevenZipPath = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZipPath) { $sevenZipPath = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path -LiteralPath $sevenZipPath)) { throw '7-Zip was not found on this Windows runner' }
+          $extractDir = Join-Path $env:RUNNER_TEMP "mesa3d-$version"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          & $sevenZipPath x $archive "-o$extractDir" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to extract Mesa (exit $LASTEXITCODE)" }
+
+          $mesaOpenGl = Get-ChildItem -LiteralPath $extractDir -Recurse -File -Filter opengl32.dll |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $mesaOpenGl) { throw 'Mesa x64 opengl32.dll was not present in the pinned archive' }
+          Add-Content -Path $env:GITHUB_ENV -Value "GOSURVEY_MESA_BIN=$($mesaOpenGl.DirectoryName)"
+          Add-Content -Path $env:GITHUB_ENV -Value 'GALLIUM_DRIVER=llvmpipe'
+
+      - name: Stage Mesa runtime dependencies for release tests
+        shell: pwsh
+        run: |
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
+          if (Test-Path -LiteralPath $backup) { Remove-Item -LiteralPath $backup -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path $backup | Out-Null
+
+          foreach ($dependency in 'opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll') {
+            $source = Join-Path $env:GOSURVEY_MESA_BIN $dependency
+            $destination = Join-Path $runtime $dependency
+            if (Test-Path -LiteralPath $destination) {
+              Copy-Item -LiteralPath $destination -Destination (Join-Path $backup $dependency) -Force
+            }
+            if (Test-Path -LiteralPath $source) {
+              Copy-Item -LiteralPath $source -Destination $destination -Force
+            } elseif ($dependency -eq 'opengl32.dll') {
+              throw "Pinned Mesa OpenGL entry point is missing: $source"
+            } else {
+              Write-Host "Optional Mesa dependency is absent; retaining the existing runtime file if present: $dependency"
+            }
+          }
+
+      - name: Test release (REQ-202)
+        shell: pwsh
+        env:
+          QT_OPENGL: desktop
+          GALLIUM_DRIVER: llvmpipe
+        run: |
+          $runtime = Join-Path $env:GITHUB_WORKSPACE 'build'
+          $backup = Join-Path $env:RUNNER_TEMP 'gosurvey-release-qt-runtime-backup'
+          $dependencies = @('opengl32.dll', 'libgallium_wgl.dll', 'libglapi.dll', 'dxil.dll')
+          $testExit = 1
+          try {
+            ctest --preset ninja-release --parallel 8 --output-on-failure
+            $testExit = $LASTEXITCODE
+          } finally {
+            # Mesa is only a test driver. Restore Qt's original DLLs (or remove Mesa-only files)
+            # before later steps stage the application for publication, including on test failure.
+            foreach ($dependency in $dependencies) {
+              $saved = Join-Path $backup $dependency
+              $staged = Join-Path $runtime $dependency
+              if (Test-Path -LiteralPath $saved) {
+                Copy-Item -LiteralPath $saved -Destination $staged -Force
+              } elseif (Test-Path -LiteralPath $staged) {
+                Remove-Item -LiteralPath $staged -Force
+              }
+            }
+          }
+          if ($testExit -ne 0) { throw "CTest failed with exit code $testExit." }
+
+      - name: Test release PDB archive validation
+        shell: pwsh
+        run: ./tools/test-archive-release-pdb.ps1
+
+      - name: Archive private release PDB
+        # REQ-425 / issue #1004: archive symbols from this exact build before any package
+        # artifact is staged. The R2 key is separate from the crash-dumps/ lifecycle prefix.
+        if: github.ref_name == 'beta' || (github.ref_name == 'master' && steps.gate.outputs.publish == 'true')
+        shell: pwsh
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          ./tools/archive-release-pdb.ps1 `
+            -ExecutablePath 'build/GoSurvey.exe' `
+            -PdbPath 'build/.cmake/release/symbols/GoSurvey.pdb' `
+            -Version '${{ steps.ver.outputs.version }}' `
+            -Commit (git rev-parse --short=12 HEAD)
+
       - name: REQ-336 assert whats-new.md is packaged
         # Runtime falls back if the file is missing; CI must still refuse to ship without it.
         shell: pwsh
@@ -213,6 +311,31 @@ jobs:
             }
             Write-Host "OK: $path present"
           }
+
+      - name: Stage app-local Microsoft VC runtime (x64)
+        shell: pwsh
+        run: |
+          # ADR-073: bootstrap and in-app updates are non-elevated, so ship the licensed
+          # release CRT DLLs beside GoSurvey.exe. Keep this sourced from the active MSVC
+          # redist directory and refresh it on every release build.
+          $redistRoot = Join-Path $env:VCToolsRedistDir 'x64'
+          $crtDirs = @(Get-ChildItem -LiteralPath $redistRoot -Directory -Filter 'Microsoft.VC*.CRT' |
+            Sort-Object Name -Descending)
+          if ($crtDirs.Count -eq 0) {
+            throw "No x64 Microsoft VC CRT redistributable folder found under '$redistRoot'."
+          }
+          $crtDir = $crtDirs[0].FullName
+          $crtDlls = @(Get-ChildItem -LiteralPath $crtDir -File -Filter '*.dll')
+          if ($crtDlls.Count -eq 0) { throw "No runtime DLLs found in '$crtDir'." }
+          foreach ($required in @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')) {
+            if (-not ($crtDlls.Name -contains $required)) {
+              throw "Required app-local runtime '$required' is missing from '$crtDir'."
+            }
+          }
+          foreach ($dll in $crtDlls) {
+            Copy-Item -LiteralPath $dll.FullName -Destination 'build' -Force
+          }
+          Write-Host "Staged $($crtDlls.Count) runtime DLLs from $crtDir"
 
       - name: sccache stats
         if: always()
@@ -283,11 +406,18 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
-          if (-not (Test-Path 'build\GoSurvey.exe')) {
-            throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
-          }
-          if (-not (Test-Path 'build\vc_redist.x64.exe')) {
-            throw 'Expected build\vc_redist.x64.exe — the installer must ship the VC++ runtime.'
+          # Keep these runtime requirements aligned with tools/verify-qt-deployment.ps1. The
+          # installer must remain usable after the Store downloads it once and the machine goes
+          # offline; checking for any DLL is not enough to prove the Qt runtime is complete.
+          foreach ($path in @('build\GoSurvey.exe', 'build\Qt6Core.dll', 'build\Qt6Gui.dll',
+                              'build\Qt6Widgets.dll', 'build\Qt6OpenGL.dll',
+                              'build\Qt6OpenGLWidgets.dll', 'build\pdfium.dll',
+                              'build\qt.conf', 'build\qt-plugins\platforms\qwindows.dll',
+                              'build\resources\default-template.gst',
+                              'build\vc_redist.x64.exe')) {
+            if (-not (Test-Path $path)) {
+              throw "Expected $path in packaging inputs; offline installer would be incomplete."
+            }
           }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
@@ -446,6 +576,14 @@ jobs:
             notes       = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
+          if ($env:GITHUB_REF_NAME -eq 'master') {
+            @(
+              "Installer URL: $url"
+              "SHA-256: $sha"
+              'Install parameters: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-'
+              'UAC: A Windows UAC prompt is permitted.'
+            ) | Set-Content -Path installer\Output\store-submission.txt -Encoding UTF8
+          }
           # Same text, as Markdown, for the GitHub release page body (see the publish steps).
           Set-Content -Path installer\Output\release-body.md -Value $notes -Encoding UTF8
           "installer=$($installer.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
@@ -521,6 +659,7 @@ jobs:
           gh release create "v${{ needs.build.outputs.version }}" `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" `
+            "installer\Output\store-submission.txt" `
             --title "GoSurvey ${{ needs.build.outputs.version }}" `
             --notes-file installer\Output\release-body.md
 

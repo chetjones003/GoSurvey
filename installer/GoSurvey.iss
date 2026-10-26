@@ -34,9 +34,10 @@
   #define OutputDir "Output"
 #endif
 
-; Microsoft VC++ 2015–2022 x64 runtime (placed in build/ by CI or tools/fetch-vc-redist.ps1).
-#ifexist "..\build\vc_redist.x64.exe"
-  #define VcRedistBundled
+; The offline installer must carry the Microsoft VC++ runtime. CI and local packaging put it in
+; build/ before ISCC; fail instead of silently producing an installer that needs a network fetch.
+#ifnexist "..\build\vc_redist.x64.exe"
+  #error Missing build\vc_redist.x64.exe; fetch it with tools\fetch-vc-redist.ps1 before packaging.
 #endif
 
 #define MyAppName "GoSurvey"
@@ -59,14 +60,17 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
+; ADR-072: every install belongs to the current Windows user. This also keeps normal updates
+; writable without elevation and gives new installs a stable per-user path.
+DefaultDirName={localappdata}\Programs\{#MyAppName}
+UsePreviousAppDir=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 DisableProgramGroupPage=yes
 LicenseFile=License.txt
 InfoAfterFile=InfoAfter.txt
-PrivilegesRequiredOverridesAllowed=dialog
+PrivilegesRequired=lowest
 OutputDir={#OutputDir}
 OutputBaseFilename=GoSurvey-{#AppVersion}-Installer
 SetupIconFile=..\resources\icons\app.ico
@@ -76,8 +80,8 @@ WizardStyle=modern dynamic
 ; REQ-078 / ADR-029 (f): the running application publishes these mutexes (see
 ; PublishInstallerDetectionMutex in src/app/main.cpp). Without them a silent update
 ; cannot tell that GoSurvey is running, and fails trying to replace a locked .exe.
-; Both namespaces are listed because the installer runs elevated and may not share the
-; local one with the user's session.
+; Both namespaces are published so the legacy elevated build and the per-user build can
+; detect the same running app during migration/update.
 AppMutex=GoSurveyAppMutex,Global\GoSurveyAppMutex
 CloseApplications=yes
 RestartApplications=yes
@@ -108,10 +112,8 @@ Source: "{#BuildDir}\pdfium.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt.conf"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\qt-plugins\*"; DestDir: "{app}\qt-plugins"; Flags: ignoreversion recursesubdirs createallsubdirs
-#ifdef VcRedistBundled
 ; Redistributable under Microsoft's license terms; installed quietly during setup (see [Run]).
 Source: "{#BuildDir}\vc_redist.x64.exe"; DestDir: "{app}\redist"; DestName: "VC_redist.x64.exe"; Flags: ignoreversion
-#endif
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files
 
 [Icons]
@@ -119,6 +121,39 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Code]
+// A direct installer launch must not replace a build already installed at this version or newer. The bootstrap
+// performs the same check before downloading; this protects users who run the installer itself.
+function IsVersionInstalledAtLeast(RootKey: Integer): Boolean;
+var
+  InstalledVersion: String;
+  InstalledPackedVersion: Int64;
+  SetupPackedVersion: Int64;
+begin
+  Result := False;
+  if RegQueryStringValue(RootKey,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{02774040-27C9-4A9A-A999-86E641C42F78}_is1',
+       'DisplayVersion', InstalledVersion) and
+     StrToVersion(InstalledVersion, InstalledPackedVersion) and
+     StrToVersion('{#AppVersion}', SetupPackedVersion) then
+    Result := ComparePackedVersion(InstalledPackedVersion, SetupPackedVersion) >= 0;
+end;
+
+function IsVersionAlreadyInstalled: Boolean;
+begin
+  Result := IsVersionInstalledAtLeast(HKCU) or IsVersionInstalledAtLeast(HKLM);
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := not IsVersionAlreadyInstalled;
+  if not Result then
+  begin
+    Log('GoSurvey {#AppVersion} or newer is already installed; Setup will not replace it.');
+    if not WizardSilent then
+      MsgBox('GoSurvey {#AppVersion} or newer is already installed.', mbInformation, MB_OK);
+  end;
+end;
+
 // True when Setup was started by the in-app updater with /RELAUNCH=1 (REQ-078).
 //
 // Needed because /RESTARTAPPLICATIONS cannot do this job: it only restarts applications that
@@ -133,22 +168,19 @@ begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
 end;
 
-function ShouldInstallVcRedist: Boolean;
+// The per-user bootstrap and in-app updater carry the licensed app-local CRT DLLs beside the
+// executable. The Microsoft Store installation keeps using the shared redistributable.
+function WantsRuntimeRedist: Boolean;
 begin
-  Result := FileExists(ExpandConstant('{app}\redist\VC_redist.x64.exe'));
+  Result := ExpandConstant('{param:SKIPVCREDIST|0}') <> '1';
 end;
 
 [Run]
-#ifdef VcRedistBundled
-; Idempotent on machines that already have the runtime; required for GoSurvey.exe (/MD).
-Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: ShouldInstallVcRedist
-#endif
+; Store path retains the shared redistributable. Per-user bootstrap/updater paths carry local CRT DLLs.
+Filename: "{app}\redist\VC_redist.x64.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ runtime..."; Flags: waituntilterminated; Check: WantsRuntimeRedist
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-; The updater's relaunch, routed through Explorer.
-;
-; Launching non-elevated is the requirement, not a nicety: Setup runs elevated, so a direct exec
-; would bring GoSurvey back as administrator and it would then write prefs and drawings with admin
-; ownership that the user's own session cannot modify.
+; The updater's relaunch, routed through Explorer to keep the app in the current user's shell.
+; Setup is now per-user under ADR-072; the Explorer launch remains the established update route.
 ;
 ; `runasoriginaluser` is the flag meant for this and it was tried first. Setup's log showed it
 ; accepted the entry ("Run as: Original user", "Type: Exec", correct Filename) and then silently

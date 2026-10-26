@@ -16,6 +16,7 @@
 #include <QTextEdit>
 #include <QKeySequenceEdit>
 #include <QShowEvent>
+#include <utility>
 #include "EditorViewport.hpp"
 #include "AdjustmentWindow.hpp"
 #include "QtText.hpp"
@@ -25,12 +26,12 @@
 #include "DwgIo.hpp"
 #include "GsIo.hpp"
 #include "AppPaths.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "UserPrefs.hpp"
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "WhatsNewLogic.hpp"
 #include "Project.hpp"
-#include "auth/AuthService.hpp"
 #include "update/UpdateService.hpp"
 #include "telemetry/TelemetryService.hpp"
 #include "platform/HttpFetch.hpp"
@@ -44,9 +45,11 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QEvent>
 #include <QComboBox>
-#include <QCompleter>
-#include <QStringListModel>
+#include <QAbstractItemView>
+#include <QHash>
+#include <QListView>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDockWidget>
@@ -57,12 +60,12 @@
 #include <QFormLayout>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
-#include <QRadioButton>
 #include <QHeaderView>
 #include <QInputDialog>
 #include <QImage>
 #include <QKeyEvent>
 #include <QShortcut>
+#include <QSizeGrip>
 #include <QTimer>
 #include <QLabel>
 #include <QLineEdit>
@@ -71,8 +74,6 @@
 #include <QMenu>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QProgressBar>
-#include <QRadioButton>
 #include <QSettings>
 #include <QSignalBlocker>
 #include <QStackedWidget>
@@ -102,11 +103,13 @@
 #include <QClipboard>
 #include <QDir>
 #include <QFrame>
-#include <QRadioButton>
 #include <exception>
 #include <cstring>
 #include <array>
 #include <cmath>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 QString QtAsset(const QString& relative) {
   QString resolved = relative;
@@ -120,6 +123,26 @@ QString QtAsset(const QString& relative) {
 }
 
 namespace {
+class VisibleSizeGrip final : public QSizeGrip {
+public:
+  explicit VisibleSizeGrip(QWidget* parent) : QSizeGrip(parent) {
+    setObjectName("editorResizeGrip");
+    setFixedSize(24, 24);
+    setCursor(Qt::SizeFDiagCursor);
+    setToolTip("Drag to resize window");
+  }
+
+protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    painter.setPen(QPen(QColor("#9aabb8"), 1.6, Qt::SolidLine, Qt::RoundCap));
+    for (int offset : {0, 5, 10})
+      painter.drawLine(width() - 4 - offset, height() - 3,
+                       width() - 3, height() - 4 - offset);
+  }
+};
+
 class TopographicTreeWidget final : public QTreeWidget {
  public:
   explicit TopographicTreeWidget(bool rightCorner, QWidget* parent = nullptr)
@@ -152,21 +175,6 @@ class TopographicTreeWidget final : public QTreeWidget {
 
  private:
   bool m_RightCorner;
-};
-
-class TopographicMapPanel final : public QWidget {
- public:
-  explicit TopographicMapPanel(QWidget* parent = nullptr) : QWidget(parent) {}
-
- protected:
-  void paintEvent(QPaintEvent* event) override {
-    QWidget::paintEvent(event);
-    if (qApp->property("cadLightTheme").toBool()) return;
-    QPainter painter(this);
-    const qreal artWidth = width() * .9;
-    qtArtwork::DrawRisingContours(painter,
-        QRectF(width() * .54, height() * .30, artWidth, artWidth * 120.0 / 220.0), .58);
-  }
 };
 
 class TopographicStartBody final : public QWidget {
@@ -299,11 +307,64 @@ QIcon CadCommandIcon(const QString& icon) {
   return QIcon(QPixmap::fromImage(image));
 }
 
-EditorWindow::EditorWindow() {
+QString NormalizedCommandIconName(QString name) {
+  name = name.toLower();
+  name.remove(QRegularExpression("[^a-z0-9]"));
+  return name;
+}
+
+QString GeneratedCommandIconFamily(const QString& name, const QString& description) {
+  const QString text = (name + " " + description).toLower();
+  if (text.contains("surface") || text.contains("terrain") || text.contains("grading") ||
+      text.contains("contour") || text.contains("watershed") || text.contains("catchment")) return "terrain";
+  if (text.contains("point") || text.contains("survey") || text.contains("traverse") ||
+      text.contains("station") || text.contains("bearing") || text.contains("elevation")) return "survey";
+  if (text.contains("layer")) return "layers";
+  if (text.contains("dimension") || text.contains("measure") || text.contains("distance") ||
+      text.contains("volume") || text.contains("massprop") || text.contains("angle")) return "dimension";
+  if (text.contains("block") || text.contains("solid") || text.contains("mesh") ||
+      text.contains("box") || text.contains("cylinder") || text.contains("sphere")) return "solid";
+  if (text.contains("import") || text.contains("export") || text.contains("open") ||
+      text.contains("save") || text.contains("file") || text.contains("project")) return "file";
+  if (text.contains("view") || text.contains("zoom") || text.contains("orbit") ||
+      text.contains("camera") || text.contains("perspective") || text.contains("fov")) return "view";
+  if (text.contains("setting") || text.contains("option") || text.contains("unit") ||
+      text.contains("style") || text.contains("config")) return "settings";
+  if (text.contains("delete") || text.contains("erase") || text.contains("trim") ||
+      text.contains("remove") || text.contains("purge")) return "edit";
+  if (text.contains("move") || text.contains("copy") || text.contains("rotate") ||
+      text.contains("scale") || text.contains("mirror") || text.contains("array") ||
+      text.contains("offset")) return "transform";
+  if (text.contains("line") || text.contains("poly") || text.contains("curve") ||
+      text.contains("spline") || text.contains("arc")) return "geometry";
+  if (text.contains("list") || text.contains("table") || text.contains("report") ||
+      text.contains("search") || text.contains("stats") || text.contains("catalog")) return "data";
+  if (text.contains("pipe") || text.contains("fitting")) return "pipe";
+  return "utility";
+}
+
+void EditorWindow::LoadCoordinateSystemDictionaries() {
+  if (geo::DictionariesLoaded()) return;
+  std::string directory;
+  try {
+    directory = ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string();
+  } catch (const std::exception& error) {
+    qWarning() << "Unable to locate the bundled coordinate-system dictionary:" << error.what();
+  }
+  geo::LoadDictionaries(directory);
+}
+
+EditorWindow::EditorWindow(QString developmentBranchLabel)
+    : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
+  // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
+  // without Drawing Settings having been opened first.
+  LoadCoordinateSystemDictionaries();
   InitUpdates();
   setObjectName("GoSurveyQtEditor");
-  setWindowTitle("GoSurvey");
+  const QString title = m_DevelopmentBranchLabel.isEmpty()
+      ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
+  setWindowTitle(title);
   setWindowFlag(Qt::FramelessWindowHint);
   setMinimumSize(820, 540);
   setWindowIcon(QIcon(QtAsset("icons/app.ico")));
@@ -673,6 +734,13 @@ EditorWindow::EditorWindow() {
   modelLayout->setContentsMargins(0, 0, 0, 0);
   m_Viewport = new EditorViewport(m_State, m_Log, modelPage);
   m_Viewport->changed = [this] { ResetDraftingInput(); Refresh(); };
+  // Issue #1084: a part picture finished inside the viewport's paint; update the palette afterwards.
+  m_Viewport->partThumbnailsChanged = [this] {
+    QTimer::singleShot(0, this, [this] {
+      if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible())
+        RefreshPipeFittingPalette(palette);
+    });
+  };
   m_Viewport->contextMenuRequested = [this](const QPoint& position) { ShowDrawingContextMenu(position); };
   m_Viewport->thumbnailReady = [this] {
     QTimer::singleShot(0, this, [this] { RefreshRecentDrawings(); });
@@ -708,6 +776,8 @@ EditorWindow::EditorWindow() {
   BuildDocks();
   UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
+  statusBar()->setSizeGripEnabled(false);
+  statusBar()->addPermanentWidget(new VisibleSizeGrip(this));
   statusBar()->addPermanentWidget(m_Coordinates, 1);
   BuildDraftingInput();
   auto* grid = new QToolButton(this);
@@ -743,7 +813,6 @@ EditorWindow::EditorWindow() {
   auto* service = new QTimer(this);
   service->setInterval(33);
   connect(service, &QTimer::timeout, this, [this] {
-    ServiceAuth();
     ServiceTelemetry();
     ServiceUpdate();
     const auto before = m_State.cadGpuRevision;
@@ -810,117 +879,26 @@ QAction* EditorWindow::CommandAction(const QString& label, const QString& icon,
   return action;
 }
 
-void EditorWindow::ServiceAuth() {
-  if (!m_AuthStarted)
-    return;
-  if (m_State.authSignOutRequested) {
-    m_State.authSignOutRequested = false;
-    auth::SignOut();
-    m_State.authSignedIn = false;
-    m_State.authEmail.clear();
-    m_State.authError.clear();
-    Refresh();
-  }
-  if (m_State.authSignInRequested) {
-    m_State.authSignInRequested = false;
-    if (!m_AuthTask) {
-      m_AuthTask = auth::BeginInteractiveSignIn();
-      m_AuthLastAttemptInteractive = true;
-      m_State.authBusy = true;
-      m_State.authInteractiveBusy = true;
-      m_State.authError.clear();
-    }
-  }
-  if (m_State.authDeclineRequested) {
-    m_State.authDeclineRequested = false;
-    m_State.authOptedOut = true;
-    if (SaveUserStartupPrefs(m_State)) {
-      m_State.authGateResolved = true;
-    } else {
-      m_State.authOptedOut = false;
-      m_State.authError = "Your sign-in choice could not be saved. It may "
-                          "appear again next time.";
-    }
-  }
-  if (m_AuthTask && m_AuthTask->done.load(std::memory_order_acquire)) {
-    m_State.authBusy = false;
-    m_State.authInteractiveBusy = false;
-    m_State.authSignedIn = m_AuthTask->ok;
-    m_State.authEmail = m_AuthTask->email;
-    m_State.authError = (!m_AuthTask->ok && m_AuthLastAttemptInteractive)
-                            ? m_AuthTask->error
-                            : "";
-    if (m_AuthTask->ok || m_AuthTask->skippedNoNetwork)
-      m_State.authGateResolved = true;
-    if (m_AuthTask->ok && m_State.authOptedOut) {
-      m_State.authOptedOut = false;
-      if (!SaveUserStartupPrefs(m_State))
-        m_State.authError =
-            "Signed in, but the saved sign-in preference could not be updated.";
-    }
-    m_AuthTask.reset();
-    Refresh();
-  }
-  if (m_State.authGateResolved) {
-    if (auto *gate = findChild<QDialog *>("signInGate"))
-      gate->accept();
-  } else if (!UpdateBlocksLaunch() && HasInternetConnectivity()) {
-    ShowSignInGate();
-  }
-  MaybeAutoOpenWhatsNew();
-}
-
 void EditorWindow::EnableTelemetry() {
-  // The launch-time channel ensures a Settings change applies from the next launch.
-  // A literal, not a std::string: the stored lambda is copied by std::function, and a capture
-  // whose copy can allocate (and so throw) is what bugprone-exception-escape rejects.
+  if (m_TelemetryTask)
+    return;
   const char* channel = m_State.updatePrefs.useBetaChannel ? "beta" : "stable";
-  m_SendTelemetry = [this, channel](const std::string& email) {
-    // REQ-080: the ping must never fail the application. Starting its worker can throw (no thread
-    // or memory available); that is logged like a failed ping and the session carries on.
-    try {
-      m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel, email);
-    } catch (const std::exception& error) {
-      qWarning() << "[telemetry] ping not started:" << error.what();
-    } catch (...) {
-      qWarning() << "[telemetry] ping not started: unknown exception.";
-    }
-  };
+  try {
+    m_TelemetryTask = telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL, channel);
+  } catch (...) {
+    // Telemetry is best effort; even worker creation failure is invisible to the user.
+  }
 }
 
 void EditorWindow::ServiceTelemetry() {
   telemetry::PollTelemetryTask(m_TelemetryTask);
-  // REQ-080: one ping per launch, fired once the launch gate resolves (signed in, opted out, or
-  // the offline exception) so the sign-in state it reports is known. It never waits on sign-in
-  // beyond that and never shows anything; failures are dropped inside the worker.
-  if (!m_AuthStarted || !m_State.authGateResolved || m_TelemetrySent || !m_SendTelemetry)
-    return;
-  m_TelemetrySent = true;
-  m_SendTelemetry(m_State.authSignedIn ? m_State.authEmail : std::string());
 }
-
-void EditorWindow::StartAuth(bool previewSignIn) {
-  if (m_AuthStarted)
-    return;
-  m_AuthStarted = true;
-  if (previewSignIn) {
-    m_State.authGateResolved = false;
-    m_State.authSignedIn = false;
-    m_State.authBusy = false;
-    m_State.authOptedOut = false;
-    ShowSignInGate();
-    return;
-  }
-  if (!m_State.authOptedOut) {
-    m_AuthTask = auth::BeginSilentRefresh();
-    m_State.authBusy = true;
-  } else {
-    m_State.authGateResolved = true;
-  }
-}
-
 void EditorWindow::InitializeStartup() {
   m_StartupInitialized = true;
+  // The entry point exits its splash wait when the worker marks the task done, before the UI
+  // thread has consumed that result. Resolve it here so only a confirmed offer takes priority;
+  // a completed no-update check must return to Idle before REQ-336 evaluates startup eligibility.
+  ServiceUpdate();
   // REQ-078 before REQ-336: when the startup check found an update, What's New does not
   // auto-open on this launch. The check has already answered by now (the splash waits for it).
   if (UpdateBlocksLaunch()) m_WhatsNewAutoOpened = true;
@@ -928,8 +906,7 @@ void EditorWindow::InitializeStartup() {
 }
 
 void EditorWindow::MaybeAutoOpenWhatsNew() {
-  if (!m_StartupInitialized || m_WhatsNewAutoOpened || !m_State.authGateResolved ||
-      m_State.activeDrawingIdx != 0 ||
+  if (!m_StartupInitialized || m_WhatsNewAutoOpened || m_State.activeDrawingIdx != 0 ||
       !WhatsNewShouldAutoOpen(GOSURVEY_VERSION_FULL, m_State.whatsNewDismissedVersion, false))
     return;
   m_WhatsNewAutoOpened = true;
@@ -958,6 +935,8 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
+  file->addSeparator();
+  file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
   file->addSeparator();
   file->addAction(CommandAction("New project...", "New_Drawing.png", "NEWPROJECT"));
   file->addAction(CommandAction("Open project...", "Open.png", "OPENPROJECT"));
@@ -1041,73 +1020,10 @@ void EditorWindow::BuildDocks() {
   toolSettingsLayout->addStretch();
   connect(settingsButton, &QPushButton::clicked, this, [this] { ShowSettings(); });
   toolspaceTabs->addTab(toolSettings, "Settings");
-  auto* toolspaceDock = makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
+  makeDock("Toolspace", "toolspaceDock", Qt::RightDockWidgetArea, toolspaceTabs);
   BuildPropertiesPanel();
   auto* propertiesDock = makeDock("Properties", "propertiesDock", Qt::LeftDockWidgetArea, m_PropertiesScroll);
-  auto* mapPanel = new TopographicMapPanel(this);
-  mapPanel->setObjectName("mapTaskPanel");
-  auto* mapLayout = new QVBoxLayout(mapPanel);
-  mapLayout->setContentsMargins(10, 10, 10, 10);
-  auto* mapIntro = new QLabel("Choose a USGS base map for this drawing. Captured areas remain available offline.", mapPanel);
-  mapIntro->setWordWrap(true);
-  mapLayout->addWidget(mapIntro);
-  auto* providerTitle = new QLabel("Map provider", mapPanel);
-  providerTitle->setStyleSheet("font-weight:600;");
-  mapLayout->addWidget(providerTitle);
-  auto* providerGroup = new QButtonGroup(mapPanel);
-  providerGroup->setExclusive(true);
-  for (const auto& info : kOnlineMaps) {
-    auto* option = new QRadioButton(QString::fromUtf8(info.label), mapPanel);
-    option->setObjectName(QString("mapProvider_%1").arg(static_cast<int>(info.map)));
-    option->setIcon(CadCommandIcon(QString::fromUtf8(info.icon) + ".png"));
-    option->setIconSize(QSize(24, 24));
-    option->setMinimumHeight(34);
-    providerGroup->addButton(option, static_cast<int>(info.map));
-    mapLayout->addWidget(option);
-    connect(option, &QRadioButton::clicked, this, [this, info] {
-      SetOnlineMap(m_State, info.map, m_Log);
-      Refresh();
-    });
-  }
-  auto* mapAttribution = new QLabel("Map: USGS The National Map", mapPanel);
-  mapAttribution->setObjectName("mapAttribution");
-  mapAttribution->setWordWrap(true);
-  mapAttribution->setStyleSheet("color:#65727e;");
-  mapLayout->addWidget(mapAttribution);
-  auto* captureTitle = new QLabel("Capture area", mapPanel);
-  captureTitle->setStyleSheet("font-weight:600;");
-  mapLayout->addWidget(captureTitle);
-  auto* captureView = new QPushButton("Capture visible map", mapPanel);
-  captureView->setObjectName("mapCaptureVisible");
-  mapLayout->addWidget(captureView);
-  auto* capturePick = new QPushButton("Pick area", mapPanel);
-  capturePick->setObjectName("mapCapturePick");
-  mapLayout->addWidget(capturePick);
-  auto* removeCapture = new QPushButton("Remove captured areas", mapPanel);
-  removeCapture->setObjectName("mapRemoveCaptures");
-  mapLayout->addWidget(removeCapture);
-  auto* captureStatus = new QLabel(mapPanel);
-  captureStatus->setObjectName("mapCaptureStatus");
-  captureStatus->setWordWrap(true);
-  mapLayout->addWidget(captureStatus);
-  auto* captureProgress = new QProgressBar(mapPanel);
-  captureProgress->setObjectName("mapCaptureProgress");
-  captureProgress->setTextVisible(true);
-  mapLayout->addWidget(captureProgress);
-  mapLayout->addStretch(1);
-  auto* mapDock = makeDock("Map", "mapTaskDock", Qt::RightDockWidgetArea, mapPanel);
-  mapDock->setMinimumWidth(250);
-  splitDockWidget(toolspaceDock, mapDock, Qt::Vertical);
   propertiesDock->raise();
-  connect(captureView, &QPushButton::clicked, this, [this] {
-    StartCaptureMapArea(m_State, false, m_Log); Refresh();
-  });
-  connect(capturePick, &QPushButton::clicked, this, [this] {
-    StartCaptureMapArea(m_State, true, m_Log); Refresh();
-  });
-  connect(removeCapture, &QPushButton::clicked, this, [this] {
-    RemoveCapturedMapAreas(m_State, m_Log); Refresh();
-  });
   m_CommandBar = new FloatingCommandBar(m_Viewport);
   m_CommandBar->optionSelected = [this](const QString& shortcut) { Submit(shortcut); m_Command->setFocus(); };
   m_Transcript = m_CommandBar->Transcript();
@@ -1118,24 +1034,120 @@ void EditorWindow::BuildDocks() {
   connect(toggleCommand, &QAction::triggered, this, [this] { m_CommandBar->ToggleVisible(); });
   if (auto* view = findChild<QMenu*>("viewMenu")) view->addAction(toggleCommand);
   m_Command->setPlaceholderText("Type a command or coordinates");
-  QStringList names;
-  for (const auto& suggestion : FuzzyCommandSuggestions("", 10000))
-    names.push_back(QString::fromUtf8(suggestion.name.c_str()));
-  auto* completer = new QCompleter(names, m_Command);
-  completer->setCaseSensitivity(Qt::CaseInsensitive);
-  m_Command->setCompleter(completer);
-  connect(m_Command, &QLineEdit::textEdited, this, [completer](const QString& text) {
-    QStringList matches;
-    for (const auto& suggestion : FuzzyCommandSuggestions(text.toUtf8().toStdString(), 30))
-      matches.push_back(QString::fromUtf8(suggestion.name.c_str()));
-    static_cast<QStringListModel*>(completer->model())->setStringList(matches);
-    completer->setCompletionPrefix(text);
-    if (!matches.isEmpty()) completer->complete();
+  m_CommandSuggestions = new QListView(this);
+  m_CommandSuggestions->setObjectName("commandSuggestionPopup");
+  // A Qt::Popup grabs subsequent key presses after the first character opened suggestions,
+  // preventing the focused command line from receiving the rest of a typed query.
+  m_CommandSuggestions->setWindowFlags(Qt::Tool | Qt::FramelessWindowHint | Qt::WindowDoesNotAcceptFocus);
+  m_CommandSuggestions->setAttribute(Qt::WA_ShowWithoutActivating);
+  m_CommandSuggestions->setFocusPolicy(Qt::NoFocus);
+  m_CommandSuggestions->setFrameShape(QFrame::NoFrame);
+  m_CommandSuggestions->setSelectionMode(QAbstractItemView::SingleSelection);
+  m_CommandSuggestions->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  m_CommandSuggestions->setIconSize(QSize(18, 18));
+  m_CommandSuggestions->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+  m_CommandSuggestions->setStyleSheet(
+      "QListView#commandSuggestionPopup { background: palette(base); color: palette(text); "
+      "border: 1px solid palette(mid); border-radius: 8px; padding: 4px; outline: none; }"
+      "QListView#commandSuggestionPopup::item { padding: 6px 9px; min-height: 22px; border-radius: 4px; }"
+      "QListView#commandSuggestionPopup::item:selected { background: palette(highlight); "
+      "color: palette(highlighted-text); }");
+  m_CommandSuggestionModel = new QStandardItemModel(m_CommandSuggestions);
+  m_CommandSuggestions->setModel(m_CommandSuggestionModel);
+
+  QHash<QString, QIcon> commandIcons;
+  for (const auto* action : findChildren<QAction*>()) {
+    QString name = action->property("ribbonCommand").toString();
+    if (name.isEmpty() && action->objectName().startsWith("command_"))
+      name = action->objectName().mid(QString("command_").size());
+    if (name.isEmpty()) continue;
+    const QString iconName = action->property("cadIcon").toString();
+    const QIcon icon = iconName.isEmpty() ? action->icon() : CadCommandIcon(iconName);
+    if (!icon.isNull()) commandIcons.insert(name.toUpper(), icon);
+  }
+  static const QHash<QString, QString> resourceIcons = [] {
+    QHash<QString, QString> icons;
+    const QDir commandIconDirectory(QtAsset("icons"));
+    for (const auto& entry : commandIconDirectory.entryInfoList({"*.png", "*.svg"}, QDir::Files)) {
+      const QString key = NormalizedCommandIconName(entry.completeBaseName());
+      if (!key.isEmpty() && !icons.contains(key)) icons.insert(key, entry.fileName());
+    }
+    return icons;
+  }();
+  const QHash<QString, QString> semanticIconNames{
+      {"CIRCLE", "Circle_Center_Radius.png"}, {"3DPOLY", "3D_Polyline.png"},
+      {"FEATURELINE", "c3d_featureline.png"}, {"GRADING", "c3d_grading.png"},
+      {"TRIMSTATE", "Auto_Trimming.png"}, {"EXPORTPTS", "c3d_exportpoints.png"},
+      {"EXPORTPOINTS", "c3d_exportpoints.png"}, {"QUICKPROFILE", "c3d_quickprofile.png"},
+      {"SURFACECREATE", "c3d_surfaces.png"}, {"ZOOMEXTENTS", "Zoom_Extensis.png"},
+      {"MOVESEL", "3D_Move.png"}, {"ROTATESEL", "3D_Rotate.png"},
+      {"SCALESEL", "Scale.png"}, {"MIRRORSEL", "3D_Mirror.png"},
+      {"DELETE", "erase.png"}, {"MATCHPROP", "Match_Properties.png"},
+      {"DRAWINGSETTINGS", "c3d_dwgsettings.png"}, {"PROJECTSETTINGS", "settings.png"},
+      {"PROJECTHEALTH", "settings.png"}, {"PACKPROJECT", "Save.png"},
+      {"TURNOVER", "Active_File.png"}, {"OPENPACK", "Open.png"},
+      {"BLOCKLIST", "Blocks_Palette.png"}, {"BLOCKLIB", "Blocks_Palette.png"},
+      {"BLOCKFAV", "Blocks_Palette.png"}, {"BLOCKRECENT", "Blocks_Palette.png"},
+      {"COPYCLIP", "Copy_Clip.png"}, {"PASTEBLOCK", "Paste.png"},
+      {"PDFATTACH", "Pdf.png"}, {"PDFVIEW", "Pdf.png"}, {"PDFSPLIT", "Pdf.png"},
+      {"IMPORTPOINTS", "c3d_transferpoints.png"}, {"EXPORTLANDXML", "c3d_exportto.png"},
+      {"VOLDASH", "c3d_surfaces.png"}, {"SURFACEIMPORTFILE", "c3d_surfaces.png"},
+      {"PIPERUN", "c3d_pipenet.png"}, {"PIPESYS", "c3d_pipenet.png"},
+      {"PIPECATALOG", "c3d_pipenet.png"}, {"BEDIT", "Block_Editor.png"},
+      {"BSAVE", "Save.png"}, {"BSAVEAS", "Save_As.png"}};
+  connect(m_Command, &QLineEdit::textEdited, this,
+          [this, commandIcons, semanticIconNames](const QString& text) mutable {
+    if (m_DynamicInput && m_DynamicInput->isVisible()) {
+      m_CommandSuggestions->hide();
+      UpdateDraftingInputFromCommandLine(text);
+      return;
+    }
+    m_CommandSuggestionModel->clear();
+    const QString query = text.trimmed();
+    const auto suggestions = query.isEmpty()
+        ? std::vector<CommandSuggestion>{}
+        : FuzzyCommandSuggestions(query.toUtf8().toStdString(), 30);
+    for (const auto& suggestion : suggestions) {
+      const QString name = QString::fromUtf8(suggestion.name.c_str());
+      QIcon icon = commandIcons.value(name);
+      if (icon.isNull()) {
+        const QString semanticFile = semanticIconNames.value(name);
+        if (!semanticFile.isEmpty()) icon = CadCommandIcon(semanticFile);
+      }
+      if (icon.isNull()) {
+        const QString resourceFile = resourceIcons.value(NormalizedCommandIconName(name));
+        if (!resourceFile.isEmpty()) icon = CadCommandIcon(resourceFile);
+      }
+      if (icon.isNull()) {
+        const QString generated = GeneratedCommandIconFamily(name, QString::fromUtf8(suggestion.description.c_str()));
+        icon = CadCommandIcon("commands/" + generated + ".svg");
+      }
+      commandIcons.insert(name, icon);
+      auto* item = new QStandardItem(icon, name);
+      item->setEditable(false);
+      item->setToolTip(QString::fromUtf8(suggestion.description.c_str()));
+      m_CommandSuggestionModel->appendRow(item);
+    }
+    const int rows = m_CommandSuggestionModel->rowCount();
+    if (rows == 0) { m_CommandSuggestions->hide(); return; }
+    const int visibleRows = std::min(rows, 8);
+    const int popupHeight = visibleRows * 32 + 10;
+    const QPoint inputTop = m_Command->mapToGlobal(QPoint(0, 0));
+    m_CommandSuggestions->setGeometry(inputTop.x(), inputTop.y() - popupHeight,
+                                      m_Command->width(), popupHeight);
+    const QModelIndex first = m_CommandSuggestionModel->index(0, 0);
+    m_CommandSuggestions->setCurrentIndex(first);
+    m_CommandSuggestions->scrollToTop();
+    m_CommandSuggestions->show();
+    m_CommandSuggestions->raise();
   });
-  connect(m_Command, &QLineEdit::returnPressed, this, [this] {
-    const QString line = m_Command->text();
+  connect(m_CommandSuggestions, &QListView::clicked, this, [this](const QModelIndex& index) {
+    if (!index.isValid() || (m_DynamicInput && m_DynamicInput->isVisible())) return;
+    const QString command = index.data(Qt::DisplayRole).toString();
+    m_CommandSuggestions->hide();
     m_Command->clear();
-    Submit(line);
+    Submit(command);
+    m_Command->setFocus(Qt::OtherFocusReason);
   });
   connect(m_Toolspace, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
     const auto index = item->data(0, Qt::UserRole);
@@ -1449,6 +1461,16 @@ void EditorWindow::ShowViewportsManager() {
   QDialog dialog(this); dialog.setObjectName("viewportsManager"); dialog.setWindowTitle("Viewports — " + QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(layoutIndex)].name.c_str())); dialog.resize(450, 350);
   auto* outer = new QVBoxLayout(&dialog);
   auto* list = new QListWidget(&dialog); list->setObjectName("viewportsList"); outer->addWidget(list, 1);
+  auto* annotationScaleRow = new QHBoxLayout(); outer->addLayout(annotationScaleRow);
+  annotationScaleRow->addWidget(new QLabel("Annotative scale:", &dialog));
+  auto* annotationScale = new QComboBox(&dialog); annotationScale->setObjectName("viewportAnnotationScale");
+  for (const CadAnnotationScale& scale : m_State.annotationScales)
+    annotationScale->addItem(QString::fromUtf8(scale.name.c_str()), QString::fromUtf8(scale.name.c_str()));
+  if (annotationScale->count() == 0) {
+    annotationScale->addItem("No annotation scales");
+    annotationScale->setEnabled(false);
+  }
+  annotationScaleRow->addWidget(annotationScale, 1);
   auto* row = new QHBoxLayout(); outer->addLayout(row);
   auto* add = new QPushButton("Add viewport", &dialog); add->setObjectName("viewportAdd");
   auto* scale = new QPushButton("Set scale…", &dialog); scale->setObjectName("viewportScale");
@@ -1465,12 +1487,47 @@ void EditorWindow::ShowViewportsManager() {
           .arg(vp.paperWIn, 0, 'f', 2).arg(vp.paperHIn, 0, 'f', 2));
     }
     if (list->count() > 0) list->setCurrentRow(std::clamp(m_State.selectedViewportIndex, 0, list->count() - 1));
+    const int selected = list->currentRow();
+    const bool hasViewport = selected >= 0 && static_cast<size_t>(selected) < viewports.size();
+    const std::string effectiveScale = hasViewport
+        ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
+                                       &viewports[static_cast<size_t>(selected)], m_State.modelUnitsPerPlottedInch)
+        : std::string{};
+    const QSignalBlocker block(annotationScale);
+    const int scaleIndex = annotationScale->findData(QString::fromUtf8(effectiveScale.c_str()));
+    annotationScale->setCurrentIndex(scaleIndex);
+    annotationScale->setEnabled(writable && hasViewport && scaleIndex >= 0);
     scale->setEnabled(writable && list->currentRow() >= 0); remove->setEnabled(writable && list->currentRow() >= 0);
   };
   refill();
   connect(list, &QListWidget::currentRowChanged, &dialog, [&, writable](int rowIndex) {
     if (rowIndex >= 0) SelectViewport(m_State, rowIndex, false);
     scale->setEnabled(writable && rowIndex >= 0); remove->setEnabled(writable && rowIndex >= 0);
+    const auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    const bool hasViewport = rowIndex >= 0 && static_cast<size_t>(rowIndex) < viewports.size();
+    const std::string effectiveScale = hasViewport
+        ? CadActiveAnnotationScaleName(&m_State.annotationScales, m_State.currentAnnotationScaleIndex,
+                                       &viewports[static_cast<size_t>(rowIndex)], m_State.modelUnitsPerPlottedInch)
+        : std::string{};
+    const QSignalBlocker block(annotationScale);
+    annotationScale->setCurrentIndex(annotationScale->findData(QString::fromUtf8(effectiveScale.c_str())));
+    annotationScale->setEnabled(writable && hasViewport && annotationScale->currentIndex() >= 0);
+  });
+  connect(annotationScale, qOverload<int>(&QComboBox::currentIndexChanged), &dialog, [&, writable](int index) {
+    const int viewportIndex = list->currentRow();
+    if (!writable || index < 0 || viewportIndex < 0)
+      return;
+    auto& viewports = m_State.paperLayouts[static_cast<size_t>(layoutIndex)].viewports;
+    if (static_cast<size_t>(viewportIndex) >= viewports.size())
+      return;
+    const std::string name = annotationScale->itemData(index).toString().toUtf8().toStdString();
+    Viewport& viewport = viewports[static_cast<size_t>(viewportIndex)];
+    if (viewport.annotationScaleName == name)
+      return;
+    PushUndoSnapshot(m_State, "Viewport annotative scale");
+    viewport.annotationScaleName = name;
+    BumpCadGpuCache(m_State);
+    Refresh();
   });
   connect(add, &QPushButton::clicked, &dialog, [&] {
     PushUndoSnapshot(m_State, "Create viewport");
@@ -1499,17 +1556,42 @@ void EditorWindow::ShowViewportsManager() {
 }
 
 bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
+  if (event->type() == QEvent::MouseButtonPress && m_CommandSuggestions && m_CommandSuggestions->isVisible()) {
+    auto* clicked = qobject_cast<QWidget*>(watched);
+    const bool inSuggestions = clicked &&
+        (clicked == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(clicked));
+    const bool inCommand = clicked && (clicked == m_Command || m_Command->isAncestorOf(clicked));
+    if (!inSuggestions && !inCommand) m_CommandSuggestions->hide();
+  }
   if (DraftingInputEvent(watched, event)) return true;
-  if (watched == m_Command && event->type() == QEvent::KeyPress) {
+  auto* keyWidget = qobject_cast<QWidget*>(watched);
+  const bool suggestionPopupWidget = keyWidget && m_CommandSuggestions &&
+      (keyWidget == m_CommandSuggestions || m_CommandSuggestions->isAncestorOf(keyWidget));
+  if ((watched == m_Command || suggestionPopupWidget) && event->type() == QEvent::KeyPress) {
     auto* key = static_cast<QKeyEvent*>(event);
     if (key->key() == Qt::Key_Escape) {
+      if (m_CommandSuggestions && m_CommandSuggestions->isVisible()) {
+        m_CommandSuggestions->hide();
+        m_Command->clear();
+        return true;
+      }
       m_State.showCreatePointsWindow = false;
       CancelActiveCommand(m_State, m_Log);
       m_Command->clear(); m_Viewport->InvalidateGeometry(); Refresh();
       return true;
     }
     if (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down) {
-      if (m_Command->completer() && m_Command->completer()->popup()->isVisible()) return QMainWindow::eventFilter(watched, event);
+      if (m_CommandSuggestions && m_CommandSuggestions->isVisible() && m_CommandSuggestionModel &&
+          m_CommandSuggestionModel->rowCount() > 0) {
+        int row = m_CommandSuggestions->currentIndex().row();
+        if (row < 0) row = 0;
+        else row = std::clamp(row + (key->key() == Qt::Key_Up ? -1 : 1), 0,
+                              m_CommandSuggestionModel->rowCount() - 1);
+        const QModelIndex next = m_CommandSuggestionModel->index(row, 0);
+        m_CommandSuggestions->setCurrentIndex(next);
+        m_CommandSuggestions->scrollTo(next);
+        return true;
+      }
       m_HistoryIndex = std::clamp(m_HistoryIndex + (key->key() == Qt::Key_Up ? -1 : 1), 0, static_cast<int>(m_CommandHistory.size()));
       m_Command->setText(m_HistoryIndex < m_CommandHistory.size() ? m_CommandHistory[m_HistoryIndex] : QString{});
       return true;
@@ -1555,6 +1637,18 @@ bool EditorWindow::eventFilter(QObject* watched, QEvent* event) {
 
 void EditorWindow::showEvent(QShowEvent* event) {
   QMainWindow::showEvent(event);
+#ifdef _WIN32
+  // Qt reapplies the frameless flag while first showing the native window, so
+  // restore the shell-facing styles after that transition.
+  const HWND hwnd = reinterpret_cast<HWND>(winId());
+  const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+  SetWindowLongPtrW(hwnd, GWL_STYLE, style | WS_CAPTION | WS_THICKFRAME | WS_SYSMENU |
+      WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#endif
+  if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
+    grip->setVisible(!isMaximized() && !isFullScreen());
   m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
@@ -1562,19 +1656,36 @@ void EditorWindow::showEvent(QShowEvent* event) {
   RefreshRecentDrawings();
 }
 
+void EditorWindow::changeEvent(QEvent* event) {
+  QMainWindow::changeEvent(event);
+  if (event->type() == QEvent::WindowStateChange) {
+    if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
+      grip->setVisible(!isMaximized() && !isFullScreen());
+  }
+}
+
 void EditorWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
+  if (m_Viewport) m_Viewport->UpdateWindowResizePreviewGeometry();
   const bool compact = width() < 1120;
-  if (auto* columns = findChild<QBoxLayout*>("startContentColumns"))
-    columns->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-  if (auto* sidePanel = findChild<QWidget*>("startRightColumn")) {
-    sidePanel->setMaximumWidth(compact ? QWIDGETSIZE_MAX : 560);
-    sidePanel->setMinimumWidth(compact ? 0 : 430);
+  if (auto* columns = findChild<QBoxLayout*>("startContentColumns")) {
+    const auto direction = compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight;
+    if (columns->direction() != direction) columns->setDirection(direction);
   }
-  QTimer::singleShot(0, this, [this] {
-    RefreshRecentProjects();
-    RefreshRecentDrawings();
-  });
+  if (auto* sidePanel = findChild<QWidget*>("startRightColumn")) {
+    const int maximum = compact ? QWIDGETSIZE_MAX : 560;
+    const int minimum = compact ? 0 : 430;
+    if (sidePanel->maximumWidth() != maximum) sidePanel->setMaximumWidth(maximum);
+    if (sidePanel->minimumWidth() != minimum) sidePanel->setMinimumWidth(minimum);
+  }
+}
+
+void EditorWindow::BeginInteractiveResize() {
+  if (m_Viewport) m_Viewport->BeginWindowResizePreview();
+}
+
+void EditorWindow::EndInteractiveResize() {
+  if (m_Viewport) m_Viewport->EndWindowResizePreview();
 }
 
 void EditorWindow::SwitchDrawing(int index) {
@@ -1854,110 +1965,24 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   event->accept();
 }
 
-void EditorWindow::Refresh() {
-  if (m_Refreshing) return;
-  m_Refreshing = true;
-  if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
-    const QSignalBlocker block(annotationScale);
-    annotationScale->clear();
-    for (const auto& scale : m_State.annotationScales)
-      annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
-    annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
-    annotationScale->setEnabled(!m_State.annotationScales.empty());
+// The Toolspace tree is rebuilt only when what it lists changes. Refresh() runs on every viewport click,
+// and rebuilding the tree (icons and all) took ~100 ms of each one.
+void EditorWindow::RefreshToolspace() {
+  QStringList key;
+  for (const auto& session : m_State.openProjects) {
+    key << QString::fromUtf8(session.project.name.c_str()) + (session.readOnly ? "|ro" : "|rw");
+    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str());
   }
-  RefreshProjects();
-  const QSignalBlocker tabBlock(m_Tabs);
-  while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
-  for (int i = 0; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
-    QString title = QString::fromUtf8(m_State.drawingTabs[i].name.c_str());
-    const bool dirty = i == m_State.activeDrawingIdx ? m_State.cadGpuRevision != m_State.activeDocSavedRevision :
-        m_State.documents[i].cadGpuRevision != m_State.documents[i].savedRevision;
-    if (i > 0 && dirty) title += " *";
-    if (i == m_Tabs->count()) m_Tabs->addTab(title); else m_Tabs->setTabText(i, title);
-  }
-  m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
-  m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
-  {
-    const QSignalBlocker spaceBlock(m_SpaceTabs);
-    while (m_SpaceTabs->count() > static_cast<int>(m_State.paperLayouts.size()) + 1)
-      m_SpaceTabs->removeTab(m_SpaceTabs->count() - 1);
-    const QString modelLabel = m_State.floatingViewportIndex >= 0 ? "Model (Floating)" : "Model";
-    if (m_SpaceTabs->count() == 0) m_SpaceTabs->addTab(modelLabel);
-    else m_SpaceTabs->setTabText(0, modelLabel);
-    for (int i = 0; i < static_cast<int>(m_State.paperLayouts.size()); ++i) {
-      const QString name = QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(i)].name.c_str());
-      if (i + 1 == m_SpaceTabs->count()) m_SpaceTabs->addTab(name);
-      else m_SpaceTabs->setTabText(i + 1, name);
-    }
-    m_SpaceTabs->setCurrentIndex(m_State.activeSpaceIndex < 0 ? 0 : m_State.activeSpaceIndex + 1);
-  }
-  if (auto* spaceBar = findChild<QWidget*>("paperSpaceBar"))
-    spaceBar->setVisible(m_State.activeDrawingIdx > 0);
-  m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
-  m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
-  const bool drawingActive = m_State.activeDrawingIdx > 0;
-  if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(true);
-  m_Tabs->setVisible(true);
-  statusBar()->setVisible(true);
-  for (auto* button : findChildren<QToolButton*>())
-    if (button->objectName().startsWith("quick_")) button->setVisible(drawingActive);
-  if (auto* toolspaceDock = findChild<QDockWidget*>("toolspaceDock"))
-    toolspaceDock->setVisible(drawingActive);
-  if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
-    propertiesDock->setVisible(drawingActive);
-  if (auto* mapDock = findChild<QDockWidget*>("mapTaskDock"))
-    mapDock->setVisible(drawingActive);
-  const bool mapEnabled = drawingActive && m_State.drawingSettings.Geolocated() &&
-      m_State.drawingSettings.onlineMap != DrawingSettings::OnlineMap::Off;
-  for (const auto& info : kOnlineMaps) {
-    if (auto* option = findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(info.map)))) {
-      const QSignalBlocker block(option);
-      option->setChecked(m_State.drawingSettings.onlineMap == info.map);
-    }
-  }
-  if (auto* capture = findChild<QPushButton*>("mapCaptureVisible")) capture->setEnabled(mapEnabled);
-  if (auto* capture = findChild<QPushButton*>("mapCapturePick")) capture->setEnabled(mapEnabled);
-  if (auto* remove = findChild<QPushButton*>("mapRemoveCaptures"))
-    remove->setEnabled(drawingActive && !m_State.drawingSettings.capturedAreas.empty());
-  if (auto* status = findChild<QLabel*>("mapCaptureStatus")) {
-    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
-    status->setText(capturing ? QString::fromUtf8(m_State.mapCapture.prompt.c_str())
-                              : QString("%1 captured area(s) stored in this drawing.").arg(m_State.drawingSettings.capturedAreas.size()));
-  }
-  if (auto* progress = findChild<QProgressBar*>("mapCaptureProgress")) {
-    const bool capturing = m_State.active == AppCommandState::Kind::GeoCaptureArea;
-    progress->setVisible(capturing);
-    progress->setRange(0, capturing ? std::max(1, m_State.mapCapture.total) : 1);
-    progress->setValue(capturing ? m_State.mapCapture.gathered : 0);
-    if (capturing) progress->setFormat(QString("%1 / %2 tiles").arg(m_State.mapCapture.gathered).arg(m_State.mapCapture.total));
-  }
-  while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
-  QString commandHint;
-  for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
-      ScaleCommandFooterHint(m_State), RotateCommandFooterHint(m_State), DeleteCommandFooterHint(m_State),
-      JoinCommandFooterHint(m_State), TrimCommandFooterHint(m_State), OffsetCommandFooterHint(m_State),
-      AlignCommandFooterHint(m_State), ZoomCommandFooterHint(m_State), DrawingExtrasFooterHint(m_State)})
-    if (hint && *hint) { commandHint = QString::fromUtf8(hint); break; }
-  m_CommandBar->SetHint(commandHint);
-  RefreshDraftingInput(commandHint);
-  if (m_WindowTitle) {
-    const auto title = QString("GoSurvey");
-    m_WindowTitle->setText(title); setWindowTitle(title);
-  }
-  if (auto* signedIn = findChild<QWidget*>("startSignedInAccount")) {
-    signedIn->setVisible(m_State.authSignedIn);
-    if (auto* signedOut = findChild<QWidget*>("startSignedOutAccount"))
-      signedOut->setVisible(!m_State.authSignedIn);
-    if (m_State.authSignedIn) {
-      QString accountName = QString::fromUtf8(m_State.authEmail.c_str()).section('@', 0, 0);
-      if (!accountName.isEmpty()) accountName[0] = accountName[0].toUpper();
-      if (auto* welcome = findChild<QLabel*>("startAccountWelcome"))
-        welcome->setText("Welcome " + (accountName.isEmpty() ? QString("GoSurvey user") : accountName) + "!");
-      if (auto* email = findChild<QLabel*>("startAccountEmail"))
-        email->setText(QString::fromUtf8(m_State.authEmail.c_str()));
-    }
-  }
-  RefreshProperties();
+  key << "#drawings";
+  for (std::size_t i = 1; i < m_State.drawingTabs.size(); ++i) key << QString::fromUtf8(m_State.drawingTabs[i].name.c_str());
+  key << "#points" + QString::number(m_State.surveyPoints.size()) << "#surfaces";
+  for (const auto& surface : m_State.cadSurfaces) key << QString::fromUtf8(surface.name.c_str());
+  key << "#styles";
+  for (const auto& surfaceStyle : m_State.surfaceStyles) key << QString::fromUtf8(surfaceStyle.name.c_str());
+  key << "#blocks";
+  for (const auto& block : m_State.blockDefs) key << QString::fromUtf8(block.name.c_str());
+  if (m_ToolspaceKey == key && m_Toolspace->topLevelItemCount() > 0) return;
+  m_ToolspaceKey = key;
   auto itemPath = [](QTreeWidgetItem* item) {
     QStringList parts; for (; item; item = item->parent()) parts.prepend(item->text(0));
     return parts.join(QChar(0x1f));
@@ -2013,7 +2038,79 @@ void EditorWindow::Refresh() {
     (*it)->setExpanded(expanded.contains(itemPath(*it)));
     if (itemPath(*it) == currentItem) m_Toolspace->setCurrentItem(*it);
   }
+}
+
+void EditorWindow::Refresh() {
+  if (m_Refreshing) return;
+  m_Refreshing = true;
+  if (auto* annotationScale = findChild<QComboBox*>("statusAnnotationScale")) {
+    const QSignalBlocker block(annotationScale);
+    annotationScale->clear();
+    for (const auto& scale : m_State.annotationScales)
+      annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
+    annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    annotationScale->setEnabled(!m_State.annotationScales.empty());
+  }
+  RefreshProjects();
+  const QSignalBlocker tabBlock(m_Tabs);
+  while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
+  for (int i = 0; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
+    QString title = QString::fromUtf8(m_State.drawingTabs[i].name.c_str());
+    const bool dirty = i == m_State.activeDrawingIdx ? m_State.cadGpuRevision != m_State.activeDocSavedRevision :
+        m_State.documents[i].cadGpuRevision != m_State.documents[i].savedRevision;
+    if (i > 0 && dirty) title += " *";
+    if (i == m_Tabs->count()) m_Tabs->addTab(title); else m_Tabs->setTabText(i, title);
+  }
+  m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
+  m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
+  {
+    const QSignalBlocker spaceBlock(m_SpaceTabs);
+    while (m_SpaceTabs->count() > static_cast<int>(m_State.paperLayouts.size()) + 1)
+      m_SpaceTabs->removeTab(m_SpaceTabs->count() - 1);
+    const QString modelLabel = m_State.floatingViewportIndex >= 0 ? "Model (Floating)" : "Model";
+    if (m_SpaceTabs->count() == 0) m_SpaceTabs->addTab(modelLabel);
+    else m_SpaceTabs->setTabText(0, modelLabel);
+    for (int i = 0; i < static_cast<int>(m_State.paperLayouts.size()); ++i) {
+      const QString name = QString::fromUtf8(m_State.paperLayouts[static_cast<size_t>(i)].name.c_str());
+      if (i + 1 == m_SpaceTabs->count()) m_SpaceTabs->addTab(name);
+      else m_SpaceTabs->setTabText(i + 1, name);
+    }
+    m_SpaceTabs->setCurrentIndex(m_State.activeSpaceIndex < 0 ? 0 : m_State.activeSpaceIndex + 1);
+  }
+  if (auto* spaceBar = findChild<QWidget*>("paperSpaceBar"))
+    spaceBar->setVisible(m_State.activeDrawingIdx > 0);
+  m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
+  m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
+  const bool drawingActive = m_State.activeDrawingIdx > 0;
+  if (auto* drawingSettings = findChild<QAction*>("command_DRAWINGSETTINGS"))
+    drawingSettings->setEnabled(drawingActive);
+  if (auto* ribbon = findChild<QToolBar*>("ribbonBar")) ribbon->setVisible(true);
+  m_Tabs->setVisible(true);
+  statusBar()->setVisible(true);
+  for (auto* button : findChildren<QToolButton*>())
+    if (button->objectName().startsWith("quick_")) button->setVisible(drawingActive);
+  if (auto* toolspaceDock = findChild<QDockWidget*>("toolspaceDock"))
+    toolspaceDock->setVisible(drawingActive);
+  if (auto* propertiesDock = findChild<QDockWidget*>("propertiesDock"))
+    propertiesDock->setVisible(drawingActive);
+  while (m_LogShown < m_Log.size()) m_CommandBar->Append(QString::fromUtf8(m_Log[m_LogShown++].c_str()));
+  QString commandHint;
+  for (const auto* hint : {LineCommandFooterHint(m_State), CircleCommandFooterHint(m_State), ModifyCommandFooterHint(m_State),
+      ScaleCommandFooterHint(m_State), RotateCommandFooterHint(m_State), DeleteCommandFooterHint(m_State),
+      JoinCommandFooterHint(m_State), TrimCommandFooterHint(m_State), OffsetCommandFooterHint(m_State),
+      AlignCommandFooterHint(m_State), ZoomCommandFooterHint(m_State), DrawingExtrasFooterHint(m_State)})
+    if (hint && *hint) { commandHint = QString::fromUtf8(hint); break; }
+  m_CommandBar->SetHint(commandHint);
+  RefreshDraftingInput(commandHint);
+  if (m_WindowTitle) {
+    const auto title = m_DevelopmentBranchLabel.isEmpty()
+        ? QString("GoSurvey") : QString("GoSurvey — ") + m_DevelopmentBranchLabel;
+    m_WindowTitle->setText(title); setWindowTitle(title);
+  }
+  RefreshProperties();
+  RefreshToolspace();
   RefreshRibbon();
+  m_Viewport->RefreshCommandCursor();
   m_Viewport->update();
   m_Refreshing = false;
   ServiceUiRequests();
@@ -2062,29 +2159,31 @@ void EditorWindow::ShowWhatsNew() {
   browser->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   QFile markdown(QtAsset("whats-new.md"));
   QString notes;
+  QStringList imageNames;
   if (markdown.open(QIODevice::ReadOnly)) {
     notes = QString::fromUtf8(markdown.readAll());
-    // Register bundled images under the markdown's `whats-new:` URLs. QTextBrowser has no
-    // handler for that scheme by default, and scaling wide screenshots keeps them inside the pane.
+    // QTextBrowser has no handler for the Markdown's custom `whats-new:` image URLs.
     const QRegularExpression imageUrl(R"(whats-new:([A-Za-z0-9_.-]+))");
     auto match = imageUrl.globalMatch(notes);
-    QStringList imageNames;
     while (match.hasNext()) {
       const auto found = match.next();
       const QString name = found.captured(1);
       if (!imageNames.contains(name)) imageNames.push_back(name);
-    }
-    for (const auto& name : imageNames) {
-      QImage image(QtAsset("whats-new/" + name));
-      if (image.isNull()) continue;
-      if (image.width() > 460) image = image.scaledToWidth(460, Qt::SmoothTransformation);
-      browser->document()->addResource(QTextDocument::ImageResource, QUrl("whats-new:" + name), image);
     }
   }
   if (notes.trimmed().isEmpty())
     notes = "What's New content could not be loaded from resources/whats-new.md for GoSurvey " +
             QString::fromUtf8(GOSURVEY_VERSION_FULL) + ". You can view the release notes online below.";
   browser->setMarkdown(notes);
+  // setMarkdown clears document resources, so install bundled images afterward. Scaling wide
+  // screenshots keeps them inside the release-notes pane.
+  for (const auto& name : imageNames) {
+    QImage image(QtAsset("whats-new/" + name));
+    if (image.isNull()) continue;
+    if (image.width() > 460) image = image.scaledToWidth(460, Qt::SmoothTransformation);
+    browser->document()->addResource(QTextDocument::ImageResource, QUrl("whats-new:" + name), image);
+  }
+  browser->document()->markContentsDirty(0, browser->document()->characterCount());
   browser->setOpenExternalLinks(true);
   layout->addWidget(browser, 1);
   auto* releases = new QLabel(
@@ -2395,9 +2494,42 @@ void EditorWindow::RefreshRecentProjects() {
     grid->addWidget(new QLabel("No recent projects. Use New Project or Open Project.", m_ProjectTiles), 0, 0);
 }
 
-void EditorWindow::ShowPdf() { auto* window = new PdfWindow(this); window->SetEditor(this); window->show(); }
+// The viewer is its own top-level window, not an owned child: an owned window is kept above its owner, which stopped
+// the main window being focused (or alt-tabbed to) while a PDF was open. It closes with the main window; if the user
+// declines to discard unsaved marks the close is refused and the viewer stays open on its own, which keeps their work.
+void EditorWindow::ShowPdf() {
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+}
 
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
+  if (!CreatePdfCoordinate(c)) return false;
+  FinishPdfCoordinates();
+  return true;
+}
+
+// Accept all: every candidate is created first and the view is framed and redrawn once at the end, so a long list
+// does not flash the drawing once per point. Stops at the first candidate that could not be created.
+std::size_t EditorWindow::CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates) {
+  std::size_t created = 0;
+  for (const auto& candidate : candidates) {
+    if (!CreatePdfCoordinate(candidate)) break;
+    ++created;
+  }
+  if (created) FinishPdfCoordinates();
+  return created;
+}
+
+void EditorWindow::FinishPdfCoordinates() {
+  StartZoomExtentsCommand(m_State, m_Log);
+  m_State.requestMainWindowFocus = true;
+  Refresh();
+  raise(); activateWindow();
+}
+
+bool EditorWindow::CreatePdfCoordinate(const pdfview::CoordCandidate& c) {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     QMessageBox::information(this, "Extract Coordinates", "Open a drawing before accepting extracted coordinates.");
     return false;
@@ -2445,10 +2577,6 @@ bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
                          static_cast<float>(c.northing - m_State.worldDocumentOriginY),
                          static_cast<float>(c.elevation.value_or(0.0)), radius, 0.f, 0.f, 1.f, m_Log);
   }
-  StartZoomExtentsCommand(m_State, m_Log);
-  m_State.requestMainWindowFocus = true;
-  Refresh();
-  raise(); activateWindow();
   return true;
 }
 void EditorWindow::ShowAdjustment() {

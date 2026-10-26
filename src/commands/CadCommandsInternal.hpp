@@ -40,6 +40,3 @@ void ResetDistDraft(AppCommandState& st);
 /// Resets every in-progress draft/prompt tool. Call on command start, cancel, or
 /// clear-geometry so no half-collected state leaks into the next command.
 void ResetAllCadDraftTools(AppCommandState& st);
-
-/// Clears a pending ZOOM EXTENTS / ZOOM WINDOW request.
-void ClearPendingViewportZoom(AppCommandState& st);

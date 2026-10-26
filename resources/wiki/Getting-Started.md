@@ -22,10 +22,16 @@ Survey points move through **CSV** in PNEZD/PENZD order.
 
 1. Open the [Releases](https://github.com/chetjones003/GoSurvey/releases) page.
 2. Download the **`.exe` installer** from the latest release.
-3. Run it. GoSurvey installs to `%ProgramFiles%\GoSurvey` and adds a Start Menu entry. A desktop
-   shortcut is offered.
+3. Run it. GoSurvey installs for your Windows user at
+   `%LOCALAPPDATA%\Programs\GoSurvey` and adds a Start Menu entry. A desktop shortcut is offered.
 4. **SmartScreen** — the installer is not code-signed yet, so Windows may show *"Windows protected
    your PC"*. Choose **More info → Run anyway** if you trust the release.
+
+If you already have GoSurvey in Program Files, the 0.7.5 update explains the move before you
+choose **Update Now**. Windows asks once for permission to remove the protected old copy. Your
+settings and user data stay in place, and the old shared Start Menu shortcut is removed. Later
+updates use the per-user installation and do not need administrator approval. Running the install
+command when the same or a newer version is already installed skips the download and reinstall.
 
 **If the program will not start with a missing-DLL error**, install the
 The installer installs the **Microsoft Visual C++ runtime** automatically. You only need a [manual VC++ install](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if an IT policy blocked the install step or you copied `GoSurvey.exe` without running the installer.
@@ -41,7 +47,9 @@ you can press **Continue without checking**.
 Nothing downloads or installs on its own. When an update exists you choose **Update Now**,
 **Remind Me Later**, or **Skip This Version**. Choosing to update downloads the installer, verifies
 it against a SHA-256 published with the release, prompts you to save open drawings, then installs
-and reopens GoSurvey.
+and reopens GoSurvey. Since 0.7.5, installs and updates use
+`%LOCALAPPDATA%\Programs\GoSurvey`; the first update from Program Files asks once for permission
+to remove that older copy and preserves your settings and user data.
 
 Both update settings live in **View → Settings… → System**:
 
@@ -78,21 +86,27 @@ A new tab appears named `Drawing 2`, `Drawing 3`, and so on. Each tab is a **com
 document**: its own geometry, layers, survey points, paper layouts, plot scale, and undo history.
 Switching tabs switches all of it.
 
-There is no "new from template" dialog. New drawings start from the bundled template
-(`resources/default-template.gst`) if one is present — see **Settings → Files**.
+When no project drawing is active, **File → New** opens the **New Drawing** chooser. Choose
+**Blank Drawing** for an empty drawing, or select one of the bundled or personal `.gst` templates
+to load its contents into a fresh tab. The source template is not changed. When a drawing in an
+open project is active, a new drawing starts empty with that project's defaults instead.
+
+The startup workspace template in **Settings → Files** is a separate setting; it is not the source
+of the choices in the New Drawing chooser.
 
 ## Opening an existing drawing
 
-**File → Open** → choose a DWG drawing.
+**File → Open** (or **Ctrl+O**) → choose a DWG drawing. Opening an existing drawing does not show
+the **New Drawing** template chooser.
 
-The drawing opens **in a new tab**, named after the file. Opening does not replace what you are
-working on.
+The drawing opens **in a new, active tab**, named after the file. Opening does not replace what you
+are working on.
 
 GoSurvey opens drawings saved by any older version, converting them as it loads. The file on disk
 is not modified until you save.
 
-To bring in an external drawing, use **File → Import DXF…** or **File → Import DWG…** — see
-[[Import and Export]].
+To bring another drawing's contents into the current drawing instead, use **File → Import DXF…** or
+**File → Import DWG…** — see [[Import and Export]].
 
 ## Saving
 

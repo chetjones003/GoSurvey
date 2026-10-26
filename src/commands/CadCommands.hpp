@@ -2345,6 +2345,7 @@ struct AppCommandState {
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
   float viewportLastSurveyLayoutOrthoHalfH = 50.f;
   float viewportLastSurveyLayoutHeightPx = 600.f;
+  /// Pixel size of the model viewport; the Qt viewport publishes it every paint. Imports fit to it.
   int viewportLastFbW = 900;
   int viewportLastFbH = 650;
   /// Last ortho half-height / viewport height / MUP used for survey MTEXT auto-layout (re-run when zoom/size/MUP changes).
@@ -3355,22 +3356,6 @@ struct AppCommandState {
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
   update::UpdatePrefs updatePrefs;
-  /// REQ-091: sign-in display state and UI requests. Only flags/strings live here — the in-flight
-  /// worker (`auth::AuthTask`, holding a thread) is owned by the application loop, same split as
-  /// `updatePrefs` above, so `AppCommandState` gains no thread and stays copyable.
-  bool        authSignedIn   = false;
-  bool        authBusy       = false;   ///< an interactive sign-in or silent refresh is in flight
-  bool        authInteractiveBusy = false;  ///< true only while the browser-based flow is running,
-                                            ///< for the "Waiting for browser..." button label
-  std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
-  std::string authError;                ///< set only after a user-initiated sign-in attempt fails
-  /// REQ-091 (amended 2026-10-11, issue #824): set by the launch gate's "Don't Sign In" button.
-  bool        authDeclineRequested = false;
-  bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
-  bool        authSignOutRequested = false;  ///< set by a Sign Out button (Settings, Start screen, or
-                                             ///< the menu-bar account dropdown — REQ-091 amendment)
-  bool        showAccountDetailsWindow = false;  ///< REQ-091 amendment: menu-bar "Account Details"
-                                                 ///< opens a small read-only placeholder window
   /// REQ-336 — What's New billboard (Help → About opens the same window).
   bool        showWhatsNewWindow = false;
   bool        whatsNewAutoOpenedThisLaunch = false;  ///< suppresses re-auto-open within one launch
@@ -3382,17 +3367,6 @@ struct AppCommandState {
   bool        showWikiWindow = false;
   std::string wikiCurrentPage = "Home";
   std::string wikiScrollToCommand;  ///< lowercase primary; scroll to matching ## heading once
-  /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
-  /// launch until this is true. Set true on a successful sign-in (interactive or silent), on
-  /// Don't Sign In, OR when there is no internet connectivity at all (same offline exception
-  /// REQ-077's update gate uses) — never re-checked mid-session, so signing out later does not
-  /// reopen the gate.
-  bool        authGateResolved = false;
-  /// REQ-091 (amended 2026-10-11, D-2026-10-11-a, issue #824): the user chose "Don't Sign In" at
-  /// the launch gate. Persisted in gosurvey-user.json; checked before the gate would otherwise
-  /// open, so it never reappears once set. Cleared by a successful sign-in from Settings (the
-  /// only remaining way to opt back in).
-  bool        authOptedOut = false;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
@@ -7744,6 +7718,13 @@ void SubmitExtractCenterlineViewportPick(AppCommandState& st, std::vector<std::s
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
 
+/// Drops any queued ZOOM EXTENTS / ZOOM WINDOW request.
+void ClearPendingViewportZoom(AppCommandState& st);
+/// Queues a ZOOM EXTENTS for the viewport's next paint, replacing any queued zoom. Unlike
+/// StartZoomExtentsCommand it has no active-command guard: the REQ-120 middle double-click is a
+/// transparent view operation and changes the camera only.
+void RequestZoomExtents(AppCommandState& st);
+
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Commits a circle at (\p cx,\p cy,\p cz) with radius \p r, normal (\p nx,\p ny,\p nz), local
@@ -8509,6 +8490,7 @@ std::vector<std::string> FuzzyCommandMatches(const std::string& query, int maxRe
 struct CommandSuggestion {
   std::string name;         ///< primary command name, uppercased (e.g. "LINE")
   std::string description;  ///< short human description shown in parentheses
+  bool exactMatch = false;  ///< query exactly names the primary command or one of its aliases
 };
 
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.

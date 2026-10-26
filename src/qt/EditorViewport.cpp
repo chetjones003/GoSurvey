@@ -10,6 +10,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "QtAnnotations.hpp"
 #include "SectionClip.hpp"
+#include "QtViewCube.hpp"
 #include "ViewportPickPolicy.hpp"
 #include "util/gizmooverlay.hpp"
 #include "AppPaths.hpp"
@@ -31,6 +32,8 @@
 #include <QPainterPath>
 #include <QPolygonF>
 #include <QPixmap>
+#include <QLabel>
+#include <QLayout>
 #include <QWheelEvent>
 #include <algorithm>
 
@@ -42,6 +45,8 @@ EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>&
   setMinimumSize(240, 180);
   setCursor(Qt::CrossCursor);
   m_RightTimer.setSingleShot(true);
+  m_ViewAnimTimer.setInterval(16);
+  connect(&m_ViewAnimTimer, &QTimer::timeout, this, [this] { StepViewAnimation(); });
   m_MapTimer.setInterval(100);
   connect(&m_MapTimer, &QTimer::timeout, this, [this] {
     const bool needed = m_State.drawingSettings.Geolocated() &&
@@ -74,6 +79,7 @@ EditorViewport::~EditorViewport() { Cleanup(); }
 void EditorViewport::Cleanup() {
   if (!m_Ready || !context()) return;
   m_MapTimer.stop();
+  m_ViewAnimTimer.stop();
   makeCurrent();
   m_OnlineMap.reset();
   m_Renderer->Shutdown();
@@ -154,15 +160,73 @@ void EditorViewport::ClearTransientInput() {
   m_State.resolvedPointZValid = false;
 }
 
+void EditorViewport::BeginWindowResizePreview() {
+  if (!m_Ready || m_ResizePreview || m_State.activeSpaceIndex != kModelSpaceIndex || !parentWidget()) return;
+  const QImage frame = grabFramebuffer();
+  if (frame.isNull()) return;
+
+  m_ResizePreviewMinimumSize = minimumSize();
+  m_ResizePreviewMaximumSize = maximumSize();
+  m_ResizePreview = true;
+  setUpdatesEnabled(false);
+  setFixedSize(size());
+
+  m_ResizePreviewOverlay = new QLabel(parentWidget());
+  m_ResizePreviewOverlay->setObjectName("viewportResizePreview");
+  m_ResizePreviewOverlay->setAttribute(Qt::WA_TransparentForMouseEvents);
+  m_ResizePreviewOverlay->setScaledContents(true);
+  m_ResizePreviewOverlay->setPixmap(QPixmap::fromImage(frame));
+  UpdateWindowResizePreviewGeometry();
+  m_ResizePreviewOverlay->show();
+  m_ResizePreviewOverlay->raise();
+}
+
+void EditorViewport::EndWindowResizePreview() {
+  if (!m_ResizePreview) return;
+  m_ResizePreview = false;
+  delete m_ResizePreviewOverlay;
+  m_ResizePreviewOverlay = nullptr;
+  setUpdatesEnabled(true);
+  setMinimumSize(m_ResizePreviewMinimumSize);
+  setMaximumSize(m_ResizePreviewMaximumSize);
+  if (parentWidget() && parentWidget()->layout()) parentWidget()->layout()->activate();
+  updateGeometry();
+  update();
+}
+
+void EditorViewport::UpdateWindowResizePreviewGeometry() {
+  if (!m_ResizePreviewOverlay || !parentWidget()) return;
+  const QRect geometry = parentWidget()->rect();
+  if (m_ResizePreviewOverlay->geometry() != geometry)
+    m_ResizePreviewOverlay->setGeometry(geometry);
+}
+
 void EditorViewport::paintGL() {
   const int w = qRound(width() * devicePixelRatioF());
   const int h = qRound(height() * devicePixelRatioF());
   if (w <= 0 || h <= 0) return;
+  // New entities still have id zero after their command's pre-edit undo snapshot.
+  // Assign identities before display caches and selection overlays consume them (REQ-076).
+  EnsureEntityIds(m_State);
+  // A named-view restore starts an orientation animation without going through this widget; make
+  // sure something is ticking it (REQ-059).
+  if (m_State.viewAnimActive && !m_ViewAnimTimer.isActive()) StartViewAnimationClock();
   m_State.uiViewportWidthPx = static_cast<float>(width());
   m_State.uiViewportHeightPx = static_cast<float>(height());
+  // ZOOMEXTENTS / ZOOM WINDOW only set a pending flag; the camera write needs the real viewport
+  // size, so it happens here, before the camera below is built from the result (REQ-120, REQ-123).
+  // The pan/zoom out-pointers are optional: the function writes them into the state itself.
+  // Imports fit the drawing to the last painted size (DxfIo/LibreDwgCad read these).
+  m_State.viewportLastFbW = w;
+  m_State.viewportLastFbH = h;
+  ProcessPendingViewportZoom(m_State, nullptr, nullptr, nullptr, w, h,
+      static_cast<float>(width()) / static_cast<float>(std::max(1, height())), m_Log);
   const bool paperSpace = m_State.activeSpaceIndex >= 0 &&
       m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) && !InFloatingModelSpace(m_State);
-  if (m_Ready && !paperSpace) {
+  const bool useResizePreview = m_Ready && !paperSpace && m_ResizePreview && m_Renderer->HasRenderedFrame();
+  if (useResizePreview) {
+    m_Renderer->BlitRenderedFrame(defaultFramebufferObject(), w, h);
+  } else if (m_Ready && !paperSpace) {
     const Camera camera = CadViewCamera(m_State);
     std::vector<float> rubber, preview, previewCircles, highlight, highlightCircles;
     AppendCadDraftRubberLines(m_State, m_Cursor.x, m_Cursor.y, m_State.orthoMode,
@@ -355,6 +419,15 @@ void EditorViewport::paintGL() {
       glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
       glDeleteFramebuffers(1, &readFbo);
     }
+  }
+  // REQ-350 (e): the Pipe Fittings palette's part pictures are rendered here, after the scene pass
+  // (the one point in a paint where binding another framebuffer is safe), a few per paint.
+  if (m_Ready && (!m_State.pipeFittingThumbRequests.empty() || !m_State.pipeFittingThumbStale.empty())) {
+    const bool changed = ServicePipeFittingThumbnails(m_State, *m_Renderer, m_PartThumbs);
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    glViewport(0, 0, w, h);
+    if (!m_State.pipeFittingThumbRequests.empty()) update();
+    if (changed && partThumbnailsChanged) partThumbnailsChanged();
   }
   QPainter painter(this);
   const Camera overlayCamera = CadViewCamera(m_State);
@@ -789,21 +862,9 @@ void EditorViewport::paintGL() {
   if (!m_Ready) painter.drawText(rect(), Qt::AlignCenter, m_Error);
   painter.setPen(QColor("#7593ad"));
   if (!paperSpace) painter.drawText(18, height() - 20, "WCS");
-  const QPointF c(width() - 80, 76);
-  const QPolygonF top({c + QPointF(0, -34), c + QPointF(42, -12), c + QPointF(0, 10), c + QPointF(-42, -12)});
-  const QPolygonF front({c + QPointF(-42, -12), c + QPointF(0, 10), c + QPointF(0, 56), c + QPointF(-42, 32)});
-  const QPolygonF right({c + QPointF(0, 10), c + QPointF(42, -12), c + QPointF(42, 32), c + QPointF(0, 56)});
-  painter.setRenderHint(QPainter::Antialiasing);
-  painter.setPen(QColor("#8ca5ba"));
-  for (const auto& face : {top, front, right}) {
-    painter.setBrush(face.containsPoint(m_Last, Qt::OddEvenFill) ? QColor("#4e7d9e") : QColor("#384753"));
-    painter.drawPolygon(face);
-  }
-  painter.setPen(QColor("#e1e9ef"));
-  painter.drawText(QRectF(c.x() - 30, c.y() - 23, 60, 24), Qt::AlignCenter, "TOP");
-  painter.drawText(QRectF(c.x() - 42, c.y() + 13, 42, 24), Qt::AlignCenter, "FRONT");
-  painter.drawText(QRectF(c.x(), c.y() + 13, 42, 24), Qt::AlignCenter, "RIGHT");
-  if (m_Ready && m_PointerInside) DrawCursor(painter);
+  const viewcube::Scene cube = CubeScene();
+  PaintViewCube(painter, cube, m_PointerInside ? viewcube::HitTest(cube, m_Last.x(), m_Last.y()) : viewcube::Hit{});
+  if (m_Ready && m_PointerInside && !viewcube::Contains(cube, m_Last.x(), m_Last.y())) DrawCursor(painter);
 }
 
 // REQ-450: crosshair arms plus a central pickbox; an object-selection step keeps the pickbox only.
@@ -830,11 +891,13 @@ void EditorViewport::DrawCursor(QPainter& painter) {
 void EditorViewport::enterEvent(QEnterEvent* event) {
   m_PointerInside = true;
   m_Last = event->position();
+  RefreshCommandCursor();
   update();
   QOpenGLWidget::enterEvent(event);
 }
 
 void EditorViewport::leaveEvent(QEvent* event) {
+  setCursor(m_Ready ? Qt::BlankCursor : Qt::CrossCursor);  // the painted crosshair stands in for the native one
   m_PointerInside = false;
   update();
   QOpenGLWidget::leaveEvent(event);
@@ -862,20 +925,25 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     return uid != 0 && std::any_of(m_State.openProjects.begin(), m_State.openProjects.end(),
         [uid](const auto& project) { return project.uid == uid && project.readOnly; });
   };
+  // REQ-059: a press anywhere on the ViewCube (face, arrow, home or the gaps between) belongs to the
+  // widget and never reaches the viewport behind it. Middle stays navigation (pan / orbit).
+  if (event->button() != Qt::MiddleButton && viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y())) {
+    m_CubePressed = true;
+    if (event->button() == Qt::LeftButton) ClickViewCube(m_Last);
+    event->accept();
+    update();
+    return;
+  }
+  if (event->button() == Qt::LeftButton &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit)) {
+    event->accept();
+    return;
+  }
   if (event->button() == Qt::LeftButton &&
       (m_State.entityGripMoveActive || m_State.dimGripMoveActive || m_State.mtextGripMoveActive)) {
     ClearEntityGripInteraction(m_State); ClearDimGripInteraction(m_State); ClearMtextGripInteraction(m_State);
     m_GripMovedWithButton = false;
     if (changed) changed(); update(); return;
-  }
-  if (event->button() == Qt::LeftButton) {
-    const QPointF c(width() - 80, 76);
-    const QPolygonF top({c + QPointF(0, -34), c + QPointF(42, -12), c + QPointF(0, 10), c + QPointF(-42, -12)});
-    const QPolygonF front({c + QPointF(-42, -12), c + QPointF(0, 10), c + QPointF(0, 56), c + QPointF(-42, 32)});
-    const QPolygonF right({c + QPointF(0, 10), c + QPointF(42, -12), c + QPointF(42, 32), c + QPointF(0, 56)});
-    if (top.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(0, 90); return; }
-    if (front.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(0, 0); return; }
-    if (right.containsPoint(m_Last, Qt::OddEvenFill)) { SetOrientation(90, 0); return; }
   }
   if (event->button() == Qt::RightButton) {
     if ((event->modifiers() & Qt::ShiftModifier) && snapMenuRequested) {
@@ -1200,6 +1268,20 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
+  // REQ-120: a middle double-click zooms to extents, even mid-command and even over the ViewCube
+  // (a middle press passes through the cube to orbit/pan, so this does too). It writes the camera
+  // only (paintGL consumes the flag), so the active command's phase, points and draft are untouched.
+  if (event->button() == Qt::MiddleButton) {
+    RequestZoomExtents(m_State);
+    event->accept();
+    update();
+    return;
+  }
+  // Qt delivers a quick second press as a double click; over the ViewCube it is just another click.
+  if (viewcube::Contains(CubeScene(), event->position().x(), event->position().y())) {
+    mousePressEvent(event);
+    return;
+  }
   if (m_State.activeSpaceIndex >= 0 && m_State.activeSpaceIndex < static_cast<int>(m_State.paperLayouts.size()) &&
       !InFloatingModelSpace(m_State)) {
     ray3d::Vec3 point;
@@ -1246,20 +1328,43 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
 
 void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
   const QPointF delta = event->position() - m_Last;
-  if (event->buttons() & Qt::MiddleButton) {
-    if (event->modifiers() & Qt::ShiftModifier) {
-      m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
-      m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg + static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
-    } else {
-      ray3d::Vec3 before, after;
-      if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
-        m_State.viewportPanX += before.x - after.x;
-        m_State.viewportPanY += before.y - after.y;
-        m_State.viewportPanZ += before.z - after.z;
-      }
+  const bool leftCommandDrag = (event->buttons() & Qt::LeftButton) &&
+      (m_State.active == AppCommandState::Kind::Pan || m_State.active == AppCommandState::Kind::Orbit);
+  const bool commandOrbitDrag = leftCommandDrag && m_State.active == AppCommandState::Kind::Orbit;
+  const bool middleOrbitDrag = (event->buttons() & Qt::MiddleButton) &&
+      (event->modifiers() & Qt::ShiftModifier);
+  const bool panDrag = (leftCommandDrag && m_State.active == AppCommandState::Kind::Pan) ||
+      ((event->buttons() & Qt::MiddleButton) && !(event->modifiers() & Qt::ShiftModifier));
+  if (middleOrbitDrag || (commandOrbitDrag && m_State.activeSpaceIndex == kModelSpaceIndex)) {
+    m_State.viewAnimActive = false;  // A manual ORBIT takes over from any ViewCube animation (REQ-059).
+    m_State.viewportAzimuthDeg += static_cast<float>(delta.x()) * 0.4f;
+    m_State.viewportElevationDeg = std::clamp(m_State.viewportElevationDeg +
+        static_cast<float>(delta.y()) * 0.4f, -89.9f, 90.f);
+  } else if (panDrag) {
+    ray3d::Vec3 before, after;
+    if (ViewPoint(m_Last, before) && ViewPoint(event->position(), after)) {
+      m_State.viewportPanX += before.x - after.x;
+      m_State.viewportPanY += before.y - after.y;
+      m_State.viewportPanZ += before.z - after.z;
     }
   }
   m_Last = event->position();
+  // Over the ViewCube the pointer is the widget's, not the drawing's: arrow cursor, hover highlight on
+  // the control, and nothing picked or snapped behind it. A held button (box select, grip drag) keeps
+  // tracking so a gesture that started in the drawing is not interrupted.
+  const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  RefreshCommandCursor();
+  if (overCube && event->buttons() == Qt::NoButton) {
+    update();
+    return;
+  }
+  if (leftCommandDrag) {
+    m_Last = event->position();
+    if (changed) changed();
+    update();
+    event->accept();
+    return;
+  }
   ClearTransientInput();
   if (WorldPoint(m_Last, m_Cursor)) {
     const Camera camera = CadViewCamera(m_State);
@@ -1408,6 +1513,11 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
+  if (m_CubePressed && event->button() != Qt::MiddleButton) {  // the press was the ViewCube's
+    m_CubePressed = false;
+    event->accept();
+    return;
+  }
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton && m_State.entityGripMoveActive) {
     ClearEntityGripInteraction(m_State);
   }
@@ -1575,4 +1685,42 @@ void EditorViewport::SetOrientation(float azimuth, float elevation) {
   m_State.viewportElevationDeg = elevation;
   m_State.viewportRollDeg = 0.f;
   update();
+}
+
+void EditorViewport::RefreshCommandCursor() {
+  const bool overCube = viewcube::Contains(CubeScene(), m_Last.x(), m_Last.y());
+  setCursor(overCube ? Qt::ArrowCursor : (m_PointerInside && m_State.active == AppCommandState::Kind::Pan
+      ? Qt::OpenHandCursor : (m_Ready ? Qt::BlankCursor : Qt::CrossCursor)));
+}
+
+// REQ-059: the widget's orientation changes ease to the target instead of snapping.
+void EditorViewport::AnimateToOrientation(float azimuth, float elevation) {
+  CadStartViewAnimation(m_State, azimuth, elevation);
+  StartViewAnimationClock();
+  update();
+}
+
+void EditorViewport::StartViewAnimationClock() {
+  m_ViewAnimClock.start();
+  m_ViewAnimTimer.start();
+}
+
+void EditorViewport::StepViewAnimation() {
+  if (!m_State.viewAnimActive) { m_ViewAnimTimer.stop(); return; }
+  CadTickViewAnimation(m_State, static_cast<float>(m_ViewAnimClock.restart()) / 1000.f);
+  if (!m_State.viewAnimActive) m_ViewAnimTimer.stop();
+  update();
+}
+
+viewcube::Scene EditorViewport::CubeScene() const {
+  const viewcube::Point origin = viewcube::OriginFor(static_cast<float>(width()));
+  return viewcube::BuildScene(CadViewCamera(m_State), origin.x, origin.y, CadUcsViewAzimuthOffsetDeg(m_State));
+}
+
+void EditorViewport::ClickViewCube(QPointF point) {
+  const viewcube::Scene scene = CubeScene();
+  viewcube::Target target;
+  if (viewcube::TargetFor(viewcube::HitTest(scene, point.x(), point.y()), CadViewCamera(m_State),
+                          scene.ucsAzimuthOffsetDeg, &target))
+    AnimateToOrientation(target.azimuthDeg, target.elevationDeg);
 }

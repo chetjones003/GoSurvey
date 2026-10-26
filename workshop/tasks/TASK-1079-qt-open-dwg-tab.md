@@ -36,3 +36,5 @@
 - Qt tests: all six `qt.editor.shard-*` tests passed across the complete run and focused reruns. Shards 0–3 passed in the initial run; shard 4 passed after its assertion was corrected to use the initial tab count; shard 5 passed with failure-state assertions.
 - Architecture / code review: PASS — existing EditorWindow responsibility and snapshot-aware API reused; no new dependencies, abstractions or state.
 - `git diff --check` — PASS.
+- Beta conflict resolution: merged current `origin/beta` (41f8476c) into the court branch; retained the beta startup regression test alongside both DWG tests.
+- Post-merge verification: `build.bat` — PASS (Release); `ctest --preset ninja-release` — PASS (191/191, including all six Qt editor shards and build output layout); `git diff --check` — PASS.

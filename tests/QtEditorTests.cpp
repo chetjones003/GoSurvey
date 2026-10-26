@@ -1,8 +1,10 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "io/DwgIo.hpp"
+#include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
+#include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -17,6 +19,7 @@
 #include "PdfAttach.hpp"
 #include "PdfWindow.hpp"
 #include "PdfCanvas.hpp"
+#include "PdfRibbon.hpp"
 #include <fpdf_edit.h>
 #include <fpdf_save.h>
 #include <fpdfview.h>
@@ -32,6 +35,7 @@
 #include "ProjectPack.hpp"
 #include "ProjectTurnover.hpp"
 #include "ProjectSettings.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "SurveyCsv.hpp"
 #include "io/ProjectPointDb.hpp"
 #include "io/Project.hpp"
@@ -56,10 +60,13 @@
 #include <E57SimpleWriter.h>
 #include <array>
 #include <QPdfWriter>
+#include <QAbstractItemView>
 #include <QCheckBox>
 #include <QDockWidget>
 #include <QListView>
+#include <QScrollBar>
 #include <QToolBar>
+#include <QWheelEvent>
 #include <QPainter>
 #include <QtTest/QtTest>
 #include <QAction>
@@ -70,6 +77,8 @@
 #include <QDialog>
 #include <QPlainTextEdit>
 #include <QScrollBar>
+#include <QWheelEvent>
+#include <QSizeGrip>
 #include <QRegularExpression>
 #include <QTextBlock>
 #include <QTextLayout>
@@ -77,8 +86,6 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QLabel>
-#include <QCompleter>
-#include <QAbstractItemView>
 #include <QMouseEvent>
 #include <QDialogButtonBox>
 #include <QListWidget>
@@ -86,12 +93,15 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QHeaderView>
 #include <QTableWidget>
 #include <QGroupBox>
 #include <QListWidget>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QToolButton>
+#include <QWidgetAction>
+#include <QMenuBar>
 #include <QStatusBar>
 #include <QMenu>
 #include <QBoxLayout>
@@ -109,14 +119,22 @@
 #include <QClipboard>
 #include <QScopeGuard>
 #include <QStyle>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <QSurfaceFormat>
 #include <QTemporaryDir>
 #include <QTemporaryFile>
 #include <QDir>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
+#include <QImage>
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
@@ -125,6 +143,13 @@
 #include <limits>
 
 namespace {
+// REQ-059 / #1034: the ViewCube as laid out for the viewport's current camera and UCS.
+viewcube::Scene ViewCubeSceneOf(EditorViewport* viewport, const AppCommandState& state) {
+  const viewcube::Point origin = viewcube::OriginFor(static_cast<float>(viewport->width()));
+  return viewcube::BuildScene(CadViewCamera(state), origin.x, origin.y, CadUcsViewAzimuthOffsetDeg(state));
+}
+QPoint Px(const viewcube::Point& p) { return QPoint(qRound(p.x), qRound(p.y)); }
+
 QString QtTestArtifactDirectory() {
   const QString override = qEnvironmentVariable("GOSURVEY_QT_TEST_ARTIFACT_DIR");
   return override.isEmpty() ? QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) : override;
@@ -189,6 +214,11 @@ QString OpenTraverseCommands() {
       "HDIST 2 3 100\n");
 }
 QString Issue914Shot(const char* name) {
+  const QString directory = QtTestArtifactDirectory();
+  QDir().mkpath(directory);
+  return QDir(directory).filePath(QString::fromLatin1(name));
+}
+QString Req453Shot(const char* name) {
   const QString directory = QtTestArtifactDirectory();
   QDir().mkpath(directory);
   return QDir(directory).filePath(QString::fromLatin1(name));
@@ -488,10 +518,19 @@ void Issue906Move(QWidget* canvas, QPoint position) {
   QMouseEvent move(QEvent::MouseMove, QPointF(position), QPointF(canvas->mapToGlobal(position)), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
   QApplication::sendEvent(canvas, &move);
 }
+// Issue #1037: a wheel event and a mouse event with explicit buttons, sent the way the window system would.
+void Issue1037Wheel(QWidget* target, QPoint position, int delta, Qt::KeyboardModifiers modifiers) {
+  QWheelEvent wheel(QPointF(position), QPointF(target->mapToGlobal(position)), QPoint(), QPoint(0, delta), Qt::NoButton, modifiers,
+                    Qt::NoScrollPhase, false);
+  QApplication::sendEvent(target, &wheel);
+}
+void Issue1037MouseGlobal(QWidget* target, QEvent::Type type, QPoint global, Qt::MouseButton button, Qt::MouseButtons buttons) {
+  QMouseEvent event(type, QPointF(target->mapFromGlobal(global)), QPointF(global), button, buttons, Qt::NoModifier);
+  QApplication::sendEvent(target, &event);
+}
 QAction* Issue906Action(PdfWindow& window, const QString& text) {
-  for (auto* bar : window.findChildren<QToolBar*>())
-    for (auto* action : bar->actions())
-      if (action->text() == text) return action;
+  for (auto* action : window.findChildren<QAction*>())
+    if (action->text() == text && !action->isSeparator()) return action;
   return nullptr;
 }
 // Sets the preset \p label on the current page through the Set scale dialog.
@@ -614,6 +653,40 @@ class QtEditorTests final : public QObject {
   }
 
 private Q_SLOTS:
+  void req453DevelopmentBranchAppearsInBothWindowTitlesAndSurvivesRefresh() {
+    EditorWindow window(QStringLiteral("feature/window-label"));
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey — feature/window-label"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-development-branch-title.png")));
+  }
+
+  void req453WindowTitleWithoutDevelopmentBranchStaysUnchanged() {
+    EditorWindow window;
+    auto* brand = window.findChild<QLabel*>("windowBrandTitle");
+    QVERIFY(brand);
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+
+    window.CreateDrawingFromTemplate();
+    window.Refresh();
+    QCOMPARE(window.windowTitle(), QString("GoSurvey"));
+    QCOMPARE(brand->text(), window.windowTitle());
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+    QVERIFY(window.grab().save(Req453Shot("req453-normal-title.png")));
+  }
+
   void issue803SplineRibbonPreviewAndSelectionScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
@@ -1054,6 +1127,386 @@ private Q_SLOTS:
     QVERIFY(state.surveyPoints.empty()); // Deny never touches the drawing.
   }
 
+  void pdfCoordinateReviewAcceptAllAndDenyAll() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-all.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
+    PdfWindow window(&editor);
+    window.SetEditor(&editor);
+    window.resize(1100, 820); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    std::vector<pdfview::CoordCandidate> candidates;
+    for (int i = 0; i < 4; ++i) {
+      pdfview::CoordCandidate candidate;
+      candidate.northing = 1000.0 + i; candidate.easting = 2000.0 + i; candidate.elevation = 50.0 + i;
+      candidate.description = "CTRL"; candidate.pointNumber = 10 + i; candidate.sourceText = "row";
+      candidates.push_back(candidate);
+    }
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
+    window.ShowExtractReview();
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
+    auto* table = review->findChild<QTableWidget*>("pdfCoordinateCandidates");
+    QCOMPARE(table->rowCount(), 4);
+    review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->click();
+    QCOMPARE(state.surveyPoints.size(), size_t(4));
+    QCOMPARE(table->rowCount(), 0);
+
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
+    window.ShowExtractReview();
+    QCOMPARE(table->rowCount(), 4);
+    review->findChild<QPushButton*>("pdfCoordinateDenyAll")->click();
+    QCOMPARE(table->rowCount(), 0);
+    QCOMPARE(state.surveyPoints.size(), size_t(4)); // Deny all never touches the drawing.
+  }
+
+  void pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-stop.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    auto& state = editor.State();
+    state.drawingTabs.push_back({"Drawing 1", state.nextTabUid++});
+    state.documents.emplace_back();
+    state.activeDrawingIdx = state.prevDrawingIdx = static_cast<int>(state.drawingTabs.size()) - 1;
+    SurveyPoint existing{}; existing.id = 10; state.surveyPoints.push_back(existing);
+    PdfWindow window(&editor); window.SetEditor(&editor); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    std::vector<pdfview::CoordCandidate> candidates;
+    for (const int id : {11, 10, 12}) {
+      pdfview::CoordCandidate candidate; candidate.pointNumber = id; candidate.northing = id * 10.0;
+      candidate.easting = id * 20.0; candidate.elevation = 5.0; candidate.description = "CTRL"; candidate.sourceText = "row";
+      candidates.push_back(candidate);
+    }
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, candidates, {}};
+    window.ShowExtractReview();
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview"); QVERIFY(review);
+    QTimer::singleShot(0, [] {
+      auto* conflict = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(conflict);
+      QVERIFY(conflict->button(QMessageBox::Cancel));
+      conflict->button(QMessageBox::Cancel)->click();
+    });
+    review->findChild<QPushButton*>("pdfCoordinateAcceptAll")->click();
+    QCOMPARE(state.surveyPoints.size(), size_t(2));
+    QCOMPARE(state.surveyPoints.back().id, 11);
+    QCOMPARE(window.m_ExtractResult->candidates.size(), size_t(2));
+    QCOMPARE(window.m_ExtractResult->candidates.front().pointNumber.value(), 10);
+    QVERIFY(std::none_of(state.surveyPoints.begin(), state.surveyPoints.end(), [](const auto& point) { return point.id == 12; }));
+  }
+
+  void issue1037ActiveToolIsNamedOnTheStatusBarAndEscapeEndsIt() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "tool-flow.pdf", pdfview::MakeSyntheticPdf(2, 3, 0));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* label = window.statusBar()->findChild<QLabel*>("pdfActiveTool");
+    QVERIFY(label);
+    QCOMPARE(label->text(), QString("Tool: Select"));
+    QAction* line = nullptr;
+    for (QAction* action : window.findChildren<QAction*>()) if (action->text() == "Line") line = action;
+    QVERIFY(line);
+    line->trigger();
+    QVERIFY(label->text().contains("Line") && label->text().contains("Esc"));
+    QVERIFY(line->isChecked());
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QCOMPARE(window.m_Tool, -1);
+    QVERIFY(!label->text().contains("Esc"));
+    window.findChild<QAction*>("pdfExtractCoordinates")->trigger();
+    QVERIFY(label->text().contains("Extract coordinates") && label->text().contains("Esc"));
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QVERIFY(!label->text().contains("Extract"));
+    // The yellow source box stays while candidates are under review, and Esc or closing the review removes it.
+    pdfview::CoordCandidate candidate; candidate.northing = 1; candidate.easting = 2; candidate.sourceText = "N1 E2";
+    window.m_ExtractResult = pdfview::ExtractResult{pdfview::ExtractStatus::Ok, {candidate}, {}};
+    window.ShowExtractReview();
+    QVERIFY(window.m_ExtractBox);
+    window.EscapePressed();
+    QVERIFY(!window.m_ExtractBox);
+    window.ShowExtractReview();
+    QVERIFY(window.m_ExtractBox);
+    window.findChild<QDialog*>("pdfCoordinateReview")->findChild<QPushButton*>("pdfCoordinateReviewClose")->click();
+    QVERIFY(!window.m_ExtractBox);
+  }
+
+  // REQ-455: single-letter tool hotkeys; Esc returns to Browse; the callout and the revision cloud survive a save.
+  void issue1037ToolHotkeysAndCalloutAndRevisionCloudRoundTrip() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "hotkeys.pdf", pdfview::MakeSyntheticPdf(2, 3, 0));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.activateWindow();
+    const std::pair<Qt::Key, int> keys[] = {{Qt::Key_L, 1}, {Qt::Key_R, 2}, {Qt::Key_E, 3}, {Qt::Key_T, 0}, {Qt::Key_C, 4},
+        {Qt::Key_K, 9}, {Qt::Key_D, 5}, {Qt::Key_P, 6}, {Qt::Key_A, 7}, {Qt::Key_G, 8}, {Qt::Key_H, PdfWindow::kToolCheck},
+        {Qt::Key_S, PdfWindow::kToolSelect}, {Qt::Key_B, PdfWindow::kToolBrowse}};
+    for (const auto& [key, tool] : keys) {
+      QTest::keyClick(&window, key);
+      QCOMPARE(window.m_Tool, tool);
+    }
+    const auto pageSize = window.m_Document->Sizes()[0];
+    const auto canvasPoint = [&](float x, float y) {
+      return QPointF(x * window.PageWidthPx() / pageSize.wPt,
+                     (pageSize.hPt - y) * window.PageHeightPx() / pageSize.hPt);
+    };
+    // The revision-cloud button defaults to a two-click rectangle; polygon mode takes corners then Enter.
+    QVERIFY(!window.m_CloudPolygon);
+    window.m_CloudPolygon = true;
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::RevCloud), QString());
+    window.PageClick(canvasPoint(10, 10), Qt::LeftButton);
+    window.PageClick(canvasPoint(60, 10), Qt::LeftButton);
+    window.PageClick(canvasPoint(60, 60), Qt::LeftButton);
+    const int itemsBefore = static_cast<int>(window.m_Annotations.Items().size());
+    QTest::keyClick(&window, Qt::Key_Return);
+    QCOMPARE(static_cast<int>(window.m_Annotations.Items().size()), itemsBefore + 1);
+    QCOMPARE(window.m_Annotations.Items().back().kind, pdfview::Annot::Kind::RevCloud);
+    window.m_CloudPolygon = false;
+    window.m_PageNumber->setValue(2);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    const auto rectPageSize = window.m_Document->Sizes()[1];
+    const QPointF rectangleFirst(50.f * window.PageWidthPx() / rectPageSize.wPt,
+                                 (rectPageSize.hPt - 50.f) * window.PageHeightPx() / rectPageSize.hPt);
+    const QPointF rectangleSecond(250.f * window.PageWidthPx() / rectPageSize.wPt,
+                                  (rectPageSize.hPt - 150.f) * window.PageHeightPx() / rectPageSize.hPt);
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::RevCloud), QString());
+    window.PageClick(rectangleFirst, Qt::LeftButton);
+    window.PageClick(rectangleSecond, Qt::LeftButton); // the second corner finishes the rectangle
+    QCOMPARE(static_cast<int>(window.m_Annotations.Items().back().pts.size()), 4);
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::Leader), QString());
+    window.PageClick(canvasPoint(100, 200), Qt::LeftButton); // first click is the target
+    QTimer::singleShot(0, [] {
+      auto* input = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+      QVERIFY(input);
+      input->setTextValue("CHECK THIS");
+      input->accept();
+    });
+    window.PageClick(canvasPoint(150, 260), Qt::LeftButton); // second click places the note box
+    QTest::keyClick(&window, Qt::Key_Escape);
+    QCOMPARE(window.m_Tool, -1); // Esc falls back to Browse
+    pdfview::Annot cloud; cloud.kind = pdfview::Annot::Kind::RevCloud; cloud.page = 1; cloud.thickness = 1.f;
+    cloud.pts = {{50.f, 50.f}, {250.f, 50.f}, {250.f, 150.f}, {50.f, 150.f}};
+    QVERIFY(!pdfview::RevCloudArcs(cloud).empty());
+    QVERIFY(!cloud.IsDimension() && cloud.UsesPoints());
+    QCOMPARE(window.m_Annotations.Items().back().kind, pdfview::Annot::Kind::Leader);
+    QCOMPARE(window.m_Annotations.Items().back().text, std::string("CHECK THIS"));
+    const QString saved = directory.filePath("marked.pdf");
+    QVERIFY(window.SaveFile(saved, error));
+    const auto back = pdfview::ReadAnnotations(std::filesystem::path(saved.toStdWString()));
+    bool sawCallout = false, sawCloud = false, sawPolygonCloud = false;
+    for (const auto& a : back) {
+      if (a.kind == pdfview::Annot::Kind::Leader) {
+        sawCallout = true; QCOMPARE(a.text, std::string("CHECK THIS"));
+        QVERIFY(!a.pts.empty()); QVERIFY(std::abs(a.pts[0].first - 100.f) < 1.f && std::abs(a.pts[0].second - 200.f) < 1.f);
+      }
+      if (a.kind == pdfview::Annot::Kind::RevCloud && a.page == 1) { sawCloud = true; QCOMPARE(static_cast<int>(a.pts.size()), 4); QCOMPARE(a.page, 1); }
+      if (a.kind == pdfview::Annot::Kind::RevCloud && a.page == 0) { sawPolygonCloud = true; QCOMPARE(a.pts.size(), size_t(3)); }
+    }
+    QVERIFY(sawCallout); QVERIFY(sawCloud); QVERIFY(sawPolygonCloud);
+    for (const auto& a : back)
+      if (a.kind == pdfview::Annot::Kind::RevCloud && a.page == 1) { QVERIFY(a.x0 < a.x1 && a.y0 < a.y1); } // the corners' box is filled in
+    // A cloud with too few corners (a malformed mark) draws nothing and does not stop the save.
+    pdfview::Annot degenerate = cloud; degenerate.pts = {{10.f, 10.f}, {10.f, 10.f}};
+    QVERIFY(window.AddAnnotation(degenerate, error));
+    QVERIFY2(window.SaveFile(directory.filePath("degenerate.pdf"), error), qPrintable(error));
+    // The ribbon's Undo drops the selection, so no grip is left on a mark that moved or went away.
+    window.m_SelectedAnnotation = static_cast<int>(window.m_Annotations.Items().size()) - 1;
+    window.m_SelectedMore = {0};
+    window.m_AnnotationDragging = true;
+    window.m_AnnotationHandle = 0;
+    window.m_DragPreview = window.m_Annotations.Items().front();
+    window.findChild<QAction*>("pdfUndo")->trigger();
+    QCOMPARE(window.m_SelectedAnnotation, -1);
+    QVERIFY(window.m_SelectedMore.empty());
+    QVERIFY(!window.m_AnnotationDragging);
+    QCOMPARE(window.m_AnnotationHandle, -1);
+    QVERIFY(!window.m_DragPreview.has_value());
+  }
+
+  void issue1037RevisionCloudReadBackKeepsBoundsOnRotatedPages() {
+    QTemporaryDir directory;
+    const QString source = Issue905WritePdf(directory, "cloud-source.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    const QString rotated = directory.filePath("cloud-rotated.pdf");
+    QVERIFY(WriteRotatedCopy(source, rotated));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(rotated, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::Annot cloud; cloud.kind = pdfview::Annot::Kind::RevCloud; cloud.page = 0; cloud.thickness = 1.f;
+    cloud.pts = {{40.f, 50.f}, {240.f, 50.f}, {240.f, 150.f}, {40.f, 150.f}};
+    QVERIFY(window.AddAnnotation(cloud, error));
+    const QString saved = directory.filePath("cloud-rotated-marked.pdf");
+    QVERIFY2(window.SaveFile(saved, error), qPrintable(error));
+    const auto annotations = pdfview::ReadAnnotations(std::filesystem::path(saved.toStdWString()));
+    const auto found = std::find_if(annotations.begin(), annotations.end(), [](const auto& annotation) {
+      return annotation.kind == pdfview::Annot::Kind::RevCloud;
+    });
+    QVERIFY(found != annotations.end());
+    QVERIFY(found->x0 < found->x1);
+    QVERIFY(found->y0 < found->y1);
+    QCOMPARE(found->pts.size(), size_t(4));
+  }
+
+  // REQ-455 clauses 1, 11 and 13: the Tool Chest buttons, the revision-cloud drop-down, and a preview after the first click.
+  void issue1037ToolChestCloudMenuAndPreviews() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "previews.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    PdfWindow window(nullptr); window.resize(1100, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    auto* chest = window.findChild<QWidget*>("pdfToolChest");
+    QVERIFY(chest);
+    QVERIFY(chest->findChildren<QToolButton*>().size() >= 16); // Markup 8, Measurement 5, Review 3
+    auto* cloud = window.findChild<QToolButton*>("pdfCloudButton");
+    QVERIFY(cloud && cloud->menu());
+    window.findChild<QTabWidget*>("pdfRibbon")->setCurrentIndex(1);
+    QTest::qWait(50);
+    QCOMPARE(cloud->menu()->actions().size(), 2); // rectangle (default) and polygon
+    QCOMPARE(cloud->text(), QString("Rect cloud"));
+    QVERIFY(cloud->toolTip().contains("click two opposite corners"));
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-cloud-default.png")));
+    cloud->menu()->popup(cloud->mapToGlobal(QPoint(0, cloud->height())));
+    QTRY_VERIFY_WITH_TIMEOUT(cloud->menu()->isVisible(), 1000);
+    QVERIFY(cloud->menu()->grab().save(Issue905Shot("qt-1037-cloud-menu.png")));
+    cloud->menu()->hide();
+    cloud->menu()->actions().at(1)->trigger();
+    QCOMPARE(cloud->text(), QString("Polygon cloud")); // the button shows, and uses, the last mode
+    QVERIFY(window.m_CloudPolygon);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-cloud-polygon-mode.png")));
+    // After the first click a dashed preview follows the pointer: the page looks different with it than without.
+    for (const int tool : {1, 2, 3, 4, 9}) {
+      window.SetTool(tool, QString());
+      window.m_Draft.clear();
+      window.m_PointerIn = true; window.m_PointerPage = 0; window.m_LastPointer = QPointF(260, 220);
+      const QImage without = window.m_Page->grab().toImage();
+      window.m_Draft = {{40.f, 600.f}}; window.m_DraftPage = 0;
+      const QImage with = window.m_Page->grab().toImage();
+      QVERIFY2(without != with, qPrintable(QString("no preview for tool %1").arg(tool)));
+    }
+  }
+
+  void issue1037PdfWindowIsTopLevelAndClosesWithEditor() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "owned-window.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    auto editor = std::make_unique<EditorWindow>();
+    editor->ShowPdf();
+    PdfWindow* viewer = nullptr;
+    for (QWidget* candidate : QApplication::topLevelWidgets())
+      if (auto* pdf = dynamic_cast<PdfWindow*>(candidate)) { viewer = pdf; break; }
+    QVERIFY(viewer);
+    QVERIFY(viewer->isWindow());
+    QVERIFY(viewer->parentWidget() == nullptr);
+    QVERIFY(viewer->windowFlags().testFlag(Qt::Window));
+    QString error;
+    QVERIFY2(viewer->LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!viewer->IsBusy(), 10000);
+    pdfview::Annot mark; mark.kind = pdfview::Annot::Kind::Rect; mark.page = 0;
+    mark.x0 = 10; mark.y0 = 10; mark.x1 = 40; mark.y1 = 40;
+    QVERIFY(viewer->AddAnnotation(mark, error));
+    QTimer::singleShot(0, [] {
+      auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(prompt);
+      prompt->button(QMessageBox::Cancel)->click();
+    });
+    viewer->close();
+    QVERIFY(viewer->isVisible()); // declining to discard keeps the independent viewer open
+    QTimer::singleShot(0, [] {
+      auto* prompt = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(prompt);
+      prompt->button(QMessageBox::Discard)->click();
+    });
+    editor.reset();
+    QVERIFY(!viewer->isVisible());
+    delete viewer;
+  }
+
+  // Select works like the drawing's box select: two clicks; left to right takes what the box encloses, right to left
+  // takes what it touches.
+  void issue1037SelectBoxWindowAndCrossing() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "box-select.pdf", pdfview::MakeSyntheticPdf(2, 3, 0));
+    PdfWindow window(nullptr); window.resize(1000, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::Annot inside; inside.kind = pdfview::Annot::Kind::Rect; inside.page = 0; inside.x0 = 100; inside.y0 = 100; inside.x1 = 140; inside.y1 = 140;
+    pdfview::Annot straddling = inside; straddling.x0 = 190; straddling.x1 = 260;
+    QVERIFY(window.AddAnnotation(inside, error)); QVERIFY(window.AddAnnotation(straddling, error));
+    window.SetTool(-2, QString());
+    window.SelectInBox(QPointF(50, 50), QPointF(220, 200)); // window: only the first is fully inside
+    QCOMPARE(window.m_SelectedAnnotation, 0); QVERIFY(window.m_SelectedMore.empty());
+    window.SelectInBox(QPointF(220, 200), QPointF(50, 50)); // crossing: both
+    QVERIFY(window.IsSelected(0) && window.IsSelected(1));
+    pdfview::Annot cloud; cloud.kind = pdfview::Annot::Kind::RevCloud; cloud.page = 0; cloud.thickness = 1.f;
+    cloud.pts = {{300.f, 300.f}, {400.f, 300.f}, {400.f, 350.f}, {300.f, 350.f}};
+    QVERIFY(window.AddAnnotation(cloud, error));
+    window.SelectInBox(QPointF(500, 200), QPointF(350, 320)); // a crossing box that only overlaps the cloud
+    QCOMPARE(window.m_SelectedAnnotation, 2);
+    window.SelectInBox(QPointF(290, 290), QPointF(410, 360)); // a window box around it
+    QCOMPARE(window.m_SelectedAnnotation, 2);
+    window.SelectInBox(QPointF(400, 400), QPointF(450, 450));
+    QCOMPARE(window.m_SelectedAnnotation, -1);
+  }
+
+  void issue1037SingleClickAndBatchDeleteAndStyle() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "selection-actions.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    PdfWindow window(nullptr); window.resize(1000, 800); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    pdfview::Annot first; first.kind = pdfview::Annot::Kind::Rect; first.page = 0; first.x0 = 100; first.y0 = 100; first.x1 = 160; first.y1 = 160;
+    pdfview::Annot second = first; second.x0 = 200; second.x1 = 260;
+    QVERIFY(window.AddAnnotation(first, error)); QVERIFY(window.AddAnnotation(second, error));
+    window.SetTool(PdfWindow::kToolSelect, QString());
+    const auto size = window.m_Document->Sizes()[0];
+    const QPointF click(130.0 * window.PageWidthPx() / size.wPt,
+                        (size.hPt - 130.0) * window.PageHeightPx() / size.hPt);
+    window.PageClick(click, Qt::LeftButton);
+    window.EndAnnotation(click, Qt::LeftButton);
+    QCOMPARE(window.m_SelectedAnnotation, 0);
+    QVERIFY(window.m_SelectedMore.empty()); // one click selects only the mark under it
+
+    window.SelectInBox(QPointF(50, 50), QPointF(300, 200));
+    QVERIFY(window.IsSelected(0) && window.IsSelected(1));
+    window.m_AnnotationColor = 0x123456;
+    window.findChild<QAction*>("pdfAnnotationApplyStyle")->trigger();
+    QCOMPARE(window.m_Annotations.Items()[0].color, 0x123456u);
+    QCOMPARE(window.m_Annotations.Items()[1].color, 0x123456u);
+    QTest::keyClick(&window, Qt::Key_Delete);
+    QVERIFY(window.m_Annotations.Items().empty()); // Delete acts on every mark in the box selection
+  }
+
+  // Dragging with the left button pans the page under Browse.
+  void issue1037BrowseDragPansTheDocument() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "browse-pan.pdf", pdfview::MakeSyntheticPdf(2, 3, 0));
+    PdfWindow window(nullptr); window.resize(900, 700); window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.SetZoomPercent(300);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.SetTool(-1, QString());
+    auto* bar = window.m_Scroll->verticalScrollBar();
+    bar->setValue(bar->maximum() / 2);
+    const int before = bar->value();
+    QWidget* viewport = window.m_Scroll->viewport();
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(300, 400));
+    QTest::mouseMove(viewport, QPoint(300, 300));
+    QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(300, 300));
+    QVERIFY2(bar->value() > before, "dragging up with the left button under Browse scrolls the page down");
+  }
+
   void pdfCoordinateRegionCancelAndNoTextAreSafe() {
     QTemporaryDir directory;
     const QString path = Issue905WritePdf(directory, "coordinate-scan.pdf",
@@ -1126,6 +1579,26 @@ private Q_SLOTS:
     QCOMPARE(state.surveyPoints.front().description, candidate.description);
     QVERIFY(DoUndo(state, editor.m_Log));
     QCOMPARE(state.surveyPoints.front().description, existing.description);
+  }
+
+  void pdfCoordinateCircleLandsInTheDrawingAndZoomExtentsFramesIt() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate();
+    editor.resize(1000, 700);
+    editor.show();
+    QTRY_VERIFY_WITH_TIMEOUT(editor.m_Viewport->IsRendererReady(), 10000);
+    auto& state = editor.State();
+    pdfview::CoordCandidate candidate; // a state-plane northing/easting with no description: becomes a circle
+    candidate.northing = 303401.741; candidate.easting = 1887631.271;
+    QVERIFY(editor.CommitPdfCoordinate(candidate));
+    QCOMPARE(state.userCirclesCxCyZR.size(), size_t(4));
+    QVERIFY(state.userCirclesCxCyZR[3] > 0.f);
+    QTRY_VERIFY_WITH_TIMEOUT(!state.pendingZoomExtents, 10000);
+    QStringList log;
+    for (const auto& line : editor.m_Log) log << QString::fromStdString(line);
+    QVERIFY2(log.join(" | ").contains("Zoom extents applied"), qPrintable(log.join(" | ")));
+    // The view is now centred on the circle, so the circle is on screen rather than off in empty space.
+    QVERIFY(std::abs(state.viewportPanX - state.userCirclesCxCyZR[0]) < 1.0 && std::abs(state.viewportPanY - state.userCirclesCxCyZR[1]) < 1.0);
   }
 
   void approvedTopographyStaysInPanelBackgrounds() {
@@ -1479,9 +1952,13 @@ private Q_SLOTS:
   void viewportScaleWorkflowValidatesAndSupportsUndo() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
+    window.State().annotationScales = {{"1:50", 1.f, 50.f}, {"1:100", 1.f, 100.f}};
+    window.State().currentAnnotationScaleIndex = 0;
     if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
     window.State().activeSpaceIndex = 0;
     const int viewport = AddViewport(window.State(), 0);
+    QCOMPARE(QString::fromUtf8(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].annotationScaleName.c_str()),
+             QString("1:50"));
     const float initial = window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn;
     window.Submit("VPSCALE 1:25");
     QVERIFY(std::fabs(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn - 25.f) < 1e-4f);
@@ -1491,7 +1968,11 @@ private Q_SLOTS:
     QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, initial);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("viewportsManager"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(Issue897Shot("qt-897-viewports-manager.png")));
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-default.png")));
+      auto* annotationScale = dialog->findChild<QComboBox*>("viewportAnnotationScale"); QVERIFY(annotationScale);
+      QCOMPARE(annotationScale->currentText(), QString("1:50"));
+      annotationScale->setCurrentText("1:100");
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-selected.png")));
       QTimer::singleShot(0, [&] {
         for (auto* widget : QApplication::topLevelWidgets())
           if (auto* scaleDialog = qobject_cast<QInputDialog*>(widget); scaleDialog && scaleDialog->windowTitle() == "Viewport Scale") {
@@ -1505,6 +1986,8 @@ private Q_SLOTS:
       dialog->findChild<QPushButton*>("viewportClose")->click();
     });
     window.ShowViewportsManager();
+    QCOMPARE(QString::fromUtf8(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].annotationScaleName.c_str()),
+             QString("1:100"));
   }
 
   void paperSpaceRendersSheetTablesAndViewportModelContent() {
@@ -1733,42 +2216,6 @@ private Q_SLOTS:
     QVERIFY(!window.HasUnsavedChanges());
     QVERIFY2(window.LoadFile(path, error), qPrintable(error));
     QVERIFY(!window.HasUnsavedChanges());
-  }
-
-  void settingsAccountSupportsLaterSignInAndReadOnlyStatus() {
-    EditorWindow window;
-    auto *viewMenu = window.findChild<QMenu *>("viewMenu");
-    QVERIFY(viewMenu);
-    QAction *settings = nullptr;
-    for (auto *action : viewMenu->actions())
-      if (action->text() == "Settings…")
-        settings = action;
-    QVERIFY(settings);
-    settings->trigger();
-    auto *dialog = window.findChild<QDialog *>("applicationSettings");
-    QVERIFY(dialog);
-    auto *heading = dialog->findChild<QLabel *>("accountSettingsHeading");
-    QVERIFY(heading);
-    QCOMPARE(heading->text(), QString("Account"));
-    QVERIFY(dialog->findChild<QFrame *>("accountIdentityCard"));
-    QVERIFY(dialog->findChild<QWidget *>("settingsPageAccount")->findChildren<QLineEdit *>().isEmpty());
-    auto *action = dialog->findChild<QPushButton *>("accountSignInAction");
-    auto *status = dialog->findChild<QLabel *>("accountSignInStatus");
-    QVERIFY(action);
-    QVERIFY(status);
-    QTRY_COMPARE(action->text(), QString("Sign In"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    window.State().authSignInRequested = false;
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_COMPARE(status->text(), QString("Signed in as surveyor@example.com"));
-    QTRY_COMPARE(action->text(), QString("Sign Out"));
-    const auto accountShot = dialog->grab();
-    QVERIFY(accountShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-account-final.png"));
-    QTest::mouseClick(action, Qt::LeftButton);
-    QVERIFY(window.State().authSignOutRequested);
   }
 
   void projectSettingsApplyPersistsAndCancelDiscardsStagedChanges() {
@@ -2214,46 +2661,6 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
   }
 
-  void startupGateUsesApplicationLogoAndRequiresAChoice() {
-    EditorWindow window;
-    window.State().authGateResolved = false;
-    window.show();
-    window.ShowSignInGate();
-    auto *gate = window.findChild<QDialog *>("signInGate");
-    QVERIFY(gate);
-    QTRY_VERIFY(gate->isVisible());
-    QCOMPARE(gate->windowModality(), Qt::ApplicationModal);
-    QVERIFY(!(gate->windowFlags() & Qt::WindowCloseButtonHint));
-    auto *logo = gate->findChild<QLabel *>("signInLogo");
-    QVERIFY(logo);
-    QVERIFY(!logo->pixmap(Qt::ReturnByValue).isNull());
-    const auto startupShot = gate->grab();
-    QVERIFY(startupShot.save(QtTestArtifactDirectory() +
-                             "/qt-880-startup-final.png"));
-    gate->close();
-    QVERIFY(gate->isVisible());
-    QTest::keyClick(gate, Qt::Key_Escape);
-    QVERIFY(gate->isVisible());
-    QTest::mouseClick(gate->findChild<QPushButton *>("signInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authSignInRequested);
-    QTest::mouseClick(gate->findChild<QPushButton *>("declineSignInButton"),
-                      Qt::LeftButton);
-    QVERIFY(window.State().authDeclineRequested);
-  }
-
-  void savedOptOutResolvesQtLaunchWithoutAuthAttempt() {
-    EditorWindow window;
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QVERIFY(window.State().authGateResolved);
-    QVERIFY(!window.State().authBusy);
-    QCoreApplication::processEvents();
-    QVERIFY(!window.findChild<QDialog *>("signInGate"));
-  }
-
-  // ---- REQ-080 usage ping / REQ-425 crash and startup-failure reports (issue #883) -----------
-
   static QString SampleCrashReport() {
     return QString(
         "GoSurvey stopped because of an unexpected error.\n\n"
@@ -2273,7 +2680,6 @@ private Q_SLOTS:
         "Use \"Send This Report\" to copy this text and open GitHub to file an issue.";
   }
 
-  /// Clicks OK on the next message box and hands back what it said.
   static void CaptureNextMessage(QString& text) {
     QTimer::singleShot(0, [&text] {
       for (auto* widget : QApplication::topLevelWidgets())
@@ -2282,77 +2688,6 @@ private Q_SLOTS:
           message->button(QMessageBox::Ok)->click();
         }
     });
-  }
-
-  void telemetryPingWaitsForLaunchGateAndFiresOnce() {
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping before the launch sequence starts");
-    window.m_AuthStarted = true;
-    window.State().authGateResolved = false;
-    window.ServiceTelemetry();
-    QVERIFY2(sent.empty(), "no ping while the sign-in gate is unresolved");
-    window.State().authGateResolved = true;
-    window.ServiceTelemetry();
-    window.ServiceTelemetry();
-    QCOMPARE(sent.size(), std::size_t(1));
-    QCOMPARE(sent[0], std::string());  // signed out: no email
-
-    EditorWindow signedIn;
-    std::vector<std::string> signedInSent;
-    signedIn.m_SendTelemetry = [&signedInSent](const std::string& email) { signedInSent.push_back(email); };
-    signedIn.m_AuthStarted = true;
-    signedIn.State().authGateResolved = true;
-    signedIn.State().authSignedIn = true;
-    signedIn.State().authEmail = "surveyor@example.com";
-    signedIn.ServiceTelemetry();
-    QCOMPARE(signedInSent, std::vector<std::string>{"surveyor@example.com"});
-  }
-
-  void telemetryPingFollowsTheRealLaunchPathOnlyWhenEnabled() {
-    // The saved opt-out resolves the gate at once; the window's own service loop sends the ping.
-    EditorWindow window;
-    std::vector<std::string> sent;
-    window.m_SendTelemetry = [&sent](const std::string& email) { sent.push_back(email); };
-    window.State().authOptedOut = true;
-    window.StartAuth();
-    QTRY_COMPARE(sent.size(), std::size_t(1));
-    QTest::qWait(150);
-    QCOMPARE(sent.size(), std::size_t(1));
-
-    // A window the entry point did not enable never sends one (so tests stay off the network).
-    EditorWindow quiet;
-    quiet.State().authOptedOut = true;
-    quiet.StartAuth();
-    QTest::qWait(150);
-    QVERIFY(!quiet.m_SendTelemetry);
-    QVERIFY(!quiet.m_TelemetryTask);
-  }
-
-  void settingsUsageDisclosureIsAccurateAndFollowsSignIn() {
-    EditorWindow window;
-    window.ShowSettings();
-    auto* dialog = window.findChild<QDialog*>("applicationSettings");
-    QVERIFY(dialog);
-    auto* heading = dialog->findChild<QLabel*>("usageDataHeading");
-    auto* summary = dialog->findChild<QLabel*>("usageDataSummary");
-    auto* email = dialog->findChild<QLabel*>("usageDataEmail");
-    auto* crash = dialog->findChild<QLabel*>("usageDataCrashReports");
-    QVERIFY(heading && summary && email && crash);
-    // REQ-080 as amended: a ping every launch. The 0.7.4 "at most once a day" is no longer true.
-    QVERIFY(summary->text().contains("each time you start GoSurvey"));
-    QVERIFY(!summary->text().contains("once a day"));
-    // A disclosure, not a control: ADR-032 has no opt-out.
-    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection")->findChild<QCheckBox*>());
-    QVERIFY(email->text().contains("currently signed out"));
-    // REQ-425 §6.
-    QVERIFY(crash->text().contains("crashes or cannot start"));
-    QVERIFY(crash->text().contains("file locations"));
-    window.State().authSignedIn = true;
-    window.State().authEmail = "surveyor@example.com";
-    QTRY_VERIFY(email->text().contains("your email is included too"));
   }
 
   void failureReportWindowSendsWithoutClosingAndCloseSendsNothing() {
@@ -2365,6 +2700,11 @@ private Q_SLOTS:
     dialog->show();
     QTRY_VERIFY(dialog->isVisible());
     QCOMPARE(dialog->windowTitle(), QString("GoSurvey encountered a problem"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportNextStepsHeading"));
+    QVERIFY(dialog->findChild<QLabel*>("failureReportExplanation"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportNextSteps"));
+    QVERIFY(dialog->findChild<QFrame*>("failureReportHeader"));
     auto* text = dialog->findChild<QPlainTextEdit*>("failureReportText");
     QVERIFY(text);
     QVERIFY(text->isReadOnly());
@@ -2437,9 +2777,29 @@ private Q_SLOTS:
       QVERIFY(file.open(QIODevice::WriteOnly));
       file.write("not a crash bundle\n");
     }
+    const QString malformedDump = directory.filePath("gosurvey-crash-3-4.dmp");
+    {
+      QFile file(malformedDump);
+      QVERIFY(file.open(QIODevice::WriteOnly));
+      file.write("MDMP");
+    }
     crashReporter::CrashReport rejected;
     QVERIFY(!crashReporter::ReadCrashBundle(malformed.toStdWString(), rejected));
     QVERIFY2(!QFileInfo::exists(malformed), "a malformed bundle is not left in the temp folder");
+    QVERIFY2(!QFileInfo::exists(malformedDump), "a malformed bundle's paired dump is also removed");
+  }
+
+  void helperProcessWritesAStackFocusedMinidump() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("crash-test.dmp");
+    QVERIFY(crashReporter::WriteMinidumpWithHelper(path.toStdWString(), nullptr));
+    QFile dump(path);
+    QVERIFY(dump.open(QIODevice::ReadOnly));
+    QCOMPARE(dump.read(4), QByteArray("MDMP", 4));
+    QVERIFY(dump.size() <= 10 * 1024 * 1024);
+    dump.close();
+    QVERIFY(QFile::remove(path));
   }
 
   void startupGraphicsCheckPassesOnAWorkingDriver() {
@@ -2657,20 +3017,25 @@ private Q_SLOTS:
 
   void failureReportAndUsageNoticeScreenshots() {
     const QString dir = QtTestArtifactDirectory();
-    std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
-                                                              SampleCrashReport()));
-    dialog->resize(dialog->minimumSize());
-    dialog->show();
-    QTest::qWait(50);
-    QVERIFY(dialog->grab().save(dir + "/qt-883-report-final.png"));
-    std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
-        "GoSurvey could not start",
-        "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
-        "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
-    startup->resize(startup->minimumSize());
-    startup->show();
-    QTest::qWait(50);
-    QVERIFY(startup->grab().save(dir + "/qt-883-startup-final.png"));
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      const QString appearance = light ? "light" : "dark";
+      std::unique_ptr<QDialog> dialog(CreateFailureReportDialog("GoSurvey encountered a problem",
+                                                                SampleCrashReport()));
+      dialog->resize(dialog->minimumSize());
+      dialog->show();
+      QTest::qWait(50);
+      QVERIFY(dialog->grab().save(dir + "/qt-1004-crash-" + appearance + ".png"));
+      std::unique_ptr<QDialog> startup(CreateFailureReportDialog(
+          "GoSurvey could not start",
+          "GoSurvey could not initialize OpenGL 3.3 for drawing.\n\nTechnical detail:\n"
+          "OpenGL shader setup failed (driver may not support OpenGL 3.3 core)."));
+      startup->resize(startup->minimumSize());
+      startup->show();
+      QTest::qWait(50);
+      QVERIFY(startup->grab().save(dir + "/qt-1004-startup-" + appearance + ".png"));
+    }
+    ApplyQtAppearance(*qApp, false);
     EditorWindow window;
     window.ShowSettings();
     auto* settings = window.findChild<QDialog*>("applicationSettings");
@@ -2684,8 +3049,10 @@ private Q_SLOTS:
 
   // ---- REQ-077 / REQ-078 software update (issue #882) ----------------------------------------
 
-  static QDialog* OfferUpdate(EditorWindow& window, const update::Manifest& manifest) {
+  static QDialog* OfferUpdate(EditorWindow& window, const update::Manifest& manifest,
+                              bool requiresPerUserMigration = false) {
     window.m_Update->runningVersion = "0.7.4";
+    window.m_Update->requiresPerUserMigration = requiresPerUserMigration;
     window.m_Update->available = manifest;
     window.m_Update->phase = update::Phase::UpdateReady;
     window.ServiceUpdate();
@@ -2716,11 +3083,43 @@ private Q_SLOTS:
     // Notes are rendered, and the compatibility notice sits ABOVE them.
     auto* notes = dialog->findChild<QTextBrowser*>("updateNotes");
     auto* compatibility = dialog->findChild<QLabel*>("updateCompatibility");
+    auto* migration = dialog->findChild<QLabel*>("updateMigrationNotice");
     QVERIFY(notes->isVisibleTo(dialog));
     QVERIFY(notes->toPlainText().contains("Faster point import"));
     QVERIFY(compatibility->isVisibleTo(dialog));
+    QVERIFY(!migration->isVisibleTo(dialog));
     QVERIFY(compatibility->mapTo(dialog, QPoint()).y() < notes->mapTo(dialog, QPoint()).y());
     UpdateButton(dialog, "updateRemindButton")->click();
+  }
+
+  void updateOfferExplainsProgramFilesMigrationBeforeReleaseNotes() {
+    EditorWindow legacyWindow;
+    auto* legacyDialog = OfferUpdate(legacyWindow, OfferedManifest(), true);
+    QVERIFY(legacyDialog);
+    auto* legacyNotice = legacyDialog->findChild<QLabel*>("updateMigrationNotice");
+    auto* legacyNotes = legacyDialog->findChild<QTextBrowser*>("updateNotes");
+    QVERIFY(legacyNotice->isVisibleTo(legacyDialog));
+    QVERIFY(legacyNotice->text().contains("%LOCALAPPDATA%\\Programs\\GoSurvey"));
+    QVERIFY(legacyNotice->text().contains("ask once"));
+    QVERIFY(legacyNotice->text().contains("settings and user data"));
+    QVERIFY(legacyNotice->mapTo(legacyDialog, QPoint()).y() <
+            legacyNotes->mapTo(legacyDialog, QPoint()).y());
+    for (const char* name : {"updateNowButton", "updateRemindButton", "updateSkipButton"})
+      QVERIFY(UpdateButton(legacyDialog, name)->isVisibleTo(legacyDialog));
+    QTest::qWait(100);
+    QVERIFY(legacyDialog->grab().save(Issue914Shot("qt-1106-update-migration-legacy.png")));
+    UpdateButton(legacyDialog, "updateRemindButton")->click();
+    QTRY_VERIFY(!legacyWindow.findChild<QDialog*>("softwareUpdate"));
+
+    EditorWindow perUserWindow;
+    auto* perUserDialog = OfferUpdate(perUserWindow, OfferedManifest(), false);
+    QVERIFY(perUserDialog);
+    auto* perUserNotice = perUserDialog->findChild<QLabel*>("updateMigrationNotice");
+    QVERIFY(!perUserNotice->isVisibleTo(perUserDialog));
+    QTest::qWait(100);
+    QVERIFY(perUserDialog->grab().save(Issue914Shot("qt-1106-update-migration-per-user.png")));
+    UpdateButton(perUserDialog, "updateRemindButton")->click();
+    QTRY_VERIFY(!perUserWindow.findChild<QDialog*>("softwareUpdate"));
   }
 
   void updateCompatibilityNoticesAreDistinguishedAndAbsentWhenUndeclared() {
@@ -2956,18 +3355,13 @@ private Q_SLOTS:
     UpdateButton(dialog, "updateRemindButton")->click();
   }
 
-  void updateOfferIsShownBeforeTheSignInGate() {
+  void startupHasNoSignInGate() {
     EditorWindow window;
-    window.State().authGateResolved = false;
-    window.m_AuthStarted = true;
-    window.m_Update->phase = update::Phase::Checking;
-    window.ServiceAuth();
+    window.show();
+    QApplication::processEvents();
     QVERIFY(!window.findChild<QDialog*>("signInGate"));
-    window.m_Update->phase = update::Phase::Idle;
-    window.ServiceAuth();
-    if (HasInternetConnectivity()) QVERIFY(window.findChild<QDialog*>("signInGate"));
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/task-1043-startup.png"));
   }
-
   void settingsUpdatesAreStagedUntilApply() {
     IsolatedUserData userData;
     EditorWindow window;
@@ -3034,9 +3428,12 @@ private Q_SLOTS:
     QVERIFY(dialog);
     auto* categories = dialog->findChild<QListWidget*>("settingsCategories");
     QVERIFY(categories);
+    QVERIFY(!dialog->findChild<QLabel*>("crashDiagnosticsDisclosure"));
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
-    QCOMPARE(names, (QStringList{"Account", "Updates and Privacy", "Display", "Drafting", "Survey Points"}));
+    QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
+    QVERIFY(!dialog->findChild<QWidget*>("settingsPageAccount"));
+    QVERIFY(!dialog->findChild<QWidget*>("usageDataSection"));
     auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
     auto* undo = dialog->findChild<QSpinBox*>("settingsUndoHistory");
     auto* angle = dialog->findChild<QComboBox*>("settingsAngleType");
@@ -3053,7 +3450,6 @@ private Q_SLOTS:
       const QString artifacts = QString::fromUtf8(GOSURVEY_TEST_ARTIFACT_DIR) + "/";
       auto* stack = dialog->findChild<QStackedWidget*>("settingsPages");
       ApplyQtAppearance(*qApp, false);  // the app's real Graphite theme, as a user sees it
-      window.State().authSignedIn = false;
       dialog->resize(780, 600);
       for (int i = 0; i < categories->count(); ++i) {
         categories->setCurrentRow(i);
@@ -3062,6 +3458,7 @@ private Q_SLOTS:
       }
       QVERIFY(stack);
       categories->setCurrentRow(0);
+      QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
     const float wheelBefore = window.State().displayWheelZoomFactor;
     wheel->setValue(1.5);
@@ -3272,21 +3669,44 @@ private Q_SLOTS:
     QCOMPARE(window.findChild<QLabel*>("startWelcomeTitle")->text(), QString("Welcome to GoSurvey"));
     QVERIFY(window.findChild<QPushButton*>("startNewDrawing"));
     QVERIFY(window.findChild<QPushButton*>("startOpenDrawing"));
-
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion = GOSURVEY_VERSION_FULL;
     window.InitializeStartup();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
 
     EditorWindow firstRun;
-    firstRun.State().authGateResolved = true;
+    // What's New follows the Start-screen conditions without a sign-in gate.
     firstRun.State().whatsNewDismissedVersion.clear();
     firstRun.InitializeStartup();
     auto* whatsNew = firstRun.findChild<QDialog*>("whatsNewDialog");
     QVERIFY(whatsNew);
+    firstRun.show();
+    QApplication::processEvents();
+    QVERIFY(whatsNew->isVisible());
+    QDir().mkpath(QtTestArtifactDirectory());
+    QVERIFY(whatsNew->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-startup.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewHeading"));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewVersion"));
-    QVERIFY(whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes"));
+    auto* notes = whatsNew->findChild<QTextBrowser*>("whatsNewReleaseNotes");
+    QVERIFY(notes);
+    const QStringList imageNames = {"projects.png", "maps.png", "pdf-viewer.png",
+                                    "point-clouds.png", "piping.png", "surfaces-3d.png"};
+    for (const auto& name : imageNames) {
+      QVERIFY(QFile::exists(QtAsset("whats-new/" + name)));
+      const QVariant resource = notes->document()->resource(
+          QTextDocument::ImageResource, QUrl("whats-new:" + name));
+      QVERIFY2(resource.canConvert<QImage>(), qPrintable(name));
+      QVERIFY2(!resource.value<QImage>().isNull(), qPrintable(name));
+    }
+    notes->verticalScrollBar()->setValue(450);
+    QApplication::processEvents();
+    QVERIFY(notes->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue1029-whats-new-projects-image.png")));
+    notes->verticalScrollBar()->setValue(notes->verticalScrollBar()->maximum());
+    QApplication::processEvents();
+    QVERIFY(notes->toPlainText().contains("0.7.7"));
+    QVERIFY(whatsNew->grab().save(
+        QDir(QtTestArtifactDirectory()).filePath("issue-update-migration-whats-new-077.png")));
     QVERIFY(whatsNew->findChild<QLabel*>("whatsNewReleasesLink"));
     QVERIFY(whatsNew->findChild<QCheckBox*>("whatsNewDontShowAgain"));
     auto* about = firstRun.findChild<QAction*>("aboutGoSurveyAction");
@@ -3352,19 +3772,40 @@ private Q_SLOTS:
     QCOMPARE(window.State().userLinesFlat, previousLines);
   }
 
+  void directDrawingStartupDoesNotAutoOpenWhatsNew() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    window.InitializeStartup();
+    QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
+  }
+
   void updateOfferSuppressesWhatsNewForTheLaunch() {
     EditorWindow window;
-    window.State().authGateResolved = true;
     window.State().whatsNewDismissedVersion.clear();   // would otherwise auto-open
     auto* dialog = OfferUpdate(window, OfferedManifest());
     QVERIFY(dialog);
     window.InitializeStartup();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));
     UpdateButton(dialog, "updateRemindButton")->click();
     window.ServiceUpdate();
-    window.ServiceAuth();
     QVERIFY(!window.findChild<QDialog*>("whatsNewDialog"));   // still not later in the same launch
+  }
+
+  void completedUpdateCheckDoesNotSuppressWhatsNewStartup() {
+    EditorWindow window;
+    window.State().whatsNewDismissedVersion.clear();
+    window.m_Update->phase = update::Phase::Checking;
+    window.m_Update->task = std::make_unique<update::UpdateTask>();
+    window.m_Update->task->ok = false;
+    window.m_Update->task->error = "0.7.4 is the latest";
+    window.m_Update->task->done.store(true, std::memory_order_release);
+
+    // This is the real launch ordering: the startup check has completed, then startup
+    // initialization must consume its result before deciding whether an offer has priority.
+    window.InitializeStartup();
+
+    QCOMPARE(window.m_Update->phase, update::Phase::Idle);
+    QVERIFY(window.findChild<QDialog*>("whatsNewDialog"));
   }
 
   void malformedOpenAndSavePreserveExistingSession() {
@@ -4280,8 +4721,8 @@ private Q_SLOTS:
     viewport->setFocus();
     QTest::keyClicks(viewport, "l");
     QCOMPARE(input->text(), QString("l"));
-    QTRY_VERIFY(input->completer()->completionCount() > 0);
-    input->completer()->popup()->hide();
+    QTRY_VERIFY(window.m_CommandSuggestionModel->rowCount() > 0);
+    window.m_CommandSuggestions->hide();
     input->setText("LINE");
     QTest::keyClick(input, Qt::Key_Return);
     QCOMPARE(window.State().active, AppCommandState::Kind::Line);
@@ -4302,11 +4743,95 @@ private Q_SLOTS:
       qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
     });
     ApplyQtAppearance(*qApp, false);
-    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 800);
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.State().userLinesFlat = {-12.0, 0.0, 0.0, 12.0, 0.0, 0.0};
+    ++window.State().cadGpuRevision;
+    window.m_Viewport->InvalidateGeometry();
+    window.resize(1200, 800);
     window.show(); window.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&window));
     QVERIFY(window.windowFlags() & Qt::FramelessWindowHint);
+#ifdef _WIN32
+    const HWND hwnd = reinterpret_cast<HWND>(window.winId());
+    const LONG_PTR nativeStyle = GetWindowLongPtrW(hwnd, GWL_STYLE);
+    QVERIFY(nativeStyle & WS_THICKFRAME);
+    QVERIFY(nativeStyle & WS_CAPTION);
+    auto* titleForHitTest = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(titleForHitTest);
+    const QPoint captionPoint = titleForHitTest->mapToGlobal(QPoint(titleForHitTest->width() / 2, titleForHitTest->height() / 2));
+    const qreal scale = window.devicePixelRatioF();
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(captionPoint.x() * scale), qRound(captionPoint.y() * scale))), static_cast<LRESULT>(HTCAPTION));
+    const QPoint leftEdge = window.mapToGlobal(QPoint(0, window.height() / 2));
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(leftEdge.x() * scale), qRound(leftEdge.y() * scale))), static_cast<LRESULT>(HTLEFT));
+    const auto hitAt = [&](QPoint local) {
+      const QPoint global = window.mapToGlobal(local);
+      return SendMessageW(hwnd, WM_NCHITTEST, 0,
+          MAKELPARAM(qRound(global.x() * scale), qRound(global.y() * scale)));
+    };
+    QCOMPARE(hitAt(QPoint(0, 0)), static_cast<LRESULT>(HTTOPLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, 0)), static_cast<LRESULT>(HTTOPRIGHT));
+    QCOMPARE(hitAt(QPoint(0, window.height() - 1)), static_cast<LRESULT>(HTBOTTOMLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, window.height() - 1)), static_cast<LRESULT>(HTBOTTOMRIGHT));
+    QCOMPARE(hitAt(QPoint(window.width() / 2, 0)), static_cast<LRESULT>(HTTOP));
+    QCOMPARE(hitAt(QPoint(window.width() / 2, window.height() - 1)), static_cast<LRESULT>(HTBOTTOM));
+    QCOMPARE(hitAt(QPoint(0, window.height() / 2)), static_cast<LRESULT>(HTLEFT));
+    QCOMPARE(hitAt(QPoint(window.width() - 1, window.height() / 2)), static_cast<LRESULT>(HTRIGHT));
+#endif
+    QVERIFY(!window.statusBar()->isSizeGripEnabled());
+    auto* nativeSizeGrip = window.statusBar()->findChild<QSizeGrip*>(); QVERIFY(nativeSizeGrip);
+    QTRY_VERIFY(nativeSizeGrip->isVisible());
+    QVERIFY(nativeSizeGrip->width() >= 20 && nativeSizeGrip->height() >= 20);
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-restored-resize-grip.png"));
+    auto* viewport = window.m_Viewport; QVERIFY(viewport);
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->m_Renderer->HasRenderedFrame(), 10000);
+    QSize lastFrame(viewport->m_Renderer->RenderedWidth(), viewport->m_Renderer->RenderedHeight());
+    const QSize startingSize = window.size();
+    const QSize viewportSize = viewport->size();
+#ifdef _WIN32
+    SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0);
+#else
+    window.BeginInteractiveResize();
+#endif
+    QVERIFY(viewport->m_ResizePreview);
+    auto* resizePreview = window.findChild<QLabel*>("viewportResizePreview"); QVERIFY(resizePreview);
+    QCOMPARE(viewport->size(), viewportSize);
+    QCOMPARE(viewport->m_Renderer->RenderedWidth(), lastFrame.width());
+    QCOMPARE(viewport->m_Renderer->RenderedHeight(), lastFrame.height());
+    const QSize previewParentSize = viewport->parentWidget()->size();
+    for (int sample = 0; sample < 30; ++sample) {
+      window.resize(startingSize + QSize(40 + (sample % 2) * 2, 32 + (sample % 2) * 2));
+      QApplication::processEvents(QEventLoop::AllEvents, 10);
+      QCOMPARE(viewport->size(), viewportSize);
+      QCOMPARE(resizePreview->geometry(), viewport->parentWidget()->rect());
+    }
+    QVERIFY(resizePreview->size() != previewParentSize);
+    window.resize(startingSize + QSize(40, 32));
+    QApplication::processEvents();
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-resize-preview.png"));
+#ifdef _WIN32
+    SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+#else
+    window.EndInteractiveResize();
+#endif
+    QTRY_VERIFY_WITH_TIMEOUT(!viewport->m_ResizePreview, 2000);
+    QTRY_COMPARE_WITH_TIMEOUT(viewport->m_Renderer->RenderedWidth(),
+        qRound(viewport->width() * viewport->devicePixelRatioF()), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(viewport->m_Renderer->RenderedHeight(),
+        qRound(viewport->height() * viewport->devicePixelRatioF()), 5000);
+    QVERIFY(window.width() >= startingSize.width() + 36);
+    QVERIFY(window.height() >= startingSize.height() + 28);
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-resized.png"));
+    window.showMaximized(); QApplication::processEvents();
+    QTRY_VERIFY(!nativeSizeGrip->isVisible());
+#ifdef _WIN32
+    const QPoint maximizedCaption = titleForHitTest->mapToGlobal(QPoint(titleForHitTest->width() / 2, titleForHitTest->height() / 2));
+    QCOMPARE(SendMessageW(hwnd, WM_NCHITTEST, 0, MAKELPARAM(qRound(maximizedCaption.x() * scale), qRound(maximizedCaption.y() * scale))), static_cast<LRESULT>(HTCAPTION));
+#endif
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-window-maximized.png"));
+    window.showNormal(); QApplication::processEvents();
+    QTRY_VERIFY(nativeSizeGrip->isVisible());
     auto* title = window.findChild<QWidget*>("editorTitleBar"); QVERIFY(title);
+    QVERIFY(title->geometry().top() >= 0);
+    QVERIFY(title->geometry().bottom() < window.height());
     auto* logo = window.findChild<QToolButton*>("applicationMenu"); QVERIFY(logo); QVERIFY(logo->menu());
     QStringList categories; for (auto* action : logo->menu()->actions()) categories.append(QString(action->text()).remove('&'));
     QCOMPARE(categories, QStringList({"File", "Edit", "View", "Survey", "Help"}));
@@ -4319,9 +4844,9 @@ private Q_SLOTS:
       QVERIFY(title->isAncestorOf(button));
     }
     QVERIFY(!window.findChild<QDockWidget*>("commandDock"));
-    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewport);
+    auto* viewportWidget = window.findChild<QOpenGLWidget*>("modelViewport"); QVERIFY(viewportWidget);
     auto* panel = dynamic_cast<FloatingCommandBar*>(window.findChild<QFrame*>("floatingCommandBar")); QVERIFY(panel);
-    QCOMPARE(panel->parentWidget(), viewport);
+    QCOMPARE(panel->parentWidget(), viewportWidget);
     auto* input = panel->Input();
     input->setFocus(); input->setText("LINE"); QTest::keyClick(input, Qt::Key_Return);
     QCOMPARE(window.State().active, AppCommandState::Kind::Line);
@@ -4340,11 +4865,11 @@ private Q_SLOTS:
     window.Submit("0,0");
     window.Submit("10,0");
     window.CancelDraftingInput();
-    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(12));
     window.findChild<QToolButton*>("quick_UNDO")->click();
-    QVERIFY(window.State().userLinesFlat.empty());
-    window.findChild<QToolButton*>("quick_REDO")->click();
     QCOMPARE(window.State().userLinesFlat.size(), std::size_t(6));
+    window.findChild<QToolButton*>("quick_REDO")->click();
+    QCOMPARE(window.State().userLinesFlat.size(), std::size_t(12));
     QTest::keyClick(input, Qt::Key_F2);
     QTRY_VERIFY(panel->Transcript()->isVisible());
     QVERIFY(panel->Transcript()->toPlainText().contains("LINE", Qt::CaseInsensitive));
@@ -4424,6 +4949,557 @@ private Q_SLOTS:
     window.CancelDraftingInput();
   }
 
+  void issue1039CommandLineAndDynamicFieldsShareOneDraft() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& state = window.State();
+    state.objectSnapEnabled = false;
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* x = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(x);
+    auto* y = window.findChild<QLineEdit*>("dynamicField1"); QVERIFY(y);
+
+    // A command-line point answer is parsed into the same coordinate fields and Enter advances once.
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "12,34");
+    QTRY_COMPARE(x->text(), QString("12"));
+    QTRY_COMPARE(y->text(), QString("34"));
+    QCOMPARE(command->text(), QString("12,34"));
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(state.activeDrawingIdx > 0);
+    QCOMPARE(window.DraftingInputText(), QString("12,34"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-commandline-draft.png")));
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.m_CommandHistory.last(), QString("12,34"));
+    QVERIFY(!state.cmdEnteredHistory.empty());
+    QCOMPARE(QString::fromStdString(state.cmdEnteredHistory.back()), QString("12,34"));
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QVERIFY(std::abs(state.anchorX - 12) < 1e-5);
+    QVERIFY(std::abs(state.anchorY - 34) < 1e-5);
+
+    // A polar dynamic-input pair is shown in the command line using the same entered distance
+    // and angle, while submission still composes the equivalent point for existing command parsing.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "40");
+    y->setFocus(); y->selectAll(); QTest::keyClicks(y, "45");
+    QTRY_COMPARE(command->text(), QString("@40<45"));
+    QCOMPARE(window.DraftingInputText(), QString("@28.284271,28.284271"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/polar-draft-shared.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+
+    // A dynamic-field edit is reflected by the command line, whose Enter submits that same draft.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTRY_VERIFY(!command->text().isEmpty());
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/point-dynamic-field-draft.png")));
+    command->setFocus(); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(12));
+
+    // Enter in the dynamic field also submits once and keeps the LINE prompt active.
+    x->setFocus(); x->selectAll(); QTest::keyClicks(x, "5");
+    QTest::keyClick(x, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(state.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    QCOMPARE(state.userLinesFlat.size(), std::size_t(18));
+
+    // Cancel clears an unsubmitted draft; a later command starts with its own empty prompt state.
+    command->setFocus(); QTest::keyClicks(command, "99,99");
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(command->text(), QString());
+    command->setFocus(); command->setText("CIRCLE"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::Circle);
+    command->setFocus(); QTest::keyClicks(command, "0,0"); QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.circlePhase, AppCommandState::CirclePhase::WaitRadius);
+    auto* radius = window.findChild<QLineEdit*>("dynamicField0"); QVERIFY(radius);
+    command->setFocus(); QTest::keyClicks(command, "5");
+    QTRY_COMPARE(radius->text(), QString("5"));
+    QVERIFY(window.grab().save(Issue886Shot("issue1039/radius-commandline-draft.png")));
+    radius->setFocus(); radius->selectAll(); QTest::keyClicks(radius, "6");
+    QTRY_COMPARE(command->text(), QString("6"));
+    QTest::keyClick(radius, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.userCirclesCxCyZR.size(), std::size_t(4));
+    window.CancelDraftingInput();
+  }
+
+  void issue1040QtCommandFinderFuzzyKeyboardAndMouseSelection() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    auto& state = window.State();
+
+    // Real typing goes to the command field for the first character, then must keep going there
+    // even after suggestions appear instead of being captured by a popup keyboard grab.
+    command->setFocus(); QTest::keyClick(command, Qt::Key_T);
+    QTRY_VERIFY(popup->isVisible());
+    QWidget* typingTarget = QApplication::activePopupWidget();
+    if (!typingTarget) typingTarget = QApplication::focusWidget();
+    QVERIFY(typingTarget);
+    QTest::keyClicks(typingTarget, "raverse");
+    QCOMPARE(command->text(), QString("traverse"));
+    QVERIFY(!FuzzyCommandSuggestions(command->text().toStdString(), 30).empty());
+    QCOMPARE(QString::fromStdString(FuzzyCommandSuggestions(command->text().toStdString(), 30).front().name),
+             QString("TRAVERSE"));
+    QPixmap traverseAndSuggestions = window.grab();
+    {
+      QPainter painter(&traverseAndSuggestions);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(traverseAndSuggestions.save(Issue886Shot("issue1040/traverse-query-kept.png")));
+    QTest::mouseClick(&window, Qt::LeftButton, Qt::NoModifier, QPoint(30, 30));
+    QVERIFY(!popup->isVisible());
+    popup->hide(); command->clear();
+
+    // Subsequence and prefix queries both rank LINE first, and rows carry icons.
+    const auto typoSuggestions = FuzzyCommandSuggestions("lne", 30);
+    QVERIFY(!typoSuggestions.empty());
+    QCOMPARE(QString::fromStdString(typoSuggestions.front().name), QString("LINE"));
+    const auto aliasSuggestions = FuzzyCommandSuggestions("l", 1);
+    QVERIFY(!aliasSuggestions.empty());
+    QCOMPARE(QString::fromStdString(aliasSuggestions.front().name), QString("LINE"));
+    QVERIFY(aliasSuggestions.front().exactMatch);
+    const auto prefixSuggestions = FuzzyCommandSuggestions("lin", 1);
+    QVERIFY(!prefixSuggestions.empty());
+    QVERIFY(!prefixSuggestions.front().exactMatch);
+    QVERIFY(!window.m_DynamicInput->isVisible());
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QCOMPARE(command->text(), QString("lne"));
+    QVERIFY(model->rowCount() > 0);
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(popup, Qt::Key_Down);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MKLINE"));
+    QTest::keyClick(popup, Qt::Key_Up);
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    const auto firstIcon = model->index(0, 0).data(Qt::DecorationRole);
+    QVERIFY(!qvariant_cast<QIcon>(firstIcon).isNull());
+    QVERIFY(popup->styleSheet().contains("border-radius"));
+    QPixmap editorAndPopup = window.grab();
+    {
+      QPainter painter(&editorAndPopup);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(editorAndPopup.save(Issue886Shot("issue1040/command-finder-fuzzy-results.png")));
+    // A visible Qt::Popup takes the keyboard grab on the real UI path. Deliver Enter through
+    // the popup itself as well as the line edit so this covers the native popup event route.
+    QTest::keyClick(popup, Qt::Key_Return);
+    QVERIFY(!window.m_CommandHistory.isEmpty());
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    QCOMPARE(state.active, AppCommandState::Kind::Line);
+
+    // A normal prefix query also ranks LINE first; Escape dismisses the finder without launching it.
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    command->setFocus(); QTest::keyClicks(command, "lin");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    QTest::keyClick(command, Qt::Key_Escape);
+    QVERIFY(!popup->isVisible());
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+
+    // A query with no ranked result hides the prior highlight; Enter submits the typed text unchanged.
+    command->setFocus(); QTest::keyClicks(command, "zzzz");
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(window.m_CommandHistory.last(), QString("zzzz"));
+
+    // The registered `l` alias ranks LINE first; scrolling and clicking launch it.
+    command->setFocus(); QTest::keyClicks(command, "l");
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("LINE"));
+    auto* scroll = popup->verticalScrollBar(); QVERIFY(scroll);
+    QVERIFY(scroll->maximum() > 0);
+    const int beforeScroll = scroll->value();
+    QWheelEvent down(QPointF(popup->viewport()->rect().center()),
+                     popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, -240),
+                     Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &down);
+    QVERIFY(scroll->value() > beforeScroll);
+    const int afterScroll = scroll->value();
+    QWheelEvent up(QPointF(popup->viewport()->rect().center()),
+                   popup->viewport()->mapToGlobal(popup->viewport()->rect().center()), {}, QPoint(0, 240),
+                   Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+    QApplication::sendEvent(popup->viewport(), &up);
+    QVERIFY(scroll->value() < afterScroll);
+    const QModelIndex line = model->index(0, 0);
+    QCOMPARE(line.data().toString(), QString("LINE"));
+    QTest::mouseClick(popup->viewport(), Qt::LeftButton, Qt::NoModifier, popup->visualRect(line).center());
+    QTRY_COMPARE(state.active, AppCommandState::Kind::Line);
+    QCOMPARE(window.m_CommandHistory.last(), QString("LINE"));
+    window.CancelDraftingInput();
+
+    // Empty input and an active drafting prompt must not leave a stale command result available.
+    command->clear();
+    QVERIFY(!popup->isVisible());
+    window.Submit("LINE");
+    command->setFocus(); QTest::keyClicks(command, "lne");
+    QVERIFY(window.m_DynamicInput->isVisible());
+    QVERIFY(!popup->isVisible());
+    QTest::keyClick(command, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue1081QtExactOpenWinsOverOpenPackSuggestion() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+
+    command->setFocus(); QTest::keyClicks(command, "OPEN");
+    QTRY_VERIFY(popup->isVisible());
+    const auto openSuggestions = FuzzyCommandSuggestions("OPEN", 1);
+    QCOMPARE(QString::fromStdString(openSuggestions.front().name), QString("OPENPACK"));
+    QVERIFY(!openSuggestions.front().exactMatch);
+    QCOMPARE(model->index(0, 0).data().toString(), QString("OPENPACK"));
+    QModelIndex packRow;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("OPENPACK")) {
+        packRow = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(packRow.isValid());
+    popup->setCurrentIndex(packRow);
+
+    QString dialogTitle;
+    QStringList dialogFilters;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialogTitle = dialog->windowTitle();
+      dialogFilters = dialog->nameFilters();
+      dialog->reject();
+    });
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(dialogTitle, QString("Open drawing"));
+    QVERIFY(dialogFilters.contains(QString("Drawing (*.dwg)")));
+
+    command->setFocus(); QTest::keyClicks(command, "LINE");
+    QTRY_VERIFY(popup->isVisible());
+    QModelIndex otherCommand;
+    for (int row = 0; row < model->rowCount(); ++row) {
+      if (model->index(row, 0).data().toString() == QString("MKLINE")) {
+        otherCommand = model->index(row, 0);
+        break;
+      }
+    }
+    QVERIFY(otherCommand.isValid());
+    popup->setCurrentIndex(otherCommand);
+    QTest::keyClick(command, Qt::Key_Return);
+    QCOMPARE(window.State().active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
+  }
+
+private:
+  // GitHub #1024: helpers for the Qt zoom tests. Friends of EditorWindow, so they can reach its log
+  // and cancel path; a free function could not.
+  static constexpr std::size_t kFlatLineStride = 6;  // x0 y0 z0 x1 y1 z1
+  static constexpr double kExtentsMargin = 0.08;      // REQ-122: the binding axis leaves 8% free
+  static constexpr double kFitMin = 0.98, kFitMax = 1.001;  // "framed": the binding axis is within 2% of the margin
+  static constexpr double kParkedPanX = -5000.0, kParkedPanY = 7000.0;  // a camera nothing could frame
+  static constexpr double kLineW = 400.0, kLineH = 200.0;               // the line DrawLine("0,0", "400,200") makes
+  static constexpr double kThinLineScale = 13.587;  // req123-viewport-zoom-extents.txt: 2 * (100 / 3.68) / 4 in
+
+  static void DrawLine(EditorWindow& window, const char* from, const char* to) {
+    for (const char* text : {"LINE", from, to}) window.Submit(text);
+    window.CancelDraftingInput();
+  }
+  static void DrawWideLine(EditorWindow& window) { DrawLine(window, "0,0", "400,200"); }
+  static void ParkCamera(AppCommandState& st) {
+    st.viewportPanX = kParkedPanX; st.viewportPanY = kParkedPanY; st.viewportZoom = 1.f;
+  }
+  static bool LogHas(const std::vector<std::string>& log, const char* text) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& e) { return e.find(text) != std::string::npos; });
+  }
+  // 1.0 means the box exactly fills the view minus the margin on its binding axis; > 1 clips it and
+  // a value well under 1 means the view is wider than REQ-122 asks. Independent of the framing code.
+  static double FrameFit(const AppCommandState& st, const QWidget& view, double spanX, double spanY) {
+    const Camera camera = CadViewCamera(st);
+    const double halfH = camera.orthoHalfH;
+    const double halfW = halfH * view.width() / view.height();
+    return std::max(0.5 * spanX / (halfW * (1.0 - kExtentsMargin)), 0.5 * spanY / (halfH * (1.0 - kExtentsMargin)));
+  }
+  static bool IsFramed(const AppCommandState& st, const QWidget& view, double spanX, double spanY) {
+    const double fit = FrameFit(st, view, spanX, spanY);
+    return fit > kFitMin && fit <= kFitMax;
+  }
+  static EditorViewport* PaintedViewport(EditorWindow& window) {
+    window.m_Viewport->grabFramebuffer();
+    return window.m_Viewport;
+  }
+
+private Q_SLOTS:
+  // GitHub #1024 / REQ-120 / REQ-122: ZOOMEXTENTS only sets a pending flag, so the Qt viewport has to
+  // consume it when it paints. The headless transcripts call the zoom function directly and cannot
+  // see this; only the real viewport can. Wide, tall and ultra-wide windows move the binding axis.
+  void issue1024QtZoomExtentsFramesTheDrawing() {
+    for (const QSize size : {QSize(1280, 800), QSize(600, 900), QSize(1600, 500)}) {
+      EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(size); window.show();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      auto& st = window.State();
+      DrawWideLine(window);
+      QVERIFY(st.userLinesFlat.size() >= kFlatLineStride);
+      const std::size_t o = st.userLinesFlat.size() - kFlatLineStride;
+      const double cx = 0.5 * (st.userLinesFlat[o] + st.userLinesFlat[o + 3]);
+      const double cy = 0.5 * (st.userLinesFlat[o + 1] + st.userLinesFlat[o + 4]);
+
+      ParkCamera(st);
+      window.Submit("ZOOMEXTENTS");
+      QTRY_VERIFY(!st.pendingZoomExtents);
+      QVERIFY(std::abs(st.viewportPanX - cx) < 1.0);
+      QVERIFY(std::abs(st.viewportPanY - cy) < 1.0);
+      QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+      // The whole line fits, and the axis that binds leaves 8% free (REQ-122).
+      QVERIFY2(IsFramed(st, *window.m_Viewport, kLineW, kLineH),
+               qPrintable(QString("window %1x%2").arg(size.width()).arg(size.height())));
+    }
+  }
+
+  // REQ-122: an orbited camera frames the model's 3D box by its silhouette, not the plan rectangle.
+  void issue1024QtZoomExtentsFramesTheDrawingWhenOrbited() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    PaintedViewport(window)->SetOrientation(30.f, 40.f);
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied (3D)"));
+    QVERIFY(std::abs(st.viewportPanX - kLineW / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+    QVERIFY(std::abs(st.viewportPanZ) < 1.0);
+    QVERIFY(st.viewportZoom > 0.f && st.viewportZoom != 1.f);
+  }
+
+  // REQ-120: the middle double-click is the same operation as the typed command, is transparent
+  // mid-command, and works over the ViewCube too (a middle press passes through the cube).
+  void issue1024QtMiddleDoubleClickZoomsExtentsMidCommand() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    window.Submit("LINE"); window.Submit("10,10");
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    QCOMPARE(st.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    const std::size_t lines = st.userLinesFlat.size();
+
+    // The typed route stays refused mid-command; nothing about it is relaxed. (REQ-120 quotes the
+    // older "Could not parse point" wording; today the LINE prompt names itself, same refusal.)
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QApplication::processEvents(); QTest::qWait(50);
+    QVERIFY(LogHas(window.m_Log, "still running"));
+    QVERIFY(!st.pendingZoomExtents);
+    QCOMPARE(st.viewportPanX, kParkedPanX);
+
+    // Off the cube, and on its centre, home button and bottom-right corner.
+    const viewcube::Scene scene = ViewCubeSceneOf(window.m_Viewport, st);
+    const QPoint cubeCorner(qRound(scene.originX + scene.sizePx - 3), qRound(scene.originY + scene.sizePx - 3));
+    for (const QPoint& at : {QPoint(300, 300), Px(scene.center), Px(scene.home), cubeCorner}) {
+      ParkCamera(st);
+      QTest::mouseDClick(window.m_Viewport, Qt::MiddleButton, Qt::NoModifier, at);
+      QTRY_VERIFY2(std::abs(st.viewportPanX - kLineW / 2) < 1.0, qPrintable(QString("%1,%2").arg(at.x()).arg(at.y())));
+      QVERIFY(std::abs(st.viewportPanY - kLineH / 2) < 1.0);
+      QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+    }
+    // The LINE in progress kept its first point: the next point completes a segment from (10,10).
+    QCOMPARE(st.active, AppCommandState::Kind::Line);
+    QCOMPARE(st.linePhase, AppCommandState::LinePhase::NeedNextPoint);
+    window.Submit("50,60");
+    QCOMPARE(st.userLinesFlat.size(), lines + kFlatLineStride);
+    QCOMPARE(st.userLinesFlat[lines], 10.0);
+    QCOMPARE(st.userLinesFlat[lines + 1], 10.0);
+    QCOMPARE(st.userLinesFlat[lines + 3], 50.0);
+    QCOMPARE(st.userLinesFlat[lines + 4], 60.0);
+    window.CancelDraftingInput();
+  }
+
+  // REQ-122: a queued ZOOM WINDOW is applied by the viewport too. Its pending request was stranded
+  // the same way. The request is queued directly: the Qt viewport never starts ZOOM WINDOW's first
+  // corner from a click (a separate defect, #1100), so no click can queue it yet.
+  void issue1024QtQueuedZoomWindowFramesTheRectangle() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    ParkCamera(st);
+    st.pendingZoomMnX = 100.f; st.pendingZoomMxX = 300.f;
+    st.pendingZoomMnY = 50.f; st.pendingZoomMxY = 150.f;
+    st.pendingZoomWindow = true;
+    window.m_Viewport->update();
+    QTRY_VERIFY(!st.pendingZoomWindow);
+    QVERIFY(LogHas(window.m_Log, "Zoom window applied"));
+    QVERIFY(std::abs(st.viewportPanX - 200.0) < 0.5);
+    QVERIFY(std::abs(st.viewportPanY - 100.0) < 0.5);
+    QVERIFY(IsFramed(st, *window.m_Viewport, 200.0, 100.0));
+  }
+
+  // REQ-201: with nothing to frame, say so and leave the view alone.
+  void issue1024QtZoomExtentsOnAnEmptyDrawingSaysWhyAndKeepsTheView() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    QVERIFY(st.userLinesFlat.empty());
+    st.viewportPanX = 123.0; st.viewportPanY = 456.0; st.viewportZoom = 2.f;
+    window.m_Log.clear();
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QCOMPARE(st.viewportPanX, 123.0);
+    QCOMPARE(st.viewportPanY, 456.0);
+    QCOMPARE(st.viewportZoom, 2.f);
+    QVERIFY(LogHas(window.m_Log, "nothing to frame"));
+  }
+
+  // REQ-120: in paper space the gesture frames the SHEET, not the paper entities on it.
+  void issue1024QtZoomExtentsInPaperSpaceFramesTheSheet() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    const int layout = AddPaperLayout(st);
+    SetActiveSpace(st, layout);
+    window.Refresh();
+    const double sheetW = st.paperLayouts[static_cast<std::size_t>(layout)].sheetWidthIn();
+    const double sheetH = st.paperLayouts[static_cast<std::size_t>(layout)].sheetHeightIn();
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(st.viewportPanX - 0.5 * sheetW) < 0.01);
+    QVERIFY(std::abs(st.viewportPanY - 0.5 * sheetH) < 0.01);
+    QVERIFY(IsFramed(st, *window.m_Viewport, sheetW, sheetH));
+  }
+
+  // REQ-123: inside an activated viewport the model is framed into the VIEWPORT's own rectangle, and
+  // with the zoom lock on the sheet is framed instead.
+  void issue1024QtZoomExtentsInAFloatingViewportFramesTheViewport() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawLine(window, "0,0", "100,20");
+    const int layout = AddPaperLayout(st);
+    SetActiveSpace(st, layout);
+    const int vpIndex = AddViewportRect(st, layout, 1.f, 1.f, 9.f, 5.f);  // 8 in x 4 in: aspect 2
+    EnterFloatingModelSpace(st, layout, vpIndex, window.m_Log);
+    QVERIFY(InFloatingModelSpace(st));
+    window.Refresh();
+    auto& vp = st.paperLayouts[static_cast<std::size_t>(layout)].viewports[static_cast<std::size_t>(vpIndex)];
+    vp.modelCenterX = -900.0; vp.modelCenterY = 900.0; vp.scaleModelPerPaperIn = 1.f;
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(vp.modelCenterX - 50.0) < 0.01);
+    QVERIFY(std::abs(vp.modelCenterY - 10.0) < 0.01);
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);
+
+    st.viewportZoomLocked = true;
+    ParkCamera(st);
+    window.Submit("ZOOMEXTENTS");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(std::abs(vp.scaleModelPerPaperIn - kThinLineScale) < 0.01);  // the viewport was left alone
+    const auto& sheet = st.paperLayouts[static_cast<std::size_t>(layout)];
+    QVERIFY(std::abs(st.viewportPanX - 0.5 * sheet.sheetWidthIn()) < 0.01);
+    QVERIFY(std::abs(st.viewportPanY - 0.5 * sheet.sheetHeightIn()) < 0.01);
+  }
+
+  // Entering BEDIT queues a zoom extents of the block's own content; it was dead in Qt until the
+  // viewport consumed the request, so the editor now opens framed on the block.
+  void issue1024QtBlockEditFramesTheBlockContent() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    CadBlockDefinition block;
+    block.name = "Issue1024Block";
+    block.content.lines = {0.f, 0.f, 0.f, static_cast<float>(kLineW), static_cast<float>(kLineH), 0.f};
+    block.content.lineAttrs.resize(1);
+    block.content.lineVis.resize(1);
+    st.blockDefs.push_back(block);
+    ParkCamera(st);
+    window.Submit("BEDIT Issue1024Block");
+    QTRY_VERIFY(!st.pendingZoomExtents);
+    QVERIFY(st.blockEditActive);
+    QVERIFY(LogHas(window.m_Log, "Zoom extents applied"));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+  }
+
+  // Imports fit the drawing to the size the viewport last painted at (DxfIo/LibreDwgCad read it);
+  // before the Qt viewport published it they always fit to a stale 900 x 650.
+  void issue1024QtViewportPublishesItsPixelSizeAndImportsFitToIt() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    const QString path = directory.filePath("wide.dxf");
+    {
+      EditorWindow source; source.CreateDrawingFromTemplate(); source.resize(1280, 800); source.show();
+      QVERIFY(QTest::qWaitForWindowActive(&source));
+      DrawWideLine(source);
+      std::vector<std::string> log;
+      QVERIFY(ExportDxfFile(source.State(), path.toUtf8().constData(), log));
+    }
+    // Aspect 3.2: the wide line is height-bound here but width-bound at the stale 900 x 650 (1.38).
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1600, 500); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    PaintedViewport(window);
+    QCOMPARE(st.viewportLastFbW, qRound(window.m_Viewport->width() * window.m_Viewport->devicePixelRatioF()));
+    QCOMPARE(st.viewportLastFbH, qRound(window.m_Viewport->height() * window.m_Viewport->devicePixelRatioF()));
+    std::vector<std::string> log;
+    QVERIFY(ImportDxfFile(st, path.toUtf8().constData(), log));
+    QVERIFY(IsFramed(st, *window.m_Viewport, kLineW, kLineH));
+  }
+
+  void issue1041EveryRegisteredCommandHasAnAssociatedFinderIcon() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1200, 850);
+    window.show(); window.activateWindow(); QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto* command = window.findChild<QLineEdit*>("commandInput"); QVERIFY(command);
+    auto* popup = window.m_CommandSuggestions; QVERIFY(popup);
+    auto* model = window.m_CommandSuggestionModel; QVERIFY(model);
+    const QImage generic = window.style()->standardIcon(QStyle::SP_CommandLink).pixmap(18, 18).toImage();
+
+    for (const auto& primary : RegisteredCommandPrimariesForTest()) {
+      const QString query = QString::fromStdString(primary);
+      command->setText(query);
+      QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                        Q_ARG(QString, query)));
+      QCoreApplication::processEvents();
+      QCOMPARE(model->rowCount() > 0, true);
+      QCOMPARE(model->index(0, 0).data().toString(), query.toUpper());
+      const QIcon icon = qvariant_cast<QIcon>(model->index(0, 0).data(Qt::DecorationRole));
+      QVERIFY2(!icon.isNull(), primary.c_str());
+      QVERIFY2(icon.pixmap(18, 18).toImage() != generic, primary.c_str());
+    }
+
+    command->setText("massprop");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("massprop"))));
+    QTRY_VERIFY(popup->isVisible());
+    QCOMPARE(popup->currentIndex().data().toString(), QString("MASSPROP"));
+    QPixmap generatedIconState = window.grab();
+    {
+      QPainter painter(&generatedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(generatedIconState.save(Issue886Shot("issue1041/generated-massprop-icon.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/generated-massprop-popup.png")));
+
+    command->setText("l");
+    QVERIFY(QMetaObject::invokeMethod(command, "textEdited", Qt::DirectConnection,
+                                      Q_ARG(QString, QString("l"))));
+    QTRY_VERIFY(popup->isVisible());
+    QPixmap mixedIconState = window.grab();
+    {
+      QPainter painter(&mixedIconState);
+      const QPoint popupPosition = window.mapFromGlobal(popup->mapToGlobal(QPoint(0, 0)));
+      painter.drawPixmap(popupPosition, popup->grab());
+    }
+    QVERIFY(mixedIconState.save(Issue886Shot("issue1041/mixed-command-icons.png")));
+    QVERIFY(popup->grab().save(Issue886Shot("issue1041/mixed-command-icons-popup.png")));
+  }
+
   void issue919TypedDraftingInAReadOnlyProjectDrawingCannotBeSaved() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show();
     auto& state = window.State();
@@ -4445,32 +5521,6 @@ private Q_SLOTS:
     QCOMPARE(state.userLinesFlat.size(), std::size_t(6));   // the typed work is kept, just not written
     QVERIFY(DoUndo(state, window.m_Log));
     QVERIFY(state.userLinesFlat.empty());
-  }
-
-  void issue919DeclinedSignInThatCannotBeSavedKeepsTheChoiceOpenAndSaysWhy() {
-    QTemporaryFile blocker;
-    QVERIFY(blocker.open());
-    IsolatedUserData unwritable(blocker.fileName());   // APPDATA is a file, so preferences cannot be written
-    EditorWindow window;
-    auto& state = window.State();
-    window.m_AuthStarted = true;
-    state.authGateResolved = false;
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(!state.authOptedOut);
-    QVERIFY(!state.authGateResolved);
-    QVERIFY(state.authError.find("could not be saved") != std::string::npos);
-
-    IsolatedUserData writable;
-    state.authError.clear();
-    state.authDeclineRequested = true;
-    window.ServiceAuth();
-    QVERIFY(state.authOptedOut);
-    QVERIFY(state.authGateResolved);
-    QVERIFY(state.authError.empty());
-    AppCommandState reloaded;
-    LoadUserStartupPrefSettings(reloaded);
-    QVERIFY(reloaded.authOptedOut);
   }
 
   void issue903PolarSettingsAndOneShotSnap() {
@@ -4661,16 +5711,16 @@ private Q_SLOTS:
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
     QTest::keyClicks(tree, "l");
     QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     tabs->setFocus(); QTRY_VERIFY(tabs->hasFocus());
     QTest::keyClicks(tabs, "c");
     QCOMPARE(input->text(), QString("c")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     auto* tool = window.findChild<QToolButton*>("quick_NEW"); QVERIFY(tool);
     tool->setFocus(); QTRY_VERIFY(tool->hasFocus());
     QTest::keyClicks(tool, "p");
     QCOMPARE(input->text(), QString("p")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     // An editable property keeps text input rather than turning it into a CAD command.
     window.State().userLinesFlat = {0, 0, 0, 10, 0, 0};
     EnsureAttrCounts(window.State());
@@ -4684,7 +5734,7 @@ private Q_SLOTS:
     panel->ToggleConsole(); auto* console = panel->Transcript(); console->setFocus();
     QTRY_VERIFY(console->hasFocus()); QTest::keyClicks(console, "u");
     QCOMPARE(input->text(), QString("u")); QVERIFY(input->hasFocus());
-    input->completer()->popup()->hide(); input->clear();
+    window.m_CommandSuggestions->hide(); input->clear();
     QDialog dialog(&window); auto* field = new QLineEdit(&dialog);
     dialog.setModal(true); dialog.show(); dialog.activateWindow();
     QVERIFY(QTest::qWaitForWindowActive(&dialog)); field->setFocus();
@@ -4697,10 +5747,9 @@ private Q_SLOTS:
     QVERIFY(QTest::qWaitForWindowActive(dock)); tree->setFocus();
     QTRY_VERIFY(tree->hasFocus()); QTest::keyClicks(tree, "z");
     QCOMPARE(input->text(), QString("z"));
-    // Zoom commands open the completer popup, which can own focus while the command edit still
-    // receives the typed prefix.
-    QTRY_VERIFY(input->hasFocus() || input->completer()->popup()->isVisible());
-    input->completer()->popup()->hide(); input->clear();
+    // Zoom commands open the command suggestion popup while the command edit receives the prefix.
+    QTRY_VERIFY(input->hasFocus() || window.m_CommandSuggestions->isVisible());
+    window.m_CommandSuggestions->hide(); input->clear();
     dock->setFloating(false);
   }
 
@@ -4837,6 +5886,73 @@ private Q_SLOTS:
     QCOMPARE(state.openProjects.front().readOnly, true);
   }
 
+  void qtOpenExistingDrawingBypassesTemplateChooserAndPreservesTabsOnFailure() {
+    IsolatedUserData userData;
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString drawingPath = directory.filePath("Existing.dwg");
+    AppCommandState source;
+    source.userLinesFlat = {12.0, 4.0, 0.0, 18.0, 4.0, 0.0};
+    source.userLineAttrs.push_back(EntityAttributes{});
+    std::vector<std::string> saveLog;
+    const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
+    QVERIFY(SaveDrawingDocument(source, drawingPathUtf8.constData(), saveLog));
+
+    EditorWindow window;
+    const auto initialTabs = window.State().drawingTabs.size();
+    QVERIFY(initialTabs >= 2);
+    QCOMPARE(window.State().activeDrawingIdx, 0);
+    bool chooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        chooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!chooserAppeared);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+    QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(initialTabs));
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+    QCOMPARE(window.State().drawingTabs[static_cast<std::size_t>(window.State().activeDrawingIdx)].name,
+             std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    window.SwitchDrawing(1);
+    const auto tabsBeforeSecondOpen = window.State().drawingTabs.size();
+    bool secondChooserAppeared = false;
+    QTimer::singleShot(0, [&] {
+      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
+        secondChooserAppeared = true;
+        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+            ->button(QDialogButtonBox::Cancel)->click();
+      }
+    });
+    window.OpenDrawing(drawingPath);
+    QVERIFY(!secondChooserAppeared);
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeSecondOpen + 1);
+    QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(tabsBeforeSecondOpen));
+    QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
+    QCOMPARE(window.State().drawingTabs.back().name, std::string("Existing"));
+    QCOMPARE(window.State().userLinesFlat, source.userLinesFlat);
+
+    const auto activeIndex = window.State().activeDrawingIdx;
+    const auto tabsBeforeFailure = window.State().drawingTabs.size();
+    const auto linesBeforeFailure = window.State().userLinesFlat;
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
+    });
+    window.OpenDrawing(directory.filePath("Missing.dwg"));
+    QCOMPARE(window.State().drawingTabs.size(), tabsBeforeFailure);
+    QCOMPARE(window.State().activeDrawingIdx, activeIndex);
+    QCOMPARE(window.State().userLinesFlat, linesBeforeFailure);
+    QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
+  }
+
   void qtDrawingTemplateScreenshotEvidenceForIssue885() {
     IsolatedUserData userData;
     const auto templateDir = UserDataDirectory() / "drawing-templates";
@@ -4944,6 +6060,75 @@ private Q_SLOTS:
     QVERIFY(std::abs(window.State().viewportPanY) < 0.001);
   }
 
+  void orbitCommandLeftDragTumblesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    StartOrbitCommand(state, log);
+    QCOMPARE(state.active, AppCommandState::Kind::Orbit);
+    const float azimuth = state.viewportAzimuthDeg;
+    const float elevation = state.viewportElevationDeg;
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    const QPoint finish = start + QPoint(25, -20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportAzimuthDeg - azimuth) > 0.1f);
+    QVERIFY(std::abs(state.viewportElevationDeg - elevation) > 0.1f);
+
+    state.activeSpaceIndex = 0;
+    const float paperAzimuth = state.viewportAzimuthDeg;
+    const float paperElevation = state.viewportElevationDeg;
+    QMouseEvent paperPress(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperPress);
+    QMouseEvent paperMove(QEvent::MouseMove, finish, finish, Qt::NoButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperMove);
+    QMouseEvent paperRelease(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &paperRelease);
+    QCOMPARE(state.viewportAzimuthDeg, paperAzimuth);
+    QCOMPARE(state.viewportElevationDeg, paperElevation);
+  }
+
+  void panCommandLeftDragMovesView() {
+    AppCommandState state;
+    std::vector<std::string> log;
+    EditorViewport viewport(state, log, nullptr);
+    viewport.resize(800, 600);
+    const QPoint start(viewport.width() / 2, viewport.height() / 2);
+    QEnterEvent enter(start, start, start);
+    QApplication::sendEvent(&viewport, &enter);
+    StartPanCommand(state, log);
+    viewport.RefreshCommandCursor();
+    QCOMPARE(state.active, AppCommandState::Kind::Pan);
+    QCOMPARE(viewport.cursor().shape(), Qt::OpenHandCursor);
+    const double panX = state.viewportPanX;
+    const double panY = state.viewportPanY;
+    const double panZ = state.viewportPanZ;
+    const QPoint finish = start + QPoint(25, 20);
+    QMouseEvent press(QEvent::MouseButtonPress, start, start, Qt::LeftButton, Qt::LeftButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &press);
+    QMouseEvent move(QEvent::MouseMove, finish, finish, Qt::NoButton,
+        Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &move);
+    QMouseEvent release(QEvent::MouseButtonRelease, finish, finish, Qt::LeftButton, Qt::NoButton,
+        Qt::NoModifier);
+    QApplication::sendEvent(&viewport, &release);
+    QVERIFY(std::abs(state.viewportPanX - panX) > 0.01);
+    QVERIFY(std::abs(state.viewportPanY - panY) > 0.01 ||
+        std::abs(state.viewportPanZ - panZ) > 0.01);
+  }
+
   void viewportCubeIsVisibleInFramebuffer() {
     EditorWindow window;
     window.show();
@@ -4956,9 +6141,22 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
     const auto image = viewport->grabFramebuffer();
     QVERIFY(!image.isNull());
+    // Plan view (the startup default) must stay legible (REQ-059): the TOP face is drawn light and
+    // carries its dark label, and the compass ring around it is drawn too.
     const qreal ratio = viewport->devicePixelRatioF();
-    const auto face = image.pixelColor(qRound((viewport->width() - 55) * ratio), qRound(91 * ratio));
-    QVERIFY2(face.blue() > 60 && face.red() > 40, qPrintable(face.name()));
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, window.State());
+    const viewcube::QuadFace* top = nullptr;
+    for (const auto& q : scene.quads) if (q.visible) top = &q;
+    QVERIFY(top && top->labelled);
+    const QPoint corner(qRound((top->pts[0].x * 0.8 + top->pts[2].x * 0.2) * ratio),
+                        qRound((top->pts[0].y * 0.8 + top->pts[2].y * 0.2) * ratio));
+    QVERIFY2(image.pixelColor(corner).red() > 100, qPrintable(image.pixelColor(corner).name()));
+    int darkLabelPixels = 0;
+    const int cx = qRound(top->labelAt.x * ratio), cy = qRound(top->labelAt.y * ratio);
+    for (int dy = -6; dy <= 6; ++dy)
+      for (int dx = -12; dx <= 12; ++dx)
+        if (image.pixelColor(cx + dx, cy + dy).red() < 90) ++darkLabelPixels;
+    QVERIFY2(darkLabelPixels > 15, qPrintable(QString::number(darkLabelPixels)));
   }
 
   void qtViewportRendersGizmoAndSectionPlaneOverlays() {
@@ -5134,6 +6332,112 @@ private Q_SLOTS:
     QVERIFY(!window.State().drawingLayerTable[1].on);
     window.Submit("UNDO");
     QVERIFY(window.State().drawingLayerTable[1].on);
+  }
+
+  void issue1036LayerManagerSortingActsOnTheShownRecord() {
+    ApplyQtAppearance(*qApp, false);  // the app's Dark theme, whatever an earlier test left applied
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    std::string error;
+    QVERIFY(CadAddDrawingLayer(state, "Survey", &error));
+    QVERIFY(CadAddDrawingLayer(state, "Alpha", &error));
+    state.currentLayer = "Survey";
+    std::vector<std::string> storedOrder;
+    storedOrder.reserve(state.drawingLayerTable.size());
+    for (const auto& layer : state.drawingLayerTable) storedOrder.push_back(layer.name);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      auto* header = table->horizontalHeader();
+      auto names = [&] { QStringList list; for (int row = 0; row < table->rowCount(); ++row) list << table->item(row, 0)->text(); return list; };
+      QCOMPARE(names(), QStringList({"0", "Survey", "Alpha"}));
+      // Layout: the Name column takes the width the others leave, so the table fills the window.
+      int columnsWidth = 0;
+      for (int column = 0; column < table->columnCount(); ++column) if (!table->isColumnHidden(column)) columnsWidth += header->sectionSize(column);
+      QVERIFY(columnsWidth >= table->viewport()->width() - 2);
+      QVERIFY(header->sectionSize(0) > 150);
+      // Swatch and linetype sample sit beside the stored text.
+      QCOMPARE(table->item(0, 4)->text(), QString::fromStdString(state.drawingLayerTable[0].color));
+      QVERIFY(table->item(0, 4)->data(Qt::DecorationRole).isValid());
+      QVERIFY(table->item(0, 5)->data(Qt::DecorationRole).isValid());
+      // The current layer is marked.
+      QVERIFY(table->item(1, 0)->font().bold());
+      QVERIFY(!table->item(2, 0)->font().bold());
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-normal.png")));
+      auto clickHeader = [&](int column) { QTest::mouseClick(header->viewport(), Qt::LeftButton, Qt::NoModifier, QPoint(header->sectionViewportPosition(column) + 8, header->height() / 2)); };
+      clickHeader(0);
+      QCOMPARE(names(), QStringList({"0", "Alpha", "Survey"}));
+      clickHeader(0);
+      QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-sorted.png")));
+      // Row 0 is Survey now: the edit lands on Survey, not on the layer that used to be first.
+      table->item(0, 1)->setCheckState(Qt::Unchecked);
+      QCOMPARE(names(), QStringList({"Survey", "Alpha", "0"}));
+      QVERIFY(!state.drawingLayerTable[1].on);
+      QVERIFY(state.drawingLayerTable[0].on && state.drawingLayerTable[2].on);
+      // Delete acts on the row shown.
+      table->setCurrentCell(1, 0);
+      dialog->findChild<QPushButton*>("layerDelete")->click();
+      QCOMPARE(names(), QStringList({"Survey", "0"}));
+      // Set current acts on the row shown.
+      table->setCurrentCell(1, 0);
+      dialog->findChild<QPushButton*>("layerSetCurrent")->click();
+      QCOMPARE(state.currentLayer, std::string("0"));
+      // Columns can be hidden and reordered; the checkbox cells are drawn in both states.
+      header->setSectionHidden(3, true);
+      header->moveSection(header->visualIndex(6), 1);
+      QVERIFY(header->isSectionHidden(3));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
+    // Display sorting never reordered the saved layers.
+    QCOMPARE(state.drawingLayerTable.size(), std::size_t(2));
+    QCOMPARE(state.drawingLayerTable[0].name, storedOrder[0]);
+    QCOMPARE(state.drawingLayerTable[1].name, storedOrder[1]);
+  }
+
+  void issue1036LayerManagerViewportColumnsEditTheCurrentViewport() {
+    ApplyQtAppearance(*qApp, false);  // the app's Dark theme, whatever an earlier test left applied
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    std::string error;
+    QVERIFY(CadAddDrawingLayer(state, "Survey", &error));
+    // Model space: no current viewport, so the VP columns are not shown.
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(table->isColumnHidden(7));
+      QVERIFY(table->isColumnHidden(8));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
+    PaperLayout layout;
+    layout.viewports.push_back(Viewport{});
+    state.paperLayouts = {layout};
+    state.activeSpaceIndex = 0;
+    state.selectedViewportIndex = 0;
+    state.selectedViewports = {0};
+    QVERIFY(CurrentViewport(state) != nullptr);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("layerManager"); QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("layerTable"); QVERIFY(table);
+      QVERIFY(!table->isColumnHidden(7));
+      QVERIFY(!table->isColumnHidden(8));
+      table->item(1, 7)->setCheckState(Qt::Checked);
+      QVERIFY(IsLayerFrozenInViewport(state.paperLayouts[0].viewports[0], "Survey"));
+      QVERIFY(!state.drawingLayerTable[1].frozen);
+      table->item(1, 8)->setText("Red");
+      QVERIFY(ViewportLayerColorOverride(state.paperLayouts[0].viewports[0], "Survey") != nullptr);
+      QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("qt-1036-layer-manager-viewport.png")));
+      table->item(1, 8)->setText("");
+      QVERIFY(ViewportLayerColorOverride(state.paperLayouts[0].viewports[0], "Survey") == nullptr);
+      table->item(1, 7)->setCheckState(Qt::Unchecked);
+      QVERIFY(!IsLayerFrozenInViewport(state.paperLayouts[0].viewports[0], "Survey"));
+      dialog->reject();
+    });
+    window.Submit("LAYER");
   }
 
   void pointGroupManagerCreatesAndUndoesFromEmptyState() {
@@ -5452,7 +6756,7 @@ private Q_SLOTS:
     QVERIFY(!state.selection.empty());
     QVERIFY(!state.selBoxWaitingSecond);
     const auto selected = state.selection;
-    const QPointF blank = screenPoint(30, 20);
+    const QPointF blank = screenPoint(-30, -20);  // clear of the ViewCube, which owns the top-right corner
     sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
     sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
@@ -5590,6 +6894,67 @@ private Q_SLOTS:
     auto* draw = window.findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->menu()->actions().contains(line));
   }
 
+  void compactRibbonDropdownButtonsOpenAtMinimumWindowWidth() {
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restoreAppearance = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.resize(1200, 800); window.show(); QTest::qWait(100);
+    window.resize(window.minimumSize()); QTest::qWait(100);
+    auto* tabMenuButton = window.findChild<QToolButton*>("ribbonTabMenu"); QVERIFY(tabMenuButton);
+    QVERIFY(tabMenuButton->menu()); QVERIFY(!tabMenuButton->menu()->actions().empty());
+    QPointer<QAction> firstTabAction = tabMenuButton->menu()->actions().front();
+    // Repeated size changes inside the same compact state must not destroy and
+    // reconnect every tab action on each resize event.
+    window.resize(window.width() + 2, window.height()); QCoreApplication::processEvents();
+    QVERIFY(firstTabAction);
+    auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
+    QList<QToolButton*> visibleMenus;
+    for (auto* button : page->findChildren<QToolButton*>())
+      if (button->objectName().startsWith("collapsed_") && button->isVisible() && button->menu())
+        visibleMenus.append(button);
+    auto* more = page->findChild<QToolButton*>("ribbonMore");
+    if (more && more->isVisible() && more->menu()) visibleMenus.append(more);
+    QVERIFY(!visibleMenus.empty());
+    QVERIFY(window.grab().save(QtTestArtifactDirectory() + "/qt-1035-ribbon-minimum-width.png"));
+    for (auto* button : visibleMenus) {
+      QVERIFY(!button->menu()->actions().empty());
+      bool opened = false;
+      connect(button->menu(), &QMenu::aboutToShow, &window, [&opened] { opened = true; });
+      for (const QPoint position : {button->rect().center(), QPoint(button->width() / 2, button->height() - 5)}) {
+        opened = false;
+        const bool capture = button->objectName() == "collapsed_ribbonPanel_Home_Draw" &&
+                             position == button->rect().center();
+        QTimer::singleShot(0, button->menu(), [menu = button->menu(), capture] {
+          if (capture) menu->grab().save(QtTestArtifactDirectory() + "/qt-1035-ribbon-minimum-width-menu.png");
+          menu->hide();
+        });
+        QTest::mouseClick(button, Qt::LeftButton, Qt::NoModifier, position);
+        QVERIFY2(opened, qPrintable(button->objectName()));
+      }
+    }
+    auto* draw = page->findChild<QToolButton*>("collapsed_ribbonPanel_Home_Draw"); QVERIFY(draw); QVERIFY(draw->isVisible());
+    QAction* line = nullptr;
+    for (auto* action : draw->menu()->actions())
+      if (action->text().contains("Line", Qt::CaseInsensitive)) { line = action; break; }
+    QVERIFY(line);
+    bool drawMenuOpened = false;
+    connect(draw->menu(), &QMenu::aboutToShow, &window, [&drawMenuOpened] { drawMenuOpened = true; });
+    QTimer::singleShot(0, draw->menu(), [menu = draw->menu(), line] {
+      line->trigger();
+      menu->hide();
+    });
+    QTest::mouseClick(draw, Qt::LeftButton, Qt::NoModifier, draw->rect().center());
+    QVERIFY(drawMenuOpened);
+    QTRY_COMPARE(window.State().active, AppCommandState::Kind::Line);
+    window.CancelDraftingInput();
+  }
+
   void ribbonPanelCaptionsHaveBottomSpaceWithoutResizingButtons() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1400, 800); window.show();
     QTest::qWait(100);
@@ -5631,10 +6996,12 @@ private Q_SLOTS:
     QCOMPARE(ribbon->currentIndex(), index("Modeling")); // A location does not steal the active tab.
   }
 
-  void issue899DrawingSettingsAndMapTaskPanelUseSharedWorkflows() {
+  void issue899DrawingSettingsAndGeolocationRibbonUseSharedWorkflows() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();
     auto& state = window.State();
+    if (!geo::DictionariesLoaded())
+      QVERIFY(geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string()));
     state.drawingSettings.transform.apply = false;
     const QString artifacts = QtTestArtifactDirectory() + "/";
 
@@ -5657,25 +7024,169 @@ private Q_SLOTS:
     });
     window.ShowUnits();
     QVERIFY(state.drawingSettings.objectLayers[0].locked);
+    window.show(); QTest::qWait(100);
 
-    state.drawingSettings.zoneCode = "TX83-CF";
+    state.drawingSettings.zoneCode.clear();
     state.drawingSettings.onlineMap = DrawingSettings::OnlineMap::Off;
     window.Submit("");
-    auto* mapDock = window.findChild<QDockWidget*>("mapTaskDock"); QVERIFY(mapDock);
-    auto* panel = window.findChild<QWidget*>("mapTaskPanel"); QVERIFY(panel);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel.png"));
-    auto* imagery = window.findChild<QRadioButton*>(QString("mapProvider_%1").arg(static_cast<int>(DrawingSettings::OnlineMap::UsgsImagery)));
+    QVERIFY(!window.findChild<QDockWidget*>("mapTaskDock"));
+    QVERIFY(!window.findChild<QWidget*>("mapTaskPanel"));
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    const int geoTab = ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_GeolocationCtx")); QVERIFY(geoTab >= 0);
+    QVERIFY(!ribbon->isTabVisible(geoTab));
+    QVERIFY(window.grab().save(artifacts + "qt-1035-no-geolocation-ribbon.png"));
+    state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+    window.Submit("");
+    QVERIFY(ribbon->isTabVisible(geoTab));
+    QVERIFY(geoTab > ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_Modeling")));
+    ribbon->setCurrentIndex(geoTab); QApplication::processEvents();
+    QVERIFY(window.grab().save(artifacts + "qt-1035-geolocation-ribbon.png"));
+    auto* wrapper = window.findChild<QWidget*>("ribbonWrapper"); QVERIFY(wrapper);
+    auto* nav = window.findChild<QWidget*>("ribbonTabMenuHeader"); QVERIFY(nav);
+    auto* tabMenu = window.findChild<QToolButton*>("ribbonTabMenu"); QVERIFY(tabMenu); QVERIFY(tabMenu->menu());
+    auto* sharedLayers = window.findChild<QWidget*>("ribbonSharedArea"); QVERIFY(sharedLayers);
+    wrapper->setFixedWidth(700); QTest::qWait(100);
+    QVERIFY(nav->isVisible()); QVERIFY(!ribbon->tabBar()->isVisible());
+    QVERIFY(!sharedLayers->isVisible());
+    auto* compactLayerButton = window.findChild<QToolButton*>("ribbonCompactLayers"); QVERIFY(compactLayerButton); QVERIFY(compactLayerButton->isVisible());
+    QVERIFY(compactLayerButton->menu());
+    compactLayerButton->menu()->show(); QApplication::processEvents();
+    QVERIFY(compactLayerButton->menu()->findChildren<QComboBox*>().size() >= 2);
+    QVERIFY(compactLayerButton->menu()->grab().save(artifacts + "qt-1035-contextual-tabs-layers-menu.png"));
+    compactLayerButton->menu()->hide();
+    ribbon->setCurrentIndex(ribbon->indexOf(window.findChild<QWidget*>("ribbonPage_Home")));
+    tabMenu->menu()->show(); QApplication::processEvents();
+    auto* geoMenuAction = tabMenu->menu()->findChild<QAction*>("ribbonTabMenuAction_GeolocationCtx"); QVERIFY(geoMenuAction);
+    QCOMPARE(tabMenu->menu()->actions().last(), geoMenuAction);
+    geoMenuAction->trigger(); QCOMPARE(ribbon->currentIndex(), geoTab);
+    tabMenu->menu()->hide();
+    tabMenu->menu()->show(); QApplication::processEvents();
+    geoMenuAction = tabMenu->menu()->findChild<QAction*>("ribbonTabMenuAction_GeolocationCtx"); QVERIFY(geoMenuAction);
+    QVERIFY(geoMenuAction->isChecked());
+    QVERIFY(tabMenu->menu()->grab().save(artifacts + "qt-1035-contextual-tabs-menu-open.png"));
+    tabMenu->menu()->hide();
+    QVERIFY(wrapper->grab().save(artifacts + "qt-1035-contextual-tabs-compact-menu.png"));
+    wrapper->setMinimumWidth(0); wrapper->setMaximumWidth(QWIDGETSIZE_MAX);
+    window.resize(1600, 800); QTest::qWait(100);
+    QVERIFY(!nav->isVisible()); QVERIFY(ribbon->tabBar()->isVisible());
+    QCOMPARE(ribbon->currentIndex(), geoTab);
+    auto* mapAction = window.findChild<QAction*>("ribbon_GeoMap"); QVERIFY(mapAction);
+    auto* mapMenu = mapAction->menu(); QVERIFY(mapMenu);
+    QAction* imagery = nullptr;
+    for (auto* option : mapMenu->actions())
+      if (option->property("ribbonCommand").toString() == QString("@map:%1").arg(static_cast<int>(DrawingSettings::OnlineMap::UsgsImagery))) imagery = option;
     QVERIFY(imagery); QVERIFY(imagery->isEnabled());
-    imagery->click();
+    imagery->trigger();
     QCOMPARE(state.drawingSettings.onlineMap, DrawingSettings::OnlineMap::UsgsImagery);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-task-panel-active.png"));
-    auto* capture = window.findChild<QPushButton*>("mapCapturePick"); QVERIFY(capture);
-    capture->click();
+    auto* captureAction = window.findChild<QAction*>("ribbon_GeoCaptureArea"); QVERIFY(captureAction);
+    auto* captureMenu = captureAction->menu(); QVERIFY(captureMenu);
+    QAction* capture = nullptr;
+    for (auto* option : captureMenu->actions())
+      if (option->property("ribbonCommand").toString() == "@captureArea") capture = option;
+    QVERIFY(capture); QVERIFY(capture->isEnabled());
+    capture->trigger();
     QCOMPARE(state.active, AppCommandState::Kind::GeoCaptureArea);
-    QVERIFY(panel->grab().save(artifacts + "qt-899-map-capture-prompt.png"));
+    QVERIFY(window.grab().save(artifacts + "qt-1035-geolocation-ribbon-capture.png"));
     std::vector<std::string> log;
     CancelActiveCommand(state, log);
     QCOMPARE(state.active, AppCommandState::Kind::None);
+  }
+
+  void issue1083CoordinateSystemDictionaryLoadsWithTheWindow() {
+    // Issue #1083: the zone, grid readouts and the online map need the dictionary before Drawing
+    // Settings has ever been opened. Start from an unloaded dictionary, as a fresh session does.
+    QVERIFY(!geo::LoadDictionaries("C:/no/such/folder"));
+    QVERIFY(!geo::DictionariesLoaded());
+    EditorWindow window;
+    QVERIFY2(geo::DictionariesLoaded(), geo::DictionaryError().c_str());
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    state.drawingInsUnits = 2;
+    state.drawingSettings.zoneCode = "HARN/TX.TX-CF";
+    const auto factors = ResolveDrawingTransform(state.drawingSettings, state.drawingInsUnits, false);
+    QVERIFY2(factors.ok, factors.error.c_str());
+  }
+
+  void drawingSettingsFileMenuLoadsCoordinateSystemCategories() {
+    EditorWindow window;
+    auto* fileMenu = window.findChild<QMenu*>("fileMenu"); QVERIFY(fileMenu);
+    auto* drawingSettings = window.findChild<QAction*>("command_DRAWINGSETTINGS"); QVERIFY(drawingSettings);
+    QVERIFY(fileMenu->actions().contains(drawingSettings));
+    QVERIFY(!drawingSettings->isEnabled());
+    window.CreateDrawingFromTemplate();
+    QVERIFY(drawingSettings->isEnabled());
+
+    QVERIFY(!geo::LoadDictionaries("C:/no/such/folder"));
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(dialog);
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      auto saveDropdown = [dialog](QWidget* popup, const QString& path) {
+        QPixmap capture = dialog->grab();
+        const QPoint offset = popup->mapToGlobal(QPoint(0, 0)) - dialog->mapToGlobal(QPoint(0, 0));
+        QPainter painter(&capture);
+        painter.drawPixmap(offset, popup->grab());
+        return capture.save(path);
+      };
+      auto* category = dialog->findChild<QComboBox*>("drawingZoneCategory"); QVERIFY(category);
+      QVERIFY(category->count() > 2);
+      QCOMPARE(category->style()->styleHint(QStyle::SH_ComboBox_Popup, nullptr, category), 0);
+      QVERIFY(!category->view()->hasAutoScroll());
+      QCOMPARE(category->view()->verticalScrollBarPolicy(), Qt::ScrollBarAsNeeded);
+      category->showPopup(); QApplication::processEvents();
+      auto* categoryPopup = category->view()->window();
+      QTRY_VERIFY_WITH_TIMEOUT(categoryPopup->isVisible(), 2000);
+      QVERIFY(categoryPopup->frameGeometry().top() >= category->mapToGlobal(QPoint(0, category->height())).y() - 2);
+      QVERIFY(categoryPopup->frameGeometry().left() == category->mapToGlobal(QPoint(0, 0)).x());
+      QVERIFY(categoryPopup->height() <= 240);
+      QVERIFY(saveDropdown(categoryPopup, QtTestArtifactDirectory() + "/qt-1035-coordinate-category-dropdown.png"));
+      category->hidePopup();
+      QApplication::processEvents();
+      const int texas = category->findData("USA, Texas"); QVERIFY(texas >= 0);
+      category->setCurrentIndex(texas);
+      auto* systems = dialog->findChild<QComboBox*>("drawingZoneSystem"); QVERIFY(systems);
+      QVERIFY(!systems->view()->hasAutoScroll());
+      QCOMPARE(systems->style()->styleHint(QStyle::SH_ComboBox_Popup, nullptr, systems), 0);
+      const int central = systems->findData("HARN/TX.TX-C"); QVERIFY(central >= 0);
+      systems->showPopup(); QApplication::processEvents();
+      auto* systemsPopup = systems->view()->window();
+      QTRY_VERIFY_WITH_TIMEOUT(systemsPopup->isVisible(), 2000);
+      QVERIFY(systemsPopup->frameGeometry().top() >= systems->mapToGlobal(QPoint(0, systems->height())).y() - 2);
+      QVERIFY(systemsPopup->frameGeometry().left() == systems->mapToGlobal(QPoint(0, 0)).x());
+      QVERIFY(systemsPopup->height() <= 240);
+      QVERIFY(saveDropdown(systemsPopup, QtTestArtifactDirectory() + "/qt-1035-coordinate-system-dropdown.png"));
+      systems->hidePopup();
+      systems->setCurrentIndex(central);
+      auto* code = dialog->findChild<QLineEdit*>("drawingZoneCode"); QVERIFY(code);
+      QCOMPARE(code->text(), QString("HARN/TX.TX-C"));
+      const QString artifacts = QtTestArtifactDirectory() + "/";
+      QVERIFY(dialog->grab().save(artifacts + "qt-1035-drawing-settings-coordinate-systems.png"));
+      dialog->reject();
+    });
+    drawingSettings->trigger();
+  }
+
+  void drawingSettingsZoneDetailsDescribeTheDrawingsZoneOnOpen() {
+    QVERIFY(geo::LoadDictionaries(ResolveBundledAssetPath(std::filesystem::path("resources") / "csmap").string()));
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.State().drawingSettings.zoneCode = "HARN/NB.NB";
+    auto* drawingSettings = window.findChild<QAction*>("command_DRAWINGSETTINGS"); QVERIFY(drawingSettings);
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingSettingsDialog"); QVERIFY(dialog);
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      auto* systems = dialog->findChild<QComboBox*>("drawingZoneSystem"); QVERIFY(systems);
+      auto* code = dialog->findChild<QLineEdit*>("drawingZoneCode"); QVERIFY(code);
+      auto* details = dialog->findChild<QLabel*>("drawingZoneDetails"); QVERIFY(details);
+      QCOMPARE(systems->currentData().toString(), QString("HARN/NB.NB"));
+      QCOMPARE(code->text(), QString("HARN/NB.NB"));
+      const auto info = geo::FindCoordinateSystem("HARN/NB.NB"); QVERIFY(info);
+      QCOMPARE(details->text(), QString("%1\nProjection: %2\nDatum: %3").arg(QString::fromUtf8(info->description.c_str()),
+               QString::fromUtf8(info->projection.c_str()), QString::fromUtf8(info->datum.c_str())));
+      QVERIFY(!details->text().contains("NAD27"));
+      QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/qt-1085-drawing-settings-zone-details.png"));
+      dialog->reject();
+    });
+    drawingSettings->trigger();
   }
 
   void releaseRibbonSelectorsAndFittingMenuReachSharedServices() {
@@ -5782,6 +7293,179 @@ private Q_SLOTS:
     QTest::keyClick(commandInput, Qt::Key_Escape);
     QCOMPARE(state.active, AppCommandState::Kind::None);
     QCOMPARE(state.cadPipeRuns.size(), runsBefore);
+  }
+
+private:
+  // Issue #1084 / REQ-350: the Pipe Fittings palette shows in the Qt editor. Names of the rows a tab lists.
+  static QStringList PipePaletteRows(QDialog* palette, int tab) {
+    QStringList names;
+    auto* list = palette->findChild<QListWidget*>(QString("pipeFittingList%1").arg(tab));
+    if (!list || !list->isVisible()) return names;
+    for (int i = 0; i < list->count(); ++i) names << list->item(i)->data(Qt::UserRole).toString();
+    return names;
+  }
+  // A real part picture, not the empty placeholder box: it has drawn pixels well inside its border.
+  static bool PipePaletteRowHasPicture(QListWidget* list, int row) {
+    const QImage image = list->item(row)->icon().pixmap(64, 64).toImage().convertToFormat(QImage::Format_ARGB32);
+    int drawn = 0;
+    for (int y = 8; y < 56; ++y)
+      for (int x = 8; x < 56; ++x)
+        if (qAlpha(image.pixel(x, y)) > 0) ++drawn;
+    return drawn > 150;
+  }
+
+private Q_SLOTS:
+  void issue1084PipeRunOpensPaletteWithSizeMatchedParts() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTest::qWait(100);
+    auto& state = window.State();
+    QVERIFY(!window.findChild<QDialog*>("pipeFittingPalette"));
+
+    window.Submit("PIPERUN");  // opens the palette by itself (REQ-350 (a))
+    QVERIFY(state.pipeFittingPaletteOpen);
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    QVERIFY(palette->isVisible());
+    QVERIFY(!palette->isModal());  // a palette, never a modal
+    window.Submit("2in");
+    window.Submit("");  // schedule 40
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    QVERIFY(tabs);
+    QCOMPARE(tabs->tabPosition(), QTabWidget::East);
+    QCOMPARE(tabs->count(), 5);
+    QCOMPARE(tabs->tabText(0), QString("Fittings"));
+    QCOMPARE(tabs->tabText(1), QString("Flanges"));
+    tabs->setCurrentIndex(1);
+
+    // A 2in run lists the two 2in flanges and not the 4in one (size match is exact).
+    const QStringList twoInch = PipePaletteRows(palette, 1);
+    QVERIFY(twoInch.contains("2IN_BLIND_FLANGE"));
+    QVERIFY(twoInch.contains("2in_WELD_NECK_FLANGE"));
+    QVERIFY(!twoInch.contains("CJ_4in_WELD_NECK_FLANGE"));
+    QCOMPARE(palette->findChild<QLabel*>("pipeFittingRun")->text(), QString("Pipe run: 2in"));
+
+    // Route something and finish: the palette stays open after the run is committed.
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+
+    // A 4in run re-filters the same window, live.
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QCOMPARE(PipePaletteRows(palette, 1), QStringList{"CJ_4in_WELD_NECK_FLANGE"});
+
+    // A category with nothing at this size says so, naming the size.
+    tabs->setCurrentIndex(2);
+    auto* empty = palette->findChild<QLabel*>("pipeFittingEmpty2");
+    QVERIFY(empty && empty->isVisible());
+    QVERIFY(empty->text().contains("4in"));
+    QVERIFY(empty->text().contains("valves"));
+    QVERIFY(PipePaletteRows(palette, 2).isEmpty());
+    QCOMPARE(state.pipeFittingPaletteTab, 2);
+
+    // Cancel the run in progress (the palette stays open), then: the close box closes it and the
+    // reopen command shows it again where it was.
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QVERIFY(palette->isVisible());
+    QVERIFY(state.pipeFittingPaletteOpen);
+    const QPoint before = palette->pos();
+    palette->close();
+    QVERIFY(!palette->isVisible());
+    QVERIFY(!state.pipeFittingPaletteOpen);
+    window.Submit("PIPEPALETTE");
+    QVERIFY(state.pipeFittingPaletteOpen);
+    QCOMPARE(window.findChild<QDialog*>("pipeFittingPalette"), palette);
+    QVERIFY(palette->isVisible());
+    QCOMPARE(palette->pos(), before);
+    window.Submit("PIPEPALETTE");  // the same command closes it again
+    QVERIFY(!palette->isVisible());
+  }
+
+  void issue1084PaletteRowsShowShadedPicturesAndArmThePart() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    palette->findChild<QTabWidget*>("pipeFittingTabs")->setCurrentIndex(1);
+    auto* list = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(list && list->isVisible());
+    QCOMPARE(list->count(), 2);
+
+    // Each row's picture is rendered once by the renderer and then shown.
+    for (int row = 0; row < list->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(list, row), 10000);
+    QCOMPARE(window.m_Viewport->PartThumbnails().size(), std::size_t(2));
+    QVERIFY(list->item(0)->text().contains('\n'));  // the name, with size and type beneath
+
+    // Picking a row arms the part for the next viewport click and does not place anything yet.
+    const QString name = list->item(0)->data(Qt::UserRole).toString();
+    const auto refsBefore = state.cadBlockRefs.size();
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(0)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    QCOMPARE(QString::fromUtf8(state.insertBlockName), name);
+    QVERIFY(state.insertBlockPipeSpliceArmed);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore);
+
+    // A click off every run places it as an ordinary block INSERT.
+    window.Submit("500,500,0");  // the same placement a viewport click makes, typed
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+    QCOMPARE(QString::fromUtf8(state.cadBlockRefs.back().defName.c_str()), name);
+    QVERIFY(!state.insertBlockPipeSpliceArmed);
+
+    // ESC disarms an armed part.
+    QTest::mouseClick(list->viewport(), Qt::LeftButton, Qt::NoModifier, list->visualItemRect(list->item(1)).center());
+    QCOMPARE(state.active, AppCommandState::Kind::InsertBlock);
+    auto* commandInput = window.findChild<QLineEdit*>("commandInput"); QVERIFY(commandInput);
+    commandInput->setFocus();
+    QTest::keyClick(commandInput, Qt::Key_Escape);
+    QCOMPARE(state.active, AppCommandState::Kind::None);
+    QCOMPARE(state.cadBlockRefs.size(), refsBefore + 1);
+  }
+
+  void qt1084PipeFittingPaletteScreenshots() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1440, 900); window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    window.Submit("PIPERUN");
+    window.Submit("2in");
+    auto* palette = window.findChild<QDialog*>("pipeFittingPalette");
+    QVERIFY(palette);
+    auto* tabs = palette->findChild<QTabWidget*>("pipeFittingTabs");
+    auto shoot = [&](const QString& file) {
+      QApplication::processEvents();
+      QVERIFY(palette->grab().save(artifacts + file));
+    };
+    // Before any picture exists: name-only rows with placeholder boxes.
+    tabs->setCurrentIndex(1);
+    auto* flanges = palette->findChild<QListWidget*>("pipeFittingList1");
+    QVERIFY(flanges);
+    for (int row = 0; row < flanges->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges, row), 10000);
+    shoot("qt-1084-palette-2in-flanges.png");
+    tabs->setCurrentIndex(2);
+    shoot("qt-1084-palette-2in-valves-empty.png");
+    window.Submit("");
+    window.Submit("0,0,0");
+    window.Submit("10,0,0");
+    window.Submit("END");
+    window.Submit("PIPERUN");
+    window.Submit("4in");
+    tabs->setCurrentIndex(1);
+    auto* flanges4 = palette->findChild<QListWidget*>("pipeFittingList1");
+    for (int row = 0; row < flanges4->count(); ++row)
+      QTRY_VERIFY_WITH_TIMEOUT(PipePaletteRowHasPicture(flanges4, row), 10000);
+    shoot("qt-1084-palette-4in-flanges.png");
+    QVERIFY(window.grab().save(artifacts + "qt-1084-palette-in-window.png"));
   }
 
   void issue1002RibbonExportsLandXmlThroughTheCommand() {
@@ -6082,10 +7766,9 @@ private Q_SLOTS:
     QVERIFY(commandBar->grab().save(artifacts + "qt-997-grading-edit-prompt.png"));
     window.Submit("F"); window.Submit("2:1"); window.Submit("");
     QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
-    // Frame the 200 ft test site directly. Qt's ZOOMEXTENTS never reaches the viewport (a separate
-    // defect; the pending zoom is not consumed by the Qt viewport), so this capture sets the view.
+    // Frame the 200 ft test site with the real ZOOMEXTENTS (GitHub #1024).
     state.selection.clear();
-    state.viewportPanX = 100.0; state.viewportPanY = 100.0; state.viewportZoom = 0.3f;
+    window.Submit("ZOOMEXTENTS");
     QApplication::processEvents(); QTest::qWait(100);
     QVERIFY(window.grab().save(artifacts + "qt-997-grading-result-window.png"));
     QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts + "qt-997-grading-result-viewport.png"));
@@ -6339,6 +8022,8 @@ private Q_SLOTS:
     EditorWindow window; window.CreateDrawingFromTemplate(); window.show(); auto& state = window.State();
     state.userLinesFlat = {0, 0, 0, 10, 0, 0, 20, 0, 0, 30, 0, 0};
     state.userLineAttrs.resize(2);
+    // Direct fixture edits must invalidate the revision-gated identity/display caches.
+    BumpCadGpuCache(state);
     state.selection = {{SelectedEntity::Type::LineSeg, 0}};
     window.Submit("ISOLATEOBJECTS");
     QCOMPARE(state.hiddenEntityIds.size(), std::size_t(1));
@@ -6778,7 +8463,7 @@ private Q_SLOTS:
     rect.kind = pdfview::Annot::Kind::Rect;
     rect.x0 = 20; rect.y0 = 30; rect.x1 = 80; rect.y1 = 100;
     QVERIFY(window.AddAnnotation(rect, error));
-    QVERIFY(window.findChild<QToolBar*>("pdfAnnotationStyle"));
+    QVERIFY(window.findChild<QDoubleSpinBox*>("pdfAnnotationWidth"));
     const QPointF centre = window.PageToCanvas(50, 65);
     window.PageClick(centre, Qt::LeftButton);
     QCOMPARE(window.m_SelectedAnnotation, 0);
@@ -6920,6 +8605,194 @@ private Q_SLOTS:
 #endif
   }
 
+  // ---- GitHub #1034 / REQ-059: the ViewCube -------------------------------------------------------
+  void issue1034ViewCubeControlsAnimateAndSettleWithinHalfASecond() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+
+    // The animation is the requirement's 0.5 s at most (a constant, so a slow CI machine cannot flake it),
+    // does not snap (the click only starts it), and the real timer then drives it to the target.
+    static_assert(kViewAnimSeconds <= 0.5f, "REQ-059: orientation changes settle within 0.5 s");
+    const auto clickAndSettle = [&](const QPoint& at, float azimuth, float elevation, const char* what) {
+      QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, at);
+      QTRY_VERIFY2_WITH_TIMEOUT(!state.viewAnimActive,
+          qPrintable(QString("%1: az %2 el %3 t %4").arg(what).arg(state.viewportAzimuthDeg).arg(state.viewportElevationDeg).arg(state.viewAnimT)), 10000);
+      QVERIFY2(std::fabs(Camera::ShortestAzimuthDelta(state.viewportAzimuthDeg, azimuth)) < 0.01f, what);
+      QVERIFY2(std::fabs(state.viewportElevationDeg - elevation) < 0.01f, what);
+    };
+
+    // Home -> SW isometric.
+    clickAndSettle(Px(ViewCubeSceneOf(viewport, state).home), 45.f, 35.26439f, "home");
+    // From the isometric view, clicking FRONT, LEFT and TOP sets each standard view.
+    for (const char* label : {"FRONT", "LEFT", "TOP"}) {
+      viewport->SetOrientation(45.f, 35.26439f);
+      const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+      const viewcube::QuadFace* quad = nullptr;
+      for (const auto& q : scene.quads)
+        if (q.visible && std::string(viewcube::kFaces[q.face].label) == label) quad = &q;
+      QVERIFY2(quad, label);
+      const viewcube::Face& face = viewcube::kFaces[quad->face];
+      const QPoint centre(qRound((quad->pts[0].x + quad->pts[1].x + quad->pts[2].x + quad->pts[3].x) / 4),
+                          qRound((quad->pts[0].y + quad->pts[1].y + quad->pts[2].y + quad->pts[3].y) / 4));
+      clickAndSettle(centre, face.azimuthDeg, face.elevationDeg, label);
+    }
+    // The arrow turns a quarter turn even though the view is already square, keeping the elevation.
+    viewport->SetOrientation(0.f, 25.f);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    const float bearing = (viewcube::kArrowMidDeg - viewcube::kArrowGapDeg - 10.f) * 3.14159265f / 180.f;
+    clickAndSettle(QPoint(qRound(scene.center.x + std::cos(bearing) * scene.arrowRadius),
+                          qRound(scene.center.y - std::sin(bearing) * scene.arrowRadius)), 90.f, 25.f, "arrow");
+  }
+
+  void issue1034ViewCubeClicksNeverReachTheViewportBehindIt() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+
+    // A line across the whole viewport at the pixel row of the widget's bottom-right corner, which
+    // is inside the widget but is no control.
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    const int cornerX = qRound(scene.originX + scene.sizePx - 3), cornerY = qRound(scene.originY + scene.sizePx - 3);
+    QVERIFY(viewcube::Contains(scene, cornerX, cornerY));
+    QCOMPARE(viewcube::HitTest(scene, cornerX, cornerY).part, viewcube::Part::None);
+    const auto ray = CadViewCamera(state).ScreenRay(static_cast<float>(cornerX), static_cast<float>(cornerY),
+        static_cast<float>(viewport->width()), static_cast<float>(viewport->height()));
+    ray3d::Vec3 world;
+    QVERIFY(ray3d::RayPlaneIntersect(ray, CadActiveWorkPlane(state), &world));
+    state.userLinesFlat = {world.x - 100000.0, world.y, 0.0, world.x + 100000.0, world.y, 0.0};
+    state.userLineAttrs.push_back(EntityAttributes{});
+    window.Refresh();
+
+    // Outside the widget the line picks as normal ...
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, QPoint(viewport->width() / 2, cornerY));
+    QCOMPARE(state.selection.size(), std::size_t{1});
+    state.selection.clear();
+    // ... and a click on the widget, on a control or off one, never starts a selection or a pick.
+    for (const QPoint& at : {QPoint(cornerX, cornerY), Px(scene.home), Px(scene.center)}) {
+      QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, at);
+      QVERIFY(!state.selBoxWaitingSecond);
+      QVERIFY(state.selection.empty());
+    }
+    QTest::mouseClick(viewport, Qt::RightButton, Qt::NoModifier, QPoint(cornerX, cornerY));
+    QVERIFY(state.selection.empty());
+  }
+
+  void issue1034ManualOrbitCancelsAnimationAndTheCubeTracksTheCamera() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    viewport->SetOrientation(0.f, 90.f);
+    QTest::mouseClick(viewport, Qt::LeftButton, Qt::NoModifier, Px(ViewCubeSceneOf(viewport, state).home));
+    if (!state.viewAnimActive) QSKIP("the click took longer than the animation on this machine");
+
+    // Shift + middle drag is the hand orbit: it takes over at once.
+    const QPoint start(viewport->width() / 3, viewport->height() / 2), finish = start + QPoint(30, 20);
+    QTest::mousePress(viewport, Qt::MiddleButton, Qt::ShiftModifier, start);
+    QMouseEvent move(QEvent::MouseMove, finish, viewport->mapToGlobal(finish), Qt::NoButton, Qt::MiddleButton,
+                     Qt::ShiftModifier);
+    QApplication::sendEvent(viewport, &move);
+    QTest::mouseRelease(viewport, Qt::MiddleButton, Qt::ShiftModifier, finish);
+    QVERIFY(!state.viewAnimActive);
+    const float azimuth = state.viewportAzimuthDeg, elevation = state.viewportElevationDeg;
+    QTest::qWait(450);  // longer than the animation: nothing may keep pulling the view toward home
+    QCOMPARE(state.viewportAzimuthDeg, azimuth);
+    QCOMPARE(state.viewportElevationDeg, elevation);
+
+    // After the orbit the cube is laid out for the camera as it now is.
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    QCOMPARE(scene.cameraAzimuthDeg, azimuth);
+    QCOMPARE(scene.cameraElevationDeg, elevation);
+  }
+
+  void issue1034ViewCubeScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    auto& state = window.State();
+    state.userLinesFlat = {-30, -20, 0, 30, -20, 0, 30, -20, 0, 30, 20, 0, 30, 20, 0, -30, 20, 0};
+    for (int i = 0; i < 3; ++i) state.userLineAttrs.push_back(EntityAttributes{});
+    window.Refresh();
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    struct Shot { const char* name; float azimuth, elevation; };
+    for (const Shot& shot : {Shot{"plan", 0.f, 90.f}, Shot{"sw-isometric", 45.f, 35.26439f},
+                             Shot{"front", 0.f, 0.f}, Shot{"back", 180.f, 0.f}, Shot{"bottom", 0.f, -90.f}}) {
+      viewport->SetOrientation(shot.azimuth, shot.elevation);
+      QCoreApplication::processEvents();
+      QVERIFY(viewport->grabFramebuffer().save(artifacts + QString("qt-1034-viewcube-%1.png").arg(shot.name)));
+    }
+    // Hovering a control highlights it.
+    viewport->SetOrientation(45.f, 35.26439f);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, state);
+    QTest::mouseMove(viewport, Px(scene.home));
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-1034-viewcube-home-hover.png"));
+    // Under a rotated UCS the compass follows the UCS.
+    state.activeUcs = ucs::RotatedAboutZ(ucs::Ucs{}, 30.0);
+    viewport->SetOrientation(CadUcsViewAzimuthOffsetDeg(state), 90.f);
+    QCoreApplication::processEvents();
+    QVERIFY(viewport->grabFramebuffer().save(artifacts + "qt-1034-viewcube-rotated-ucs.png"));
+  }
+
+  // GitHub #1034 follow-ups: the painted crosshair replaces the native cursor, and a viewport click must not
+  // rebuild the Toolspace tree (that rebuild cost ~100 ms per click).
+  void issue1034ViewportHidesNativeCursorAndClicksDoNotRebuildTheToolspace() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    auto* viewport = static_cast<EditorViewport*>(window.findChild<QOpenGLWidget*>("modelViewport"));
+    QVERIFY(viewport);
+    viewport->grabFramebuffer();
+    const auto moveTo = [viewport](const QPoint& at) {  // delivered directly: a synthetic cursor move may not arrive on the hidden desktop
+      QMouseEvent move(QEvent::MouseMove, at, viewport->mapToGlobal(at), Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+      QApplication::sendEvent(viewport, &move);
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(viewport->IsRendererReady(), 10000);
+    moveTo(QPoint(200, 300));
+    QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
+    const viewcube::Scene scene = ViewCubeSceneOf(viewport, window.State());
+    moveTo(Px(scene.center));
+    QCOMPARE(viewport->cursor().shape(), Qt::ArrowCursor);  // the ViewCube keeps a normal pointer
+    moveTo(QPoint(200, 300));
+    QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
+
+    auto* tree = window.findChild<QTreeWidget*>();
+    QVERIFY(tree && tree->topLevelItemCount() > 0);
+    const QTreeWidgetItem* first = tree->topLevelItem(0);
+    window.Refresh();
+    QCOMPARE(tree->topLevelItem(0), first);  // unchanged contents: same items
+    window.State().blockDefs.push_back({});
+    window.State().blockDefs.back().name = "BLK1034";
+    window.Refresh();
+    QVERIFY(!tree->findItems("BLK1034", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());  // a change still shows
+  }
+
   // ---- Issue #1028 / REQ-093: the Qt splash progress bar and phase label advance ----
   void issue1028SplashProgressBarAndPhaseLabelAdvanceDuringTheDisplayTime() {
     using namespace qtsplash;
@@ -6938,7 +8811,9 @@ private Q_SLOTS:
     QCOMPARE(PhaseLabelAt(qint64{kMinimumDisplayMs} * 4), phases.last());
     QCOMPARE(PhaseLabelAt(-250), phases.first());
 
-    const QPixmap backdrop = MakeBackdrop(QPixmap(QtAsset("qt-splash-bg.png")));
+    const QPixmap source(QtAsset("qt-splash-bg.png"));
+    QVERIFY(!source.isNull());
+    const QPixmap backdrop = MakeBackdrop(source);
     QCOMPARE(backdrop.size(), QSize(800, 450));
     const auto frameAt = [&](qint64 elapsedMs) {
       return MakeFrame(backdrop, ProgressAt(elapsedMs), PhaseLabelAt(elapsedMs)).toImage();
@@ -6977,6 +8852,549 @@ private Q_SLOTS:
 #endif
   }
 
+  // ---- Issue #1037 / REQ-455: PDF command tabs and continuous zoom/pan navigation ----
+  void issue1037RibbonSidePanelAndStatusBarNavigation() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "layout.pdf", pdfview::MakeSyntheticPdf(6, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1200, 800);
+    window.show();
+    auto* tabs = window.findChild<QTabWidget*>("pdfRibbon");
+    QVERIFY(tabs);
+    QStringList titles;
+    for (int i = 0; i < tabs->count(); ++i) titles << tabs->tabText(i);
+    QCOMPARE(titles, (QStringList{"Open/View", "Annotate", "Measure", "Review"}));
+    // Every command of a tab: the ribbon buttons' actions plus whatever sits in a collapsed panel's menu.
+    const auto actionsIn = [&](int tab) {
+      QStringList names;
+      for (auto* button : tabs->widget(tab)->findChildren<QToolButton*>()) {
+        if (button->defaultAction()) names << button->defaultAction()->text();
+        if (button->menu()) for (auto* action : button->menu()->actions()) names << action->text();
+      }
+      return names;
+    };
+    const QStringList expected[] = {
+      {"Open...", "Save As...", "Extract pages...", "Find...", "Side panel"},
+      {"Select", "Browse", "Text", "Line", "Rectangle", "Ellipse", "Color...", "Apply style to selected", "Undo", "Redo"},
+      {"Length", "Polyline length", "Area", "Angle", "Check", "Undo", "Redo", "Set scale...", "Snap: off"},
+      {"Extract coordinates", "Audit scale", QStringLiteral("Compare revisions\u2026")}};
+    for (int tab = 0; tab < 4; ++tab) {
+      const QStringList actual = actionsIn(tab);
+      for (const QString& name : expected[tab]) QVERIFY2(actual.contains(name), qPrintable(titles[tab] + " is missing " + name));
+    }
+    for (auto* bar : window.findChildren<QToolBar*>())
+      QVERIFY2(bar->objectName() == "pdfCommandBar" || bar->objectName() == "pdfFindBar", qPrintable(bar->objectName()));
+    QVERIFY(tabs->widget(0)->findChild<QComboBox*>("pdfLayoutBox"));
+    // Page navigation and zoom are on the bottom bar only, not in the ribbon.
+    for (const QString& name : {"Previous", "Next", "Zoom out", "Zoom in", "Fit width", "Fit page"}) QVERIFY2(!actionsIn(0).contains(name), qPrintable(name));
+    QVERIFY(!tabs->widget(0)->findChild<QSpinBox*>());
+    QVERIFY(tabs->widget(1)->findChild<QDoubleSpinBox*>("pdfAnnotationWidth"));
+    QVERIFY(tabs->widget(1)->findChild<QCheckBox*>("pdfAnnotationBold"));
+    QVERIFY(tabs->widget(2)->findChild<QPushButton*>("pdfScaleChecksButton"));
+    QVERIFY(tabs->widget(2)->findChild<QCheckBox*>("pdfShowChecks"));
+    QVERIFY(tabs->widget(3)->findChild<QToolButton*>("tool_pdfAuditScale"));
+    for (int tab = 0; tab < 4; ++tab) QVERIFY(!tabs->widget(tab)->findChildren<QLabel*>("ribbonPanelLabel").isEmpty());
+    const char* shots[] = {"open-view", "annotate", "measure", "review"};
+    for (int tab = 0; tab < 4; ++tab) {
+      tabs->setCurrentIndex(tab);
+      QTest::qWait(50);
+      QVERIFY(window.grab().save(Issue905Shot((std::string("qt-1037-tab-") + shots[tab] + ".png").c_str())));
+    }
+    tabs->setCurrentIndex(0);
+    // Side panel: three buttons that say what they are (text, not just an icon) choose the page beside them.
+    auto* strip = window.findChild<QWidget*>("pdfSideStrip");
+    auto* pages = window.findChild<QStackedWidget*>("pdfSidePages");
+    QVERIFY(strip && pages);
+    const QStringList labels{"Thumbnails", "Tool Chest", "Properties"};
+    for (int i = 0; i < 3; ++i) {
+      auto* button = strip->findChild<QToolButton*>(QString("pdfSideButton_") + QString(labels[i]).remove(' '));
+      QVERIFY2(button, qPrintable(labels[i]));
+      QCOMPARE(button->text(), labels[i]);
+      QCOMPARE(button->toolButtonStyle(), Qt::ToolButtonTextUnderIcon);
+      QVERIFY(!button->icon().isNull());
+    }
+    QCOMPARE(pages->currentIndex(), 0);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-thumbnails.png")));
+    strip->findChild<QToolButton*>("pdfSideButton_ToolChest")->click();
+    QCOMPARE(pages->currentIndex(), 1);
+    auto* chestRectangle = pages->findChild<QToolButton*>("pdfChest_Rectangle");
+    QVERIFY(chestRectangle);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-tool-chest.png")));
+    chestRectangle->click();
+    QCOMPARE(window.m_Tool, 2); // the chest button is the very same tool as the ribbon's
+    QVERIFY(Issue906Action(window, "Rectangle")->isChecked());
+    strip->findChild<QToolButton*>("pdfSideButton_Properties")->click();
+    QCOMPARE(pages->currentIndex(), 2);
+    QCOMPARE(window.findChild<QLabel*>("pdfPropFile")->text(), QString("-")); // nothing open yet
+    // Open a six-page file: the properties follow it and the page.
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.findChild<QLabel*>("pdfPropFile")->text(), QString("layout.pdf"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropPages")->text(), QString("6"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropNumber")->text(), QString("1 of 6"));
+    QVERIFY(window.findChild<QLabel*>("pdfPropSize")->text().contains(" in"));
+    QCOMPARE(window.findChild<QLabel*>("pdfPropScale")->text(), QString("Unscaled"));
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-side-properties.png")));
+    // Navigation on the bottom bar: first / previous / page box / next / last and zoom, in step with the ribbon.
+    auto* statusPage = window.statusBar()->findChild<QSpinBox*>("pdfPageNumber");
+    auto* statusZoom = window.statusBar()->findChild<QSpinBox*>("pdfZoomPercent");
+    QVERIFY(statusPage && statusZoom);
+    QCOMPARE(window.statusBar()->findChild<QLabel*>("pdfStatusPageCount")->text(), QString("of 6"));
+    QCOMPARE(statusPage->maximum(), 6);
+    for (const char* name : {"pdfFirstPage", "pdfPreviousPage", "pdfNextPage", "pdfLastPage", "pdfZoomOut", "pdfZoomIn", "pdfFitWidth", "pdfFitPage"}) {
+      auto* button = window.statusBar()->findChild<QToolButton*>(QString("pdfStatus_") + name);
+      QVERIFY2(button && !button->icon().isNull() && button->height() >= 30, name);
+    }
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfNextPage")->click();
+    QCOMPARE(window.CurrentPage(), 1);
+    QCOMPARE(statusPage->value(), 2);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfLastPage")->click();
+    QCOMPARE(window.CurrentPage(), 5);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFirstPage")->click();
+    QCOMPARE(window.CurrentPage(), 0);
+    statusPage->setValue(4);
+    QCOMPARE(window.CurrentPage(), 3);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfPreviousPage")->click();
+    QCOMPARE(window.CurrentPage(), 2);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFirstPage")->click();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    statusZoom->setValue(50);
+    QVERIFY(std::abs(window.ZoomPercent() - 50.0) < 1.0);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfZoomIn")->click();
+    QVERIFY(window.ZoomPercent() > 55.0);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.statusBar()->findChild<QToolButton*>("pdfStatus_pdfFitWidth")->click();
+    QCOMPARE(window.m_Page->width(), qRound(window.WidthAtZoomOne(0)));
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-status-navigation.png")));
+    // The side panel hides and shows from the ribbon.
+    window.findChild<QAction*>("pdfThumbnailsAction")->trigger();
+    QVERIFY(!window.findChild<QDockWidget*>("pdfThumbnails")->isVisible());
+    // Narrow window: ribbon panels collapse into menus holding the same actions; nothing is lost.
+    window.resize(560, 800);
+    tabs->setCurrentIndex(1);
+    QTest::qWait(50);
+    auto* statusMore = window.findChild<QToolButton*>("pdfStatusMore");
+    QVERIFY(statusMore && statusMore->isVisible());
+    for (const char* hiddenName : {"pdfStatus_pdfFirstPage", "pdfStatus_pdfLastPage", "pdfStatus_pdfFitPage"})
+      QVERIFY(!window.findChild<QToolButton*>(hiddenName)->isVisible());
+    QVERIFY(window.statusBar()->grab().save(Issue905Shot("qt-1037-status-narrow.png")));
+    QList<QWidget*> statusControls;
+    for (const char* name : {"pdfActiveTool", "pdfStatusPageLabel", "pdfPageNumber", "pdfStatusPageCount",
+                             "pdfStatus_pdfPreviousPage", "pdfStatus_pdfNextPage", "pdfStatus_pdfZoomOut",
+                             "pdfZoomPercent", "pdfStatus_pdfZoomIn", "pdfStatus_pdfFitWidth", "pdfStatusMore"}) {
+      auto* control = window.statusBar()->findChild<QWidget*>(name);
+      QVERIFY(control);
+      if (control->isVisible()) statusControls << control;
+    }
+    std::sort(statusControls.begin(), statusControls.end(), [](QWidget* a, QWidget* b) { return a->x() < b->x(); });
+    for (int i = 1; i < statusControls.size(); ++i)
+      QVERIFY2(statusControls[i - 1]->geometry().right() < statusControls[i]->geometry().left(),
+               qPrintable(statusControls[i - 1]->objectName() + " overlaps " + statusControls[i]->objectName()));
+    auto* annotatePage = dynamic_cast<pdfribbon::Page*>(tabs->widget(1));
+    QVERIFY(annotatePage);
+    annotatePage->setFixedWidth(90); // force every collapsed panel into the More menu
+    annotatePage->Fit();
+    QTest::qWait(50);
+    QVERIFY(actionsIn(1).contains("Rectangle") && actionsIn(1).contains("Color..."));
+    auto* more = tabs->widget(1)->findChild<QToolButton*>("pdfRibbonMore");
+    QVERIFY(more);
+    QVERIFY2(more->isVisible(), qPrintable(QString("page width %1, hidden %2, overflow entries %3")
+        .arg(annotatePage->width()).arg(more->isHidden()).arg(more->menu()->actions().size())));
+    QVERIFY(more->menu());
+    const auto overflowPanels = more->menu()->actions();
+    QVERIFY(!overflowPanels.isEmpty());
+    QStringList overflowActionTexts;
+    QMenu* annotationOverflowMenu = nullptr;
+    for (auto* panelAction : overflowPanels) if (panelAction->menu()) {
+      for (auto* action : panelAction->menu()->actions()) {
+        overflowActionTexts << action->text();
+        if (action->text() == "Rectangle") annotationOverflowMenu = panelAction->menu();
+      }
+    }
+    QVERIFY2(overflowActionTexts.contains("Rectangle") && overflowActionTexts.contains("Color..."),
+             qPrintable(overflowActionTexts.join(", ")));
+    auto* overflowPanelMenu = annotationOverflowMenu;
+    QVERIFY(overflowPanelMenu);
+    overflowPanelMenu->popup(QPoint(120, 120));
+    QTRY_VERIFY_WITH_TIMEOUT(overflowPanelMenu->isVisible(), 1000);
+    QVERIFY(overflowPanelMenu->grab().save(Issue905Shot("qt-1037-ribbon-overflow-actions.png")));
+    overflowPanelMenu->hide();
+    QVERIFY(annotatePage->grab().save(Issue905Shot("qt-1037-ribbon-narrow.png")));
+    bool mirroredWidth = false;
+    for (auto* button : tabs->widget(1)->findChildren<QToolButton*>())
+      if (button->menu() && button->objectName().contains("Style"))
+        for (auto* action : button->menu()->actions())
+          if (auto* widgetAction = qobject_cast<QWidgetAction*>(action))
+            if (qobject_cast<QDoubleSpinBox*>(widgetAction->defaultWidget())) mirroredWidth = true;
+    QVERIFY(mirroredWidth);
+  }
+
+  void issue1037ContinuousLayoutScrollsAndStaysSynchronized() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "continuous.pdf", pdfview::MakeSyntheticPdf(8, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.CurrentLayout(), PdfWindow::Layout::PageByPage); // the default keeps the existing behaviour
+    auto* spin = window.findChild<QSpinBox*>("pdfPageNumber");
+    auto* bar = window.m_Scroll->verticalScrollBar();
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    QCOMPARE(window.findChild<QComboBox*>("pdfLayoutBox")->currentIndex(), 1);
+    QCOMPARE(window.m_PageTop.size(), std::size_t(8));
+    int stack = PdfWindow::kPageGap;
+    for (int page = 0; page < 8; ++page) stack += window.m_PageHpx[static_cast<std::size_t>(page)] + PdfWindow::kPageGap;
+    QCOMPARE(window.m_Page->height(), stack);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 10000);
+    // Scrolling: the page in the middle of the view becomes the current page; the strip follows.
+    bar->setValue(window.m_PageTop[4]);
+    QCOMPARE(spin->value(), 5);
+    QCOMPARE(window.m_ThumbView->currentIndex().row(), 4);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(4) == 1, 10000);
+    // Choosing a page scrolls it to the top and the box keeps it.
+    window.ScrollToPage(2);
+    QCOMPARE(spin->value(), 3);
+    QCOMPARE(bar->value(), window.m_PageTop[2] - PdfWindow::kPageGap);
+    spin->setValue(7);
+    QCOMPARE(window.CurrentPage(), 6);
+    QCOMPARE(bar->value(), std::min(bar->maximum(), window.m_PageTop[6] - PdfWindow::kPageGap));
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(spin->value(), 1);
+    QCOMPARE(bar->value(), 0);
+    QTest::keyClick(&window, Qt::Key_PageDown);
+    QCOMPARE(spin->value(), 2);
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(spin->value(), 8);
+    QTest::keyClick(&window, Qt::Key_PageUp);
+    QCOMPARE(spin->value(), 7);
+    // The plain wheel scrolls the document continuously.
+    window.ScrollToPage(0);
+    const int before = bar->value();
+    Issue1037Wheel(window.m_Page, QPoint(300, 200), -120, Qt::NoModifier);
+    QVERIFY(bar->value() > before);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 10000);
+    QVERIFY(window.grab().save(Issue905Shot("qt-1037-continuous.png")));
+    // Back to one page: the page is kept and drawn again.
+    window.ScrollToPage(3);
+    window.SetLayout(PdfWindow::Layout::PageByPage);
+    QCOMPARE(spin->value(), 4);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    QCOMPARE(spin->value(), 4);
+    QCOMPARE(bar->value(), std::min(bar->maximum(), window.m_PageTop[3] - PdfWindow::kPageGap));
+  }
+
+  void issue1037CtrlWheelZoomKeepsThePointerAnchored() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "zoom.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      auto* viewport = window.m_Scroll->viewport();
+      const QPoint pointer(viewport->width() / 3, viewport->height() / 2);
+      for (const int notches : {2, 2, -1}) {
+        const double zoomBefore = window.m_Zoom;
+        const auto anchor = window.CaptureAnchor(pointer);
+        const QPoint onCanvas = window.m_Page->mapFrom(viewport, pointer);
+        Issue1037Wheel(window.m_Page, onCanvas, notches * 120, Qt::ControlModifier);
+        QVERIFY2((notches > 0) == (window.m_Zoom > zoomBefore), "Ctrl+wheel changes the zoom the right way");
+        // The page point that was under the pointer is still under it, within a pixel.
+        const QRect rect = window.PageRect(anchor.page);
+        const QPointF expected(rect.x() + anchor.fx * rect.width(), rect.y() + anchor.fy * rect.height());
+        const QPoint actual = window.m_Page->mapFrom(viewport, pointer);
+        const auto stopped = [](const QScrollBar* scrollBar) { return scrollBar->value() == 0 || scrollBar->value() == scrollBar->maximum(); };
+        if (!stopped(window.m_Scroll->horizontalScrollBar()))
+          QVERIFY2(std::abs(expected.x() - actual.x()) <= 1.0, qPrintable(QString("anchor moved sideways: expected %1 got %2").arg(expected.x()).arg(actual.x())));
+        if (!stopped(window.m_Scroll->verticalScrollBar()))
+          QVERIFY2(std::abs(expected.y() - actual.y()) <= 1.0, qPrintable(QString("anchor moved vertically: expected %1 got %2").arg(expected.y()).arg(actual.y())));
+        QCOMPARE(window.m_ZoomBox->value(), std::clamp(qRound(window.ZoomPercent()), 5, 1000));
+      }
+      QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-zoomed-continuous.png" : "qt-1037-zoomed-page.png")));
+    }
+  }
+
+  void issue1037MiddleDragPansWithoutTouchingTools() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "pan.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetZoomPercent(200);
+      if (layout == PdfWindow::Layout::PageByPage) QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      auto* canvas = window.m_Page;
+      auto* h = window.m_Scroll->horizontalScrollBar();
+      auto* v = window.m_Scroll->verticalScrollBar();
+      QVERIFY(h->maximum() > 100 && v->maximum() > 100);
+      h->setValue(150); v->setValue(300);
+      for (const char* tool : {"Rectangle", "Length", "Select"}) {
+        Issue906Action(window, tool)->trigger();
+        // A Length measurement is mid-pick: one point is down.
+        if (QString(tool) == "Length") {
+          QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, canvas->mapFromGlobal(window.m_Scroll->viewport()->mapToGlobal(QPoint(200, 200))));
+          QCOMPARE(window.m_Draft.size(), std::size_t(1));
+        }
+        const auto draft = window.m_Draft;
+        const int tool0 = window.m_Tool;
+        const int selected = window.m_SelectedAnnotation;
+        const QPoint start = window.m_Scroll->viewport()->mapToGlobal(QPoint(400, 300));
+        const int hStart = h->value(), vStart = v->value();
+        Issue1037MouseGlobal(canvas, QEvent::MouseButtonPress, start, Qt::MiddleButton, Qt::MiddleButton);
+        QCOMPARE(canvas->cursor().shape(), Qt::ClosedHandCursor);
+        Issue1037MouseGlobal(canvas, QEvent::MouseMove, start + QPoint(-40, -25), Qt::NoButton, Qt::MiddleButton);
+        QCOMPARE(h->value(), hStart + 40);
+        QCOMPARE(v->value(), vStart + 25);
+        if (QString(tool) == "Select") QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-pan-continuous.png" : "qt-1037-pan-page.png")));
+        Issue1037MouseGlobal(canvas, QEvent::MouseButtonRelease, start + QPoint(-40, -25), Qt::MiddleButton, Qt::NoButton);
+        QVERIFY(canvas->cursor().shape() != Qt::ClosedHandCursor);
+        QVERIFY(window.m_Annotations.Items().empty());
+        QCOMPARE(window.m_Draft, draft);
+        QCOMPARE(window.m_Tool, tool0);
+        QCOMPARE(window.m_SelectedAnnotation, selected);
+        QVERIFY(!window.HasUnsavedChanges());
+        QVERIFY(!window.m_ExtractDragging);
+        window.m_Draft.clear();
+        h->setValue(150); v->setValue(300);
+      }
+      // The margin around the page pans as well (the viewport itself, outside the canvas).
+      const int vBefore = v->value();
+      const QPoint start = window.m_Scroll->viewport()->mapToGlobal(QPoint(5, 300));
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseButtonPress, start, Qt::MiddleButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseMove, start + QPoint(0, -30), Qt::NoButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(window.m_Scroll->viewport(), QEvent::MouseButtonRelease, start + QPoint(0, -30), Qt::MiddleButton, Qt::NoButton);
+      QCOMPARE(v->value(), vBefore + 30);
+
+      Issue906Action(window, "Extract coordinates")->trigger();
+      QVERIFY(window.m_ExtractMode);
+      const QPoint extractPanStart = window.m_Scroll->viewport()->mapToGlobal(QPoint(400, 300));
+      Issue1037MouseGlobal(canvas, QEvent::MouseButtonPress, extractPanStart, Qt::MiddleButton, Qt::MiddleButton);
+      QCOMPARE(canvas->cursor().shape(), Qt::ClosedHandCursor);
+      Issue1037MouseGlobal(canvas, QEvent::MouseMove, extractPanStart + QPoint(-25, -15), Qt::NoButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(canvas, QEvent::MouseButtonRelease, extractPanStart + QPoint(-25, -15), Qt::MiddleButton, Qt::NoButton);
+      QVERIFY(window.m_ExtractMode);
+      QVERIFY(!window.m_ExtractDragging); // a pan while extraction is armed does not start a selection
+      window.BeginExtract(QPointF(200, 200), Qt::LeftButton);
+      QVERIFY(window.m_ExtractDragging);
+      const QPoint duringExtract = window.m_Scroll->viewport()->mapToGlobal(QPoint(420, 320));
+      Issue1037MouseGlobal(canvas, QEvent::MouseButtonPress, duringExtract, Qt::MiddleButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(canvas, QEvent::MouseMove, duringExtract + QPoint(-20, -10), Qt::NoButton, Qt::MiddleButton);
+      Issue1037MouseGlobal(canvas, QEvent::MouseButtonRelease, duringExtract + QPoint(-20, -10), Qt::MiddleButton, Qt::NoButton);
+      QVERIFY(window.m_ExtractMode);
+      QVERIFY(window.m_ExtractDragging); // and a pan never ends the active extraction drag
+      window.m_ExtractMode = false; window.m_ExtractDragging = false;
+    }
+  }
+
+  void issue1037FitWidthFitPageTypedPercentAndKeyboard() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "fit.pdf", pdfview::MakeSyntheticPdf(5, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    auto* viewport = window.m_Scroll->viewport();
+    window.FitPage();
+    QVERIFY(window.m_Page->height() <= viewport->height());
+    QVERIFY(window.m_Page->width() <= viewport->width());
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.findChild<QAction*>("pdfFitWidth")->trigger();
+    QCOMPARE(window.m_Page->width(), qRound(window.WidthAtZoomOne(0)));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    // A typed percentage is a percentage of the page's actual size at 96 dpi.
+    window.m_ZoomBox->setValue(100);
+    const double wPt = window.m_Document->Sizes()[0].wPt;
+    QVERIFY(std::abs(window.m_Page->width() - wPt * 96.0 / 72.0) <= 1.5);
+    QVERIFY(std::abs(window.ZoomPercent() - 100.0) < 0.5);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.m_ZoomBox->setValue(50);
+    QVERIFY(std::abs(window.m_Page->width() - wPt * 96.0 / 72.0 / 2.0) <= 1.5);
+    // Keyboard page navigation in the single-page layout.
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    auto* spin = window.findChild<QSpinBox*>("pdfPageNumber");
+    QTest::keyClick(&window, Qt::Key_PageDown);
+    QCOMPARE(spin->value(), 2);
+    QTest::keyClick(&window, Qt::Key_End);
+    QCOMPARE(spin->value(), 5);
+    QTest::keyClick(&window, Qt::Key_PageUp);
+    QCOMPARE(spin->value(), 4);
+    QTest::keyClick(&window, Qt::Key_Home);
+    QCOMPARE(spin->value(), 1);
+    // Continuous: fit page puts the whole page in view, fit width spans the view.
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    window.FitPage();
+    QVERIFY(window.m_PageHpx[0] <= viewport->height());
+    window.FitWidth();
+    QCOMPARE(window.m_PageWpx[0], qRound(window.WidthAtZoomOne(0)));
+  }
+
+  void issue1037ContinuousLayoutAnnotatesTheSecondPage() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "second.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    window.ScrollToPage(1);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(1) == 1, 10000);
+    Issue906Action(window, "Rectangle")->trigger();
+    const QRect second = window.PageRect(1);
+    const QPoint first(second.left() + 100, second.top() + 150), last(second.left() + 300, second.top() + 350);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, first);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, last);
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+    const auto& made = window.m_Annotations.Items()[0];
+    QCOMPARE(made.page, 1); // the page under the pointer, not the page box
+    const auto size = window.m_Document->Sizes()[1];
+    QVERIFY(std::abs(made.x0 - 100.0 * size.wPt / second.width()) < 0.5);
+    QVERIFY(std::abs(made.y0 - (second.height() - 150.0) * size.hPt / second.height()) < 0.5);
+    // Paint at a deterministic 1x scale through the production strip renderer so antialiasing does
+    // not depend on the host display's device-pixel ratio.
+    QImage shot(window.m_Page->size(), QImage::Format_ARGB32_Premultiplied);
+    shot.fill(Qt::transparent);
+    {
+      QPainter painter(&shot);
+      QVERIFY(window.PaintStrip(painter, window.m_Page->rect()));
+    }
+    QVERIFY(shot.save(Issue905Shot("qt-1037-second-page.png")));
+    const auto hasRedInk = [&](const QRect& rect) {
+      const QImage page = shot.copy(rect);
+      for (int y = 0; y < page.height(); ++y) {
+        for (int x = 0; x < page.width(); ++x) {
+          const QColor pixel = page.pixelColor(x, y);
+          // A one-DIP outline at 1x blends with white; test its red hue instead of requiring a
+          // pixel nearly equal to pure red as a higher-DPI capture might produce.
+          if (pixel.red() >= 200 && pixel.red() - pixel.green() >= 20 && pixel.red() - pixel.blue() >= 20) return true;
+        }
+      }
+      return false;
+    };
+    QVERIFY(hasRedInk(second));
+    QVERIFY(!hasRedInk(window.PageRect(0)));
+    QVERIFY(!hasRedInk(window.PageRect(2)));
+    // A pick on one page and a click on another do not mix: the draft restarts on the new page.
+    Issue906Action(window, "Line")->trigger();
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(second.left() + 50, second.top() + 50));
+    QCOMPARE(window.m_Draft.size(), std::size_t(1));
+    const QRect third = window.PageRect(2);
+    QTest::mouseClick(window.m_Page, Qt::LeftButton, Qt::NoModifier, QPoint(third.left() + 60, third.top() + 60));
+    QCOMPARE(window.m_Annotations.Items().size(), std::size_t(1));
+    QCOMPARE(window.m_Draft.size(), std::size_t(1));
+    QCOMPARE(window.m_DraftPage, 2);
+    QVERIFY(window.HasUnsavedChanges());
+  }
+
+  void issue1037ZoomReaches1000PercentByDrawingOnlyTheViewedWindow() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "big.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    for (const auto layout : {PdfWindow::Layout::PageByPage, PdfWindow::Layout::Continuous}) {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(layout);
+      window.SetZoomPercent(1000);
+      QVERIFY2(std::abs(window.ZoomPercent() - 1000.0) < 1.0, qPrintable(QString::number(window.ZoomPercent())));
+      QVERIFY(window.m_Page->width() > 8000); // far past the old 4096 pixel cap
+      // Zooming further is refused at the limit; the box shows it.
+      window.ZoomBy(2.0, window.m_Scroll->viewport()->rect().center());
+      QVERIFY(window.ZoomPercent() <= 1001.0);
+      // Only the window around the view is drawn, and it covers the view.
+      if (layout == PdfWindow::Layout::PageByPage) {
+        QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull() && window.PageWindowCovers(), 20000);
+        QVERIFY(window.m_Page->image.width() < window.m_Page->width() / 2);
+        // Scrolling away redraws the window around the new view.
+        window.m_Scroll->verticalScrollBar()->setValue(window.m_Scroll->verticalScrollBar()->maximum() / 2);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.PageWindowCovers(), 20000);
+      } else {
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(0) == 1, 20000);
+        QVERIFY(window.m_StripCache[0].width() < window.PageRect(0).width() / 2);
+        window.m_Scroll->verticalScrollBar()->setValue(window.m_Scroll->verticalScrollBar()->maximum() / 3);
+        QTRY_VERIFY_WITH_TIMEOUT(!window.m_StripCache.empty(), 20000);
+      }
+      QVERIFY(window.grab().save(Issue905Shot(layout == PdfWindow::Layout::Continuous ? "qt-1037-1000-continuous.png" : "qt-1037-1000-page.png")));
+      window.SetZoomPercent(5);
+      QVERIFY(std::abs(window.ZoomPercent() - 5.0) < 0.6);
+    }
+  }
+
+  void issue1037RenderCacheStaysBoundedAndCloseWaitsForTheWorker() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "long.pdf", pdfview::MakeSyntheticPdf(40, 3, 0));
+    {
+      PdfWindow window(nullptr);
+      window.resize(1000, 800);
+      window.show();
+      QString error;
+      QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+      QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+      window.SetLayout(PdfWindow::Layout::Continuous);
+      window.SetZoom(4.0, window.m_Scroll->viewport()->rect().center()); // huge pages: a few of them exceed the cap
+      for (int page = 0; page < 10; ++page) {
+        window.ScrollToPage(page);
+        QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(page) == 1, 20000);
+        std::size_t outside = 0;
+        const auto [first, last] = window.VisiblePages();
+        for (const auto& entry : window.m_StripCache)
+          if (entry.first < first || entry.first > last) outside += static_cast<std::size_t>(entry.second.sizeInBytes());
+        QVERIFY2(outside <= PdfWindow::kStripCacheBytes, "pages outside the view stay within the cap");
+      }
+      // The cache is byte-bounded, not entry-bounded; visible pages can keep ten or more images.
+      window.ScrollToPage(30); // a render is now in flight; the window is destroyed while it runs
+    }
+  }
+
+  void issue1037PageByPageWheelScrollsAndAStaleRenderIsCancelled() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "wheel.pdf", pdfview::MakeSyntheticPdf(3, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    // REQ-455 clause 3: in page-by-page the plain wheel scrolls within the page and never changes the zoom.
+    window.SetZoomPercent(300);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    const double zoom = window.ZoomPercent();
+    const int before = window.m_Scroll->verticalScrollBar()->value();
+    Issue1037Wheel(window.m_Scroll->viewport(), QPoint(300, 200), -120, Qt::NoModifier);
+    QVERIFY(window.m_Scroll->verticalScrollBar()->value() > before);
+    QCOMPARE(window.ZoomPercent(), zoom);
+    // REQ-455 clause 8: a render whose view has changed is cancelled and redone for the new view.
+    {
+      std::unique_lock<std::recursive_mutex> hold(pdfview::PdfiumMutex()); // the worker cannot finish while this is held
+      window.SetZoomPercent(150);
+      QTRY_VERIFY_WITH_TIMEOUT(window.IsBusy(), 5000); // the render starts once the zooming settles
+      window.SetZoomPercent(200);
+      QVERIFY(window.m_Cancel.load());
+      QVERIFY(window.m_Pending);
+    }
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && !window.m_Page->image.isNull(), 10000);
+    QCOMPARE(window.m_Page->imageFull, window.RenderPx(window.CurrentPage()));
+  }
+
   // ---- Issue #905 / REQ-429: PDF find bar and thumbnail strip ----
   void pdfFindBarSearchesStepsWrapsAndDoesNotTouchAnnotations() {
     QTemporaryDir directory;
@@ -6990,7 +9408,7 @@ private Q_SLOTS:
     auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
     auto* status = window.findChild<QLabel*>("pdfFindStatus");
     auto* matchCase = window.findChild<QCheckBox*>("pdfFindMatchCase");
-    auto* spin = window.findChild<QSpinBox*>();
+    auto* spin = window.findChild<QSpinBox*>("pdfPageNumber");
     QVERIFY(bar && edit && status && matchCase && spin);
     QVERIFY(!bar->isVisible());
 
@@ -7048,6 +9466,47 @@ private Q_SLOTS:
     QVERIFY(window.HasUnsavedChanges());
   }
 
+  void issue1037ContinuousSearchAndSnapOnLaterPage() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "later-page.pdf", pdfview::MakeSyntheticPdf(12, 3, 0));
+    PdfWindow window(nullptr);
+    window.resize(1000, 800);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.SetLayout(PdfWindow::Layout::Continuous);
+    auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
+    auto* status = window.findChild<QLabel*>("pdfFindStatus");
+    auto* spin = window.findChild<QSpinBox*>("pdfPageNumber");
+    auto* canvas = window.findChild<QWidget*>("pdfCanvas");
+    QVERIFY(edit && status && spin && canvas);
+    edit->setText("Page 10");
+    QTest::keyClick(edit, Qt::Key_Return);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsSearching() && status->text() == "1 of 1", 10000);
+    QCOMPARE(spin->value(), 10);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Scroll->verticalScrollBar()->value() ==
+        std::min(window.m_Scroll->verticalScrollBar()->maximum(), window.m_PageTop[9] - PdfWindow::kPageGap), 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_StripCache.count(9) == 1, 10000);
+    QTRY_VERIFY_WITH_TIMEOUT(Issue905HasHighlight(canvas->grab().toImage()), 10000);
+
+    auto laterPageSnap = std::make_shared<pdfview::SnapIndex>();
+    laterPageSnap->Build({{53.f, 103.f, 3.f}});
+    window.m_SnapPages[9].started = true;
+    window.m_SnapPages[9].index = std::move(laterPageSnap);
+    window.m_SnapOn = true;
+    window.SetTool(static_cast<int>(pdfview::Annot::Kind::Line), QString());
+    {
+      PdfWindow::PageScope scope(window, 9);
+      const auto size = window.m_Document->Sizes()[9];
+      const double pixelsPerPoint = static_cast<double>(window.PageWidthPx()) / size.wPt;
+      window.UpdateSnap(QPointF(53.0 * pixelsPerPoint,
+                                (size.hPt - 103.0) * pixelsPerPoint));
+    }
+    QVERIFY(window.m_SnapHit);
+    QTRY_VERIFY_WITH_TIMEOUT(Issue906HasSnapMarker(canvas->grab().toImage()), 10000);
+  }
+
   void pdfFindBarReportsNoTextAndCancel() {
     QTemporaryDir directory;
     // A page with line work only: no text layer, like a scan.
@@ -7098,7 +9557,7 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 20000);
     auto* list = window.findChild<QListView*>("pdfThumbnailList");
     auto* dock = window.findChild<QDockWidget*>("pdfThumbnails");
-    auto* spin = window.findChild<QSpinBox*>();
+    auto* spin = window.findChild<QSpinBox*>("pdfPageNumber");
     QVERIFY(list && dock && spin);
     QVERIFY(dock->isVisible()); // shown by default
     QCOMPARE(list->model()->rowCount(), 500);
@@ -7156,7 +9615,7 @@ private Q_SLOTS:
     QVERIFY(list);
     QCOMPARE(list->model()->rowCount(), 6);
     const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
-    QVERIFY(lastVisible >= 3); // the unreadable page 3 is on screen
+    QVERIFY(lastVisible >= 2); // the unreadable page 3 (row 2) is on screen
     QTRY_COMPARE_WITH_TIMEOUT(window.ThumbnailsKept(), lastVisible, 20000); // every visible page but page 3 (rows 0..lastVisible)
     QTest::qWait(300);
     QCOMPARE(window.ThumbnailsKept(), lastVisible);
@@ -7168,11 +9627,15 @@ private Q_SLOTS:
   void qtPdfSearchAndThumbnailScreenshotEvidenceForIssue905() {
     QTemporaryDir directory;
     PdfWindow window(nullptr);
-    window.resize(1000, 860); // the PDF window has two more toolbar rows since #906, so it needs the height to show four thumbnails
+    window.resize(1000, 860);
     window.show();
     QString error;
     QVERIFY2(window.LoadFile(Issue905WritePdf(directory, "evidence.pdf", pdfview::MakeSyntheticPdf(24, 60, 6)), error), qPrintable(error));
-    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= 4, 20000);
+    auto* list = window.findChild<QListView*>("pdfThumbnailList");
+    QVERIFY(list);
+    const int lastVisible = list->indexAt({4, list->viewport()->height() - 4}).row();
+    QVERIFY(lastVisible >= 0);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy() && window.ThumbnailsKept() >= lastVisible + 1, 20000);
     QVERIFY(window.grab().save(Issue905Shot("qt-905-final-thumbnails.png"))); // find bar closed
     window.findChild<QAction*>("pdfFindAction")->trigger();
     auto* edit = window.findChild<QLineEdit*>("pdfFindEdit");
@@ -7245,7 +9708,7 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
     window.m_Compare = std::make_unique<PdfWindow::CompareSession>();
     window.m_Compare->source = revisionPath;
-    window.m_CompareDialog->show();
+    window.ShowComparePanel();
     window.StartCompare(true);
     QTRY_VERIFY_WITH_TIMEOUT(window.m_Compare && !window.m_Compare->busy, 30000);
     QVERIFY(window.m_Compare->revision);
@@ -7253,8 +9716,17 @@ private Q_SLOTS:
     QVERIFY(window.m_Compare->haveChanges);
     QVERIFY(!window.m_Compare->changes.empty());
     QCOMPARE(window.findChild<QTableWidget*>("pdfCompareChanges")->rowCount(), static_cast<int>(window.m_Compare->changes.size()));
+    // Zoomed well past the comparison images' own resolution, the Revision view gets a sharp picture of what is on screen.
+    window.SetZoomPercent(600);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+    window.m_CompareMode->setCurrentIndex(3);
+    QTRY_VERIFY_WITH_TIMEOUT(!window.m_CompareDetailImage.isNull(), 20000);
+    QCOMPARE(window.m_CompareDetailPageWidthPx, window.PageWidthPx());
+    QVERIFY(!window.m_CompareDetailMarks.isNull()); // the Tint view's red and blue marks are redrawn sharp too
+    window.SetZoomPercent(100);
+    window.m_CompareMode->setCurrentIndex(0);
     QVERIFY(window.grab().save(Issue908Shot("qt-908-compare-overlay.png")));
-    QVERIFY(window.findChild<QDialog*>("pdfCompareDialog")->grab().save(Issue908Shot("qt-908-compare-controls.png")));
+    QVERIFY(window.findChild<QWidget*>("pdfComparePanel")->grab().save(Issue908Shot("qt-908-compare-controls.png")));
 
     // One matching point and two matching points both use Qt's Base / Revision page picking sequence.
     window.findChild<QPushButton*>("pdfComparePickOne")->click();
@@ -7293,6 +9765,22 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(!window.m_Compare->busy, 10000);
     QVERIFY(window.m_CompareStatus->text().contains("Could not open the revision"));
     QVERIFY(window.m_Compare->overlay.isNull());
+  }
+
+  void issue1037CompareDetailKeepsRevisionWhenDetailMarksFail() {
+    PdfWindow::CompareDetail detail;
+    detail.bitmap.w = 2; detail.bitmap.h = 1; detail.bitmap.bgra = {1, 2, 3, 4, 5, 6, 7, 8};
+    detail.marks.w = 2; detail.marks.h = 1; detail.marks.bgra = {9, 10, 11, 12};
+    detail.redMarks = detail.marks;
+    QVERIFY(PdfWindow::KeepCompareRevisionWhenMarksFail(detail, false));
+    QCOMPARE(detail.bitmap.w, 2);
+    QCOMPARE(detail.bitmap.bgra, (std::vector<std::uint8_t>{1, 2, 3, 4, 5, 6, 7, 8}));
+    QVERIFY(detail.marks.bgra.empty() && detail.redMarks.bgra.empty());
+    QVERIFY(detail.failed);
+
+    QVERIFY(!PdfWindow::KeepCompareRevisionWhenMarksFail(detail, true));
+    QCOMPARE(detail.bitmap.w, 0); // cancellation discards stale revision pixels
+    QVERIFY(!detail.failed);
   }
 
   void qtPdfCompareAndAuditDeepNavyScreenshotsForIssue908() {
@@ -7336,10 +9824,10 @@ private Q_SLOTS:
     QTRY_VERIFY_WITH_TIMEOUT(!compareWindow.IsBusy(), 10000);
     compareWindow.m_Compare = std::make_unique<PdfWindow::CompareSession>();
     compareWindow.m_Compare->source = revisionPath;
-    compareWindow.m_CompareDialog->show();
+    compareWindow.ShowComparePanel();
     compareWindow.StartCompare(true);
     QTRY_VERIFY_WITH_TIMEOUT(compareWindow.m_Compare && !compareWindow.m_Compare->busy && compareWindow.m_Compare->haveChanges, 30000);
-    auto* compareDialog = compareWindow.findChild<QDialog*>("pdfCompareDialog");
+    auto* compareDialog = compareWindow.findChild<QWidget*>("pdfComparePanel");
     QVERIFY(compareDialog);
     QVERIFY(saveComposite(compareWindow, compareDialog, Issue908Shot("qt-908-compare-deep-navy.png")));
   }
@@ -7353,7 +9841,7 @@ private Q_SLOTS:
     PdfWindow& window = *holder;
     auto* label = window.findChild<QLabel*>("pdfScaleLabel");
     auto* setScale = window.findChild<QAction*>("pdfSetScaleAction");
-    auto* pageBox = window.findChild<QSpinBox*>();
+    auto* pageBox = window.findChild<QSpinBox*>("pdfPageNumber");
     QVERIFY(label && setScale && pageBox);
     QCOMPARE(label->text(), QString("Unscaled"));
     QVERIFY(!window.HasUnsavedChanges());
@@ -9460,6 +11948,40 @@ private Q_SLOTS:
     QCOMPARE(CanUndo(window.State()), couldUndo);
   }
 
+  void newlyCreatedSurfaceDisplaysWithoutAnotherCommand() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    auto& st = window.State();
+    Issue893Fixture(st, false);
+    auto* viewport = window.findChild<QOpenGLWidget*>("modelViewport");
+    QVERIFY(viewport);
+    window.Submit("ZOOMEXTENTS");
+    QTest::qWait(100);
+    QVERIFY(viewport->grabFramebuffer().save(Issue893Shot("qt-1080-before-create.png")));
+
+    window.Submit("SURFACECREATE First surface, Ground");
+    QCOMPARE(st.cadSurfaces.size(), size_t(1));
+    QVERIFY(st.cadSurfaces[0].tin);
+    // Paint without another command/undo snapshot: that used to leave id zero forever.
+    const QImage created = viewport->grabFramebuffer();
+    QVERIFY(created.save(Issue893Shot("qt-1080-created.png")));
+    QCOMPARE(st.cadSurfaceAttrs.size(), size_t(1));
+    QVERIFY(st.cadSurfaceAttrs[0].id != 0);
+    QVERIFY(!st.surfaceDisplayGeometry.empty());
+    QCOMPARE(st.surfaceDisplayCache.size(), size_t(1));
+    const auto id = st.cadSurfaceAttrs[0].id;
+    const auto nextId = st.nextEntityId;
+    const auto regenerations = st.surfaceDisplayRegenCount;
+    for (int i = 0; i < 3; ++i) {
+      QVERIFY(!viewport->grabFramebuffer().isNull());
+      QCOMPARE(st.cadSurfaceAttrs[0].id, id);
+      QCOMPARE(st.nextEntityId, nextId);
+      QCOMPARE(st.surfaceDisplayRegenCount, regenerations);
+    }
+  }
+
   void homeSurfacesCreatedSurfaceSurvivesSaveAndReopen() {
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
@@ -9834,10 +12356,17 @@ private Q_SLOTS:
 };
 
 int main(int argc, char** argv) {
+  int minidumpWriterExitCode = 1;
+  if (crashReporter::RunMinidumpWriterMode(minidumpWriterExitCode))
+    return minidumpWriterExitCode;
+
   QSurfaceFormat format;
   format.setVersion(3, 3); format.setProfile(QSurfaceFormat::CoreProfile);
   format.setDepthBufferSize(24); format.setStencilBufferSize(8);
   QSurfaceFormat::setDefaultFormat(format);
+  // GUI tests run on a hidden desktop and inspect dialogs as Qt widgets. Avoid
+  // platform-native dialogs, which are not reliably discoverable there.
+  QApplication::setAttribute(Qt::AA_DontUseNativeDialogs);
   QApplication app(argc, argv);
   app.setOrganizationName("GoSurveyTests");
   const QString shard = qEnvironmentVariable("GOSURVEY_QT_TEST_SHARD");

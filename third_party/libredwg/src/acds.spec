@@ -22,6 +22,15 @@
   static char _AcDs_Schema_Prop_types[] = {0, 0, 2, 1, 2, 4, 8, 1, 2, 4, 8, 4, 8, 0, 0, 0};
 
   DECODER {
+    if (dat->size)
+      {
+        _obj->raw_data = (BITCODE_RC *)malloc (dat->size);
+        if (_obj->raw_data)
+          {
+            memcpy (_obj->raw_data, dat->chain, dat->size);
+            _obj->raw_size = dat->size;
+          }
+      }
     LOG_TRACE ("unknown_bits [%" PRIuSIZE " (%u,%d,%d) %" PRIuSIZE " TF]: ", dat->size * 8,
                0, 0, 0, dat->size);
     LOG_TRACE_TF (dat->chain, (int)dat->size);
@@ -267,11 +276,7 @@
                     SUB_FIELD_RL (prop,unknown_2, 0)
                   }
                 SUB_FIELD_RS (prop,num_values, 0);
-                if (_obj->prop.type_size)
-                  {
-                    SUB_FIELD_VECTOR_TYPESIZE (prop, values, num_values,
-                                               _obj->prop.type_size, 0);
-                  }
+                /* Schema property values are not represented in Dwg_AcDs yet. */
             END_REPEAT_BLOCK
 #undef prop
             END_REPEAT (schdat.schemas[rcount2].props)

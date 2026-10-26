@@ -19,6 +19,33 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.7.7
+
+**Updating GoSurvey**
+- When moving an older Program Files installation to your user profile, GoSurvey now recognizes and removes the old version so the Start Menu opens the updated copy.
+- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
+
+---
+
+## 0.7.6
+
+**Paper-space viewport state**
+- Paper-space viewports now keep their camera, UCS, layer color overrides, and independent annotation
+  scale when you save and reopen R2018 DWG or DXF drawings. Set a viewport's scale independently
+  from zoom; new viewports start with the drawing's current annotation scale.
+
+**Installer**
+- The PowerShell install command now recognizes published stable releases and continues with setup.
+
+---
+
+## 0.7.5
+
+**Moving GoSurvey to your user profile**
+- GoSurvey now installs under `%LOCALAPPDATA%\Programs\GoSurvey`. Updating from Program Files moves
+  the old copy after one Windows approval and keeps your settings and user data. Future updates use
+  the per-user install and do not need elevation.
+
 ## 0.7.4
 
 **Traverse Editor: unit scaling, ground-to-grid, curvature and refraction, and a new LSA
@@ -58,8 +85,8 @@ adjuster — new**
   confirm against — if you hit an issue importing one, please send us the file.
 
 - Fixed a second case of the command line running a different command than what was typed.
-- The sign-in prompt at launch is now a real choice: sign in now, or choose "Don't Sign In" to
-  skip it for good. You can still sign in later any time from Settings.
+- GoSurvey no longer asks you to sign in. Anonymous install and open pings run in the background
+  and never block the app, including when you are offline.
 
 ## 0.7.3
 

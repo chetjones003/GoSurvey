@@ -38,6 +38,29 @@ The repository has three layers:
 
 `feature/fix/docs branch → PR → beta → release PR → master`
 
+### Pre-PR product documentation review (REQ-453)
+
+Before creating any pull request, inspect all four product documentation sources:
+
+1. `README.md`
+2. `PRIVACY.md`
+3. The in-app help wiki in `resources/wiki/`
+4. The public user manual wiki linked from `gosurveycad.com` (currently the
+   [GoSurvey GitHub Wiki](https://github.com/chetjones003/GoSurvey/wiki))
+
+Update every source affected by the change before opening the pull request. In
+the task log or pull request description, record each source as reviewed and
+either identify its update or state that no update was needed. If an affected
+external wiki cannot be updated due to missing access, keep the pull request
+unopened until access is available and the update is made.
+### Emergency repository-admin bypass
+
+When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin
+may use GitHub's existing branch-protection bypass to push or merge directly, including bypassing
+required reviews and checks. Follow [the emergency admin bypass procedure](docs/emergency-admin-bypass.md)
+to record the action. This is an explicit exception to the normal branch workflow; agents must not
+infer emergency authorization from urgency alone.
+
 ### Issues and pull request labels
 
 All agents creating a GitHub issue or pull request must apply the appropriate repository labels as part of creation. Choose labels that match the work's type and status from the repository's existing label set. Add the labels during creation when the tool supports it; otherwise, apply them immediately afterward and confirm they are present. If no existing label fits, use the repository's established label conventions when creating a suitable label.
@@ -84,11 +107,30 @@ For Debug, use `.\build.bat debug`, then run
 `ctest --preset ninja-debug -R "^qt[.]editor$"`. Build all Debug targets before
 `ctest --preset ninja-debug`.
 
+### Agent builds in T3 worktrees
+
+Build and launch from the root of the worktree assigned to the current agent:
+run `.\build.bat` (or `.\build.bat debug`) there, then `.\run.bat` (or
+`.\run.bat debug`). The scripts resolve their source and output paths from that
+checkout, so each worktree uses its own standard `build/` directory and its
+ordinary `GoSurvey.exe` name. Do not redirect output into another worktree or
+the main checkout. Do not close a GoSurvey window running from another worktree
+to unblock a build; that process uses a different executable path. If a build
+is blocked, first confirm the process path belongs to the current worktree.
+
 `build-qt.bat` forwards to `build.bat`. For direct CMake builds, use
 `cmake --build --preset ninja-release` (or `ninja-debug`) from an MSVC developer shell;
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows
 CMake/CTest and `gh` executables. Keep the Windows-native toolchain.
+
+### Agent worktree isolation
+
+Build and run only from the root of the worktree assigned to the current agent, using that
+checkout's `./build.bat` (or `./build.bat debug`) and `./run.bat` (or `./run.bat debug`).
+Each worktree has its own `build/` directory and application path. Leave GoSurvey instances
+started from other worktrees untouched; do not close them or interfere with their builds or
+runtime files.
 
 ### Keep build output clean
 

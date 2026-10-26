@@ -1,4 +1,4 @@
-# GoSurvey 0.7.0
+# GoSurvey 0.7.7
 
 This release is built around **Projects** — one place for every drawing, point file, PDF, and cloud
 that belongs to a job. The sections below walk through what is new and how it fits together.
@@ -111,6 +111,32 @@ a project folder with shared survey points and tracked files.
 - Plant 3D piping DWGs: more solids import correctly, and Plant fittings now write back out on save.
 - Runtime crash reports: a shared dialog explains what happened and can send a report.
 - Various paper-space and ribbon fixes.
+
+**0.7.3**
+- Set up paper layouts and viewport scales with the new `LAYOUT`, `PAGESETUP`, and `VPSCALE`
+  commands.
+- Browse and edit survey points in the new Survey Point Database grid.
+- Start pipe runs and Feature Line commands directly from the ribbon.
+
+**0.7.4**
+- Adjust traverses with the new least-squares editor, including ground-to-grid scaling and
+  curvature/refraction corrections.
+- Import and export E57, LAS, LAZ, PTS, and PTX point clouds.
+
+**0.7.5**
+- GoSurvey now installs under `%LOCALAPPDATA%\Programs\GoSurvey`. The first update from Program
+  Files asks once for Windows approval and keeps your settings and user data.
+- Startup and crash reports can include a stack-focused memory dump when available. See the Privacy
+  Policy for what is sent and how long uploaded dumps are kept.
+
+**0.7.6**
+- Paper-space viewports keep their camera, UCS, layer colors, and independent annotation scale when
+  you save and reopen R2018 DWG and DXF drawings.
+- The PowerShell install command now recognizes stable releases and continues with setup.
+
+**0.7.7**
+- Moving an older Program Files installation to your user profile now recognizes and removes the old version, so the Start Menu opens the updated copy.
+- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
 
 ---
 

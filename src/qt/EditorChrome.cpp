@@ -13,13 +13,17 @@
 #include <QPropertyAnimation>
 #include <QPainter>
 #include <QPainterPath>
+#include <QEvent>
 #include <QSettings>
 #include <QShortcut>
 #include <QTimer>
 #include <QToolButton>
+#include <QPixmap>
 #include <QVBoxLayout>
 #include <QWindow>
 #include <algorithm>
+#include <array>
+#include <utility>
 #ifdef _WIN32
 #include <windows.h>
 #include <windowsx.h>
@@ -42,7 +46,14 @@ protected:
     background.setColorAt(0.65, QColor("#1d2226"));
     background.setColorAt(1.0, QColor("#282e33"));
     painter.fillRect(rect(), background);
-    qtArtwork::DrawTerrainContours(painter, QRectF(width() - 600, -170, 500, 366), true, .80);
+    static const QPixmap terrain = [] {
+      QPixmap image(500, 366);
+      image.fill(Qt::transparent);
+      QPainter artwork(&image);
+      qtArtwork::DrawTerrainContours(artwork, QRectF(0, 0, 500, 366), true, .80);
+      return image;
+    }();
+    painter.drawPixmap(width() - 600, -170, terrain);
   }
 
   bool eventFilter(QObject* watched, QEvent* event) override {
@@ -51,8 +62,23 @@ protected:
     return QWidget::eventFilter(watched, event);
   }
   void mousePressEvent(QMouseEvent* event) override {
-    if (event->button() == Qt::LeftButton && m_Window->windowHandle()) m_Window->windowHandle()->startSystemMove();
-    else QWidget::mousePressEvent(event);
+    if (event->button() == Qt::LeftButton && m_Window->windowHandle()) {
+#ifdef _WIN32
+      const QPoint global = event->globalPosition().toPoint();
+      const qreal ratio = m_Window->devicePixelRatioF();
+      const LPARAM screenPosition = MAKELPARAM(qRound(global.x() * ratio), qRound(global.y() * ratio));
+      const HWND hwnd = reinterpret_cast<HWND>(m_Window->winId());
+      ReleaseCapture();
+      SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, screenPosition);
+      event->accept();
+      return;
+#else
+      m_Window->windowHandle()->startSystemMove();
+      event->accept();
+      return;
+#endif
+    }
+    QWidget::mousePressEvent(event);
   }
   void mouseDoubleClickEvent(QMouseEvent* event) override {
     if (event->button() == Qt::LeftButton) m_Window->isMaximized() ? m_Window->showNormal() : m_Window->showMaximized();
@@ -60,6 +86,7 @@ protected:
 private:
   QMainWindow* m_Window;
 };
+
 }
 
 void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
@@ -97,14 +124,52 @@ void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
 bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
 #ifdef _WIN32
   auto* msg = static_cast<MSG*>(message);
-  if (msg->message == WM_NCHITTEST && !isMaximized() && !isFullScreen()) {
-    RECT rect; GetWindowRect(msg->hwnd, &rect);
-    const int border = std::max(4, int(6 * GetDpiForWindow(msg->hwnd) / 96));
-    const int x = GET_X_LPARAM(msg->lParam), y = GET_Y_LPARAM(msg->lParam);
-    const bool left = x < rect.left + border, right = x >= rect.right - border;
-    const bool top = y < rect.top + border, bottom = y >= rect.bottom - border;
-    const int hit = top ? (left ? HTTOPLEFT : right ? HTTOPRIGHT : HTTOP) : bottom ? (left ? HTBOTTOMLEFT : right ? HTBOTTOMRIGHT : HTBOTTOM) : left ? HTLEFT : right ? HTRIGHT : HTCLIENT;
-    if (hit != HTCLIENT) { *result = hit; return true; }
+  if (msg->message == WM_NCCALCSIZE) {
+    // Keep the custom Qt title bar inside the full client area while retaining the
+    // native sizing/caption styles that Windows uses for resize and Snap Assist.
+    *result = 0;
+    return true;
+  }
+  if (msg->message == WM_NCHITTEST) {
+    POINT point{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+    ScreenToClient(msg->hwnd, &point);
+    const qreal ratio = devicePixelRatioF();
+    const int edge = qMax(1, qRound(8 * ratio));
+    const int logicalX = qRound(point.x / ratio), logicalY = qRound(point.y / ratio);
+    if (!isMaximized() && !isFullScreen()) {
+      const bool left = point.x < edge, right = point.x >= qRound(width() * ratio) - edge;
+      const bool top = point.y < edge, bottom = point.y >= qRound(height() * ratio) - edge;
+      if (top && left) *result = HTTOPLEFT;
+      else if (top && right) *result = HTTOPRIGHT;
+      else if (bottom && left) *result = HTBOTTOMLEFT;
+      else if (bottom && right) *result = HTBOTTOMRIGHT;
+      else if (left) *result = HTLEFT;
+      else if (right) *result = HTRIGHT;
+      else if (top) *result = HTTOP;
+      else if (bottom) *result = HTBOTTOM;
+      else goto titleHitTest;
+      return true;
+    }
+titleHitTest:
+    {
+      auto* title = findChild<QWidget*>("editorTitleBar");
+      const QPoint local(logicalX, logicalY);
+      if (title && title->geometry().contains(local)) {
+        QWidget* child = childAt(local);
+        while (child && child != title) {
+          if (qobject_cast<QToolButton*>(child)) break;
+          child = child->parentWidget();
+        }
+        if (child == title) { *result = HTCAPTION; return true; }
+      }
+      *result = HTCLIENT;
+    }
+    return true;
+  }
+  if (msg->message == WM_ENTERSIZEMOVE) {
+    BeginInteractiveResize();
+  } else if (msg->message == WM_EXITSIZEMOVE) {
+    EndInteractiveResize();
   }
   if (msg->message == WM_GETMINMAXINFO) {
     MONITORINFO monitor{sizeof(MONITORINFO)};

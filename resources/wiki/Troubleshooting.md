@@ -10,6 +10,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Problem | Cause | Solution |
 |---|---|---|
 | *"Windows protected your PC"* on the installer | The installer is not code-signed yet | **More info → Run anyway**, if you trust the release |
+| Update from Program Files asks for Windows approval | Since 0.7.5, GoSurvey moves to `%LOCALAPPDATA%\Programs\GoSurvey` | Approve once to remove the protected old copy. Settings and user data stay in place; later updates do not need administrator approval |
 | The program will not start — missing DLL | An older install without the bundled runtime, or a corrupted install | Reinstall from the latest installer (it installs the VC++ runtime automatically). You can also install the [Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) manually. |
 | Double-click does nothing (no window at all) | Startup failed before the main UI (often OpenGL 3.3 or display drivers) | GoSurvey should show a **Could not start** dialog. Click **Send This Report** to copy the text and open a pre-filled [GitHub issue](https://github.com/chetjones003/GoSurvey/issues/new), or read `%APPDATA%\GoSurvey\startup-failure.log`. Update your graphics driver (Windows Update optional drivers, or your PC/GPU vendor). OpenGL comes from the driver — it is not a separate redistributable like Visual C++. |
 | Startup hangs on *"Checking for updates"* | Slow or blocked network | Press **Continue without checking**. Turn the check off in **Settings → System** |
@@ -25,7 +26,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Opening a drawing did not replace the current one | **Open** always uses a new tab, by design | Close the tab you no longer want |
 | Work was lost after a crash | There is **no autosave and no recovery** | `Ctrl+S` often |
 | A DWG will not open | Damaged file or unsupported DWG content | Check the error message and log; try opening a copy or importing through DXF |
-| Preferences do not persist | `gosurvey-user.json` could not be written | *"Error: failed to write gosurvey-user.json (check directory permissions)"* — the folder beside the executable must be writable |
+| Preferences do not persist | `gosurvey-user.json` could not be written | *"Error: failed to write gosurvey-user.json (check directory permissions)"* — `%APPDATA%\GoSurvey` must be writable |
 | New drawings do not have my layers | No startup template | **Settings → Files → Startup template (.gst)** |
 
 ---
@@ -108,7 +109,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 | Problem | Cause | Solution |
 |---|---|---|
 | DXF import brings in nothing | Binary DXF | *"Binary DXF is not supported — in AutoCAD use Save As → ASCII DXF."* |
-| DXF import brings in nothing, and the log mentions group 67 | The geometry is all in paper space, which is not imported | Move it to model space in the source program |
+| DXF import brings in nothing, and the log mentions group 67 | No supported paper-space entities were found | Check the log for unsupported types; move unsupported content to model space in the source program |
 | CSV import brings in nothing | The column order does not match | Check the **File preview** and change **Column order** |
 | Civil 3D points did not import | They are custom objects, absent from the DXF | Export a PNEZD CSV from Civil 3D |
 | Point IDs collided | Two sources numbered from 1 | Choose **Renumber** in the duplicate policy, or **offset** at the DXF merge prompt |
@@ -125,7 +126,7 @@ Press `F2` for the full console and scroll back — most of the answers below ar
 |---|---|---|
 | Some entities are missing from the DXF | Those types have no export branch yet | Read the `DXF export — excluded …` log line; see [[Known Limitations]] |
 | Dimensions are not live in AutoCAD | Aligned dimensions export as **exploded lines plus text** | Expected. Recreate them in the receiving program if they must be associative |
-| DWG export lost blocks and layouts | Documented; the dialog warns before writing | Use DXF where possible |
+| DWG export lost blocks | Block definitions and inserts are written as exploded geometry | Recreate blocks in the receiving program if needed |
 | `DXF export — could not open file for writing` | The path is not writable, or the file is open elsewhere | Close it and retry |
 
 ---

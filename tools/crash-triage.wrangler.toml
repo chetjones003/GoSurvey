@@ -1,0 +1,9 @@
+name = "gosurvey-crash-triage"
+compatibility_date = "2026-10-01"
+
+# Read-only lookup target for tools/triage-crash-report.ps1. This database ID is public and also
+# appears in the GoSurveyCAD site's workers/telemetry/wrangler.toml. The tool issues SELECT only.
+[[d1_databases]]
+binding = "DB"
+database_name = "gosurvey-telemetry"
+database_id = "6a6a538a-a9e2-489f-81e8-3908741d0fc5"

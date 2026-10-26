@@ -2,16 +2,22 @@
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
+#include "EditorLayerManager.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
 #include "NonDismissableDialog.hpp"
 #include "Version.hpp"
+#include "platform/AppPaths.hpp"
 #include "update/UpdateService.hpp"
 #include "UserPrefs.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "util/PlotScales.hpp"
 #include <QDialog>
+#include <QApplication>
 #include <QDialogButtonBox>
+#include <QDebug>
+#include <QAbstractItemView>
+#include <QGuiApplication>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHeaderView>
@@ -25,6 +31,7 @@
 #include <QSignalBlocker>
 #include <QTableWidget>
 #include <QComboBox>
+#include <QProxyStyle>
 #include <QCheckBox>
 #include <QLineEdit>
 #include <QSpinBox>
@@ -42,133 +49,64 @@
 #include <QKeyEvent>
 #include <QFrame>
 #include <QGroupBox>
+#include <QScreen>
 #include <QStyle>
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <climits>
 #include <array>
+#include <filesystem>
 #include <cstdio>
 #include <functional>
 #include <memory>
 #include <vector>
 
-void EditorWindow::ShowSignInGate() {
-  if (findChild<QDialog *>("signInGate"))
-    return;
-  auto *dialog = new NonDismissableDialog(this);
-  dialog->setObjectName("signInGate");
-  dialog->setAttribute(Qt::WA_DeleteOnClose);
-  dialog->setWindowTitle("Sign in to GoSurvey");
-  dialog->setWindowModality(Qt::ApplicationModal);
-  dialog->setWindowFlag(Qt::WindowCloseButtonHint, false);
-  dialog->setFixedSize(700, 370);
-  auto *layout = new QHBoxLayout(dialog);
-  layout->setContentsMargins(0, 0, 0, 0);
-  layout->setSpacing(0);
+namespace {
+class CoordinateSystemPopupStyle final : public QProxyStyle {
+public:
+  explicit CoordinateSystemPopupStyle(const QString& baseStyle) : QProxyStyle(baseStyle) {}
 
-  auto *brandPanel = new QWidget(dialog);
-  brandPanel->setObjectName("signInBrandPanel");
-  brandPanel->setFixedWidth(250);
-  const bool darkAppearance = palette().color(QPalette::Window).lightness() < 128;
-  brandPanel->setStyleSheet(QString("QWidget#signInBrandPanel { background:%1; }")
-                                .arg(darkAppearance ? "#30373c" : "#243a53"));
-  auto *brandLayout = new QVBoxLayout(brandPanel);
-  brandLayout->setContentsMargins(26, 28, 26, 24);
-  auto *logo = new QLabel(brandPanel);
-  logo->setObjectName("signInLogo");
-  logo->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(54, 54));
-  brandLayout->addWidget(logo);
-  auto *brand = new QLabel("GoSurvey", brandPanel);
-  brand->setObjectName("signInBrand");
-  brand->setStyleSheet("color:#f4f7fb;");
-  QFont brandFont = brand->font();
-  brandFont.setPointSize(21);
-  brandFont.setBold(true);
-  brand->setFont(brandFont);
-  brandLayout->addWidget(brand);
-  auto *brandTitle = new QLabel("Make GoSurvey yours", brandPanel);
-  brandTitle->setStyleSheet("color:#f4f7fb;");
-  QFont brandTitleFont = brandTitle->font();
-  brandTitleFont.setPointSize(14);
-  brandTitleFont.setBold(true);
-  brandTitle->setFont(brandTitleFont);
-  brandTitle->setWordWrap(true);
-  brandLayout->addSpacing(8);
-  brandLayout->addWidget(brandTitle);
-  auto *brandBody = new QLabel("Sign in to identify your account and prepare "
-                               "for future cloud-sync features.",
-                               brandPanel);
-  brandBody->setWordWrap(true);
-  brandBody->setStyleSheet("color:#d0d9e4;");
-  brandLayout->addWidget(brandBody);
-  brandLayout->addStretch();
-  layout->addWidget(brandPanel);
+  int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
+                const QWidget* widget = nullptr, QStyleHintReturn* returnData = nullptr) const override {
+    // Menu-style combo popups create invisible hover scrollers at their top and bottom.
+    // Use the normal list popup so pointer proximity never changes the current scroll position.
+    if (hint == QStyle::SH_ComboBox_Popup) return 0;
+    return QProxyStyle::styleHint(hint, option, widget, returnData);
+  }
+};
 
-  auto *choicePanel = new QWidget(dialog);
-  auto *choiceLayout = new QVBoxLayout(choicePanel);
-  choiceLayout->setContentsMargins(32, 30, 32, 26);
-  choiceLayout->setSpacing(12);
-  auto *title = new QLabel("Sign in to GoSurvey", choicePanel);
-  QFont titleFont = title->font();
-  titleFont.setPointSize(17);
-  titleFont.setBold(true);
-  title->setFont(titleFont);
-  choiceLayout->addWidget(title);
-  auto *body = new QLabel(
-      "Choose an option to continue. GoSurvey opens the secure sign-in page in "
-      "your browser. "
-      "Google, Microsoft, and email/password sign-in are available there.",
-      choicePanel);
-  body->setWordWrap(true);
-  choiceLayout->addWidget(body);
-  choiceLayout->addStretch();
-  auto *error = new QLabel(choicePanel);
-  error->setObjectName("signInError");
-  error->setWordWrap(true);
-  error->setStyleSheet("color:#c54646;");
-  choiceLayout->addWidget(error);
-  auto *signIn = new QPushButton("Sign In", choicePanel);
-  signIn->setObjectName("signInButton");
-  signIn->setDefault(true);
-  signIn->setMinimumHeight(40);
-  signIn->setStyleSheet(QString(
-      "QPushButton { background:%1; color:white; font-weight:600; "
-      "padding:9px; border:0; border-radius:4px; } QPushButton:hover { "
-      "background:%2; }").arg(QtAccentFor(darkAppearance).fill, QtAccentFor(darkAppearance).fillHover));
-  choiceLayout->addWidget(signIn);
-  auto *decline = new QPushButton("Don't Sign In", choicePanel);
-  decline->setObjectName("declineSignInButton");
-  decline->setMinimumHeight(38);
-  choiceLayout->addWidget(decline);
-  auto *state = new QLabel("You will not be asked again if you skip. You can "
-                           "sign in later from Settings → Account.",
-                           choicePanel);
-  state->setWordWrap(true);
-  state->setStyleSheet("color:#777f89;");
-  choiceLayout->addWidget(state);
-  layout->addWidget(choicePanel, 1);
-  connect(signIn, &QPushButton::clicked, this,
-          [this] { m_State.authSignInRequested = true; });
-  connect(decline, &QPushButton::clicked, this,
-          [this] { m_State.authDeclineRequested = true; });
-  auto *refresh = new QTimer(dialog);
-  refresh->setInterval(50);
-  connect(refresh, &QTimer::timeout, dialog,
-          [this, dialog, signIn, decline, error] {
-            error->setText(QString::fromUtf8(m_State.authError.c_str()));
-            const bool busy = m_State.authBusy;
-            signIn->setEnabled(!busy);
-            decline->setEnabled(!busy);
-            signIn->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
-                                                        : "Sign In");
-            if (m_State.authGateResolved)
-              dialog->accept();
-          });
-  refresh->start();
-  dialog->show();
-}
+class CoordinateSystemComboBox final : public QComboBox {
+public:
+  explicit CoordinateSystemComboBox(QWidget* parent) : QComboBox(parent) {
+    auto* popupStyle = new CoordinateSystemPopupStyle(QApplication::style()->name());
+    popupStyle->setParent(this);
+    setStyle(popupStyle);
+    setMaxVisibleItems(8);
+    // SH_ComboBox_Popup can leave this scrollbar hidden from the style used during base
+    // construction, so select a normal viewport scrollbar explicitly for long lists.
+    view()->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    view()->setAutoScroll(false);
+    view()->setAutoScrollMargin(0);
+    view()->setMaximumHeight(220);
+  }
+
+  void showPopup() override {
+    QComboBox::showPopup();
+    QWidget* popup = view()->window();
+    QTimer::singleShot(0, this, [this, popup] {
+      if (!popup || !popup->isVisible()) return;
+      const QPoint topLeft = mapToGlobal(QPoint(0, height()));
+      QScreen* screen = QGuiApplication::screenAt(topLeft);
+      if (!screen) return;
+      const int availableBelow = screen->availableGeometry().bottom() + 1 - topLeft.y();
+      const int popupHeight = std::min({popup->height(), 220, availableBelow});
+      if (popupHeight <= 0) return;
+      popup->setGeometry(topLeft.x(), topLeft.y(), width(), popupHeight);
+    });
+  }
+};
+}  // namespace
 
 void EditorWindow::ShowSettings() {
   if (findChild<QDialog *>("applicationSettings")) {
@@ -213,112 +151,15 @@ void EditorWindow::ShowSettings() {
     sidebar->addItem(title);
     return pageLayout;
   };
-  QVBoxLayout *layout = newPage("Account", "settingsPageAccount");
-  auto *heading = new QLabel("Account", dialog);
-  heading->setObjectName("accountSettingsHeading");
-  QFont headingFont = heading->font();
-  headingFont.setPointSize(16);
-  headingFont.setBold(true);
-  heading->setFont(headingFont);
-  layout->addWidget(heading);
-  auto *description = new QLabel(dialog);
-  description->setWordWrap(true);
-  description->setText(
-      "Sign in with Google, Microsoft, or an email and password to identify "
-      "this account. Nothing in GoSurvey is currently gated on signing in.");
-  layout->addWidget(description);
-
-  auto *identityCard = new QFrame(dialog);
-  identityCard->setObjectName("accountIdentityCard");
-  identityCard->setFrameShape(QFrame::StyledPanel);
-  auto *identityLayout = new QHBoxLayout(identityCard);
-  identityLayout->setContentsMargins(14, 12, 14, 12);
-  auto *logo = new QLabel(identityCard);
-  logo->setObjectName("accountSettingsLogo");
-  logo->setPixmap(QIcon(QtAsset("icons/app.ico")).pixmap(40, 40));
-  identityLayout->addWidget(logo);
-  auto *identityText = new QVBoxLayout();
-  auto *brand = new QLabel("GoSurvey", identityCard);
-  QFont accountBrandFont = brand->font();
-  accountBrandFont.setBold(true);
-  brand->setFont(accountBrandFont);
-  identityText->addWidget(brand);
-  auto *status = new QLabel(identityCard);
-  status->setObjectName("accountSignInStatus");
-  identityText->addWidget(status);
-  identityLayout->addLayout(identityText, 1);
-  auto *action = new QPushButton(identityCard);
-  action->setObjectName("accountSignInAction");
-  action->setMinimumWidth(100);
-  identityLayout->addWidget(action, 0, Qt::AlignVCenter);
-  layout->addWidget(identityCard);
-
-  auto *error = new QLabel(dialog);
-  error->setObjectName("accountSignInError");
-  error->setWordWrap(true);
-  error->setStyleSheet("color:#c54646;");
-  layout->addWidget(error);
-
-  // REQ-080 / REQ-425 §6: what leaves this machine, in plain words. Text, not a checkbox: there is
-  // no opt-out by decision (ADR-032), and a toggle that did nothing — or wording that implied
-  // consent nobody is asked for — would be worse than saying so plainly. The email sentence
-  // follows the live sign-in state, so the notice is never a stale promise.
-  auto *usageBox = new QFrame(dialog);
-  usageBox->setObjectName("usageDataSection");
-  auto *usageLayout = new QVBoxLayout(usageBox);
-  usageLayout->setSpacing(8);
-  auto *usageHeading = new QLabel("What GoSurvey sends", usageBox);
-  usageHeading->setObjectName("usageDataHeading");
-  QFont usageHeadingFont = headingFont;
-  usageHeadingFont.setPointSize(12);
-  usageHeading->setFont(usageHeadingFont);
-  auto *usageSummary = new QLabel(
-      "GoSurvey reports usage so development can be aimed at what people actually run. Every "
-      "report includes a random ID that identifies this installation, the version, whether you "
-      "are on stable or beta, and that you are on Windows — once when installed, and each time "
-      "you start GoSurvey after that.",
-      usageBox);
-  usageSummary->setObjectName("usageDataSummary");
-  usageSummary->setWordWrap(true);
-  auto *usageEmail = new QLabel(usageBox);
-  usageEmail->setObjectName("usageDataEmail");
-  usageEmail->setWordWrap(true);
-  auto *usageCrash = new QLabel(
-      "If GoSurvey crashes or cannot start, it also sends the error report it shows you. That "
-      "report can include file locations on this computer, such as your user folder.",
-      usageBox);
-  usageCrash->setObjectName("usageDataCrashReports");
-  usageCrash->setWordWrap(true);
-  auto syncUsage = [this, usageEmail] {
-    usageEmail->setText(
-        m_State.authSignedIn
-            ? "Because you are signed in (see Account above), your email is included too. Sign "
-              "out and usage reports go back to fully anonymous."
-            : "Usage reports never send your name, company, computer name, file names, "
-              "drawings, survey data, or location. Your email is included only when you are "
-              "signed in — you are currently signed out, so they stay fully anonymous.");
-  };
-  syncUsage();
-  // Framed like the account card, so it reads as a notice rather than a setting.
-  usageBox->setFrameShape(QFrame::StyledPanel);
-  usageLayout->setContentsMargins(14, 12, 14, 12);
-  auto *titleRow = new QHBoxLayout();
-  auto *mark = new QLabel(usageBox);
-  mark->setPixmap(style()->standardIcon(QStyle::SP_MessageBoxInformation).pixmap(22, 22));
-  titleRow->addWidget(mark);
-  titleRow->addWidget(usageHeading, 1);
-  usageLayout->addLayout(titleRow);
-  usageLayout->addWidget(usageSummary);
-  usageLayout->addWidget(usageEmail);
-  usageLayout->addWidget(usageCrash);
-
   // REQ-077: the update check is switchable, and switching it off means no network request is
   // ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
   // problem has somewhere to read it off.
-  layout->addStretch();
-  layout = newPage("Updates and Privacy", "settingsPageUpdates");
+  QVBoxLayout *layout = newPage("Updates", "settingsPageUpdates");
   auto *updatesHeading = new QLabel("Updates", dialog);
   updatesHeading->setObjectName("updatesSettingsHeading");
+  QFont headingFont = updatesHeading->font();
+  headingFont.setPointSize(16);
+  headingFont.setBold(true);
   updatesHeading->setFont(headingFont);
   layout->addWidget(updatesHeading);
   auto *versionLabel = new QLabel(QString("Version ") + GOSURVEY_VERSION_FULL, dialog);
@@ -375,8 +216,6 @@ void EditorWindow::ShowSettings() {
   });
   updatesSync->start();
 
-  // Next to Updates: the other thing here that talks to the network.
-  layout->addWidget(usageBox);
   layout->addStretch();
 
   // ---- Display page (REQ-449) ------------------------------------------------------------
@@ -587,34 +426,6 @@ void EditorWindow::ShowSettings() {
   connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
   connect(sidebar, &QListWidget::currentRowChanged, pages, &QStackedWidget::setCurrentIndex);
   sidebar->setCurrentRow(0);
-  connect(action, &QPushButton::clicked, this, [this] {
-    if (m_State.authSignedIn)
-      m_State.authSignOutRequested = true;
-    else
-      m_State.authSignInRequested = true;
-  });
-  auto *refresh = new QTimer(dialog);
-  refresh->setInterval(100);
-  connect(refresh, &QTimer::timeout, dialog, [this, status, error, action, syncUsage] {
-    syncUsage();
-    if (m_State.authSignedIn) {
-      status->setText("Signed in as " +
-                      QString::fromUtf8(m_State.authEmail.c_str()));
-      action->setText("Sign Out");
-    } else {
-      status->setText(m_State.authOptedOut
-                          ? "You chose not to sign in at startup."
-                          : "Not signed in.");
-      action->setText(m_State.authInteractiveBusy ? "Waiting for browser…"
-                                                  : "Sign In");
-    }
-    action->setEnabled(!m_State.authBusy);
-    error->setText(QString::fromUtf8(m_State.authError.c_str()));
-  });
-  refresh->start();
-  // The wrapped notices need more height than the fixed starting size; open tall enough that
-  // no paragraph is squeezed (about 670 px at this width, which still fits a 720 px screen).
-  dialog->resize(dialog->width(), std::max(dialog->height(), dialog->heightForWidth(dialog->width())));
   dialog->show();
 }
 
@@ -727,6 +538,8 @@ void EditorWindow::ServiceUiRequests() {
   }
   if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
   else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
+  if (m_State.pipeFittingPaletteOpen) ShowPipeFittingPalette();
+  else if (auto* palette = findChild<QDialog*>("pipeFittingPalette"); palette && palette->isVisible()) palette->close();
   if (m_State.showConnectionModesWindow) ShowConnectionModes();
   else if (auto* modes = findChild<QDialog*>("connectionModes")) modes->close();
   if (m_State.addDrawingToProjectUid != 0) {
@@ -1121,99 +934,7 @@ void EditorWindow::ShowQuickSelect() {
 
 void EditorWindow::ShowLayers() {
   m_ModalOpen = true;
-  SyncDrawingLayerTableWithGeometry(m_State);
-  QDialog dialog(this);
-  dialog.setObjectName("layerManager");
-  dialog.setWindowTitle("Layer Properties Manager");
-  dialog.resize(950, 550);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* toolbar = new QHBoxLayout;
-  auto* add = new QPushButton(QIcon(QtAsset("icons/New_Layer.png")), "New layer", &dialog);
-  auto* erase = new QPushButton("Delete layer", &dialog);
-  auto* current = new QPushButton("Set current", &dialog);
-  toolbar->addWidget(add); toolbar->addWidget(erase); toolbar->addWidget(current); toolbar->addStretch();
-  layout->addLayout(toolbar);
-  auto* table = new QTableWidget(&dialog);
-  table->setObjectName("layerTable");
-  table->setColumnCount(7);
-  table->setHorizontalHeaderLabels({"Name", "On", "Frozen", "Locked", "Color", "Linetype", "Lineweight (mm)"});
-  table->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-  table->setSelectionBehavior(QAbstractItemView::SelectRows);
-  layout->addWidget(table);
-  auto populate = [&] {
-    const QSignalBlocker blocker(table);
-    table->setRowCount(static_cast<int>(m_State.drawingLayerTable.size()));
-    for (int row = 0; row < table->rowCount(); ++row) {
-      const auto& layer = m_State.drawingLayerTable[row];
-      auto* name = new QTableWidgetItem(QString::fromUtf8(layer.name.c_str()));
-      name->setData(Qt::UserRole, name->text());
-      if (layer.name == m_State.currentLayer) { auto font = name->font(); font.setBold(true); name->setFont(font); }
-      table->setItem(row, 0, name);
-      for (int column = 1; column <= 3; ++column) {
-        auto* value = new QTableWidgetItem;
-        value->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
-        value->setCheckState((column == 1 ? layer.on : column == 2 ? layer.frozen : layer.locked) ? Qt::Checked : Qt::Unchecked);
-        table->setItem(row, column, value);
-      }
-      table->setItem(row, 4, new QTableWidgetItem(QString::fromUtf8(layer.color.c_str())));
-      table->setItem(row, 5, new QTableWidgetItem(QString::fromUtf8(layer.linetype.c_str())));
-      table->setItem(row, 6, new QTableWidgetItem(QString::number(layer.lineweightMm)));
-    }
-  };
-  populate();
-  connect(table, &QTableWidget::itemChanged, &dialog, [&](QTableWidgetItem* item) {
-    const int row = item->row(), column = item->column();
-    const auto name = table->item(row, 0)->data(Qt::UserRole).toString().toUtf8().toStdString();
-    const auto found = std::find_if(m_State.drawingLayerTable.begin(), m_State.drawingLayerTable.end(),
-        [&](const auto& layer) { return layer.name == name; });
-    if (found == m_State.drawingLayerTable.end()) return;
-    std::string error;
-    if (column == 0) {
-      const auto next = item->text().toUtf8().toStdString();
-      if (!CadRenameDrawingLayer(m_State, name, next, &error)) QMessageBox::warning(&dialog, "Rename layer", QString::fromUtf8(error.c_str()));
-    } else {
-      CadLayerRow next = *found;
-      bool valid = true;
-      if (column == 1) next.on = item->checkState() == Qt::Checked;
-      if (column == 2) next.frozen = item->checkState() == Qt::Checked;
-      if (column == 3) next.locked = item->checkState() == Qt::Checked;
-      if (column == 4) valid = CadColorStorageFromTyped(item->text().toUtf8().toStdString(), &next.color) && next.color != "ByLayer";
-      if (column == 5) { next.linetype = item->text().trimmed().toUtf8().toStdString(); valid = !next.linetype.empty(); }
-      if (column == 6) {
-        const double value = item->text().toDouble(&valid);
-        valid = valid && std::isfinite(value) && value >= -1 && value <= 10;
-        next.lineweightMm = static_cast<float>(value);
-      }
-      if (valid) { PushUndoSnapshot(m_State, "Layer property"); *found = std::move(next); BumpCadGpuCache(m_State); }
-      else QMessageBox::warning(&dialog, "Layer property", "Enter a valid color, linetype, or lineweight (-1 for default).");
-    }
-    populate(); Refresh();
-  });
-  connect(add, &QPushButton::clicked, &dialog, [&] {
-    bool accepted = false;
-    const auto name = QInputDialog::getText(&dialog, "New layer", "Name", QLineEdit::Normal, {}, &accepted);
-    if (!accepted) return;
-    std::string error;
-    if (!CadAddDrawingLayer(m_State, name.toUtf8().toStdString(), &error))
-      QMessageBox::warning(&dialog, "New layer", QString::fromUtf8(error.c_str()));
-    populate(); Refresh();
-  });
-  connect(erase, &QPushButton::clicked, &dialog, [&] {
-    if (table->currentRow() < 0) return;
-    const auto name = table->item(table->currentRow(), 0)->data(Qt::UserRole).toString().toUtf8().toStdString();
-    std::string error;
-    if (!CadDeleteDrawingLayer(m_State, name, &error)) QMessageBox::warning(&dialog, "Delete layer", QString::fromUtf8(error.c_str()));
-    populate(); Refresh();
-  });
-  connect(current, &QPushButton::clicked, &dialog, [&] {
-    if (table->currentRow() < 0) return;
-    m_State.currentLayer = table->item(table->currentRow(), 0)->data(Qt::UserRole).toString().toUtf8().toStdString();
-    populate(); Refresh();
-  });
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  layout->addWidget(buttons);
-  dialog.exec();
+  ShowLayerManager(this, m_State, [this] { Refresh(); });
   m_ModalOpen = false;
   Refresh();
 }
@@ -1225,6 +946,8 @@ void EditorWindow::ShowUnits() {
   if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
     m_Log.push_back("DRAWINGSETTINGS — open or create a drawing first."); Refresh(); return;
   }
+  LoadCoordinateSystemDictionaries();
+  const bool coordinateSystemsAvailable = geo::DictionariesLoaded();
   auto* dialog = new QDialog(this);
   dialog->setObjectName("drawingSettingsDialog");
   dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1286,14 +1009,19 @@ void EditorWindow::ShowUnits() {
   unitsForm->addRow("Imperial to Metric conversion", foot);
   unitsForm->addRow("Plot scale", scaleRow);
   unitsForm->addRow(scaleInserted); unitsForm->addRow(setVariables);
-  auto* zoneHeading = new QLabel("Coordinate system", unitsPage); zoneHeading->setStyleSheet("font-weight:600; font-size:15px;");
-  unitsForm->addRow(zoneHeading);
-  auto* category = new QComboBox(unitsPage); category->setObjectName("drawingZoneCategory");
+  auto* zoneGroup = new QGroupBox("Coordinate system", unitsPage);
+  auto* zoneForm = new QFormLayout(zoneGroup);
+  auto* category = new CoordinateSystemComboBox(zoneGroup); category->setObjectName("drawingZoneCategory");
   category->addItem(QString::fromUtf8(geo::kNoZoneCategory), QString());
   for (const auto& name : geo::Categories()) category->addItem(QString::fromUtf8(name.c_str()), QString::fromUtf8(name.c_str()));
-  auto* systems = new QComboBox(unitsPage); systems->setObjectName("drawingZoneSystem");
-  auto* zoneCode = new QLineEdit(unitsPage); zoneCode->setObjectName("drawingZoneCode");
-  auto* zoneDetails = new QLabel(unitsPage); zoneDetails->setObjectName("drawingZoneDetails"); zoneDetails->setWordWrap(true);
+  auto* systems = new CoordinateSystemComboBox(zoneGroup); systems->setObjectName("drawingZoneSystem");
+  auto* zoneCode = new QLineEdit(zoneGroup); zoneCode->setObjectName("drawingZoneCode");
+  auto* zoneDetails = new QLabel(zoneGroup); zoneDetails->setObjectName("drawingZoneDetails"); zoneDetails->setWordWrap(true);
+  auto* zoneError = new QLabel(unitsPage); zoneError->setObjectName("drawingZoneError");
+  zoneError->setWordWrap(true); zoneError->setStyleSheet("color:#b23b35;");
+  zoneError->setText(coordinateSystemsAvailable ? QString() : QString::fromUtf8(geo::DictionaryError().c_str()));
+  zoneError->setVisible(!coordinateSystemsAvailable);
+  zoneGroup->setEnabled(coordinateSystemsAvailable);
   auto updateDetails = [zoneDetails, &staged] {
     if (staged.zoneCode.empty()) { zoneDetails->setText("No Datum, No Projection\nProjection: Unknown projection\nDatum: Unknown Datum"); return; }
     const auto info = geo::FindCoordinateSystem(staged.zoneCode);
@@ -1322,6 +1050,7 @@ void EditorWindow::ShowUnits() {
       const int zoneIndex = systems->findData(QString::fromUtf8(initialZoneCode.c_str()));
       if (zoneIndex >= 0) { systems->setCurrentIndex(zoneIndex); staged.zoneCode = initialZoneCode; }
     } else staged.zoneCode = initialZoneCode;
+    updateDetails();
   }
   zoneCode->setText(staged.zoneCode.empty() ? "." : QString::fromUtf8(staged.zoneCode.c_str()));
   connect(category, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [&, populateSystems](int) {
@@ -1341,8 +1070,9 @@ void EditorWindow::ShowUnits() {
     category->setCurrentIndex(category->findData(cat)); populateSystems(cat); systems->setCurrentIndex(systems->findData(QString::fromUtf8(info->code.c_str())));
     zoneCode->setText(QString::fromUtf8(info->code.c_str())); updateDetails();
   });
-  unitsForm->addRow("Categories", category); unitsForm->addRow("Available coordinate systems", systems);
-  unitsForm->addRow("Selected coordinate system code", zoneCode); unitsForm->addRow(zoneDetails);
+  zoneForm->addRow("Categories", category); zoneForm->addRow("Available coordinate systems", systems);
+  zoneForm->addRow("Selected coordinate system code", zoneCode); zoneForm->addRow(zoneDetails);
+  unitsForm->addRow(zoneGroup); unitsForm->addRow(zoneError);
   pages->addWidget(unitsPage);
 
   auto* transformPage = new QWidget(dialog); auto* transformForm = new QFormLayout(transformPage);

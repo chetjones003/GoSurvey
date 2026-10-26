@@ -198,6 +198,10 @@ public:
                    const PointCloudDisplaySettings* pointCloudDisplay = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
+  [[nodiscard]] bool HasRenderedFrame() const { return renderedW_ > 0 && renderedH_ > 0; }
+  [[nodiscard]] int RenderedWidth() const { return renderedW_; }
+  [[nodiscard]] int RenderedHeight() const { return renderedH_; }
+  void BlitRenderedFrame(unsigned int destinationFramebuffer, int width, int height) const;
 
   /// REQ-363 / ADR-064 (d): an online map tile's texture from top-row-first RGBA — linear filtered,
   /// clamped at the edges so neighbouring tiles meet without a seam. 0 on failure. Static: tiles are
@@ -241,6 +245,14 @@ public:
   /// a placeholder. Opaque to the caller: no GL call is needed to use it beyond handing it to the UI.
   [[nodiscard]] unsigned int PartThumbnailTexture(const std::string& key) const;
 
+  /// Copy \p key's cached thumbnail out of GPU memory as tightly packed RGBA8, top row first, so a
+  /// frontend whose palette lives in another GL context (the Qt editor's floating palette cannot
+  /// sample this renderer's texture) can show it as an ordinary image. False when \p key is not
+  /// cached. Same call-site constraint as \ref EnsurePartThumbnail; restores no framebuffer binding
+  /// of its own beyond unbinding, which is where EnsurePartThumbnail leaves it.
+  [[nodiscard]] bool ReadPartThumbnailPixels(const std::string& key, std::vector<unsigned char>* rgba,
+                                             int* px) const;
+
   /// Drop \p key's cached thumbnail, so the next request re-renders it. Called when a block
   /// definition is edited (ADR-062 (c) — the one way a part's geometry changes in a session).
   void InvalidatePartThumbnail(const std::string& key);
@@ -280,8 +292,15 @@ private:
   unsigned int fbo_ = 0;
   unsigned int colorTex_ = 0;
   unsigned int rbo_ = 0;
+  // Allocation size is retained while the live viewport shrinks or grows within
+  // this capacity, avoiding renderbuffer destruction/recreation on each resize step.
   int fbW_ = 0;
   int fbH_ = 0;
+  // Current drawing area within the retained allocation.
+  int viewW_ = 0;
+  int viewH_ = 0;
+  int renderedW_ = 0;
+  int renderedH_ = 0;
 
   /// Multisampled pass → blit to \p colorTex_ (reduces aliasing / "sparkle" when zoomed).
   unsigned int msFbo_ = 0;

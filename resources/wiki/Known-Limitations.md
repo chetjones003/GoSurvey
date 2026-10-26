@@ -4,7 +4,7 @@ Things that are visible in the interface but do not work yet, and things a CAD u
 expect that GoSurvey does not have. This page exists so you find out here rather than halfway
 through a deadline.
 
-Current as of **version 0.6.0**.
+Current as of **version 0.7.6**.
 
 ---
 
@@ -104,10 +104,10 @@ presets
 | Gap | Detail |
 |---|---|
 | **Binary DXF** | Not supported. *"in AutoCAD use Save As → ASCII DXF"* |
-| **DXF paper space** | Paper-space entities and title blocks are **not imported**. The log reports the count |
+| **DXF paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported paper-space types are reported; polyline arc bulges are drawn straight |
 | **Unsupported DXF entities** | Reported as `N unsupported ENTITIES record(s)`, never silently dropped |
 | **DXF export coverage** | Some entity types have no export branch yet and are absent from the file. The log names what was excluded |
-| **DWG export losses** | Block definitions and inserts (written exploded), paper-space layouts beyond the first, elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing |
+| **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing |
 | **Civil 3D COGO points** | Custom objects — **not in a DXF at all**. Use a PNEZD/PENZD CSV |
 | **Plant 3D drawings** | Largely `AcPp*` custom objects requiring Autodesk's object enabler; unreachable by any third-party reader |
 | **Model import** | `IMPORTMODEL` brings in **geometry only**. Materials, animations, and cameras are named in the log as not imported |

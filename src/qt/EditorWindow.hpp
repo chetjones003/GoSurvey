@@ -7,14 +7,16 @@
 #include "WikiContent.hpp"
 #include "PdfCoordExtract.hpp"
 
-namespace auth { struct AuthTask; }
 namespace update { struct UpdateState; }
 namespace telemetry { struct TelemetryTask; }
 
 class EditorViewport;
 class QTabBar;
 class QLineEdit;
+class QListView;
+class QStandardItemModel;
 class QResizeEvent;
+class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
 class QScrollArea;
@@ -26,15 +28,18 @@ class QMenu;
 class QPoint;
 class QGridLayout;
 class QWidget;
+class QDialog;
 class FloatingCommandBar;
 class QFrame;
+class QTimer;
 
 class EditorWindow final : public QMainWindow {
 public:
-  EditorWindow();
+  explicit EditorWindow(QString developmentBranchLabel = {});
   ~EditorWindow() override;
   void Submit(const QString& command);
-  void StartAuth(bool previewSignIn = false);
+  void BeginInteractiveResize();
+  void EndInteractiveResize();
   /// REQ-077: begins the unattended startup check. Called by the application entry
   /// point (not the constructor) so test windows never touch the network.
   void StartUpdateCheck();
@@ -48,20 +53,25 @@ public:
   void OpenDrawing(const QString& path);
   AppCommandState& State() { return m_State; }
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
+  std::size_t CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates); ///< one redraw for the lot; returns how many were created
   bool RunSmokeChecks(QString& error);
 protected:
   void closeEvent(QCloseEvent* event) override;
+  void changeEvent(QEvent* event) override;
   void showEvent(QShowEvent* event) override;
   void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
   bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 private:
+  bool CreatePdfCoordinate(const pdfview::CoordCandidate& candidate); ///< creates the geometry; no redraw
+  void FinishPdfCoordinates();                                         ///< frame the view, redraw, focus
   friend class QtEditorTests;
   QAction* CommandAction(const QString& label, const QString& icon, const QString& command,
                         const QKeySequence& shortcut = {});
   void BuildRibbon();
   void BuildRibbonPages();
   void RefreshRibbon();
+  void RefreshToolspace();
   void RunRibbonAction(const QString& id);
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
@@ -71,6 +81,10 @@ private:
   void BuildDraftingInput();
   void RefreshDraftingInput(const QString& hint = {});
   void ResetDraftingInput();
+  void UpdateDraftingInputFromCommandLine(const QString& text);
+  void UpdateCommandLineFromDraftingInput();
+  [[nodiscard]] QString DraftingInputText() const;
+  [[nodiscard]] QString DraftingInputDisplayText() const;
   bool SubmitDraftingInput(bool click = false);
   bool DraftingInputEvent(QObject* watched, QEvent* event);
   void CancelDraftingInput();
@@ -94,6 +108,9 @@ private:
   void ShowPdf();
   void ShowAdjustment();
   void ShowProjectSettings(std::uint32_t projectUid);
+  /// REQ-358 / REQ-363 (issue #1083): load the bundled CS-MAP dictionary if it is not loaded yet.
+  /// A failed load leaves geo::DictionaryError() set for the Zone group and the online map to report.
+  void LoadCoordinateSystemDictionaries();
   void ShowProjectHealth(std::uint32_t projectUid);
   void ShowProjectPack(std::uint32_t projectUid);
   void ShowProjectTurnover(std::uint32_t projectUid);
@@ -139,20 +156,23 @@ private:
   void ShowRightClickCustomization();
   void ShowSelectionList();
   void ShowBlockAuthoringPalette();
+  // Issue #1084: the REQ-350 Pipe Fittings palette (EditorPipePalette.cpp).
+  void ShowPipeFittingPalette();
+  void RefreshPipeFittingPalette(QDialog* dialog);
   void ShowBlockEditorPicker();
   void ShowConnectionModes();
   void ShowBlockEditorClosePrompt();
-  void ShowSignInGate();
-  void ServiceAuth();
   void ServiceTelemetry();
   void InitUpdates();
   void ServiceUpdate();
   void ShowUpdateDialog();
   bool UpdateBlocksLaunch() const;
+  QString m_DevelopmentBranchLabel;
   bool m_ModalOpen = false;
   AppCommandState m_State;
   std::vector<std::string> m_Log;
   std::size_t m_LogShown = 0;
+  QStringList m_ToolspaceKey;  ///< What the Toolspace tree last listed; see RefreshToolspace().
   EditorViewport* m_Viewport = nullptr;
   QTabBar* m_Tabs = nullptr;
   QTabBar* m_SpaceTabs = nullptr;
@@ -162,6 +182,8 @@ private:
   QLineEdit* m_RecentSearch = nullptr;
   QPlainTextEdit* m_Transcript = nullptr;
   QLineEdit* m_Command = nullptr;
+  QListView* m_CommandSuggestions = nullptr;
+  QStandardItemModel* m_CommandSuggestionModel = nullptr;
   FloatingCommandBar* m_CommandBar = nullptr;
   QFrame* m_DynamicInput = nullptr;
   QLabel* m_DynamicPrompt = nullptr;
@@ -182,23 +204,16 @@ private:
   QLabel* m_Coordinates = nullptr;
   bool m_Refreshing = false;
   bool m_TextDialogOpen = false;
-  bool m_AuthLastAttemptInteractive = false;
-  bool m_AuthStarted = false;
   bool m_StartupInitialized = false;
   bool m_WhatsNewAutoOpened = false;
   bool m_RecentListView = false;
   bool m_RecentShowAll = false;
   bool m_ShowAllProjects = false;
-  std::unique_ptr<auth::AuthTask> m_AuthTask;
   std::unique_ptr<update::UpdateState> m_Update;
   /// Hands the verified installer to the OS; replaceable so tests never run one.
   std::function<bool(update::UpdateState&)> m_LaunchInstaller;
   bool m_UpdateExitPending = false;
   std::unique_ptr<telemetry::TelemetryTask> m_TelemetryTask;
-  /// Sends the REQ-080 ping with the signed-in email (or empty). Unset until EnableTelemetry;
-  /// replaceable so tests never send one.
-  std::function<void(const std::string& email)> m_SendTelemetry;
-  bool m_TelemetrySent = false;
   QStringList m_CommandHistory;
   int m_HistoryIndex = 0;
 };
