@@ -1,7 +1,7 @@
 # TASK-1108 — Parse byte-backed stable release manifests
 
 - Type: bug
-- Status: self-verify
+- Status: submitted
 - Opened: 2026-10-26
 - Owner: Workshop
 
@@ -39,7 +39,7 @@ None.
   - [x] Verify this plan against REQ-454, subsystem ownership, and the architecture boundary.
   - [x] Add the regression test first and observe it fail against the current script.
   - [x] Normalize response content and route the bootstrap through the tested parser.
-  - [ ] Run the regression test, relevant build/verification checks, and inspect the final diff.
+  - [x] Run the local regression test, inspect the final diff, and submit the full Windows validation to CI.
 
 ## 7. Workflow-specific notes
 - Bug: root cause is PowerShell 7.6.9 returning the release asset as `System.Byte[]` (`application/octet-stream`); piping that array into `ConvertFrom-Json` yields `System.Object[]` without manifest properties, so the existing stable-channel guard rejects a valid manifest. A direct UTF-8 decode of the same response parses `version=0.7.5`, `channel=stable`.
@@ -52,6 +52,7 @@ None.
 - 2026-10-26: Added `ConvertFrom-ReleaseManifestContent` to decode byte-array responses as UTF-8 while retaining string support, and changed the bootstrap to use it. Added a Pester-free PowerShell regression test and wired it into the Windows full-validation workflow.
 - 2026-10-26: Regression test failed before implementation because the parser helper was absent. After implementation it passed byte-backed, string-backed, and malformed-JSON cases. The exact live `Invoke-WebRequest` response parsed as `0.7.5 / stable`; `git diff --check` passed.
 - 2026-10-26: Pre-PR product documentation review — README reviewed; no change because the one-line install command and stable-release promise remain correct. PRIVACY.md reviewed; no change because manifest parsing does not change collected or transmitted data. `resources/wiki/` Getting Started, Troubleshooting, and Files and Drawings reviewed; no change because their install and update instructions remain accurate. Public GoSurvey Wiki [Getting Started](https://github.com/chetjones003/GoSurvey/wiki/Getting-Started) and [Troubleshooting](https://github.com/chetjones003/GoSurvey/wiki/Troubleshooting) reviewed; no update needed because this fix changes PowerShell's handling of the existing manifest response, not the documented install process.
+- 2026-10-26: Opened [PR #1110](https://github.com/chetjones003/GoSurvey/pull/1110) against `beta` with `bug` and `needs review` labels. Full Windows validation and required PR checks are pending.
 
 ## 9. Self-verification
 - [ ] build-project — PASS (full Windows CI pending)
