@@ -85,11 +85,14 @@ typedef struct _bit_chain
   }
 
 // only if from r2007+ DWG. not JSON, DXF (FIXME TABLE.name).
-// add API converts to TU
+// add API converts to TU. DWG_OPTS_IN controls API object ownership during
+// document construction; DWG_OPTS_TU marks API-created R2007+ documents.
 #define IS_FROM_TU(dat)                                                       \
-  ((dat->from_version >= R_2007) && !(dat->opts & DWG_OPTS_IN))
+  ((dat->from_version >= R_2007)                                           \
+   && (!(dat->opts & DWG_OPTS_IN) || (dat->opts & DWG_OPTS_TU)))
 #define IS_FROM_TU_DWG(dwg)                                                   \
-  ((dwg->header.from_version >= R_2007) && !(dwg->opts & DWG_OPTS_IN))
+  ((dwg->header.from_version >= R_2007)                                    \
+   && (!(dwg->opts & DWG_OPTS_IN) || (dwg->opts & DWG_OPTS_TU)))
 #define TU_to_int(b) le16toh (((uint16_t)b[1] << 8) + b[0])
 
 /* Functions for raw data manipulations.
@@ -233,6 +236,7 @@ BITCODE_T32 bit_read_T32 (Bit_Chain *restrict dat) ATTRIBUTE_MALLOC;
 BITCODE_TU32 bit_read_TU32 (Bit_Chain *restrict dat) ATTRIBUTE_MALLOC;
 
 void bit_write_TU (Bit_Chain *restrict dat, BITCODE_TU restrict value);
+void bit_write_TU_no_null (Bit_Chain *restrict dat, BITCODE_TU restrict value);
 void bit_write_TU16 (Bit_Chain *restrict dat, BITCODE_TU restrict value);
 void bit_write_T16 (Bit_Chain *restrict dat, BITCODE_T16 restrict value);
 void bit_write_T32 (Bit_Chain *restrict dat, BITCODE_T32 restrict value);

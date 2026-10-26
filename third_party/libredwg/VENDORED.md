@@ -36,6 +36,7 @@ Each change is its own commit. Keep this list current.
 | 10 | `src/out_dxf.c` (`SAT_boolean`) | The face logical counter (sense / sides / containment) resets at every record identifier; it used to carry from one face to the next when records with no logicals sat between them, naming a `forward single` face `out forward` (issue #786). | not yet |
 | 11 | `src/out_dxf.c` (`SAB_RD1`) | SAB → SAT writes doubles with `%.17g` (exact round trip), not `%g`'s six digits, which made full-circle edges read back as 6.28318 and closed solids fail exact closure checks (issue #786). | not yet |
 | 12 | `src/decode.c`, `src/decode_r2007.c` (class section) | The class record's `dwg_version` / `maint_version` are read as `BL` (as the R13–R2000 reader and `Dwg_Class` already have them), not `BS`: a value ≥ 256 mis-framed every later class, so R2018 Plant 3D classes lost their entity flag and decoded as objects (D-2026-10-08-b, issue #786). The encoder still writes `BS`, identical for values < 256. | not yet |
+| 13 | `src/bits.c`, `src/bits.h`, `src/encode.c` | Correct R2007+ UMC variable-length integer output and distinguish zero-terminated TU strings from length-delimited TU strings; encode length-delimited class names without a null terminator. These low-level encodings are used by the R2018 writer and are validated by AutoCAD-authored controls (TASK-1013). | not yet |
 
 ## Moving to a newer upstream release
 A recorded decision (ADR-041 (h)). Replace `src/` and `include/` with the new tag's tracked files,

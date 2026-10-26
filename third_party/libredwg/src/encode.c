@@ -2294,7 +2294,7 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
           bit_write_T (dat, klass->appname);
           bit_write_T (dat, klass->cppname);
           if (klass->dxfname_u)
-            bit_write_TU (dat, klass->dxfname_u);
+            bit_write_TU_no_null (dat, klass->dxfname_u);
           else
             bit_write_T (dat, klass->dxfname);
         }
