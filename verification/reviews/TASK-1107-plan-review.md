@@ -48,3 +48,11 @@ does not contain `libglapi.dll`. The full-validation workflow intentionally stag
 dependencies only when present. **Plan verdict: PASS WITH FIX REQUIRED.** Require `opengl32.dll`,
 back up existing destination files before examining source availability, copy other Mesa DLLs only
 when present, and retain `finally` cleanup so original Qt files are restored.
+
+## Third follow-up — Trivy database source
+
+PR #1108's Trivy job failed twice before scanning because the default `mirror.gcr.io` database
+mirror returned HTTP 404. REQ-437 requires Trivy to remain a blocking scan. Trivy's official docs
+list GHCR as a database source and support configuring it explicitly. **Plan verdict: PASS.** Set
+`TRIVY_DB_REPOSITORY=ghcr.io/aquasecurity/trivy-db:2` on the existing action; preserve its scan,
+severity, and fail-on-finding configuration.

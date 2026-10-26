@@ -100,6 +100,10 @@ jobs:
 
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.33.1
+        env:
+          # The default mirror.gcr.io source returned HTTP 404 twice in the 0.7.5 promotion scan.
+          # Use Trivy's official GHCR database directly so the blocking scan can initialize.
+          TRIVY_DB_REPOSITORY: ghcr.io/aquasecurity/trivy-db:2
         with:
           scan-type: fs
           scan-ref: .

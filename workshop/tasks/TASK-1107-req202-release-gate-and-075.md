@@ -185,3 +185,25 @@ The 0.7.5 release-note section is already present, and the user selected 0.7.5 f
   logic remains unchanged.
 - Workflow contract verification and `git diff --check` pass. The hosted build/test and stable
   release remain pending this correction's PR and a subsequent intentional master dispatch.
+
+## 13. Trivy database mirror follow-up (2026-10-26)
+
+- **Observed:** PR #1108's dependency scan failed on both the initial run and its retry before
+  scanning the repository. Both attempts failed fetching Trivy's vulnerability database layer
+  from `mirror.gcr.io` with HTTP 404; no dependency finding was reported.
+- **Expected:** REQ-437 requires the Trivy dependency scan to run and block on actual findings. A
+  broken mirror must not prevent the scanner from obtaining its database when the official source
+  is available.
+- **Root cause:** Trivy's default database source order starts with `mirror.gcr.io`; the observed
+  mirror returned 404 twice and Trivy exited before falling back. Trivy supports an explicit
+  database repository, and its official documentation lists `ghcr.io/aquasecurity/trivy-db` as a
+  published database location.
+- **Plan:** Set `TRIVY_DB_REPOSITORY` for the existing Trivy action to the official GHCR repository
+  (`ghcr.io/aquasecurity/trivy-db:2`). Keep scan type, severity threshold, ignore-unfixed behavior,
+  and nonzero finding exit code unchanged.
+- **Verification:** Parse/contract-check workflow env and preserve all existing Trivy inputs;
+  require PR CI to complete a successful scan before merging. The prior two failures are
+  infrastructure failures, not evidence that a vulnerability scan passed.
+- Updated `.github/workflows/pr-checks.yml` with the explicit official GHCR database repository;
+  Trivy's filesystem scan, CRITICAL/HIGH gate, and exit behavior remain unchanged.
+- Workflow YAML and contract assertions pass locally; CI verification is pending.
