@@ -19,6 +19,14 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.7.7
+
+**Updating GoSurvey**
+- When moving an older Program Files installation to your user profile, GoSurvey now recognizes and removes the old version so the Start Menu opens the updated copy.
+- The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
+
+---
+
 ## 0.7.6
 
 **Paper-space viewport state**
