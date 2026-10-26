@@ -4573,8 +4573,9 @@ TEST_CASE("DXF native viewport detection reports malformed group values", "[dxf]
     std::vector<std::string> log;
     AppCommandState imported;
     CHECK_FALSE(ImportDxfFile(imported, path.c_str(), log));
-    CHECK(LogContains(log, malformedGroup.starts_with("90") ? "invalid integer for group code 90"
-                                                              : "invalid group code: bad-code"));
+    const std::string_view expectedDiagnostic =
+        malformedGroup == "90\nnot-an-integer" ? "invalid integer for group code 90" : "invalid group code: bad-code";
+    CHECK(LogContains(log, expectedDiagnostic));
   }
 }
 
