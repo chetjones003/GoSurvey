@@ -14036,7 +14036,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
   redistributable installer. Migration preserves GoSurvey
   settings and user data and leaves one working installation with its supported shortcuts. Following
   migration, the user's explicit in-app update choice remains required under REQ-078 and applies the
-  update to this per-user copy without elevation.
+  update to this per-user copy without elevation. The bootstrap recognizes the legacy versioned
+  uninstall display name as well as the current unversioned name. Before installing, it compares the
+  latest stable version with the installed per-user version and skips the download and install when
+  the installed version is equal or newer; a Program Files copy still takes the migration path.
+  Running a release installer directly also skips replacing the exact same version when it is
+  already registered for the current user or machine.
 
   An update offered to a process running from Program Files shows a prominent migration notice above
   the release notes before choosing whether to update. It explains the per-user destination, the
@@ -14057,8 +14062,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - a fresh install completes under `%LOCALAPPDATA%\Programs\GoSurvey` without GoSurvey setup UI,
     UAC, or installation-choice prompts;
   - migration from Program Files completes after one UAC consent, preserves user data/settings,
+    removes the legacy versioned machine-wide registration and any stale shared Start-menu shortcut,
     leaves one working per-user installation, and restores the Start-menu shortcut and any existing
     desktop shortcut;
+  - the PowerShell bootstrap skips download/install when the current user's installed version is
+    equal to or newer than the stable manifest version, except that a Program Files copy still
+    migrates to the per-user location;
+  - direct Setup skips replacing an exact version already registered for the current user or machine;
   - the migrated copy opens normally with its bundled app-local Visual C++ runtime, and future
     user-approved REQ-078 updates replace that same per-user installation without elevation or
     launching the shared runtime installer;
@@ -14078,7 +14088,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   acceptance following clarification that standalone `.gs` drawings are retired. D-2026-10-24-d
   selects app-local Visual C++ runtime DLLs for bootstrap and in-app updates to avoid shared-runtime
   UAC; the Microsoft Store redistributable flow remains under REQ-453. D-2026-10-25-f requires the
-  0.7.5 notes and Program Files update offer to explain the migration.
+  0.7.5 notes and Program Files update offer to explain the migration. 2026-10-26 — user-directed
+  legacy version-name recognition, installed-version no-op checks, and stale shared shortcut removal.
 
 ### REQ-324 — Static analysis runs automatically and non-blocking findings are surfaced, not silenced
 - Purpose: catch a class of bug (uninitialized memory, buffer overrun, null deref) and a class of

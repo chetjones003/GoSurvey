@@ -121,6 +121,39 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Code]
+// A direct installer launch must not replace a build already installed at this version or newer. The bootstrap
+// performs the same check before downloading; this protects users who run the installer itself.
+function IsVersionInstalledAtLeast(RootKey: Integer): Boolean;
+var
+  InstalledVersion: String;
+  InstalledPackedVersion: Int64;
+  SetupPackedVersion: Int64;
+begin
+  Result := False;
+  if RegQueryStringValue(RootKey,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{02774040-27C9-4A9A-A999-86E641C42F78}_is1',
+       'DisplayVersion', InstalledVersion) and
+     StrToVersion(InstalledVersion, InstalledPackedVersion) and
+     StrToVersion('{#AppVersion}', SetupPackedVersion) then
+    Result := ComparePackedVersion(InstalledPackedVersion, SetupPackedVersion) >= 0;
+end;
+
+function IsVersionAlreadyInstalled: Boolean;
+begin
+  Result := IsVersionInstalledAtLeast(HKCU) or IsVersionInstalledAtLeast(HKLM);
+end;
+
+function InitializeSetup: Boolean;
+begin
+  Result := not IsVersionAlreadyInstalled;
+  if not Result then
+  begin
+    Log('GoSurvey {#AppVersion} or newer is already installed; Setup will not replace it.');
+    if not WizardSilent then
+      MsgBox('GoSurvey {#AppVersion} or newer is already installed.', mbInformation, MB_OK);
+  end;
+end;
+
 // True when Setup was started by the in-app updater with /RELAUNCH=1 (REQ-078).
 //
 // Needed because /RESTARTAPPLICATIONS cannot do this job: it only restarts applications that

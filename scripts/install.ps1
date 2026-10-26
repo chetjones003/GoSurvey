@@ -291,7 +291,10 @@ function Get-MachineInstall {
 
     foreach ($root in $uninstallRoots) {
         $entry = Get-ItemProperty -LiteralPath (Join-Path $root $appIdKey) -ErrorAction SilentlyContinue
-        if ($null -eq $entry -or $entry.DisplayName -ne 'GoSurvey') { continue }
+        # Older installers included the version in DisplayName (for example,
+        # "GoSurvey version 0.7.4"); newer per-user entries use their own label.
+        # The stable AppId key identifies this product across both forms.
+        if ($null -eq $entry -or $entry.DisplayName -notmatch '^GoSurvey(?: version .+)?$') { continue }
 
         $installLocation = [string]$entry.InstallLocation
         if ([string]::IsNullOrWhiteSpace($installLocation)) {
@@ -319,6 +322,25 @@ function Get-MachineInstall {
     }
 
     return $null
+}
+
+function Get-PerUserInstallVersion {
+    $appIdKey = '{02774040-27C9-4A9A-A999-86E641C42F78}_is1'
+    $entry = Get-ItemProperty -LiteralPath (Join-Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' $appIdKey) -ErrorAction SilentlyContinue
+    if ($null -eq $entry -or $entry.DisplayName -notmatch '^GoSurvey(?: version .+)?$') { return $null }
+    return [string]$entry.DisplayVersion
+}
+
+function Test-InstalledVersionAtLeast {
+    param([string]$InstalledVersion, [string]$AvailableVersion)
+
+    $installed = $null
+    $available = $null
+    if (-not [version]::TryParse($InstalledVersion, [ref]$installed) -or
+        -not [version]::TryParse($AvailableVersion, [ref]$available)) {
+        return $false
+    }
+    return $installed -ge $available
 }
 
 function Copy-UserDataBack {
@@ -392,6 +414,16 @@ try {
     $version = [string]$manifest.version
     Write-Step -State Ok -Label 'Release' -Detail @('Text', "GoSurvey $version", 'Dim', "  $dot  stable channel")
 
+    # Keep a protected Program Files installation on the migration path even when its
+    # version is current. Otherwise, do not download or reinstall a version already present.
+    $machineInstall = Get-MachineInstall
+    $perUserVersion = Get-PerUserInstallVersion
+    if (-not $machineInstall -and (Test-InstalledVersionAtLeast -InstalledVersion $perUserVersion -AvailableVersion $version)) {
+        Write-Step -State Ok -Label 'Install' -Detail @('Text', "GoSurvey $perUserVersion is already installed", 'Dim', '  no download needed')
+        Write-InstallSummary -Version $perUserVersion -Location $targetPath
+        return
+    }
+
     $currentStep = 'Download'
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $downloaded = Save-InstallerDownload -Uri $installerUri -Path $installerPath -Label 'Download'
@@ -416,7 +448,6 @@ try {
         'Text', 'SHA-256 matches the release manifest',
         'Dim', ('  {0}  {1}' -f $dot, $actualHash.Substring(0, 12).ToLowerInvariant()))
 
-    $machineInstall = Get-MachineInstall
     $desktopShortcuts = @(
         (Join-Path $env:PUBLIC 'Desktop\GoSurvey.lnk'),
         (Join-Path ([Environment]::GetFolderPath('Desktop')) 'GoSurvey.lnk')
@@ -448,6 +479,16 @@ try {
         Wait-InstallerProcess -Process $uninstall -Label 'Migrate' -Detail $migrateDetail
         if ($uninstall.ExitCode -ne 0) {
             throw "The old GoSurvey uninstaller returned exit code $($uninstall.ExitCode). The new installer was not run."
+        }
+        # A successful process exit is not enough to guarantee the machine-wide copy is gone.
+        # In particular, leaving its shared Start Menu shortcut makes Windows launch the old
+        # Program Files executable even after the per-user installer creates its own shortcut.
+        if (Get-MachineInstall) {
+            throw 'The old GoSurvey installation is still registered after its uninstaller finished. The new installer was not run.'
+        }
+        $machineStartMenuShortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\GoSurvey.lnk'
+        if (Test-Path -LiteralPath $machineStartMenuShortcut) {
+            Remove-Item -LiteralPath $machineStartMenuShortcut -Force -ErrorAction Stop
         }
         Write-Step -State Ok -Label 'Migrate' -Detail @('Text', 'Removed the Program Files copy', 'Dim', "  $dot  settings kept")
     }

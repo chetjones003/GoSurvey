@@ -29,8 +29,9 @@ Survey points move through **CSV** in PNEZD/PENZD order.
 
 If you already have GoSurvey in Program Files, the 0.7.5 update explains the move before you
 choose **Update Now**. Windows asks once for permission to remove the protected old copy. Your
-settings and user data stay in place. Later updates use the per-user installation and do not need
-administrator approval.
+settings and user data stay in place, and the old shared Start Menu shortcut is removed. Later
+updates use the per-user installation and do not need administrator approval. Running the install
+command when the same or a newer version is already installed skips the download and reinstall.
 
 **If the program will not start with a missing-DLL error**, install the
 The installer installs the **Microsoft Visual C++ runtime** automatically. You only need a [manual VC++ install](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) if an IT policy blocked the install step or you copied `GoSurvey.exe` without running the installer.
