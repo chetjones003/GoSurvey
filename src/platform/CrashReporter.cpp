@@ -42,6 +42,7 @@ constexpr wchar_t kCrashReportArgPrefix[] = L"--gosurvey-crash-report=";
 constexpr wchar_t kMinidumpWriterArg[]   = L"--gosurvey-minidump-writer";
 constexpr wchar_t kTestCrashArg[]         = L"--gosurvey-test-crash";
 constexpr uintmax_t kMaxCrashDumpBytes   = 10u * 1024u * 1024u;
+constexpr size_t    kMaxCrashReportBytes = 16384;
 
 char g_reportChannel[16] = "stable";
 
@@ -246,10 +247,7 @@ void TryPostCrashReportSilent(const std::string& wireReason, const std::string& 
   if (!HasInternetConnectivity())
     return;
 
-  std::string report = reportUtf8;
-  constexpr size_t kMaxReport = 16384;
-  if (report.size() > kMaxReport)
-    report.resize(kMaxReport);
+  const std::string report = TruncateUtf8(reportUtf8, kMaxCrashReportBytes);
 
   const TelemetryIds ids = GetTelemetryIds();
   nlohmann::json body;
@@ -290,10 +288,7 @@ void TryPostCrashReportSilent(const std::string& wireReason, const std::string& 
   if (!HasInternetConnectivity())
     return;
 
-  std::string report = reportUtf8;
-  constexpr size_t kMaxReport = 16384;
-  if (report.size() > kMaxReport)
-    report.resize(kMaxReport);
+  const std::string report = TruncateUtf8(reportUtf8, kMaxCrashReportBytes);
 
   const TelemetryIds ids = GetTelemetryIds();
   nlohmann::json metadata;
