@@ -968,6 +968,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     return;
   } else if (event->button() == Qt::LeftButton && (WorldPoint(m_Last, m_Cursor) ||
              (m_State.active == AppCommandState::Kind::None && ViewPoint(m_Last, m_Cursor)))) {
+    const ray3d::Vec3 rawCursor = m_Cursor;
     const Camera camera = CadViewCamera(m_State);
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
@@ -1014,7 +1015,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     const auto route = ViewportClickRouteFor(m_State);
     if (route == ViewportClickRoute::SelectionBox && m_State.active == AppCommandState::Kind::Zoom &&
         !m_State.selBoxWaitingSecond) {
-      BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+      m_State.uiCursorWorldZ = static_cast<float>(rawCursor.z);
+      BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
           static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
       if (changed) changed();
       update();
@@ -1161,7 +1163,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       tolerance.edge = aperture;
       SubmitSubObjectPick(m_State, ray, tolerance, event->modifiers() & Qt::ShiftModifier, m_Log);
     } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
-      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, false,
+      const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
+      const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
+      SubmitViewportPick(m_State, pickX, pickY, m_Log, false,
           m_Last.x() >= m_State.selBoxAnchorScreenX, CadViewIsPlan(m_State) ? nullptr : &ray);
       m_LeftDragSelection = false;
       m_HasSelectionBoxSnapshot = false;

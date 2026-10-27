@@ -5353,17 +5353,36 @@ private Q_SLOTS:
     QCOMPARE(st.active, AppCommandState::Kind::Zoom);
     QVERIFY(!st.selBoxWaitingSecond);
 
-    const QPoint first(300, 300), second(800, 500);
+    st.objectSnapEnabled = true;
+    const Camera camera = CadViewCamera(st);
+    float firstX = 0.f, firstY = 0.f, secondX = 0.f, secondY = 0.f;
+    camera.WorldToScreen(0.f, 0.f, 0.f, static_cast<float>(window.m_Viewport->width()),
+        static_cast<float>(window.m_Viewport->height()), &firstX, &firstY);
+    camera.WorldToScreen(400.f, 200.f, 0.f, static_cast<float>(window.m_Viewport->width()),
+        static_cast<float>(window.m_Viewport->height()), &secondX, &secondY);
+    const QPoint first(qRound(firstX) + 2, qRound(firstY) + 2);
+    const QPoint second(qRound(secondX) + 2, qRound(secondY) + 2);
+    ray3d::Vec3 rawFirst, rawSecond;
+    QVERIFY(window.m_Viewport->WorldPoint(first, rawFirst));
+    QVERIFY(window.m_Viewport->WorldPoint(second, rawSecond));
     QTest::mouseMove(window.m_Viewport, first);
     QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, first);
+    QVERIFY(st.viewportSnapPickValid);
     QVERIFY(st.selBoxWaitingSecond);
     QCOMPARE(st.active, AppCommandState::Kind::Zoom);
+    QVERIFY(std::abs(st.selBoxAnchorX - rawFirst.x) < 0.01);
+    QVERIFY(std::abs(st.selBoxAnchorY - rawFirst.y) < 0.01);
     QCOMPARE(st.selBoxAnchorScreenX, static_cast<float>(first.x()));
     QCOMPARE(st.selBoxAnchorScreenY, static_cast<float>(first.y()));
     QVERIFY(!st.pendingZoomWindow);
 
     QTest::mouseMove(window.m_Viewport, second);
     QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
+    QVERIFY(st.viewportSnapPickValid);
+    QVERIFY(std::abs(st.pendingZoomMnX - std::min(rawFirst.x, rawSecond.x)) < 0.01);
+    QVERIFY(std::abs(st.pendingZoomMxX - std::max(rawFirst.x, rawSecond.x)) < 0.01);
+    QVERIFY(std::abs(st.pendingZoomMnY - std::min(rawFirst.y, rawSecond.y)) < 0.01);
+    QVERIFY(std::abs(st.pendingZoomMxY - std::max(rawFirst.y, rawSecond.y)) < 0.01);
     QTRY_VERIFY(!st.pendingZoomWindow);
     QVERIFY(LogHas(window.m_Log, "Zoom window applied"));
     QCOMPARE(st.active, AppCommandState::Kind::None);
