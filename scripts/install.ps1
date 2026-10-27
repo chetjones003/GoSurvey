@@ -468,6 +468,20 @@ try {
         Write-Step -State Note -Label 'Approval' -Detail @('Muted', 'Windows will ask once to remove the old Program Files copy.')
         $migrateDetail = @('Muted', 'Moving GoSurvey from Program Files to your user profile')
         Write-StepProgress -Label 'Migrate' -Detail $migrateDetail
+        # The in-app updater launches this script and exits; an old GoSurvey.exe still holding its
+        # files would make the uninstaller leave the Program Files copy behind.
+        $legacyExecutable = Join-Path $machineInstall.InstallLocation 'GoSurvey.exe'
+        $exitDeadline = [DateTime]::UtcNow.AddSeconds(30)
+        while ([DateTime]::UtcNow -lt $exitDeadline) {
+            $running = @(Get-Process -Name 'GoSurvey' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $legacyExecutable })
+            if ($running.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 250
+        }
+        if (@(Get-Process -Name 'GoSurvey' -ErrorAction SilentlyContinue |
+                Where-Object { $_.Path -eq $legacyExecutable }).Count -gt 0) {
+            throw 'The old GoSurvey is still running. Close it and run the command again. The new installer was not run.'
+        }
         try {
             $uninstall = Start-Process -FilePath $machineInstall.Uninstaller -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -Verb RunAs -PassThru
             $migrationMayHaveChangedData = $true
@@ -483,7 +497,7 @@ try {
         # A successful process exit is not enough to guarantee the machine-wide copy is gone.
         # In particular, leaving its shared Start Menu shortcut makes Windows launch the old
         # Program Files executable even after the per-user installer creates its own shortcut.
-        if (Get-MachineInstall) {
+        if ((Get-MachineInstall) -or (Test-Path -LiteralPath $legacyExecutable)) {
             throw 'The old GoSurvey installation is still registered after its uninstaller finished. The new installer was not run.'
         }
         $machineStartMenuShortcut = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\GoSurvey.lnk'
@@ -504,6 +518,11 @@ try {
     Wait-InstallerProcess -Process $install -Label 'Install' -Detail $installDetail
     if ($install.ExitCode -ne 0) {
         throw "GoSurvey setup returned exit code $($install.ExitCode)."
+    }
+    # The Start Menu must now open the per-user copy. A surviving machine-wide registration means the
+    # old version is still what launches, so report failure instead of a false "ready".
+    if (Get-MachineInstall) {
+        throw 'The old Program Files copy of GoSurvey is still installed, so the Start Menu may open the old version.'
     }
     $installerSucceeded = $true
     Write-Step -State Ok -Label 'Install' -Detail @('Text', 'Installed for this Windows user', 'Dim', "  $dot  no administrator needed")
