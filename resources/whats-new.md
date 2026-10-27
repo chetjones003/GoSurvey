@@ -1,4 +1,4 @@
-# GoSurvey 0.7.7
+# GoSurvey 0.7.8
 
 This release is built around **Projects** — one place for every drawing, point file, PDF, and cloud
 that belongs to a job. The sections below walk through what is new and how it fits together.
@@ -137,6 +137,9 @@ a project folder with shared survey points and tracked files.
 **0.7.7**
 - Moving an older Program Files installation to your user profile now recognizes and removes the old version, so the Start Menu opens the updated copy.
 - The install command and installer skip reinstalling GoSurvey when the same or a newer version is already installed.
+
+**0.7.8**
+- Fixed the Start Menu still opening an old version after an update: the installer and install command now ask Windows for permission to remove an older Program Files copy, keep your settings, and stop with a clear message if it can't be removed.
 
 ---
 

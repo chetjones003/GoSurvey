@@ -85,8 +85,15 @@ if ($source -notmatch 'Remove-Item -LiteralPath \$machineStartMenuShortcut -Forc
 
 $innoPath = Join-Path $repoRoot 'installer\GoSurvey.iss'
 $innoSource = Get-Content -LiteralPath $innoPath -Raw
-if ($innoSource -notmatch '(?s)function IsVersionAlreadyInstalled.*?IsVersionInstalledAtLeast\(HKCU\).*?IsVersionInstalledAtLeast\(HKLM\).*?function InitializeSetup') {
-    throw 'The Inno installer must check per-user and machine-wide registrations before replacing files.'
+if ($innoSource -notmatch '(?s)function IsVersionAlreadyInstalled.*?not HasMachineInstall.*?IsVersionInstalledAtLeast\(HKCU\).*?function InitializeSetup') {
+    throw 'The Inno installer must never treat a machine-wide install as "already installed"; it must be migrated.'
+}
+if ($innoSource -notmatch "(?s)function PrepareToInstall.*?RemoveMachineInstall" -or
+    $innoSource -notmatch "ShellExec\('runas', Uninstaller") {
+    throw 'The Inno installer must remove a machine-wide install with UAC before writing any files.'
+}
+if ($innoSource -notmatch '(?s)CopyUserData\(DataPath, BackupPath\).*?ShellExec\(.runas.*?CopyUserData\(BackupPath, DataPath\)') {
+    throw 'The Inno installer must back up and restore user settings around the old uninstaller.'
 }
 
 Write-Output 'Installer migration postcondition tests passed (legacy registration and shared shortcut).'
