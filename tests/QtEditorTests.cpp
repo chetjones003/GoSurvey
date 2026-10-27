@@ -5361,6 +5361,37 @@ private Q_SLOTS:
     QVERIFY(IsFramed(st, *window.m_Viewport, 200.0, 100.0));
   }
 
+  // Issue #1100: the first Qt click starts the existing Zoom selection box; the second queues and
+  // applies that rectangle through the same viewport path as the ImGui frontend.
+  void issue1100QtZoomWindowClicksBothCorners() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    DrawWideLine(window);
+    ParkCamera(st);
+    window.Submit("ZW");
+    QCOMPARE(st.active, AppCommandState::Kind::Zoom);
+    QVERIFY(!st.selBoxWaitingSecond);
+
+    const QPoint first(300, 300), second(800, 500);
+    QTest::mouseMove(window.m_Viewport, first);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, first);
+    QVERIFY(st.selBoxWaitingSecond);
+    QCOMPARE(st.active, AppCommandState::Kind::Zoom);
+    QCOMPARE(st.selBoxAnchorScreenX, static_cast<float>(first.x()));
+    QCOMPARE(st.selBoxAnchorScreenY, static_cast<float>(first.y()));
+    QVERIFY(!st.pendingZoomWindow);
+
+    QTest::mouseMove(window.m_Viewport, second);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
+    QTRY_VERIFY(!st.pendingZoomWindow);
+    QVERIFY(LogHas(window.m_Log, "Zoom window applied"));
+    QCOMPARE(st.active, AppCommandState::Kind::None);
+    QVERIFY(IsFramed(st, *window.m_Viewport,
+        std::abs(st.pendingZoomMxX - st.pendingZoomMnX),
+        std::abs(st.pendingZoomMxY - st.pendingZoomMnY)));
+  }
+
   // REQ-201: with nothing to frame, say so and leave the view alone.
   void issue1024QtZoomExtentsOnAnEmptyDrawingSaysWhyAndKeepsTheView() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();

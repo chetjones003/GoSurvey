@@ -1012,6 +1012,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       return;
     }
     const auto route = ViewportClickRouteFor(m_State);
+    if (route == ViewportClickRoute::SelectionBox && m_State.active == AppCommandState::Kind::Zoom &&
+        !m_State.selBoxWaitingSecond) {
+      BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+          static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
         m_State.active == AppCommandState::Kind::SectionPlane) {
