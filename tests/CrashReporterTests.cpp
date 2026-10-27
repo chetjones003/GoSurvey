@@ -2,6 +2,8 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <nlohmann/json.hpp>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -12,6 +14,26 @@ TEST_CASE("ExceptionCodeToWireReason maps common Windows codes", "[crash][platfo
   REQUIRE(crashReporter::ExceptionCodeToWireReason(EXCEPTION_STACK_OVERFLOW) == "stack_overflow");
 #endif
   REQUIRE(crashReporter::ExceptionCodeToWireReason(0xDEADBEEF) == "unhandled_exception");
+}
+
+TEST_CASE("TruncateUtf8 keeps short text and cuts long text at a character boundary", "[crash][platform]") {
+  // "ab" + "\xC3\xA9" (e acute, 2 bytes) + "\xC3\xA9" = 6 bytes.
+  const std::string text = "ab\xC3\xA9\xC3\xA9";
+  REQUIRE(crashReporter::TruncateUtf8(text, 6) == text);
+  REQUIRE(crashReporter::TruncateUtf8(text, 3) == "ab");
+  REQUIRE(crashReporter::TruncateUtf8(text, 4) == "ab\xC3\xA9");
+  REQUIRE(crashReporter::TruncateUtf8(text, 5) == "ab\xC3\xA9");
+}
+
+TEST_CASE("TruncateUtf8 keeps the upload JSON-encodable when a multi-byte character straddles the cap", "[crash][platform]") {
+  // 16383 ASCII bytes then a 2-byte character: the 16384-byte cut lands inside it.
+  const std::string report = std::string(16383, 'a') + "\xC3\xA9";
+  REQUIRE(report.size() == 16385);
+  const std::string cut = crashReporter::TruncateUtf8(report, 16384);
+  REQUIRE(cut == std::string(16383, 'a'));
+  nlohmann::json body;
+  body["report"] = cut;
+  REQUIRE_NOTHROW(body.dump());
 }
 
 #ifdef _WIN32
