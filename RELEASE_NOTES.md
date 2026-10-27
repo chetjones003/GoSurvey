@@ -19,6 +19,13 @@ time. Current GoSurvey drawings use DWG.
 
 ---
 
+## 0.7.8
+
+**Updating GoSurvey**
+- Fixed the Start Menu still opening an old version after an update. The installer and install command now ask Windows for permission to remove an older Program Files copy, keep your settings, and stop with a clear message if it can't be removed.
+
+---
+
 ## 0.7.7
 
 **Updating GoSurvey**

@@ -15,6 +15,11 @@ Complete the [pre-PR product documentation review in `CLAUDE.md`](CLAUDE.md#pre-
 Use the Windows MSVC/CMake/Ninja workflow in [CLAUDE.md §1](CLAUDE.md#1-environment).
 From the repository root in PowerShell:
 
+Start every new task in its own new worktree and branch cut from the current `master` (or the
+intended base); never reuse another task's worktree. After a PR merges, GitHub deletes the remote
+branch automatically; run `pwsh scripts/cleanup-merged-worktrees.ps1` to remove the merged local
+worktree and branch (it skips any worktree with uncommitted changes).
+
 Build and run only from the root of your assigned worktree, using that checkout's
 `./build.bat` and `./run.bat` (or their `debug` variants). Leave GoSurvey instances
 started from other worktrees untouched; do not close them or interfere with their

@@ -121,6 +121,9 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Code]
+const
+  AppUninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{02774040-27C9-4A9A-A999-86E641C42F78}_is1';
+
 // A direct installer launch must not replace a build already installed at this version or newer. The bootstrap
 // performs the same check before downloading; this protects users who run the installer itself.
 function IsVersionInstalledAtLeast(RootKey: Integer): Boolean;
@@ -131,16 +134,120 @@ var
 begin
   Result := False;
   if RegQueryStringValue(RootKey,
-       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{02774040-27C9-4A9A-A999-86E641C42F78}_is1',
+       AppUninstallKey,
        'DisplayVersion', InstalledVersion) and
      StrToVersion(InstalledVersion, InstalledPackedVersion) and
      StrToVersion('{#AppVersion}', SetupPackedVersion) then
     Result := ComparePackedVersion(InstalledPackedVersion, SetupPackedVersion) >= 0;
 end;
 
+// A machine-wide (Program Files) install is registered under HKLM. Setup runs per-user, so it
+// cannot replace that copy; it has to be removed with one UAC consent. Returns True when the
+// registration exists in this registry view, with the uninstaller path it names.
+function FindMachineInstallIn(RootKey: Integer; var Uninstaller: String): Boolean;
+var
+  Location: String;
+begin
+  Result := RegKeyExists(RootKey, AppUninstallKey);
+  if not Result then
+    Exit;
+  if not RegQueryStringValue(RootKey, AppUninstallKey, 'InstallLocation', Location) or (Location = '') then
+    Location := GetEnv('ProgramW6432') + '\{#MyAppName}';
+  Uninstaller := AddBackslash(Location) + 'unins000.exe';
+end;
+
+function FindMachineInstall(var Uninstaller: String): Boolean;
+begin
+  Result := FindMachineInstallIn(HKLM64, Uninstaller) or FindMachineInstallIn(HKLM32, Uninstaller);
+end;
+
+function HasMachineInstall: Boolean;
+var
+  Ignored: String;
+begin
+  Result := FindMachineInstall(Ignored);
+end;
+
+// A machine-wide copy always needs removing, even when its version is current: leaving it keeps
+// the shared Start Menu shortcut pointing at Program Files, which is how 0.7.4 kept launching
+// after an update to the per-user copy.
 function IsVersionAlreadyInstalled: Boolean;
 begin
-  Result := IsVersionInstalledAtLeast(HKCU) or IsVersionInstalledAtLeast(HKLM);
+  Result := (not HasMachineInstall) and IsVersionInstalledAtLeast(HKCU);
+end;
+
+function CopyUserData(const Source, Dest: String): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(ExpandConstant('{sys}\xcopy.exe'),
+    '"' + Source + '\*" "' + Dest + '\" /E /I /H /Y /Q', '', SW_HIDE, ewWaitUntilTerminated, ResultCode)
+    and (ResultCode = 0);
+end;
+
+// Removes the machine-wide install with a UAC prompt. The old uninstaller also deletes
+// %APPDATA%\GoSurvey, so settings are copied aside first and put back afterwards.
+// Returns '' on success, otherwise the reason Setup must stop.
+function RemoveMachineInstall: String;
+var
+  Uninstaller, DataPath, BackupPath, ShortcutPath: String;
+  ResultCode: Integer;
+  HadData: Boolean;
+begin
+  Result := '';
+  if not FindMachineInstall(Uninstaller) then
+    Exit;
+  if not FileExists(Uninstaller) then
+  begin
+    Result := 'GoSurvey is installed for all users, but its uninstaller (' + Uninstaller +
+      ') is missing. Remove the old GoSurvey from Windows Settings > Apps, then run Setup again.';
+    Exit;
+  end;
+
+  DataPath := ExpandConstant('{userappdata}\{#MyAppName}');
+  BackupPath := ExpandConstant('{localappdata}\{#MyAppName}-migration-backup');
+  HadData := DirExists(DataPath);
+  if HadData then
+  begin
+    DelTree(BackupPath, True, True, True);
+    if not CopyUserData(DataPath, BackupPath) then
+    begin
+      Result := 'Setup could not back up your GoSurvey settings, so the old all-users copy was not removed.';
+      Exit;
+    end;
+  end;
+
+  Log('Removing the machine-wide GoSurvey install with ' + Uninstaller);
+  if not ShellExec('runas', Uninstaller, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '',
+                   SW_SHOWNORMAL, ewWaitUntilTerminated, ResultCode) then
+    Result := 'GoSurvey is installed for all users and Windows did not allow Setup to remove it (error ' +
+      IntToStr(ResultCode) + '). Approve the Windows administrator prompt, or remove the old GoSurvey from Windows Settings > Apps, then run Setup again.'
+  else if ResultCode <> 0 then
+    Result := 'The old all-users GoSurvey uninstaller returned exit code ' + IntToStr(ResultCode) + '. Setup did not install the new version.'
+  else if HasMachineInstall then
+    Result := 'The old all-users GoSurvey is still registered after its uninstaller finished. Setup did not install the new version.';
+
+  if HadData then
+  begin
+    if CopyUserData(BackupPath, DataPath) then
+      DelTree(BackupPath, True, True, True)
+    else if Result = '' then
+      Result := 'Setup could not restore your GoSurvey settings. They are saved in ' + BackupPath + '.';
+  end;
+  if Result <> '' then
+    Exit;
+
+  // The shared shortcut must not survive: it would keep opening the Program Files copy.
+  ShortcutPath := GetEnv('ProgramData') + '\Microsoft\Windows\Start Menu\Programs\{#MyAppName}.lnk';
+  if FileExists(ShortcutPath) and not DeleteFile(ShortcutPath) then
+    Log('Could not remove the shared Start Menu shortcut ' + ShortcutPath);
+end;
+
+// Runs after the wizard (or silent flow) and before any file is written, so a refused UAC prompt
+// stops Setup with the old install intact instead of leaving two copies.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  Result := RemoveMachineInstall;
 end;
 
 function InitializeSetup: Boolean;
