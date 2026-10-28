@@ -742,6 +742,98 @@ LsaWeights MakeRoundTripWeights() {
 
 }  // namespace
 
+TEST_CASE("TraverseIo: side shots and direction observations round-trip every input field", "[io][REQ-403]") {
+    TraverseData original;
+    TraverseSideShot shot;
+    shot.horizAngleDeg = 123.45;
+    shot.horizDist = 67.89;
+    shot.slopeDist = 70.12;
+    shot.vertAngleDeg = 88.76;
+    shot.knownEasting = 5432.1;
+    shot.knownNorthing = 6789.2;
+    shot.description = "fence corner";
+    shot.code = "FNC";
+    shot.sourceOrder = 17;
+    shot.horizAngleBuf = "123-27-00";
+    shot.vertAngleBuf = "88-45-36";
+    shot.atStationId = 4;
+    shot.stationId = 101;
+    shot.hasHorizAngle = true;
+    shot.hasHorizDist = true;
+    shot.hasSlopeDist = true;
+    shot.isZenithAngle = false;
+    shot.hasVertAngle = true;
+    shot.isCheckShot = true;
+    shot.hasKnownCoords = true;
+    original.sideShots.push_back(shot);
+
+    NetworkDirectionObs direction;
+    direction.setId = 8;
+    direction.atId = 4;
+    direction.toId = 9;
+    direction.directionDeg = 271.234;
+    direction.stdErrorSec = 2.5;
+    direction.code = "CTRL";
+    direction.sourceOrder = 23;
+    original.networkDirections.push_back(direction);
+
+    const std::string path = (TraverseIoTestDir() / "side-shots-directions.gstrav").string();
+    std::string err;
+    REQUIRE(traverseio::Save(path, original, LsaWeights{}, err));
+
+    TraverseData loaded;
+    LsaWeights weights;
+    REQUIRE(traverseio::Load(path, loaded, weights, err));
+    REQUIRE(loaded.sideShots.size() == 1);
+    const TraverseSideShot& loadedShot = loaded.sideShots[0];
+    CHECK(loadedShot.horizAngleDeg == Approx(shot.horizAngleDeg));
+    CHECK(loadedShot.horizDist == Approx(shot.horizDist));
+    CHECK(loadedShot.slopeDist == Approx(shot.slopeDist));
+    CHECK(loadedShot.vertAngleDeg == Approx(shot.vertAngleDeg));
+    CHECK(loadedShot.knownEasting == Approx(shot.knownEasting));
+    CHECK(loadedShot.knownNorthing == Approx(shot.knownNorthing));
+    CHECK(loadedShot.description == shot.description);
+    CHECK(loadedShot.code == shot.code);
+    CHECK(loadedShot.sourceOrder == shot.sourceOrder);
+    CHECK(loadedShot.horizAngleBuf == shot.horizAngleBuf);
+    CHECK(loadedShot.vertAngleBuf == shot.vertAngleBuf);
+    CHECK(loadedShot.atStationId == shot.atStationId);
+    CHECK(loadedShot.stationId == shot.stationId);
+    CHECK(loadedShot.hasHorizAngle == shot.hasHorizAngle);
+    CHECK(loadedShot.hasHorizDist == shot.hasHorizDist);
+    CHECK(loadedShot.hasSlopeDist == shot.hasSlopeDist);
+    CHECK(loadedShot.isZenithAngle == shot.isZenithAngle);
+    CHECK(loadedShot.hasVertAngle == shot.hasVertAngle);
+    CHECK(loadedShot.isCheckShot == shot.isCheckShot);
+    CHECK(loadedShot.hasKnownCoords == shot.hasKnownCoords);
+
+    REQUIRE(loaded.networkDirections.size() == 1);
+    const NetworkDirectionObs& loadedDirection = loaded.networkDirections[0];
+    CHECK(loadedDirection.setId == direction.setId);
+    CHECK(loadedDirection.atId == direction.atId);
+    CHECK(loadedDirection.toId == direction.toId);
+    CHECK(loadedDirection.directionDeg == Approx(direction.directionDeg));
+    CHECK(loadedDirection.stdErrorSec == Approx(direction.stdErrorSec));
+    CHECK(loadedDirection.code == direction.code);
+    CHECK(loadedDirection.sourceOrder == direction.sourceOrder);
+}
+
+TEST_CASE("TraverseIo: v1 files without side shots or directions still load", "[io][REQ-403]") {
+    const std::filesystem::path path = TraverseIoTestDir() / "legacy-without-side-shots-directions.gstrav";
+    {
+        std::ofstream f(path, std::ios::binary | std::ios::trunc);
+        f << R"({"format":"gstrav","version":1,"startStationId":12})";
+    }
+
+    TraverseData loaded;
+    LsaWeights weights;
+    std::string err;
+    REQUIRE(traverseio::Load(path.string(), loaded, weights, err));
+    CHECK(loaded.startStationId == 12);
+    CHECK(loaded.sideShots.empty());
+    CHECK(loaded.networkDirections.empty());
+}
+
 TEST_CASE("TraverseIo: save/load round-trips every input field", "[io][REQ-403]") {
     const TraverseData original = MakeRoundTripFixture();
     const LsaWeights originalWeights = MakeRoundTripWeights();
@@ -858,6 +950,35 @@ TEST_CASE("TraverseIo: a malformed file fails Load and leaves the traverse untou
     CHECK(td.legs.size() == before.legs.size());
     CHECK(td.startStationId == before.startStationId);
     CHECK(weights.sigmaAngleSec == Approx(weightsBefore.sigmaAngleSec));
+}
+
+TEST_CASE("TraverseIo: malformed side-shot and direction entries fail without changing the traverse", "[io][REQ-403]") {
+    const std::array<std::string, 2> malformedFiles = {
+        R"({"format":"gstrav","version":1,"sideShots":[null]})",
+        R"({"format":"gstrav","version":1,"networkDirections":[null]})",
+    };
+    size_t index = 0;
+    for (const std::string& contents : malformedFiles) {
+        const std::filesystem::path path = TraverseIoTestDir() / ("malformed-observation-" + std::to_string(index++) + ".gstrav");
+        {
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            f << contents;
+        }
+
+        TraverseData td = MakeRoundTripFixture();
+        const TraverseData before = td;
+        LsaWeights weights = MakeRoundTripWeights();
+        const LsaWeights weightsBefore = weights;
+        std::string err;
+
+        CHECK_FALSE(traverseio::Load(path.string(), td, weights, err));
+        CHECK_FALSE(err.empty());
+        CHECK(td.legs.size() == before.legs.size());
+        CHECK(td.sideShots.size() == before.sideShots.size());
+        CHECK(td.networkDirections.size() == before.networkDirections.size());
+        CHECK(td.startStationId == before.startStationId);
+        CHECK(weights.sigmaAngleSec == Approx(weightsBefore.sigmaAngleSec));
+    }
 }
 
 TEST_CASE("TraverseIo: a file with the wrong format tag is refused", "[io][REQ-403]") {
