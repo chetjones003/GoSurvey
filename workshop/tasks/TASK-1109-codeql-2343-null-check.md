@@ -83,4 +83,4 @@ User requested a focused PR from `fix/codeql-2343-null-check` to `beta`; do not 
 PR labels: `bug` (type) and `needs review` (ready status). PR body must cite REQ-324, report both full-suite runs (first 190/191 transient Qt failure, second 191/191), the four documentation review outcomes above, and that alert closure awaits the next supported beta CodeQL scan. No UI screenshots or external product-doc updates apply.
 
 ### PR execution
-- Pending creation; the user explicitly authorized the PR to beta.
+- Created PR [#1126](https://github.com/chetjones003/GoSurvey/pull/1126) to `beta` after explicit user authorization. At creation, head SHA was `246f8323317bc26c688f8ffd70ae8c0c1f12cbe0`; labels `bug` and `needs review` were present. Initial PR inspection: docs-only policy and docs-only classification checks passed; PR gate, full build/test, clang-tidy, MSVC analysis, dependency scan, and gitleaks checks were pending; no review decision was recorded. PR remains open and unmerged; alert closure awaits a supported beta CodeQL scan.
