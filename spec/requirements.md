@@ -3173,6 +3173,14 @@ requirements is a planning failure, not a sign of rigor.
     drawing canvas uses a deep navy ground with a fine, low-contrast blue grid. The Light theme
     remains unchanged. *(Qt accent colours superseded by REQ-436: the primary accent is now
     topo-line amber, D-2026-10-21-f.)*
+  - **(added 2026-10-28, D-2026-10-28-b; GitHub issue #1041)** the Qt drawing workspace
+    chrome has a narrow appearance exception in both Light and Dark: the ribbon/workspace
+    boundary and the Properties, viewport, and Toolspace surfaces are visibly separated; the
+    ribbon and dock panels have restrained rounded, raised edges; and the permanent ribbon tabs
+    have modest rounding with distinct hover and selected states. Preserve each theme's palette,
+    the viewport's usable area, all ribbon and docking behavior, and all drawing/viewport content.
+    This Qt-only workspace treatment does not alter the ImGui frontend or extend the floating
+    dialog gradient/bevel treatment from D-2026-09-01-a.
 - Owner-layer: UI (`src/ui/CadUi.cpp`; Qt frontend `src/qt/QtAppearance.cpp`, `src/qt/EditorChrome.cpp`, and `src/qt/EditorWindow.cpp`)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
@@ -3181,7 +3189,9 @@ requirements is a planning failure, not a sign of rigor.
   colours regardless of which theme was active. User supplied the Hazel editor as
   the visual reference and chose (1) the **Dark** theme as the one to restyle,
   leaving the classic theme intact, and (2) full parity including the
-  property-grid widgets. See ADR-033.
+  property-grid widgets. See ADR-033. 2026-10-28 — D-2026-10-28-b / GitHub issue #1041 adds the
+  Qt drawing-workspace chrome exception above in both Qt appearances; the original ImGui theme
+  direction and the floating-dialog-only scope of D-2026-09-01-a remain intact.
   2026-08-16 (revision 2) — after seeing revision 1 running, the user asked that
   the palette be put on a proper footing rather than left as hand-picked values.
   Measuring the shipped ramp found three defects the eye had registered but not
@@ -12853,7 +12863,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Surfaces.** The Qt **Dark** appearance uses graphite surfaces throughout the application: the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels.
   2. **Primary accent.** In both the **Dark** and **Light** appearances, the primary accent — the colour of active and interactive states in Qt application chrome (selected and hovered controls, pressed and checked buttons, focus rings, selected rows and tabs, links, the application-menu button, checked radio/check indicators, progress and highlight fills) — is the **topo-line amber**: the hue of the amber contours in the topographic artwork (`src/qt/TopographicArtwork.hpp`, RGB 185,100,12, hue about 30 degrees). Each appearance picks its own lightness and saturation of that hue so text on it and the control itself stay readable; the hue is the same in both. Aqua and the Light appearance's light-blue/Windows-blue accent no longer appear as a primary accent in Qt chrome.
   3. **Secondary emphasis.** Secondary emphasis (informational notes, "recommended"/tag labels, secondary cards, quiet detail) uses a calm neutral tone (soft grey-blue in Dark, grey in Light), never the primary amber, so "active" and "secondary" remain distinguishable. Warnings keep a distinct warning look that is readable in both appearances and is not mistaken for an active state.
-  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged.
+  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged except for the Qt drawing-workspace chrome treatment explicitly accepted by D-2026-10-28-b / issue #1041: its specified workspace seams, subtle rounding, and elevation marks only.
 - Acceptance:
   - Start, drawing workspace, menus, and representative Qt dialogs render with the topo-line amber for active, hover, pressed, checked, focus and selected states in Dark and in Light; no aqua (`#55d8d0`/`#168e8a` family) or light/Windows blue (`#0078d7`/`#438fda`/`#0878c5` family) remains as a primary accent in `QtAppearance.cpp`, `EditorSurfaceUi.hpp`, the Start page, or the dialogs that carried their own accent colours.
   - Primary text on an accent-filled control meets 4.5:1 contrast, and an accent border/indicator against its surface meets 3:1, in both appearances; hover, pressed, checked and disabled states are visibly distinct from one another.
@@ -12861,8 +12871,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - No Qt-owned surface in Dark retains the former deep navy as its dominant UI surface color.
   - Switching between Dark and Light leaves neither palette behind in the other appearance.
   - Drawing content, entity colors, the canvas ground/grid, and behavior remain unchanged when appearance changes.
-- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction. Amended (2026-10-21) — D-2026-10-21-f, GitHub issue #1031.
-- Revisions: 2026-10-21 — retitled and rewritten from "Qt Dark appearance uses graphite with aqua and amber accents". Primary accent aqua -> topo-line amber and extended to the Light appearance (previously "Classic light is unchanged"); the former amber secondary role became a neutral tone because one colour cannot be both the primary and the secondary accent. The Dark canvas grid tint is treated as drawing-area colour and stays as shipped.
+- Status: accepted (2026-10-19) — D-2026-10-19-h, user direction. Amended (2026-10-21) — D-2026-10-21-f, GitHub issue #1031; 2026-10-28 — D-2026-10-28-b, GitHub issue #1041.
+- Revisions: 2026-10-21 — retitled and rewritten from "Qt Dark appearance uses graphite with aqua and amber accents". Primary accent aqua -> topo-line amber and extended to the Light appearance (previously "Classic light is unchanged"); the former amber secondary role became a neutral tone because one colour cannot be both the primary and the secondary accent. The Dark canvas grid tint is treated as drawing-area colour and stays as shipped. 2026-10-28 — clarified that the general Light non-accent-surface freeze has the narrow Qt drawing-workspace chrome exception in D-2026-10-28-b; palette, viewport, drawing content, and all other Light surfaces remain unchanged.
 
 ### REQ-431 — Qt least-squares adjustment editor: highlighting, line numbers, inline errors and plan preview (GitHub issue #912)
 
