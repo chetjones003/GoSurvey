@@ -280,6 +280,8 @@ void EditorWindow::BuildRibbonPages() {
   auto* tabMenuItems = new QMenu(tabMenu); tabMenu->setMenu(tabMenuItems);
   headerLayout->addWidget(tabMenu); headerLayout->addStretch(); header->hide(); ribbonLayout->addWidget(header);
   auto* ribbon = new QTabWidget(ribbonColumn); ribbon->setObjectName("ribbon"); ribbonLayout->addWidget(ribbon, 1);
+  ribbon->tabBar()->setMouseTracking(true);
+  ribbon->tabBar()->setAttribute(Qt::WA_Hover, true);
   strip->addWidget(ribbonColumn, 1);
   auto* shared = new QWidget(wrapper); shared->setObjectName("ribbonSharedArea"); shared->setFixedWidth(228);
   auto* sharedColumn = new QVBoxLayout(shared); sharedColumn->setContentsMargins(0, 26, 0, 0); sharedColumn->setSpacing(0);

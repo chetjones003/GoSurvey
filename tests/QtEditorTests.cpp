@@ -6108,6 +6108,61 @@ private Q_SLOTS:
     QVERIFY(!drawings()->isExpanded()); QVERIFY(blocks()->isExpanded());
   }
 
+  void issue1041WorkspaceChromeWorksInBothAppearances() {
+    IsolatedUserData isolated;
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restore = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+    });
+
+    ApplyQtAppearance(*qApp, false);
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1540, 900);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+
+    auto* ribbon = window.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    auto* ribbonTabs = ribbon->tabBar(); QVERIFY(ribbonTabs);
+    QVERIFY(ribbonTabs->count() >= 2);
+    auto* properties = window.findChild<QDockWidget*>("propertiesDock"); QVERIFY(properties);
+    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(toolspace);
+    if (auto* recent = window.findChild<QLabel*>("commandRecent")) recent->hide();
+    window.resizeDocks({properties, toolspace}, {285, 295}, Qt::Horizontal);
+
+    for (const bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      QCoreApplication::processEvents();
+      ribbon->setCurrentIndex(0);
+      ribbonTabs->update();
+      QTest::qWait(50);
+      QVERIFY(properties->isVisible());
+      QVERIFY(toolspace->isVisible());
+      const char* theme = light ? "light" : "dark";
+      const QImage selectedImage = window.grab().toImage();
+      QVERIFY(selectedImage.save(Issue886Shot((QString("issue1041-workspace-%1-home-selected.png").arg(theme)).toLatin1().constData())));
+
+      const QPoint insertTab = ribbonTabs->tabRect(1).center();
+      QVERIFY(ribbonTabs->rect().contains(insertTab));
+      QTest::mouseClick(ribbonTabs, Qt::LeftButton, Qt::NoModifier, insertTab);
+      QCOMPARE(ribbon->currentIndex(), 1);
+      QCoreApplication::processEvents();
+      QTest::qWait(150);
+      QVERIFY(properties->isVisible());
+      QVERIFY(toolspace->isVisible());
+      QVERIFY(window.grab().save(Issue886Shot((QString("issue1041-workspace-%1-insert-selected.png").arg(theme)).toLatin1().constData())));
+    }
+
+    window.resize(1000, 760);
+    QCoreApplication::processEvents();
+    QVERIFY(ribbon->isVisible());
+    QVERIFY(properties->isVisible());
+    QVERIFY(toolspace->isVisible());
+  }
+
   void frontViewPanMovesInCameraPlane() {
     EditorWindow window;
     window.show();
