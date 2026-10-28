@@ -73,4 +73,3 @@ None. “Subtle/modest” remains a visual acceptance judged by the issue's requ
 - Refactors:              none planned
 - Docs updated:           REQ-081 and REQ-436 amended; product documentation review recorded, no product docs needed edits.
 - Done:                   implementation, verification, and visual approval are complete. Pull request is the next step.
-
