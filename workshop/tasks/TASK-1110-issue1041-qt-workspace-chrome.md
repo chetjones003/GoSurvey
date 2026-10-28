@@ -23,13 +23,13 @@
 ## 4. Questions
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
-| Q1 | Is the issue's request to amend REQ-081 and style only the listed Qt workspace surfaces in both themes sufficiently specific to resolve its recorded SPEC GAP? | 2026-10-28 | Resolved from evidence: yes. Issue #1041 explicitly requests the narrow scope, both themes, retained palettes, and acceptance checks. User directed the agent to resolve gaps from code/docs first and ask only when evidence does not settle them. Autodesk documentation confirms ribbon/tab/panel roles but makes no styling prescription. Scope and behavior remain bounded by the issue; record D-2026-10-28-a before implementation. |
+| Q1 | Is the issue's request to amend REQ-081 and style only the listed Qt workspace surfaces in both themes sufficiently specific to resolve its recorded SPEC GAP? | 2026-10-28 | Resolved from evidence: yes. Issue #1041 explicitly requests the narrow scope, both themes, retained palettes, and acceptance checks. User directed the agent to resolve gaps from code/docs first and ask only when evidence does not settle them. Autodesk documentation confirms ribbon/tab/panel roles but makes no styling prescription. Scope and behavior remain bounded by the issue; record D-2026-10-28-b before implementation. |
 
 ## 5. Assumptions
 None. “Subtle/modest” remains a visual acceptance judged by the issue's required Dark/Light screenshots; do not invent pixel/radius thresholds.
 
 ## 6. Plan
-- Approach: Record D-2026-10-28-a and amend REQ-081/REQ-436 with a narrow Qt workspace exception. Keep palette values and viewport untouched. Adjust only the existing Qt appearance rules for ribbon boundary, permanent ribbon tabs, dock panel edges, and workspace seams. Add or extend Qt tests for style/state coverage and retain screenshot evidence for Dark and Light review.
+- Approach: Record D-2026-10-28-b and amend REQ-081/REQ-436 with a narrow Qt workspace exception. Keep palette values and viewport untouched. Adjust only the existing Qt appearance rules for ribbon boundary, permanent ribbon tabs, dock panel edges, and workspace seams. Add or extend Qt tests for style/state coverage and retain screenshot evidence for Dark and Light review.
 - Files/functions to touch: `spec/project.md`, `spec/requirements.md`, `workshop/tasks/TASK-1110-issue1041-qt-workspace-chrome.md`, `verification/reviews/TASK-1110-plan-review.md`, `src/qt/QtAppearance.cpp`, `src/qt/EditorRibbon.cpp`, and `tests/QtEditorTests.cpp`. Update the Qt parity ledger if it tracks this appearance work.
 - Test approach: Happy path = both appearances show separated, rounded, subtly raised ribbon/panel surfaces and distinct tab states; failure/regression = switching Light → Dark → Light leaves no stale styles and existing ribbon/dock interaction tests continue to pass. Screenshot both themes at a representative workspace layout.
 - Steps:
@@ -44,7 +44,7 @@ None. “Subtle/modest” remains a visual acceptance judged by the issue's requ
 ## 8. Implementation log
 - 2026-10-28 — Opened in a dedicated worktree from `origin/beta` after user direction to investigate and resolve blockers using code/spec/documentation evidence.
 - 2026-10-28 — Inspected REQ-081, REQ-436, existing Qt style rules and Autodesk ribbon/workspace documentation. Findings and evidence are recorded in Q1 and the proposed decision; no code changed.
-- 2026-10-28 — Verification approved the bounded plan. Recorded D-2026-10-28-a, amended REQ-081/REQ-436 narrowly for the #1041 Qt workspace surfaces, and removed the `blocked` issue label in favor of `in progress`.
+- 2026-10-28 — Verification approved the bounded plan. Recorded D-2026-10-28-b, amended REQ-081/REQ-436 narrowly for the #1041 Qt workspace surfaces, and removed the `blocked` issue label in favor of `in progress`.
 - 2026-10-28 — Implemented workspace-only Qt separators, ribbon boundaries, rounded tab faces and dock panel edges in both appearance styles; enabled hover tracking on the permanent ribbon tab bar. Added a Qt editor test that checks ribbon tab navigation and dock visibility after theme switching/resizing, and captures Home/Insert selected states in Light and Dark.
 - 2026-10-28 — `build.bat` passed after the final production-code changes. The first CTest filter matched no tests because Qt cases are shard-suffixed; corrected to all six `qt.editor.shard-*` tests. Final rerun passed 6/6 (389.80 s); `ctest --preset ninja-release -R "^build[.]output-layout$"` passed 1/1. `git diff --check` passed.
 - 2026-10-28 — Pre-PR product documentation review: `README.md`, `PRIVACY.md`, `resources/wiki/`, and the public manual wiki linked from gosurveycad.com were reviewed. No updates are needed: the change does not alter commands, panel placement, help entry points, data handling, or workflows. The public manual homepage indexes a User Interface page whose source was absent in the cloned wiki; the in-app `resources/wiki/User-Interface.md` was reviewed and its functional descriptions remain accurate.
@@ -52,6 +52,7 @@ None. “Subtle/modest” remains a visual acceptance judged by the issue's requ
 - 2026-10-28 — A follow-up that floated Properties and Toolspace on the drawing was rejected. Restored the earlier workspace chrome: ribbon and dock edges in place, no canvas gutter and no overlay cards.
 - 2026-10-28 — The user rejected the dark-color experiments. Restored the dark workspace to the first #1041 chrome: beveled separator, original drawing surface, and original panel colors.
 - 2026-10-28 — The user approved that restored workspace. Re-checked `README.md`, `PRIVACY.md`, `resources/wiki/`, and the earlier public-manual review: still no product-doc update. The change does not alter commands, panel placement, help, data handling, or workflows.
+- 2026-10-28 — Beta already recorded D-2026-10-28-a for full-sheet paper viewports. This workspace decision is D-2026-10-28-b. The appearance is unchanged.
 
 ## 9. Self-verification
 - [x] build-project — Release build passed after final production-code changes; the subsequent edit changed only test capture timing.

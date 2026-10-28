@@ -2,7 +2,7 @@
 
 ## Authority and specification decision
 
-**APPROVE.** GitHub issue #1041 gives a concrete Qt-only surface list, requires both themes, preserves the semantic accent palette and viewport, and names the interactions that must continue to work. Its existing owner-authored SPEC GAP comment identifies REQ-081's Light-theme freeze. The issue itself explicitly requests the REQ-081 amendment, and D-2026-10-28-a records the user's current instruction to resolve gaps through repository and product evidence. REQ-436's Light-surface freeze is amended only for those listed workspace marks; other palette and surface rules remain binding.
+**APPROVE.** GitHub issue #1041 gives a concrete Qt-only surface list, requires both themes, preserves the semantic accent palette and viewport, and names the interactions that must continue to work. Its existing owner-authored SPEC GAP comment identifies REQ-081's Light-theme freeze. The issue itself explicitly requests the REQ-081 amendment, and D-2026-10-28-b records the user's current instruction to resolve gaps through repository and product evidence. REQ-436's Light-surface freeze is amended only for those listed workspace marks; other palette and surface rules remain binding.
 
 The Autodesk AutoCAD help pages describe ribbon tabs, ribbon panels, workspace membership, dock state, palette position and size, but do not prescribe rounding, elevation, or theme styling. Those pages support the surface ownership and functional regression checks; they do not add design requirements. Existing `QtAppearance.cpp` rules already own and style these Qt surfaces, so the codebase supplies the right implementation seam.
 
@@ -27,4 +27,4 @@ The Autodesk AutoCAD help pages describe ribbon tabs, ribbon panels, workspace m
 
 ## Verdict
 
-**APPROVE** — the issue and recorded decision make the intended behavior testable and narrow enough to implement without further user choice. Proceed with D-2026-10-28-a and the TASK-1110 plan.
+**APPROVE** — the issue and recorded decision make the intended behavior testable and narrow enough to implement without further user choice. Proceed with D-2026-10-28-b and the TASK-1110 plan.
