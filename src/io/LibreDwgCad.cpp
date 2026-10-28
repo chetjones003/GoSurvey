@@ -4502,11 +4502,6 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   const Dwg_Object_Type ty = obj->fixedtype;
   if (ty == DWG_TYPE_VIEWPORT && ent->tio.VIEWPORT != nullptr) {
     const Dwg_Entity_VIEWPORT* e = ent->tio.VIEWPORT;
-    // AutoCAD's layout chrome viewport spans the whole sheet and is not a user viewport; one that is
-    // merely wide (over 50 in on a large sheet) is a real one (issue #768, finding I6). The viewport id
-    // is not reliable after a save, so the sheet span is the test.
-    if (e->width >= L.sheetWidthIn() * 0.99 && e->height >= L.sheetHeightIn() * 0.99)
-      return;
     Viewport vp;
     vp.paperWIn = static_cast<float>(e->width);
     vp.paperHIn = static_cast<float>(e->height);
