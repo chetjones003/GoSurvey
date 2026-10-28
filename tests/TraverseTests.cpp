@@ -952,6 +952,35 @@ TEST_CASE("TraverseIo: a malformed file fails Load and leaves the traverse untou
     CHECK(weights.sigmaAngleSec == Approx(weightsBefore.sigmaAngleSec));
 }
 
+TEST_CASE("TraverseIo: malformed side-shot and direction entries fail without changing the traverse", "[io][REQ-403]") {
+    const std::array<std::string, 2> malformedFiles = {
+        R"({"format":"gstrav","version":1,"sideShots":[null]})",
+        R"({"format":"gstrav","version":1,"networkDirections":[null]})",
+    };
+    size_t index = 0;
+    for (const std::string& contents : malformedFiles) {
+        const std::filesystem::path path = TraverseIoTestDir() / ("malformed-observation-" + std::to_string(index++) + ".gstrav");
+        {
+            std::ofstream f(path, std::ios::binary | std::ios::trunc);
+            f << contents;
+        }
+
+        TraverseData td = MakeRoundTripFixture();
+        const TraverseData before = td;
+        LsaWeights weights = MakeRoundTripWeights();
+        const LsaWeights weightsBefore = weights;
+        std::string err;
+
+        CHECK_FALSE(traverseio::Load(path.string(), td, weights, err));
+        CHECK_FALSE(err.empty());
+        CHECK(td.legs.size() == before.legs.size());
+        CHECK(td.sideShots.size() == before.sideShots.size());
+        CHECK(td.networkDirections.size() == before.networkDirections.size());
+        CHECK(td.startStationId == before.startStationId);
+        CHECK(weights.sigmaAngleSec == Approx(weightsBefore.sigmaAngleSec));
+    }
+}
+
 TEST_CASE("TraverseIo: a file with the wrong format tag is refused", "[io][REQ-403]") {
     const std::filesystem::path path = TraverseIoTestDir() / "wrongformat.gstrav";
     {

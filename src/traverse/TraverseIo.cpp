@@ -258,6 +258,7 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
     err = "\"" + path + "\" is not a valid .gstrav file (malformed JSON).";
     return false;
   }
+  try {
   if (j.value("format", std::string()) != kFormat) {
     err = "\"" + path + "\" is not a GoSurvey traverse file.";
     return false;
@@ -422,6 +423,10 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
   td = std::move(out);
   weights = w;
   return true;
+  } catch (const json::exception& ex) {
+    err = "Could not read \"" + path + "\": invalid .gstrav data (" + ex.what() + ").";
+    return false;
+  }
 }
 
 }  // namespace traverseio
