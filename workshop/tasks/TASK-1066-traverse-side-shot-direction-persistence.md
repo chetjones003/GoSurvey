@@ -1,6 +1,6 @@
 # TASK-1066 — Persist side shots and direction observations in `.gstrav`
 
-GitHub issue: #1066  
+GitHub issue: #1066
 Requirement authority: accepted REQ-403, especially its round-trip fidelity statement and input-field acceptance criterion. The issue's references to REQ-452 and TASK-1039 are mismatched and are not used as behavior authority.
 
 ## Scope and acceptance coverage
