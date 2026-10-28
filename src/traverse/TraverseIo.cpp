@@ -152,6 +152,22 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
   j["scaleFactorKind"] = static_cast<int>(td.scaleFactorKind);
   j["scaleFactor"] = td.scaleFactor;
 
+  json sideShots = json::array();
+  for (const TraverseSideShot& shot : td.sideShots) {
+    sideShots.push_back(json{
+        {"horizAngleDeg", shot.horizAngleDeg}, {"horizDist", shot.horizDist},
+        {"slopeDist", shot.slopeDist}, {"vertAngleDeg", shot.vertAngleDeg},
+        {"knownEasting", shot.knownEasting}, {"knownNorthing", shot.knownNorthing},
+        {"description", shot.description}, {"code", shot.code}, {"sourceOrder", shot.sourceOrder},
+        {"horizAngleBuf", shot.horizAngleBuf}, {"vertAngleBuf", shot.vertAngleBuf},
+        {"atStationId", shot.atStationId}, {"stationId", shot.stationId},
+        {"hasHorizAngle", shot.hasHorizAngle}, {"hasHorizDist", shot.hasHorizDist},
+        {"hasSlopeDist", shot.hasSlopeDist}, {"isZenithAngle", shot.isZenithAngle},
+        {"hasVertAngle", shot.hasVertAngle}, {"isCheckShot", shot.isCheckShot},
+        {"hasKnownCoords", shot.hasKnownCoords}});
+  }
+  j["sideShots"] = std::move(sideShots);
+
   json legs = json::array();
   for (const TraverseLeg& leg : td.legs)
     legs.push_back(LegToJson(leg));
@@ -190,6 +206,12 @@ bool Save(const std::string& path, const TraverseData& td, const LsaWeights& wei
     zeniths.push_back(json{{"from", zenith.fromId}, {"to", zenith.toId}, {"deg", zenith.zenithDeg},
                            {"std", zenith.stdErrorSec}});
   j["networkZeniths"] = std::move(zeniths);
+  json directions = json::array();
+  for (const NetworkDirectionObs& direction : td.networkDirections)
+    directions.push_back(json{{"setId", direction.setId}, {"at", direction.atId}, {"to", direction.toId},
+                              {"deg", direction.directionDeg}, {"std", direction.stdErrorSec},
+                              {"code", direction.code}, {"sourceOrder", direction.sourceOrder}});
+  j["networkDirections"] = std::move(directions);
 
   json w;
   w["sigmaAngleSec"] = weights.sigmaAngleSec;
@@ -265,6 +287,33 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
   out.scaleFactorKind = static_cast<TraverseData::ScaleFactorKind>(j.value("scaleFactorKind", 0));
   out.scaleFactor = j.value("scaleFactor", 1.0);
 
+  if (j.contains("sideShots") && j["sideShots"].is_array()) {
+    for (const json& sj : j["sideShots"]) {
+      TraverseSideShot shot;
+      shot.horizAngleDeg = sj.value("horizAngleDeg", 0.0);
+      shot.horizDist = sj.value("horizDist", 0.0);
+      shot.slopeDist = sj.value("slopeDist", 0.0);
+      shot.vertAngleDeg = sj.value("vertAngleDeg", 0.0);
+      shot.knownEasting = sj.value("knownEasting", 0.0);
+      shot.knownNorthing = sj.value("knownNorthing", 0.0);
+      shot.description = sj.value("description", std::string());
+      shot.code = sj.value("code", std::string());
+      shot.sourceOrder = sj.value("sourceOrder", 0);
+      shot.horizAngleBuf = sj.value("horizAngleBuf", std::string());
+      shot.vertAngleBuf = sj.value("vertAngleBuf", std::string());
+      shot.atStationId = sj.value("atStationId", 0);
+      shot.stationId = sj.value("stationId", 0);
+      shot.hasHorizAngle = sj.value("hasHorizAngle", false);
+      shot.hasHorizDist = sj.value("hasHorizDist", false);
+      shot.hasSlopeDist = sj.value("hasSlopeDist", false);
+      shot.isZenithAngle = sj.value("isZenithAngle", true);
+      shot.hasVertAngle = sj.value("hasVertAngle", false);
+      shot.isCheckShot = sj.value("isCheckShot", false);
+      shot.hasKnownCoords = sj.value("hasKnownCoords", false);
+      out.sideShots.push_back(std::move(shot));
+    }
+  }
+
   if (j.contains("legs") && j["legs"].is_array())
     for (const json& lj : j["legs"])
       out.legs.push_back(LegFromJson(lj));
@@ -328,6 +377,19 @@ bool Load(const std::string& path, TraverseData& td, LsaWeights& weights, std::s
       zenith.zenithDeg = zj.value("deg", 90.0);
       zenith.stdErrorSec = zj.value("std", 0.0);
       out.networkZeniths.push_back(zenith);
+    }
+  }
+  if (j.contains("networkDirections") && j["networkDirections"].is_array()) {
+    for (const json& dj : j["networkDirections"]) {
+      NetworkDirectionObs direction;
+      direction.setId = dj.value("setId", 0);
+      direction.atId = dj.value("at", 0);
+      direction.toId = dj.value("to", 0);
+      direction.directionDeg = dj.value("deg", 0.0);
+      direction.stdErrorSec = dj.value("std", 0.0);
+      direction.code = dj.value("code", std::string());
+      direction.sourceOrder = dj.value("sourceOrder", 0);
+      out.networkDirections.push_back(std::move(direction));
     }
   }
 
