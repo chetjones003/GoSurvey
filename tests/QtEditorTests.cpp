@@ -2802,6 +2802,26 @@ private Q_SLOTS:
     QVERIFY(QFile::remove(path));
   }
 
+  void helperProcessWritesMinidumpFromCapturedContextWithoutRecord() {
+    // HandleCrash's abort and terminate path has no exception record, only the context captured
+    // at the handler (REQ-425 §9). The helper must still write a dump from those pointers.
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath("crash-captured-context.dmp");
+    CONTEXT            here{};
+    EXCEPTION_POINTERS captured{};
+    ::RtlCaptureContext(&here);
+    captured.ContextRecord = &here;
+    QVERIFY(crashReporter::WriteMinidumpWithHelper(path.toStdWString(), &captured));
+    QFile dump(path);
+    QVERIFY(dump.open(QIODevice::ReadOnly));
+    QCOMPARE(dump.read(4), QByteArray("MDMP", 4));
+    QVERIFY(dump.size() > 0);
+    QVERIFY(dump.size() <= 10 * 1024 * 1024);
+    dump.close();
+    QVERIFY(QFile::remove(path));
+  }
+
   void startupGraphicsCheckPassesOnAWorkingDriver() {
     // REQ-425 §4: the launch check must not refuse a machine that can draw. (The failure branch
     // needs a broken driver and is checked by hand.)

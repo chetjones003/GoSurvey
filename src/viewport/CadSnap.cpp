@@ -1309,10 +1309,18 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const float s0 = std::sin(ang0);
       const float c1 = std::cos(ang1);
       const float s1 = std::sin(ang1);
-      const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-      const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-      const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-      const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+      const float x0 = static_cast<float>(static_cast<double>(el.cx) +
+                                          static_cast<double>(ux) * (static_cast<double>(ma) * static_cast<double>(c0)) +
+                                          static_cast<double>(px) * (static_cast<double>(mb) * static_cast<double>(s0)));
+      const float y0 = static_cast<float>(static_cast<double>(el.cy) +
+                                          static_cast<double>(uy) * (static_cast<double>(ma) * static_cast<double>(c0)) +
+                                          static_cast<double>(py) * (static_cast<double>(mb) * static_cast<double>(s0)));
+      const float x1 = static_cast<float>(static_cast<double>(el.cx) +
+                                          static_cast<double>(ux) * (static_cast<double>(ma) * static_cast<double>(c1)) +
+                                          static_cast<double>(px) * (static_cast<double>(mb) * static_cast<double>(s1)));
+      const float y1 = static_cast<float>(static_cast<double>(el.cy) +
+                                          static_cast<double>(uy) * (static_cast<double>(ma) * static_cast<double>(c1)) +
+                                          static_cast<double>(py) * (static_cast<double>(mb) * static_cast<double>(s1)));
       if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
                  el.z);  // the ellipse's plane, same as its centre candidate above
