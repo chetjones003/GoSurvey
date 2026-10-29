@@ -6089,7 +6089,7 @@ private Q_SLOTS:
     auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
     auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree"); QVERIFY(projectTree);
     auto drawings = [&] { return projectTree->findItems("Drawings", Qt::MatchExactly).front(); };
-    auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly).front(); };
+    auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly | Qt::MatchRecursive).front(); };  // under the drawing root
     drawings()->setExpanded(false); blocks()->setExpanded(true);
     QVERIFY(blocks()->childCount() > 0);
     const auto selected = blocks()->child(0)->text(0); tree->setCurrentItem(blocks()->child(0));
@@ -9046,6 +9046,93 @@ private Q_SLOTS:
     QCOMPARE(window.m_CommandHistory.last(), QString("PROJECTHEALTH"));
   }
 
+  // GitHub #1040: every Toolspace row has a right-click menu. Entries with no working command are disabled; an enabled
+  // entry sends the command it names.
+  void issue1040EveryToolspaceRowHasARightClickMenu() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Menu Job";
+    gsproj::TrackedItem pdf; pdf.path = "PDFs/missing.pdf";
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items = {pdf, linked};
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    st.blockDefs.push_back({});
+    st.blockDefs.back().name = "BLK";
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    int menus = 0;
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+      auto* tree = window.findChild<QTreeWidget*>(name);
+      QVERIFY(tree);
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole + 1).toString().isEmpty()) continue;  // placeholders have no menu
+        QMenu* menu = window.BuildToolspaceMenu(*it);
+        QVERIFY2(menu, qPrintable((*it)->text(0)));
+        QVERIFY2(!menu->actions().isEmpty(), qPrintable((*it)->text(0)));
+        ++menus;
+        delete menu;
+      }
+    }
+    QVERIFY(menus >= 15);
+    // Enabled and disabled entries, on rows whose state matters.
+    const auto menuFor = [&](const char* kindName, const QString& text) {
+      QTreeWidgetItem* found = nullptr;
+      for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+        auto* tree = window.findChild<QTreeWidget*>(name);
+        for (QTreeWidgetItemIterator it(tree); *it; ++it)
+          if ((*it)->text(0) == text && (*it)->data(0, Qt::UserRole + 1).toString() == kindName) found = *it;
+      }
+      return found ? window.BuildToolspaceMenu(found) : nullptr;
+    };
+    QMenu* project = menuFor("project", "Menu Job");
+    QVERIFY(project);
+    QVERIFY(project->findChild<QAction*>("toolspaceProjectSettings")->isEnabled());   // the active project
+    delete project;
+    QMenu* missing = menuFor("trackedItem", "missing.pdf");
+    QVERIFY(missing);
+    QVERIFY(!missing->findChild<QAction*>("toolspaceOpenTrackedItem")->isEnabled());   // the file does not exist
+    delete missing;
+    QMenu* points = menuFor("points", "Survey points (0)");
+    QVERIFY(points);
+    QVERIFY(!points->findChild<QAction*>("toolspacePointsSelect")->isEnabled());      // no Select command yet
+    delete points;
+    // An enabled entry sends its command.
+    QMenu* root = menuFor("drawingRoot", QString::fromStdString(st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name));
+    QVERIFY(root);
+    root->findChild<QAction*>("toolspaceZoomExtents")->trigger();
+    QCOMPARE(window.m_CommandHistory.last(), QString("ZOOMEXTENTS"));
+    delete root;
+  }
+
+  // REQ-142: the Prospector tree is rooted at the drawing's name, and lists Feature Lines under that root.
+  void issue1040ProspectorIsRootedAtTheDrawingAndListsFeatureLines() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+    QVERIFY(prospector);
+    QCOMPARE(prospector->topLevelItemCount(), 1);
+    QTreeWidgetItem* root = prospector->topLevelItem(0);
+    QCOMPARE(root->text(0), QString::fromStdString(st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name));
+    QTreeWidgetItem* featureLines = nullptr;
+    for (int i = 0; i < root->childCount(); ++i)
+      if (root->child(i)->text(0) == "Feature Lines") featureLines = root->child(i);
+    QVERIFY(featureLines);
+    QCOMPARE(featureLines->childCount(), 1);
+    QCOMPARE(featureLines->child(0)->text(0), QString("Curb Returns"));
+    QVERIFY(!featureLines->child(0)->icon(0).isNull());
+  }
+
   // GitHub #1040: double-clicking a drawing on the Project tab switches to it, like the Prospector tree did.
   void issue1040ProjectTreeDoubleClickSwitchesDrawing() {
     EditorWindow window;
@@ -9063,6 +9150,45 @@ private Q_SLOTS:
     QVERIFY(drawing);
     QMetaObject::invokeMethod(projectTree, "itemDoubleClicked", Q_ARG(QTreeWidgetItem*, drawing), Q_ARG(int, 0));
     QCOMPARE(window.State().activeDrawingIdx, first);
+  }
+
+  // GitHub #1040: one capture of the right-click menu for each kind of row, for the visual review.
+  void issue1040ToolspaceMenusCaptureForReview() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    gsproj::TrackedItem pdf; pdf.path = "PDFs/plan.pdf";
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items = {pdf, linked};
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    const std::pair<const char*, const char*> rows[] = {
+        {"toolspaceProspectorTree", "drawingRoot"}, {"toolspaceProspectorTree", "pointGroup"},
+        {"toolspaceProspectorTree", "featureLine"}, {"toolspaceProjectTree", "project"},
+        {"toolspaceProjectTree", "trackedItem"}, {"toolspaceSettingsTree", "textStyle"}};
+    for (const auto& [treeName, kindName] : rows) {
+      auto* tree = window.findChild<QTreeWidget*>(treeName);
+      QVERIFY(tree);
+      QTreeWidgetItem* found = nullptr;
+      for (QTreeWidgetItemIterator it(tree); *it && !found; ++it)
+        if ((*it)->data(0, Qt::UserRole + 1).toString() == kindName) found = *it;
+      if (!found) continue;  // a row kind absent from this drawing has nothing to capture
+      tree->setCurrentItem(found);
+      QMenu* menu = window.BuildToolspaceMenu(found);
+      QVERIFY(menu);
+      menu->popup(QPoint(40, 40));
+      QTest::qWait(150);
+      QVERIFY(menu->grab().save(Issue886Shot(QString("issue1040-menu-%1.png").arg(kindName).toUtf8().constData())));
+      menu->close();
+      delete menu;
+    }
   }
 
   // GitHub #1040 / REQ-142 (D-2026-10-28-d): one screenshot per Toolspace tab for the visual review. The Project tab

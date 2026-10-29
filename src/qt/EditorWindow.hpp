@@ -19,6 +19,7 @@ class QResizeEvent;
 class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
+class QTreeWidgetItem;
 class QPushButton;
 class QScrollArea;
 class QComboBox;
@@ -143,6 +144,8 @@ private:
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
   void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
+  QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
+  void ShowPdfFile(const QString& path);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
   void ShowPdfAttachDialog();

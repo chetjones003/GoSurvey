@@ -71,3 +71,9 @@
   - GitHub wiki (`GoSurvey.wiki`): cloned and searched; no Toolspace or Prospector text; no update needed.
 - Assumptions and debt: see section 7.
 - PR: to be recorded when opened.
+
+## 9. Right-click menus and image panel (2026-10-29)
+- Every Toolspace row now has a right-click menu (BuildToolspaceMenu). Entries with no working command are disabled with a "Not implemented yet" tooltip; the Project-tab project commands are enabled only for the active drawing's project.
+- Feature Lines and the drawing-name root node added to Prospector.
+- Menu captures (GoSurvey side): build/artifacts/qt-editor/manual/shard-3/artifacts/issue1040-menu-*.png. Owner approved these captures in chat on 2026-10-29.
+- Image panel (CLAUDE.md §3 step 6): INCONCLUSIVE. Civil 3D is not installed on this machine (only AutoCAD 2025, which has no Toolspace). No paired reference exists, so the three-reviewer panel was not run. Merge is on hold until the owner either installs Civil 3D or explicitly waives the comparison.

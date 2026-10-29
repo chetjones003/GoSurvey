@@ -40,6 +40,7 @@
 #include "ProjectWarnings.hpp"
 #include "util/PlotScales.hpp"
 #include "MtextRichFormat.hpp"
+#include "ToolspaceCatalog.hpp"
 #include "Version.hpp"
 #include <QAction>
 #include <QApplication>
@@ -2089,6 +2090,9 @@ void EditorWindow::RefreshToolspace() {
   key << "#layers";
   for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
   key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
+  key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
+  key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
+  for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);
   key << (drawingOpen ? "#open" : "#closed");
   // The Toolspace trees are rebuilt only when what they list changes. Refresh() runs on every viewport click,
   // and rebuilding the trees (icons and all) took ~100 ms of each one.
@@ -2101,10 +2105,13 @@ void EditorWindow::RefreshToolspace() {
     } else {
       auto* projects = new QTreeWidgetItem(m_ToolspaceProject, {"Projects"});
       projects->setIcon(0, ToolspaceIcon("c3d_workfolder.png"));
+      projects->setData(0, Qt::UserRole + 1, "projectsFolder");
       for (const auto& session : m_State.openProjects) {
         auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
             (session.readOnly ? " (read-only)" : "")});
         project->setIcon(0, ToolspaceIcon("project.png"));
+        project->setData(0, Qt::UserRole + 1, "project");
+        project->setData(0, Qt::UserRole + 4, session.uid);
         // Tracked items by folder (REQ-379 clause 3). Linked files sit under "Linked files" with a link badge; the
         // rest sit under the first folder of their project path, or directly under the project at the root.
         QHash<QString, QTreeWidgetItem*> folders;
@@ -2119,6 +2126,7 @@ void EditorWindow::RefreshToolspace() {
             if (!folders.contains(folder)) {
               auto* node = new QTreeWidgetItem(project, {linked ? QStringLiteral("Linked files") : folder});
               node->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
+              node->setData(0, Qt::UserRole + 1, linked ? "linkedFolder" : "projectFolder");
               folders.insert(folder, node);
             }
             parent = folders.value(folder);
@@ -2127,16 +2135,21 @@ void EditorWindow::RefreshToolspace() {
           auto* row = new QTreeWidgetItem(parent, {label});
           row->setToolTip(0, linked ? path + "\nLinked file: does not travel with the project" : path);
           row->setIcon(0, TrackedItemIcon(path));
+          row->setData(0, Qt::UserRole + 1, "trackedItem");
+          row->setData(0, Qt::UserRole + 5, linked ? path : QString::fromStdWString(session.project.Folder().wstring()) + "/" + path);
+          row->setData(0, Qt::UserRole + 6, linked);
         }
       }
       projects->setExpanded(true);
     }
     auto* drawings = new QTreeWidgetItem(m_ToolspaceProject, {"Drawings"});
     drawings->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
+    drawings->setData(0, Qt::UserRole + 1, "drawingsFolder");
     for (int i = 1; i < static_cast<int>(m_State.drawingTabs.size()); ++i) {
       if (m_State.drawingTabs[static_cast<size_t>(i)].projectUid == 0) continue;  // project drawings only (REQ-142)
       auto* drawing = new QTreeWidgetItem(drawings, {QString::fromUtf8(m_State.drawingTabs[i].name.c_str())});
       drawing->setData(0, Qt::UserRole, i);
+      drawing->setData(0, Qt::UserRole + 1, "projectDrawing");
       drawing->setIcon(0, ToolspaceIcon("Active_File.png"));
     }
     drawings->setExpanded(true);
@@ -2144,13 +2157,23 @@ void EditorWindow::RefreshToolspace() {
 
   RebuildToolspaceTree(m_Toolspace, [this, drawingOpen] {
     if (!drawingOpen) { (new QTreeWidgetItem(m_Toolspace, {"No drawing is open"}))->setIcon(0, ToolspaceIcon("info.png")); return; }
-    auto* points = new QTreeWidgetItem(m_Toolspace, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
+    // REQ-142: Prospector is rooted at the active drawing's name; its collections sit under that root.
+    auto* root = new QTreeWidgetItem(m_Toolspace, {QString::fromStdString(ToolspaceActiveDrawingName(m_State))});
+    root->setIcon(0, ToolspaceIcon("Active_File.png"));
+    root->setData(0, Qt::UserRole + 1, "drawingRoot");
+    root->setExpanded(true);
+    auto* points = new QTreeWidgetItem(root, {"Survey points (" + QString::number(m_State.surveyPoints.size()) + ")"});
     points->setIcon(0, ToolspaceIcon("Point.png"));
-    auto* pointGroups = new QTreeWidgetItem(m_Toolspace, {"Point Groups"});
+    points->setData(0, Qt::UserRole + 1, "points");
+    auto* pointGroups = new QTreeWidgetItem(root, {"Point Groups"});
     pointGroups->setIcon(0, ToolspaceIcon("Multi_Point.png"));
-    for (const auto& group : m_State.pointGroups)
-      (new QTreeWidgetItem(pointGroups, {QString::fromUtf8(group.name.c_str())}))->setIcon(0, ToolspaceIcon("Single_Point.png"));
-    auto* surfaces = new QTreeWidgetItem(m_Toolspace, {"Surfaces"});
+    pointGroups->setData(0, Qt::UserRole + 1, "pointGroupsFolder");
+    for (const auto& group : m_State.pointGroups) {
+      auto* entry = new QTreeWidgetItem(pointGroups, {QString::fromUtf8(group.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Single_Point.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointGroup");
+    }
+    auto* surfaces = new QTreeWidgetItem(root, {"Surfaces"});
     surfaces->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
     surfaces->setData(0, Qt::UserRole + 1, "surfacesFolder");
     for (int i = 0; i < static_cast<int>(m_State.cadSurfaces.size()); ++i) {
@@ -2159,10 +2182,27 @@ void EditorWindow::RefreshToolspace() {
       surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
       surface->setData(0, Qt::UserRole + 2, i);
     }
-    auto* blocks = new QTreeWidgetItem(m_Toolspace, {"Blocks"});
+    auto* blocks = new QTreeWidgetItem(root, {"Blocks"});
     blocks->setIcon(0, ToolspaceIcon("block.png"));
-    for (const auto& block : m_State.blockDefs)
-      (new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())}))->setIcon(0, ToolspaceIcon("Block_Base.png"));
+    blocks->setData(0, Qt::UserRole + 1, "blocksFolder");
+    for (const auto& block : m_State.blockDefs) {
+      auto* entry = new QTreeWidgetItem(blocks, {QString::fromUtf8(block.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Block_Base.png"));
+      entry->setData(0, Qt::UserRole + 1, "block");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(block.name.c_str()));
+    }
+    // Feature lines are named when they have a name, otherwise numbered (same rule as TOOLSPACE LIST).
+    auto* featureLines = new QTreeWidgetItem(root, {"Feature Lines"});
+    featureLines->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+    featureLines->setData(0, Qt::UserRole + 1, "featureLinesFolder");
+    for (size_t i = 0; i < ToolspaceFeatureLineCount(m_State); ++i) {
+      const QString name = i < m_State.featureLineInfo.size() && !m_State.featureLineInfo[i].name.empty()
+          ? QString::fromStdString(m_State.featureLineInfo[i].name) : "Feature Line " + QString::number(i + 1);
+      auto* entry = new QTreeWidgetItem(featureLines, {name});
+      entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+      entry->setData(0, Qt::UserRole + 1, "featureLine");
+      entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+    }
   });
 
   // Drawing-level style tables only (REQ-142). App-wide preferences stay in View → Settings.
@@ -2170,21 +2210,37 @@ void EditorWindow::RefreshToolspace() {
     if (!drawingOpen) { (new QTreeWidgetItem(m_ToolspaceSettings, {"No drawing is open"}))->setIcon(0, ToolspaceIcon("info.png")); return; }
     auto* general = new QTreeWidgetItem(m_ToolspaceSettings, {"General"});
     general->setIcon(0, ToolspaceIcon("settings.png"));
+    general->setData(0, Qt::UserRole + 1, "generalFolder");
     auto* textStyles = new QTreeWidgetItem(general, {"Text Styles"});
     textStyles->setIcon(0, ToolspaceIcon("Text_Style.png"));
-    for (const auto& textStyle : m_State.textStyles)
-      (new QTreeWidgetItem(textStyles, {QString::fromUtf8(textStyle.name.c_str())}))->setIcon(0, ToolspaceIcon("text.png"));
+    textStyles->setData(0, Qt::UserRole + 1, "textStylesFolder");
+    for (const auto& textStyle : m_State.textStyles) {
+      auto* entry = new QTreeWidgetItem(textStyles, {QString::fromUtf8(textStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("text.png"));
+      entry->setData(0, Qt::UserRole + 1, "textStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(textStyle.name.c_str()));
+    }
     auto* layers = new QTreeWidgetItem(general, {"Layers"});
     layers->setIcon(0, ToolspaceIcon("layers.png"));
-    for (const auto& row : m_State.drawingLayerTable)
-      (new QTreeWidgetItem(layers, {QString::fromUtf8(row.name.c_str())}))->setIcon(0, ToolspaceIcon("Layer_Properties.png"));
+    layers->setData(0, Qt::UserRole + 1, "layersFolder");
+    for (const auto& row : m_State.drawingLayerTable) {
+      auto* entry = new QTreeWidgetItem(layers, {QString::fromUtf8(row.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Layer_Properties.png"));
+      entry->setData(0, Qt::UserRole + 1, "layer");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(row.name.c_str()));
+    }
     auto* dimensionStyles = new QTreeWidgetItem(general, {"Dimension Style"});
     dimensionStyles->setIcon(0, ToolspaceIcon("Dim_Style.png"));
-    (new QTreeWidgetItem(dimensionStyles, {QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())}))->setIcon(0, ToolspaceIcon("dimstyle.png"));
+    dimensionStyles->setData(0, Qt::UserRole + 1, "dimensionFolder");
+    auto* dimensionEntry = new QTreeWidgetItem(dimensionStyles, {QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())});
+    dimensionEntry->setIcon(0, ToolspaceIcon("dimstyle.png"));
+    dimensionEntry->setData(0, Qt::UserRole + 1, "dimensionStyle");
+    dimensionEntry->setData(0, Qt::UserRole + 3, QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()));
     dimensionStyles->setExpanded(true);
     general->setExpanded(true);
     auto* surface = new QTreeWidgetItem(m_ToolspaceSettings, {"Surface"});
     surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+    surface->setData(0, Qt::UserRole + 1, "surfaceSettingsFolder");
     auto* surfaceStyles = new QTreeWidgetItem(surface, {"Surface Styles"});
     surfaceStyles->setIcon(0, ToolspaceIcon("Tint.png"));
     surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
@@ -2664,6 +2720,15 @@ void EditorWindow::ShowPdf() {
   window->SetEditor(this);
   connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
   window->show();
+}
+
+// Opens one PDF from the Project tab in the PDF viewer (REQ-379 clause 5 and REQ-387).
+void EditorWindow::ShowPdfFile(const QString& path) {
+  auto* window = new PdfWindow(nullptr);
+  window->SetEditor(this);
+  connect(this, &QObject::destroyed, window, [window] { window->SetEditor(nullptr); window->close(); });
+  window->show();
+  window->Open(path);
 }
 
 bool EditorWindow::CommitPdfCoordinate(const pdfview::CoordCandidate& c) {
