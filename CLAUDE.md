@@ -168,7 +168,9 @@ Every task must have:
 * the relevant **Acceptance Criteria**
 * any applicable constraints (`CON-NN`)
 
-If the required specification does not exist or is unclear, stop and raise a **SPEC GAP**.
+If the required specification does not exist or is unclear, treat it as a **SPEC GAP** and follow
+[§5](#5-spec-gap). Resolve it with evidence first; ask the user only when evidence cannot safely
+settle the gap.
 
 Specification changes require a deliberate, recorded decision.
 
@@ -207,11 +209,18 @@ Check the plan against the SPEC, architecture, scope, risks, and missing require
 
 ### 4. Resolve uncertainty
 
-If requirements are ambiguous, contradictory, incomplete, architecturally significant, irreversible, or outward-facing:
+When a requirement, acceptance criterion, or REQ is missing, ambiguous, or contradictory:
 
-**Stop and ask the user. Never guess.**
+1. **Try evidence first** using the [SPEC GAP evidence pass](#5-spec-gap) (repository sources, then
+   Autodesk product behavior). Record what you checked and what it showed.
+2. If evidence settles the behavior and scope, propose or apply the matching **recorded decision**
+   and SPEC update per §5. Do not implement on guesswork.
+3. **Stop and ask the user** only when the gap remains after that pass, or when the choice is
+   architecturally significant, irreversible, or outward-facing in a way evidence cannot authorize
+   alone.
 
-Ask one clear question at a time, provide options, and recommend one.
+Ask one clear question at a time, provide options grounded in the evidence you gathered, and
+recommend one. **Never guess.**
 
 ### 5. Implement
 
@@ -242,20 +251,45 @@ The result must be:
 
 **PASS**, **FAIL**, or **SPEC GAP**.
 
-**Qt UI changes: present screenshots in the T3 visualizer.**
-When the work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
-tweak, a restyle), running the tests is not enough. Before calling the work done:
+**Qt UI changes: compare screenshots with Civil 3D.**
+When work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
+tweak, or a restyle), screenshots and a completed comparison panel are required before calling the
+work done:
 
-* Capture screenshots of every affected surface and its meaningful states (for example: normal,
-  busy, error, empty, disabled). Use the Qt test run on the hidden desktop
-  (`tools/run-qt-tests-hidden.ps1`, used by `ctest --preset ninja-release -R qt.editor`) with
-  `widget->grab()` or, for the 3D viewport, `grabFramebuffer()`. Save the PNGs under `build/artifacts/`; never commit them.
-* Present them together in one labeled, clickable T3 visualizer. Use a self-contained HTML page
-  when needed, check it with `html_preview`, then publish it with `html_render`. Embed the screenshot
-  captures in the visualizer and make wide captures readable at chat width.
-* Label each image, say what changed, then **stop and wait** for the user to approve or ask for tweaks.
-  Apply the requested changes and show new screenshots until they approve. Only then commit and open
-  the PR.
+1. Capture every affected GoSurvey surface and meaningful state (such as normal, busy, error, empty,
+   or disabled). Use the hidden-desktop Qt test run (`tools/run-qt-tests-hidden.ps1`, used by
+   `ctest --preset ninja-release -R qt.editor`) with `widget->grab()` or, for the 3D viewport,
+   `grabFramebuffer()`. Save PNGs under `build/artifacts/`; never commit them.
+2. In Civil 3D, reproduce the same task, drawing content, visible state, and view as closely as the
+   products allow. Capture the corresponding Civil 3D surface. Match window size, display scale,
+   theme, viewport, camera, zoom, and other relevant view settings; record any setting that cannot
+   be matched. Keep both products' captures together under `build/artifacts/`.
+3. Have three agents review the paired captures independently using the same task description and
+   rubric, without seeing one another's scores first. Each agent records a 0–2 score for each item:
+   - **Structure and geometry:** major regions, drawing geometry, spacing, and alignment.
+   - **Hierarchy and typography:** control placement, labels, text size, and readability.
+   - **Color and visual weight:** background, contrast, line weights, and emphasis.
+   - **State and feedback:** visible state, selection, hover, prompts, and other task feedback.
+   - **Overall composition:** viewport-to-chrome balance and the arrangement of the whole surface.
+
+   Score each item as `0` for a material mismatch, `1` for a noticeable but usable difference, or
+   `2` for a close match. For each score, cite the visible evidence and location in the captures.
+4. A blocking mismatch is a difference that hides or misplaces a primary work area, makes a required
+   control or label unreadable, or changes how the task or visible state is understood. Count a
+   blocker only when at least two reviewers independently cite the same mismatch and point to its
+   location in the captures. The panel passes only when the median score for **every** rubric item
+   is at least `1` and there are no corroborated blockers. Otherwise it fails; fix the cited
+   mismatches, recapture, and run a fresh independent panel. The recorded scores and this fixed rule
+   determine the pass/fail result.
+5. Save the task description, capture settings, paired screenshots, three score sheets, median
+   results, and pass/fail decision under `build/artifacts/`. Report the result and evidence location
+   in the task completion record. The panel decision is the completion gate; user approval is not
+   required.
+
+If Civil 3D cannot be launched or the task/surface cannot be meaningfully matched, record that
+limitation and mark the comparison **inconclusive**. Do not claim a pass or substitute an unpaired
+GoSurvey screenshot; report the blocker in the completion record. Continue other verification that
+does not depend on the comparison.
 
 ### 7. Complete
 
@@ -300,18 +334,39 @@ Examples:
 * Undefined architectural boundary
 * Required architectural decision
 
-When a SPEC GAP occurs:
+### Evidence pass (required before escalating)
+
+Do not open a SPEC GAP with the user until you have tried to close it from evidence. Work in this
+order; cite sources in the task log:
+
+1. **Repository:** applicable `REQ-NNN`, acceptance criteria, `spec/project.md` decisions, GitHub
+   issues and comments, `resources/wiki/`, and existing product behavior in code and tests.
+2. **Autodesk help (web):** official AutoCAD and Civil 3D documentation for the command, dialog,
+   workflow, or file behavior in question.
+3. **Civil 3D (this machine):** reproduce the task in the installed app when the gap is about UI,
+   interaction, or visible behavior; capture notes or screenshots under `build/artifacts/`.
+4. **AutoCAD console (`accoreconsole.exe`, this machine):** run scripted checks when the gap is about
+   geometry, units, DWG/DXF content, or other headless oracle behavior the repo already uses in
+   tests (see `resources/wiki/Import-and-Export.md`).
+
+If evidence agrees and only needs authority to enter the SPEC, draft the decision, update the SPEC,
+and continue. If evidence contradicts the SPEC, stop implementing and reconcile through a recorded
+decision—do not silently pick a side.
+
+When evidence does not settle the gap, or the remaining choice needs user authority (see step 3 in
+[§3.4](#4-resolve-uncertainty)), escalate:
 
 1. Stop.
-2. Explain the problem to the user.
+2. Explain the problem to the user in plain English ([§6](#6-explaining-req--spec--ac-problems)).
 3. Explain why it matters.
-4. Present the available choices.
+4. Present the available choices, including what the evidence pass showed for each.
 5. Recommend the best choice.
 6. Record the decision.
 7. Update the appropriate SPEC.
 8. Resume only after the SPEC is resolved.
 
-**Never solve a SPEC GAP by guessing.**
+**Never solve a SPEC GAP by guessing.** Evidence-backed resolution is required; guessing is not a
+substitute for the pass above.
 
 ---
 
@@ -325,9 +380,11 @@ Always explain:
 
 1. **What the SPEC currently says**
 2. **What is missing, unclear, or contradictory**
-3. **Why Claude cannot safely decide on its own**
-4. **What choices the user has**
-5. **Claude's recommendation**
+3. **What you already checked** (repository, Autodesk help, Civil 3D, or `accoreconsole`) and what
+   that evidence showed
+4. **Why the gap still needs a human decision** (if it does)
+5. **What choices the user has**
+6. **Claude's recommendation**
 
 Use simple real-world analogies when they make the problem easier to understand.
 
@@ -366,7 +423,7 @@ Document assumptions and technical debt. If an assumption affects the SPEC or ar
 > **Build the simplest correct thing that the specification actually requires.**
 
 **If the SPEC is clear, implement it.
-If the SPEC is unclear, ask.
+If the SPEC is unclear, resolve it from evidence per §5; ask only when that pass cannot settle it.
 If the implementation conflicts with the SPEC, fix the implementation.
 If the SPEC must change, get a recorded decision first.**
 

@@ -6,6 +6,14 @@ Instructions for AI coding agents working in this repository.
 VERIFICATION -> WORKSHOP, the git workflow, the Windows build tooling, and the SPEC GAP rules) and
 applies to every agent, not only Claude.
 
+## SPEC GAPs and unclear REQs
+
+Do not ask the user to resolve a gap until you have run the **evidence pass** in
+[CLAUDE.md §5](CLAUDE.md#5-spec-gap): repository sources, Autodesk help on the web, the installed
+Civil 3D app, and `accoreconsole.exe` on this machine when behavior must be verified in product.
+Record what you checked; escalate with evidence-backed options only when the gap remains or needs
+user authority.
+
 ## Before creating a pull request
 
 Complete the [pre-PR product documentation review in `CLAUDE.md`](CLAUDE.md#pre-pr-product-documentation-review-req-453): inspect `README.md`, `PRIVACY.md`, `resources/wiki/`, and the public manual wiki linked from `gosurveycad.com`. Update affected sources before opening the PR, and record each review and its outcome in the task log or PR description. An affected external wiki update must be completed before opening the PR.
@@ -47,18 +55,9 @@ building, close apps/tests and run
 Use `.\build\debug` for Debug cleanup. Preserve archives for recovery and limit cleanup to the
 current checkout. For a clean rebuild, use `.\build.bat release --clean-first`.
 
-## Qt UI changes: present screenshots in T3 visualizer
+## Qt UI screenshot review
 
-When the work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
-tweak, a restyle), running the tests is not enough. Before calling the work done:
-
-* Capture screenshots of every affected surface and its meaningful states (for example: normal,
-  busy, error, empty, disabled). Use the Qt test run on the hidden desktop
-  (`tools/run-qt-tests-hidden.ps1`, used by `ctest --preset ninja-release -R qt.editor`) with
-  `widget->grab()` or, for the 3D viewport, `grabFramebuffer()`. Save the PNGs under `build/artifacts/`; never commit them.
-* Present the screenshots in one labeled, clickable T3 visualizer. Use an HTML page as the
-  container when needed, check it with `html_preview`, and publish it with `html_render`. Group
-  related states in the same visualizer and make wide captures readable at chat width.
-* Label each image, say what changed, then **stop and wait** for the user to approve or ask for tweaks.
-  Apply the requested changes and show new screenshots until they approve. Only then commit and open
-  the PR.
+For any visible Qt UI change, capture the affected surfaces and meaningful states and have the
+three-agent Civil 3D comparison panel judge them before completion. Follow the capture, scoring, and
+evidence procedure in [CLAUDE.md §3, Verify](CLAUDE.md#6-verify). Screenshots remain required; the
+panel's documented result replaces the former user-approval gate.
