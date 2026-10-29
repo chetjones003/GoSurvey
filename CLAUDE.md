@@ -242,20 +242,45 @@ The result must be:
 
 **PASS**, **FAIL**, or **SPEC GAP**.
 
-**Qt UI changes: present screenshots in the T3 visualizer.**
-When the work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
-tweak, a restyle), running the tests is not enough. Before calling the work done:
+**Qt UI changes: compare screenshots with Civil 3D.**
+When work adds or changes visible Qt UI (a new window, dialog, ribbon or Settings page, a layout
+tweak, or a restyle), screenshots and a completed comparison panel are required before calling the
+work done:
 
-* Capture screenshots of every affected surface and its meaningful states (for example: normal,
-  busy, error, empty, disabled). Use the Qt test run on the hidden desktop
-  (`tools/run-qt-tests-hidden.ps1`, used by `ctest --preset ninja-release -R qt.editor`) with
-  `widget->grab()` or, for the 3D viewport, `grabFramebuffer()`. Save the PNGs under `build/artifacts/`; never commit them.
-* Present them together in one labeled, clickable T3 visualizer. Use a self-contained HTML page
-  when needed, check it with `html_preview`, then publish it with `html_render`. Embed the screenshot
-  captures in the visualizer and make wide captures readable at chat width.
-* Label each image, say what changed, then **stop and wait** for the user to approve or ask for tweaks.
-  Apply the requested changes and show new screenshots until they approve. Only then commit and open
-  the PR.
+1. Capture every affected GoSurvey surface and meaningful state (such as normal, busy, error, empty,
+   or disabled). Use the hidden-desktop Qt test run (`tools/run-qt-tests-hidden.ps1`, used by
+   `ctest --preset ninja-release -R qt.editor`) with `widget->grab()` or, for the 3D viewport,
+   `grabFramebuffer()`. Save PNGs under `build/artifacts/`; never commit them.
+2. In Civil 3D, reproduce the same task, drawing content, visible state, and view as closely as the
+   products allow. Capture the corresponding Civil 3D surface. Match window size, display scale,
+   theme, viewport, camera, zoom, and other relevant view settings; record any setting that cannot
+   be matched. Keep both products' captures together under `build/artifacts/`.
+3. Have three agents review the paired captures independently using the same task description and
+   rubric, without seeing one another's scores first. Each agent records a 0–2 score for each item:
+   - **Structure and geometry:** major regions, drawing geometry, spacing, and alignment.
+   - **Hierarchy and typography:** control placement, labels, text size, and readability.
+   - **Color and visual weight:** background, contrast, line weights, and emphasis.
+   - **State and feedback:** visible state, selection, hover, prompts, and other task feedback.
+   - **Overall composition:** viewport-to-chrome balance and the arrangement of the whole surface.
+
+   Score each item as `0` for a material mismatch, `1` for a noticeable but usable difference, or
+   `2` for a close match. For each score, cite the visible evidence and location in the captures.
+4. A blocking mismatch is a difference that hides or misplaces a primary work area, makes a required
+   control or label unreadable, or changes how the task or visible state is understood. Count a
+   blocker only when at least two reviewers independently cite the same mismatch and point to its
+   location in the captures. The panel passes only when the median score for **every** rubric item
+   is at least `1` and there are no corroborated blockers. Otherwise it fails; fix the cited
+   mismatches, recapture, and run a fresh independent panel. The recorded scores and this fixed rule
+   determine the pass/fail result.
+5. Save the task description, capture settings, paired screenshots, three score sheets, median
+   results, and pass/fail decision under `build/artifacts/`. Report the result and evidence location
+   in the task completion record. The panel decision is the completion gate; user approval is not
+   required.
+
+If Civil 3D cannot be launched or the task/surface cannot be meaningfully matched, record that
+limitation and mark the comparison **inconclusive**. Do not claim a pass or substitute an unpaired
+GoSurvey screenshot; report the blocker in the completion record. Continue other verification that
+does not depend on the comparison.
 
 ### 7. Complete
 
