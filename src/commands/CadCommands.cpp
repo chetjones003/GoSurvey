@@ -5357,13 +5357,18 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
       StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
 
   const auto dumpTree = [&]() {
-    const bool settings = (st.toolspaceTab == AppCommandState::ToolspaceTab::Settings);
-    log.push_back(std::string("TOOLSPACE — tab: ") + (settings ? "Settings" : "Prospector"));
+    std::string tabName = "Prospector";
     std::vector<std::string> lines;
-    if (settings)
+    if (st.toolspaceTab == AppCommandState::ToolspaceTab::Project) {
+      tabName = "Project";
+      AppendToolspaceProjectLines(st, &lines);
+    } else if (st.toolspaceTab == AppCommandState::ToolspaceTab::Settings) {
+      tabName = "Settings";
       AppendToolspaceSettingsLines(st, &lines);
-    else
+    } else {
       AppendToolspaceProspectorLines(st, &lines);
+    }
+    log.push_back("TOOLSPACE — tab: " + tabName);
     for (const std::string& line : lines)
       log.push_back(std::string("TOOLSPACE  ") + line);
   };

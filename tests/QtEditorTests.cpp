@@ -8919,10 +8919,62 @@ private Q_SLOTS:
     QVERIFY(!tree->findItems("BLK1034", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());  // a change still shows
   }
 
+  // GitHub #1040 / REQ-142 / REQ-379: the Project tab's buttons follow the active drawing's project, the saved tab
+  // follows the tab bar both ways, and the Project tree lists the open project.
+  void issue1040ProjectTabButtonsTabStateAndTreeFollowTheDrawing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    auto* refresh = window.findChild<QPushButton*>("toolspaceRefresh");
+    auto* health = window.findChild<QPushButton*>("toolspaceProjectHealth");
+    auto* tabs = window.findChild<QTabWidget*>("toolspaceTabs");
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    QVERIFY(refresh && health && tabs && projectTree);
+    const int drawing = st.activeDrawingIdx;
+
+    window.Refresh();  // no project: both buttons disabled, the tree says so
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(!health->isEnabled());
+    QCOMPARE(projectTree->topLevelItem(0)->text(0), QString("No project is open"));
+
+    st.drawingTabs[static_cast<size_t>(drawing)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    st.openProjects.push_back(session);
+    window.Refresh();  // project, writable: both enabled and the project is listed
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+    QVERIFY(projectTree->findItems("Cloud Job", Qt::MatchExactly | Qt::MatchRecursive).size() == 1);
+
+    st.openProjects.back().readOnly = true;
+    window.Refresh();  // read-only project: Refresh is refused, Project Health still runs
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+
+    st.openProjects.clear();
+    st.drawingTabs[static_cast<size_t>(drawing)].projectUid = 0;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;  // e.g. after TOOLSPACE SETTINGS
+    window.Refresh();
+    QCOMPARE(tabs->currentIndex(), 2);
+    tabs->setCurrentIndex(0);  // a click on the Project tab is remembered
+    QVERIFY(st.toolspaceTab == AppCommandState::ToolspaceTab::Project);
+    window.Refresh();
+    QCOMPARE(tabs->currentIndex(), 0);
+  }
+
   // GitHub #1040 / REQ-142 (D-2026-10-28-a): one screenshot per Toolspace tab for the visual review. The Project tab
   // shows its empty state because no project is open in this drawing.
   void issue1040ToolspaceTabsCaptureForReview() {
+    // Pin the Graphite theme for the review images, and restore the app's theme afterwards like the appearance test does.
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restore = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+      QSettings().remove("editor/lightTheme");
+    });
     EditorWindow window;
+    if (auto* graphite = Action(window, "Graphite")) graphite->trigger();
     window.CreateDrawingFromTemplate();
     window.resize(1280, 820);
     window.show();

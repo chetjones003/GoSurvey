@@ -1009,7 +1009,7 @@ AppCommandState::ToolspaceTab ToolspaceTabFromIndex(int index) {
 }  // namespace
 
 void EditorWindow::BuildDocks() {
-  auto makeDock =[&](const char* title, const char* name, Qt::DockWidgetArea area, QWidget* widget) {
+  auto makeDock = [&](const char* title, const char* name, Qt::DockWidgetArea area, QWidget* widget) {
     auto* dock = new QDockWidget(title, this);
     dock->setObjectName(name);
     dock->setWidget(widget);
@@ -2035,6 +2035,8 @@ void RebuildToolspaceTree(QTreeWidget* tree, Fill fill) {
 }  // namespace
 
 void EditorWindow::RefreshToolspace() {
+  // The Toolspace trees and buttons exist only after BuildDocks(); a refresh before that has nothing to update.
+  if (!m_ToolspaceRefresh || !m_ToolspaceProjectHealth || !m_ToolspaceProject || !m_Toolspace || !m_ToolspaceSettings) return;
   const int drawingIdx = m_State.activeDrawingIdx;
   const bool drawingOpen = drawingIdx > 0 && drawingIdx < static_cast<int>(m_State.drawingTabs.size());
   const std::uint32_t activeProject = drawingOpen ? m_State.drawingTabs[static_cast<size_t>(drawingIdx)].projectUid : 0;
@@ -2058,6 +2060,7 @@ void EditorWindow::RefreshToolspace() {
   for (const auto& textStyle : m_State.textStyles) key << QString::fromUtf8(textStyle.name.c_str());
   key << "#layers";
   for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
+  key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
   key << (drawingOpen ? "#open" : "#closed");
   if (m_ToolspaceKey == key && m_Toolspace->topLevelItemCount() > 0) return;
   m_ToolspaceKey = key;
@@ -2112,7 +2115,9 @@ void EditorWindow::RefreshToolspace() {
     for (const auto& textStyle : m_State.textStyles) new QTreeWidgetItem(textStyles, {QString::fromUtf8(textStyle.name.c_str())});
     auto* layers = new QTreeWidgetItem(general, {"Layers"});
     for (const auto& row : m_State.drawingLayerTable) new QTreeWidgetItem(layers, {QString::fromUtf8(row.name.c_str())});
-    new QTreeWidgetItem(general, {"Dimension Style"});
+    auto* dimensionStyles = new QTreeWidgetItem(general, {"Dimension Style"});
+    new QTreeWidgetItem(dimensionStyles, {QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())});
+    dimensionStyles->setExpanded(true);
     general->setExpanded(true);
     auto* surface = new QTreeWidgetItem(m_ToolspaceSettings, {"Surface"});
     surface->setIcon(0, style()->standardIcon(QStyle::SP_DirIcon));
