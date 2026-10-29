@@ -1371,6 +1371,17 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  if (wantEndpoint) {
+    for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&
+          exclude.index == static_cast<int>(pi))
+        continue;
+      const CadPoint& p = cmd.cadPoints[pi];
+      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+               SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+    }
+  }
+
   // Intersection / apparent intersection (REQ-062). Gathered once and shared: both walk the same
   // near-cursor object list, and the cull is the only thing that keeps a pairwise snap affordable.
   if (wantIntersection || wantApparentIntersection) {

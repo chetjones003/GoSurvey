@@ -1013,21 +1013,6 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   return true;
 }
 
-static void ImportPointAsPositionMarker(AppCommandState& st, double wx, double wy, double z,
-                                        const EntityAttributes& at) {
-  CadPositionMarker m;
-  m.x = wx - st.worldDocumentOriginX;
-  m.y = wy - st.worldDocumentOriginY;
-  m.z = static_cast<float>(z);
-  m.label.kind = CadAnnotation::Kind::Mtext;
-  m.label.insX = static_cast<float>(m.x);
-  m.label.insY = static_cast<float>(m.y);
-  m.label.insZ = m.z;
-  m.label.text.clear();
-  st.cadPositionMarkers.push_back(std::move(m));
-  st.cadPositionMarkerAttrs.push_back(at);
-}
-
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                   AppCommandState* blockDefCatalog);
@@ -2119,7 +2104,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const Dwg_Entity_POINT* e = ent->tio.POINT;
     double px = 0.0, py = 0.0;
     xf.apply(e->x, e->y, &px, &py);
-    ImportPointAsPositionMarker(st, px, py, e->z, at);
+    CadPoint cp;
+    cp.x = px - st.worldDocumentOriginX;
+    cp.y = py - st.worldDocumentOriginY;
+    cp.z = e->z;
+    st.cadPoints.push_back(cp);
+    st.cadPointAttrs.push_back(at);
     return;
   }
   if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
@@ -4398,11 +4388,33 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   rest.ellAttrs = L.paperEllAttrs;
   rest.polyOffsets = L.paperPolyOffsets;
   rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.polyVertsBulge = L.paperPolyVertsBulge;
   rest.polyClosed = L.paperPolyClosed;
   rest.polyAttrs = L.paperPolyAttrs;
   rest.texts = L.paperTexts;
   rest.textAttrs = L.paperTextAttrs;
   WriteBlockDefinitionGeometry(ps, rest, tw);
+  for (size_t i = 0; i < L.paperPoints.size(); ++i) {
+    const CadPoint& p = L.paperPoints[i];
+    dwg_point_3d pt{p.x, p.y, 0.0};
+    if (Dwg_Entity_POINT* e = dwg_add_POINT(ps, &pt))
+      apply(e->parent, AttrAt(L.paperPointAttrs, i));
+  }
+  for (size_t i = 0; i < L.paperSplines.size(); ++i) {
+    const CadSpline& s = L.paperSplines[i];
+    if (!spline::Validate(s).empty() || s.ctrl.empty())
+      continue;
+    std::vector<dwg_point_3d> seed;
+    const auto& source = s.fit.empty() ? s.ctrl : s.fit;
+    seed.reserve(source.size());
+    for (const auto& p : source)
+      seed.push_back(dwg_point_3d{p.x, p.y, 0.0});
+    dwg_point_3d tangent{};
+    Dwg_Entity_SPLINE* e = dwg_add_SPLINE(ps, static_cast<int>(seed.size()), seed.data(), &tangent, &tangent);
+    if (e == nullptr)
+      continue;
+    apply(e->parent, AttrAt(L.paperSplineAttrs, i));
+  }
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
                                 fldCtx);
@@ -4635,7 +4647,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
       ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
       ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
-      ty == DWG_TYPE_TABLE) {
+      ty == DWG_TYPE_TABLE || ty == DWG_TYPE_POINT || ty == DWG_TYPE_SPLINE) {
     AppCommandState scratch;
     scratch.worldDocumentOriginX = 0.0;
     scratch.worldDocumentOriginY = 0.0;
@@ -4645,9 +4657,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
     ent->entmode = savedEntMode;
-    // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
-    if (AppendScratchToPaperLayout(L, scratch))
-      NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
+    AppendScratchToPaperLayout(L, scratch);
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +
@@ -5613,6 +5623,13 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     }
     apply(e->parent, AttrAt(st.cadSplineAttrs, i));
   }
+  for (size_t i = 0; i < st.cadPoints.size(); ++i) {
+    const CadPoint& p = st.cadPoints[i];
+    dwg_point_3d pt{};
+    world(static_cast<float>(p.x), static_cast<float>(p.y), p.z, &pt);
+    if (Dwg_Entity_POINT* e = dwg_add_POINT(hdr, &pt))
+      apply(e->parent, AttrAt(st.cadPointAttrs, i));
+  }
   // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
   // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
   // the hatch path (non-associative).
@@ -6124,7 +6141,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
                          st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
-                         st.cadSplines.empty();
+                         st.cadSplines.empty() && st.cadPoints.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {

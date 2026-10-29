@@ -495,20 +495,20 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial.
 
-### REQ-031 — Persist layouts and viewports in .gs
+### REQ-031 — Persist layouts and viewports in DWG and DXF
 - Purpose: layouts survive save/reload
 - Priority: should
 - Type: functional
 - Statement: Paper layouts, their paper size/orientation, their viewports
   (rectangle, scale, center) and per-viewport frozen layers are **persisted in the
-  native `.gs` file** and restored on load. DXF persistence of layouts/viewports is
-  **deferred** to a later requirement (decision log, 2026-06-15).
+  drawing's DWG file** and restored on open. DXF export and import of layouts and
+  viewports is governed by REQ-113.
 - Acceptance: a drawing with multiple layouts and viewports (with set scales, paper
-  sizes, and per-viewport frozen layers) saved to `.gs` then reloaded restores all
+  sizes, and per-viewport frozen layers) saved to DWG then reopened restores all
   of them identically.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-06-15 — initial.
+- Revisions: 2026-06-15 — initial. 2026-10-28 — persistence restated from the retired `.gs` format to DWG and DXF (issue #1018; D-2026-10-20-a, D-2026-09-03-h); DXF deferral lifted by REQ-113.
 
 ### REQ-032 — Contextual "Layout" ribbon in paper space
 - Purpose: surface paper-space commands only when they apply
@@ -600,14 +600,15 @@ requirements is a planning failure, not a sign of rigor.
   model-space UX. Survey-specific tools (survey points, CSV import) remain
   **model-only**. Snapping in paper space resolves to **paper-space entities only**
   (snapping to viewport-displayed model geometry is deferred). Paper-space entities
-  **persist per layout in the native `.gs` file** and are unaffected by model edits.
+  **persist per layout in the drawing's DWG file** (the DWG and DXF form is set by
+  REQ-113) and are unaffected by model edits.
 - Acceptance: in a paper layout the user can draw lines and place text on the sheet;
   each can be moved/copied/rotated/deleted and snapped to; they do **not** appear in
-  model space or in other layouts; a drawing with paper-space entities saved to `.gs`
-  then reloaded restores them per layout.
+  model space or in other layouts; a drawing with paper-space entities saved to DWG
+  then reopened restores them per layout.
 - Owner-layer: Domain / UI / Commands / Renderer / IO
 - Status: accepted
-- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009).
+- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009). 2026-10-28 — persistence restated from `.gs` to DWG (issue #1018; REQ-113).
 
 ### REQ-038 — Clipboard copy/paste within and across model & paper space
 - Purpose: reuse existing geometry — e.g. copy a DXF title block from model space
@@ -627,8 +628,8 @@ requirements is a planning failure, not a sign of rigor.
   (layer, color, linetype, text style/typeface). Copy/paste works **model→paper,
   paper→model, and within the same space**. **Ctrl+V with an empty clipboard does
   nothing** (no crash). Survey points and survey-specific tools remain model-only.
-  The clipboard is in-memory only (not persisted; DXF persistence of the new paper
-  types stays deferred per the ADR-013 amendment).
+  The clipboard is in-memory only (not persisted). Paper objects pasted onto a sheet
+  persist with that sheet's DWG and DXF output under REQ-113.
 - Acceptance: (1) a model-space selection + Ctrl+C, switch to a paper layout +
   Ctrl+V shows a cursor-tracking preview and a click places the copies in paper
   space; (2) the reverse (paper→model) works the same way; (3) same-space copy/paste
@@ -658,14 +659,16 @@ requirements is a planning failure, not a sign of rigor.
   General (layer/color/linetype/lineweight/transparency) and per-type Geometry and Text
   (contents/height/rotation/style) — the same panel used for model selection; (d) **object
   snapping** to paper objects; (e) **draw** commands LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE,
-  POLYLINE create into the active layout's paper store (paper inches); (f) **modify** commands
-  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET operate on the paper selection.
+  POLYLINE, SPLINE, POINT, and LEADER create into the active layout's paper store (paper inches);
+  (f) **modify** commands
+  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET, PEDIT operate on the paper selection.
+  MEASURE, DIVIDE, AREA, and LIST also run against paper objects while a paper layout is active.
   Additionally, **double-clicking a text object opens an in-place editor** to edit its
   contents — implemented for **both** model space and paper space (the same shared editor).
   Survey-specific tools (survey points, CSV import) remain **model-only**; paper edits never
   alter model geometry; coordinates never cross spaces implicitly (REQ-038's 1:1 paste is the
   one sanctioned exception). Paper-space objects and their edits **persist per layout in the
-  native `.gs`** (REQ-031/037 pattern); DXF persistence of paper objects stays deferred.
+  drawing's DWG file** (REQ-031/037 pattern; DXF per REQ-113).
 - Acceptance: in a paper layout — (1) a window box (L→R) selects paper objects fully inside it
   and a crossing box (R→L) selects any it touches, for every paper object type; (2) clicking a
   paper text selects it with no vertical offset, and double-clicking any text (model or paper)
@@ -673,13 +676,14 @@ requirements is a planning failure, not a sign of rigor.
   paper object(s) populates the Properties panel and edits made there apply to the object(s);
   (4) selected paper objects show grips and dragging a grip edits the geometry; (5) CIRCLE,
   ARC, ELLIPSE, POLYLINE, and MTEXT draw onto the sheet, and SCALE/JOIN/TRIM/OFFSET operate on
-  the paper selection; (6) none of these paper edits change model geometry; (7) a `.gs`
-  round-trip restores the edited paper objects per layout.
+  the paper selection; (6) none of these paper edits change model geometry; (7) a DWG
+  save and reopen restores the edited paper objects per layout.
 - Owner-layer: UI / Commands / Domain / IO
 - Status: accepted
 - Revisions: 2026-06-18 — initial (paper-space object parity; ADR-014). Delivered incrementally:
   Phase 1 selection/text-pick/Properties, Phase 2 in-place text editor, Phase 3 grips, Phase 4
-  draw + modify parity.
+  draw + modify parity. 2026-10-28 — D-2026-10-28-c / issue #1019: SPLINE, POINT, LEADER draw onto
+  the sheet; PEDIT, MEASURE, DIVIDE, AREA, LIST run on paper objects.
 
 ### REQ-040 — AutoCAD-style floating command line with fading history and an F2 console
 - Purpose: the command line should read and behave like AutoCAD's — a compact
@@ -972,8 +976,8 @@ requirements is a planning failure, not a sign of rigor.
   deferred), the override colors **only the overridden layers**; general true-color viewport
   rendering is out of scope. All per-viewport freeze and color state is **strictly per
   viewport** — model space and other viewports are unaffected — and **persists per viewport in
-  the native `.gs`** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty, no
-  crash). DXF persistence of per-viewport overrides stays deferred.
+  the drawing's DWG file** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty,
+  no crash). DXF carries the same overrides under REQ-113.
 - Acceptance:
   - the standalone "Frozen Layers" panel no longer appears;
   - with a current viewport, the Layer Manager shows the **VP Freeze** and **VP Color** columns;
@@ -984,7 +988,7 @@ requirements is a planning failure, not a sign of rigor.
     the current viewport only; clearing the override reverts to the normal color;
   - **VPFREEZE** → select objects → those entities' layers are frozen in the current viewport
     only; **VPTHAW** → select objects → those layers are thawed; Esc / empty pick changes nothing;
-  - a `.gs` save/load round-trips per-viewport frozen layers **and** color overrides;
+  - a DWG save/reopen round-trips per-viewport frozen layers **and** color overrides;
   - a PDF plot of a viewport shows frozen layers **absent** and VP-Color layers in their
     **override color**, matching the screen;
   - existing global layer freeze/color and model-space rendering are unchanged.
@@ -2250,14 +2254,14 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: `PaperLayout` geometry remains 2D paper inches (ADR-009/013 stores unchanged).
   Each `Viewport` gains a stored camera direction, up vector and projection, persisted
-  additively in `.gs`. Screen rendering and the PDF plot each render a viewport's model
+  in the drawing's DWG file. Screen rendering and the PDF plot each render a viewport's model
   content from that viewport's own camera.
 - Acceptance:
   - a layout with two viewports — one plan, one isometric — renders both correctly on screen
     and plots both correctly to PDF;
-  - a legacy `.gs` loads with every viewport in plan view and renders identically to
-    pre-change.
-- Owner-layer: Domain (data), Renderer (draw), IO (`.gs` + plot)
+  - a drawing saved before this requirement loads with every viewport in plan view and renders
+    identically to pre-change.
+- Owner-layer: Domain (data), Renderer (draw), IO (DWG + plot)
 - Status: accepted — **implemented 2026-08-31** (GitHub issue #175, split from #155). `Viewport`
   carries `cam{Azimuth,Elevation,Roll}Deg` + `camPerspective`/`camFovDeg`, defaulting to the
   straight-down orthographic plan view; `render/ViewportProjection.hpp`
@@ -4386,7 +4390,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user. 2026-10-28 — POINT is REQ-456 (D-2026-10-28-c / issue #1019); remaining names here are unchanged.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -4416,8 +4420,8 @@ requirements is a planning failure, not a sign of rigor.
   - two points at the same elevation report "level (0.00%)" and no ratio;
   - all four figures are taken in the active UCS, and a tilted UCS moves them together.
 - Owner-layer: Commands/UI
-- Status: accepted (DIST only — issue #382); AREA/LIST/MASSPROP remain proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1)
+- Status: accepted (DIST — issue #382; AREA and LIST — D-2026-10-28-c / issue #1019 / REQ-456); MASSPROP remains proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1); 2026-10-28 — AREA and LIST accepted as REQ-456 (D-2026-10-28-c)
 
 ### REQ-106 — View-management commands
 - Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
@@ -11123,7 +11127,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
   issue #600 (R2007+ export path).
 - Statement:
-  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in the drawing's DWG file
      additively on the layout viewport object.
   2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
      VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
@@ -11145,9 +11149,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
     Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
     `viewportVisualStyle` via VPORT `*Active`;
-  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
+  - `GsIoViewportCameraTests` tag `[req371]`: DWG save/reopen preserves `visualStyle` on layout viewports;
   - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
-- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (DWG)
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
   `*Active` import/export (increment 2).
@@ -13065,9 +13069,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      curve passes exactly through every point the user clicks) and **CV** (control vertices — the
      curve is pulled toward, but does not touch, the clicked points). Both methods are
      degree 3 and open or closed (`Close` option; Enter ends an open spline).
-  3. The spline is a new entity kind stored in its own store in model space (3D points per
-     REQ-057), with layer, colour and linetype like every other entity. It is shown as a smooth
-     curve whose deviation from the true curve never exceeds REQ-101's tolerance.
+  3. The spline is a new entity kind stored in its own store (3D points per REQ-057), with layer,
+     colour and linetype like every other entity. In model space it lives on `cadSplines`; in
+     paper space it lives on the active layout's paper spline store (D-2026-10-28-c). It is shown
+     as a smooth curve whose deviation from the true curve never exceeds REQ-101's tolerance.
   4. Live preview while picking, committing on the snapped point (the preview-vs-commit invariant).
   5. **Editing.** The spline can be selected, erased, moved, copied, rotated, scaled and mirrored;
      it appears in the Properties panel (method, degree, closed, point count, length); its
@@ -13077,9 +13082,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **Files.** A spline saves to and loads from DXF and DWG as a standard `SPLINE`
      entity, including its degree, knots, control points, fit points and closed flag. Importing a
      DXF/DWG `SPLINE` creates a real spline entity instead of dropping it.
-  8. Paper space, TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
+  8. TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
      requirement; a command that cannot act on a spline says so in the command log (REQ-201)
-     and changes nothing.
+     and changes nothing. Paper space: a SPLINE drawn while a paper layout is the active space
+     (and not floating model space) commits to that layout's paper spline store (D-2026-10-28-c /
+     REQ-456). The earlier model-only refusal is lifted.
 - Acceptance:
   - A Fit spline through four clicked points passes within REQ-101's tolerance of all four; a CV
     spline does not pass through its interior control points; both can be closed.
@@ -13100,7 +13107,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-e.
 - Status: accepted
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20. 2026-10-28 — paper-space SPLINE accepted (D-2026-10-28-c / REQ-456 / issue #1019).
 
 
 ### REQ-444 — Revision Cloud command (GitHub issue #803)
@@ -14899,7 +14906,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
 | REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
-| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows; paper-space SPLINE (REQ-456) | accepted |
+| REQ-456 | Commands/Domain/IO/Qt UI | `Issue1019CommandTests` `[req456][issue1019]`: LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST in model and paper; PDMODE/PDSIZE; named refusals | accepted |
 | REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
 | REQ-448 | IO/Commands/Qt UI | `LandXmlExportTests` (points, TIN, feature lines, units, failures, XML text), `QtEditorTests` `issue1002RibbonExportsLandXmlThroughTheCommand`, transcript `issue1002-landxml-export`, schema check `tools/validate-landxml.ps1` | accepted |
 | REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
@@ -14930,9 +14938,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-034 | UI/Commands/Renderer | ~~manual (polygonal viewport clips model to the polygon) — Inc 3d~~ | withdrawn (2026-07-13) |
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
-| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
-| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; .gs round-trip of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
-| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; .gs round-trip) | accepted |
+| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; DWG save/reopen) | accepted |
+| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; DWG save/reopen of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
+| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; DWG save/reopen) | accepted |
 | REQ-040 | UI | `CommandLineTests` (fade-alpha vs elapsed time; recent-tail line selection) + manual (floating bar draggable + position/visibility persist; last ~3 lines fade after idle; F2 toggles console; ESC always cancels; select-to-copy; ×/Ctrl+9 hide/restore; autocomplete + dynamic input + [A]/[2P] preserved; dock still available) | accepted |
 | REQ-041 | UI/IO | `SurveyCsvValidateTests` (file-state classification; duplicate-ID detection within file + vs session) + manual (distinct not-found/empty/locked messages; Import disabled on file-level; row-only prompts to confirm skip; overall status string) | accepted |
 | REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
@@ -15142,6 +15150,68 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. The normal executable filename remains `GoSurvey.exe`; this increment adds neither the standalone manager nor a build/restart watcher.
 - Owner-layer: Application / Qt UI / Build documentation
 - Status: accepted (2026-10-23, user approved scope)
+
+---
+
+### REQ-456 — Paper-space command parity for LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (GitHub issue #1019)
+- Purpose: eight command names from the paper-space audit leftover of #751/#753 (finding V3/N3)
+  currently answer "Unknown command" (or, for SPLINE, refuse paper). Surveyors use them on sheets
+  as well as in the model.
+- Priority: should
+- Type: functional
+- Depends on: REQ-039, REQ-104, REQ-105, REQ-367, REQ-443, REQ-101, REQ-201.
+- Statement:
+  1. Typed `LEADER`, `SPLINE`, `POINT`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` are
+     registered commands. None of them answers "Unknown command". `MLEADER` is also registered
+     (the handler already exists).
+  2. Each command runs in **model space** and in **paper space** while a layout is active and not
+     in floating model space. Paper draws commit to that layout's paper store in paper inches.
+     Model draws commit to the model stores. Paper edits never change model geometry.
+  3. **POINT** creates a `CadPoint` entity (not a survey point, not a Position Marker). The
+     command loops until Enter. `PDMODE` (0/1/2/3/4 plus 32/64/96 for circle/square) and
+     `PDSIZE` (0 = 5% of the view height; negative = percent of view; positive = drawing units)
+     control how every CAD point in the drawing is drawn. A DXF/DWG `POINT` without GOSURVEY
+     XDATA imports as `CadPoint`. Survey-point XDATA still reconstructs a survey point (REQ-023).
+  4. **LEADER** collects vertex points, then annotation (Mtext default, or None) and format
+     (Straight default, Spline, Arrow, None). Tolerance, Copy, and Block annotation are refused
+     by name (REQ-201) and change nothing. The result is a `CadMultileader` in the model
+     multileader store or the layout's `paperMultileaders`.
+  5. **SPLINE** in paper space commits to the layout's paper spline store. The REQ-443
+     model-only refusal is lifted.
+  6. **PEDIT** converts a picked line or arc into a polyline, then Close/Open, Join, Reverse,
+     Edit vertex (Next/Previous/Insert/Move/eXit), Decurve (zero bulges), Fit (bulge arcs
+     between vertices), and Spline (densify vertices). Width and linetype generation are
+     refused by name. Fit/Spline operate on the live vertices; Decurve cannot restore a
+     pre-Fit original vertex set.
+  7. **MEASURE** places `CadPoint` entities at a typed interval along a picked line, polyline,
+     or circle, measured from the end nearest the pick (closed polyline from its start vertex;
+     circle from the pick, with rotation 0 = east).
+  8. **DIVIDE** places `CadPoint` entities that split a picked line, polyline, or circle into N
+     equal segments: N−1 points on an open object, N on a closed object.
+  9. **AREA** reports area and perimeter from typed points (shoelace), from a picked closed
+     polyline/rectangle/circle, and Add/Subtract running totals. Read-only; no undo entry.
+  10. **LIST** prints type, layer, space, and geometry of the selection, or of objects picked
+      after the command starts. Read-only; no undo entry.
+- Acceptance:
+  1. Typing each of the eight names (and `MLEADER`) on a blank drawing leaves a prompt, a
+     report, or a started command — never "Unknown command".
+  2. POINT, LEADER, and SPLINE drawn in model space land in the model stores; the same
+     commands drawn on a paper layout land only in that layout's paper stores.
+  3. A POINT through two typed coordinates exists, is selectable, moves, and one UNDO removes
+     it. PDMODE 0 draws a marker; PDMODE 1 draws nothing; PDSIZE 0 uses 5% of the view.
+  4. LEADER with two points and None annotation creates a multileader; typing Tolerance / Copy
+     / Block logs a named refusal.
+  5. PEDIT Close on an open two-vertex polyline from a line makes it closed; Width logs a
+     named refusal.
+  6. MEASURE of a 10-unit line at interval 2.5 places three interior points; DIVIDE of the
+     same line into 4 segments places three points.
+  7. AREA of a 10×10 rectangle of points reports 100 area and 40 perimeter within REQ-101;
+     LIST of a line reports LINE, its layer, and its endpoints.
+  8. Each of the eight commands run on a paper layout leaves model geometry unchanged.
+- Frontend: **Qt only** for ribbon/icons; command and entity logic lives in Commands / Domain / IO.
+- Owner-layer: Commands / Domain / IO / Qt UI
+- Decision: D-2026-10-28-c.
+- Status: accepted (2026-10-28, user chose Option C on issue #1019)
 
 ## Anti-requirements
 

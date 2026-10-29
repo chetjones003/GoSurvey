@@ -335,6 +335,7 @@ QString GeneratedCommandIconFamily(const QString& name, const QString& descripti
   if (text.contains("move") || text.contains("copy") || text.contains("rotate") ||
       text.contains("scale") || text.contains("mirror") || text.contains("array") ||
       text.contains("offset")) return "transform";
+  if (text.contains("leader")) return "dimension";
   if (text.contains("line") || text.contains("poly") || text.contains("curve") ||
       text.contains("spline") || text.contains("arc")) return "geometry";
   if (text.contains("list") || text.contains("table") || text.contains("report") ||
