@@ -556,8 +556,8 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
 
 // --- Toolspace menus -------------------------------------------------------------------------------
 
-void EditorWindow::ShowToolspaceContextMenu(const QPoint& position) {
-  QTreeWidgetItem* item = m_Toolspace->itemAt(position);
+void EditorWindow::ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position) {
+  QTreeWidgetItem* item = tree->itemAt(position);
   if (!item) return;
   const QString kind = item->data(0, Qt::UserRole + 1).toString();
   if (kind.isEmpty()) return;
@@ -616,5 +616,5 @@ void EditorWindow::ShowToolspaceContextMenu(const QPoint& position) {
   } else {
     return;
   }
-  menu.exec(m_Toolspace->viewport()->mapToGlobal(position));
+  menu.exec(tree->viewport()->mapToGlobal(position));
 }

@@ -5777,7 +5777,7 @@ private Q_SLOTS:
     QVERIFY(viewportTop > tabs->geometry().bottom());
     QVERIFY(viewportTop - tabs->geometry().bottom() <= 3);
     auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
-    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
     QTest::keyClicks(tree, "l");
     QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
@@ -6086,8 +6086,9 @@ private Q_SLOTS:
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
     const auto geometry = window.State().userLinesFlat;
-    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
-    auto drawings = [&] { return tree->findItems("Drawings", Qt::MatchExactly).front(); };
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree"); QVERIFY(projectTree);
+    auto drawings = [&] { return projectTree->findItems("Drawings", Qt::MatchExactly).front(); };
     auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly).front(); };
     drawings()->setExpanded(false); blocks()->setExpanded(true);
     QVERIFY(blocks()->childCount() > 0);
@@ -8907,7 +8908,7 @@ private Q_SLOTS:
     moveTo(QPoint(200, 300));
     QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
 
-    auto* tree = window.findChild<QTreeWidget*>();
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
     QVERIFY(tree && tree->topLevelItemCount() > 0);
     const QTreeWidgetItem* first = tree->topLevelItem(0);
     window.Refresh();
@@ -8916,6 +8917,28 @@ private Q_SLOTS:
     window.State().blockDefs.back().name = "BLK1034";
     window.Refresh();
     QVERIFY(!tree->findItems("BLK1034", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());  // a change still shows
+  }
+
+  // GitHub #1040 / REQ-142 (D-2026-10-28-a): one screenshot per Toolspace tab for the visual review. The Project tab
+  // shows its empty state because no project is open in this drawing.
+  void issue1040ToolspaceTabsCaptureForReview() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 820);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* dock = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(dock);
+    auto* tabs = window.findChild<QTabWidget*>("toolspaceTabs"); QVERIFY(tabs);
+    QCOMPARE(tabs->count(), 3);
+    QCOMPARE(tabs->tabText(0), QString("Project"));
+    QCOMPARE(tabs->tabText(1), QString("Prospector"));
+    QCOMPARE(tabs->tabText(2), QString("Settings"));
+    const std::pair<int, const char*> captures[] = {{0, "issue1040-toolspace-project.png"}, {1, "issue1040-toolspace-prospector.png"}, {2, "issue1040-toolspace-settings.png"}};
+    for (const auto& [index, name] : captures) {
+      tabs->setCurrentIndex(index);
+      QTest::qWait(150);
+      QVERIFY(dock->grab().save(Issue886Shot(name)));
+    }
   }
 
   // ---- Issue #1028 / REQ-093: the Qt splash progress bar and phase label advance ----
@@ -11595,6 +11618,7 @@ private Q_SLOTS:
 
   void surfaceRequestsFromRibbonCommandsAndToolspaceOpenTheNativeDialogs() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();  // the Toolspace shows objects and styles only while a drawing is open (REQ-142)
     auto& st = window.State();
     Issue893Fixture(st);
     // Create Surface (ribbon / Toolspace set the flag the command layer sets).
@@ -11646,14 +11670,15 @@ private Q_SLOTS:
     QCOMPARE(window.findChildren<QDialog*>("surfaceManager").size(), 1);
     manager->close();
     // The Toolspace lists surfaces and surface styles and tags them for its context menu.
-    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock")->findChild<QTreeWidget*>();
-    QVERIFY(toolspace);
+    auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+    auto* settingsTree = window.findChild<QTreeWidget*>("toolspaceSettingsTree");
+    QVERIFY(prospector && settingsTree);
     QTreeWidgetItem* surfaces = nullptr;
     QTreeWidgetItem* styles = nullptr;
-    for (int i = 0; i < toolspace->topLevelItemCount(); ++i) {
-      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "surfacesFolder") surfaces = toolspace->topLevelItem(i);
-      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "stylesFolder") styles = toolspace->topLevelItem(i);
-    }
+    for (QTreeWidgetItemIterator it(prospector); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole + 1).toString() == "surfacesFolder") surfaces = *it;
+    for (QTreeWidgetItemIterator it(settingsTree); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole + 1).toString() == "stylesFolder") styles = *it;
     QVERIFY(surfaces && styles);
     QCOMPARE(surfaces->childCount(), 2);
     QCOMPARE(surfaces->child(1)->data(0, Qt::UserRole + 2).toInt(), 1);
