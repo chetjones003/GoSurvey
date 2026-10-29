@@ -24,8 +24,12 @@ for a compact list inside the program.
 | `FEATURELINELIST` | `FLLIST` | List every feature line and its vertices | [[Commands/featurelinelist]] |
 | `HATCH` | `H`, `BHATCH` | Fill a closed area (pick an internal point) | [[Commands/hatch]] |
 | `LINE` | `L` | Draw line segments | [[Commands/line]] |
+| `PDMODE` | — | CAD point display mode | [[Commands/pdmode]] |
+| `PDSIZE` | — | CAD point display size | [[Commands/pdsize]] |
+| `POINT` | — | Place CAD point markers (`PDMODE` / `PDSIZE`) | [[Commands/point]] |
 | `POLYLINE` | `PL` | Draw a connected polyline | [[Commands/polyline]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | Draw a rectangle (two opposite corners) | [[Commands/rect]] |
+| `SPLINE` | `SPL` | Draw a NURBS spline (Fit or CV) | [[Commands/spline]] |
 
 ### Solids and 3D
 
@@ -61,6 +65,8 @@ for a compact list inside the program.
 | `DIMANGULAR` | `DAN` | Angular dimension | [[Commands/dimangular]] |
 | `DIMLINEAR` | `DLI` | Linear dimension | [[Commands/dimlinear]] |
 | `DIMSTY` | `DIMSTYLE`, `DSTY` | Dimension style editor | [[Commands/dimsty]] |
+| `LEADER` | `LE` | Draw a leader (Mtext or None) | [[Commands/leader]] |
+| `MLEADER` | `ML` | Draw a multileader | [[Commands/mleader]] |
 | `MTEXT` | `MT` | Place multiline text | [[Commands/mtext]] |
 | `STYLE` | `ST`, `DDSTYLE` | Text style manager: create / edit named text styles | [[Commands/style]] |
 | `TEXT` | — | Place single-line text | [[Commands/text]] |
@@ -81,8 +87,11 @@ for a compact list inside the program.
 | `JOIN` | `J` | Join collinear objects | [[Commands/join]] |
 | `LENGTHEN` | `LEN` | Change an object's length (DElta/Percent/Total/DYnamic) | [[Commands/lengthen]] |
 | `MIRROR` | `MI` | Mirror objects across a line | [[Commands/mirror]] |
+| `DIVIDE` | `DIV` | Place points that divide an object into equal segments | [[Commands/divide]] |
+| `MEASURE` | `ME` | Place points at a measured interval along an object | [[Commands/measure]] |
 | `MOVE` | `M` | Move objects | [[Commands/move]] |
 | `OFFSET` | `O` | Offset at a distance | [[Commands/offset]] |
+| `PEDIT` | `PE` | Edit a polyline (Close, Open, Join, Reverse, Fit, Spline, Decurve) | [[Commands/pedit]] |
 | `OVERKILL` | `OK` | Remove duplicate geometry | [[Commands/overkill]] |
 | `PASTE` | — | Paste from clipboard | [[Commands/paste]] |
 | `PASTEORIG` | `PO` | Paste at original coordinates | [[Commands/pasteorig]] |
@@ -134,12 +143,14 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `AREA` | `AA` | Area and perimeter of typed points or a closed object | [[Commands/area]] |
 | `CREATEPOINTS` | `CRTPTS` | Create survey points | [[Commands/createpoints]] |
 | `DIST` | `DI` | 3D distance between two points: dX, dY, dZ, slope distance | [[Commands/dist]] |
 | `EXPORTPOINTS` | `EXPPTS` | Export survey points | [[Commands/exportpoints]] |
 | `ID` | — | Identify point coordinates | [[Commands/id]] |
 | `IMPORTPOINTS` | `IMPPTS` | Import survey points | [[Commands/importpoints]] |
 | `INVERSE` | `INV` | Inverse between two points | [[Commands/inverse]] |
+| `LIST` | `LI` | List type, layer, space and geometry of selected objects | [[Commands/list]] |
 | `SURFELEV` | `SE` | Surface elevation at a point; grade between two | [[Commands/surfelev]] |
 | `TRAVERSE` | `TRAV`, `TRAVERSEEDITOR` | Open the Traverse Editor | [[Commands/traverse]] |
 | `VIEWPOINTS` | `VWPTS` | View / edit survey points | [[Commands/viewpoints]] |
@@ -261,6 +272,7 @@ for a compact list inside the program.
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | [[Commands/3dpoly]] |
 | `ALIGN` | `AL` | [[Commands/align]] |
 | `ARC` | — | [[Commands/arc]] |
+| `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |
 | `ATTDEF` | — | [[Commands/attdef]] |
 | `ATTEDIT` | — | [[Commands/attedit]] |
@@ -302,6 +314,7 @@ for a compact list inside the program.
 | `DIMLINEAR` | `DLI` | [[Commands/dimlinear]] |
 | `DIMSTY` | `DIMSTYLE`, `DSTY` | [[Commands/dimsty]] |
 | `DIST` | `DI` | [[Commands/dist]] |
+| `DIVIDE` | `DIV` | [[Commands/divide]] |
 | `ELEV` | `UCS` | [[Commands/elev]] |
 | `ELLIPSE` | `EL` | [[Commands/ellipse]] |
 | `EXPLODE` | `X` | [[Commands/explode]] |
@@ -329,13 +342,17 @@ for a compact list inside the program.
 | `ISOLINES` | — | [[Commands/isolines]] |
 | `JOIN` | `J` | [[Commands/join]] |
 | `LAYER` | `LA` | [[Commands/layer]] |
+| `LEADER` | `LE` | [[Commands/leader]] |
 | `LENGTHEN` | `LEN` | [[Commands/lengthen]] |
 | `LINE` | `L` | [[Commands/line]] |
+| `LIST` | `LI` | [[Commands/list]] |
 | `LOFT` | `LFT` | [[Commands/loft]] |
 | `MAKEBLOCK` | — | [[Commands/makeblock]] |
+| `MEASURE` | `ME` | [[Commands/measure]] |
 | `MIRROR` | `MI` | [[Commands/mirror]] |
 | `MIRRORSEL` | — | [[Commands/mirrorsel]] |
 | `MKLINE` | — | [[Commands/mkline]] |
+| `MLEADER` | `ML` | [[Commands/mleader]] |
 | `MOVE` | `M` | [[Commands/move]] |
 | `MOVESEL` | — | [[Commands/movesel]] |
 | `MSPACE` | `MS` | [[Commands/mspace]] |
@@ -351,9 +368,13 @@ for a compact list inside the program.
 | `PASTEORIG` | `PO` | [[Commands/pasteorig]] |
 | `PDFATTACH` | `PA` | [[Commands/pdfattach]] |
 | `PDFVIEW` | `PV` | [[Commands/pdfview]] |
+| `PEDIT` | `PE` | [[Commands/pedit]] |
+| `PDMODE` | — | [[Commands/pdmode]] |
+| `PDSIZE` | — | [[Commands/pdsize]] |
 | `PERSPECTIVE` | `PROJECTION`, `PERSP` | [[Commands/perspective]] |
 | `PLAN` | — | [[Commands/plan]] |
 | `PLOTSCALE` | `PSCALE` | [[Commands/plotscale]] |
+| `POINT` | — | [[Commands/point]] |
 | `POLYLINE` | `PL` | [[Commands/polyline]] |
 | `POLYSOLID` | `PSOLID` | [[Commands/polysolid]] |
 | `PRESSPULL` | `PP` | [[Commands/presspull]] |
@@ -378,6 +399,7 @@ for a compact list inside the program.
 | `SOLIDCHECK` | `SCHECK` | [[Commands/solidcheck]] |
 | `SOLIDLIST` | `SOLIDS` | [[Commands/solidlist]] |
 | `SPHERE` | `SPH` | [[Commands/sphere]] |
+| `SPLINE` | `SPL` | [[Commands/spline]] |
 | `STRETCH` | `S` | [[Commands/stretch]] |
 | `STYLE` | `ST`, `DDSTYLE` | [[Commands/style]] |
 | `SUBTRACT` | `SU` | [[Commands/subtract]] |

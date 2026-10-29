@@ -1679,13 +1679,14 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         i = j;
         continue;
       }
-      double arm = (*coordMagMax > 1.0) ? (*coordMagMax * 1e-7) : 0.01;
-      arm = std::clamp(arm, 1e-6, std::max(*coordMagMax * 1e-6, 0.5));
-      // Split each arm at center so (px,py) is a stored endpoint — snap hits the exact point.
-      appendSegXF(px - arm, py, px, py, at);
-      appendSegXF(px, py, px + arm, py, at);
-      appendSegXF(px, py - arm, px, py, at);
-      appendSegXF(px, py, px, py + arm, at);
+      double wx = 0, wy = 0;
+      xf.apply(px, py, &wx, &wy);
+      CadPoint cp;
+      cp.x = wx - st.worldDocumentOriginX;
+      cp.y = wy - st.worldDocumentOriginY;
+      cp.z = pz;
+      st.cadPoints.push_back(cp);
+      st.cadPointAttrs.push_back(at);
       i = j;
       continue;
     }
@@ -2443,7 +2444,7 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
   if (layouts.empty())
     return 0;
 
-  int nRead = 0, nBulge = 0, nOther = 0;
+  int nRead = 0, nOther = 0;
   const Affine2D xfRoot{};
   for (const Rec& r : found) {
     PaperLayout& L = layouts[static_cast<size_t>(r.layout)];
@@ -2533,15 +2534,11 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
     std::unordered_map<std::string, int> skipCounts;
     ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
                       &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate);
-    if (AppendScratchToPaperLayout(L, scratch))
-      ++nBulge;
+    AppendScratchToPaperLayout(L, scratch);
     if (skUnknown > 0 || degenerate > 0)
       ++nOther;
     ++nRead;
   }
-  if (nBulge > 0)
-    log.push_back("DXF import — paper-space polyline arc segments drawn straight (no bulge store) in " +
-                  std::to_string(nBulge) + " polyline(s).");
   if (nOther > 0)
     log.push_back("DXF import — " + std::to_string(nOther) + " paper-space entit" + (nOther == 1 ? "y" : "ies") +
                   " of an unsupported type skipped.");
@@ -2735,7 +2732,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // duplicating every entity in it.
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
                       st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty() &&
-                      st.cadSplines.empty();
+                      st.cadSplines.empty() && st.cadPoints.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -2885,7 +2882,8 @@ uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
     nLeaderParts += 4 + static_cast<uint64_t>(std::max(tb.cols - 1, 0) + std::max(CadTableRowCount(tb) - 1, 0)) +
                     tb.cells.size();
   return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
-         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts;
+         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts +
+         L.paperPoints.size() + L.paperSplines.size();
 }
 
 std::string DxfHex(uint64_t v) {
@@ -3039,12 +3037,59 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     rec.hasTransparency = c.hasTr;
     rec.transparency440 = c.tr;
     rec.closed = p < L.paperPolyClosed.size() && L.paperPolyClosed[p] != 0;
-    for (int vi = a; vi < b; ++vi)
+    for (int vi = a; vi < b; ++vi) {
       rec.vertices.push_back({num(L.paperPolyVerts[static_cast<size_t>(vi) * 3]),
                               num(L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 1])});
+      const float bg = static_cast<size_t>(vi) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                                                             : 0.f;
+      rec.bulges.push_back(bg == 0.f ? std::string("0") : num(bg));
+    }
     std::vector<DxfOutPair> v;
     DxfAppendLwPolylineRecord(rec, &v);
     DxfTagPaperSpace(&v, L.name);
+    flush(v);
+  }
+  for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+    const CadSpline& s = L.paperSplines[si];
+    if (!spline::Validate(s).empty())
+      continue;
+    const Common c = commonOf(attrAt(L.paperSplineAttrs, si));
+    std::vector<DxfOutPair> v;
+    begin(v, "SPLINE", c);
+    v.push_back({100, "AcDbSpline"});
+    v.push_back({70, std::to_string((s.periodic ? 3 : 0) | (!s.weights.empty() ? 4 : 0))});
+    v.push_back({71, std::to_string(s.degree)});
+    v.push_back({72, std::to_string(s.knots.size())});
+    v.push_back({73, std::to_string(s.ctrl.size())});
+    v.push_back({74, std::to_string(s.fit.size())});
+    for (double knot : s.knots)
+      v.push_back({40, num(knot)});
+    for (const auto& p : s.ctrl) {
+      v.push_back({10, num(p.x)});
+      v.push_back({20, num(p.y)});
+      v.push_back({30, num(p.z)});
+    }
+    if (!s.weights.empty()) {
+      for (double weight : s.weights)
+        v.push_back({41, num(weight)});
+    }
+    for (const auto& p : s.fit) {
+      v.push_back({11, num(p.x)});
+      v.push_back({21, num(p.y)});
+      v.push_back({31, num(p.z)});
+    }
+    flush(v);
+  }
+  for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+    const CadPoint& p = L.paperPoints[pi];
+    const Common c = commonOf(attrAt(L.paperPointAttrs, pi));
+    std::vector<DxfOutPair> v;
+    begin(v, "POINT", c);
+    v.push_back({100, "AcDbPoint"});
+    v.push_back({10, num(p.x)});
+    v.push_back({20, num(p.y)});
+    v.push_back({30, num(p.z)});
+    flat(v);
     flush(v);
   }
   for (size_t i = 0; i < L.paperTexts.size(); ++i) {
@@ -3341,7 +3386,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
                                static_cast<uint64_t>(st.userEllipses.size()) +
-                               static_cast<uint64_t>(st.cadSplines.size());
+                               static_cast<uint64_t>(st.cadSplines.size()) +
+                               static_cast<uint64_t>(st.cadPoints.size());
   // Dimension geometry comes from CadDimStroke.hpp - the same module the viewport (CadUi) and the
   // plot (PdfPlot) already use - rather than being rebuilt here. The block this replaces handled
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
@@ -3617,6 +3663,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       }
     }
   }
+  for (const CadPoint& p : st.cadPoints) {
+    accExt(q6lx(p.x), q6ly(p.y));
+    accExtZ(p.z);
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -3784,12 +3834,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(70, "0");
   emitPair(9, "$MIRRTEXT");
   emitPair(70, "0");
-  if (!st.surveyPoints.empty()) {
-    // Match PTYPE "X": point display as X-cross (PDMODE 3). PDSIZE 0 = 5% of viewport height.
+  if (!st.cadPoints.empty() || !st.surveyPoints.empty()) {
     emitPair(9, "$PDMODE");
-    emitPair(70, "3");
+    emitPair(70, std::to_string(!st.cadPoints.empty() ? st.pdMode : 3));
     emitPair(9, "$PDSIZE");
-    emitPair(40, "0.0");
+    emitPair(40, std::to_string(!st.cadPoints.empty() ? st.pdSize : 0.0));
   }
   emitPair(9, "$LTSCALE");
   emitPair(40, "1.0");
@@ -4632,6 +4681,27 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitDoublePair(21, worldY(p.y));
       emitDoublePair(31, p.z);
     }
+  }
+
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.cadPoints[pi];
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    EntityAttributes at{};
+    if (pi < st.cadPointAttrs.size()) at = st.cadPointAttrs[pi];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+    emitPair(0, "POINT");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbPoint");
+    emitPair(10, std::to_string(worldX(p.x)));
+    emitPair(20, std::to_string(worldY(p.y)));
+    emitPair(30, std::to_string(p.z));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
   }
 
   // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis

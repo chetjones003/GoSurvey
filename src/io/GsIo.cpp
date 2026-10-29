@@ -1381,6 +1381,7 @@ json BuildRoot(const AppCommandState& st) {
         o["paperEllAttrs"] = attrsToJson(l.paperEllAttrs);
         o["paperPolyOffsets"] = l.paperPolyOffsets;
         o["paperPolyVerts"] = l.paperPolyVerts;
+        o["paperPolyVertsBulge"] = l.paperPolyVertsBulge;
         json pc = json::array();
         for (uint8_t c : l.paperPolyClosed)
           pc.push_back(static_cast<int>(c));
@@ -1407,6 +1408,28 @@ json BuildRoot(const AppCommandState& st) {
           pbr.push_back(CadBlockRefToJson(r));
         o["paperBlockRefs"] = std::move(pbr);
         o["paperBlockRefAttrs"] = attrsToJson(l.paperBlockRefAttrs);
+        json psp = json::array();
+        for (const CadSpline& s : l.paperSplines) {
+          json so;
+          so["degree"] = s.degree;
+          so["periodic"] = s.periodic;
+          so["knots"] = s.knots;
+          so["ctrl"] = json::array();
+          for (const ray3d::Vec3& p : s.ctrl)
+            so["ctrl"].push_back({p.x, p.y, p.z});
+          so["weights"] = s.weights;
+          so["fit"] = json::array();
+          for (const ray3d::Vec3& p : s.fit)
+            so["fit"].push_back({p.x, p.y, p.z});
+          psp.push_back(std::move(so));
+        }
+        o["paperSplines"] = std::move(psp);
+        o["paperSplineAttrs"] = attrsToJson(l.paperSplineAttrs);
+        json ppt = json::array();
+        for (const CadPoint& p : l.paperPoints)
+          ppt.push_back({p.x, p.y, p.z});
+        o["paperPoints"] = std::move(ppt);
+        o["paperPointAttrs"] = attrsToJson(l.paperPointAttrs);
       }
       layouts.push_back(o);
     }
@@ -1648,6 +1671,10 @@ json BuildRoot(const AppCommandState& st) {
     o["path"] = ml.pathXyz;
     if (ml.annotative)
       o["annotative"] = true;
+    if (ml.splinePath)
+      o["splinePath"] = true;
+    if (!ml.showArrow)
+      o["showArrow"] = false;
     if (!ml.annotativeVisibleScaleNames.empty())
       o["annotativeVisibleScaleNames"] = ml.annotativeVisibleScaleNames;
     if (!ml.extraLeaderPaths.empty()) {
@@ -1697,6 +1724,24 @@ json BuildRoot(const AppCommandState& st) {
   }
   if (!splineAttrs.empty())
     doc["splineAttrs"] = std::move(splineAttrs);
+
+  json points = json::array();
+  for (const CadPoint& p : st.cadPoints)
+    points.push_back({p.x, p.y, p.z});
+  if (!points.empty())
+    doc["cadPoints"] = std::move(points);
+  json pointAttrs = json::array();
+  for (const auto& a : st.cadPointAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    pointAttrs.push_back(std::move(o));
+  }
+  if (!pointAttrs.empty())
+    doc["cadPointAttrs"] = std::move(pointAttrs);
+  if (st.pdMode != 0)
+    doc["pdMode"] = st.pdMode;
+  if (st.pdSize != 0.0)
+    doc["pdSize"] = st.pdSize;
 
   doc["drawingInsUnits"] = st.drawingInsUnits;
   json blockDefs = json::array();
@@ -2737,6 +2782,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           for (const auto& v : o["paperPolyVerts"])
             if (v.is_number())
               l.paperPolyVerts.push_back(v.get<float>());
+        if (o.contains("paperPolyVertsBulge") && o["paperPolyVertsBulge"].is_array())
+          for (const auto& v : o["paperPolyVertsBulge"])
+            if (v.is_number())
+              l.paperPolyVertsBulge.push_back(v.get<float>());
         if (o.contains("paperPolyClosed") && o["paperPolyClosed"].is_array())
           for (const auto& v : o["paperPolyClosed"])
             if (v.is_number())
@@ -2748,12 +2797,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
              static_cast<size_t>(l.paperPolyOffsets.back()) * 3 != l.paperPolyVerts.size())) {
           l.paperPolyOffsets.clear();
           l.paperPolyVerts.clear();
+          l.paperPolyVertsBulge.clear();
           l.paperPolyClosed.clear();
           l.paperPolyAttrs.clear();
         } else {
           readAttrs("paperPolyAttrs", l.paperPolyAttrs);
           l.paperPolyClosed.resize(static_cast<size_t>(std::max(0, nPoly)));
           l.paperPolyAttrs.resize(static_cast<size_t>(std::max(0, nPoly)));
+          l.paperPolyVertsBulge.resize(l.paperPolyVerts.size() / 3, 0.f);
         }
         if (o.contains("paperFilledRegions") && o["paperFilledRegions"].is_array())
           for (const auto& el : o["paperFilledRegions"])
@@ -2784,6 +2835,44 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               l.paperBlockRefs.push_back(CadBlockRefFromJson(br));
         readAttrs("paperBlockRefAttrs", l.paperBlockRefAttrs);
         l.paperBlockRefAttrs.resize(l.paperBlockRefs.size());
+        if (o.contains("paperSplines") && o["paperSplines"].is_array()) {
+          for (const auto& so : o["paperSplines"]) {
+            if (!so.is_object())
+              continue;
+            CadSpline s;
+            s.degree = so.value("degree", 3);
+            s.periodic = so.value("periodic", false);
+            if (so.contains("knots") && so["knots"].is_array())
+              for (const auto& k : so["knots"])
+                if (k.is_number()) s.knots.push_back(k.get<double>());
+            auto readPts = [](const json& list, std::vector<ray3d::Vec3>* out) {
+              if (!list.is_array()) return;
+              for (const auto& p : list) {
+                if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+                  continue;
+                out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+              }
+            };
+            if (so.contains("ctrl")) readPts(so["ctrl"], &s.ctrl);
+            if (so.contains("fit")) readPts(so["fit"], &s.fit);
+            if (so.contains("weights") && so["weights"].is_array())
+              for (const auto& w : so["weights"])
+                if (w.is_number()) s.weights.push_back(w.get<double>());
+            if (spline::Validate(s).empty())
+              l.paperSplines.push_back(std::move(s));
+          }
+        }
+        readAttrs("paperSplineAttrs", l.paperSplineAttrs);
+        l.paperSplineAttrs.resize(l.paperSplines.size());
+        if (o.contains("paperPoints") && o["paperPoints"].is_array()) {
+          for (const auto& p : o["paperPoints"]) {
+            if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+              continue;
+            l.paperPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+          }
+        }
+        readAttrs("paperPointAttrs", l.paperPointAttrs);
+        l.paperPointAttrs.resize(l.paperPoints.size());
       }
       st.paperLayouts.push_back(l);
     }
@@ -3167,6 +3256,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
       }
       ml.annotative = o.value("annotative", false);
+      ml.splinePath = o.value("splinePath", false);
+      ml.showArrow = o.value("showArrow", true);
       if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
         ml.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       if (o.contains("extraPaths") && o["extraPaths"].is_array()) {
@@ -3232,6 +3323,26 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
   }
   st.cadSplineAttrs.resize(st.cadSplines.size());
+
+  st.cadPoints.clear();
+  st.cadPointAttrs.clear();
+  if (doc.contains("cadPoints") && doc["cadPoints"].is_array()) {
+    const json* attrs = doc.contains("cadPointAttrs") && doc["cadPointAttrs"].is_array()
+                            ? &doc["cadPointAttrs"] : nullptr;
+    size_t i = 0;
+    for (const auto& p : doc["cadPoints"]) {
+      const size_t attrIndex = i++;
+      if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+        continue;
+      st.cadPoints.push_back(CadPoint{p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+      st.cadPointAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
+                                     ? EntityAttributesFromJson((*attrs)[attrIndex])
+                                     : EntityAttributes{});
+    }
+  }
+  st.cadPointAttrs.resize(st.cadPoints.size());
+  st.pdMode = doc.value("pdMode", 0);
+  st.pdSize = doc.value("pdSize", 0.0);
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
   st.blockDefs.clear();

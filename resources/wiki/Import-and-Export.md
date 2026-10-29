@@ -55,7 +55,7 @@ Brings in model-space geometry: lines, circles, arcs, ellipses, polylines, and c
 
 | Behaviour | Detail |
 |---|---|
-| **Paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported entity types are reported in the log. |
+| **Paper space** | Layouts, viewports, and supported sheet entities import in paper inches, including paper `POINT` and `SPLINE`. Unsupported entity types are reported in the log. |
 | **Unsupported types** | `N unsupported ENTITIES record(s).` — reported, never silently dropped |
 | **No ENTITIES section** | Falls back to the `*MODEL_SPACE` block and says so |
 | **Large coordinates** | State-plane values are imported at **full precision**; an internal local origin is set automatically |

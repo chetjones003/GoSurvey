@@ -2744,6 +2744,32 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
+        if (extended->points && !extended->points->empty()) {
+          const double viewH = 2.0 * static_cast<double>(halfH);
+          const double halfSize = CadPointMarkerSize(extended->pdSize, viewH);
+          std::vector<CadPointStroke> strokes;
+          for (size_t i = 0; i < extended->points->size(); ++i) {
+            EntityAttributes attr{};
+            if (extended->pointAttrs && i < extended->pointAttrs->size())
+              attr = (*extended->pointAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            CadPointDisplayStrokes((*extended->points)[i], extended->pdMode, halfSize, &strokes);
+            for (const CadPointStroke& s : strokes) {
+              const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+              maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+              float rgba[4];
+              ResolveEntityRgbaForViewport(attr, lr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
+              const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+              const float xy[4] = {static_cast<float>(s.x0 - viewAnchorX), static_cast<float>(s.y0 - viewAnchorY),
+                                   static_cast<float>(s.x1 - viewAnchorX), static_cast<float>(s.y1 - viewAnchorY)};
+              const float zs[2] = {static_cast<float>(s.z0), static_cast<float>(s.z1)};
+              CadTessellateLinetypeChainVc(xy, 2, 0.f, false, lt, dashPatScale, rgba, &cpuVcLines_, zs);
+              lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+            }
+          }
+        }
         // Polylines and feature lines: the same CSR shape and the same tessellation, but each gated
         // on ITS OWN store. The feature-line append used to be nested inside the polyline block, so
         // it inherited whether polylines existed — a coupling with no reason behind it and a second

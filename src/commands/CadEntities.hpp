@@ -26,6 +26,84 @@ using CadSpline = spline::Spline;
 /// per hover. The renderer samples finer.
 inline constexpr double kSplineSampleTolerance = 0.002;
 
+/// A CAD POINT entity (REQ-456 / issue #1019): a location drawn with PDMODE/PDSIZE. Distinct from
+/// a survey point (identity + description) and from a Position Marker (geolocation label).
+struct CadPoint {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// AutoCAD PDSIZE: positive = drawing units; negative = percent of view height; 0 = 5% of view.
+[[nodiscard]] inline double CadPointMarkerSize(double pdSize, double viewHeight) {
+  assert(std::isfinite(pdSize));
+  assert(std::isfinite(viewHeight));
+  if (pdSize > 0.0)
+    return pdSize;
+  const double h = viewHeight > 1e-12 ? viewHeight : 1.0;
+  if (pdSize < 0.0)
+    return h * (-pdSize) / 100.0;
+  return h * 0.05;
+}
+
+/// One stroke of a POINT marker (x0,y0,z0) → (x1,y1,z1).
+struct CadPointStroke {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// PDMODE: 0 dot, 1 none, 2 plus, 3 X, 4 tick; +32 circle, +64 square (96 = both).
+inline void CadPointDisplayStrokes(const CadPoint& p, int pdMode, double halfSize,
+                                   std::vector<CadPointStroke>* out) {
+  assert(out != nullptr);
+  assert(std::isfinite(halfSize));
+  out->clear();
+  if (!(halfSize > 0.0) || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+    return;
+  const int shape = pdMode & 7;
+  const int surround = pdMode & 96;
+  auto stroke = [&](double x0, double y0, double x1, double y1) {
+    out->push_back(CadPointStroke{x0, y0, p.z, x1, y1, p.z});
+  };
+  if (shape == 0) {
+    const double d = halfSize * 0.15;
+    stroke(p.x - d, p.y, p.x + d, p.y);
+    stroke(p.x, p.y - d, p.x, p.y + d);
+  } else if (shape == 2) {
+    stroke(p.x - halfSize, p.y, p.x + halfSize, p.y);
+    stroke(p.x, p.y - halfSize, p.x, p.y + halfSize);
+  } else if (shape == 3) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x + halfSize, p.y - halfSize);
+  } else if (shape == 4) {
+    stroke(p.x, p.y, p.x, p.y + halfSize);
+  }
+  if (surround == 32 || surround == 96) {
+    constexpr int kSeg = 16;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    double px = p.x + halfSize;
+    double py = p.y;
+    for (int i = 1; i <= kSeg; ++i) {
+      const double a = kTwoPi * static_cast<double>(i) / static_cast<double>(kSeg);
+      const double nx = p.x + halfSize * std::cos(a);
+      const double ny = p.y + halfSize * std::sin(a);
+      stroke(px, py, nx, ny);
+      px = nx;
+      py = ny;
+    }
+  }
+  if (surround == 64 || surround == 96) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y - halfSize);
+    stroke(p.x + halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x + halfSize, p.y + halfSize, p.x - halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x - halfSize, p.y - halfSize);
+  }
+}
+
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///
 /// Depth testing was left OFF by ADR-025 ASSUMPTION-1 precisely until a visual-style requirement
@@ -410,6 +488,9 @@ struct CadMultileader {
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
+  /// REQ-456 LEADER Format: spline-fit path vs straight segments; Arrow vs None arrowhead.
+  bool splinePath = false;
+  bool showArrow = true;
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 
@@ -424,6 +505,55 @@ inline void CadMultileaderLandingLocal(const CadMultileader& ml, float* x, float
 
 inline int CadMultileaderBranchCount(const CadMultileader& ml) {
   return 1 + static_cast<int>(ml.extraLeaderPaths.size());
+}
+
+/// Filled arrowhead at the tip of a leader path (first two XYZ triplets). Invalid when the path is
+/// too short, the size is not positive, or the first segment has no XY length.
+struct CadLeaderArrowHead {
+  bool valid = false;
+  float tipX = 0.f;
+  float tipY = 0.f;
+  float tipZ = 0.f;
+  float b1x = 0.f;
+  float b1y = 0.f;
+  float b1z = 0.f;
+  float b2x = 0.f;
+  float b2y = 0.f;
+  float b2z = 0.f;
+};
+
+[[nodiscard]] inline CadLeaderArrowHead CadMultileaderArrow(const CadMultileader& ml, const std::vector<float>& pathXyz,
+                                                           float size) {
+  assert(std::isfinite(size));
+  CadLeaderArrowHead a;
+  if (!ml.showArrow || !(size > 0.f) || pathXyz.size() < 6)
+    return a;
+  assert(pathXyz.size() % 3 == 0);
+  const float x0 = pathXyz[0];
+  const float y0 = pathXyz[1];
+  const float z0 = pathXyz[2];
+  const float dx = pathXyz[3] - x0;
+  const float dy = pathXyz[4] - y0;
+  const float len = std::hypot(dx, dy);
+  if (!(len > 1e-8f))
+    return a;
+  const float ux = dx / len;
+  const float uy = dy / len;
+  const float px = -uy;
+  const float py = ux;
+  const float along = size;
+  const float half = size * 0.35f;
+  a.valid = true;
+  a.tipX = x0;
+  a.tipY = y0;
+  a.tipZ = z0;
+  a.b1x = x0 + ux * along + px * half;
+  a.b1y = y0 + uy * along + py * half;
+  a.b1z = z0;
+  a.b2x = x0 + ux * along - px * half;
+  a.b2y = y0 + uy * along - py * half;
+  a.b2z = z0;
+  return a;
 }
 
 /// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a
