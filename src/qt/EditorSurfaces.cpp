@@ -10,6 +10,7 @@
 #include "SurfaceStyle.hpp"
 #include "util/surfacestats.hpp"
 #include "EditorViewport.hpp"
+#include <QFileInfo>
 
 #include <QCheckBox>
 #include <QDialog>
@@ -556,19 +557,41 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
 
 // --- Toolspace menus -------------------------------------------------------------------------------
 
-void EditorWindow::ShowToolspaceContextMenu(const QPoint& position) {
-  QTreeWidgetItem* item = m_Toolspace->itemAt(position);
+void EditorWindow::ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position) {
+  QTreeWidgetItem* item = tree->itemAt(position);
   if (!item) return;
+  QMenu* menu = BuildToolspaceMenu(item);
+  if (!menu) return;
+  menu->exec(tree->viewport()->mapToGlobal(position));
+  menu->deleteLater();
+}
+
+// The right-click menu for one Toolspace row (REQ-142). An entry with no working command yet is shown disabled with
+// a "not implemented yet" tooltip (REQ-084). Returns nullptr for a row that has no menu.
+QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
   const QString kind = item->data(0, Qt::UserRole + 1).toString();
-  if (kind.isEmpty()) return;
+  if (kind.isEmpty()) return nullptr;
   const int surface = item->data(0, Qt::UserRole + 2).isValid() ? item->data(0, Qt::UserRole + 2).toInt() : -1;
   const QString styleName = item->data(0, Qt::UserRole + 3).toString();
-  QMenu menu(this);
-  menu.setObjectName("toolspaceSurfaceMenu");
+  QMenu* menuPtr = new QMenu(this);
+  QMenu& menu = *menuPtr;
+  menu.setObjectName("toolspaceMenu");
+  // The project and drawing state every project entry depends on.
+  const int drawingIdx = m_State.activeDrawingIdx;
+  const std::uint32_t activeProject = drawingIdx > 0 && drawingIdx < static_cast<int>(m_State.drawingTabs.size())
+      ? m_State.drawingTabs[static_cast<size_t>(drawingIdx)].projectUid : 0;
+  const bool activeWritable = activeProject != 0 && !ActiveDrawingReadOnly();
+  const auto unavailable = [&](const QString& text, const char* name) {
+    QAction* entry = menu.addAction(text);
+    entry->setObjectName(name);
+    entry->setEnabled(false);
+    entry->setToolTip("Not implemented yet");
+  };
   const auto add = [&](const QString& text, const char* name, bool enabled, std::function<void()> action) {
     QAction* entry = menu.addAction(text);
     entry->setObjectName(name);
     entry->setEnabled(enabled);
+    if (!enabled) entry->setToolTip("Not available right now");
     connect(entry, &QAction::triggered, this, [action = std::move(action)] { action(); });  // NOLINT(bugprone-exception-escape): a slot, like every other lambda in this file
   };
   const bool valid = surface >= 0 && surface < static_cast<int>(m_State.cadSurfaces.size());
@@ -613,8 +636,80 @@ void EditorWindow::ShowToolspaceContextMenu(const QPoint& position) {
       m_State.showSurfaceStyleWindow = true;
       Refresh();
     });
+  } else if (kind == "drawingRoot") {
+    add("Drawing Settings...", "toolspaceDrawingSettings", true, [this] { Submit("DRAWINGSETTINGS"); });
+    add("Units...", "toolspaceUnits", true, [this] { ShowUnits(); });
+    add("Zoom Extents", "toolspaceZoomExtents", true, [this] { Submit("ZOOMEXTENTS"); });
+  } else if (kind == "points") {
+    add("Create Points...", "toolspaceCreatePoints", true, [this] { ShowCreatePoints(); });
+    add("Import Points...", "toolspaceImportPoints", true, [this] { m_State.showImportPointsWindow = true; Refresh(); });
+    add("Export Points...", "toolspaceExportPoints", true, [this] { m_State.showExportPointsWindow = true; Refresh(); });
+    menu.addSeparator();
+    add("Survey Point Grid...", "toolspacePointGrid", true, [this] { m_State.showSurveyPointGridWindow = true; Refresh(); });
+    add("Zoom Extents", "toolspacePointsZoom", true, [this] { Submit("ZOOMEXTENTS"); });
+    unavailable("Select", "toolspacePointsSelect");
+    unavailable("Pan To", "toolspacePointsPan");
+  } else if (kind == "pointGroupsFolder") {
+    add("Point Group Manager...", "toolspacePointGroupManager", true, [this] { m_State.showPointGroupManagerWindow = true; Refresh(); });
+  } else if (kind == "pointGroup") {
+    add("Properties...", "toolspacePointGroupProperties", true, [this] { m_State.showPointGroupManagerWindow = true; Refresh(); });
+  } else if (kind == "blocksFolder") {
+    add("Block Library...", "toolspaceBlockLibrary", true, [this] { Submit("BLOCKLIB"); });
+    add("Insert Block...", "toolspaceInsertBlock", true, [this] { Submit("INSERT"); });
+  } else if (kind == "block") {
+    add("Insert", "toolspaceInsertNamedBlock", true, [this, styleName] { Submit(QStringLiteral("INSERT ") + styleName); });
+    add("Edit in Place...", "toolspaceEditBlock", true, [this, styleName] { Submit(QStringLiteral("BEDIT ") + styleName); });
+  } else if (kind == "featureLinesFolder") {
+    add("Feature Line List", "toolspaceFeatureLineList", true, [this] { Submit("FEATURELINELIST"); });
+    add("Create Feature Line...", "toolspaceCreateFeatureLine", true, [this] { Submit("FEATURELINE"); });
+  } else if (kind == "featureLine") {
+    add("Edit Elevations...", "toolspaceFeatureLineElevations", true, [this] { m_State.showFeatureLineElevWindow = true; Refresh(); });
+    add("Feature Line List", "toolspaceFeatureLineListOne", true, [this] { Submit("FEATURELINELIST"); });
+    unavailable("Zoom To", "toolspaceFeatureLineZoom");
+  } else if (kind == "projectsFolder") {
+    add("Refresh Project Files", "toolspaceRefreshFiles", activeWritable, [this] { Submit("REFRESH"); });
+    add("Add PDF...", "toolspaceAddPdfEntry", activeWritable, [this] { Submit("ADDPDFTOPROJECT"); });
+    menu.addSeparator();
+    add("Project Health...", "toolspaceHealthEntry", activeProject != 0, [this] { Submit("PROJECTHEALTH"); });
+  } else if (kind == "project") {
+    // The project commands act on the project of the active drawing, so they are enabled only for that project.
+    const bool isActive = item->data(0, Qt::UserRole + 4).toUInt() == activeProject && activeProject != 0;
+    add("Project Settings...", "toolspaceProjectSettings", isActive, [this] { Submit("PROJECTSETTINGS"); });
+    add("Project Health...", "toolspaceProjectHealthEntry", isActive, [this] { Submit("PROJECTHEALTH"); });
+    add("Pack Project...", "toolspacePackProject", isActive, [this] { Submit("PACKPROJECT"); });
+    add("Turnover...", "toolspaceTurnover", isActive, [this] { Submit("TURNOVER"); });
+    menu.addSeparator();
+    add("Refresh Project Files", "toolspaceRefreshProject", isActive && !ActiveDrawingReadOnly(), [this] { Submit("REFRESH"); });
+  } else if (kind == "projectFolder") {
+    add("Add PDF...", "toolspaceAddPdfToFolder", activeWritable, [this] { Submit("ADDPDFTOPROJECT"); });
+    add("Refresh Project Files", "toolspaceRefreshFolder", activeWritable, [this] { Submit("REFRESH"); });
+  } else if (kind == "linkedFolder") {
+    add("Copy Links Into Project", "toolspaceCopyLinks", activeWritable, [this] { Submit("PROJECTHEALTH"); });
+  } else if (kind == "trackedItem") {
+    const QString path = item->data(0, Qt::UserRole + 5).toString();
+    const bool linked = item->data(0, Qt::UserRole + 6).toBool();
+    const bool isPdf = QFileInfo(path).suffix().compare(QStringLiteral("pdf"), Qt::CaseInsensitive) == 0;
+    add("Open", "toolspaceOpenTrackedItem", isPdf && QFileInfo::exists(path), [this, path] { ShowPdfFile(path); });
+    if (linked) add("Copy Into Project", "toolspaceCopyLinkIntoProject", activeWritable, [this] { Submit("PROJECTHEALTH"); });
+  } else if (kind == "drawingsFolder") {
+    add("Refresh Project Files", "toolspaceRefreshDrawings", activeWritable, [this] { Submit("REFRESH"); });
+  } else if (kind == "projectDrawing") {
+    const int index = item->data(0, Qt::UserRole).toInt();
+    add("Switch to Drawing", "toolspaceSwitchDrawing", true, [this, index] { SwitchDrawing(index); });
+    add("Drawing Settings...", "toolspaceDrawingSettingsOf", true, [this, index] { SwitchDrawing(index); Submit("DRAWINGSETTINGS"); });
+  } else if (kind == "generalFolder") {
+    add("Drawing Settings...", "toolspaceGeneralSettings", true, [this] { Submit("DRAWINGSETTINGS"); });
+  } else if (kind == "textStylesFolder" || kind == "textStyle") {
+    add("Text Style Manager...", "toolspaceTextStyles", true, [this] { m_State.showTextStyleManagerWindow = true; Refresh(); });
+  } else if (kind == "layersFolder" || kind == "layer") {
+    add("Layer Manager...", "toolspaceLayers", true, [this] { m_State.showLayerManagerWindow = true; Refresh(); });
+  } else if (kind == "dimensionFolder" || kind == "dimensionStyle") {
+    add("Dimension Styles...", "toolspaceDimensionStyles", true, [this] { Submit("DIMSTY"); });
+  } else if (kind == "surfaceSettingsFolder") {
+    add("Surface Styles...", "toolspaceSurfaceStylesSettings", true, [this] { m_State.showSurfaceStyleWindow = true; Refresh(); });
   } else {
-    return;
+    menuPtr->deleteLater();
+    return nullptr;
   }
-  menu.exec(m_Toolspace->viewport()->mapToGlobal(position));
+  return menuPtr;
 }

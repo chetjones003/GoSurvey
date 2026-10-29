@@ -5803,8 +5803,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
-  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
-  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  tree, a right-edge set of three **readable** vertical tabs (**Project**, **Prospector**, **Settings**), and an empty
+  preview strip. Each tab shows only its own data and keeps its own tree; switching tabs changes no project or drawing data:
+  - **Project** lists open projects with their tracked items (REQ-379), and the open drawings that belong to a project. Its header carries **Refresh** (REQ-379 clause 6) and **Project Health** (REQ-379 clause 4). With no project open it shows "No project is open"; Refresh and Project Health are disabled unless the active drawing belongs to a project (Refresh also in a read-only project).
+  - **Prospector** is the active drawing's object tree, made of the collections described in this requirement. With no drawing open it shows "No drawing is open".
+  - **Settings** lists drawing-level style tables only (General and Surface, below). It does not repeat app-wide preferences, which stay in View → Settings. With no drawing open it shows "No drawing is open". There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
   installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
   Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
   Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
@@ -5826,10 +5829,15 @@ requirements is a planning failure, not a sign of rigor.
   - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
     or Grading;
   - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+  - the Qt Toolspace shows three tabs in the order Project, Prospector, Settings; choosing a tab with the mouse and `TOOLSPACE PROJECT` / `PROSPECTOR` / `SETTINGS` select the same tab;
+  - with no project open the Project tab shows "No project is open" and its Refresh and Project Health buttons are disabled;
+  - with a drawing in a project, Project Health and (if the project is not read-only) Refresh are enabled and run the same actions as the File menu items;
+  - the Settings tab does not contain a button or entry that opens app-wide Settings.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28)
+- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-d)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
   2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
+  2026-10-28 — D-2026-10-28-d (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
@@ -11445,7 +11453,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      missing at its stored path is resolved to the tracked item of the same file name associated with
      the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
      opens. A drawing outside any project is unchanged.
-  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+  3. **Project Files section** in the Toolspace **Project tab** (REQ-142) lists tracked items by folder, with a link badge on
      `local-link` entries.
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
      offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
@@ -11457,7 +11465,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
      association and no placements. Tracking the same file twice changes nothing. Files other than
      PDFs are not accepted here (point clouds and point files keep their own import commands).
-  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace **Project tab** (project drawings
      only; disabled in a read-only project) looks through the project folder for **new files** — files
      of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
      track — and, **only when the user pressed Refresh**, asks which of them to track. The question
