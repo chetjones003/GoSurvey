@@ -1049,6 +1049,10 @@ void EditorWindow::BuildDocks() {
   connect(m_ToolspaceProjectHealth, &QPushButton::clicked, this, [this] { Submit("PROJECTHEALTH"); });
   projectButtons->addWidget(m_ToolspaceRefresh);
   projectButtons->addWidget(m_ToolspaceProjectHealth);
+  m_ToolspaceAddPdf = new QPushButton("Add PDF...", projectPage);
+  m_ToolspaceAddPdf->setObjectName("toolspaceAddPdf");
+  connect(m_ToolspaceAddPdf, &QPushButton::clicked, this, [this] { Submit("ADDPDFTOPROJECT"); });
+  projectButtons->addWidget(m_ToolspaceAddPdf);
   projectButtons->addStretch();
   projectLayout->addLayout(projectButtons);
   projectLayout->addWidget(m_ToolspaceProject);
@@ -2011,7 +2015,6 @@ QString ToolspaceItemPath(const QTreeWidgetItem* item) {
   return parts.join(QChar(0x1f));
 }
 
-// Rebuilds one Toolspace tree with \p fill. Rows that were expanded or selected stay so, unless the tree is new.
 // Icon for a Toolspace row (REQ-142). CadCommandIcon recolours its strokes for the current palette, so each
 // icon is cached per theme; otherwise a tree with hundreds of layers would recolour every icon on every refresh.
 QIcon ToolspaceIcon(const QString& file) {
@@ -2033,6 +2036,7 @@ QIcon TrackedItemIcon(const QString& path) {
   return ToolspaceIcon("file.png");
 }
 
+// Rebuilds one Toolspace tree with \p fill. Rows that were expanded or selected stay so, unless the tree is new.
 // Rows that did not exist before keep the state \p fill gave them, so a new folder opens by default.
 template <typename Fill>
 void RebuildToolspaceTree(QTreeWidget* tree, Fill fill) {
@@ -2057,17 +2061,18 @@ void RebuildToolspaceTree(QTreeWidget* tree, Fill fill) {
 
 void EditorWindow::RefreshToolspace() {
   // The Toolspace trees and buttons exist only after BuildDocks(); a refresh before that has nothing to update.
-  if (!m_ToolspaceRefresh || !m_ToolspaceProjectHealth || !m_ToolspaceProject || !m_Toolspace || !m_ToolspaceSettings) return;
+  if (!m_ToolspaceRefresh || !m_ToolspaceProjectHealth || !m_ToolspaceAddPdf || !m_ToolspaceProject || !m_Toolspace || !m_ToolspaceSettings) return;
   const int drawingIdx = m_State.activeDrawingIdx;
   const bool drawingOpen = drawingIdx > 0 && drawingIdx < static_cast<int>(m_State.drawingTabs.size());
   const std::uint32_t activeProject = drawingOpen ? m_State.drawingTabs[static_cast<size_t>(drawingIdx)].projectUid : 0;
   // Button state is cheap, so it is set before the key check that skips rebuilding the trees.
   m_ToolspaceProjectHealth->setEnabled(activeProject != 0);
   m_ToolspaceRefresh->setEnabled(activeProject != 0 && !ActiveDrawingReadOnly());
+  m_ToolspaceAddPdf->setEnabled(activeProject != 0 && !ActiveDrawingReadOnly());
   QStringList key;
   for (const auto& session : m_State.openProjects) {
     key << QString::fromUtf8(session.project.name.c_str()) + (session.readOnly ? "|ro" : "|rw");
-    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str());
+    for (const auto& item : session.project.items) key << QString::fromUtf8(item.path.c_str()) << QString::fromUtf8(item.kind.c_str());
   }
   key << "#drawings";
   for (std::size_t i = 1; i < m_State.drawingTabs.size(); ++i)
@@ -2099,9 +2104,26 @@ void EditorWindow::RefreshToolspace() {
         auto* project = new QTreeWidgetItem(projects, {QString::fromUtf8(session.project.name.c_str()) +
             (session.readOnly ? " (read-only)" : "")});
         project->setIcon(0, ToolspaceIcon("project.png"));
+        // Tracked items by folder (REQ-379 clause 3). Linked files sit under "Linked files" with a link badge; the
+        // rest sit under the first folder of their project path, or directly under the project at the root.
+        QHash<QString, QTreeWidgetItem*> folders;
         for (const auto& item : session.project.items) {
           const QString path = QString::fromUtf8(item.path.c_str());
-          (new QTreeWidgetItem(project, {path}))->setIcon(0, TrackedItemIcon(path));
+          const bool linked = item.kind == gsproj::kKindLocalLink;
+          const QString folder = linked ? QStringLiteral("Linked files") : (path.contains('/') ? path.section('/', 0, 0) : QString());
+          QTreeWidgetItem* parent = project;
+          if (!folder.isEmpty()) {
+            if (!folders.contains(folder)) {
+              auto* node = new QTreeWidgetItem(project, {folder});
+              node->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
+              folders.insert(folder, node);
+            }
+            parent = folders.value(folder);
+          }
+          const QString label = linked ? QFileInfo(path).fileName() + " (link)" : (folder.isEmpty() ? path : path.section('/', 1));
+          auto* row = new QTreeWidgetItem(parent, {label});
+          row->setToolTip(0, linked ? path + "\nLinked file: does not travel with the project" : path);
+          row->setIcon(0, TrackedItemIcon(path));
         }
       }
       projects->setExpanded(true);

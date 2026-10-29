@@ -203,6 +203,7 @@ private:
   QTreeWidget* m_ToolspaceSettings = nullptr;      ///< Settings tab (REQ-142): drawing-level style tables.
   QPushButton* m_ToolspaceRefresh = nullptr;       ///< Project tab's Refresh (REQ-379 clause 6).
   QPushButton* m_ToolspaceProjectHealth = nullptr; ///< Project tab's Project Health (REQ-379 clause 4).
+  QPushButton* m_ToolspaceAddPdf = nullptr;        ///< Project tab's Add PDF... (REQ-379 clause 5).
   QScrollArea* m_PropertiesScroll = nullptr;
   std::uint64_t m_PropertiesFingerprint = ~0ull;
   QString m_PropertiesNote;

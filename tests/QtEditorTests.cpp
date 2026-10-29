@@ -8973,19 +8973,77 @@ private Q_SLOTS:
     auto& st = window.State();
     st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
     AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
-    gsproj::TrackedItem pdf; pdf.path = "PDFs/plan.pdf";
-    gsproj::TrackedItem cloud; cloud.path = "PointClouds/site.e57";
-    gsproj::TrackedItem other; other.path = "Notes/readme.txt";
-    session.project.items = {pdf, cloud, other};
+    for (const char* path : {"PDFs/plan.pdf", "PDFs/PLAN.PDF", "PointClouds/site.e57", "PointClouds/SITE.E57", "Notes/readme.txt", "Notes/readme"}) {
+      gsproj::TrackedItem item; item.path = path; session.project.items.push_back(item);
+    }
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items.push_back(linked);
     st.openProjects.push_back(session);
     PointGroup group; group.name = "Existing Ground";
     st.pointGroups.push_back(group);
+    st.cadSurfaces.push_back({});
+    st.cadSurfaces.back().name = "EG";
+    st.blockDefs.push_back({});
+    st.blockDefs.back().name = "BLK";
     window.Refresh();
     for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
       auto* tree = window.findChild<QTreeWidget*>(name);
       QVERIFY(tree);
       for (QTreeWidgetItemIterator it(tree); *it; ++it) QVERIFY2(!(*it)->icon(0).isNull(), qPrintable((*it)->text(0)));
     }
+    // Each row's icon is chosen by file kind, so upper-case extensions match and a file with no extension gets the plain file icon.
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    auto find = [&](const QString& text) {
+      QTreeWidgetItem* found = nullptr;
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) if ((*it)->text(0) == text) found = *it;
+      return found;
+    };
+    auto image = [&](const QString& text) { QTreeWidgetItem* row = find(text); return row ? row->icon(0).pixmap(32, 32).toImage() : QImage(); };
+    for (const char* text : {"plan.pdf", "PLAN.PDF", "site.e57", "SITE.E57", "readme", "readme.txt", "map.pdf (link)", "PDFs", "PointClouds", "Linked files"})
+      QVERIFY2(find(text), text);
+    QVERIFY(image("plan.pdf") == image("PLAN.PDF"));
+    QVERIFY(image("site.e57") == image("SITE.E57"));
+    QVERIFY(image("readme") == image("readme.txt"));
+    QVERIFY(image("plan.pdf") != image("readme.txt"));
+    QVERIFY(image("plan.pdf") != image("site.e57"));
+    // Folders: in-project files sit under their folder; the linked file sits under "Linked files" with the badge.
+    QCOMPARE(find("PDFs")->childCount(), 2);
+    QCOMPARE(find("PointClouds")->childCount(), 2);
+    QCOMPARE(find("Linked files")->childCount(), 1);
+    QCOMPARE(find("map.pdf (link)")->parent()->text(0), QString("Linked files"));
+    QVERIFY(find("map.pdf (link)")->toolTip(0).contains("does not travel"));
+    QVERIFY(image("map.pdf (link)") == image("plan.pdf"));
+  }
+
+  // GitHub #1040 / REQ-379: Refresh and Project Health submit the File-menu commands for the active drawing's project.
+  // Add PDF... opens a native file picker that a test cannot dismiss, so only its enabled state is checked here.
+  void issue1040ProjectButtonsRunTheirActions() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Button Job", &created, &error), error.c_str());
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), false);
+    QVERIFY(uid != 0);
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = uid;
+    window.Refresh();
+    auto* refresh = window.findChild<QPushButton*>("toolspaceRefresh");
+    auto* health = window.findChild<QPushButton*>("toolspaceProjectHealth");
+    auto* addPdf = window.findChild<QPushButton*>("toolspaceAddPdf");
+    QVERIFY(refresh && health && addPdf);
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+    QVERIFY(addPdf->isEnabled());
+    const auto press = [](QPushButton* button) {
+      QTimer::singleShot(0, [] { if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject(); });
+      button->click();
+      QCoreApplication::processEvents();
+    };
+    press(refresh);
+    QCOMPARE(window.m_CommandHistory.last(), QString("REFRESH"));
+    press(health);
+    QCOMPARE(window.m_CommandHistory.last(), QString("PROJECTHEALTH"));
   }
 
   // GitHub #1040: double-clicking a drawing on the Project tab switches to it, like the Prospector tree did.
@@ -9007,7 +9065,7 @@ private Q_SLOTS:
     QCOMPARE(window.State().activeDrawingIdx, first);
   }
 
-  // GitHub #1040 / REQ-142 (D-2026-10-28-a): one screenshot per Toolspace tab for the visual review. The Project tab
+  // GitHub #1040 / REQ-142 (D-2026-10-28-c): one screenshot per Toolspace tab for the visual review. The Project tab
   // shows its empty state because no project is open in this drawing.
   void issue1040ToolspaceTabsCaptureForReview() {
     // Pin the Graphite theme for the review images, and restore the app's theme afterwards like the appearance test does.
@@ -9020,7 +9078,9 @@ private Q_SLOTS:
       QSettings().remove("editor/lightTheme");
     });
     EditorWindow window;
-    if (auto* graphite = Action(window, "Graphite")) graphite->trigger();
+    auto* graphite = Action(window, "Graphite");
+    QVERIFY(graphite);
+    graphite->trigger();
     window.CreateDrawingFromTemplate();
     // Sample project with each kind of tracked file, a point group, and a project drawing, so every row kind is in the images.
     auto& sample = window.State();
@@ -9029,6 +9089,8 @@ private Q_SLOTS:
     for (const char* path : {"PDFs/plan.pdf", "PointClouds/site.e57", "Notes/readme.txt"}) {
       gsproj::TrackedItem item; item.path = path; project.project.items.push_back(item);
     }
+    gsproj::TrackedItem link; link.path = "C:/Scans/map.pdf"; link.kind = gsproj::kKindLocalLink;
+    project.project.items.push_back(link);
     sample.openProjects.push_back(project);
     PointGroup group; group.name = "Existing Ground";
     sample.pointGroups.push_back(group);

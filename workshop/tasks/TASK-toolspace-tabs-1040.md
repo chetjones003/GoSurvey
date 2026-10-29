@@ -9,7 +9,7 @@
 
 ## 1. Authority
 - Goal:         GOAL-NN from spec/project.md (Qt parity, Toolspace)
-- Requirements: REQ-142 (amended by D-2026-10-28-a), REQ-379 clauses 3 and 6 (wording now "Project tab")
+- Requirements: REQ-142 (amended by D-2026-10-28-c), REQ-379 clauses 3 and 6 (wording now "Project tab")
 - Constraints:  CON for Qt UI and no new dependencies (none added)
 - Acceptance (from REQ-142 as amended, and issue #1040):
   - Toolspace presents Project, Prospector and Settings as separate selectable tabs.
@@ -43,7 +43,7 @@
 | 1 | Project tab as a separate tab, or a section in Prospector? | 2026-10-28 | Option A: separate tab (owner) |
 
 ## 5. Plan
-1. Amend REQ-142 and REQ-379 wording; record D-2026-10-28-a. (done)
+1. Amend REQ-142 and REQ-379 wording; record D-2026-10-28-c. (done)
 2. Split the Qt dock into three trees; move project list and open drawings to Project; keep objects in Prospector; move style tables to Settings.
 3. Buttons: Refresh → `REFRESH`, Project Health → `PROJECTHEALTH` (same verbs the File menu uses); enabled only when the active drawing belongs to a project (Refresh also not read-only).
 4. Tests: update the Toolspace style test; build; run Qt editor tests; capture screenshots of Project, Prospector and Settings tabs (normal and empty states) for review.
