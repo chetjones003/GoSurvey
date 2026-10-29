@@ -1,10 +1,12 @@
-// CadCommands_Issue1019.cpp — LEADER, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (REQ-456).
+// CadCommands_DrawInquiry.cpp — LEADER, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (REQ-456).
 
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 
 #include "util/NumFormat.hpp"
 #include "util/StringUtil.hpp"
+#include "util/geom2d.hpp"
+#include "util/spline.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -17,6 +19,7 @@ namespace {
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kTwoPi = 6.28318530717958647692;
+constexpr double kJoinTol = 1.0e-3;
 
 [[nodiscard]] std::string UpperTrim(const std::string& raw) {
   std::string s = StringUtil::trimCopy(raw);
@@ -26,7 +29,7 @@ constexpr double kTwoPi = 6.28318530717958647692;
   return s;
 }
 
-[[nodiscard]] bool IsIssue1019Kind(AppCommandState::Kind k) {
+[[nodiscard]] bool IsCadDrawInquiryKind(AppCommandState::Kind k) {
   using K = AppCommandState::Kind;
   return k == K::Point || k == K::Leader || k == K::Pedit || k == K::Measure || k == K::Divide ||
          k == K::Area || k == K::List;
@@ -61,8 +64,21 @@ struct PathSample {
   bool closed = false;
 };
 
+void AppendBulgeSegment(PathSample* out, const spline::Vec3& a, const spline::Vec3& b, float bulge) {
+  assert(out != nullptr);
+  const BulgeArcSpan span = BulgeArc(a.x, a.y, b.x, b.y, bulge);
+  if (!span.valid) {
+    out->pts.push_back(b);
+    return;
+  }
+  constexpr int kSeg = 16;
+  for (int i = 1; i <= kSeg; ++i) {
+    const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(kSeg);
+    out->pts.push_back({span.cx + span.radius * std::cos(ang), span.cy + span.radius * std::sin(ang), a.z});
+  }
+}
+
 [[nodiscard]] double PathLength(const PathSample& path) {
-  assert(!path.pts.empty());
   if (path.pts.size() < 2)
     return 0.0;
   double total = 0.0;
@@ -103,6 +119,35 @@ bool PointAtLength(const PathSample& path, double dist, spline::Vec3* out) {
   return true;
 }
 
+void FillPolyPath(const std::vector<double>& verts, const std::vector<float>& bulge, int v0, int v1, bool closed,
+                  PathSample* out) {
+  assert(out != nullptr);
+  out->pts.clear();
+  out->closed = closed;
+  if (v1 - v0 < 2)
+    return;
+  const size_t a0 = static_cast<size_t>(v0) * 3;
+  out->pts.push_back({verts[a0], verts[a0 + 1], verts[a0 + 2]});
+  const int nVert = v1 - v0;
+  const int nSeg = closed ? nVert : nVert - 1;
+  for (int s = 0; s < nSeg; ++s) {
+    const int ia = v0 + s;
+    const int ib = v0 + ((s + 1) % nVert);
+    const size_t a = static_cast<size_t>(ia) * 3;
+    const size_t b = static_cast<size_t>(ib) * 3;
+    const spline::Vec3 pa{verts[a], verts[a + 1], verts[a + 2]};
+    const spline::Vec3 pb{verts[b], verts[b + 1], verts[b + 2]};
+    const float bg = static_cast<size_t>(ia) < bulge.size() ? bulge[static_cast<size_t>(ia)] : 0.f;
+    AppendBulgeSegment(out, pa, pb, bg);
+  }
+}
+
+void FillPolyPathF(const std::vector<float>& verts, const std::vector<float>& bulge, int v0, int v1, bool closed,
+                   PathSample* out) {
+  std::vector<double> d(verts.begin(), verts.end());
+  FillPolyPath(d, bulge, v0, v1, closed, out);
+}
+
 bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, double pickX, double pickY,
                          PathSample* out) {
   assert(out != nullptr);
@@ -131,14 +176,9 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
       return false;
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
     const int v1 = st.userPolylineOffsets[static_cast<size_t>(e.index) + 1];
-    out->closed = static_cast<size_t>(e.index) < st.userPolylineClosed.size() &&
-                  st.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
-    for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi) * 3;
-      if (b + 2 >= st.userPolylineVerts.size())
-        break;
-      out->pts.push_back({st.userPolylineVerts[b], st.userPolylineVerts[b + 1], st.userPolylineVerts[b + 2]});
-    }
+    const bool closed = static_cast<size_t>(e.index) < st.userPolylineClosed.size() &&
+                        st.userPolylineClosed[static_cast<size_t>(e.index)] != 0;
+    FillPolyPath(st.userPolylineVerts, st.userPolylineVertsBulge, v0, v1, closed, out);
     return out->pts.size() >= 2;
   }
   if (e.type == T::Circle) {
@@ -163,8 +203,7 @@ bool ModelPathFromEntity(const AppCommandState& st, const SelectedEntity& e, dou
   return false;
 }
 
-bool PaperPathFromRef(const PaperLayout& L, const PaperEntityRef& r, double pickX, double pickY,
-                      PathSample* out) {
+bool PaperPathFromRef(const PaperLayout& L, const PaperEntityRef& r, double pickX, double pickY, PathSample* out) {
   assert(out != nullptr);
   out->pts.clear();
   out->closed = false;
@@ -176,11 +215,7 @@ bool PaperPathFromRef(const PaperLayout& L, const PaperEntityRef& r, double pick
     const spline::Vec3 b{L.paperLines[k + 3], L.paperLines[k + 4], L.paperLines[k + 5]};
     const double da = (a.x - pickX) * (a.x - pickX) + (a.y - pickY) * (a.y - pickY);
     const double db = (b.x - pickX) * (b.x - pickX) + (b.y - pickY) * (b.y - pickY);
-    if (da <= db) {
-      out->pts = {a, b};
-    } else {
-      out->pts = {b, a};
-    }
+    out->pts = (da <= db) ? std::vector<spline::Vec3>{a, b} : std::vector<spline::Vec3>{b, a};
     return true;
   }
   if (r.type == PaperEntityRef::Type::Polyline) {
@@ -188,14 +223,9 @@ bool PaperPathFromRef(const PaperLayout& L, const PaperEntityRef& r, double pick
       return false;
     const int v0 = L.paperPolyOffsets[static_cast<size_t>(r.index)];
     const int v1 = L.paperPolyOffsets[static_cast<size_t>(r.index) + 1];
-    out->closed = static_cast<size_t>(r.index) < L.paperPolyClosed.size() &&
-                  L.paperPolyClosed[static_cast<size_t>(r.index)] != 0;
-    for (int vi = v0; vi < v1; ++vi) {
-      const size_t b = static_cast<size_t>(vi) * 3;
-      if (b + 2 >= L.paperPolyVerts.size())
-        break;
-      out->pts.push_back({L.paperPolyVerts[b], L.paperPolyVerts[b + 1], L.paperPolyVerts[b + 2]});
-    }
+    const bool closed = static_cast<size_t>(r.index) < L.paperPolyClosed.size() &&
+                        L.paperPolyClosed[static_cast<size_t>(r.index)] != 0;
+    FillPolyPathF(L.paperPolyVerts, L.paperPolyVertsBulge, v0, v1, closed, out);
     return out->pts.size() >= 2;
   }
   if (r.type == PaperEntityRef::Type::Circle) {
@@ -227,14 +257,16 @@ void PlacePointsAlong(AppCommandState& st, const PathSample& path, const std::ve
     return;
   }
   PushUndoSnapshot(st, verb);
+  int placed = 0;
   for (double d : stations) {
     spline::Vec3 p{};
     if (!PointAtLength(path, d, &p))
       continue;
     CommitCadPointToActiveSpace(st, CadPoint{p.x, p.y, p.z});
+    ++placed;
   }
   BumpCadGpuCache(st);
-  log.push_back(std::string(verb) + " — placed " + std::to_string(stations.size()) + " point(s).");
+  log.push_back(std::string(verb) + " — placed " + std::to_string(placed) + " point(s).");
 }
 
 [[nodiscard]] double ShoelaceArea(const std::vector<spline::Vec3>& pts) {
@@ -267,6 +299,10 @@ void ReportArea(AppCommandState& st, double area, double peri, std::vector<std::
   std::snprintf(buf, sizeof(buf), "AREA — area %s  perimeter %s", FormatLinear(area, prec).c_str(),
                 FormatLinear(peri, prec).c_str());
   log.push_back(buf);
+  if (st.areaAccumulate) {
+    std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(st.areaRunning, prec).c_str());
+    log.push_back(buf);
+  }
 }
 
 void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::vector<std::string>& log) {
@@ -327,28 +363,52 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
   log.push_back("LIST — " + layer + "  model  type " + std::to_string(static_cast<int>(e.type)));
 }
 
-void ListPaperEntity(const PaperLayout& L, const PaperEntityRef& r, std::vector<std::string>& log) {
+void ListPaperEntity(const AppCommandState& st, const PaperLayout& L, const PaperEntityRef& r,
+                     std::vector<std::string>& log) {
+  const int prec = LinearPrecision(st);
   auto layerOf = [](const std::vector<EntityAttributes>& attrs, int i) -> std::string {
     if (i >= 0 && static_cast<size_t>(i) < attrs.size() && !attrs[static_cast<size_t>(i)].layer.empty())
       return attrs[static_cast<size_t>(i)].layer;
     return "0";
   };
+  char buf[256];
   switch (r.type) {
-  case PaperEntityRef::Type::Line:
-    log.push_back("LINE  layer " + layerOf(L.paperLineAttrs, r.index) + "  paper");
+  case PaperEntityRef::Type::Line: {
+    const size_t k = static_cast<size_t>(r.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return;
+    std::snprintf(buf, sizeof(buf), "LINE  layer %s  paper  (%s,%s) to (%s,%s)",
+                  layerOf(L.paperLineAttrs, r.index).c_str(), FormatLinear(L.paperLines[k], prec).c_str(),
+                  FormatLinear(L.paperLines[k + 1], prec).c_str(), FormatLinear(L.paperLines[k + 3], prec).c_str(),
+                  FormatLinear(L.paperLines[k + 4], prec).c_str());
+    log.push_back(buf);
     break;
-  case PaperEntityRef::Type::Circle:
-    log.push_back("CIRCLE  layer " + layerOf(L.paperCircleAttrs, r.index) + "  paper");
+  }
+  case PaperEntityRef::Type::Circle: {
+    const size_t k = static_cast<size_t>(r.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return;
+    std::snprintf(buf, sizeof(buf), "CIRCLE  layer %s  paper  center (%s,%s)  radius %s",
+                  layerOf(L.paperCircleAttrs, r.index).c_str(), FormatLinear(L.paperCircles[k], prec).c_str(),
+                  FormatLinear(L.paperCircles[k + 1], prec).c_str(), FormatLinear(L.paperCircles[k + 2], prec).c_str());
+    log.push_back(buf);
     break;
+  }
   case PaperEntityRef::Type::Polyline:
     log.push_back("POLYLINE  layer " + layerOf(L.paperPolyAttrs, r.index) + "  paper");
     break;
   case PaperEntityRef::Type::Spline:
     log.push_back("SPLINE  layer " + layerOf(L.paperSplineAttrs, r.index) + "  paper");
     break;
-  case PaperEntityRef::Type::Point:
-    log.push_back("POINT  layer " + layerOf(L.paperPointAttrs, r.index) + "  paper");
+  case PaperEntityRef::Type::Point: {
+    if (r.index < 0 || static_cast<size_t>(r.index) >= L.paperPoints.size())
+      return;
+    const CadPoint& p = L.paperPoints[static_cast<size_t>(r.index)];
+    std::snprintf(buf, sizeof(buf), "POINT  layer %s  paper  (%s,%s,%s)", layerOf(L.paperPointAttrs, r.index).c_str(),
+                  FormatLinear(p.x, prec).c_str(), FormatLinear(p.y, prec).c_str(), FormatLinear(p.z, prec).c_str());
+    log.push_back(buf);
     break;
+  }
   case PaperEntityRef::Type::Leader:
     log.push_back("LEADER  layer " + layerOf(L.paperMultileaderAttrs, r.index) + "  paper");
     break;
@@ -366,7 +426,20 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "LEADER");
   CadMultileader ml;
   ml.annotative = st.activeMultileaderStyle.annotativeDefault;
-  for (const spline::Vec3& p : st.leaderDraftPoints) {
+  ml.splinePath = st.leaderPathStyle == AppCommandState::LeaderPathStyle::Spline;
+  ml.showArrow = st.leaderShowArrow;
+  std::vector<spline::Vec3> pathPts = st.leaderDraftPoints;
+  if (ml.splinePath && st.leaderDraftPoints.size() >= 3) {
+    spline::Spline fit;
+    std::string why;
+    if (spline::MakeFit(st.leaderDraftPoints, false, &fit, &why)) {
+      std::vector<spline::Vec3> tess;
+      spline::Tessellate(fit, kSplineSampleTolerance, &tess);
+      if (tess.size() >= 2)
+        pathPts = std::move(tess);
+    }
+  }
+  for (const spline::Vec3& p : pathPts) {
     ml.pathXyz.push_back(static_cast<float>(p.x));
     ml.pathXyz.push_back(static_cast<float>(p.y));
     ml.pathXyz.push_back(static_cast<float>(p.z));
@@ -401,17 +474,14 @@ void FinishLeader(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("LEADER complete.");
 }
 
-bool ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std::vector<std::string>& log) {
+int ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std::vector<std::string>& log) {
   using T = SelectedEntity::Type;
-  if (hit.type == T::Polyline) {
-    st.peditIndex = hit.index;
-    st.peditPaper = false;
-    return true;
-  }
+  if (hit.type == T::Polyline)
+    return hit.index;
   if (hit.type == T::LineSeg) {
     const size_t k = static_cast<size_t>(hit.index) * 6;
     if (k + 5 >= st.userLinesFlat.size())
-      return false;
+      return -1;
     PushUndoSnapshot(st, "PEDIT convert");
     if (st.userPolylineOffsets.empty())
       st.userPolylineOffsets.push_back(0);
@@ -430,15 +500,13 @@ bool ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std
                            st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k) + 6);
     if (static_cast<size_t>(hit.index) < st.userLineAttrs.size())
       st.userLineAttrs.erase(st.userLineAttrs.begin() + hit.index);
-    st.peditIndex = static_cast<int>(st.userPolylineOffsets.size()) - 2;
-    st.peditPaper = false;
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted line to polyline.");
-    return true;
+    return static_cast<int>(st.userPolylineOffsets.size()) - 2;
   }
   if (hit.type == T::Arc) {
     if (static_cast<size_t>(hit.index) >= st.userArcs.size())
-      return false;
+      return -1;
     const CadArc a = st.userArcs[static_cast<size_t>(hit.index)];
     PushUndoSnapshot(st, "PEDIT convert");
     if (st.userPolylineOffsets.empty())
@@ -460,33 +528,26 @@ bool ConvertPickedToPolyline(AppCommandState& st, const SelectedEntity& hit, std
     SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
     SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
     const size_t bulgeI = static_cast<size_t>(base);
-    if (bulgeI < st.userPolylineVertsBulge.size()) {
-      const double s = std::tan(static_cast<double>(a.sweepRad) / 4.0);
-      st.userPolylineVertsBulge[bulgeI] = static_cast<float>(s);
-    }
+    if (bulgeI < st.userPolylineVertsBulge.size())
+      st.userPolylineVertsBulge[bulgeI] = static_cast<float>(std::tan(static_cast<double>(a.sweepRad) / 4.0));
     st.userArcs.erase(st.userArcs.begin() + hit.index);
     if (static_cast<size_t>(hit.index) < st.userArcAttrs.size())
       st.userArcAttrs.erase(st.userArcAttrs.begin() + hit.index);
-    st.peditIndex = static_cast<int>(st.userPolylineOffsets.size()) - 2;
-    st.peditPaper = false;
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted arc to polyline.");
-    return true;
+    return static_cast<int>(st.userPolylineOffsets.size()) - 2;
   }
-  return false;
+  return -1;
 }
 
-bool ConvertPaperPickedToPolyline(AppCommandState& st, PaperLayout& L, const PaperEntityRef& hit,
-                                  std::vector<std::string>& log) {
-  if (hit.type == PaperEntityRef::Type::Polyline) {
-    st.peditIndex = hit.index;
-    st.peditPaper = true;
-    return true;
-  }
+int ConvertPaperPickedToPolyline(AppCommandState& st, PaperLayout& L, const PaperEntityRef& hit,
+                                 std::vector<std::string>& log) {
+  if (hit.type == PaperEntityRef::Type::Polyline)
+    return hit.index;
   if (hit.type == PaperEntityRef::Type::Line) {
     const size_t k = static_cast<size_t>(hit.index) * 6;
     if (k + 5 >= L.paperLines.size())
-      return false;
+      return -1;
     PushUndoSnapshot(st, "PEDIT convert");
     if (L.paperPolyOffsets.empty())
       L.paperPolyOffsets.push_back(0);
@@ -500,19 +561,18 @@ bool ConvertPaperPickedToPolyline(AppCommandState& st, PaperLayout& L, const Pap
     L.paperPolyOffsets.push_back(base + 2);
     L.paperPolyClosed.push_back(0);
     L.paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
+    SyncPolylineBulge(L.paperPolyVertsBulge, L.paperPolyVerts.size());
     L.paperLines.erase(L.paperLines.begin() + static_cast<std::ptrdiff_t>(k),
                        L.paperLines.begin() + static_cast<std::ptrdiff_t>(k) + 6);
     if (static_cast<size_t>(hit.index) < L.paperLineAttrs.size())
       L.paperLineAttrs.erase(L.paperLineAttrs.begin() + hit.index);
-    st.peditIndex = static_cast<int>(L.paperPolyOffsets.size()) - 2;
-    st.peditPaper = true;
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted line to polyline.");
-    return true;
+    return static_cast<int>(L.paperPolyOffsets.size()) - 2;
   }
   if (hit.type == PaperEntityRef::Type::Arc) {
     if (static_cast<size_t>(hit.index) >= L.paperArcs.size())
-      return false;
+      return -1;
     const CadArc a = L.paperArcs[static_cast<size_t>(hit.index)];
     PushUndoSnapshot(st, "PEDIT convert");
     if (L.paperPolyOffsets.empty())
@@ -531,21 +591,22 @@ bool ConvertPaperPickedToPolyline(AppCommandState& st, PaperLayout& L, const Pap
     L.paperPolyOffsets.push_back(base + 2);
     L.paperPolyClosed.push_back(0);
     L.paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
+    SyncPolylineBulge(L.paperPolyVertsBulge, L.paperPolyVerts.size());
+    if (static_cast<size_t>(base) < L.paperPolyVertsBulge.size())
+      L.paperPolyVertsBulge[static_cast<size_t>(base)] = static_cast<float>(std::tan(static_cast<double>(a.sweepRad) / 4.0));
     L.paperArcs.erase(L.paperArcs.begin() + hit.index);
     if (static_cast<size_t>(hit.index) < L.paperArcAttrs.size())
       L.paperArcAttrs.erase(L.paperArcAttrs.begin() + hit.index);
-    st.peditIndex = static_cast<int>(L.paperPolyOffsets.size()) - 2;
-    st.peditPaper = true;
     BumpCadGpuCache(st);
     log.push_back("PEDIT — converted arc to polyline.");
-    return true;
+    return static_cast<int>(L.paperPolyOffsets.size()) - 2;
   }
-  return false;
+  return -1;
 }
 
 bool PeditHasPoly(const AppCommandState& st) {
   if (st.peditPaper) {
-    const PaperLayout* L = ActivePaperGeometryTarget(const_cast<AppCommandState&>(st));
+    const PaperLayout* L = ActivePaperGeometryTarget(st);
     return L && st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < L->paperPolyOffsets.size();
   }
   return st.peditIndex >= 0 && static_cast<size_t>(st.peditIndex) + 1 < st.userPolylineOffsets.size();
@@ -565,6 +626,16 @@ void PeditCloseOpen(AppCommandState& st, bool close, std::vector<std::string>& l
   }
   BumpCadGpuCache(st);
   log.push_back(close ? "PEDIT — closed." : "PEDIT — opened.");
+}
+
+void ReverseBulgeRange(std::vector<float>& bulge, int v0, int v1) {
+  if (bulge.empty() || v1 <= v0)
+    return;
+  if (static_cast<size_t>(v1) > bulge.size())
+    return;
+  std::reverse(bulge.begin() + v0, bulge.begin() + v1);
+  for (int i = v0; i < v1; ++i)
+    bulge[static_cast<size_t>(i)] = -bulge[static_cast<size_t>(i)];
 }
 
 void PeditReverse(AppCommandState& st, std::vector<std::string>& log) {
@@ -588,59 +659,54 @@ void PeditReverse(AppCommandState& st, std::vector<std::string>& log) {
     const int v0 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
     const int v1 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1];
     reverseRange(L->paperPolyVerts, v0, v1);
+    ReverseBulgeRange(L->paperPolyVertsBulge, v0, v1);
   } else {
     const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
     const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
     reverseRange(st.userPolylineVerts, v0, v1);
-    if (!st.userPolylineVertsBulge.empty()) {
-      std::reverse(st.userPolylineVertsBulge.begin() + v0, st.userPolylineVertsBulge.begin() + v1);
-      for (int i = v0; i < v1; ++i)
-        st.userPolylineVertsBulge[static_cast<size_t>(i)] = -st.userPolylineVertsBulge[static_cast<size_t>(i)];
-    }
+    ReverseBulgeRange(st.userPolylineVertsBulge, v0, v1);
   }
   BumpCadGpuCache(st);
   log.push_back("PEDIT — reversed.");
 }
 
-void PeditDecurve(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.peditPaper) {
-    log.push_back("PEDIT — paper polylines have no bulge; nothing to decurve.");
-    return;
-  }
+void PeditSetBulges(AppCommandState& st, float value, const char* undo, const char* done, std::vector<std::string>& log) {
   if (!PeditHasPoly(st))
     return;
-  PushUndoSnapshot(st, "PEDIT Decurve");
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-  for (int i = v0; i < v1; ++i)
-    st.userPolylineVertsBulge[static_cast<size_t>(i)] = 0.f;
+  PushUndoSnapshot(st, undo);
+  if (st.peditPaper) {
+    PaperLayout* L = ActivePaperGeometryTarget(st);
+    if (!L)
+      return;
+    SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1];
+    for (int i = v0; i + 1 < v1; ++i)
+      L->paperPolyVertsBulge[static_cast<size_t>(i)] = value;
+  } else {
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
+    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    for (int i = v0; i + 1 < v1; ++i)
+      st.userPolylineVertsBulge[static_cast<size_t>(i)] = value;
+  }
   BumpCadGpuCache(st);
-  log.push_back("PEDIT — decurved.");
+  log.push_back(done);
+}
+
+void PeditDecurve(AppCommandState& st, std::vector<std::string>& log) {
+  PeditSetBulges(st, 0.f, "PEDIT Decurve", "PEDIT — decurved.", log);
 }
 
 void PeditFit(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.peditPaper) {
-    log.push_back("PEDIT — Fit needs bulge storage; paper polylines keep straight segments.");
-    return;
-  }
-  if (!PeditHasPoly(st))
-    return;
-  PushUndoSnapshot(st, "PEDIT Fit");
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1];
-  SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
-  for (int i = v0; i + 1 < v1; ++i)
-    st.userPolylineVertsBulge[static_cast<size_t>(i)] = 0.5f;
-  BumpCadGpuCache(st);
-  log.push_back("PEDIT — fit (bulge arcs).");
+  PeditSetBulges(st, 0.5f, "PEDIT Fit", "PEDIT — fit (bulge arcs).", log);
 }
 
 void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
   if (!PeditHasPoly(st))
     return;
   PushUndoSnapshot(st, "PEDIT Spline");
-  auto densify = [](auto& verts, auto& offsets, int pi) {
+  auto densify = [](auto& verts, auto& offsets, auto& bulge, int pi) {
     const int v0 = offsets[static_cast<size_t>(pi)];
     const int v1 = offsets[static_cast<size_t>(pi) + 1];
     std::vector<typename std::decay<decltype(verts[0])>::type> neu;
@@ -664,15 +730,15 @@ void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
     const int delta = newN - oldN;
     for (size_t i = static_cast<size_t>(pi) + 1; i < offsets.size(); ++i)
       offsets[i] += delta;
+    SyncPolylineBulge(bulge, verts.size());
   };
   if (st.peditPaper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    densify(L->paperPolyVerts, L->paperPolyOffsets, st.peditIndex);
+    densify(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, st.peditIndex);
   } else {
-    densify(st.userPolylineVerts, st.userPolylineOffsets, st.peditIndex);
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    densify(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, st.peditIndex);
     SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
@@ -681,7 +747,7 @@ void PeditSplineDensify(AppCommandState& st, std::vector<std::string>& log) {
 
 int PeditVertexCount(const AppCommandState& st) {
   if (st.peditPaper) {
-    const PaperLayout* L = ActivePaperGeometryTarget(const_cast<AppCommandState&>(st));
+    const PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L || !PeditHasPoly(st))
       return 0;
     return L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1] -
@@ -728,29 +794,233 @@ void PeditInsertVertex(AppCommandState& st, double x, double y, std::vector<std:
   PushUndoSnapshot(st, "PEDIT insert");
   const int n = PeditVertexCount(st);
   const int vi = std::clamp(st.peditVertex, 0, std::max(0, n - 1));
-  auto insertAt = [&](auto& verts, auto& offsets, double z) {
+  auto insertAt = [&](auto& verts, auto& offsets, auto& bulge, double z) {
     const int v0 = offsets[static_cast<size_t>(st.peditIndex)];
     const size_t at = static_cast<size_t>(v0 + vi + 1) * 3;
-    verts.insert(verts.begin() + static_cast<std::ptrdiff_t>(at), {static_cast<typename std::decay<decltype(verts[0])>::type>(x),
-                                                                  static_cast<typename std::decay<decltype(verts[0])>::type>(y),
-                                                                  static_cast<typename std::decay<decltype(verts[0])>::type>(z)});
+    verts.insert(verts.begin() + static_cast<std::ptrdiff_t>(at),
+                 {static_cast<typename std::decay<decltype(verts[0])>::type>(x),
+                  static_cast<typename std::decay<decltype(verts[0])>::type>(y),
+                  static_cast<typename std::decay<decltype(verts[0])>::type>(z)});
     for (size_t i = static_cast<size_t>(st.peditIndex) + 1; i < offsets.size(); ++i)
       offsets[i] += 1;
+    SyncPolylineBulge(bulge, verts.size());
   };
   if (st.peditPaper) {
     PaperLayout* L = ActivePaperGeometryTarget(st);
     if (!L)
       return;
-    insertAt(L->paperPolyVerts, L->paperPolyOffsets, 0.0);
+    insertAt(L->paperPolyVerts, L->paperPolyOffsets, L->paperPolyVertsBulge, 0.0);
   } else {
-    insertAt(st.userPolylineVerts, st.userPolylineOffsets, CadCommitElevation(st));
-    SyncPolylineBulge(st.userPolylineVertsBulge, st.userPolylineVerts.size());
+    insertAt(st.userPolylineVerts, st.userPolylineOffsets, st.userPolylineVertsBulge, CadCommitElevation(st));
     SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
   }
   BumpCadGpuCache(st);
   st.peditVertex = vi + 1;
   st.peditPhase = AppCommandState::PeditPhase::WaitVertex;
   log.push_back("PEDIT — vertex inserted. Next / Previous / Insert / Move / eXit:");
+}
+
+void EraseModelPolyline(AppCommandState& st, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi) + 1 >= st.userPolylineOffsets.size())
+    return;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi) + 1];
+  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (st.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
+    st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + v0, st.userPolylineVertsBulge.begin() + v1);
+  if (st.userPolylineVertsNormal.size() >= static_cast<size_t>(v1) * 3)
+    st.userPolylineVertsNormal.erase(st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                                     st.userPolylineVertsNormal.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  const int nv = v1 - v0;
+  st.userPolylineOffsets.erase(st.userPolylineOffsets.begin() + (pi + 1));
+  for (size_t k = static_cast<size_t>(pi) + 1; k < st.userPolylineOffsets.size(); ++k)
+    st.userPolylineOffsets[k] -= nv;
+  if (st.userPolylineOffsets.size() == 1)
+    st.userPolylineOffsets.clear();
+  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+    st.userPolylineClosed.erase(st.userPolylineClosed.begin() + pi);
+  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+    st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + pi);
+}
+
+void ErasePaperPoly(PaperLayout& L, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi) + 1 >= L.paperPolyOffsets.size())
+    return;
+  const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi) + 1];
+  const int nv = v1 - v0;
+  L.paperPolyVerts.erase(L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                         L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (L.paperPolyVertsBulge.size() >= static_cast<size_t>(v1))
+    L.paperPolyVertsBulge.erase(L.paperPolyVertsBulge.begin() + v0, L.paperPolyVertsBulge.begin() + v1);
+  L.paperPolyOffsets.erase(L.paperPolyOffsets.begin() + (pi + 1));
+  for (size_t k = static_cast<size_t>(pi) + 1; k < L.paperPolyOffsets.size(); ++k)
+    L.paperPolyOffsets[k] -= nv;
+  if (L.paperPolyOffsets.size() == 1)
+    L.paperPolyOffsets.clear();
+  if (static_cast<size_t>(pi) < L.paperPolyClosed.size())
+    L.paperPolyClosed.erase(L.paperPolyClosed.begin() + pi);
+  if (static_cast<size_t>(pi) < L.paperPolyAttrs.size())
+    L.paperPolyAttrs.erase(L.paperPolyAttrs.begin() + pi);
+}
+
+bool JoinVertexLists(std::vector<spline::Vec3>* keep, std::vector<float>* keepBulge, const std::vector<spline::Vec3>& other,
+                     const std::vector<float>& otherBulge) {
+  assert(keep != nullptr && keepBulge != nullptr);
+  if (keep->size() < 2 || other.size() < 2)
+    return false;
+  const auto d2 = [](const spline::Vec3& a, const spline::Vec3& b) {
+    return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y);
+  };
+  const double t2 = kJoinTol * kJoinTol;
+  const double dLfOf = d2(keep->back(), other.front());
+  const double dLfOl = d2(keep->back(), other.back());
+  const double dFfOl = d2(keep->front(), other.back());
+  const double dFfOf = d2(keep->front(), other.front());
+  double best = dLfOf;
+  int mode = 0;
+  if (dLfOl < best) {
+    best = dLfOl;
+    mode = 1;
+  }
+  if (dFfOl < best) {
+    best = dFfOl;
+    mode = 2;
+  }
+  if (dFfOf < best) {
+    best = dFfOf;
+    mode = 3;
+  }
+  if (best > t2)
+    return false;
+  std::vector<spline::Vec3> o = other;
+  std::vector<float> ob = otherBulge;
+  ob.resize(o.size(), 0.f);
+  if (mode == 1 || mode == 2) {
+    std::reverse(o.begin(), o.end());
+    std::reverse(ob.begin(), ob.end());
+    for (float& b : ob)
+      b = -b;
+  }
+  if (mode == 2 || mode == 3) {
+    std::reverse(keep->begin(), keep->end());
+    std::reverse(keepBulge->begin(), keepBulge->end());
+    for (float& b : *keepBulge)
+      b = -b;
+  }
+  keepBulge->resize(keep->size(), 0.f);
+  for (size_t i = 1; i < o.size(); ++i) {
+    keep->push_back(o[i]);
+    keepBulge->push_back(i < ob.size() ? ob[i] : 0.f);
+  }
+  return true;
+}
+
+void PeditJoinIndex(AppCommandState& st, int other, std::vector<std::string>& log) {
+  if (!PeditHasPoly(st) || other == st.peditIndex) {
+    log.push_back("PEDIT — pick a different touching polyline.");
+    return;
+  }
+  std::vector<spline::Vec3> keepPts;
+  std::vector<float> keepBg;
+  std::vector<spline::Vec3> otherPts;
+  std::vector<float> otherBg;
+  auto load = [](const auto& verts, const auto& bulge, int v0, int v1, std::vector<spline::Vec3>* pts,
+                 std::vector<float>* bg) {
+    pts->clear();
+    bg->clear();
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      pts->push_back({static_cast<double>(verts[b]), static_cast<double>(verts[b + 1]), static_cast<double>(verts[b + 2])});
+      bg->push_back(static_cast<size_t>(vi) < bulge.size() ? static_cast<float>(bulge[static_cast<size_t>(vi)]) : 0.f);
+    }
+  };
+  if (st.peditPaper) {
+    PaperLayout* L = ActivePaperGeometryTarget(st);
+    if (!L || other < 0 || static_cast<size_t>(other) + 1 >= L->paperPolyOffsets.size())
+      return;
+    if (L->paperPolyClosed[static_cast<size_t>(st.peditIndex)] || L->paperPolyClosed[static_cast<size_t>(other)]) {
+      log.push_back("PEDIT — cannot join a closed polyline.");
+      return;
+    }
+    load(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets[static_cast<size_t>(st.peditIndex)],
+         L->paperPolyOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
+    load(L->paperPolyVerts, L->paperPolyVertsBulge, L->paperPolyOffsets[static_cast<size_t>(other)],
+         L->paperPolyOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
+    if (!JoinVertexLists(&keepPts, &keepBg, otherPts, otherBg)) {
+      log.push_back("PEDIT — objects do not touch.");
+      return;
+    }
+    PushUndoSnapshot(st, "PEDIT Join");
+    const int keep = st.peditIndex;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(keep)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(keep) + 1];
+    L->paperPolyVerts.erase(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                            L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+    if (L->paperPolyVertsBulge.size() >= static_cast<size_t>(v1))
+      L->paperPolyVertsBulge.erase(L->paperPolyVertsBulge.begin() + v0, L->paperPolyVertsBulge.begin() + v1);
+    std::vector<float> flat;
+    for (const spline::Vec3& p : keepPts) {
+      flat.push_back(static_cast<float>(p.x));
+      flat.push_back(static_cast<float>(p.y));
+      flat.push_back(static_cast<float>(p.z));
+    }
+    L->paperPolyVerts.insert(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(), flat.end());
+    L->paperPolyVertsBulge.insert(L->paperPolyVertsBulge.begin() + v0, keepBg.begin(), keepBg.end());
+    const int delta = static_cast<int>(keepPts.size()) - (v1 - v0);
+    for (size_t i = static_cast<size_t>(keep) + 1; i < L->paperPolyOffsets.size(); ++i)
+      L->paperPolyOffsets[i] += delta;
+    int keepAfter = keep;
+    ErasePaperPoly(*L, other);
+    if (other < keepAfter)
+      --keepAfter;
+    st.peditIndex = keepAfter;
+  } else {
+    if (other < 0 || static_cast<size_t>(other) + 1 >= st.userPolylineOffsets.size())
+      return;
+    if (st.userPolylineClosed[static_cast<size_t>(st.peditIndex)] || st.userPolylineClosed[static_cast<size_t>(other)]) {
+      log.push_back("PEDIT — cannot join a closed polyline.");
+      return;
+    }
+    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(st.peditIndex)],
+         st.userPolylineOffsets[static_cast<size_t>(st.peditIndex) + 1], &keepPts, &keepBg);
+    load(st.userPolylineVerts, st.userPolylineVertsBulge, st.userPolylineOffsets[static_cast<size_t>(other)],
+         st.userPolylineOffsets[static_cast<size_t>(other) + 1], &otherPts, &otherBg);
+    if (!JoinVertexLists(&keepPts, &keepBg, otherPts, otherBg)) {
+      log.push_back("PEDIT — objects do not touch.");
+      return;
+    }
+    PushUndoSnapshot(st, "PEDIT Join");
+    const int keep = st.peditIndex;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(keep)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(keep) + 1];
+    st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                               st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+    if (st.userPolylineVertsBulge.size() >= static_cast<size_t>(v1))
+      st.userPolylineVertsBulge.erase(st.userPolylineVertsBulge.begin() + v0, st.userPolylineVertsBulge.begin() + v1);
+    std::vector<double> flat;
+    for (const spline::Vec3& p : keepPts) {
+      flat.push_back(p.x);
+      flat.push_back(p.y);
+      flat.push_back(p.z);
+    }
+    st.userPolylineVerts.insert(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
+                                flat.end());
+    st.userPolylineVertsBulge.insert(st.userPolylineVertsBulge.begin() + v0, keepBg.begin(), keepBg.end());
+    const int delta = static_cast<int>(keepPts.size()) - (v1 - v0);
+    for (size_t i = static_cast<size_t>(keep) + 1; i < st.userPolylineOffsets.size(); ++i)
+      st.userPolylineOffsets[i] += delta;
+    int keepAfter = keep;
+    EraseModelPolyline(st, other);
+    if (other < keepAfter)
+      --keepAfter;
+    st.peditIndex = keepAfter;
+    SyncPolylineNormal(st.userPolylineVertsNormal, st.userPolylineVerts.size());
+  }
+  BumpCadGpuCache(st);
+  st.peditPhase = AppCommandState::PeditPhase::WaitOption;
+  log.push_back("PEDIT — joined. Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
 }
 
 bool HandlePeditOption(AppCommandState& st, const std::string& opt, std::vector<std::string>& log) {
@@ -818,8 +1088,7 @@ bool HandlePeditVertex(AppCommandState& st, const std::string& opt, std::vector<
   }
   if (opt == "I" || opt == "INSERT") {
     log.push_back("PEDIT — specify insert point:");
-    st.peditPhase = AppCommandState::PeditPhase::WaitVertexMove;
-    st.peditVertex = st.peditVertex;  // insert after current
+    st.peditPhase = AppCommandState::PeditPhase::WaitVertexInsert;
     return true;
   }
   if (opt == "M" || opt == "MOVE") {
@@ -861,13 +1130,67 @@ bool AreaFromPicked(const AppCommandState& st, const SelectedEntity& e, double* 
   return false;
 }
 
+bool AreaFromPaper(const PaperLayout& L, const PaperEntityRef& r, double* area, double* peri) {
+  assert(area != nullptr && peri != nullptr);
+  if (r.type == PaperEntityRef::Type::Circle) {
+    const size_t k = static_cast<size_t>(r.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return false;
+    const double rad = L.paperCircles[k + 2];
+    if (!(rad > 0.0))
+      return false;
+    *area = kPi * rad * rad;
+    *peri = kTwoPi * rad;
+    return true;
+  }
+  if (r.type == PaperEntityRef::Type::Polyline) {
+    PathSample path;
+    if (!PaperPathFromRef(L, r, 0.0, 0.0, &path) || path.pts.size() < 3)
+      return false;
+    *area = ShoelaceArea(path.pts);
+    *peri = Perimeter(path.pts, true);
+    return true;
+  }
+  return false;
+}
+
+void ApplyAreaValue(AppCommandState& st, double area, double peri, std::vector<std::string>& log) {
+  const double signedA = st.areaSubtract ? -area : area;
+  st.areaRunning += signedA;
+  ReportArea(st, signedA, peri, log);
+  st.areaDraftPoints.clear();
+  if (st.areaAccumulate) {
+    st.areaPhase = AppCommandState::AreaPhase::WaitFirst;
+    log.push_back(st.areaSubtract ? "AREA Subtract mode — specify points or Object:"
+                                  : "AREA Add mode — specify points or Object:");
+    return;
+  }
+  st.active = AppCommandState::Kind::None;
+}
+
+void SampleMeasurePath(AppCommandState& st, PathSample* path, bool* ok) {
+  assert(path != nullptr && ok != nullptr);
+  *ok = false;
+  if (st.measurePaper) {
+    if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
+      PaperEntityRef r{st.measurePaperType, st.measurePaperIndex};
+      *ok = PaperPathFromRef(*L, r, st.measurePickX, st.measurePickY, path);
+    }
+    return;
+  }
+  *ok = ModelPathFromEntity(st, st.measureTarget, st.measurePickX, st.measurePickY, path);
+}
+
 }  // namespace
 
-void ResetIssue1019Drafts(AppCommandState& st) {
+void ResetCadDrawInquiryDrafts(AppCommandState& st) {
   st.leaderDraftPoints.clear();
   st.leaderPhase = AppCommandState::LeaderPhase::WaitFirst;
   st.leaderAnnotation = AppCommandState::LeaderAnnotation::Mtext;
   st.leaderFormat = AppCommandState::LeaderFormat::Straight;
+  st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
+  st.leaderShowArrow = true;
+  st.leaderFinishAfterAnnotation = false;
   st.peditPhase = AppCommandState::PeditPhase::WaitObject;
   st.peditIndex = -1;
   st.peditVertex = 0;
@@ -875,10 +1198,13 @@ void ResetIssue1019Drafts(AppCommandState& st) {
   st.measurePhase = AppCommandState::MeasurePhase::WaitObject;
   st.measureTarget = SelectedEntity{};
   st.measurePaper = false;
+  st.measurePickX = 0.0;
+  st.measurePickY = 0.0;
   st.areaDraftPoints.clear();
   st.areaPhase = AppCommandState::AreaPhase::WaitFirst;
   st.areaRunning = 0.0;
   st.areaSubtract = false;
+  st.areaAccumulate = false;
   st.listPhase = AppCommandState::ListPhase::WaitObject;
 }
 
@@ -926,6 +1252,7 @@ void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.areaDraftPoints.clear();
   st.areaRunning = 0.0;
   st.areaSubtract = false;
+  st.areaAccumulate = false;
   log.push_back("AREA — specify first corner point (Object / Add / Subtract):");
 }
 
@@ -938,11 +1265,12 @@ void StartListCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (!st.selectedPaperEntities.empty()) {
     if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
       for (const PaperEntityRef& r : st.selectedPaperEntities)
-        ListPaperEntity(*L, r, log);
+        ListPaperEntity(st, *L, r, log);
       return;
     }
   }
   BeginInteractive(st, AppCommandState::Kind::List);
+  st.listPhase = AppCommandState::ListPhase::WaitObject;
   log.push_back("LIST — select objects, then Enter:");
 }
 
@@ -984,23 +1312,24 @@ void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vec
   log.push_back(buf);
 }
 
-bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  if (!IsIssue1019Kind(st.active))
+  if (!IsCadDrawInquiryKind(st.active))
     return false;
   const double z = CadCommitElevation(st);
   if (st.active == K::Point) {
     CommitCadPointAt(st, wx, wy, z, log);
     return true;
   }
-  if (st.active == K::Leader) {
+  if (st.active == K::Leader && st.leaderPhase != AppCommandState::LeaderPhase::WaitAnnotation &&
+      st.leaderPhase != AppCommandState::LeaderPhase::WaitFormat) {
     st.leaderDraftPoints.push_back({wx, wy, z});
     if (st.leaderPhase == AppCommandState::LeaderPhase::WaitFirst)
       st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
     log.push_back("LEADER — specify next point (Enter = annotation):");
     return true;
   }
-  if (st.active == K::Area) {
+  if (st.active == K::Area && st.areaPhase != AppCommandState::AreaPhase::WaitObject) {
     st.areaDraftPoints.push_back({wx, wy, z});
     st.areaPhase = AppCommandState::AreaPhase::WaitNext;
     log.push_back("AREA — specify next point (Enter to close):");
@@ -1010,6 +1339,39 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
     PeditMoveVertex(st, wx, wy, log);
     return true;
   }
+  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert) {
+    PeditInsertVertex(st, wx, wy, log);
+    return true;
+  }
+  if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitJoin) {
+    if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+      PaperEntityRef hit;
+      if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+        log.push_back("PEDIT — nothing at that point.");
+        return true;
+      }
+      const int idx = ConvertPaperPickedToPolyline(st, *L, hit, log);
+      if (idx < 0) {
+        log.push_back("PEDIT — select a polyline, line, or arc.");
+        return true;
+      }
+      PeditJoinIndex(st, idx, log);
+      return true;
+    }
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("PEDIT — nothing at that point.");
+      return true;
+    }
+    const int idx = ConvertPickedToPolyline(st, hit, log);
+    if (idx < 0) {
+      log.push_back("PEDIT — select a polyline, line, or arc.");
+      return true;
+    }
+    PeditJoinIndex(st, idx, log);
+    return true;
+  }
   if (st.active == K::Pedit && st.peditPhase == AppCommandState::PeditPhase::WaitObject) {
     if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
       PaperEntityRef hit;
@@ -1017,10 +1379,13 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
         log.push_back("PEDIT — nothing at that point.");
         return true;
       }
-      if (!ConvertPaperPickedToPolyline(st, *L, hit, log)) {
+      const int idx = ConvertPaperPickedToPolyline(st, *L, hit, log);
+      if (idx < 0) {
         log.push_back("PEDIT — select a polyline, line, or arc.");
         return true;
       }
+      st.peditIndex = idx;
+      st.peditPaper = true;
       st.peditPhase = AppCommandState::PeditPhase::WaitOption;
       log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
       return true;
@@ -1031,23 +1396,25 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
       log.push_back("PEDIT — nothing at that point.");
       return true;
     }
-    if (!ConvertPickedToPolyline(st, hit, log) && hit.type != SelectedEntity::Type::Polyline) {
+    const int idx = ConvertPickedToPolyline(st, hit, log);
+    if (idx < 0) {
       log.push_back("PEDIT — select a polyline, line, or arc.");
       return true;
     }
-    if (hit.type == SelectedEntity::Type::Polyline)
-      st.peditIndex = hit.index;
+    st.peditIndex = idx;
+    st.peditPaper = false;
     st.peditPhase = AppCommandState::PeditPhase::WaitOption;
     log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
     return true;
   }
   if ((st.active == K::Measure || st.active == K::Divide) &&
       st.measurePhase == AppCommandState::MeasurePhase::WaitObject) {
+    st.measurePickX = wx;
+    st.measurePickY = wy;
     if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
       PaperEntityRef hit;
       if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
-        log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point."
-                                              : "DIVIDE — nothing at that point.");
+        log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point." : "DIVIDE — nothing at that point.");
         return true;
       }
       st.measurePaper = true;
@@ -1061,8 +1428,7 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
     SelectedEntity hit{};
     float d2 = 0.f;
     if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
-      log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point."
-                                            : "DIVIDE — nothing at that point.");
+      log.push_back(st.active == K::Measure ? "MEASURE — nothing at that point." : "DIVIDE — nothing at that point.");
       return true;
     }
     st.measureTarget = hit;
@@ -1072,11 +1438,11 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
                                           : "DIVIDE — enter the number of segments:");
     return true;
   }
-  if (st.active == K::List) {
+  if (st.active == K::List && st.listPhase == AppCommandState::ListPhase::WaitObject) {
     if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
       PaperEntityRef hit;
       if (PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs))
-        ListPaperEntity(*L, hit, log);
+        ListPaperEntity(st, *L, hit, log);
       else
         log.push_back("LIST — nothing at that point.");
       return true;
@@ -1090,6 +1456,20 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
     return true;
   }
   if (st.active == K::Area && st.areaPhase == AppCommandState::AreaPhase::WaitObject) {
+    if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+      PaperEntityRef hit;
+      if (!PickPaperEntityAt(*L, static_cast<float>(wx), static_cast<float>(wy), 0.15f, &hit, &st.blockDefs)) {
+        log.push_back("AREA — nothing at that point.");
+        return true;
+      }
+      double area = 0.0, peri = 0.0;
+      if (!AreaFromPaper(*L, hit, &area, &peri)) {
+        log.push_back("AREA — object must be a closed polyline or circle.");
+        return true;
+      }
+      ApplyAreaValue(st, area, peri, log);
+      return true;
+    }
     SelectedEntity hit{};
     float d2 = 0.f;
     if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
@@ -1101,23 +1481,15 @@ bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std:
       log.push_back("AREA — object must be a closed polyline or circle.");
       return true;
     }
-    const double signedA = st.areaSubtract ? -area : area;
-    st.areaRunning += signedA;
-    ReportArea(st, signedA, peri, log);
-    if (st.areaRunning != signedA) {
-      char buf[128];
-      std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(st.areaRunning, LinearPrecision(st)).c_str());
-      log.push_back(buf);
-    }
-    st.active = AppCommandState::Kind::None;
+    ApplyAreaValue(st, area, peri, log);
     return true;
   }
   return true;
 }
 
-bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
+bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  if (!IsIssue1019Kind(st.active))
+  if (!IsCadDrawInquiryKind(st.active))
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string opt = UpperTrim(line);
@@ -1138,7 +1510,67 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
   }
 
   if (st.active == K::Leader) {
+    if (st.leaderPhase == AppCommandState::LeaderPhase::WaitFormat) {
+      if (opt == "S" || opt == "STRAIGHT") {
+        st.leaderFormat = AppCommandState::LeaderFormat::Straight;
+        st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+        log.push_back("LEADER — straight. Specify next point:");
+        return true;
+      }
+      if (opt == "SPLINE") {
+        st.leaderFormat = AppCommandState::LeaderFormat::Spline;
+        st.leaderPathStyle = AppCommandState::LeaderPathStyle::Spline;
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+        log.push_back("LEADER — spline format. Specify next point:");
+        return true;
+      }
+      if (opt == "A" || opt == "ARROW") {
+        st.leaderFormat = AppCommandState::LeaderFormat::Arrow;
+        st.leaderShowArrow = true;
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+        log.push_back("LEADER — arrow. Specify next point:");
+        return true;
+      }
+      if (opt == "N" || opt == "NONE") {
+        st.leaderFormat = AppCommandState::LeaderFormat::None;
+        st.leaderShowArrow = false;
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+        log.push_back("LEADER — no arrow. Specify next point:");
+        return true;
+      }
+      if (line.empty()) {
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitNext;
+        log.push_back("LEADER — specify next point (Enter = annotation):");
+        return true;
+      }
+      log.push_back("LEADER format — Straight / Spline / Arrow / None:");
+      return true;
+    }
+    if (st.leaderPhase == AppCommandState::LeaderPhase::WaitAnnotation) {
+      if (opt == "N" || opt == "NONE")
+        st.leaderAnnotation = AppCommandState::LeaderAnnotation::None;
+      else if (opt == "M" || opt == "MTEXT" || line.empty()) {
+        if (!line.empty())
+          st.leaderAnnotation = AppCommandState::LeaderAnnotation::Mtext;
+      } else if (opt == "T" || opt == "TOLERANCE" || opt == "C" || opt == "COPY" || opt == "B" || opt == "BLOCK") {
+        log.push_back("LEADER — Tolerance, Copy, and Block annotation are not supported.");
+        return true;
+      } else {
+        log.push_back("LEADER annotation — Mtext / None (Tolerance/Copy/Block are not supported):");
+        return true;
+      }
+      if (st.leaderDraftPoints.size() >= 2 || st.leaderFinishAfterAnnotation) {
+        FinishLeader(st, log);
+        return true;
+      }
+      st.leaderPhase = AppCommandState::LeaderPhase::WaitFirst;
+      log.push_back("LEADER — specify first leader point (Annotation / Format):");
+      return true;
+    }
     if (opt == "A" || opt == "ANNOTATION") {
+      st.leaderPhase = AppCommandState::LeaderPhase::WaitAnnotation;
+      st.leaderFinishAfterAnnotation = st.leaderDraftPoints.size() >= 2;
       log.push_back("LEADER annotation — Mtext / None (Tolerance/Copy/Block are not supported):");
       return true;
     }
@@ -1157,20 +1589,33 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
       return true;
     }
     if (opt == "F" || opt == "FORMAT") {
+      st.leaderPhase = AppCommandState::LeaderPhase::WaitFormat;
       log.push_back("LEADER format — Straight / Spline / Arrow / None:");
       return true;
     }
     if (opt == "S" || opt == "STRAIGHT") {
       st.leaderFormat = AppCommandState::LeaderFormat::Straight;
+      st.leaderPathStyle = AppCommandState::LeaderPathStyle::Straight;
       log.push_back("LEADER — straight. Specify next point:");
       return true;
     }
     if (opt == "SPLINE") {
       st.leaderFormat = AppCommandState::LeaderFormat::Spline;
+      st.leaderPathStyle = AppCommandState::LeaderPathStyle::Spline;
       log.push_back("LEADER — spline format. Specify next point:");
       return true;
     }
     if (line.empty()) {
+      if (st.leaderDraftPoints.size() >= 2) {
+        if (st.leaderAnnotation == AppCommandState::LeaderAnnotation::None) {
+          FinishLeader(st, log);
+          return true;
+        }
+        st.leaderPhase = AppCommandState::LeaderPhase::WaitAnnotation;
+        st.leaderFinishAfterAnnotation = true;
+        log.push_back("LEADER annotation — Mtext / None (Enter = Mtext):");
+        return true;
+      }
       FinishLeader(st, log);
       return true;
     }
@@ -1190,13 +1635,26 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
       return HandlePeditOption(st, opt, log);
     if (st.peditPhase == AppCommandState::PeditPhase::WaitVertex)
       return HandlePeditVertex(st, opt, log);
-    if (st.peditPhase == AppCommandState::PeditPhase::WaitVertexMove) {
+    if (st.peditPhase == AppCommandState::PeditPhase::WaitJoin) {
+      if (line.empty()) {
+        st.peditPhase = AppCommandState::PeditPhase::WaitOption;
+        log.push_back("PEDIT — Close/Open/Join/Edit/Fit/Spline/Decurve/Reverse/eXit:");
+        return true;
+      }
+      log.push_back("PEDIT — pick a touching polyline, or Enter to skip.");
+      return true;
+    }
+    if (st.peditPhase == AppCommandState::PeditPhase::WaitVertexMove ||
+        st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert) {
       float x = 0.f, y = 0.f;
       if (!ParseStoragePoint(st, line, &x, &y, false, 0.f, 0.f)) {
         log.push_back("PEDIT — enter a point.");
         return true;
       }
-      PeditMoveVertex(st, x, y, log);
+      if (st.peditPhase == AppCommandState::PeditPhase::WaitVertexInsert)
+        PeditInsertVertex(st, x, y, log);
+      else
+        PeditMoveVertex(st, x, y, log);
       return true;
     }
     if (line.empty()) {
@@ -1209,20 +1667,12 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
 
   if (st.active == K::Measure || st.active == K::Divide) {
     if (st.measurePhase != AppCommandState::MeasurePhase::WaitValue) {
-      log.push_back(st.active == K::Measure ? "MEASURE — pick an object first."
-                                            : "DIVIDE — pick an object first.");
+      log.push_back(st.active == K::Measure ? "MEASURE — pick an object first." : "DIVIDE — pick an object first.");
       return true;
     }
     PathSample path;
     bool ok = false;
-    if (st.measurePaper) {
-      if (const PaperLayout* L = ActivePaperGeometryTarget(st)) {
-        PaperEntityRef r{st.measurePaperType, st.measurePaperIndex};
-        ok = PaperPathFromRef(*L, r, 0.0, 0.0, &path);
-      }
-    } else {
-      ok = ModelPathFromEntity(st, st.measureTarget, 0.0, 0.0, &path);
-    }
+    SampleMeasurePath(st, &path, &ok);
     if (!ok) {
       log.push_back("Cannot sample that object.");
       st.active = K::None;
@@ -1250,14 +1700,13 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
         return true;
       }
       std::vector<double> stations;
-      const int count = path.closed ? n : n - 1;
-      for (int i = 1; i <= count; ++i) {
-        if (!path.closed && i == n)
-          break;
-        stations.push_back(len * static_cast<double>(i) / static_cast<double>(n));
+      if (path.closed) {
+        for (int i = 0; i < n; ++i)
+          stations.push_back(len * static_cast<double>(i) / static_cast<double>(n));
+      } else {
+        for (int i = 1; i < n; ++i)
+          stations.push_back(len * static_cast<double>(i) / static_cast<double>(n));
       }
-      if (path.closed && !stations.empty() && std::fabs(stations.back() - len) < 1e-9)
-        stations.pop_back();
       PlacePointsAlong(st, path, stations, log, "DIVIDE");
     }
     st.active = K::None;
@@ -1272,26 +1721,32 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
     }
     if (opt == "A" || opt == "ADD") {
       st.areaSubtract = false;
+      st.areaAccumulate = true;
       log.push_back("AREA Add mode — specify points or Object:");
       return true;
     }
     if (opt == "S" || opt == "SUBTRACT") {
       st.areaSubtract = true;
+      st.areaAccumulate = true;
       log.push_back("AREA Subtract mode — specify points or Object:");
       return true;
     }
     if (line.empty()) {
       if (st.areaDraftPoints.size() < 3) {
+        if (st.areaAccumulate) {
+          char buf[128];
+          std::snprintf(buf, sizeof(buf), "AREA total %s", FormatLinear(st.areaRunning, LinearPrecision(st)).c_str());
+          log.push_back(buf);
+          st.active = K::None;
+          return true;
+        }
         st.active = K::None;
         log.push_back("AREA — canceled (need at least three points).");
         return true;
       }
       const double area = ShoelaceArea(st.areaDraftPoints);
       const double peri = Perimeter(st.areaDraftPoints, true);
-      const double signedA = st.areaSubtract ? -area : area;
-      st.areaRunning += signedA;
-      ReportArea(st, signedA, peri, log);
-      st.active = K::None;
+      ApplyAreaValue(st, area, peri, log);
       return true;
     }
     float x = 0.f, y = 0.f;
@@ -1317,7 +1772,7 @@ bool HandleIssue1019TextInput(const std::string& lineIn, AppCommandState& st, st
   return true;
 }
 
-const char* Issue1019CommandInputHint(const AppCommandState& st) {
+const char* CadDrawInquiryCommandInputHint(const AppCommandState& st) {
   using K = AppCommandState::Kind;
   if (st.active == K::Point)
     return "POINT: click or X,Y | Enter ends | ESC cancel";

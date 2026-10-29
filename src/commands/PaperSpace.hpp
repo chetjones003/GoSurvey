@@ -440,6 +440,7 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperEllAttrs;
   std::vector<int>              paperPolyOffsets;  ///< vertex-offset table (starts with 0); empty = no polylines
   std::vector<float>            paperPolyVerts;    ///< flat x,y,z triples
+  std::vector<float>            paperPolyVertsBulge;  ///< REQ-456 PEDIT Fit: one bulge per vertex, like model
   std::vector<uint8_t>          paperPolyClosed;
   std::vector<EntityAttributes> paperPolyAttrs;
   std::vector<CadFilledRegion>  paperFilledRegions;     ///< Solid fills on the sheet, paper inches (REQ-038 addendum)

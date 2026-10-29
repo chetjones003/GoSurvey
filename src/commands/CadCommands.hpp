@@ -1665,16 +1665,17 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
 /// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
 /// or nullptr when the command targets model space (model space active, or floating model space).
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
+const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st);
 
 // Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
 void ClearPaperEntitySelection(AppCommandState& st);
-/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 /// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
 /// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
-/// by the DWG and DXF readers. Returns true when a polyline carried a bulge: the sheet's polyline store
-/// has none, so curved segments arrive straight and the caller reports it (REQ-201).
+/// by the DWG and DXF readers. Returns true when a polyline carried a bulge so callers can log if they
+/// still drop arcs; paper now stores bulges (REQ-456 PEDIT Fit), so the usual return is false.
 bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
 
+/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
                        const std::vector<CadBlockDefinition>* blockDefs = nullptr);
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
@@ -2593,25 +2594,39 @@ struct AppCommandState {
   enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
   std::vector<spline::Vec3> splineDraftPoints;
 
-  /// REQ-456 / issue #1019 command drafts.
+  /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
   enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
   enum class LeaderFormat : std::uint8_t { Straight, Spline, Arrow, None } leaderFormat = LeaderFormat::Straight;
-  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation } leaderPhase = LeaderPhase::WaitFirst;
+  enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
+  bool leaderShowArrow = true;
+  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
+      LeaderPhase::WaitFirst;
+  bool leaderFinishAfterAnnotation = false;
   std::vector<spline::Vec3> leaderDraftPoints;
-  enum class PeditPhase : std::uint8_t { WaitObject, WaitOption, WaitVertex, WaitJoin, WaitVertexMove } peditPhase =
-      PeditPhase::WaitObject;
+  enum class PeditPhase : std::uint8_t {
+    WaitObject,
+    WaitOption,
+    WaitVertex,
+    WaitJoin,
+    WaitVertexMove,
+    WaitVertexInsert
+  } peditPhase = PeditPhase::WaitObject;
   int peditIndex = -1;
   int peditVertex = 0;
   bool peditPaper = false;
+  /// MEASURE and DIVIDE share object-pick + value prompt state (same AutoCAD two-step).
   enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
   SelectedEntity measureTarget{};
   bool measurePaper = false;
   int measurePaperIndex = -1;
   PaperEntityRef::Type measurePaperType = PaperEntityRef::Type::Line;
+  double measurePickX = 0.0;
+  double measurePickY = 0.0;
   enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
   std::vector<spline::Vec3> areaDraftPoints;
   double areaRunning = 0.0;
   bool areaSubtract = false;
+  bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
   enum class ListPhase : std::uint8_t { WaitObject } listPhase = ListPhase::WaitObject;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
@@ -7294,10 +7309,10 @@ void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartListCommand(AppCommandState& st, std::vector<std::string>& log);
 void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
-bool HandleIssue1019TextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
-bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
-[[nodiscard]] const char* Issue1019CommandInputHint(const AppCommandState& st);
-void ResetIssue1019Drafts(AppCommandState& st);
+bool HandleCadDrawInquiryTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+[[nodiscard]] const char* CadDrawInquiryCommandInputHint(const AppCommandState& st);
+void ResetCadDrawInquiryDrafts(AppCommandState& st);
 void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.

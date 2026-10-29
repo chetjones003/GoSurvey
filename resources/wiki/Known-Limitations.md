@@ -104,7 +104,7 @@ presets
 | Gap | Detail |
 |---|---|
 | **Binary DXF** | Not supported. *"in AutoCAD use Save As → ASCII DXF"* |
-| **DXF paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported paper-space types are reported; polyline arc bulges are drawn straight |
+| **DXF paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported paper-space types are reported |
 | **Unsupported DXF entities** | Reported as `N unsupported ENTITIES record(s)`, never silently dropped |
 | **DXF export coverage** | Some entity types have no export branch yet and are absent from the file. The log names what was excluded |
 | **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing |

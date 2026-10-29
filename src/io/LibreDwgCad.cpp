@@ -4388,6 +4388,7 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   rest.ellAttrs = L.paperEllAttrs;
   rest.polyOffsets = L.paperPolyOffsets;
   rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.polyVertsBulge = L.paperPolyVertsBulge;
   rest.polyClosed = L.paperPolyClosed;
   rest.polyAttrs = L.paperPolyAttrs;
   rest.texts = L.paperTexts;
@@ -4656,9 +4657,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
     ent->entmode = savedEntMode;
-    // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
-    if (AppendScratchToPaperLayout(L, scratch))
-      NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
+    (void)AppendScratchToPaperLayout(L, scratch);
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +

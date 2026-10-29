@@ -488,6 +488,9 @@ struct CadMultileader {
   bool annotative = false;
   /// When non-empty, draw only at these SCALE dictionary names; empty = every scale (issue #622).
   std::vector<std::string> annotativeVisibleScaleNames;
+  /// REQ-456 LEADER Format: spline-fit path vs straight segments; Arrow vs None arrowhead.
+  bool splinePath = false;
+  bool showArrow = true;
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 

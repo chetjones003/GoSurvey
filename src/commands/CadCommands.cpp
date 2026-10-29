@@ -695,7 +695,7 @@ void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<st
 
 bool InFloatingModelSpace(const AppCommandState& cmd) { return cmd.floatingViewportIndex >= 0; }
 
-PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
+const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st) {
   // REQ-037 / ADR-009: a draw/edit command writes to the active layout's paper store when a paper
   // layout is active and NOT in floating model space; otherwise it targets model space (→ nullptr).
   if (st.activeSpaceIndex < 0 || InFloatingModelSpace(st))
@@ -703,6 +703,10 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
   if (static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size())
     return nullptr;
   return &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+}
+
+PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
+  return const_cast<PaperLayout*>(ActivePaperGeometryTarget(static_cast<const AppCommandState&>(st)));
 }
 
 // --- Native paper-space geometry: selection + edit (REQ-037, ADR-009) ---
@@ -772,15 +776,20 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
       L.paperPolyOffsets.push_back(0);
     const int a = scratch.userPolylineOffsets[p];
     const int b = scratch.userPolylineOffsets[p + 1];
-    for (int v = a * 3; v < b * 3; ++v)
-      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[static_cast<size_t>(v)]));
+    for (int v = a; v < b; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base]));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 1]));
+      L.paperPolyVerts.push_back(static_cast<float>(scratch.userPolylineVerts[base + 2]));
+      const float bg = static_cast<size_t>(v) < scratch.userPolylineVertsBulge.size()
+                           ? scratch.userPolylineVertsBulge[static_cast<size_t>(v)]
+                           : 0.f;
+      L.paperPolyVertsBulge.push_back(bg);
+    }
     L.paperPolyOffsets.push_back(L.paperPolyOffsets.back() + (b - a));
     L.paperPolyClosed.push_back(scratch.userPolylineClosed[p]);
     L.paperPolyAttrs.push_back(scratch.userPolylineAttrs[p]);
   }
-  bool bulged = false;
-  for (const float bg : scratch.userPolylineVertsBulge)
-    bulged = bulged || bg != 0.f;
   L.paperLines.insert(L.paperLines.end(), scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
   L.paperLineAttrs.insert(L.paperLineAttrs.end(), scratch.userLineAttrs.begin(), scratch.userLineAttrs.end());
   L.paperTexts.insert(L.paperTexts.end(), scratch.cadAnnotations.begin(), scratch.cadAnnotations.end());
@@ -795,7 +804,7 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
                                  scratch.cadMultileaderAttrs.end());
   L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
   L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
-  return bulged;
+  return false;
 }
 
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,
@@ -882,10 +891,23 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
   for (int pi = static_cast<int>(L.paperPolyOffsets.size()) - 2; pi >= 0; --pi) {
     const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
     const int v1 = L.paperPolyOffsets[(static_cast<size_t>(pi)+ 1)];
-    for (int vi = v0; vi + 1 < v1; ++vi) {
-      const size_t a = static_cast<size_t>(vi) * 3, b = (static_cast<size_t>(vi)+ 1) * 3;
-      if (PaperPointSegDist2(x, y, L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
-                             L.paperPolyVerts[b + 1]) <= tol2) {
+    const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+    const int nSeg = closed ? (v1 - v0) : (v1 - v0 - 1);
+    for (int s = 0; s < nSeg; ++s) {
+      const int ia = v0 + s;
+      const int ib = v0 + ((s + 1) % (v1 - v0));
+      const size_t a = static_cast<size_t>(ia) * 3, b = static_cast<size_t>(ib) * 3;
+      const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)] : 0.f;
+      if (std::fabs(bulge) > 1.e-8f) {
+        const BulgeArcSpan span = BulgeArc(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                                           L.paperPolyVerts[b + 1], bulge);
+        if (span.valid && PointArcDistanceSq(x, y, span) <= static_cast<double>(tol2)) {
+          out->type = PaperRef::Type::Polyline;
+          out->index = pi;
+          return true;
+        }
+      } else if (PaperPointSegDist2(x, y, L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                                    L.paperPolyVerts[b + 1]) <= tol2) {
         out->type = PaperRef::Type::Polyline;
         out->index = pi;
         return true;
@@ -951,6 +973,8 @@ static void ErasePaperPolyline(PaperLayout& L, int pi) {
   const int nv = v1 - v0;
   L.paperPolyVerts.erase(L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
                          L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  if (L.paperPolyVertsBulge.size() >= static_cast<size_t>(v1))
+    L.paperPolyVertsBulge.erase(L.paperPolyVertsBulge.begin() + v0, L.paperPolyVertsBulge.begin() + v1);
   L.paperPolyOffsets.erase(L.paperPolyOffsets.begin() + (pi + 1));  // drop this poly's end marker
   for (size_t k = (static_cast<size_t>(pi)+ 1); k < L.paperPolyOffsets.size(); ++k)
     L.paperPolyOffsets[k] -= nv;                                    // shift the rest back
@@ -1114,6 +1138,9 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3)] + dxIn);
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dyIn);
           L->paperPolyVerts.push_back(L->paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+          L->paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < L->paperPolyVertsBulge.size()
+                                               ? L->paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                               : 0.f);
         }
         L->paperPolyOffsets.push_back(baseVert + (v1 - v0));
         L->paperPolyClosed.push_back(static_cast<size_t>(pi) < L->paperPolyClosed.size() ? L->paperPolyClosed[static_cast<size_t>(pi)] : 0u);
@@ -6872,7 +6899,7 @@ void ResetAllCadDraftTools(AppCommandState& st) {
   ResetEllipseDraft(st);
   st.splineDraftPoints.clear();
   st.splineMethod = AppCommandState::SplineMethod::Fit;
-  ResetIssue1019Drafts(st);
+  ResetCadDrawInquiryDrafts(st);
   ResetRectDraft(st);
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
@@ -9669,6 +9696,8 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 0)] + dx));
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 1)] + dy));
       L.paperPolyVerts.push_back(static_cast<float>(cb.polyVerts[(static_cast<size_t>(vi)* 3 + 2)]));
+      L.paperPolyVertsBulge.push_back(static_cast<size_t>(vi) < cb.polyVertsBulge.size() ? cb.polyVertsBulge[static_cast<size_t>(vi)]
+                                                                                       : 0.f);
     }
     if (L.paperPolyOffsets.empty())
       L.paperPolyOffsets.push_back(baseVert);
@@ -9761,7 +9790,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
     const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
-                    " object(s) skipped (paper space does not store dimensions or splines).");
+                    " object(s) skipped (paper space does not store dimensions).");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
@@ -15018,7 +15047,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
     return;
   }
 
-  if (SubmitIssue1019ViewportPick(st, wx, wy, log))
+  if (SubmitCadDrawInquiryViewportPick(st, wx, wy, log))
     return;
 
   if (st.active == K::PipeRun) {
@@ -16822,6 +16851,9 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)]);
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
         cb.polyVerts.push_back(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 2)]);
+        cb.polyVertsBulge.push_back(static_cast<size_t>(vi) < L.paperPolyVertsBulge.size()
+                                       ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                       : 0.f);
         expandBbox(L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 0)], L.paperPolyVerts[(static_cast<size_t>(vi)* 3 + 1)]);
       }
       cb.polyOffsets.push_back(baseVert + (v1 - v0));
@@ -19076,6 +19108,7 @@ static void ReplacePaperPolylineVerts(PaperLayout* L, int pi, const std::vector<
     flat.push_back(0.f);
   }
   L->paperPolyVerts.insert(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(), flat.end());
+  SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
   for (size_t oi = (static_cast<size_t>(pi)+ 1); oi < L->paperPolyOffsets.size(); ++oi)
     L->paperPolyOffsets[oi] += delta;
 }
@@ -19093,6 +19126,7 @@ static void AppendNewPaperPolyline(PaperLayout* L, const std::vector<std::pair<f
   L->paperPolyOffsets.push_back(base + static_cast<int>(xy.size()));
   L->paperPolyClosed.push_back(closed ? 1u : 0u);
   L->paperPolyAttrs.push_back(std::move(attrs));
+  SyncPolylineBulge(L->paperPolyVertsBulge, L->paperPolyVerts.size());
 }
 
 static bool ApplyBreakToPaperOpenPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
@@ -27760,8 +27794,8 @@ int ExplodeSelectedPolylines(AppCommandState& st, std::vector<std::string>& log)
       case T::Ellipse:      otherKinds.insert("ellipse"); break;
       case T::Spline:       otherKinds.insert("spline"); break;  // REQ-443
       case T::Point:        otherKinds.insert("point"); break;   // REQ-456
-      case T::PositionMarker: otherKinds.insert("position marker"); break;
-      case T::Multileader:    otherKinds.insert("multileader"); break;
+      case T::PositionMarker: otherKinds.insert("position marker"); break;  // -Wswitch with Point
+      case T::Multileader:    otherKinds.insert("multileader"); break;      // -Wswitch with Point
       case T::Annotation:   otherKinds.insert("text"); break;
       case T::FilledRegion: otherKinds.insert("hatch"); break;
       case T::Mesh:         otherKinds.insert("mesh"); break;
@@ -31689,6 +31723,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     paperJoin.userLineAttrs = paper->paperLineAttrs;
     paperJoin.userPolylineOffsets = paper->paperPolyOffsets;
     paperJoin.userPolylineVerts.assign(paper->paperPolyVerts.begin(), paper->paperPolyVerts.end());
+    paperJoin.userPolylineVertsBulge = paper->paperPolyVertsBulge;
     paperJoin.userPolylineClosed = paper->paperPolyClosed;
     paperJoin.userPolylineAttrs = paper->paperPolyAttrs;
 
@@ -31731,6 +31766,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     paper->paperLineAttrs = std::move(paperJoin.userLineAttrs);
     paper->paperPolyOffsets = std::move(paperJoin.userPolylineOffsets);
     paper->paperPolyVerts.assign(paperJoin.userPolylineVerts.begin(), paperJoin.userPolylineVerts.end());
+    paper->paperPolyVertsBulge = std::move(paperJoin.userPolylineVertsBulge);
     paper->paperPolyClosed = std::move(paperJoin.userPolylineClosed);
     paper->paperPolyAttrs = std::move(paperJoin.userPolylineAttrs);
     st.selectedPaperEntities.clear();
@@ -44105,31 +44141,31 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SPLINE canceled — nothing was added.");
   }
   else if (st.active == AppCommandState::Kind::Point) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("POINT canceled.");
   }
   else if (st.active == AppCommandState::Kind::Leader) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("LEADER canceled — nothing was added.");
   }
   else if (st.active == AppCommandState::Kind::Pedit) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("PEDIT canceled.");
   }
   else if (st.active == AppCommandState::Kind::Measure) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("MEASURE canceled.");
   }
   else if (st.active == AppCommandState::Kind::Divide) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("DIVIDE canceled.");
   }
   else if (st.active == AppCommandState::Kind::Area) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("AREA canceled.");
   }
   else if (st.active == AppCommandState::Kind::List) {
-    ResetIssue1019Drafts(st);
+    ResetCadDrawInquiryDrafts(st);
     log.push_back("LIST canceled.");
   }
   else if (st.active == AppCommandState::Kind::Rect)
@@ -45165,7 +45201,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
-  if (HandleIssue1019TextInput(line, st, log))
+  if (HandleCadDrawInquiryTextInput(line, st, log))
     return;
 
   if (line.empty()) {
@@ -48484,8 +48520,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
                   st.splineDraftPoints.size());
     return buf;
   }
-  if (const char* issue1019 = Issue1019CommandInputHint(st))
-    return issue1019;
+  if (const char* drawInquiry = CadDrawInquiryCommandInputHint(st))
+    return drawInquiry;
   if (st.active == K::Text) {
     switch (st.textPhase) {
     case TP::WaitInsertion:

@@ -570,17 +570,39 @@ void EditorViewport::paintGL() {
       const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
       painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
+      const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
       QPolygonF polyline;
-      for (int v = begin; v < end; ++v) {
-        const std::size_t offset = static_cast<std::size_t>(v) * 3;
-        if (offset + 1 < layout.paperPolyVerts.size())
-          polyline << project(layout.paperPolyVerts[offset], layout.paperPolyVerts[offset + 1]);
+      if (begin < end) {
+        const std::size_t first = static_cast<std::size_t>(begin) * 3;
+        if (first + 1 < layout.paperPolyVerts.size())
+          polyline << project(layout.paperPolyVerts[first], layout.paperPolyVerts[first + 1]);
       }
-      if (polyline.size() > 1) {
-        const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
-        if (closed) polyline << polyline.front();
+      const int nVert = end - begin;
+      const int nSeg = closed ? nVert : nVert - 1;
+      for (int s = 0; s < nSeg; ++s) {
+        const int ia = begin + s;
+        const int ib = begin + ((s + 1) % nVert);
+        const std::size_t a = static_cast<std::size_t>(ia) * 3;
+        const std::size_t b = static_cast<std::size_t>(ib) * 3;
+        if (b + 1 >= layout.paperPolyVerts.size())
+          break;
+        const float bulge = static_cast<std::size_t>(ia) < layout.paperPolyVertsBulge.size()
+                                ? layout.paperPolyVertsBulge[static_cast<std::size_t>(ia)]
+                                : 0.f;
+        const BulgeArcSpan span = BulgeArc(layout.paperPolyVerts[a], layout.paperPolyVerts[a + 1],
+                                           layout.paperPolyVerts[b], layout.paperPolyVerts[b + 1], bulge);
+        if (span.valid) {
+          constexpr int kArcSeg = 16;
+          for (int i = 1; i <= kArcSeg; ++i) {
+            const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(kArcSeg);
+            polyline << project(span.cx + span.radius * std::cos(ang), span.cy + span.radius * std::sin(ang));
+          }
+        } else {
+          polyline << project(layout.paperPolyVerts[b], layout.paperPolyVerts[b + 1]);
+        }
+      }
+      if (polyline.size() > 1)
         painter.drawPolyline(polyline);
-      }
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));

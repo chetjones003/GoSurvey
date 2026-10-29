@@ -748,14 +748,35 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
         const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
         const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
-        for (int vi = v0; vi + 1 < v1; ++vi)
-          addSeg(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)],
-                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3)],
-                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3 + 1)]);
-        if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] &&
-            v1 - v0 >= 2)
-          addSeg(L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3)], L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)],
-                 L.paperPolyVerts[static_cast<size_t>(v0 * 3)], L.paperPolyVerts[static_cast<size_t>(v0 * 3 + 1)]);
+        const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() &&
+                            L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+        const int nVert = v1 - v0;
+        const int nSeg = closed ? nVert : nVert - 1;
+        for (int s = 0; s < nSeg; ++s) {
+          const int ia = v0 + s;
+          const int ib = v0 + ((s + 1) % nVert);
+          const size_t a = static_cast<size_t>(ia) * 3;
+          const size_t b = static_cast<size_t>(ib) * 3;
+          const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)]
+                                                                                    : 0.f;
+          const BulgeArcSpan span = BulgeArc(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                                             L.paperPolyVerts[b + 1], bulge);
+          if (span.valid) {
+            constexpr int kArcSeg = 16;
+            double px = L.paperPolyVerts[a];
+            double py = L.paperPolyVerts[a + 1];
+            for (int i = 1; i <= kArcSeg; ++i) {
+              const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(kArcSeg);
+              const double qx = span.cx + span.radius * std::cos(ang);
+              const double qy = span.cy + span.radius * std::sin(ang);
+              addSeg(static_cast<float>(px), static_cast<float>(py), static_cast<float>(qx), static_cast<float>(qy));
+              px = qx;
+              py = qy;
+            }
+          } else {
+            addSeg(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1]);
+          }
+        }
       }
 
       // Multileader leader paths (issue #768): arrow tip to landing, plus extra branches. The label plots

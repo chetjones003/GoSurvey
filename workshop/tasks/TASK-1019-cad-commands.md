@@ -41,4 +41,5 @@ MASSPROP; XLINE/RAY/DONUT/MLINE.
 - DWG POINT import (`LibreDwgCadTests` issue #613): now expects `CadPoint` (REQ-456); PASS
 - `ctest --preset ninja-release`: 190/191 passed; shard-0 SEGFAULT was the stale POINT→Position Marker assertion, re-run after the test fix
 - AC 1–8 covered by Issue1019CommandTests (AC 3 MOVE added)
-- Remaining: paper PEDIT Fit/Decurve named as no bulge storage (paper polylines have never stored bulges); TransformPreview has no POINT ghost during MOVE
+- Remaining: TransformPreview has no POINT ghost during MOVE
+- Review follow-up: paper polyline bulge store so PEDIT Fit/Decurve work on sheets; Join, Insert, AREA Add/Subtract, MEASURE pick origin, DIVIDE closed N, LIST paper endpoints, LEADER format/annotation, paste log, const ActivePaperGeometryTarget, renamed DrawInquiry TU

@@ -1381,6 +1381,7 @@ json BuildRoot(const AppCommandState& st) {
         o["paperEllAttrs"] = attrsToJson(l.paperEllAttrs);
         o["paperPolyOffsets"] = l.paperPolyOffsets;
         o["paperPolyVerts"] = l.paperPolyVerts;
+        o["paperPolyVertsBulge"] = l.paperPolyVertsBulge;
         json pc = json::array();
         for (uint8_t c : l.paperPolyClosed)
           pc.push_back(static_cast<int>(c));
@@ -1670,6 +1671,10 @@ json BuildRoot(const AppCommandState& st) {
     o["path"] = ml.pathXyz;
     if (ml.annotative)
       o["annotative"] = true;
+    if (ml.splinePath)
+      o["splinePath"] = true;
+    if (!ml.showArrow)
+      o["showArrow"] = false;
     if (!ml.annotativeVisibleScaleNames.empty())
       o["annotativeVisibleScaleNames"] = ml.annotativeVisibleScaleNames;
     if (!ml.extraLeaderPaths.empty()) {
@@ -2777,6 +2782,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           for (const auto& v : o["paperPolyVerts"])
             if (v.is_number())
               l.paperPolyVerts.push_back(v.get<float>());
+        if (o.contains("paperPolyVertsBulge") && o["paperPolyVertsBulge"].is_array())
+          for (const auto& v : o["paperPolyVertsBulge"])
+            if (v.is_number())
+              l.paperPolyVertsBulge.push_back(v.get<float>());
         if (o.contains("paperPolyClosed") && o["paperPolyClosed"].is_array())
           for (const auto& v : o["paperPolyClosed"])
             if (v.is_number())
@@ -2788,12 +2797,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
              static_cast<size_t>(l.paperPolyOffsets.back()) * 3 != l.paperPolyVerts.size())) {
           l.paperPolyOffsets.clear();
           l.paperPolyVerts.clear();
+          l.paperPolyVertsBulge.clear();
           l.paperPolyClosed.clear();
           l.paperPolyAttrs.clear();
         } else {
           readAttrs("paperPolyAttrs", l.paperPolyAttrs);
           l.paperPolyClosed.resize(static_cast<size_t>(std::max(0, nPoly)));
           l.paperPolyAttrs.resize(static_cast<size_t>(std::max(0, nPoly)));
+          l.paperPolyVertsBulge.resize(l.paperPolyVerts.size() / 3, 0.f);
         }
         if (o.contains("paperFilledRegions") && o["paperFilledRegions"].is_array())
           for (const auto& el : o["paperFilledRegions"])
@@ -3245,6 +3256,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             ml.pathXyz.push_back(static_cast<float>(v.get<double>()));
       }
       ml.annotative = o.value("annotative", false);
+      ml.splinePath = o.value("splinePath", false);
+      ml.showArrow = o.value("showArrow", true);
       if (o.contains("annotativeVisibleScaleNames") && o["annotativeVisibleScaleNames"].is_array())
         ml.annotativeVisibleScaleNames = o["annotativeVisibleScaleNames"].get<std::vector<std::string>>();
       if (o.contains("extraPaths") && o["extraPaths"].is_array()) {

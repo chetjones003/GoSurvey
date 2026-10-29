@@ -485,7 +485,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/ProjectFiles.cpp
   src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
-  src/commands/CadCommands_Issue1019.cpp
+  src/commands/CadCommands_DrawInquiry.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp

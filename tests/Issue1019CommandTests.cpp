@@ -278,3 +278,112 @@ TEST_CASE("paper MEASURE DIVIDE AREA LIST PEDIT leave model geometry unchanged",
   SubmitViewportPick(st, 1.0, 0.0, log, false, false, nullptr);
   CHECK(st.userPolylineOffsets.size() == modelPolys);
 }
+
+TEST_CASE("PEDIT Join concatenates touching polylines; Insert adds a vertex",
+          "[commands][req456][issue1019]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  PushLine(st, 0.0, 0.0, 10.0, 0.0);
+  PushLine(st, 10.0, 0.0, 20.0, 0.0);
+  Submit(st, "pedit", log);
+  SubmitViewportPick(st, 5.0, 0.0, log, false, false, nullptr);
+  REQUIRE(st.userPolylineOffsets.size() >= 2);
+  Submit(st, "join", log);
+  SubmitViewportPick(st, 15.0, 0.0, log, false, false, nullptr);
+  REQUIRE(st.userPolylineOffsets.size() == 2);
+  CHECK(st.userPolylineOffsets.back() == 3);
+  CHECK(st.userLinesFlat.empty());
+  CHECK(LogHas(log, "joined"));
+
+  log.clear();
+  Submit(st, "edit", log);
+  Submit(st, "insert", log);
+  Submit(st, "5,1", log);
+  CHECK(st.userPolylineOffsets.back() == 4);
+  CHECK(LogHas(log, "inserted"));
+}
+
+TEST_CASE("MEASURE starts at the picked end; DIVIDE of a closed polyline places N points",
+          "[commands][req456][issue1019]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  PushLine(st, 0.0, 0.0, 10.0, 0.0);
+  Submit(st, "measure", log);
+  SubmitViewportPick(st, 9.9, 0.0, log, false, false, nullptr);
+  Submit(st, "2.5", log);
+  REQUIRE(st.cadPoints.size() == 3);
+  CHECK(st.cadPoints[0].x == Approx(7.5));
+  CHECK(st.cadPoints[1].x == Approx(5.0));
+  CHECK(st.cadPoints[2].x == Approx(2.5));
+
+  st.cadPoints.clear();
+  st.cadPointAttrs.clear();
+  st.userLinesFlat.clear();
+  st.userLineAttrs.clear();
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(0);
+  st.userPolylineVerts = {0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 10.0, 10.0, 0.0, 0.0, 10.0, 0.0};
+  st.userPolylineOffsets.push_back(4);
+  st.userPolylineClosed.push_back(1);
+  st.userPolylineAttrs.push_back(EntityAttributes{});
+  Submit(st, "divide", log);
+  SubmitViewportPick(st, 5.0, 10.0, log, false, false, nullptr);
+  Submit(st, "4", log);
+  REQUIRE(st.cadPoints.size() == 4);
+}
+
+TEST_CASE("AREA Add accumulates two rectangles; paper LIST reports line endpoints",
+          "[commands][req456][issue1019]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "area", log);
+  Submit(st, "add", log);
+  Submit(st, "0,0", log);
+  Submit(st, "10,0", log);
+  Submit(st, "10,10", log);
+  Submit(st, "0,10", log);
+  Submit(st, "", log);
+  REQUIRE(LogHas(log, "100.0000"));
+  CHECK(st.active == AppCommandState::Kind::Area);
+  Submit(st, "0,0", log);
+  Submit(st, "10,0", log);
+  Submit(st, "10,10", log);
+  Submit(st, "0,10", log);
+  Submit(st, "", log);
+  REQUIRE(LogHas(log, "200.0000"));
+
+  AppCommandState paper = PaperDrawing();
+  log.clear();
+  paper.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, 0});
+  Submit(paper, "list", log);
+  REQUIRE(LogHas(log, "LINE"));
+  CHECK(LogHas(log, "(0.0000,0.0000) to (10.0000,0.0000)"));
+}
+
+TEST_CASE("paper PEDIT Fit stores bulge; LEADER Format Spline densifies the path",
+          "[commands][req456][issue1019]") {
+  AppCommandState st = PaperDrawing();
+  std::vector<std::string> log;
+  Submit(st, "pedit", log);
+  SubmitViewportPick(st, 1.0, 0.0, log, false, false, nullptr);
+  Submit(st, "fit", log);
+  REQUIRE_FALSE(st.paperLayouts[0].paperPolyVertsBulge.empty());
+  CHECK(st.paperLayouts[0].paperPolyVertsBulge.front() == Approx(0.5f));
+  Submit(st, "decurve", log);
+  CHECK(st.paperLayouts[0].paperPolyVertsBulge.front() == Approx(0.0f));
+  Submit(st, "", log);
+
+  AppCommandState model = Drawing();
+  log.clear();
+  Submit(model, "leader", log);
+  Submit(model, "0,0", log);
+  Submit(model, "1,0", log);
+  Submit(model, "1,1", log);
+  Submit(model, "format", log);
+  Submit(model, "spline", log);
+  Submit(model, "none", log);
+  Submit(model, "", log);
+  REQUIRE(model.cadMultileaders.size() == 1);
+  CHECK(model.cadMultileaders.front().splinePath);
+  CHECK(model.cadMultileaders.front().pathXyz.size() > 9);
+}

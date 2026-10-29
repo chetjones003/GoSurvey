@@ -375,8 +375,8 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::Ellipse:      return st.userEllipses.size();
       case T::Spline:       return st.cadSplines.size();  // REQ-443
       case T::Point:        return st.cadPoints.size();   // REQ-456
-      case T::PositionMarker: return st.cadPositionMarkers.size();
-      case T::Multileader:    return st.cadMultileaders.size();
+      case T::PositionMarker: return st.cadPositionMarkers.size();  // -Wswitch with Point
+      case T::Multileader:    return st.cadMultileaders.size();     // -Wswitch with Point
       case T::PdfUnderlay:  return st.pdfAttachments.size();
       case T::FilledRegion: return st.cadFilledRegions.size();
       case T::Mesh:         return st.cadMeshes.size();

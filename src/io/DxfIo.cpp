@@ -2444,7 +2444,7 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
   if (layouts.empty())
     return 0;
 
-  int nRead = 0, nBulge = 0, nOther = 0;
+  int nRead = 0, nOther = 0;
   const Affine2D xfRoot{};
   for (const Rec& r : found) {
     PaperLayout& L = layouts[static_cast<size_t>(r.layout)];
@@ -2534,15 +2534,11 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
     std::unordered_map<std::string, int> skipCounts;
     ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
                       &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate);
-    if (AppendScratchToPaperLayout(L, scratch))
-      ++nBulge;
+    (void)AppendScratchToPaperLayout(L, scratch);
     if (skUnknown > 0 || degenerate > 0)
       ++nOther;
     ++nRead;
   }
-  if (nBulge > 0)
-    log.push_back("DXF import — paper-space polyline arc segments drawn straight (no bulge store) in " +
-                  std::to_string(nBulge) + " polyline(s).");
   if (nOther > 0)
     log.push_back("DXF import — " + std::to_string(nOther) + " paper-space entit" + (nOther == 1 ? "y" : "ies") +
                   " of an unsupported type skipped.");
@@ -3040,9 +3036,13 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     rec.hasTransparency = c.hasTr;
     rec.transparency440 = c.tr;
     rec.closed = p < L.paperPolyClosed.size() && L.paperPolyClosed[p] != 0;
-    for (int vi = a; vi < b; ++vi)
+    for (int vi = a; vi < b; ++vi) {
       rec.vertices.push_back({num(L.paperPolyVerts[static_cast<size_t>(vi) * 3]),
                               num(L.paperPolyVerts[static_cast<size_t>(vi) * 3 + 1])});
+      const float bg = static_cast<size_t>(vi) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(vi)]
+                                                                             : 0.f;
+      rec.bulges.push_back(bg == 0.f ? std::string("0") : num(bg));
+    }
     std::vector<DxfOutPair> v;
     DxfAppendLwPolylineRecord(rec, &v);
     DxfTagPaperSpace(&v, L.name);
