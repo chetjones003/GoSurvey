@@ -2006,8 +2006,6 @@ void EditorWindow::closeEvent(QCloseEvent* event) {
   event->accept();
 }
 
-// The Toolspace tree is rebuilt only when what it lists changes. Refresh() runs on every viewport click,
-// and rebuilding the tree (icons and all) took ~100 ms of each one.
 namespace {
 // The labels from the root down to \p item, used to find the same row again after a rebuild.
 QString ToolspaceItemPath(const QTreeWidgetItem* item) {
@@ -2092,6 +2090,8 @@ void EditorWindow::RefreshToolspace() {
   for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
   key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
   key << (drawingOpen ? "#open" : "#closed");
+  // The Toolspace trees are rebuilt only when what they list changes. Refresh() runs on every viewport click,
+  // and rebuilding the trees (icons and all) took ~100 ms of each one.
   if (m_ToolspaceKey == key && m_Toolspace->topLevelItemCount() > 0) return;
   m_ToolspaceKey = key;
 
@@ -2111,11 +2111,13 @@ void EditorWindow::RefreshToolspace() {
         for (const auto& item : session.project.items) {
           const QString path = QString::fromUtf8(item.path.c_str());
           const bool linked = item.kind == gsproj::kKindLocalLink;
-          const QString folder = linked ? QStringLiteral("Linked files") : (path.contains('/') ? path.section('/', 0, 0) : QString());
+          // Linked files use a key that no folder name can have (it starts with a control character), so a real folder called
+          // "Linked files" is not merged into the linked group.
+          const QString folder = linked ? QStringLiteral("linked") : (path.contains('/') ? path.section('/', 0, 0) : QString());
           QTreeWidgetItem* parent = project;
           if (!folder.isEmpty()) {
             if (!folders.contains(folder)) {
-              auto* node = new QTreeWidgetItem(project, {folder});
+              auto* node = new QTreeWidgetItem(project, {linked ? QStringLiteral("Linked files") : folder});
               node->setIcon(0, ToolspaceIcon("c3d_setfolder.png"));
               folders.insert(folder, node);
             }

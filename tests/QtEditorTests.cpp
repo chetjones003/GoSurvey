@@ -9065,7 +9065,7 @@ private Q_SLOTS:
     QCOMPARE(window.State().activeDrawingIdx, first);
   }
 
-  // GitHub #1040 / REQ-142 (D-2026-10-28-c): one screenshot per Toolspace tab for the visual review. The Project tab
+  // GitHub #1040 / REQ-142 (D-2026-10-28-d): one screenshot per Toolspace tab for the visual review. The Project tab
   // shows its empty state because no project is open in this drawing.
   void issue1040ToolspaceTabsCaptureForReview() {
     // Pin the Graphite theme for the review images, and restore the app's theme afterwards like the appearance test does.

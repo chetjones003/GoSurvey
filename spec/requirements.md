@@ -5834,10 +5834,10 @@ requirements is a planning failure, not a sign of rigor.
   - with a drawing in a project, Project Health and (if the project is not read-only) Refresh are enabled and run the same actions as the File menu items;
   - the Settings tab does not contain a button or entry that opens app-wide Settings.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-c)
+- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-d)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
   2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
-  2026-10-28 — D-2026-10-28-c (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
+  2026-10-28 — D-2026-10-28-d (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
