@@ -424,7 +424,7 @@ A change is rejected if it breaks any of these:
 - Consequences: the document model grows by two small owned vectors + an enum; the
   Renderer learns one new pass reusing existing batches; `.gs` gains a layouts
   section (REQ-031); DXF layout/VPORT export is explicitly deferred. Built
-  incrementally (decision log) so each slice passes Verification.
+  incrementally (decision log) so each slice passes Verification. Addendum (2026-10-28, issue #1018): the `.gs` and deferred-DXF wording in this decision is historical; layouts persist in DWG and DXF under REQ-031 and REQ-113 (D-2026-10-20-a, D-2026-09-03-h).
 
 ### ADR-007 — Plot output as vector PDF via the bundled PDFium edit API   (2026-06-15, accepted)
 - Context:    REQ-029/030 require plotting a layout (and batches) to a printable
@@ -594,7 +594,7 @@ A change is rejected if it breaks any of these:
   pass) via a **screen-space scanline even-odd fill** over all loops — matching the model GL stencil pass's
   even-odd rule, so concave shapes and island holes (e.g. the logo's counters) are correct. Colour resolves
   like the model (`ResolveEntityRgbaForViewport` with the layer row). DXF persistence of paper fills stays
-  deferred (.gs only).
+  deferred (.gs only). Addendum (2026-10-28, issue #1018): superseded — paper fills persist in DWG and DXF under REQ-113 (D-2026-10-20-a).
 
 ### ADR-020 — Document-owned text-style table + bake-on-write resolution with per-property overrides   (2026-06-21, accepted)
 - Context:    REQ-044 adds AutoCAD-style named text styles (font, height, oblique, bold/italic) with a
