@@ -4647,7 +4647,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
       ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
       ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
-      ty == DWG_TYPE_TABLE) {
+      ty == DWG_TYPE_TABLE || ty == DWG_TYPE_POINT || ty == DWG_TYPE_SPLINE) {
     AppCommandState scratch;
     scratch.worldDocumentOriginX = 0.0;
     scratch.worldDocumentOriginY = 0.0;
@@ -4657,7 +4657,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
     ent->entmode = savedEntMode;
-    (void)AppendScratchToPaperLayout(L, scratch);
+    AppendScratchToPaperLayout(L, scratch);
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +

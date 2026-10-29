@@ -589,17 +589,10 @@ void EditorViewport::paintGL() {
         const float bulge = static_cast<std::size_t>(ia) < layout.paperPolyVertsBulge.size()
                                 ? layout.paperPolyVertsBulge[static_cast<std::size_t>(ia)]
                                 : 0.f;
-        const BulgeArcSpan span = BulgeArc(layout.paperPolyVerts[a], layout.paperPolyVerts[a + 1],
-                                           layout.paperPolyVerts[b], layout.paperPolyVerts[b + 1], bulge);
-        if (span.valid) {
-          constexpr int kArcSeg = 16;
-          for (int i = 1; i <= kArcSeg; ++i) {
-            const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(kArcSeg);
-            polyline << project(span.cx + span.radius * std::cos(ang), span.cy + span.radius * std::sin(ang));
-          }
-        } else {
-          polyline << project(layout.paperPolyVerts[b], layout.paperPolyVerts[b + 1]);
-        }
+        ForEachBulgeChord(layout.paperPolyVerts[a], layout.paperPolyVerts[a + 1], layout.paperPolyVerts[b],
+                          layout.paperPolyVerts[b + 1], bulge, 16, [&](double, double, double bx, double by) {
+                            polyline << project(bx, by);
+                          });
       }
       if (polyline.size() > 1)
         painter.drawPolyline(polyline);

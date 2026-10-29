@@ -759,23 +759,11 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const size_t b = static_cast<size_t>(ib) * 3;
           const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)]
                                                                                     : 0.f;
-          const BulgeArcSpan span = BulgeArc(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
-                                             L.paperPolyVerts[b + 1], bulge);
-          if (span.valid) {
-            constexpr int kArcSeg = 16;
-            double px = L.paperPolyVerts[a];
-            double py = L.paperPolyVerts[a + 1];
-            for (int i = 1; i <= kArcSeg; ++i) {
-              const double ang = span.startAngle + span.sweep * static_cast<double>(i) / static_cast<double>(kArcSeg);
-              const double qx = span.cx + span.radius * std::cos(ang);
-              const double qy = span.cy + span.radius * std::sin(ang);
-              addSeg(static_cast<float>(px), static_cast<float>(py), static_cast<float>(qx), static_cast<float>(qy));
-              px = qx;
-              py = qy;
-            }
-          } else {
-            addSeg(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1]);
-          }
+          ForEachBulgeChord(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1],
+                            bulge, 16, [&](double ax, double ay, double bx, double by) {
+                              addSeg(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(bx),
+                                     static_cast<float>(by));
+                            });
         }
       }
 

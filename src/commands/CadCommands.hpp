@@ -1672,9 +1672,8 @@ const PaperLayout* ActivePaperGeometryTarget(const AppCommandState& st);
 void ClearPaperEntitySelection(AppCommandState& st);
 /// Moves everything a model-space reader put into \p scratch (read with origin 0 and 1 unit per plotted
 /// inch, so every number is already in paper inches) into \p L's own stores (issue #768, REQ-113). Shared
-/// by the DWG and DXF readers. Returns true when a polyline carried a bulge so callers can log if they
-/// still drop arcs; paper now stores bulges (REQ-456 PEDIT Fit), so the usual return is false.
-bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
+/// by the DWG and DXF readers. Paper POINT and SPLINE come through the same scratch (REQ-456).
+void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch);
 
 /// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out,
@@ -2618,8 +2617,7 @@ struct AppCommandState {
   enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
   SelectedEntity measureTarget{};
   bool measurePaper = false;
-  int measurePaperIndex = -1;
-  PaperEntityRef::Type measurePaperType = PaperEntityRef::Type::Line;
+  PaperEntityRef measurePaperTarget{PaperEntityRef::Type::Line, -1};
   double measurePickX = 0.0;
   double measurePickY = 0.0;
   enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;

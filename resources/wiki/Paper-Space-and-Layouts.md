@@ -185,7 +185,10 @@ See [[Layers]].
 ## Drawing on the sheet
 
 In paper space, draw and modify commands act on **paper geometry** measured in paper inches. This
-is where a border, a titleblock, and sheet notes belong.
+is where a border, a titleblock, and sheet notes belong. `LINE`, `POLYLINE`, `SPLINE`, `POINT`,
+`LEADER`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` all run on the sheet without changing
+model geometry. Paper `POINT`, `SPLINE`, and `LEADER` round-trip through DXF and DWG. On a sheet a
+leader's Mtext box is sized in paper inches.
 
 - The clipboard moves objects between model and paper space at 1:1 raw coordinates — copy in model
   space, switch to the layout, and **Paste**. See [[Modify Tools]].

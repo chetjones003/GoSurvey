@@ -522,10 +522,11 @@ struct CadLeaderArrowHead {
   float b2z = 0.f;
 };
 
-[[nodiscard]] inline CadLeaderArrowHead CadLeaderArrowFromPath(const std::vector<float>& pathXyz, float size) {
+[[nodiscard]] inline CadLeaderArrowHead CadMultileaderArrow(const CadMultileader& ml, const std::vector<float>& pathXyz,
+                                                           float size) {
   assert(std::isfinite(size));
   CadLeaderArrowHead a;
-  if (!(size > 0.f) || pathXyz.size() < 6)
+  if (!ml.showArrow || !(size > 0.f) || pathXyz.size() < 6)
     return a;
   assert(pathXyz.size() % 3 == 0);
   const float x0 = pathXyz[0];
@@ -553,14 +554,6 @@ struct CadLeaderArrowHead {
   a.b2y = y0 + uy * along - py * half;
   a.b2z = z0;
   return a;
-}
-
-[[nodiscard]] inline CadLeaderArrowHead CadMultileaderArrow(const CadMultileader& ml, const std::vector<float>& pathXyz,
-                                                           float size) {
-  assert(std::isfinite(size));
-  if (!ml.showArrow)
-    return CadLeaderArrowHead{};
-  return CadLeaderArrowFromPath(pathXyz, size);
 }
 
 /// A Position Marker (REQ-359 item 3, D-2026-09-29-e): a cross inside a circle at a point, drawn at a

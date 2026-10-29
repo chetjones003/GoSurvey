@@ -760,7 +760,7 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
 // PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
 // header-only box-select + unit tests can share it.
 
-bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
+void AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) {
   for (size_t i = 0; i + 3 < scratch.userCirclesCxCyZR.size(); i += 4) {
     L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i]));
     L.paperCircles.push_back(static_cast<float>(scratch.userCirclesCxCyZR[i + 1]));
@@ -804,7 +804,10 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
                                  scratch.cadMultileaderAttrs.end());
   L.paperTables.insert(L.paperTables.end(), scratch.cadTables.begin(), scratch.cadTables.end());
   L.paperTableAttrs.insert(L.paperTableAttrs.end(), scratch.cadTableAttrs.begin(), scratch.cadTableAttrs.end());
-  return false;
+  L.paperPoints.insert(L.paperPoints.end(), scratch.cadPoints.begin(), scratch.cadPoints.end());
+  L.paperPointAttrs.insert(L.paperPointAttrs.end(), scratch.cadPointAttrs.begin(), scratch.cadPointAttrs.end());
+  L.paperSplines.insert(L.paperSplines.end(), scratch.cadSplines.begin(), scratch.cadSplines.end());
+  L.paperSplineAttrs.insert(L.paperSplineAttrs.end(), scratch.cadSplineAttrs.begin(), scratch.cadSplineAttrs.end());
 }
 
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out,

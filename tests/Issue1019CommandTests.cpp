@@ -504,3 +504,43 @@ TEST_CASE("MEASURE open polyline starts at the nearer end; PEDIT Fit sets the cl
   REQUIRE(closed.userPolylineVertsBulge.size() >= 4);
   CHECK(closed.userPolylineVertsBulge[3] == Approx(0.5f));
 }
+
+TEST_CASE("AppendScratch copies paper POINT and SPLINE from model scratch",
+          "[commands][req456][issue1019]") {
+  PaperLayout L;
+  AppCommandState scratch;
+  scratch.cadPoints.push_back({1.25, 2.5, 0.0});
+  scratch.cadPointAttrs.push_back(EntityAttributes{});
+  CadSpline spline;
+  std::string why;
+  REQUIRE(spline::MakeFit({{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}, {2.0, 0.0, 0.0}}, false, &spline, &why));
+  scratch.cadSplines.push_back(spline);
+  scratch.cadSplineAttrs.push_back(EntityAttributes{});
+  AppendScratchToPaperLayout(L, scratch);
+  REQUIRE(L.paperPoints.size() == 1);
+  CHECK(L.paperPoints[0].x == Approx(1.25));
+  CHECK(L.paperPoints[0].y == Approx(2.5));
+  REQUIRE(L.paperPointAttrs.size() == 1);
+  REQUIRE(L.paperSplines.size() == 1);
+  REQUIRE(L.paperSplineAttrs.size() == 1);
+}
+
+TEST_CASE("paper LEADER Mtext box is paper inches, not model units", "[commands][req456][issue1019]") {
+  AppCommandState st = PaperDrawing();
+  st.modelUnitsPerPlottedInch = 50.f;
+  st.activeMultileaderStyle.textSizeInches = 0.10f;
+  std::vector<std::string> log;
+  Submit(st, "leader", log);
+  Submit(st, "0,0", log);
+  Submit(st, "2,0", log);
+  Submit(st, "", log);
+  Submit(st, "", log);
+  REQUIRE(st.paperLayouts[0].paperMultileaders.size() == 1);
+  const CadAnnotation& a = st.paperLayouts[0].paperMultileaders[0].label;
+  CHECK(a.kind == CadAnnotation::Kind::Mtext);
+  const float width = a.boxMaxX - a.boxMinX;
+  const float height = a.boxMaxY - a.boxMinY;
+  CHECK(width == Approx(2.2f).margin(0.02f));
+  CHECK(height == Approx(0.26f).margin(0.02f));
+  CHECK(width < 10.f);
+}

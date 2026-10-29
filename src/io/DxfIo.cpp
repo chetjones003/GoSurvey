@@ -2534,7 +2534,7 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
     std::unordered_map<std::string, int> skipCounts;
     ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
                       &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate);
-    (void)AppendScratchToPaperLayout(L, scratch);
+    AppendScratchToPaperLayout(L, scratch);
     if (skUnknown > 0 || degenerate > 0)
       ++nOther;
     ++nRead;
@@ -2882,7 +2882,8 @@ uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
     nLeaderParts += 4 + static_cast<uint64_t>(std::max(tb.cols - 1, 0) + std::max(CadTableRowCount(tb) - 1, 0)) +
                     tb.cells.size();
   return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
-         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts;
+         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts +
+         L.paperPoints.size() + L.paperSplines.size();
 }
 
 std::string DxfHex(uint64_t v) {
@@ -3046,6 +3047,49 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     std::vector<DxfOutPair> v;
     DxfAppendLwPolylineRecord(rec, &v);
     DxfTagPaperSpace(&v, L.name);
+    flush(v);
+  }
+  for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+    const CadSpline& s = L.paperSplines[si];
+    if (!spline::Validate(s).empty())
+      continue;
+    const Common c = commonOf(attrAt(L.paperSplineAttrs, si));
+    std::vector<DxfOutPair> v;
+    begin(v, "SPLINE", c);
+    v.push_back({100, "AcDbSpline"});
+    v.push_back({70, std::to_string((s.periodic ? 3 : 0) | (!s.weights.empty() ? 4 : 0))});
+    v.push_back({71, std::to_string(s.degree)});
+    v.push_back({72, std::to_string(s.knots.size())});
+    v.push_back({73, std::to_string(s.ctrl.size())});
+    v.push_back({74, std::to_string(s.fit.size())});
+    for (double knot : s.knots)
+      v.push_back({40, num(knot)});
+    for (const auto& p : s.ctrl) {
+      v.push_back({10, num(p.x)});
+      v.push_back({20, num(p.y)});
+      v.push_back({30, num(p.z)});
+    }
+    if (!s.weights.empty()) {
+      for (double weight : s.weights)
+        v.push_back({41, num(weight)});
+    }
+    for (const auto& p : s.fit) {
+      v.push_back({11, num(p.x)});
+      v.push_back({21, num(p.y)});
+      v.push_back({31, num(p.z)});
+    }
+    flush(v);
+  }
+  for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+    const CadPoint& p = L.paperPoints[pi];
+    const Common c = commonOf(attrAt(L.paperPointAttrs, pi));
+    std::vector<DxfOutPair> v;
+    begin(v, "POINT", c);
+    v.push_back({100, "AcDbPoint"});
+    v.push_back({10, num(p.x)});
+    v.push_back({20, num(p.y)});
+    v.push_back({30, num(p.z)});
+    flat(v);
     flush(v);
   }
   for (size_t i = 0; i < L.paperTexts.size(); ++i) {
