@@ -658,6 +658,77 @@ TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
   CHECK(CountDwgMultileaders(p.c_str()) == 1);
 }
 
+TEST_CASE("TEXT export starts with a valid unit width factor",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2000, R_2010, R_2018}) {
+    CAPTURE(version);
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d point{1, 2, 0};
+    auto* text = dwg_add_TEXT(model->tio.object->tio.BLOCK_HEADER, "PLAN", &point, 0.3);
+    REQUIRE(text != nullptr);
+    CHECK(text->width_factor == Catch::Approx(1));
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+}
+
+// R2010+ drops the arrowhead list, but retains the remaining common tail.
+TEST_CASE("MULTILEADER retains its common tail in R2010 and R2018",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2010, R_2018}) {
+    CAPTURE(version);
+    ScratchDir dir("dwg-mleader-common-tail");
+    const auto path = (dir.path / "leader.dwg").string();
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d points[] = {{0, 0, 0}, {10, 2, 0}};
+    const dwg_point_3d textPoint{10, 2, 0}, direction{1, 0, 0};
+    auto* leader = dwg_add_MULTILEADER(model->tio.object->tio.BLOCK_HEADER,
+                                     2, points, "NOTE", &textPoint, &direction, 0.2, 3);
+    REQUIRE(leader != nullptr);
+    CHECK(leader->scale_factor == Catch::Approx(1));
+    leader->is_neg_textdir = 1;
+    leader->ipe_alignment = 2;
+    leader->justification = 1;
+    leader->scale_factor = 2.5;
+    leader->attach_top = 9;
+    leader->attach_bottom = 9;
+    leader->ctx.leaders[0].lastleaderlinepoint = {10, 2, 0};
+    leader->ctx.leaders[0].dogleg_vector = {1, 0, 0};
+    LibreDwgLinkBlockEntities(dwg);
+    REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+    Dwg_Data read{};
+    REQUIRE(dwg_read_file(path.c_str(), &read) < DWG_ERR_CRITICAL);
+    bool found = false;
+    for (unsigned i = 0; i < read.num_objects; ++i) {
+      if (read.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+      const auto* decoded = read.object[i].tio.entity->tio.MULTILEADER;
+      REQUIRE(decoded != nullptr);
+      CHECK(decoded->is_neg_textdir == 1);
+      CHECK(decoded->ipe_alignment == 2);
+      CHECK(decoded->justification == 1);
+      CHECK(decoded->scale_factor == Catch::Approx(2.5));
+      CHECK(decoded->attach_top == 9);
+      CHECK(decoded->attach_bottom == 9);
+      CHECK(decoded->ctx.leaders[0].has_lastleaderlinepoint == 0);
+      CHECK(decoded->ctx.leaders[0].has_dogleg == 0);
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.x == Catch::Approx(10));
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.y == Catch::Approx(2));
+      CHECK(decoded->ctx.leaders[0].dogleg_vector.x == Catch::Approx(1));
+      found = true;
+    }
+    CHECK(found);
+    dwg_free(&read);
+  }
+}
+
 TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (issue #619)",
           "[dwg][libredwg][issue619]") {
   ScratchDir dir("dwg-mleader");
@@ -6051,9 +6122,9 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
   REQUIRE(outDir != nullptr);
   const std::filesystem::path dir = std::filesystem::path(outDir);
   std::filesystem::create_directories(dir);
-  const std::pair<const char*, DwgSaveVersion> versions[] = {{"R2000", DwgSaveVersion::R2000},
-                                                               {"R2010", DwgSaveVersion::R2010},
-                                                               {"R2018", DwgSaveVersion::R2018}};
+  const std::pair<const char*, DwgSaveVersion> versions[] = {
+      {"R2000", DwgSaveVersion::R2000}, {"R2010", DwgSaveVersion::R2010},
+      {"R2018", DwgSaveVersion::R2018}};
   std::vector<std::string> log;
   for (int level = 0; level <= 4; ++level)
     for (const auto& v : versions) {
