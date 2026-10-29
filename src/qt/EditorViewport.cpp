@@ -257,6 +257,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -365,6 +368,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -536,6 +542,29 @@ void EditorViewport::paintGL() {
                          ellipse.cy + majorY + ellipse.majVx * minorScale);
       }
       painter.drawPolyline(curve);
+    }
+    for (std::size_t si = 0; si < layout.paperSplines.size(); ++si) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Spline, static_cast<int>(si));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      std::vector<ray3d::Vec3> pts;
+      spline::Tessellate(layout.paperSplines[si], kSplineSampleTolerance, &pts);
+      QPolygonF curve;
+      for (const auto& v : pts)
+        curve << project(v.x, v.y);
+      if (curve.size() > 1)
+        painter.drawPolyline(curve);
+    }
+    {
+      const double viewH = std::max(1.0, static_cast<double>(layout.sheetHeightIn()));
+      const double halfSize = CadPointMarkerSize(m_State.pdSize, viewH);
+      std::vector<CadPointStroke> strokes;
+      for (std::size_t pi = 0; pi < layout.paperPoints.size(); ++pi) {
+        const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Point, static_cast<int>(pi));
+        painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+        CadPointDisplayStrokes(layout.paperPoints[pi], m_State.pdMode, halfSize, &strokes);
+        for (const CadPointStroke& s : strokes)
+          painter.drawLine(project(s.x0, s.y0), project(s.x1, s.y1));
+      }
     }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
       const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
@@ -756,6 +785,13 @@ void EditorViewport::paintGL() {
               const spline::Vec3 v = spline::EditablePoint(sp, i);
               grips.push_back({v.x, v.y, v.z});
             }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Point: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadPoints.size()) {
+            const CadPoint& p = m_State.cadPoints[static_cast<std::size_t>(selected.index)];
+            grips.push_back({p.x, p.y, p.z});
           }
           break;
         }

@@ -485,6 +485,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/ProjectFiles.cpp
   src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
+  src/commands/CadCommands_Issue1019.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
@@ -1503,6 +1504,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    tests/Issue1019CommandTests.cpp
     # Issue #785 — regression test that every row in the command registry still has code behind
     # it. Needs gosurvey_domain for ProcessCommandLineSubmit / RegisteredCommandPrimariesForTest.
     tests/CommandRegistryHandlerTests.cpp

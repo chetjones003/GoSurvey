@@ -49,8 +49,8 @@ yet.)"*
 
 ### Drawing
 
-`SPLINE` · `POINT` (as a drawing command — use `CREATEPOINTS`) · `XLINE` · `RAY` · `DONUT` ·
-`SOLID` · `REVCLOUD` · `WIPEOUT` · `TABLE` · `MLINE`
+`XLINE` · `RAY` · `DONUT` · `SOLID` · `REVCLOUD` · `WIPEOUT` · `MLINE`. `SPLINE` and `POINT` are
+available (issue #1019). `POINT` is a CAD marker, not a survey point — use `CREATEPOINTS` for those.
 
 ### Modifying
 
@@ -64,7 +64,7 @@ yet.)"*
 
 ### Inquiry
 
-`AREA` · `DIST` · `LIST` · `MASSPROP`. The only area reported is a circle's, in the Properties panel.
+`MASSPROP`. `AREA`, `DIST`, and `LIST` are available (issue #1019 for AREA and LIST).
 
 ### View
 

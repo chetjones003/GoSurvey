@@ -336,6 +336,21 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           emitModelSeg(a.x + oX, a.y + oY, b.x + oX, b.y + oY, a.z, b.z);
         }
       }
+      {
+        const double viewH = std::max(1.0, static_cast<double>(vy1 - vy0));
+        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        std::vector<CadPointStroke> strokes;
+        for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+          const EntityAttributes* attr = pi < st.cadPointAttrs.size() ? &st.cadPointAttrs[pi] : nullptr;
+          const std::string layer = attr && !attr->layer.empty() ? attr->layer : "0";
+          if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+            continue;
+          curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
+          CadPointDisplayStrokes(st.cadPoints[pi], st.pdMode, halfSize, &strokes);
+          for (const CadPointStroke& s : strokes)
+            emitModelSeg(s.x0 + oX, s.y0 + oY, s.x1 + oX, s.y1 + oY, s.z0, s.z1);
+        }
+      }
       // Survey-point crosses (fixed 0.05-inch size on the sheet).
       for (const SurveyPoint& sp : st.surveyPoints) {
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
@@ -699,6 +714,30 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const float wx = e.cx + e.majVx * ct + mnx * stt, wy = e.cy + e.majVy * ct + mny * stt;
           if (k > 0) addSeg(pxp, pyp, wx, wy);
           pxp = wx; pyp = wy;
+        }
+      }
+      for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+        const EntityAttributes* a = sheetAttr(L.paperSplineAttrs, si);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        std::vector<ray3d::Vec3> pts;
+        spline::Tessellate(L.paperSplines[si], kSplineSampleTolerance, &pts);
+        for (size_t k = 1; k < pts.size(); ++k)
+          addSeg(static_cast<float>(pts[k - 1].x), static_cast<float>(pts[k - 1].y),
+                 static_cast<float>(pts[k].x), static_cast<float>(pts[k].y));
+      }
+      {
+        const double viewH = std::max(1.0, static_cast<double>(L.sheetHeightIn()));
+        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        std::vector<CadPointStroke> strokes;
+        for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+          const EntityAttributes* a = sheetAttr(L.paperPointAttrs, pi);
+          if (a && !plottable(a->layer)) continue;
+          curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+          CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, halfSize, &strokes);
+          for (const CadPointStroke& s : strokes)
+            addSeg(static_cast<float>(s.x0), static_cast<float>(s.y0),
+                   static_cast<float>(s.x1), static_cast<float>(s.y1));
         }
       }
       // Polylines.

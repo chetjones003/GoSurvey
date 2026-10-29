@@ -26,6 +26,84 @@ using CadSpline = spline::Spline;
 /// per hover. The renderer samples finer.
 inline constexpr double kSplineSampleTolerance = 0.002;
 
+/// A CAD POINT entity (REQ-456 / issue #1019): a location drawn with PDMODE/PDSIZE. Distinct from
+/// a survey point (identity + description) and from a Position Marker (geolocation label).
+struct CadPoint {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+/// AutoCAD PDSIZE: positive = drawing units; negative = percent of view height; 0 = 5% of view.
+[[nodiscard]] inline double CadPointMarkerSize(double pdSize, double viewHeight) {
+  assert(std::isfinite(pdSize));
+  assert(std::isfinite(viewHeight));
+  if (pdSize > 0.0)
+    return pdSize;
+  const double h = viewHeight > 1e-12 ? viewHeight : 1.0;
+  if (pdSize < 0.0)
+    return h * (-pdSize) / 100.0;
+  return h * 0.05;
+}
+
+/// One stroke of a POINT marker (x0,y0,z0) → (x1,y1,z1).
+struct CadPointStroke {
+  double x0 = 0.0;
+  double y0 = 0.0;
+  double z0 = 0.0;
+  double x1 = 0.0;
+  double y1 = 0.0;
+  double z1 = 0.0;
+};
+
+/// PDMODE: 0 dot, 1 none, 2 plus, 3 X, 4 tick; +32 circle, +64 square (96 = both).
+inline void CadPointDisplayStrokes(const CadPoint& p, int pdMode, double halfSize,
+                                   std::vector<CadPointStroke>* out) {
+  assert(out != nullptr);
+  assert(std::isfinite(halfSize));
+  out->clear();
+  if (!(halfSize > 0.0) || !std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z))
+    return;
+  const int shape = pdMode & 7;
+  const int surround = pdMode & 96;
+  auto stroke = [&](double x0, double y0, double x1, double y1) {
+    out->push_back(CadPointStroke{x0, y0, p.z, x1, y1, p.z});
+  };
+  if (shape == 0) {
+    const double d = halfSize * 0.15;
+    stroke(p.x - d, p.y, p.x + d, p.y);
+    stroke(p.x, p.y - d, p.x, p.y + d);
+  } else if (shape == 2) {
+    stroke(p.x - halfSize, p.y, p.x + halfSize, p.y);
+    stroke(p.x, p.y - halfSize, p.x, p.y + halfSize);
+  } else if (shape == 3) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x + halfSize, p.y - halfSize);
+  } else if (shape == 4) {
+    stroke(p.x, p.y, p.x, p.y + halfSize);
+  }
+  if (surround == 32 || surround == 96) {
+    constexpr int kSeg = 16;
+    constexpr double kTwoPi = 6.28318530717958647692;
+    double px = p.x + halfSize;
+    double py = p.y;
+    for (int i = 1; i <= kSeg; ++i) {
+      const double a = kTwoPi * static_cast<double>(i) / static_cast<double>(kSeg);
+      const double nx = p.x + halfSize * std::cos(a);
+      const double ny = p.y + halfSize * std::sin(a);
+      stroke(px, py, nx, ny);
+      px = nx;
+      py = ny;
+    }
+  }
+  if (surround == 64 || surround == 96) {
+    stroke(p.x - halfSize, p.y - halfSize, p.x + halfSize, p.y - halfSize);
+    stroke(p.x + halfSize, p.y - halfSize, p.x + halfSize, p.y + halfSize);
+    stroke(p.x + halfSize, p.y + halfSize, p.x - halfSize, p.y + halfSize);
+    stroke(p.x - halfSize, p.y + halfSize, p.x - halfSize, p.y - halfSize);
+  }
+}
+
 /// How the model viewport draws (REQ-064 / ADR-026 (e)).
 ///
 /// Depth testing was left OFF by ADR-025 ASSUMPTION-1 precisely until a visual-style requirement

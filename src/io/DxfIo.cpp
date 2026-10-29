@@ -1679,13 +1679,14 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         i = j;
         continue;
       }
-      double arm = (*coordMagMax > 1.0) ? (*coordMagMax * 1e-7) : 0.01;
-      arm = std::clamp(arm, 1e-6, std::max(*coordMagMax * 1e-6, 0.5));
-      // Split each arm at center so (px,py) is a stored endpoint — snap hits the exact point.
-      appendSegXF(px - arm, py, px, py, at);
-      appendSegXF(px, py, px + arm, py, at);
-      appendSegXF(px, py - arm, px, py, at);
-      appendSegXF(px, py, px, py + arm, at);
+      double wx = 0, wy = 0;
+      xf.apply(px, py, &wx, &wy);
+      CadPoint cp;
+      cp.x = wx - st.worldDocumentOriginX;
+      cp.y = wy - st.worldDocumentOriginY;
+      cp.z = pz;
+      st.cadPoints.push_back(cp);
+      st.cadPointAttrs.push_back(at);
       i = j;
       continue;
     }
@@ -2735,7 +2736,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // duplicating every entity in it.
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
                       st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty() &&
-                      st.cadSplines.empty();
+                      st.cadSplines.empty() && st.cadPoints.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -3341,7 +3342,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
                                static_cast<uint64_t>(st.userEllipses.size()) +
-                               static_cast<uint64_t>(st.cadSplines.size());
+                               static_cast<uint64_t>(st.cadSplines.size()) +
+                               static_cast<uint64_t>(st.cadPoints.size());
   // Dimension geometry comes from CadDimStroke.hpp - the same module the viewport (CadUi) and the
   // plot (PdfPlot) already use - rather than being rebuilt here. The block this replaces handled
   // DimAligned and DimLinear only, so an angular dimension exported as a bare label with no arc, no
@@ -3617,6 +3619,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       }
     }
   }
+  for (const CadPoint& p : st.cadPoints) {
+    accExt(q6lx(p.x), q6ly(p.y));
+    accExtZ(p.z);
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -3784,12 +3790,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(70, "0");
   emitPair(9, "$MIRRTEXT");
   emitPair(70, "0");
-  if (!st.surveyPoints.empty()) {
-    // Match PTYPE "X": point display as X-cross (PDMODE 3). PDSIZE 0 = 5% of viewport height.
+  if (!st.cadPoints.empty() || !st.surveyPoints.empty()) {
     emitPair(9, "$PDMODE");
-    emitPair(70, "3");
+    emitPair(70, std::to_string(!st.cadPoints.empty() ? st.pdMode : 3));
     emitPair(9, "$PDSIZE");
-    emitPair(40, "0.0");
+    emitPair(40, std::to_string(!st.cadPoints.empty() ? st.pdSize : 0.0));
   }
   emitPair(9, "$LTSCALE");
   emitPair(40, "1.0");
@@ -4632,6 +4637,27 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitDoublePair(21, worldY(p.y));
       emitDoublePair(31, p.z);
     }
+  }
+
+  for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+    const CadPoint& p = st.cadPoints[pi];
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    EntityAttributes at{};
+    if (pi < st.cadPointAttrs.size()) at = st.cadPointAttrs[pi];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+    emitPair(0, "POINT");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbPoint");
+    emitPair(10, std::to_string(worldX(p.x)));
+    emitPair(20, std::to_string(worldY(p.y)));
+    emitPair(30, std::to_string(p.z));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
   }
 
   // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis

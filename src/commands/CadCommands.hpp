@@ -146,7 +146,9 @@ struct SelectedEntity {
     /// Spline (REQ-443 / issue #803): an editable 3D NURBS curve. Selects, erases, moves, copies,
     /// rotates, scales and mirrors; TRIM / EXTEND / OFFSET / FILLET / CHAMFER / JOIN / EXPLODE /
     /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
-    Spline = 19
+    Spline = 19,
+    /// CAD POINT (REQ-456 / issue #1019). Appended after Spline so existing type values stay stable.
+    Point = 20
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -846,6 +848,11 @@ struct CadExtendedGeometryInput {
   /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
   const std::vector<CadSpline>* splines = nullptr;
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
+  /// REQ-456 CAD POINT entities.
+  const std::vector<CadPoint>* points = nullptr;
+  const std::vector<EntityAttributes>* pointAttrs = nullptr;
+  int pdMode = 0;
+  double pdSize = 0.0;
   const std::vector<double>* polylineVerts = nullptr;
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
@@ -910,6 +917,10 @@ template <class VT>
   if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
     return true;
   if (e.blockRefs != nullptr && !e.blockRefs->empty())
+    return true;
+  if (e.splines != nullptr && !e.splines->empty())
+    return true;
+  if (e.points != nullptr && !e.points->empty())
     return true;
   return false;
 }
@@ -1005,6 +1016,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> ellAttrs;
   std::vector<CadSpline>        splines; ///< REQ-443 model-space SPLINE entities.
   std::vector<EntityAttributes> splineAttrs;
+  std::vector<CadPoint>         points; ///< REQ-456 CAD POINT entities.
+  std::vector<EntityAttributes> pointAttrs;
   std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
   std::vector<double>            polyVerts;
   std::vector<float>            polyVertsBulge; ///< REQ-316 / ADR-047: per-vertex bulge, size()/3.
@@ -1033,8 +1046,8 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
-           filledRegions.empty();
+           (polyOffsets.size() <= 1) && splines.empty() && points.empty() && annotations.empty() && tables.empty() &&
+           blockRefs.empty() && filledRegions.empty();
   }
 };
 
@@ -1346,6 +1359,10 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;     ///< AutoCAD PDMODE for CAD POINT display
+  double pdSize = 0.0;  ///< AutoCAD PDSIZE; 0 = 5% of view
   /// Pipe runs (issue #486 / REQ-345). Without this, BEDIT's swap left the MAIN drawing's pipe
   /// runs rendering inside the block editor's own viewport — cadTables/cadBlockRefs beside it are
   /// swapped for exactly this reason ("hide everything that is not the block being edited",
@@ -1526,6 +1543,10 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
   /// Pipe runs and the networks that group them (issue #486 / REQ-345). Per DRAWING, like every
   /// other entity store here: without them, routing a run in one drawing left it rendering — and
   /// selectable, and snappable — in every other tab, because a tab switch swaps the whole document
@@ -2072,6 +2093,14 @@ struct AppCommandState {
     PadSolid,
     /// REQ-443: create a fit-point or control-vertex NURBS spline.
     Spline,
+    /// REQ-456 / issue #1019.
+    Point,
+    Leader,
+    Pedit,
+    Measure,
+    Divide,
+    Area,
+    List,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2084,6 +2113,13 @@ struct AppCommandState {
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Spline:        return "SPLINE";
+    case Kind::Point:         return "POINT";
+    case Kind::Leader:        return "LEADER";
+    case Kind::Pedit:         return "PEDIT";
+    case Kind::Measure:       return "MEASURE";
+    case Kind::Divide:        return "DIVIDE";
+    case Kind::Area:          return "AREA";
+    case Kind::List:          return "LIST";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -2556,6 +2592,27 @@ struct AppCommandState {
 
   enum class SplineMethod : std::uint8_t { Fit, Control } splineMethod = SplineMethod::Fit;
   std::vector<spline::Vec3> splineDraftPoints;
+
+  /// REQ-456 / issue #1019 command drafts.
+  enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
+  enum class LeaderFormat : std::uint8_t { Straight, Spline, Arrow, None } leaderFormat = LeaderFormat::Straight;
+  enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation } leaderPhase = LeaderPhase::WaitFirst;
+  std::vector<spline::Vec3> leaderDraftPoints;
+  enum class PeditPhase : std::uint8_t { WaitObject, WaitOption, WaitVertex, WaitJoin, WaitVertexMove } peditPhase =
+      PeditPhase::WaitObject;
+  int peditIndex = -1;
+  int peditVertex = 0;
+  bool peditPaper = false;
+  enum class MeasurePhase : std::uint8_t { WaitObject, WaitValue } measurePhase = MeasurePhase::WaitObject;
+  SelectedEntity measureTarget{};
+  bool measurePaper = false;
+  int measurePaperIndex = -1;
+  PaperEntityRef::Type measurePaperType = PaperEntityRef::Type::Line;
+  enum class AreaPhase : std::uint8_t { WaitFirst, WaitNext, WaitObject } areaPhase = AreaPhase::WaitFirst;
+  std::vector<spline::Vec3> areaDraftPoints;
+  double areaRunning = 0.0;
+  bool areaSubtract = false;
+  enum class ListPhase : std::uint8_t { WaitObject } listPhase = ListPhase::WaitObject;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case
@@ -3503,6 +3560,10 @@ struct AppCommandState {
   std::vector<EntityAttributes> cadMultileaderAttrs;
   std::vector<CadSpline> cadSplines;  ///< REQ-443 / issue #803
   std::vector<EntityAttributes> cadSplineAttrs;
+  std::vector<CadPoint> cadPoints;  ///< REQ-456 / issue #1019
+  std::vector<EntityAttributes> cadPointAttrs;
+  int pdMode = 0;
+  double pdSize = 0.0;
 
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef> cadBlockRefs;
@@ -5943,7 +6004,9 @@ enum class EntityKind : std::uint8_t {
   /// REQ-367 / issue #619. Appended after PositionMarker for the same id-sweep reason.
   Multileader,
   /// REQ-443 / issue #803. Appended after Multileader for the same id-sweep reason.
-  Spline
+  Spline,
+  /// REQ-456 / issue #1019. Appended after Spline for the same id-sweep reason.
+  Point
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -7222,6 +7285,20 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSplineCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPointCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLeaderCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartPeditCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMeasureCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDivideCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartListCommand(AppCommandState& st, std::vector<std::string>& log);
+void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+bool HandleIssue1019TextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);
+bool SubmitIssue1019ViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log);
+[[nodiscard]] const char* Issue1019CommandInputHint(const AppCommandState& st);
+void ResetIssue1019Drafts(AppCommandState& st);
+void CommitCadPointAt(AppCommandState& st, double x, double y, double z, std::vector<std::string>& log);
 
 /// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
