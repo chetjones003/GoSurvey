@@ -25893,6 +25893,7 @@ dwg_add_TEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->ins_pt.x = ins_pt->x;
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
+  _obj->width_factor = 1.0;
   _obj->height = height;
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
@@ -28081,6 +28082,7 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->block_scale.x = _obj->block_scale.y = _obj->block_scale.z = 1.0;
   _obj->style_attachment = 0;
   _obj->is_annotative = 0;
+  _obj->scale_factor = 1.0;
   _obj->attach_dir = 0;
   _obj->attach_top = 0;
   _obj->attach_bottom = 0;

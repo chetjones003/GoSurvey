@@ -2595,9 +2595,10 @@ encode_classes (Dwg_Data *restrict dwg, Bit_Chain *restrict dat)
   dwg->header.section[sec_id].size
       = (dat->byte - dwg->header.section[sec_id].address) & 0xFFFFFFFF;
   LOG_TRACE ("       Classes (end): %4zu\n", dat->byte);
-  if (dat->version >= R_2018)
+  if (dat->version >= R_2010)
     {
-      /* AutoCAD R2018 terminates this section with eight reserved zero bytes. */
+      /* R2010+ terminates CLASSES with eight reserved zero bytes. The older
+         0x0DCA trailer makes AutoCAD reject R2010 files with a CRC error. */
       bit_write_RL (dat, 0);
       bit_write_RL (dat, 0);
     }

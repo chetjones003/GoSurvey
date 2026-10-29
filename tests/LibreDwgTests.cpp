@@ -9,6 +9,7 @@
 extern "C" {
 #include <dwg.h>
 #include "../third_party/libredwg/src/bits.h"
+#include "../third_party/libredwg/src/decode.h"
 }
 
 #include <catch2/catch_test_macros.hpp>
@@ -23,7 +24,10 @@ extern "C" {
 #include <cstring>
 extern "C" unsigned int loglevel;
 extern "C" uint32_t dwg_section_page_checksum(uint32_t seed, Bit_Chain* dat, int32_t size, bool skip_checksum);
+#include <iterator>
+#include <memory>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -180,5 +184,70 @@ TEST_CASE("LibreDwg writes R2010/R2013/R2018 minimal LINE files (R2018 export pa
     in.read(magic, 6);
     REQUIRE(std::string(magic, 6) == row.acTag);
     REQUIRE(LibreDwgReadVersionName(pathUtf8.c_str()) == row.readName);
+  }
+}
+
+// REQ-170 / issue #993: LibreDWG's reader skips the CLASSES trailer, so an
+// ordinary round trip cannot catch the R2010 file AutoCAD rejects with status 53.
+TEST_CASE("DWG class sections terminate with the target version trailer",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2004, R_2010, R_2013, R_2018}) {
+    CAPTURE(version);
+    const std::string scratchTag = "class-trailer-" + std::to_string(version);
+    ScratchDir dir(scratchTag.c_str());
+    const auto path = dir.path / "line.dwg";
+    REQUIRE(LibreDwgWriteMinimalAtVersion(version, path.string().c_str()));
+    const auto freeDrawing = [](Dwg_Data* drawing) {
+      dwg_free(drawing);
+      delete drawing;
+    };
+    std::unique_ptr<Dwg_Data, decltype(freeDrawing)> drawing(
+        new Dwg_Data{}, freeDrawing);
+    REQUIRE(dwg_read_file(path.string().c_str(), drawing.get()) < DWG_ERR_CRITICAL);
+    const Dwg_Section_Info* classes = nullptr;
+    for (unsigned i = 0; i < drawing->header.section_infohdr.num_desc; ++i) {
+      const auto& info = drawing->header.section_info[i];
+      if (info.fixedtype == SECTION_CLASSES) classes = &info;
+    }
+    REQUIRE(classes != nullptr);
+    REQUIRE(classes->num_sections == 1);
+    REQUIRE(classes->sections != nullptr);
+    REQUIRE(classes->sections[0] != nullptr);
+    REQUIRE(classes->compressed == 2);
+    REQUIRE(classes->size > 24);
+    REQUIRE(classes->size <= classes->max_decomp_size);
+    std::ifstream in(path, std::ios::binary);
+    std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(in)), {});
+    const auto address = classes->sections[0]->address;
+    REQUIRE(address + 32 <= bytes.size());
+    uint32_t header[8];
+    std::memcpy(header, bytes.data() + address, sizeof(header));
+    for (auto& word : header) word ^= 0x4164536b ^ static_cast<uint32_t>(address);
+    REQUIRE(address + 32 + header[2] <= bytes.size());
+    std::vector<unsigned char> decoded(classes->max_decomp_size);
+    Bit_Chain src{}, dst{};
+    src.chain = bytes.data();
+    src.byte = address + 32;
+    src.size = src.byte + header[2];
+    dst.chain = decoded.data();
+    dst.size = decoded.size();
+    REQUIRE(decompress_R2004_section(&src, &dst) == 0);
+    decoded.resize(static_cast<size_t>(classes->size));
+    const size_t trailerSize = version >= R_2010 ? 8 : 4;
+    // Locate the fixed end sentinel independently of the size/CRC fields.
+    const std::array<unsigned char, 16> endSentinel = {
+        0x72, 0x5e, 0x3b, 0x47, 0x3b, 0x56, 0x07, 0x3a,
+        0x3f, 0x23, 0x0b, 0xa0, 0x18, 0x30, 0x49, 0x75};
+    const auto end = std::search(decoded.begin(), decoded.end(),
+                                 endSentinel.begin(), endSentinel.end());
+    REQUIRE(end != decoded.end());
+    REQUIRE(static_cast<size_t>(decoded.end() - end) == endSentinel.size() + trailerSize);
+    const auto trailer = end + endSentinel.size();
+    if (version >= R_2010) {
+      CHECK(std::all_of(trailer, decoded.end(), [](unsigned char b) { return b == 0; }));
+    } else {
+      CHECK(std::vector<unsigned char>(trailer, decoded.end()) ==
+            std::vector<unsigned char>{0xca, 0x0d, 0, 0});
+    }
   }
 }
