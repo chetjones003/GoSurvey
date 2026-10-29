@@ -906,7 +906,8 @@ template <class VT>
 /// rubber-band preview, and this gate — where the symptom was that a drawing containing ONLY a
 /// feature line rendered nothing at all, while still hovering and selecting, because the whole
 /// committed-geometry block was skipped. One predicate, one place to add the next entity kind, and
-/// a test that fails when someone forgets. REQ-087.
+/// a test that fails when someone forgets. REQ-087. REQ-443 splines and REQ-456 points belong here
+/// for the same reason: a drawing that holds only that kind must still enter the draw block.
 [[nodiscard]] inline bool CadExtendedHasDrawableGeometry(const CadExtendedGeometryInput& e) {
   if (e.arcs != nullptr && !e.arcs->empty())
     return true;
@@ -2596,7 +2597,6 @@ struct AppCommandState {
 
   /// REQ-456 LEADER / POINT / PEDIT / MEASURE / DIVIDE / AREA / LIST drafts.
   enum class LeaderAnnotation : std::uint8_t { Mtext, None } leaderAnnotation = LeaderAnnotation::Mtext;
-  enum class LeaderFormat : std::uint8_t { Straight, Spline, Arrow, None } leaderFormat = LeaderFormat::Straight;
   enum class LeaderPathStyle : std::uint8_t { Straight, Spline } leaderPathStyle = LeaderPathStyle::Straight;
   bool leaderShowArrow = true;
   enum class LeaderPhase : std::uint8_t { WaitFirst, WaitNext, WaitAnnotation, WaitFormat } leaderPhase =
@@ -2627,7 +2627,6 @@ struct AppCommandState {
   double areaRunning = 0.0;
   bool areaSubtract = false;
   bool areaAccumulate = false;  ///< Add/Subtract keeps a running total and stays in the command.
-  enum class ListPhase : std::uint8_t { WaitObject } listPhase = ListPhase::WaitObject;
 
   /// PADSOLID (GitHub #150): pick the boundary, then sit on an options prompt until a pad
   /// elevation is given. The surface is remembered between runs in a drawing, so the common case

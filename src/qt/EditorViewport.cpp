@@ -643,9 +643,17 @@ void EditorViewport::paintGL() {
       }
     }
     for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      const float arrowIn = std::max(m_State.activeMultileaderStyle.arrowSizeInches, 0.01f);
       auto drawPath = [&](const std::vector<float>& pts) {
         for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
           painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+        const CadLeaderArrowHead arrow = CadMultileaderArrow(leader, pts, arrowIn);
+        if (!arrow.valid)
+          return;
+        painter.setBrush(QColor("#252a30"));
+        painter.drawPolygon(QPolygonF{project(arrow.tipX, arrow.tipY), project(arrow.b1x, arrow.b1y),
+                                      project(arrow.b2x, arrow.b2y)});
+        painter.setBrush(Qt::NoBrush);
       };
       painter.setPen(QPen(QColor("#252a30"), 1));
       drawPath(leader.pathXyz);

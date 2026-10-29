@@ -789,9 +789,21 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           for (size_t k = 0; k + 5 < pts.size(); k += 3)
             addSeg(pts[k], pts[k + 1], pts[k + 3], pts[k + 4]);
         };
+        auto arrow = [&](const CadMultileader& ml, const std::vector<float>& pts) {
+          const float sz = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+          const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, sz);
+          if (!a.valid)
+            return;
+          addSeg(a.tipX, a.tipY, a.b1x, a.b1y);
+          addSeg(a.b1x, a.b1y, a.b2x, a.b2y);
+          addSeg(a.b2x, a.b2y, a.tipX, a.tipY);
+        };
         path(L.paperMultileaders[mi].pathXyz);
-        for (const std::vector<float>& branch : L.paperMultileaders[mi].extraLeaderPaths)
+        arrow(L.paperMultileaders[mi], L.paperMultileaders[mi].pathXyz);
+        for (const std::vector<float>& branch : L.paperMultileaders[mi].extraLeaderPaths) {
           path(branch);
+          arrow(L.paperMultileaders[mi], branch);
+        }
       }
 
       // Table outlines and grid lines (issue #768). The cell texts plot with the sheet text below.

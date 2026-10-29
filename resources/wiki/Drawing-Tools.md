@@ -276,8 +276,8 @@ point in the drawing is drawn. Use `CREATEPOINTS` when you need a numbered surve
 
 ## LEADER
 
-`LEADER` (and `MLEADER`) draws a leader with optional Mtext. Tolerance, Copy, and Block annotation
-are not supported.
+`LEADER` (and `MLEADER`) draws a leader with optional Mtext. Format chooses Straight or Spline path
+and Arrow or None at the tip. Tolerance, Copy, and Block annotation are not supported.
 
 ## What is not here
 

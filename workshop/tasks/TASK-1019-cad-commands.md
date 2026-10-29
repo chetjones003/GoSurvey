@@ -43,3 +43,4 @@ MASSPROP; XLINE/RAY/DONUT/MLINE.
 - AC 1–8 covered by Issue1019CommandTests (AC 3 MOVE added)
 - Remaining: TransformPreview has no POINT ghost during MOVE
 - Review follow-up: paper polyline bulge store so PEDIT Fit/Decurve work on sheets; Join, Insert, AREA Add/Subtract, MEASURE pick origin, DIVIDE closed N, LIST paper endpoints, LEADER format/annotation, paste log, const ActivePaperGeometryTarget, renamed DrawInquiry TU
+- Second review: drop dead `leaderFormat` and `ListPhase`; const MEASURE path; LIST polyline/spline/leader geometry; AREA Object requires closed; LEADER Arrow/None drawn; MEASURE open polyline nearer end; PEDIT Fit closing bulge; drawable-geometry gate tests for spline-only and point-only drawings

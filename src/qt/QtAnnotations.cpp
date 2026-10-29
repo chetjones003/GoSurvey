@@ -8,12 +8,36 @@
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
 #include <QPainter>
+#include <QPolygonF>
 #include <QTextDocument>
 #include <QFontMetricsF>
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 
 namespace {
+void DrawQtLeaderPath(QPainter& painter, const CadMultileader& ml, const std::vector<float>& path,
+                      const Camera& camera, float width, float height, float arrowSize) {
+  assert(width > 0.f);
+  assert(height > 0.f);
+  auto project = [&](double x, double y, double z) {
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(x, y, z, width, height, &sx, &sy);
+    return QPointF(sx, sy);
+  };
+  for (size_t i = 0; i + 5 < path.size(); i += 3)
+    painter.drawLine(project(path[i], path[i + 1], path[i + 2]),
+                     project(path[i + 3], path[i + 4], path[i + 5]));
+  const CadLeaderArrowHead arrow = CadMultileaderArrow(ml, path, arrowSize);
+  if (!arrow.valid)
+    return;
+  painter.setBrush(painter.pen().color());
+  painter.drawPolygon(QPolygonF{project(arrow.tipX, arrow.tipY, arrow.tipZ),
+                                project(arrow.b1x, arrow.b1y, arrow.b1z),
+                                project(arrow.b2x, arrow.b2y, arrow.b2z)});
+  painter.setBrush(Qt::NoBrush);
+}
+
 bool DrawStrokeText(QPainter& painter, const CadAnnotation& annotation, float pixels,
                      const std::string& text, bool baseline) {
   if (!cadfont::PreferShxStrokes(annotation.fontFamily, text)) return false;
@@ -222,6 +246,30 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     }
     document.drawContents(&painter);
     painter.restore();
+  }
+  const float leaderArrow = std::max(state.activeMultileaderStyle.arrowSizeInches, 0.01f) *
+                            std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
+  for (std::size_t i = 0; i < state.cadMultileaders.size(); ++i) {
+    const CadMultileader& ml = state.cadMultileaders[i];
+    const EntityAttributes* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
+    if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
+    const CadLayerRow* layer = nullptr;
+    if (attrs) for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+    if (layer && (!layer->on || layer->frozen)) continue;
+    float rgb[3]{1.f, 1.f, 1.f};
+    if (attrs) CadColorResolveRgb(CadColorEffectiveStorage(attrs->color, layer ? layer->color : "White"), 1, 1, 1, rgb);
+    QColor color = QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+    for (const auto& selected : state.selection)
+      if (selected.type == SelectedEntity::Type::Multileader && selected.index == static_cast<int>(i))
+        color = QColor("#62aaff");
+    QPen pen(color, 1.2); pen.setCosmetic(true);
+    painter.setPen(pen); painter.setBrush(Qt::NoBrush);
+    DrawQtLeaderPath(painter, ml, ml.pathXyz, camera, width, height, leaderArrow);
+    for (const auto& branch : ml.extraLeaderPaths)
+      DrawQtLeaderPath(painter, ml, branch, camera, width, height, leaderArrow);
+    if (!ml.label.text.empty())
+      painter.drawText(project(ml.label.insX, ml.label.insY, ml.label.insZ),
+                       QString::fromUtf8(ml.label.text.c_str()));
   }
   const float markerRadius = PositionMarkerRadiusWorld(state);
   for (std::size_t i = 0; i < state.cadPositionMarkers.size(); ++i) {
