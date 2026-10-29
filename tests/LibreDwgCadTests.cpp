@@ -4949,8 +4949,10 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, p.c_str(), log));
-  CHECK(st.cadPositionMarkers.size() == 1);
-  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  REQUIRE(st.cadPoints.size() == 1);
+  CHECK(st.cadPoints[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadPoints[0].y == Catch::Approx(2.0).margin(0.01));
+  CHECK(st.cadPositionMarkers.empty());
   CHECK(st.cadFilledRegions.size() >= 1);
   REQUIRE(st.cadMeshes.size() >= 1);
   CHECK(st.cadMeshes[0]->triangleCount() >= 2);
