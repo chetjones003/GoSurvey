@@ -495,20 +495,20 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial.
 
-### REQ-031 — Persist layouts and viewports in .gs
+### REQ-031 — Persist layouts and viewports in DWG and DXF
 - Purpose: layouts survive save/reload
 - Priority: should
 - Type: functional
 - Statement: Paper layouts, their paper size/orientation, their viewports
   (rectangle, scale, center) and per-viewport frozen layers are **persisted in the
-  native `.gs` file** and restored on load. DXF persistence of layouts/viewports is
-  **deferred** to a later requirement (decision log, 2026-06-15).
+  drawing's DWG file** and restored on open. DXF export and import of layouts and
+  viewports is governed by REQ-113.
 - Acceptance: a drawing with multiple layouts and viewports (with set scales, paper
-  sizes, and per-viewport frozen layers) saved to `.gs` then reloaded restores all
+  sizes, and per-viewport frozen layers) saved to DWG then reopened restores all
   of them identically.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-06-15 — initial.
+- Revisions: 2026-06-15 — initial. 2026-10-28 — persistence restated from the retired `.gs` format to DWG and DXF (issue #1018; D-2026-10-20-a, D-2026-09-03-h); DXF deferral lifted by REQ-113.
 
 ### REQ-032 — Contextual "Layout" ribbon in paper space
 - Purpose: surface paper-space commands only when they apply
@@ -600,14 +600,15 @@ requirements is a planning failure, not a sign of rigor.
   model-space UX. Survey-specific tools (survey points, CSV import) remain
   **model-only**. Snapping in paper space resolves to **paper-space entities only**
   (snapping to viewport-displayed model geometry is deferred). Paper-space entities
-  **persist per layout in the native `.gs` file** and are unaffected by model edits.
+  **persist per layout in the drawing's DWG file** (the DWG and DXF form is set by
+  REQ-113) and are unaffected by model edits.
 - Acceptance: in a paper layout the user can draw lines and place text on the sheet;
   each can be moved/copied/rotated/deleted and snapped to; they do **not** appear in
-  model space or in other layouts; a drawing with paper-space entities saved to `.gs`
-  then reloaded restores them per layout.
+  model space or in other layouts; a drawing with paper-space entities saved to DWG
+  then reopened restores them per layout.
 - Owner-layer: Domain / UI / Commands / Renderer / IO
 - Status: accepted
-- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009).
+- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009). 2026-10-28 — persistence restated from `.gs` to DWG (issue #1018; REQ-113).
 
 ### REQ-038 — Clipboard copy/paste within and across model & paper space
 - Purpose: reuse existing geometry — e.g. copy a DXF title block from model space
@@ -627,8 +628,8 @@ requirements is a planning failure, not a sign of rigor.
   (layer, color, linetype, text style/typeface). Copy/paste works **model→paper,
   paper→model, and within the same space**. **Ctrl+V with an empty clipboard does
   nothing** (no crash). Survey points and survey-specific tools remain model-only.
-  The clipboard is in-memory only (not persisted; DXF persistence of the new paper
-  types stays deferred per the ADR-013 amendment).
+  The clipboard is in-memory only (not persisted). Paper objects pasted onto a sheet
+  persist with that sheet's DWG and DXF output under REQ-113.
 - Acceptance: (1) a model-space selection + Ctrl+C, switch to a paper layout +
   Ctrl+V shows a cursor-tracking preview and a click places the copies in paper
   space; (2) the reverse (paper→model) works the same way; (3) same-space copy/paste
@@ -667,7 +668,7 @@ requirements is a planning failure, not a sign of rigor.
   Survey-specific tools (survey points, CSV import) remain **model-only**; paper edits never
   alter model geometry; coordinates never cross spaces implicitly (REQ-038's 1:1 paste is the
   one sanctioned exception). Paper-space objects and their edits **persist per layout in the
-  native `.gs`** (REQ-031/037 pattern); DXF persistence of paper objects stays deferred.
+  drawing's DWG file** (REQ-031/037 pattern; DXF per REQ-113).
 - Acceptance: in a paper layout — (1) a window box (L→R) selects paper objects fully inside it
   and a crossing box (R→L) selects any it touches, for every paper object type; (2) clicking a
   paper text selects it with no vertical offset, and double-clicking any text (model or paper)
@@ -675,8 +676,8 @@ requirements is a planning failure, not a sign of rigor.
   paper object(s) populates the Properties panel and edits made there apply to the object(s);
   (4) selected paper objects show grips and dragging a grip edits the geometry; (5) CIRCLE,
   ARC, ELLIPSE, POLYLINE, and MTEXT draw onto the sheet, and SCALE/JOIN/TRIM/OFFSET operate on
-  the paper selection; (6) none of these paper edits change model geometry; (7) a `.gs`
-  round-trip restores the edited paper objects per layout.
+  the paper selection; (6) none of these paper edits change model geometry; (7) a DWG
+  save and reopen restores the edited paper objects per layout.
 - Owner-layer: UI / Commands / Domain / IO
 - Status: accepted
 - Revisions: 2026-06-18 — initial (paper-space object parity; ADR-014). Delivered incrementally:
@@ -975,8 +976,8 @@ requirements is a planning failure, not a sign of rigor.
   deferred), the override colors **only the overridden layers**; general true-color viewport
   rendering is out of scope. All per-viewport freeze and color state is **strictly per
   viewport** — model space and other viewports are unaffected — and **persists per viewport in
-  the native `.gs`** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty, no
-  crash). DXF persistence of per-viewport overrides stays deferred.
+  the drawing's DWG file** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty,
+  no crash). DXF carries the same overrides under REQ-113.
 - Acceptance:
   - the standalone "Frozen Layers" panel no longer appears;
   - with a current viewport, the Layer Manager shows the **VP Freeze** and **VP Color** columns;
@@ -987,7 +988,7 @@ requirements is a planning failure, not a sign of rigor.
     the current viewport only; clearing the override reverts to the normal color;
   - **VPFREEZE** → select objects → those entities' layers are frozen in the current viewport
     only; **VPTHAW** → select objects → those layers are thawed; Esc / empty pick changes nothing;
-  - a `.gs` save/load round-trips per-viewport frozen layers **and** color overrides;
+  - a DWG save/reopen round-trips per-viewport frozen layers **and** color overrides;
   - a PDF plot of a viewport shows frozen layers **absent** and VP-Color layers in their
     **override color**, matching the screen;
   - existing global layer freeze/color and model-space rendering are unchanged.
@@ -2253,14 +2254,14 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: `PaperLayout` geometry remains 2D paper inches (ADR-009/013 stores unchanged).
   Each `Viewport` gains a stored camera direction, up vector and projection, persisted
-  additively in `.gs`. Screen rendering and the PDF plot each render a viewport's model
+  in the drawing's DWG file. Screen rendering and the PDF plot each render a viewport's model
   content from that viewport's own camera.
 - Acceptance:
   - a layout with two viewports — one plan, one isometric — renders both correctly on screen
     and plots both correctly to PDF;
-  - a legacy `.gs` loads with every viewport in plan view and renders identically to
-    pre-change.
-- Owner-layer: Domain (data), Renderer (draw), IO (`.gs` + plot)
+  - a drawing saved before this requirement loads with every viewport in plan view and renders
+    identically to pre-change.
+- Owner-layer: Domain (data), Renderer (draw), IO (DWG + plot)
 - Status: accepted — **implemented 2026-08-31** (GitHub issue #175, split from #155). `Viewport`
   carries `cam{Azimuth,Elevation,Roll}Deg` + `camPerspective`/`camFovDeg`, defaulting to the
   straight-down orthographic plan view; `render/ViewportProjection.hpp`
@@ -11118,7 +11119,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Depends on: REQ-064 (GoSurvey visual styles), REQ-170 / issue #610 (paper VIEWPORT export),
   issue #600 (R2007+ export path).
 - Statement:
-  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in `.gs`
+  1. **Storage.** Each `Viewport` carries a `VisualStyle` (default 2D Wireframe), persisted in the drawing's DWG file
      additively on the layout viewport object.
   2. **Import.** Opening a DWG reads each paper-space VIEWPORT's `visualstyle` handle, resolves the
      VISUALSTYLE object when LibreDWG decodes it, and maps AutoCAD's style to the nearest
@@ -11140,9 +11141,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `LibreDwgCadTests` tag `[issue624][req371]`: R2018 export of two paper viewports with Hidden and
     Shaded re-import with the same `VisualStyle` values; tag `[model]` round-trips model
     `viewportVisualStyle` via VPORT `*Active`;
-  - `GsIoViewportCameraTests` tag `[req371]`: `.gs` save/load preserves `visualStyle` on layout viewports;
+  - `GsIoViewportCameraTests` tag `[req371]`: DWG save/reopen preserves `visualStyle` on layout viewports;
   - REQ-201 / `#614` do not claim visual styles are an untracked #601 gap for paper viewports at R2007+.
-- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (`.gs`)
+- Owner-layer: IO (`LibreDwgVisualStyle.cpp`, `LibreDwgCad.cpp`), Domain (`PaperSpace.hpp`), IO (DWG)
 - Status: accepted
 - Revisions: 2026-10-05 — initial (issue #624 increment 1; D-2026-10-05-b). 2026-10-05 — model VPORT
   `*Active` import/export (increment 2).
@@ -14929,9 +14930,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-034 | UI/Commands/Renderer | ~~manual (polygonal viewport clips model to the polygon) — Inc 3d~~ | withdrawn (2026-07-13) |
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
-| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
-| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; .gs round-trip of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
-| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; .gs round-trip) | accepted |
+| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; DWG save/reopen) | accepted |
+| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; DWG save/reopen of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
+| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; DWG save/reopen) | accepted |
 | REQ-040 | UI | `CommandLineTests` (fade-alpha vs elapsed time; recent-tail line selection) + manual (floating bar draggable + position/visibility persist; last ~3 lines fade after idle; F2 toggles console; ESC always cancels; select-to-copy; ×/Ctrl+9 hide/restore; autocomplete + dynamic input + [A]/[2P] preserved; dock still available) | accepted |
 | REQ-041 | UI/IO | `SurveyCsvValidateTests` (file-state classification; duplicate-ID detection within file + vs session) + manual (distinct not-found/empty/locked messages; Import disabled on file-level; row-only prompts to confirm skip; overall status string) | accepted |
 | REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
