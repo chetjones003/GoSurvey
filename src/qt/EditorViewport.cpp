@@ -257,6 +257,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -365,6 +368,9 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
+    ext.pdMode = m_State.pdMode;
+    ext.pdSize = m_State.pdSize;
     ext.polylineVerts = &m_State.userPolylineVerts;
     ext.polylineOffsets = &m_State.userPolylineOffsets;
     ext.polylineClosed = &m_State.userPolylineClosed;
@@ -537,21 +543,59 @@ void EditorViewport::paintGL() {
       }
       painter.drawPolyline(curve);
     }
+    for (std::size_t si = 0; si < layout.paperSplines.size(); ++si) {
+      const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Spline, static_cast<int>(si));
+      painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+      std::vector<ray3d::Vec3> pts;
+      spline::Tessellate(layout.paperSplines[si], kSplineSampleTolerance, &pts);
+      QPolygonF curve;
+      for (const auto& v : pts)
+        curve << project(v.x, v.y);
+      if (curve.size() > 1)
+        painter.drawPolyline(curve);
+    }
+    {
+      const double viewH = std::max(1.0, static_cast<double>(layout.sheetHeightIn()));
+      const double halfSize = CadPointMarkerSize(m_State.pdSize, viewH);
+      std::vector<CadPointStroke> strokes;
+      for (std::size_t pi = 0; pi < layout.paperPoints.size(); ++pi) {
+        const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Point, static_cast<int>(pi));
+        painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
+        CadPointDisplayStrokes(layout.paperPoints[pi], m_State.pdMode, halfSize, &strokes);
+        for (const CadPointStroke& s : strokes)
+          painter.drawLine(project(s.x0, s.y0), project(s.x1, s.y1));
+      }
+    }
     for (std::size_t p = 0; p + 1 < layout.paperPolyOffsets.size(); ++p) {
       const bool highlighted = isTrimHighlighted(PaperEntityRef::Type::Polyline, static_cast<int>(p));
       painter.setPen(QPen(highlighted ? QColor("#00a8ff") : QColor("#252a30"), highlighted ? 2.5 : 1));
       const int begin = layout.paperPolyOffsets[p], end = layout.paperPolyOffsets[p + 1];
+      const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
       QPolygonF polyline;
-      for (int v = begin; v < end; ++v) {
-        const std::size_t offset = static_cast<std::size_t>(v) * 3;
-        if (offset + 1 < layout.paperPolyVerts.size())
-          polyline << project(layout.paperPolyVerts[offset], layout.paperPolyVerts[offset + 1]);
+      if (begin < end) {
+        const std::size_t first = static_cast<std::size_t>(begin) * 3;
+        if (first + 1 < layout.paperPolyVerts.size())
+          polyline << project(layout.paperPolyVerts[first], layout.paperPolyVerts[first + 1]);
       }
-      if (polyline.size() > 1) {
-        const bool closed = p < layout.paperPolyClosed.size() && layout.paperPolyClosed[p] != 0;
-        if (closed) polyline << polyline.front();
+      const int nVert = end - begin;
+      const int nSeg = closed ? nVert : nVert - 1;
+      for (int s = 0; s < nSeg; ++s) {
+        const int ia = begin + s;
+        const int ib = begin + ((s + 1) % nVert);
+        const std::size_t a = static_cast<std::size_t>(ia) * 3;
+        const std::size_t b = static_cast<std::size_t>(ib) * 3;
+        if (b + 1 >= layout.paperPolyVerts.size())
+          break;
+        const float bulge = static_cast<std::size_t>(ia) < layout.paperPolyVertsBulge.size()
+                                ? layout.paperPolyVertsBulge[static_cast<std::size_t>(ia)]
+                                : 0.f;
+        ForEachBulgeChord(layout.paperPolyVerts[a], layout.paperPolyVerts[a + 1], layout.paperPolyVerts[b],
+                          layout.paperPolyVerts[b + 1], bulge, 16, [&](double, double, double bx, double by) {
+                            polyline << project(bx, by);
+                          });
+      }
+      if (polyline.size() > 1)
         painter.drawPolyline(polyline);
-      }
     }
     const float pxPerInch = static_cast<float>(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) /
         std::max<double>(layout.sheetWidthIn(), 1.e-6));
@@ -592,9 +636,17 @@ void EditorViewport::paintGL() {
       }
     }
     for (const auto& leader : layout.paperMultileaders) {  // issue #768: leader paths + label
+      const float arrowIn = std::max(m_State.activeMultileaderStyle.arrowSizeInches, 0.01f);
       auto drawPath = [&](const std::vector<float>& pts) {
         for (std::size_t i = 0; i + 5 < pts.size(); i += 3)
           painter.drawLine(project(pts[i], pts[i + 1]), project(pts[i + 3], pts[i + 4]));
+        const CadLeaderArrowHead arrow = CadMultileaderArrow(leader, pts, arrowIn);
+        if (!arrow.valid)
+          return;
+        painter.setBrush(QColor("#252a30"));
+        painter.drawPolygon(QPolygonF{project(arrow.tipX, arrow.tipY), project(arrow.b1x, arrow.b1y),
+                                      project(arrow.b2x, arrow.b2y)});
+        painter.setBrush(Qt::NoBrush);
       };
       painter.setPen(QPen(QColor("#252a30"), 1));
       drawPath(leader.pathXyz);
@@ -756,6 +808,13 @@ void EditorViewport::paintGL() {
               const spline::Vec3 v = spline::EditablePoint(sp, i);
               grips.push_back({v.x, v.y, v.z});
             }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Point: {
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadPoints.size()) {
+            const CadPoint& p = m_State.cadPoints[static_cast<std::size_t>(selected.index)];
+            grips.push_back({p.x, p.y, p.z});
           }
           break;
         }
@@ -968,6 +1027,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     return;
   } else if (event->button() == Qt::LeftButton && (WorldPoint(m_Last, m_Cursor) ||
              (m_State.active == AppCommandState::Kind::None && ViewPoint(m_Last, m_Cursor)))) {
+    const ray3d::Vec3 rawCursor = m_Cursor;
     const Camera camera = CadViewCamera(m_State);
     auto ray = camera.ScreenRay(static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()),
         static_cast<float>(width()), static_cast<float>(height()));
@@ -1012,6 +1072,16 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       return;
     }
     const auto route = ViewportClickRouteFor(m_State);
+    if (route == ViewportClickRoute::SelectionBox && m_State.active == AppCommandState::Kind::Zoom &&
+        !m_State.selBoxWaitingSecond) {
+      m_State.uiCursorWorldZ = static_cast<float>(rawCursor.z);
+      BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
+          static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      if (changed) changed();
+      update();
+      event->accept();
+      return;
+    }
     bool overlayHandled = false;
     if (route == ViewportClickRoute::SubObjectFacePick &&
         m_State.active == AppCommandState::Kind::SectionPlane) {
@@ -1152,7 +1222,9 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       tolerance.edge = aperture;
       SubmitSubObjectPick(m_State, ray, tolerance, event->modifiers() & Qt::ShiftModifier, m_Log);
     } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
-      SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, false,
+      const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
+      const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
+      SubmitViewportPick(m_State, pickX, pickY, m_Log, false,
           m_Last.x() >= m_State.selBoxAnchorScreenX, CadViewIsPlan(m_State) ? nullptr : &ray);
       m_LeftDragSelection = false;
       m_HasSelectionBoxSnapshot = false;

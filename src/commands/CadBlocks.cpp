@@ -275,6 +275,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadMultileaderAttrs.clear();
   st.cadSplines.clear();  // REQ-443: model-space objects, never block content
   st.cadSplineAttrs.clear();
+  st.cadPoints.clear();  // REQ-456: model-space objects, never block content
+  st.cadPointAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this
@@ -729,15 +731,15 @@ bool PlaceInsertImpl(AppCommandState& st, std::string_view name, CadBlockXform x
     // A catalogue part off any run: the Pipe fitting row (REQ-361, D-2026-09-29-f).
     attr.layer = EnsureObjectLayer(st, ObjectLayerKind::PipeFitting, def.name);
   }
-  const bool paper = ActivePaperGeometryTarget(st) != nullptr;
+  PaperLayout* const paperTarget = ActivePaperGeometryTarget(st);
+  const bool paper = paperTarget != nullptr;
   if (paper && explode) {
     log.push_back("INSERT — explode is model space only; placing as a reference.");
     explode = false;
   }
   if (paper) {
-    PaperLayout* L = ActivePaperGeometryTarget(st);
-    L->paperBlockRefs.push_back(r);
-    L->paperBlockRefAttrs.push_back(attr);
+    paperTarget->paperBlockRefs.push_back(r);
+    paperTarget->paperBlockRefAttrs.push_back(attr);
   } else {
     st.cadBlockRefs.push_back(r);
     st.cadBlockRefAttrs.push_back(attr);

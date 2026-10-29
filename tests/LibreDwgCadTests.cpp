@@ -4413,6 +4413,42 @@ TEST_CASE("DWG round-trips entity and layer lineweight (REQ-170, issue #609)",
   REQUIRE(heavy != nullptr);
   CHECK(heavy->lineweightMm == Catch::Approx(0.35f).margin(0.02f));
 }
+
+TEST_CASE("DWG import preserves a full-sheet 36 by 48 inch paper viewport (REQ-113, issue #1012)",
+          "[dwg][libredwg][req113][issue1012]") {
+  ScratchDir dir("dwg-large-paper-viewport");
+  const auto path = (dir.path / "large-paper-viewport.dwg").string();
+  AppCommandState state;
+  PaperLayout layout;
+  layout.name = "Large Sheet";
+  layout.portraitWidthIn = 36.f;
+  layout.portraitHeightIn = 48.f;
+  layout.landscape = false;
+  Viewport viewport;
+  viewport.paperWIn = 36.f;
+  viewport.paperHIn = 48.f;
+  viewport.paperXIn = 0.f;
+  viewport.paperYIn = 0.f;
+  viewport.scaleModelPerPaperIn = 240.f;
+  layout.viewports.push_back(viewport);
+  state.paperLayouts.push_back(layout);
+
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, path.c_str(), log));
+  StripGosurveyDwgTrailer(path);
+
+  AppCommandState imported;
+  REQUIRE(ImportDwgFile(imported, path.c_str(), log));
+  REQUIRE(imported.paperLayouts.size() == 1);
+  CHECK(imported.paperLayouts[0].name == "Large Sheet");
+  REQUIRE(imported.paperLayouts[0].viewports.size() == 1);
+  const Viewport& result = imported.paperLayouts[0].viewports[0];
+  CHECK(result.paperXIn == Catch::Approx(0.f).margin(0.01f));
+  CHECK(result.paperYIn == Catch::Approx(0.f).margin(0.01f));
+  CHECK(result.paperWIn == Catch::Approx(36.f).margin(0.01f));
+  CHECK(result.paperHIn == Catch::Approx(48.f).margin(0.01f));
+}
+
 // REQ-037 / REQ-170, issue #610: paper layouts, sheet lines, and viewport scales survive DWG save/open.
 TEST_CASE("DWG round-trips paper layouts and viewport scales (REQ-170, issue #610)",
           "[dwg][libredwg][req170][issue610]") {
@@ -4913,8 +4949,10 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, p.c_str(), log));
-  CHECK(st.cadPositionMarkers.size() == 1);
-  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  REQUIRE(st.cadPoints.size() == 1);
+  CHECK(st.cadPoints[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadPoints[0].y == Catch::Approx(2.0).margin(0.01));
+  CHECK(st.cadPositionMarkers.empty());
   CHECK(st.cadFilledRegions.size() >= 1);
   REQUIRE(st.cadMeshes.size() >= 1);
   CHECK(st.cadMeshes[0]->triangleCount() >= 2);

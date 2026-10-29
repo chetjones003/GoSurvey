@@ -1,8 +1,8 @@
 // REQ-075 / issue #264 — a document written BEFORE REQ-075 must not lose its breaklines on load.
 //
-// The legacy fixture was once opened as a standalone `.gs` drawing. Issue #264 retired that file
-// format; it remains here only as raw JSON input for schema-migration coverage, passed directly to
-// LoadGoSurveyFromJsonUtf8 / MigrateGsDocument. This test does not restore `.gs` file support.
+// The legacy fixture is raw GoSurvey JSON from before issue #264 retired the standalone drawing-file
+// format. It remains here only as input for schema-migration coverage, passed directly to
+// LoadGoSurveyFromJsonUtf8 / MigrateGsDocument. This test does not restore a standalone file format.
 //
 // REQ-075's Add Breaklines dialog collects a description, so a breakline became an object
 // (`breaklines: [{entityId, description}]`) where REQ-069 had written a bare id array

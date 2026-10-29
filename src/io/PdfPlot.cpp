@@ -336,6 +336,21 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           emitModelSeg(a.x + oX, a.y + oY, b.x + oX, b.y + oY, a.z, b.z);
         }
       }
+      {
+        const double viewH = std::max(1.0, static_cast<double>(vy1 - vy0));
+        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        std::vector<CadPointStroke> strokes;
+        for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
+          const EntityAttributes* attr = pi < st.cadPointAttrs.size() ? &st.cadPointAttrs[pi] : nullptr;
+          const std::string layer = attr && !attr->layer.empty() ? attr->layer : "0";
+          if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+            continue;
+          curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
+          CadPointDisplayStrokes(st.cadPoints[pi], st.pdMode, halfSize, &strokes);
+          for (const CadPointStroke& s : strokes)
+            emitModelSeg(s.x0 + oX, s.y0 + oY, s.x1 + oX, s.y1 + oY, s.z0, s.z1);
+        }
+      }
       // Survey-point crosses (fixed 0.05-inch size on the sheet).
       for (const SurveyPoint& sp : st.surveyPoints) {
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
@@ -701,6 +716,30 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           pxp = wx; pyp = wy;
         }
       }
+      for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+        const EntityAttributes* a = sheetAttr(L.paperSplineAttrs, si);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        std::vector<ray3d::Vec3> pts;
+        spline::Tessellate(L.paperSplines[si], kSplineSampleTolerance, &pts);
+        for (size_t k = 1; k < pts.size(); ++k)
+          addSeg(static_cast<float>(pts[k - 1].x), static_cast<float>(pts[k - 1].y),
+                 static_cast<float>(pts[k].x), static_cast<float>(pts[k].y));
+      }
+      {
+        const double viewH = std::max(1.0, static_cast<double>(L.sheetHeightIn()));
+        const double halfSize = CadPointMarkerSize(st.pdSize, viewH);
+        std::vector<CadPointStroke> strokes;
+        for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+          const EntityAttributes* a = sheetAttr(L.paperPointAttrs, pi);
+          if (a && !plottable(a->layer)) continue;
+          curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+          CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, halfSize, &strokes);
+          for (const CadPointStroke& s : strokes)
+            addSeg(static_cast<float>(s.x0), static_cast<float>(s.y0),
+                   static_cast<float>(s.x1), static_cast<float>(s.y1));
+        }
+      }
       // Polylines.
       const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
       for (int pi = 0; pi < nPoly; ++pi) {
@@ -709,14 +748,23 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
         const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
         const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
-        for (int vi = v0; vi + 1 < v1; ++vi)
-          addSeg(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)],
-                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3)],
-                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3 + 1)]);
-        if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] &&
-            v1 - v0 >= 2)
-          addSeg(L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3)], L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)],
-                 L.paperPolyVerts[static_cast<size_t>(v0 * 3)], L.paperPolyVerts[static_cast<size_t>(v0 * 3 + 1)]);
+        const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() &&
+                            L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+        const int nVert = v1 - v0;
+        const int nSeg = closed ? nVert : nVert - 1;
+        for (int s = 0; s < nSeg; ++s) {
+          const int ia = v0 + s;
+          const int ib = v0 + ((s + 1) % nVert);
+          const size_t a = static_cast<size_t>(ia) * 3;
+          const size_t b = static_cast<size_t>(ib) * 3;
+          const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)]
+                                                                                    : 0.f;
+          ForEachBulgeChord(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1],
+                            bulge, 16, [&](double ax, double ay, double bx, double by) {
+                              addSeg(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(bx),
+                                     static_cast<float>(by));
+                            });
+        }
       }
 
       // Multileader leader paths (issue #768): arrow tip to landing, plus extra branches. The label plots
@@ -729,9 +777,21 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           for (size_t k = 0; k + 5 < pts.size(); k += 3)
             addSeg(pts[k], pts[k + 1], pts[k + 3], pts[k + 4]);
         };
+        auto arrow = [&](const CadMultileader& ml, const std::vector<float>& pts) {
+          const float sz = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+          const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, sz);
+          if (!a.valid)
+            return;
+          addSeg(a.tipX, a.tipY, a.b1x, a.b1y);
+          addSeg(a.b1x, a.b1y, a.b2x, a.b2y);
+          addSeg(a.b2x, a.b2y, a.tipX, a.tipY);
+        };
         path(L.paperMultileaders[mi].pathXyz);
-        for (const std::vector<float>& branch : L.paperMultileaders[mi].extraLeaderPaths)
+        arrow(L.paperMultileaders[mi], L.paperMultileaders[mi].pathXyz);
+        for (const std::vector<float>& branch : L.paperMultileaders[mi].extraLeaderPaths) {
           path(branch);
+          arrow(L.paperMultileaders[mi], branch);
+        }
       }
 
       // Table outlines and grid lines (issue #768). The cell texts plot with the sheet text below.
