@@ -6,6 +6,14 @@ Instructions for AI coding agents working in this repository.
 VERIFICATION -> WORKSHOP, the git workflow, the Windows build tooling, and the SPEC GAP rules) and
 applies to every agent, not only Claude.
 
+## SPEC GAPs and unclear REQs
+
+Do not ask the user to resolve a gap until you have run the **evidence pass** in
+[CLAUDE.md §5](CLAUDE.md#5-spec-gap): repository sources, Autodesk help on the web, the installed
+Civil 3D app, and `accoreconsole.exe` on this machine when behavior must be verified in product.
+Record what you checked; escalate with evidence-backed options only when the gap remains or needs
+user authority.
+
 ## Before creating a pull request
 
 Complete the [pre-PR product documentation review in `CLAUDE.md`](CLAUDE.md#pre-pr-product-documentation-review-req-453): inspect `README.md`, `PRIVACY.md`, `resources/wiki/`, and the public manual wiki linked from `gosurveycad.com`. Update affected sources before opening the PR, and record each review and its outcome in the task log or PR description. An affected external wiki update must be completed before opening the PR.

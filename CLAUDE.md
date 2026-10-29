@@ -168,7 +168,9 @@ Every task must have:
 * the relevant **Acceptance Criteria**
 * any applicable constraints (`CON-NN`)
 
-If the required specification does not exist or is unclear, stop and raise a **SPEC GAP**.
+If the required specification does not exist or is unclear, treat it as a **SPEC GAP** and follow
+[§5](#5-spec-gap). Resolve it with evidence first; ask the user only when evidence cannot safely
+settle the gap.
 
 Specification changes require a deliberate, recorded decision.
 
@@ -207,11 +209,18 @@ Check the plan against the SPEC, architecture, scope, risks, and missing require
 
 ### 4. Resolve uncertainty
 
-If requirements are ambiguous, contradictory, incomplete, architecturally significant, irreversible, or outward-facing:
+When a requirement, acceptance criterion, or REQ is missing, ambiguous, or contradictory:
 
-**Stop and ask the user. Never guess.**
+1. **Try evidence first** using the [SPEC GAP evidence pass](#5-spec-gap) (repository sources, then
+   Autodesk product behavior). Record what you checked and what it showed.
+2. If evidence settles the behavior and scope, propose or apply the matching **recorded decision**
+   and SPEC update per §5. Do not implement on guesswork.
+3. **Stop and ask the user** only when the gap remains after that pass, or when the choice is
+   architecturally significant, irreversible, or outward-facing in a way evidence cannot authorize
+   alone.
 
-Ask one clear question at a time, provide options, and recommend one.
+Ask one clear question at a time, provide options grounded in the evidence you gathered, and
+recommend one. **Never guess.**
 
 ### 5. Implement
 
@@ -325,18 +334,39 @@ Examples:
 * Undefined architectural boundary
 * Required architectural decision
 
-When a SPEC GAP occurs:
+### Evidence pass (required before escalating)
+
+Do not open a SPEC GAP with the user until you have tried to close it from evidence. Work in this
+order; cite sources in the task log:
+
+1. **Repository:** applicable `REQ-NNN`, acceptance criteria, `spec/project.md` decisions, GitHub
+   issues and comments, `resources/wiki/`, and existing product behavior in code and tests.
+2. **Autodesk help (web):** official AutoCAD and Civil 3D documentation for the command, dialog,
+   workflow, or file behavior in question.
+3. **Civil 3D (this machine):** reproduce the task in the installed app when the gap is about UI,
+   interaction, or visible behavior; capture notes or screenshots under `build/artifacts/`.
+4. **AutoCAD console (`accoreconsole.exe`, this machine):** run scripted checks when the gap is about
+   geometry, units, DWG/DXF content, or other headless oracle behavior the repo already uses in
+   tests (see `resources/wiki/Import-and-Export.md`).
+
+If evidence agrees and only needs authority to enter the SPEC, draft the decision, update the SPEC,
+and continue. If evidence contradicts the SPEC, stop implementing and reconcile through a recorded
+decision—do not silently pick a side.
+
+When evidence does not settle the gap, or the remaining choice needs user authority (see step 3 in
+[§3.4](#4-resolve-uncertainty)), escalate:
 
 1. Stop.
-2. Explain the problem to the user.
+2. Explain the problem to the user in plain English ([§6](#6-explaining-req--spec--ac-problems)).
 3. Explain why it matters.
-4. Present the available choices.
+4. Present the available choices, including what the evidence pass showed for each.
 5. Recommend the best choice.
 6. Record the decision.
 7. Update the appropriate SPEC.
 8. Resume only after the SPEC is resolved.
 
-**Never solve a SPEC GAP by guessing.**
+**Never solve a SPEC GAP by guessing.** Evidence-backed resolution is required; guessing is not a
+substitute for the pass above.
 
 ---
 
@@ -350,9 +380,11 @@ Always explain:
 
 1. **What the SPEC currently says**
 2. **What is missing, unclear, or contradictory**
-3. **Why Claude cannot safely decide on its own**
-4. **What choices the user has**
-5. **Claude's recommendation**
+3. **What you already checked** (repository, Autodesk help, Civil 3D, or `accoreconsole`) and what
+   that evidence showed
+4. **Why the gap still needs a human decision** (if it does)
+5. **What choices the user has**
+6. **Claude's recommendation**
 
 Use simple real-world analogies when they make the problem easier to understand.
 
@@ -391,7 +423,7 @@ Document assumptions and technical debt. If an assumption affects the SPEC or ar
 > **Build the simplest correct thing that the specification actually requires.**
 
 **If the SPEC is clear, implement it.
-If the SPEC is unclear, ask.
+If the SPEC is unclear, resolve it from evidence per §5; ask only when that pass cannot settle it.
 If the implementation conflicts with the SPEC, fix the implementation.
 If the SPEC must change, get a recorded decision first.**
 
