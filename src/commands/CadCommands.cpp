@@ -5406,7 +5406,7 @@ void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::
     log.push_back("TOOLSPACE — closed.");
     return;
   }
-  log.push_back("TOOLSPACE — usage: TOOLSPACE [PROSPECTOR|SETTINGS|LIST|CLOSE]. Unknown \"" +
+  log.push_back("TOOLSPACE — usage: TOOLSPACE [PROJECT|PROSPECTOR|SETTINGS|LIST|CLOSE]. Unknown \"" +
                 StringUtil::trimCopy(args) + "\".");
 }
 

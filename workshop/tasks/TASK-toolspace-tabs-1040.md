@@ -31,7 +31,7 @@
 - Out of scope:
   - Win32 Toolspace (src/ui/CadUi_Toolspace.cpp) — not changed.
   - Prospector root node named after the drawing and Point Groups / Feature Lines in the Qt tree (REQ-142 lists them; the Qt tree does not show them today). Pre-existing gap, recorded in D-2026-10-28-a.
-  - `TOOLSPACE LIST` on the Project tab prints the Prospector lines (command layer; pre-existing). Recorded as debt below.
+  - `TOOLSPACE LIST` on the Project tab printed Prospector lines; fixed in review commit 999385c9 (the Project list is now in ToolspaceCatalog).
   - Editors for text styles, layers and dimension style (display only).
 
 ## 3. Architectural boundary check
@@ -54,10 +54,10 @@
 - Screenshots: pending owner approval (CLAUDE.md §3 step 6).
 
 ## 7. Assumptions and technical debt
-- Assumption: open drawings belong with the Project tab (REQ-379 "project drawings").
+- Decided by the owner (2026-10-28, after the independent review): the Project tab lists only drawings that belong to a project. Point Groups were added to the Prospector tree.
 - Assumption: the dock is hidden when no drawing is open (existing behaviour), so the "No drawing is open" placeholder is only visible if the dock is shown by other means.
-- Debt: `TOOLSPACE LIST` after `TOOLSPACE PROJECT` prints Prospector lines (src/commands/CadCommands.cpp dumpTree). Fix when a Project list is added to ToolspaceCatalog.
-- Debt: Qt Prospector omits the root drawing node, Point Groups and Feature Lines required by REQ-142.
+- Resolved: `TOOLSPACE LIST` after `TOOLSPACE PROJECT` printed Prospector lines; now prints the Project list (src/commands/CadCommands.cpp dumpTree, src/commands/ToolspaceCatalog.hpp).
+- Debt: Qt Prospector omits the root drawing node and Feature Lines required by REQ-142. Point Groups are listed but have no right-click menu yet (REQ-142 asks for Properties on a named group).
 
 ## 8. Completion report
 - Status: submitted (PASS against the amended REQ-142 acceptance list, subject to the PR review).

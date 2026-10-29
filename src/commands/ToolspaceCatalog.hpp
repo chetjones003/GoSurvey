@@ -93,7 +93,7 @@ inline void AppendToolspaceSettingsLines(const AppCommandState& st, std::vector<
     out->push_back(ss.name);
 }
 
-// The Project tab (REQ-142): open projects with their tracked items, then the open drawings.
+// The Project tab (REQ-142): open projects with their tracked items, then the open drawings that belong to a project.
 inline void AppendToolspaceProjectLines(const AppCommandState& st, std::vector<std::string>* out) {
   if (out == nullptr)
     return;
@@ -108,8 +108,10 @@ inline void AppendToolspaceProjectLines(const AppCommandState& st, std::vector<s
     }
   }
   out->push_back("Drawings");
-  for (size_t i = 1; i < st.drawingTabs.size(); ++i)
-    out->push_back(st.drawingTabs[i].name);
+  for (size_t i = 1; i < st.drawingTabs.size(); ++i) {
+    if (st.drawingTabs[i].projectUid != 0)  // project drawings only (REQ-142)
+      out->push_back(st.drawingTabs[i].name);
+  }
 }
 
 [[nodiscard]] inline bool ToolspaceLineIsForbiddenCivil3d(const std::string& line) {

@@ -8959,6 +8959,52 @@ private Q_SLOTS:
     QVERIFY(st.toolspaceTab == AppCommandState::ToolspaceTab::Project);
     window.Refresh();
     QCOMPARE(tabs->currentIndex(), 0);
+    // Settings holds drawing styles only, and Surface Styles lives on Settings rather than Prospector.
+    auto* settingsTree = window.findChild<QTreeWidget*>("toolspaceSettingsTree");
+    QVERIFY(settingsTree->findItems("Open application settings", Qt::MatchContains | Qt::MatchRecursive).isEmpty());
+    QCOMPARE(settingsTree->findItems("Surface Styles", Qt::MatchExactly | Qt::MatchRecursive).size(), 1);
+    QVERIFY(window.findChild<QTreeWidget*>("toolspaceProspectorTree")->findItems("Surface Styles", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());
+  }
+
+  // GitHub #1040: every row in the Toolspace has an icon, not only the folders.
+  void issue1040EveryToolspaceRowHasAnIcon() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    gsproj::TrackedItem pdf; pdf.path = "PDFs/plan.pdf";
+    gsproj::TrackedItem cloud; cloud.path = "PointClouds/site.e57";
+    gsproj::TrackedItem other; other.path = "Notes/readme.txt";
+    session.project.items = {pdf, cloud, other};
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    window.Refresh();
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+      auto* tree = window.findChild<QTreeWidget*>(name);
+      QVERIFY(tree);
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) QVERIFY2(!(*it)->icon(0).isNull(), qPrintable((*it)->text(0)));
+    }
+  }
+
+  // GitHub #1040: double-clicking a drawing on the Project tab switches to it, like the Prospector tree did.
+  void issue1040ProjectTreeDoubleClickSwitchesDrawing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    const int first = window.State().activeDrawingIdx;
+    window.State().drawingTabs[static_cast<size_t>(first)].projectUid = 44;  // only project drawings are listed
+    window.CreateDrawingFromTemplate();
+    QVERIFY(window.State().activeDrawingIdx != first);
+    window.Refresh();
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    QVERIFY(projectTree);
+    QTreeWidgetItem* drawing = nullptr;
+    for (QTreeWidgetItemIterator it(projectTree); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole).toInt() == first) drawing = *it;
+    QVERIFY(drawing);
+    QMetaObject::invokeMethod(projectTree, "itemDoubleClicked", Q_ARG(QTreeWidgetItem*, drawing), Q_ARG(int, 0));
+    QCOMPARE(window.State().activeDrawingIdx, first);
   }
 
   // GitHub #1040 / REQ-142 (D-2026-10-28-a): one screenshot per Toolspace tab for the visual review. The Project tab
@@ -8976,6 +9022,19 @@ private Q_SLOTS:
     EditorWindow window;
     if (auto* graphite = Action(window, "Graphite")) graphite->trigger();
     window.CreateDrawingFromTemplate();
+    // Sample project with each kind of tracked file, a point group, and a project drawing, so every row kind is in the images.
+    auto& sample = window.State();
+    sample.drawingTabs[static_cast<size_t>(sample.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession project; project.uid = 44; project.project.name = "Cloud Job";
+    for (const char* path : {"PDFs/plan.pdf", "PointClouds/site.e57", "Notes/readme.txt"}) {
+      gsproj::TrackedItem item; item.path = path; project.project.items.push_back(item);
+    }
+    sample.openProjects.push_back(project);
+    PointGroup group; group.name = "Existing Ground";
+    sample.pointGroups.push_back(group);
+    window.Refresh();
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"})
+      if (auto* tree = window.findChild<QTreeWidget*>(name)) tree->expandAll();  // show every row kind in the images
     window.resize(1280, 820);
     window.show();
     QVERIFY(QTest::qWaitForWindowExposed(&window));
