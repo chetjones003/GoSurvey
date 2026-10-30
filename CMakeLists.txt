@@ -754,9 +754,15 @@ gosurvey_enable_pch(gosurvey_domain)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
-  ${GOSURVEY_OPENXLSX_SOURCES}
   "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/StbImage.cpp"
   PROPERTIES COMPILE_OPTIONS "/analyze-")
+# OpenXLSX is unmodified upstream code (third_party/OpenXLSX/VENDORED.md), so its compiler
+# warnings are silenced here rather than edited; /W0 keeps /WX in msvc-analyze from failing on them.
+if(MSVC)
+  set_source_files_properties(
+    ${GOSURVEY_OPENXLSX_SOURCES}
+    PROPERTIES COMPILE_OPTIONS "/analyze-;/W0")
+endif()
 
 # ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
 # platform macros and C header out of the shared precompiled header.
