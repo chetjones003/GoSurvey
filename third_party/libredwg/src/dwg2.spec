@@ -1422,6 +1422,18 @@ DWG_ENTITY (MULTILEADER)
   FIELD_BS (style_attachment, 176);
   FIELD_B (is_annotative, 293);
 
+  /* GoSurvey (issue #1010): the arrowhead list is present in R2010+ files too (AutoCAD writes its count,
+     0, as a BL between is_annotative and is_neg_textdir). */
+  FIELD_BL (num_arrowheads, 0);
+  VALUEOUTOFBOUNDS (num_arrowheads, 5000)
+  REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
+  REPEAT_BLOCK
+      SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
+      SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
+      SET_PARENT_OBJ (arrowheads[rcount1]);
+  END_REPEAT_BLOCK
+  END_REPEAT (arrowheads);
+
   VERSIONS (R_14, R_2007)
     {
       FIELD_BL (num_arrowheads, 0);
