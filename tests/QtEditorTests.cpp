@@ -5777,7 +5777,7 @@ private Q_SLOTS:
     QVERIFY(viewportTop > tabs->geometry().bottom());
     QVERIFY(viewportTop - tabs->geometry().bottom() <= 3);
     auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
-    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
     QTest::keyClicks(tree, "l");
     QCOMPARE(input->text(), QString("l")); QVERIFY(input->hasFocus());
@@ -6086,9 +6086,10 @@ private Q_SLOTS:
     window.Submit("LINE"); window.Submit("0,0"); window.Submit("10,0");
     std::vector<std::string> log; CancelActiveCommand(window.State(), log);
     const auto geometry = window.State().userLinesFlat;
-    auto* tree = window.findChild<QTreeWidget*>(); QVERIFY(tree);
-    auto drawings = [&] { return tree->findItems("Drawings", Qt::MatchExactly).front(); };
-    auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly).front(); };
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree"); QVERIFY(projectTree);
+    auto drawings = [&] { return projectTree->findItems("Drawings", Qt::MatchExactly).front(); };
+    auto blocks = [&] { return tree->findItems("Blocks", Qt::MatchExactly | Qt::MatchRecursive).front(); };  // under the drawing root
     drawings()->setExpanded(false); blocks()->setExpanded(true);
     QVERIFY(blocks()->childCount() > 0);
     const auto selected = blocks()->child(0)->text(0); tree->setCurrentItem(blocks()->child(0));
@@ -8907,7 +8908,7 @@ private Q_SLOTS:
     moveTo(QPoint(200, 300));
     QCOMPARE(viewport->cursor().shape(), Qt::BlankCursor);
 
-    auto* tree = window.findChild<QTreeWidget*>();
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
     QVERIFY(tree && tree->topLevelItemCount() > 0);
     const QTreeWidgetItem* first = tree->topLevelItem(0);
     window.Refresh();
@@ -8916,6 +8917,327 @@ private Q_SLOTS:
     window.State().blockDefs.back().name = "BLK1034";
     window.Refresh();
     QVERIFY(!tree->findItems("BLK1034", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());  // a change still shows
+  }
+
+  // GitHub #1040 / REQ-142 / REQ-379: the Project tab's buttons follow the active drawing's project, the saved tab
+  // follows the tab bar both ways, and the Project tree lists the open project.
+  void issue1040ProjectTabButtonsTabStateAndTreeFollowTheDrawing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    auto* refresh = window.findChild<QPushButton*>("toolspaceRefresh");
+    auto* health = window.findChild<QPushButton*>("toolspaceProjectHealth");
+    auto* tabs = window.findChild<QTabWidget*>("toolspaceTabs");
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    QVERIFY(refresh && health && tabs && projectTree);
+    const int drawing = st.activeDrawingIdx;
+
+    window.Refresh();  // no project: both buttons disabled, the tree says so
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(!health->isEnabled());
+    QCOMPARE(projectTree->topLevelItem(0)->text(0), QString("No project is open"));
+
+    st.drawingTabs[static_cast<size_t>(drawing)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    st.openProjects.push_back(session);
+    window.Refresh();  // project, writable: both enabled and the project is listed
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+    QVERIFY(projectTree->findItems("Cloud Job", Qt::MatchExactly | Qt::MatchRecursive).size() == 1);
+
+    st.openProjects.back().readOnly = true;
+    window.Refresh();  // read-only project: Refresh is refused, Project Health still runs
+    QVERIFY(!refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+
+    st.openProjects.clear();
+    st.drawingTabs[static_cast<size_t>(drawing)].projectUid = 0;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;  // e.g. after TOOLSPACE SETTINGS
+    window.Refresh();
+    QCOMPARE(tabs->currentIndex(), 2);
+    tabs->setCurrentIndex(0);  // a click on the Project tab is remembered
+    QVERIFY(st.toolspaceTab == AppCommandState::ToolspaceTab::Project);
+    window.Refresh();
+    QCOMPARE(tabs->currentIndex(), 0);
+    // Settings holds drawing styles only, and Surface Styles lives on Settings rather than Prospector.
+    auto* settingsTree = window.findChild<QTreeWidget*>("toolspaceSettingsTree");
+    QVERIFY(settingsTree->findItems("Open application settings", Qt::MatchContains | Qt::MatchRecursive).isEmpty());
+    QCOMPARE(settingsTree->findItems("Surface Styles", Qt::MatchExactly | Qt::MatchRecursive).size(), 1);
+    QVERIFY(window.findChild<QTreeWidget*>("toolspaceProspectorTree")->findItems("Surface Styles", Qt::MatchExactly | Qt::MatchRecursive).isEmpty());
+  }
+
+  // GitHub #1040: every row in the Toolspace has an icon, not only the folders.
+  void issue1040EveryToolspaceRowHasAnIcon() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    for (const char* path : {"PDFs/plan.pdf", "PDFs/PLAN.PDF", "PointClouds/site.e57", "PointClouds/SITE.E57", "Notes/readme.txt", "Notes/readme"}) {
+      gsproj::TrackedItem item; item.path = path; session.project.items.push_back(item);
+    }
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items.push_back(linked);
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    st.cadSurfaces.push_back({});
+    st.cadSurfaces.back().name = "EG";
+    st.blockDefs.push_back({});
+    st.blockDefs.back().name = "BLK";
+    window.Refresh();
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+      auto* tree = window.findChild<QTreeWidget*>(name);
+      QVERIFY(tree);
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) QVERIFY2(!(*it)->icon(0).isNull(), qPrintable((*it)->text(0)));
+    }
+    // Each row's icon is chosen by file kind, so upper-case extensions match and a file with no extension gets the plain file icon.
+    auto* tree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    auto find = [&](const QString& text) {
+      QTreeWidgetItem* found = nullptr;
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) if ((*it)->text(0) == text) found = *it;
+      return found;
+    };
+    auto image = [&](const QString& text) { QTreeWidgetItem* row = find(text); return row ? row->icon(0).pixmap(32, 32).toImage() : QImage(); };
+    for (const char* text : {"plan.pdf", "PLAN.PDF", "site.e57", "SITE.E57", "readme", "readme.txt", "map.pdf (link)", "PDFs", "PointClouds", "Linked files"})
+      QVERIFY2(find(text), text);
+    QVERIFY(image("plan.pdf") == image("PLAN.PDF"));
+    QVERIFY(image("site.e57") == image("SITE.E57"));
+    QVERIFY(image("readme") == image("readme.txt"));
+    QVERIFY(image("plan.pdf") != image("readme.txt"));
+    QVERIFY(image("plan.pdf") != image("site.e57"));
+    // Folders: in-project files sit under their folder; the linked file sits under "Linked files" with the badge.
+    QCOMPARE(find("PDFs")->childCount(), 2);
+    QCOMPARE(find("PointClouds")->childCount(), 2);
+    QCOMPARE(find("Linked files")->childCount(), 1);
+    QCOMPARE(find("map.pdf (link)")->parent()->text(0), QString("Linked files"));
+    QVERIFY(find("map.pdf (link)")->toolTip(0).contains("does not travel"));
+    QVERIFY(image("map.pdf (link)") == image("plan.pdf"));
+  }
+
+  // GitHub #1040 / REQ-379: Refresh and Project Health submit the File-menu commands for the active drawing's project.
+  // Add PDF... opens a native file picker that a test cannot dismiss, so only its enabled state is checked here.
+  void issue1040ProjectButtonsRunTheirActions() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    gsproj::Project created; std::string error;
+    QVERIFY2(gsproj::Create(directory.path().toStdWString(), "Button Job", &created, &error), error.c_str());
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    const auto uid = window.OpenProject(QString::fromStdWString(created.file.wstring()), false);
+    QVERIFY(uid != 0);
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = uid;
+    window.Refresh();
+    auto* refresh = window.findChild<QPushButton*>("toolspaceRefresh");
+    auto* health = window.findChild<QPushButton*>("toolspaceProjectHealth");
+    auto* addPdf = window.findChild<QPushButton*>("toolspaceAddPdf");
+    QVERIFY(refresh && health && addPdf);
+    QVERIFY(refresh->isEnabled());
+    QVERIFY(health->isEnabled());
+    QVERIFY(addPdf->isEnabled());
+    const auto press = [](QPushButton* button) {
+      QTimer::singleShot(0, [] { if (auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget())) dialog->reject(); });
+      button->click();
+      QCoreApplication::processEvents();
+    };
+    press(refresh);
+    QCOMPARE(window.m_CommandHistory.last(), QString("REFRESH"));
+    press(health);
+    QCOMPARE(window.m_CommandHistory.last(), QString("PROJECTHEALTH"));
+  }
+
+  // GitHub #1040: every Toolspace row has a right-click menu. Entries with no working command are disabled; an enabled
+  // entry sends the command it names.
+  void issue1040EveryToolspaceRowHasARightClickMenu() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Menu Job";
+    gsproj::TrackedItem pdf; pdf.path = "PDFs/missing.pdf";
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items = {pdf, linked};
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    st.blockDefs.push_back({});
+    st.blockDefs.back().name = "BLK";
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    int menus = 0;
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+      auto* tree = window.findChild<QTreeWidget*>(name);
+      QVERIFY(tree);
+      for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole + 1).toString().isEmpty()) continue;  // placeholders have no menu
+        QMenu* menu = window.BuildToolspaceMenu(*it);
+        QVERIFY2(menu, qPrintable((*it)->text(0)));
+        QVERIFY2(!menu->actions().isEmpty(), qPrintable((*it)->text(0)));
+        ++menus;
+        delete menu;
+      }
+    }
+    QVERIFY(menus >= 15);
+    // Enabled and disabled entries, on rows whose state matters.
+    const auto menuFor = [&](const char* kindName, const QString& text) {
+      QTreeWidgetItem* found = nullptr;
+      for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"}) {
+        auto* tree = window.findChild<QTreeWidget*>(name);
+        for (QTreeWidgetItemIterator it(tree); *it; ++it)
+          if ((*it)->text(0) == text && (*it)->data(0, Qt::UserRole + 1).toString() == kindName) found = *it;
+      }
+      return found ? window.BuildToolspaceMenu(found) : nullptr;
+    };
+    QMenu* project = menuFor("project", "Menu Job");
+    QVERIFY(project);
+    QVERIFY(project->findChild<QAction*>("toolspaceProjectSettings")->isEnabled());   // the active project
+    delete project;
+    QMenu* missing = menuFor("trackedItem", "missing.pdf");
+    QVERIFY(missing);
+    QVERIFY(!missing->findChild<QAction*>("toolspaceOpenTrackedItem")->isEnabled());   // the file does not exist
+    delete missing;
+    QMenu* points = menuFor("points", "Survey points (0)");
+    QVERIFY(points);
+    QVERIFY(!points->findChild<QAction*>("toolspacePointsSelect")->isEnabled());      // no Select command yet
+    delete points;
+    // An enabled entry sends its command.
+    QMenu* root = menuFor("drawingRoot", QString::fromStdString(st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name));
+    QVERIFY(root);
+    root->findChild<QAction*>("toolspaceZoomExtents")->trigger();
+    QCOMPARE(window.m_CommandHistory.last(), QString("ZOOMEXTENTS"));
+    delete root;
+  }
+
+  // REQ-142: the Prospector tree is rooted at the drawing's name, and lists Feature Lines under that root.
+  void issue1040ProspectorIsRootedAtTheDrawingAndListsFeatureLines() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+    QVERIFY(prospector);
+    QCOMPARE(prospector->topLevelItemCount(), 1);
+    QTreeWidgetItem* root = prospector->topLevelItem(0);
+    QCOMPARE(root->text(0), QString::fromStdString(st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].name));
+    QTreeWidgetItem* featureLines = nullptr;
+    for (int i = 0; i < root->childCount(); ++i)
+      if (root->child(i)->text(0) == "Feature Lines") featureLines = root->child(i);
+    QVERIFY(featureLines);
+    QCOMPARE(featureLines->childCount(), 1);
+    QCOMPARE(featureLines->child(0)->text(0), QString("Curb Returns"));
+    QVERIFY(!featureLines->child(0)->icon(0).isNull());
+  }
+
+  // GitHub #1040: double-clicking a drawing on the Project tab switches to it, like the Prospector tree did.
+  void issue1040ProjectTreeDoubleClickSwitchesDrawing() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    const int first = window.State().activeDrawingIdx;
+    window.State().drawingTabs[static_cast<size_t>(first)].projectUid = 44;  // only project drawings are listed
+    window.CreateDrawingFromTemplate();
+    QVERIFY(window.State().activeDrawingIdx != first);
+    window.Refresh();
+    auto* projectTree = window.findChild<QTreeWidget*>("toolspaceProjectTree");
+    QVERIFY(projectTree);
+    QTreeWidgetItem* drawing = nullptr;
+    for (QTreeWidgetItemIterator it(projectTree); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole).toInt() == first) drawing = *it;
+    QVERIFY(drawing);
+    QMetaObject::invokeMethod(projectTree, "itemDoubleClicked", Q_ARG(QTreeWidgetItem*, drawing), Q_ARG(int, 0));
+    QCOMPARE(window.State().activeDrawingIdx, first);
+  }
+
+  // GitHub #1040: one capture of the right-click menu for each kind of row, for the visual review.
+  void issue1040ToolspaceMenusCaptureForReview() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& st = window.State();
+    st.drawingTabs[static_cast<size_t>(st.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession session; session.uid = 44; session.project.name = "Cloud Job";
+    gsproj::TrackedItem pdf; pdf.path = "PDFs/plan.pdf";
+    gsproj::TrackedItem linked; linked.path = "C:/Scans/map.pdf"; linked.kind = gsproj::kKindLocalLink;
+    session.project.items = {pdf, linked};
+    st.openProjects.push_back(session);
+    PointGroup group; group.name = "Existing Ground";
+    st.pointGroups.push_back(group);
+    st.featureLineOffsets = {0, 2};
+    CadFeatureLineInfo info; info.name = "Curb Returns";
+    st.featureLineInfo = {info};
+    window.Refresh();
+    const std::pair<const char*, const char*> rows[] = {
+        {"toolspaceProspectorTree", "drawingRoot"}, {"toolspaceProspectorTree", "pointGroup"},
+        {"toolspaceProspectorTree", "featureLine"}, {"toolspaceProjectTree", "project"},
+        {"toolspaceProjectTree", "trackedItem"}, {"toolspaceSettingsTree", "textStyle"}};
+    for (const auto& [treeName, kindName] : rows) {
+      auto* tree = window.findChild<QTreeWidget*>(treeName);
+      QVERIFY(tree);
+      QTreeWidgetItem* found = nullptr;
+      for (QTreeWidgetItemIterator it(tree); *it && !found; ++it)
+        if ((*it)->data(0, Qt::UserRole + 1).toString() == kindName) found = *it;
+      if (!found) continue;  // a row kind absent from this drawing has nothing to capture
+      tree->setCurrentItem(found);
+      QMenu* menu = window.BuildToolspaceMenu(found);
+      QVERIFY(menu);
+      menu->popup(QPoint(40, 40));
+      QTest::qWait(150);
+      QVERIFY(menu->grab().save(Issue886Shot(QString("issue1040-menu-%1.png").arg(kindName).toUtf8().constData())));
+      menu->close();
+      delete menu;
+    }
+  }
+
+  // GitHub #1040 / REQ-142 (D-2026-10-28-d): one screenshot per Toolspace tab for the visual review. The Project tab
+  // shows its empty state because no project is open in this drawing.
+  void issue1040ToolspaceTabsCaptureForReview() {
+    // Pin the Graphite theme for the review images, and restore the app's theme afterwards like the appearance test does.
+    const auto oldPalette = qApp->palette(); const auto oldFont = qApp->font();
+    const auto oldSheet = qApp->styleSheet(); const auto oldStyle = qApp->style()->objectName();
+    const auto oldDefault = qApp->property("defaultQtStyle"), oldLight = qApp->property("cadLightTheme");
+    auto restore = qScopeGuard([&] {
+      qApp->setStyle(oldStyle); qApp->setPalette(oldPalette); qApp->setFont(oldFont); qApp->setStyleSheet(oldSheet);
+      qApp->setProperty("defaultQtStyle", oldDefault); qApp->setProperty("cadLightTheme", oldLight);
+      QSettings().remove("editor/lightTheme");
+    });
+    EditorWindow window;
+    auto* graphite = Action(window, "Graphite");
+    QVERIFY(graphite);
+    graphite->trigger();
+    window.CreateDrawingFromTemplate();
+    // Sample project with each kind of tracked file, a point group, and a project drawing, so every row kind is in the images.
+    auto& sample = window.State();
+    sample.drawingTabs[static_cast<size_t>(sample.activeDrawingIdx)].projectUid = 44;
+    AppCommandState::ProjectSession project; project.uid = 44; project.project.name = "Cloud Job";
+    for (const char* path : {"PDFs/plan.pdf", "PointClouds/site.e57", "Notes/readme.txt"}) {
+      gsproj::TrackedItem item; item.path = path; project.project.items.push_back(item);
+    }
+    gsproj::TrackedItem link; link.path = "C:/Scans/map.pdf"; link.kind = gsproj::kKindLocalLink;
+    project.project.items.push_back(link);
+    sample.openProjects.push_back(project);
+    PointGroup group; group.name = "Existing Ground";
+    sample.pointGroups.push_back(group);
+    window.Refresh();
+    for (const char* name : {"toolspaceProjectTree", "toolspaceProspectorTree", "toolspaceSettingsTree"})
+      if (auto* tree = window.findChild<QTreeWidget*>(name)) tree->expandAll();  // show every row kind in the images
+    window.resize(1280, 820);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+    auto* dock = window.findChild<QDockWidget*>("toolspaceDock"); QVERIFY(dock);
+    auto* tabs = window.findChild<QTabWidget*>("toolspaceTabs"); QVERIFY(tabs);
+    QCOMPARE(tabs->count(), 3);
+    QCOMPARE(tabs->tabText(0), QString("Project"));
+    QCOMPARE(tabs->tabText(1), QString("Prospector"));
+    QCOMPARE(tabs->tabText(2), QString("Settings"));
+    const std::pair<int, const char*> captures[] = {{0, "issue1040-toolspace-project.png"}, {1, "issue1040-toolspace-prospector.png"}, {2, "issue1040-toolspace-settings.png"}};
+    for (const auto& [index, name] : captures) {
+      tabs->setCurrentIndex(index);
+      QTest::qWait(150);
+      QVERIFY(dock->grab().save(Issue886Shot(name)));
+    }
   }
 
   // ---- Issue #1028 / REQ-093: the Qt splash progress bar and phase label advance ----
@@ -11595,6 +11917,7 @@ private Q_SLOTS:
 
   void surfaceRequestsFromRibbonCommandsAndToolspaceOpenTheNativeDialogs() {
     EditorWindow window;
+    window.CreateDrawingFromTemplate();  // the Toolspace shows objects and styles only while a drawing is open (REQ-142)
     auto& st = window.State();
     Issue893Fixture(st);
     // Create Surface (ribbon / Toolspace set the flag the command layer sets).
@@ -11646,14 +11969,15 @@ private Q_SLOTS:
     QCOMPARE(window.findChildren<QDialog*>("surfaceManager").size(), 1);
     manager->close();
     // The Toolspace lists surfaces and surface styles and tags them for its context menu.
-    auto* toolspace = window.findChild<QDockWidget*>("toolspaceDock")->findChild<QTreeWidget*>();
-    QVERIFY(toolspace);
+    auto* prospector = window.findChild<QTreeWidget*>("toolspaceProspectorTree");
+    auto* settingsTree = window.findChild<QTreeWidget*>("toolspaceSettingsTree");
+    QVERIFY(prospector && settingsTree);
     QTreeWidgetItem* surfaces = nullptr;
     QTreeWidgetItem* styles = nullptr;
-    for (int i = 0; i < toolspace->topLevelItemCount(); ++i) {
-      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "surfacesFolder") surfaces = toolspace->topLevelItem(i);
-      if (toolspace->topLevelItem(i)->data(0, Qt::UserRole + 1).toString() == "stylesFolder") styles = toolspace->topLevelItem(i);
-    }
+    for (QTreeWidgetItemIterator it(prospector); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole + 1).toString() == "surfacesFolder") surfaces = *it;
+    for (QTreeWidgetItemIterator it(settingsTree); *it; ++it)
+      if ((*it)->data(0, Qt::UserRole + 1).toString() == "stylesFolder") styles = *it;
     QVERIFY(surfaces && styles);
     QCOMPARE(surfaces->childCount(), 2);
     QCOMPARE(surfaces->child(1)->data(0, Qt::UserRole + 2).toInt(), 1);

@@ -659,8 +659,10 @@ requirements is a planning failure, not a sign of rigor.
   General (layer/color/linetype/lineweight/transparency) and per-type Geometry and Text
   (contents/height/rotation/style) — the same panel used for model selection; (d) **object
   snapping** to paper objects; (e) **draw** commands LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE,
-  POLYLINE create into the active layout's paper store (paper inches); (f) **modify** commands
-  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET operate on the paper selection.
+  POLYLINE, SPLINE, POINT, and LEADER create into the active layout's paper store (paper inches);
+  (f) **modify** commands
+  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET, PEDIT operate on the paper selection.
+  MEASURE, DIVIDE, AREA, and LIST also run against paper objects while a paper layout is active.
   Additionally, **double-clicking a text object opens an in-place editor** to edit its
   contents — implemented for **both** model space and paper space (the same shared editor).
   Survey-specific tools (survey points, CSV import) remain **model-only**; paper edits never
@@ -680,7 +682,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-18 — initial (paper-space object parity; ADR-014). Delivered incrementally:
   Phase 1 selection/text-pick/Properties, Phase 2 in-place text editor, Phase 3 grips, Phase 4
-  draw + modify parity.
+  draw + modify parity. 2026-10-28 — D-2026-10-28-c / issue #1019: SPLINE, POINT, LEADER draw onto
+  the sheet; PEDIT, MEASURE, DIVIDE, AREA, LIST run on paper objects.
 
 ### REQ-040 — AutoCAD-style floating command line with fading history and an F2 console
 - Purpose: the command line should read and behave like AutoCAD's — a compact
@@ -4387,7 +4390,7 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
 - Owner-layer: Commands/Domain/IO/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-20 — SPLINE, REVCLOUD and WIPEOUT split out into REQ-443, REQ-444 and REQ-442 (GitHub #803, D-2026-10-20-e); SPLINE is REQ-443 because REQ-440 was assigned to ImGui removal on beta; XLINE, RAY, DONUT, SOLID and MLINE remain here, still proposed. A drawn POINT entity was deliberately left out of #803 by the user. 2026-10-28 — POINT is REQ-456 (D-2026-10-28-c / issue #1019); remaining names here are unchanged.
 
 ### REQ-105 — Inquiry commands
 - Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
@@ -4417,8 +4420,8 @@ requirements is a planning failure, not a sign of rigor.
   - two points at the same elevation report "level (0.00%)" and no ratio;
   - all four figures are taken in the active UCS, and a tilted UCS moves them together.
 - Owner-layer: Commands/UI
-- Status: accepted (DIST only — issue #382); AREA/LIST/MASSPROP remain proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1)
+- Status: accepted (DIST — issue #382; AREA and LIST — D-2026-10-28-c / issue #1019 / REQ-456); MASSPROP remains proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i); 2026-09-07 — accepted scoped to DIST (issue #382); 2026-09-09 — DIST amended to report horizontal distance and grade (D-2026-09-09-f, TASK-235, GitHub #149 acceptance 1); 2026-10-28 — AREA and LIST accepted as REQ-456 (D-2026-10-28-c)
 
 ### REQ-106 — View-management commands
 - Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
@@ -5821,8 +5824,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
-  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
-  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  tree, a right-edge set of three **readable** vertical tabs (**Project**, **Prospector**, **Settings**), and an empty
+  preview strip. Each tab shows only its own data and keeps its own tree; switching tabs changes no project or drawing data:
+  - **Project** lists open projects with their tracked items (REQ-379), and the open drawings that belong to a project. Its header carries **Refresh** (REQ-379 clause 6) and **Project Health** (REQ-379 clause 4). With no project open it shows "No project is open"; Refresh and Project Health are disabled unless the active drawing belongs to a project (Refresh also in a read-only project).
+  - **Prospector** is the active drawing's object tree, made of the collections described in this requirement. With no drawing open it shows "No drawing is open".
+  - **Settings** lists drawing-level style tables only (General and Surface, below). It does not repeat app-wide preferences, which stay in View → Settings. With no drawing open it shows "No drawing is open". There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
   installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
   Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
   Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
@@ -5844,10 +5850,15 @@ requirements is a planning failure, not a sign of rigor.
   - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
     or Grading;
   - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+  - the Qt Toolspace shows three tabs in the order Project, Prospector, Settings; choosing a tab with the mouse and `TOOLSPACE PROJECT` / `PROSPECTOR` / `SETTINGS` select the same tab;
+  - with no project open the Project tab shows "No project is open" and its Refresh and Project Health buttons are disabled;
+  - with a drawing in a project, Project Health and (if the project is not read-only) Refresh are enabled and run the same actions as the File menu items;
+  - the Settings tab does not contain a button or entry that opens app-wide Settings.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28)
+- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-d)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
   2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
+  2026-10-28 — D-2026-10-28-d (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
@@ -11463,7 +11474,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      missing at its stored path is resolved to the tracked item of the same file name associated with
      the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
      opens. A drawing outside any project is unchanged.
-  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+  3. **Project Files section** in the Toolspace **Project tab** (REQ-142) lists tracked items by folder, with a link badge on
      `local-link` entries.
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
      offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
@@ -11475,7 +11486,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
      association and no placements. Tracking the same file twice changes nothing. Files other than
      PDFs are not accepted here (point clouds and point files keep their own import commands).
-  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace **Project tab** (project drawings
      only; disabled in a read-only project) looks through the project folder for **new files** — files
      of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
      track — and, **only when the user pressed Refresh**, asks which of them to track. The question
@@ -13079,9 +13090,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
      curve passes exactly through every point the user clicks) and **CV** (control vertices — the
      curve is pulled toward, but does not touch, the clicked points). Both methods are
      degree 3 and open or closed (`Close` option; Enter ends an open spline).
-  3. The spline is a new entity kind stored in its own store in model space (3D points per
-     REQ-057), with layer, colour and linetype like every other entity. It is shown as a smooth
-     curve whose deviation from the true curve never exceeds REQ-101's tolerance.
+  3. The spline is a new entity kind stored in its own store (3D points per REQ-057), with layer,
+     colour and linetype like every other entity. In model space it lives on `cadSplines`; in
+     paper space it lives on the active layout's paper spline store (D-2026-10-28-c). It is shown
+     as a smooth curve whose deviation from the true curve never exceeds REQ-101's tolerance.
   4. Live preview while picking, committing on the snapped point (the preview-vs-commit invariant).
   5. **Editing.** The spline can be selected, erased, moved, copied, rotated, scaled and mirrored;
      it appears in the Properties panel (method, degree, closed, point count, length); its
@@ -13091,9 +13103,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
   7. **Files.** A spline saves to and loads from DXF and DWG as a standard `SPLINE`
      entity, including its degree, knots, control points, fit points and closed flag. Importing a
      DXF/DWG `SPLINE` creates a real spline entity instead of dropping it.
-  8. Paper space, TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
+  8. TRIM, EXTEND, OFFSET, FILLET, JOIN and EXPLODE of a spline are **not** in this
      requirement; a command that cannot act on a spline says so in the command log (REQ-201)
-     and changes nothing.
+     and changes nothing. Paper space: a SPLINE drawn while a paper layout is the active space
+     (and not floating model space) commits to that layout's paper spline store (D-2026-10-28-c /
+     REQ-456). The earlier model-only refusal is lifted.
 - Acceptance:
   - A Fit spline through four clicked points passes within REQ-101's tolerance of all four; a CV
     spline does not pass through its interior control points; both can be closed.
@@ -13114,7 +13128,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands/Domain/IO/Qt UI
 - Decision: D-2026-10-20-e.
 - Status: accepted
-- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20.
+- Revisions: 2026-10-20 — initial proposal (GitHub #803); amended same day to Qt-only per the user; accepted by the user 2026-10-20. 2026-10-28 — paper-space SPLINE accepted (D-2026-10-28-c / REQ-456 / issue #1019).
 
 
 ### REQ-444 — Revision Cloud command (GitHub issue #803)
@@ -14913,7 +14927,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-440 | Qt UI/build | Qt-only configure/build/test/package/CI; source and dependency audit; preserved supported workflow coverage | accepted |
 | REQ-441 | Documentation/product verification | Human-run major-release feature acceptance checklist; manual/UI/command surface cross-check; known limitations and result recording | accepted |
 | REQ-442 | Commands/Domain/Render/IO/Qt UI | Wipeout creation, draw-order masking, plot output, DWG/DXF round-trip | accepted |
-| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows | accepted |
+| REQ-443 | Commands/Domain/IO/Qt UI | Spline creation, editing, snapping, rendering, file round-trip and refusal workflows; paper-space SPLINE (REQ-456) | accepted |
+| REQ-456 | Commands/Domain/IO/Qt UI | `Issue1019CommandTests` `[req456][issue1019]`: LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST in model and paper; PDMODE/PDSIZE; named refusals | accepted |
 | REQ-444 | Commands/Qt UI | Revision Cloud creation, object conversion, preview, snapping, and DWG/DXF round-trip | accepted |
 | REQ-448 | IO/Commands/Qt UI | `LandXmlExportTests` (points, TIN, feature lines, units, failures, XML text), `QtEditorTests` `issue1002RibbonExportsLandXmlThroughTheCommand`, transcript `issue1002-landxml-export`, schema check `tools/validate-landxml.ps1` | accepted |
 | REQ-445 | IO/Renderer | `PdfPlot` tests for each Page Setup option (changed output, measured within REQ-101, defaults unchanged) — to be added with the implementing PR | accepted |
@@ -15158,6 +15173,68 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. The normal executable filename remains `GoSurvey.exe`; this increment adds neither the standalone manager nor a build/restart watcher.
 - Owner-layer: Application / Qt UI / Build documentation
 - Status: accepted (2026-10-23, user approved scope)
+
+---
+
+### REQ-456 — Paper-space command parity for LEADER, SPLINE, POINT, PEDIT, MEASURE, DIVIDE, AREA, LIST (GitHub issue #1019)
+- Purpose: eight command names from the paper-space audit leftover of #751/#753 (finding V3/N3)
+  currently answer "Unknown command" (or, for SPLINE, refuse paper). Surveyors use them on sheets
+  as well as in the model.
+- Priority: should
+- Type: functional
+- Depends on: REQ-039, REQ-104, REQ-105, REQ-367, REQ-443, REQ-101, REQ-201.
+- Statement:
+  1. Typed `LEADER`, `SPLINE`, `POINT`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` are
+     registered commands. None of them answers "Unknown command". `MLEADER` is also registered
+     (the handler already exists).
+  2. Each command runs in **model space** and in **paper space** while a layout is active and not
+     in floating model space. Paper draws commit to that layout's paper store in paper inches.
+     Model draws commit to the model stores. Paper edits never change model geometry.
+  3. **POINT** creates a `CadPoint` entity (not a survey point, not a Position Marker). The
+     command loops until Enter. `PDMODE` (0/1/2/3/4 plus 32/64/96 for circle/square) and
+     `PDSIZE` (0 = 5% of the view height; negative = percent of view; positive = drawing units)
+     control how every CAD point in the drawing is drawn. A DXF/DWG `POINT` without GOSURVEY
+     XDATA imports as `CadPoint`. Survey-point XDATA still reconstructs a survey point (REQ-023).
+  4. **LEADER** collects vertex points, then annotation (Mtext default, or None) and format
+     (Straight default, Spline, Arrow, None). Tolerance, Copy, and Block annotation are refused
+     by name (REQ-201) and change nothing. The result is a `CadMultileader` in the model
+     multileader store or the layout's `paperMultileaders`.
+  5. **SPLINE** in paper space commits to the layout's paper spline store. The REQ-443
+     model-only refusal is lifted.
+  6. **PEDIT** converts a picked line or arc into a polyline, then Close/Open, Join, Reverse,
+     Edit vertex (Next/Previous/Insert/Move/eXit), Decurve (zero bulges), Fit (bulge arcs
+     between vertices), and Spline (densify vertices). Width and linetype generation are
+     refused by name. Fit/Spline operate on the live vertices; Decurve cannot restore a
+     pre-Fit original vertex set.
+  7. **MEASURE** places `CadPoint` entities at a typed interval along a picked line, polyline,
+     or circle, measured from the end nearest the pick (closed polyline from its start vertex;
+     circle from the pick, with rotation 0 = east).
+  8. **DIVIDE** places `CadPoint` entities that split a picked line, polyline, or circle into N
+     equal segments: N−1 points on an open object, N on a closed object.
+  9. **AREA** reports area and perimeter from typed points (shoelace), from a picked closed
+     polyline/rectangle/circle, and Add/Subtract running totals. Read-only; no undo entry.
+  10. **LIST** prints type, layer, space, and geometry of the selection, or of objects picked
+      after the command starts. Read-only; no undo entry.
+- Acceptance:
+  1. Typing each of the eight names (and `MLEADER`) on a blank drawing leaves a prompt, a
+     report, or a started command — never "Unknown command".
+  2. POINT, LEADER, and SPLINE drawn in model space land in the model stores; the same
+     commands drawn on a paper layout land only in that layout's paper stores.
+  3. A POINT through two typed coordinates exists, is selectable, moves, and one UNDO removes
+     it. PDMODE 0 draws a marker; PDMODE 1 draws nothing; PDSIZE 0 uses 5% of the view.
+  4. LEADER with two points and None annotation creates a multileader; typing Tolerance / Copy
+     / Block logs a named refusal.
+  5. PEDIT Close on an open two-vertex polyline from a line makes it closed; Width logs a
+     named refusal.
+  6. MEASURE of a 10-unit line at interval 2.5 places three interior points; DIVIDE of the
+     same line into 4 segments places three points.
+  7. AREA of a 10×10 rectangle of points reports 100 area and 40 perimeter within REQ-101;
+     LIST of a line reports LINE, its layer, and its endpoints.
+  8. Each of the eight commands run on a paper layout leaves model geometry unchanged.
+- Frontend: **Qt only** for ribbon/icons; command and entity logic lives in Commands / Domain / IO.
+- Owner-layer: Commands / Domain / IO / Qt UI
+- Decision: D-2026-10-28-c.
+- Status: accepted (2026-10-28, user chose Option C on issue #1019)
 
 ## Anti-requirements
 

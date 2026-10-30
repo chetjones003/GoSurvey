@@ -25893,6 +25893,7 @@ dwg_add_TEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->ins_pt.x = ins_pt->x;
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
+  _obj->width_factor = 1.0;
   _obj->height = height;
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
@@ -27948,6 +27949,157 @@ dwg_require_MLEADERSTYLE_Standard (Dwg_Data *restrict dwg)
   dwg_add_MLEADERSTYLE (dwg, "Standard");
 }
 
+/* GoSurvey (issue #1010): AutoCAD rebuilds a multileader's picture from proxy graphics ("preview"). This writes the
+   block AutoCAD writes: an 8-byte header (total size, chunk count), then chunks of (size, type, data): marker
+   chunks around one Text chunk (type 38, the label) and one Polyline chunk (type 6, 3 doubles per point) per
+   branch. Little-endian host, like the other bit streams written through this API. */
+typedef struct
+{
+  unsigned char *p;
+  size_t len, cap;
+  unsigned count;
+} gfx_buf;
+
+static int
+gfx_put (gfx_buf *b, const void *data, size_t n)
+{
+  if (b->len + n > b->cap)
+    {
+      size_t cap = b->cap ? b->cap * 2 : 512;
+      unsigned char *np;
+      while (cap < b->len + n)
+        cap *= 2;
+      np = (unsigned char *)realloc (b->p, cap);
+      if (!np)
+        return 0;
+      b->p = np;
+      b->cap = cap;
+    }
+  memcpy (b->p + b->len, data, n);
+  b->len += n;
+  return 1;
+}
+
+static int
+gfx_int (gfx_buf *b, int v)
+{
+  return gfx_put (b, &v, 4);
+}
+
+static int
+gfx_dbl (gfx_buf *b, double v)
+{
+  return gfx_put (b, &v, 8);
+}
+
+/* A 12-byte marker chunk: size, type, one int. */
+static int
+gfx_marker (gfx_buf *b, int type, int value)
+{
+  b->count++;
+  return gfx_int (b, 12) && gfx_int (b, type) && gfx_int (b, value);
+}
+
+/* UTF-8 text -> UTF-16LE code units; a "\P" break or a newline becomes a space. */
+static size_t
+gfx_utf16 (const char *s, unsigned short *out, size_t max)
+{
+  size_t n = 0;
+  while (*s && n + 2 < max)
+    {
+      unsigned c = (unsigned char)*s++;
+      unsigned cp = c;
+      if (c == '\\' && *s == 'P')
+        {
+          s++;
+          cp = ' ';
+        }
+      else if (c == '\n' || c == '\r')
+        cp = ' ';
+      else if (c >= 0xC0)
+        {
+          int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : 1;
+          cp = c & (0x3F >> extra);
+          while (extra-- > 0 && (*s & 0xC0) == 0x80)
+            cp = (cp << 6) | ((unsigned char)*s++ & 0x3F);
+        }
+      if (cp >= 0x10000)
+        {
+          cp -= 0x10000;
+          out[n++] = (unsigned short)(0xD800 + (cp >> 10));
+          out[n++] = (unsigned short)(0xDC00 + (cp & 0x3FF));
+        }
+      else
+        out[n++] = (unsigned short)cp;
+    }
+  return n;
+}
+
+static unsigned char *
+dwg_mleader_proxy_gfx (const char *text, const dwg_point_3d *text_loc,
+                       const double text_height, const unsigned num_branches,
+                       const dwg_mleader_branch *branches, BITCODE_BLL *out_size)
+{
+  gfx_buf b = { NULL, 0, 0, 0 };
+  unsigned short wtext[1024];
+  static const unsigned char font[] = { 't', 0, 'x', 0, 't', 0, '.', 0, 's', 0, 'h', 0, 'x', 0, 0, 0 };
+  static const unsigned char zeros[8] = { 0 };
+  const size_t nchars = gfx_utf16 (text, wtext, 1024);
+  const size_t strbytes = (nchars + 1) * 2;
+  const size_t strpad = (4 - (strbytes % 4)) % 4;
+  unsigned bi;
+  int ok = gfx_int (&b, 0) && gfx_int (&b, 0); /* header, patched below */
+  ok = ok && gfx_marker (&b, 22, (int)0xC0000000) && gfx_marker (&b, 51, 0)
+       && gfx_marker (&b, 19, 15001);
+  /* Text chunk (type 38): position, normal, direction, the string, then metrics and the font. */
+  b.count++;
+  ok = ok && gfx_int (&b, (int)(8 + 72 + strbytes + strpad + 8 + 8 * 4 + 24 + 8 + 8 + sizeof (font) + 4))
+       && gfx_int (&b, 38);
+  ok = ok && gfx_dbl (&b, text_loc->x) && gfx_dbl (&b, text_loc->y) && gfx_dbl (&b, text_loc->z);
+  ok = ok && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 1.0);
+  ok = ok && gfx_dbl (&b, 1.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 0.0);
+  ok = ok && gfx_put (&b, wtext, nchars * 2);
+  ok = ok && gfx_put (&b, zeros, 2 + strpad);
+  ok = ok && gfx_int (&b, (int)nchars) && gfx_int (&b, 1);
+  ok = ok && gfx_dbl (&b, text_height) && gfx_dbl (&b, 1.0) && gfx_dbl (&b, 0.0) && gfx_dbl (&b, 1.0);
+  ok = ok && gfx_put (&b, zeros, 8) && gfx_put (&b, zeros, 8) && gfx_put (&b, zeros, 8);
+  ok = ok && gfx_int (&b, 0) && gfx_int (&b, 1);
+  ok = ok && gfx_put (&b, zeros, 8);
+  ok = ok && gfx_put (&b, font, sizeof (font));
+  ok = ok && gfx_put (&b, zeros, 4);
+  ok = ok && gfx_marker (&b, 51, 0) && gfx_marker (&b, 16, 0) && gfx_marker (&b, 22, (int)0xC0000000)
+       && gfx_marker (&b, 18, 0x7FFF) && gfx_marker (&b, 19, 1);
+  for (bi = 0; ok && bi < num_branches; bi++)
+    {
+      unsigned j;
+      const unsigned n = branches[bi].num_points;
+      if (n < 2 || !branches[bi].points)
+        continue;
+      ok = ok && gfx_marker (&b, 19, 5001 + (int)bi);
+      b.count++;
+      ok = ok && gfx_int (&b, (int)(8 + 4 + 24 * n)) && gfx_int (&b, 6) && gfx_int (&b, (int)n);
+      for (j = 0; ok && j < n; j++)
+        ok = gfx_dbl (&b, branches[bi].points[j].x) && gfx_dbl (&b, branches[bi].points[j].y)
+             && gfx_dbl (&b, branches[bi].points[j].z);
+    }
+  ok = ok && gfx_marker (&b, 22, (int)0xC0000000) && gfx_marker (&b, 18, 0x7FFF)
+       && gfx_marker (&b, 23, 0) && gfx_marker (&b, 19, 15002) && gfx_marker (&b, 22, (int)0xC0000000)
+       && gfx_marker (&b, 18, 0x7FFF) && gfx_marker (&b, 23, -1) && gfx_marker (&b, 51, 0);
+  if (!ok)
+    {
+      free (b.p);
+      return NULL;
+    }
+  {
+    const int total = (int)b.len;
+    const int count = (int)b.count;
+    memcpy (b.p, &total, 4);
+    memcpy (b.p + 4, &count, 4);
+  }
+  *out_size = (BITCODE_BLL)b.len;
+  return b.p;
+}
+
 EXPORT Dwg_Entity_MULTILEADER *
 dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                               const unsigned num_branches,
@@ -27983,6 +28135,18 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   API_ADD_ENTITY2 (MULTILEADER);
 
   _obj->class_version = 2;
+  {
+    BITCODE_BLL gfx_size = 0;
+    unsigned char *gfx = dwg_mleader_proxy_gfx (
+        text, text_loc, text_height > 1e-9 ? text_height : 0.18, num_branches, branches, &gfx_size);
+    if (gfx)
+      {
+        obj->tio.entity->preview_exists = 1;
+        obj->tio.entity->preview_is_proxy = 0;
+        obj->tio.entity->preview_size = gfx_size;
+        obj->tio.entity->preview = (BITCODE_TF)gfx;
+      }
+  }
   Dwg_MLEADER_AnnotContext *ctx = &_obj->ctx;
   ctx->scale_factor = 1.0;
   ctx->content_base.x = text_loc->x;
@@ -28056,19 +28220,8 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       const dwg_point_3d *points = branches[bi].points;
       Dwg_LEADER_Node *lnode = &ctx->leaders[bi];
       lnode->parent = _obj;
-      lnode->has_lastleaderlinepoint = 1;
-      lnode->has_dogleg = 1;
-      lnode->lastleaderlinepoint.x = points[num_points - 1].x;
-      lnode->lastleaderlinepoint.y = points[num_points - 1].y;
-      lnode->lastleaderlinepoint.z = points[num_points - 1].z;
-      {
-        const double dx = points[num_points - 1].x - points[num_points - 2].x;
-        const double dy = points[num_points - 1].y - points[num_points - 2].y;
-        const double length = sqrt (dx * dx + dy * dy);
-        lnode->dogleg_vector.x = length > 1e-9 ? dx / length : 1.0;
-        lnode->dogleg_vector.y = length > 1e-9 ? dy / length : 0.0;
-        lnode->dogleg_vector.z = 0.0;
-      }
+      lnode->has_lastleaderlinepoint = 0;
+      lnode->has_dogleg = 0;
       lnode->branch_index = bi;
       lnode->dogleg_length = 0.36;
       lnode->num_breaks = 0;
@@ -28078,12 +28231,11 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         return NULL;
       Dwg_LEADER_Line *lline = &lnode->lines[0];
       lline->parent = lnode;
-      /* The node carries the final point; line points contain the preceding path. */
-      lline->num_points = num_points - 1;
-      lline->points = (BITCODE_3BD *)calloc (lline->num_points, sizeof (BITCODE_3BD));
+      lline->num_points = num_points;
+      lline->points = (BITCODE_3BD *)calloc (num_points, sizeof (BITCODE_3BD));
       if (!lline->points)
         return NULL;
-      for (unsigned i = 0; i < lline->num_points; i++)
+      for (unsigned i = 0; i < num_points; i++)
         {
           lline->points[i].x = points[i].x;
           lline->points[i].y = points[i].y;
@@ -28093,8 +28245,7 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       lline->line_index = 0;
       lline->type = 1;
       lline->color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
-      lline->linewt = -2; /* as AutoCAD: ByBlock weight, null linetype, no arrow-size override */
-      lline->arrow_size = 0.0;
+      lline->arrow_size = ctx->arrow_size;
       lnode->attach_dir = 0;
     }
 

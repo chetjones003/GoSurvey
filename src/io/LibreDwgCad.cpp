@@ -1016,21 +1016,6 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   return true;
 }
 
-static void ImportPointAsPositionMarker(AppCommandState& st, double wx, double wy, double z,
-                                        const EntityAttributes& at) {
-  CadPositionMarker m;
-  m.x = wx - st.worldDocumentOriginX;
-  m.y = wy - st.worldDocumentOriginY;
-  m.z = static_cast<float>(z);
-  m.label.kind = CadAnnotation::Kind::Mtext;
-  m.label.insX = static_cast<float>(m.x);
-  m.label.insY = static_cast<float>(m.y);
-  m.label.insZ = m.z;
-  m.label.text.clear();
-  st.cadPositionMarkers.push_back(std::move(m));
-  st.cadPositionMarkerAttrs.push_back(at);
-}
-
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                   AppCommandState* blockDefCatalog);
@@ -2122,7 +2107,12 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     const Dwg_Entity_POINT* e = ent->tio.POINT;
     double px = 0.0, py = 0.0;
     xf.apply(e->x, e->y, &px, &py);
-    ImportPointAsPositionMarker(st, px, py, e->z, at);
+    CadPoint cp;
+    cp.x = px - st.worldDocumentOriginX;
+    cp.y = py - st.worldDocumentOriginY;
+    cp.z = e->z;
+    st.cadPoints.push_back(cp);
+    st.cadPointAttrs.push_back(at);
     return;
   }
   if (ty == DWG_TYPE_HATCH && ent->tio.HATCH != nullptr) {
@@ -4606,23 +4596,28 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   rest.ellAttrs = L.paperEllAttrs;
   rest.polyOffsets = L.paperPolyOffsets;
   rest.polyVerts.assign(L.paperPolyVerts.begin(), L.paperPolyVerts.end());
+  rest.polyVertsBulge = L.paperPolyVertsBulge;
   rest.polyClosed = L.paperPolyClosed;
   rest.polyAttrs = L.paperPolyAttrs;
   rest.texts = L.paperTexts;
   rest.textAttrs = L.paperTextAttrs;
   WriteBlockDefinitionGeometry(ps, rest, tw);
+  for (size_t i = 0; i < L.paperPoints.size(); ++i) {
+    const CadPoint& p = L.paperPoints[i];
+    dwg_point_3d pt{p.x, p.y, 0.0};
+    if (Dwg_Entity_POINT* e = dwg_add_POINT(ps, &pt))
+      apply(e->parent, AttrAt(L.paperPointAttrs, i));
+  }
+  // REQ-113 / REQ-443: sheet splines keep their control vertices, knots and weights (paper inches, no origin shift).
+  WriteSplineEntities(tw, ps, L.paperSplines, L.paperSplineAttrs,
+                      [](float x, float y, double z, dwg_point_3d* p) {
+                        p->x = static_cast<double>(x);
+                        p->y = static_cast<double>(y);
+                        p->z = z;
+                      });
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
                                 fldCtx);
-  // REQ-456 / issue #1010: sheet POINT objects, in paper inches (block-local, no origin shift).
-  for (size_t i = 0; i + 2 < L.paperPoints.size(); i += 3) {
-    dwg_point_3d pt{};
-    pt.x = static_cast<double>(L.paperPoints[i]);
-    pt.y = static_cast<double>(L.paperPoints[i + 1]);
-    pt.z = static_cast<double>(L.paperPoints[i + 2]);
-    if (Dwg_Entity_POINT* e = dwg_add_POINT(ps, &pt))
-      apply(e->parent, AttrAt(L.paperPointAttrs, i / 3));
-  }
   // REQ-457 / issue #1010: sheet raster IMAGE underlays. dwg_add_IMAGE makes the IMAGE and its IMAGEDEF and
   // reactor; the per-pixel vectors, pixel size and image size are set here from the sheet placement.
   for (size_t i = 0; i < L.paperImages.size(); ++i) {
@@ -4702,13 +4697,6 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
                                  dimAnnot, dimState);
     }
   }
-  // REQ-113 / issue #1010: sheet splines, in paper inches (no origin shift; the sheet is block-local).
-  WriteSplineEntities(tw, ps, L.paperSplines, L.paperSplineAttrs,
-                      [](float x, float y, double z, dwg_point_3d* p) {
-                        p->x = static_cast<double>(x);
-                        p->y = static_cast<double>(y);
-                        p->z = z;
-                      });
   // Issue #768 / REQ-113: fills -> HATCH and multileaders -> MULTILEADER (R2010+) or LEADER + MTEXT,
   // through the same writers model space uses. Paper inches, so no origin shift and 1 unit per plotted inch.
   DwgExportAnnotContext noAnnot;
@@ -4959,25 +4947,16 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     L.paperImageAttrs.push_back(at);
     return;
   }
-  // REQ-456 / issue #1010: a POINT on a sheet stays on the sheet (REQ-023 survey points are model-space only).
-  if (ty == DWG_TYPE_POINT && ent->tio.POINT != nullptr) {
-    const Dwg_Entity_POINT* e = ent->tio.POINT;
-    L.paperPoints.push_back(static_cast<float>(e->x));
-    L.paperPoints.push_back(static_cast<float>(e->y));
-    L.paperPoints.push_back(static_cast<float>(e->z));
-    L.paperPointAttrs.push_back(at);
-    return;
-  }
   if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
     return;
   // REQ-113 / issue #765: TEXT, MTEXT, CIRCLE, ARC, ELLIPSE and polylines reuse the model-space reader.
   // They land in a scratch state with origin 0 and 1 model unit per plotted inch, so every number is
   // already in paper inches, then move into the layout's own stores.
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
-      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_SPLINE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
+      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
       ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR || ty == DWG_TYPE_DIMENSION_ANG3PT ||
       ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
-      ty == DWG_TYPE_TABLE) {
+      ty == DWG_TYPE_TABLE || ty == DWG_TYPE_POINT || ty == DWG_TYPE_SPLINE) {
     AppCommandState scratch;
     scratch.worldDocumentOriginX = 0.0;
     scratch.worldDocumentOriginY = 0.0;
@@ -4987,9 +4966,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     ent->entmode = 2;
     ImportObject(scratch, dwg, obj, Xf2{}, 0, skipHist, degenerateExtrusions, nullptr);
     ent->entmode = savedEntMode;
-    // The sheet's polyline store has no per-vertex bulge, so curved segments come in straight (REQ-201).
-    if (AppendScratchToPaperLayout(L, scratch))
-      NoteSkip(skipHist, "paper-space polyline arc segments drawn straight (no bulge store)");
+    AppendScratchToPaperLayout(L, scratch);
     return;
   }
   const std::string skipName = std::string("paper-space entity (unsupported type ") +
@@ -6266,8 +6243,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (CadDrawingInsUnitsOffered(static_cast<int>(dwg.header_vars.INSUNITS)))
     st.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
   // REQ-456 / issue #1010: point display travels with the drawing (PDMODE, PDSIZE).
-  st.pointDisplayMode = static_cast<int>(dwg.header_vars.PDMODE);
-  st.pointDisplaySize = dwg.header_vars.PDSIZE;
+  st.pdMode = static_cast<int>(dwg.header_vars.PDMODE);
+  st.pdSize = dwg.header_vars.PDSIZE;
 
   const double minX = dwg.header_vars.EXTMIN.x;
   const double minY = dwg.header_vars.EXTMIN.y;
@@ -6300,7 +6277,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
                          st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
-                         st.cadSplines.empty();
+                         st.cadSplines.empty() && st.cadPoints.empty();
   // DXF decode often leaves BLOCK_HEADER.first_entity unset or pointing at BLOCK/ENDBLK only.
   if (emptyGeom) {
     for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
@@ -6432,8 +6409,8 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   // Drawing unit (REQ-022) and, with "Set drawing variables to match" (REQ-357), LUNITS / AUNITS.
   dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawingInsUnits);
-  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.pointDisplayMode);  // REQ-456 / issue #1010
-  dwg->header_vars.PDSIZE = st.pointDisplaySize;
+  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.pdMode);  // REQ-456 / issue #1010
+  dwg->header_vars.PDSIZE = st.pdSize;
   if (st.drawingSettings.setDrawingVariables) {
     dwg->header_vars.LUNITS = 2;
     dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));

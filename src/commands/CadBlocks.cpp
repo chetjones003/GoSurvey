@@ -275,6 +275,8 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadMultileaderAttrs.clear();
   st.cadSplines.clear();  // REQ-443: model-space objects, never block content
   st.cadSplineAttrs.clear();
+  st.cadPoints.clear();  // REQ-456: model-space objects, never block content
+  st.cadPointAttrs.clear();
   // Pipe runs (issue #486 / REQ-345) are model-space entities, never block content, so they hide
   // the same way cadTables/cadSurfaces above do — a run drawn in the main drawing is not the block
   // being edited. pipeRunWorldSolidsSig is left stale on purpose: it is a content hash, and this

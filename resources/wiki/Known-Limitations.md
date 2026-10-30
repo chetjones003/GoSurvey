@@ -49,8 +49,8 @@ yet.)"*
 
 ### Drawing
 
-`SPLINE` · `POINT` (as a drawing command — use `CREATEPOINTS`) · `XLINE` · `RAY` · `DONUT` ·
-`SOLID` · `REVCLOUD` · `WIPEOUT` · `TABLE` · `MLINE`
+`XLINE` · `RAY` · `DONUT` · `SOLID` · `REVCLOUD` · `WIPEOUT` · `MLINE`. `SPLINE` and `POINT` are
+available (issue #1019). `POINT` is a CAD marker, not a survey point — use `CREATEPOINTS` for those.
 
 ### Modifying
 
@@ -64,7 +64,7 @@ yet.)"*
 
 ### Inquiry
 
-`AREA` · `DIST` · `LIST` · `MASSPROP`. The only area reported is a circle's, in the Properties panel.
+`MASSPROP`. `AREA`, `DIST`, and `LIST` are available (issue #1019 for AREA and LIST).
 
 ### View
 
@@ -104,10 +104,10 @@ presets
 | Gap | Detail |
 |---|---|
 | **Binary DXF** | Not supported. *"in AutoCAD use Save As → ASCII DXF"* |
-| **DXF paper space** | Layouts, viewports, and supported sheet entities import in paper inches. Unsupported paper-space types are reported; polyline arc bulges are drawn straight |
+| **DXF paper space** | Layouts, viewports, and supported sheet entities — including paper `POINT` and `SPLINE` — import and export in paper inches. Unsupported paper-space types are reported |
 | **Unsupported DXF entities** | Reported as `N unsupported ENTITIES record(s)`, never silently dropped |
 | **DXF export coverage** | Some entity types have no export branch yet and are absent from the file. The log names what was excluded |
-| **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileaders, tables, Civil 3D objects and proxies. The dialog lists these before writing |
+| **DWG export losses** | Block definitions and inserts (written exploded), elevations, block attributes, multileader extra branches (R2000 and R2004 only), tables, Civil 3D objects and proxies. The dialog lists these before writing |
 | **Civil 3D COGO points** | Custom objects — **not in a DXF at all**. Use a PNEZD/PENZD CSV |
 | **Plant 3D drawings** | Largely `AcPp*` custom objects requiring Autodesk's object enabler; unreachable by any third-party reader |
 | **Model import** | `IMPORTMODEL` brings in **geometry only**. Materials, animations, and cameras are named in the log as not imported |

@@ -19,6 +19,8 @@ class QResizeEvent;
 class QEvent;
 class QPlainTextEdit;
 class QTreeWidget;
+class QTreeWidgetItem;
+class QPushButton;
 class QScrollArea;
 class QComboBox;
 class QLabel;
@@ -141,7 +143,9 @@ private:
   void ShowViewportScale();
   void ShowViewportsManager();
   bool ActiveDrawingReadOnly() const;
-  void ShowToolspaceContextMenu(const QPoint& position);
+  void ShowToolspaceContextMenu(QTreeWidget* tree, const QPoint& position);
+  QMenu* BuildToolspaceMenu(QTreeWidgetItem* item);
+  void ShowPdfFile(const QString& path);
   void ShowPasteWarning();
   void ShowProjectAttachPrompt();
   void ShowPdfAttachDialog();
@@ -197,7 +201,12 @@ private:
   ray3d::Vec3 m_DynamicCursor{};
   bool m_DynamicReset = true;
   QLabel* m_WindowTitle = nullptr;
-  QTreeWidget* m_Toolspace = nullptr;
+  QTreeWidget* m_Toolspace = nullptr;              ///< Prospector tab (REQ-142): the active drawing's objects.
+  QTreeWidget* m_ToolspaceProject = nullptr;       ///< Project tab (REQ-142): projects, tracked items and open drawings.
+  QTreeWidget* m_ToolspaceSettings = nullptr;      ///< Settings tab (REQ-142): drawing-level style tables.
+  QPushButton* m_ToolspaceRefresh = nullptr;       ///< Project tab's Refresh (REQ-379 clause 6).
+  QPushButton* m_ToolspaceProjectHealth = nullptr; ///< Project tab's Project Health (REQ-379 clause 4).
+  QPushButton* m_ToolspaceAddPdf = nullptr;        ///< Project tab's Add PDF... (REQ-379 clause 5).
   QScrollArea* m_PropertiesScroll = nullptr;
   std::uint64_t m_PropertiesFingerprint = ~0ull;
   QString m_PropertiesNote;

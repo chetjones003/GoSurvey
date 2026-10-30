@@ -1316,9 +1316,14 @@ DWG_ENTITY (MULTILEADER)
       #define lnode ctx.leaders[rcount1]
       SUB_FIELD_B (lnode, has_lastleaderlinepoint, 290);
       SUB_FIELD_B (lnode, has_dogleg, 291);
+      /* DWG stores the vectors even when their validity flags are clear. */
+#ifdef IS_DXF
       if (FIELD_VALUE (lnode.has_lastleaderlinepoint))
+#endif
         SUB_FIELD_3BD (lnode, lastleaderlinepoint, 10);
+#ifdef IS_DXF
       if (FIELD_VALUE (lnode.has_dogleg))
+#endif
         SUB_FIELD_3BD (lnode, dogleg_vector, 11);
       SUB_FIELD_BL (lnode, num_breaks, 0);
       VALUEOUTOFBOUNDS (lnode.num_breaks, 5000)
@@ -1431,21 +1436,30 @@ DWG_ENTITY (MULTILEADER)
 
   VERSIONS (R_14, R_2007)
     {
-      FIELD_BL (num_blocklabels, 0);
-      VALUEOUTOFBOUNDS (num_blocklabels, 5000)
-      REPEAT (num_blocklabels, blocklabels, Dwg_LEADER_BlockLabel)
+      FIELD_BL (num_arrowheads, 0);
+      VALUEOUTOFBOUNDS (num_arrowheads, 5000)
+      REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
       REPEAT_BLOCK
-          SUB_FIELD_HANDLE (blocklabels[rcount1],attdef, 4, 330);
-          SUB_FIELD_T (blocklabels[rcount1],label_text, 302);
-          SUB_FIELD_BS (blocklabels[rcount1],ui_index, 177);
-          SUB_FIELD_BD (blocklabels[rcount1],width, 44);
-          SET_PARENT_OBJ (blocklabels[rcount1]);
+          SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
+          SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
+          SET_PARENT_OBJ (arrowheads[rcount1]);
       END_REPEAT_BLOCK
-      END_REPEAT (blocklabels)
+      END_REPEAT (arrowheads);
     }
-  /* GoSurvey (issue #1010): AutoCAD also writes these four fields in R2010+ files, after the
-     arrowhead count (and the R2007 block-label list) and before attach_dir. Omitting them shifts every later bit, so AutoCAD
-     rejects the whole file. Found by comparing the bit stream of an AutoCAD-authored R2018 MULTILEADER. */
+
+  /* Only the arrowhead list is R2007-only. R2010+ still stores the block
+     labels and the text-direction/alignment/scale fields before attachment. */
+  FIELD_BL (num_blocklabels, 0);
+  VALUEOUTOFBOUNDS (num_blocklabels, 5000)
+  REPEAT (num_blocklabels, blocklabels, Dwg_LEADER_BlockLabel)
+  REPEAT_BLOCK
+      SUB_FIELD_HANDLE (blocklabels[rcount1],attdef, 4, 330);
+      SUB_FIELD_T (blocklabels[rcount1],label_text, 302);
+      SUB_FIELD_BS (blocklabels[rcount1],ui_index, 177);
+      SUB_FIELD_BD (blocklabels[rcount1],width, 44);
+      SET_PARENT_OBJ (blocklabels[rcount1]);
+  END_REPEAT_BLOCK
+  END_REPEAT (blocklabels)
   FIELD_B (is_neg_textdir, 294);
   FIELD_BS (ipe_alignment, 178);
   FIELD_BS (justification, 179);

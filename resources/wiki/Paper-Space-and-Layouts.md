@@ -185,10 +185,16 @@ See [[Layers]].
 ## Drawing on the sheet
 
 In paper space, draw and modify commands act on **paper geometry** measured in paper inches. This
-is where a border, a titleblock, and sheet notes belong.
+is where a border, a titleblock, and sheet notes belong. `LINE`, `POLYLINE`, `SPLINE`, `POINT`,
+`LEADER`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` all run on the sheet without changing
+model geometry. Paper `POINT`, `SPLINE`, and `LEADER` round-trip through DXF and DWG. On a sheet a
+leader's Mtext box is sized in paper inches.
 
-DWG saves a sheet spline as a native `SPLINE` on that layout. Sheet leaders use `MULTILEADER` in
-R2018 DWG and `LEADER` with `MTEXT` in R2000 DWG.
+DWG saves each sheet object as a native AutoCAD object on its layout: `SPLINE`, `POINT`, `DIMENSION`
+and raster `IMAGE`. Sheet leaders are `MULTILEADER` in R2010 and later DWG files, and `LEADER` with
+`MTEXT` in R2000 DWG. A sheet image is saved by file path: if its file is moved or deleted, the image
+unloads when the drawing reopens and the log says so, and the rest of the sheet still loads. A sheet
+point's size and style follow the drawing's point mode (`PDMODE`) and size (`PDSIZE`).
 
 - The clipboard moves objects between model and paper space at 1:1 raw coordinates — copy in model
   space, switch to the layout, and **Paste**. See [[Modify Tools]].

@@ -1,42 +1,87 @@
-# TASK-1010 — Sheet spline DWG and R2018 multileader repair
+# TASK-1010 — Paper-space objects in DWG and R2018/R2010 leader repair
 
-- Issue: #1010
-- Status: implementation and verification
-- Base: beta at 576a8072
+- Issue: #1010 (audit #751 I3)
+- Status: PR opened with one open regression (see "Open issue"); not verified for R2010/R2018 leaders
+- Base: beta (merged up to 0c92241a, which includes PR #1137 for #993)
 
 ## Authority and scope
 
-REQ-113 (accepted, D-2026-10-20-a and D-2026-10-29-a) requires sheet splines in native DWG paper space and an AutoCAD-readable sheet. REQ-443 defines spline geometry. This increment adds the sheet spline store and DWG import/export. The accepted decision D-2026-10-29-a puts dimensions, points, and images in later increments, one PR each.
+REQ-113 (accepted; amended by D-2026-10-29-a to include DIMENSION) requires every paper-space object kind in
+its set to be written to the AutoCAD-readable part of a DWG. REQ-456 (sheet POINT) and REQ-457 (sheet raster
+IMAGE, path-only) were accepted under D-2026-10-29-a. REQ-443 defines spline geometry. REQ-367 defines
+multileaders.
 
-The R2018 AutoCAD check exposed a separate multileader writer defect that prevented the existing sheet leader from opening. The repair is included so the REQ-113 AutoCAD oracle can cover the sheet with all its existing entities.
+This is one PR, by the user's decision, covering every object kind REQ-113 names that is not yet written to
+DWG, plus the leader repair the R2018 oracle needs.
 
-## Plan and boundaries
+## What this PR changes
 
-- Domain: add `PaperLayout::paperSplines` and attributes, and move splines from paper import scratch state to the layout.
-- IO: share the model spline writer and trailer codec with the paper store. Extend native paper import to SPLINE.
-- Vendored LibreDWG: correct R2018 MULTILEADER field order and populate the leader node's last point and dogleg vector.
-- Keep model-space spline behavior and R2000 LEADER fallback covered by existing tests.
-- No new architectural layer or UI surface.
+- **Sheet dimensions:** a sheet dimension (a Dim-kind annotation in the sheet text store) is written as a
+  native DIMENSION with its anonymous block. The model-space writer and the sheet writer share
+  `WriteDimensionAnnotation`. Anonymous block names skip names already in use.
+- **Sheet images (REQ-457):** `CadRasterImage` stores the file path, insertion, size, rotation and pixel size.
+  `ProbeRasterImage` and `MakeSheetRasterImage` (src/io/RasterImage.cpp) decode with stb_image and refuse a
+  truncated or unreadable file. The IMAGE and IMAGEDEF are written with `dwg_add_IMAGE`; the IMAGEDEF is
+  listed in `ACAD_IMAGE_DICT`, and the IMAGE's link to it is a hard pointer. A file missing on import is
+  unloaded and logged.
+- **Drawing point mode (REQ-456):** the existing `st.pdMode` / `st.pdSize` (set by the PDMODE/PDSIZE commands)
+  are read from and written to the DWG header.
+- **Sheet splines and points:** beta already stores and imports these (`paperSplines`, `paperPoints`). This
+  PR replaces beta's sheet spline writer with the shared spline writer used by model space, so control
+  vertices, knots and weights survive a DWG round trip. Beta's sheet point writer is kept.
+- **Multileaders (R2010+):** the vendored writer sets ByBlock linetype and lineweight, the AutoCAD class
+  application names and proxy flags, an AutoCAD-style preview block, and the arrowhead count and R2010 fields
+  that AutoCAD reads. PR #1137 corrected the same MULTILEADER layout from the other side; the merged layout is
+  beta's (see `third_party/libredwg/VENDORED.md`, rows 16–18).
+- Decisions: D-2026-10-29-a (sheet dimensions, points and images), D-2026-10-29-b (multileader writer accepted
+  by AutoCAD; supersedes D-2026-10-01-h's "style handle is null" note).
 
-## Diagnosis and evidence
+## Evidence
 
-The spline was absent from the paper store and `ImportPaperEntity` dispatch, so DWG export and import could not retain it on a layout. A native DWG round-trip test exercises the path without the GoSurvey trailer.
+- Native round trips (no GoSurvey trailer): sheet spline, sheet dimension, sheet point (with PDMODE/PDSIZE),
+  sheet image (including missing-file unload and truncated-file refusal). Tests `[issue1010]`.
+- AutoCAD 2025 Core Console, `/i` open then query: sheet SPLINE, DIMENSION, POINT and IMAGE counted on
+  the `Plan` paper space; the image's IMAGEDEF resolves to its file path with the loaded flag set.
+- PR #1137's oracle fixtures (R2000, R2010, R2018 at levels 0–4) open in AutoCAD with exit code 0.
 
-For R2018, AutoCAD 2025 opened the control DWG but rejected GoSurvey's isolated multileader with `ErrorStatus=53`. A controlled mutation of AutoCAD's leader showed that changing only its node to `has_lastleaderlinepoint=0` and `has_dogleg=0` reproduced the rejection. AutoCAD also wrote an arrowhead count and the four trailing style fields in R2018, while the vendored spec skipped them; a field-encoded copy of AutoCAD's own leader began opening after those fields were corrected. The corrected GoSurvey isolated R2018 leader and full R2018 sheet now open in AutoCAD.
+## Verification
 
-R2010 still fails for the empty baseline fixture `L0_R2010.dwg`; it is a separate writer defect and not introduced by the sheet content.
+- Release build (`build.bat`) on the merged tree.
+- Full domain suite (`GoSurveyTests.exe`) on the merged tree.
+- AutoCAD checks above on the merged build, R2000 and R2018 (and R2010 with the PR #1137 layout).
 
-## Verification plan
+## Open issue (must be resolved before merge)
 
-- Native sheet spline save/reopen test checks layout, control vertices, and length.
-- The existing multileader API test checks last point and dogleg fields and its DWG round trip.
-- Run Release build, targeted tests, complete CTest suite, Qt test, and output layout check.
-- Use AutoCAD Core Console on R2000 and R2018 isolated and full sheet fixtures; verify SPLINE and MULTILEADER on the paper layout.
-- Review README, PRIVACY, in-app wiki, and public manual wiki before opening the PR.
+AutoCAD 2025 rejects R2010 and R2018 DWG files that contain a multileader, both on a sheet and in model space
+(`MODELLEADER_R2018`, and the level-4 fixtures `L4_R2010` and `L4_R2018`). The same level-4 fixtures open at R2000.
+Before the merge with beta these leader fixtures opened; PR #1137's build opens its own level-4 R2010 and R2018
+fixtures.
+
+Ruled out by experiment on the merged tree (each one tested alone, in AutoCAD):
+
+- the leader node: flags and dogleg vectors, the node carrying the final point, line point count, line weight
+  and arrow size. Beta's node block was restored; none of the variants opens the file;
+- the restored proxy graphics ("preview"), switched off and on;
+- the class application names for MLEADERSTYLE and MULTILEADER, switched off and on.
+
+Not yet ruled out: the MLEADERSTYLE defaults this PR sets (line type, line weight, text attachment), the
+R2010+ layout of the record after beta's changes, and an effect of the sheet content on the same drawing.
+The next step is to build PR #1137's commit separately and compare its MULTILEADER and MLEADERSTYLE records
+with this branch's output field by field.
 
 ## Pre-PR product documentation review (REQ-453)
 
-- `README.md`: reviewed. Its general DWG exchange description remains accurate; no update needed.
-- `PRIVACY.md`: reviewed. Native DWG entity serialization changes no data collection or transfer; no update needed.
-- `resources/wiki/`: reviewed, especially `Paper-Space-and-Layouts.md` and `Import-and-Export.md`. Added the native sheet SPLINE and versioned leader representation to the paper-space guide. The broader import/export page has older converter guidance unrelated to this increment.
-- Public manual wiki linked from `gosurveycad.com` (GoSurvey GitHub Wiki, HEAD `dde790d`): reviewed `Paper-Space-and-Layouts.md` and `Import-and-Export.md`. The paper-space page already says paper SPLINE and LEADER round-trip through DWG, so this fix brings the product into line with it; no update needed for this increment.
+- `README.md`: reviewed. No paper-space, leader, spline, image or point content, and the DWG description is
+  about the build and licence only. No update needed.
+- `PRIVACY.md`: reviewed. No data collection or transfer change. No update needed.
+- `resources/wiki/` (in-app help): reviewed `Paper-Space-and-Layouts.md`, `Known-Limitations.md`,
+  `Import-and-Export.md` and `FAQ.md`.
+  - `Paper-Space-and-Layouts.md`: DWG paragraph corrected to name SPLINE, POINT, DIMENSION and IMAGE, the
+    R2010+ MULTILEADER rule, image-by-path behaviour, and PDMODE/PDSIZE.
+  - `Known-Limitations.md`: the DWG export-losses entry no longer lists multileaders (only R2000/R2004 extra
+    branches are lost).
+  - `Import-and-Export.md` and `FAQ.md` describe the DWG converter. That wording is stale from before native
+    DWG reading and is not affected by this PR; it is recorded for a separate fix.
+- Public manual wiki (GoSurvey GitHub Wiki, HEAD `dde790d` before this PR): the same pages were reviewed. The
+  public `Paper-Space-and-Layouts.md` and `Known-Limitations.md` receive the same corrections as the in-app
+  copies. Its `Import-and-Export.md` and `FAQ.md` carry the same stale converter wording, recorded above.

@@ -644,17 +644,7 @@ TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
   const dwg_point_3d lpts[3] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {12.0, 2.0, 0.0}};
   const dwg_point_3d textPt{12.0, 2.0, 0.0};
   const dwg_point_3d textDir{1.0, 0.0, 0.0};
-  Dwg_Entity_MULTILEADER* leader =
-      dwg_add_MULTILEADER(hdr, 3, lpts, "Monument A", &textPt, &textDir, 0.18, 8.0);
-  REQUIRE(leader != nullptr);
-  REQUIRE(leader->ctx.num_leaders == 1);
-  const Dwg_LEADER_Node& node = leader->ctx.leaders[0];
-  CHECK(node.has_lastleaderlinepoint == 1);
-  CHECK(node.has_dogleg == 1);
-  CHECK(node.lastleaderlinepoint.x == Catch::Approx(12.0));
-  CHECK(node.lastleaderlinepoint.y == Catch::Approx(2.0));
-  CHECK(node.dogleg_vector.x == Catch::Approx(std::sqrt(0.5)));
-  CHECK(node.dogleg_vector.y == Catch::Approx(std::sqrt(0.5)));
+  REQUIRE(dwg_add_MULTILEADER(hdr, 3, lpts, "Monument A", &textPt, &textDir, 0.18, 8.0) != nullptr);
   int inDoc = 0;
   for (unsigned i = 0; i < dwg->num_objects; ++i) {
     if (dwg->object[i].fixedtype == DWG_TYPE_MULTILEADER)
@@ -667,6 +657,77 @@ TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
   dwg_free(dwg);
   std::free(dwg);
   CHECK(CountDwgMultileaders(p.c_str()) == 1);
+}
+
+TEST_CASE("TEXT export starts with a valid unit width factor",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2000, R_2010, R_2018}) {
+    CAPTURE(version);
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d point{1, 2, 0};
+    auto* text = dwg_add_TEXT(model->tio.object->tio.BLOCK_HEADER, "PLAN", &point, 0.3);
+    REQUIRE(text != nullptr);
+    CHECK(text->width_factor == Catch::Approx(1));
+    dwg_free(dwg);
+    std::free(dwg);
+  }
+}
+
+// R2010+ drops the arrowhead list, but retains the remaining common tail.
+TEST_CASE("MULTILEADER retains its common tail in R2010 and R2018",
+          "[dwg][libredwg][req170][issue993]") {
+  for (const auto version : {R_2010, R_2018}) {
+    CAPTURE(version);
+    ScratchDir dir("dwg-mleader-common-tail");
+    const auto path = (dir.path / "leader.dwg").string();
+    Dwg_Data* dwg = dwg_new_Document(version, 0, 0);
+    REQUIRE(dwg != nullptr);
+    Dwg_Object* model = dwg_model_space_object(dwg);
+    REQUIRE(model != nullptr);
+    const dwg_point_3d points[] = {{0, 0, 0}, {10, 2, 0}};
+    const dwg_point_3d textPoint{10, 2, 0}, direction{1, 0, 0};
+    auto* leader = dwg_add_MULTILEADER(model->tio.object->tio.BLOCK_HEADER,
+                                     2, points, "NOTE", &textPoint, &direction, 0.2, 3);
+    REQUIRE(leader != nullptr);
+    CHECK(leader->scale_factor == Catch::Approx(1));
+    leader->is_neg_textdir = 1;
+    leader->ipe_alignment = 2;
+    leader->justification = 1;
+    leader->scale_factor = 2.5;
+    leader->attach_top = 9;
+    leader->attach_bottom = 9;
+    leader->ctx.leaders[0].lastleaderlinepoint = {10, 2, 0};
+    leader->ctx.leaders[0].dogleg_vector = {1, 0, 0};
+    LibreDwgLinkBlockEntities(dwg);
+    REQUIRE(dwg_write_file(path.c_str(), dwg) == 0);
+    dwg_free(dwg);
+    std::free(dwg);
+    Dwg_Data read{};
+    REQUIRE(dwg_read_file(path.c_str(), &read) < DWG_ERR_CRITICAL);
+    bool found = false;
+    for (unsigned i = 0; i < read.num_objects; ++i) {
+      if (read.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+      const auto* decoded = read.object[i].tio.entity->tio.MULTILEADER;
+      REQUIRE(decoded != nullptr);
+      CHECK(decoded->is_neg_textdir == 1);
+      CHECK(decoded->ipe_alignment == 2);
+      CHECK(decoded->justification == 1);
+      CHECK(decoded->scale_factor == Catch::Approx(2.5));
+      CHECK(decoded->attach_top == 9);
+      CHECK(decoded->attach_bottom == 9);
+      CHECK(decoded->ctx.leaders[0].has_lastleaderlinepoint == 0);
+      CHECK(decoded->ctx.leaders[0].has_dogleg == 0);
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.x == Catch::Approx(10));
+      CHECK(decoded->ctx.leaders[0].lastleaderlinepoint.y == Catch::Approx(2));
+      CHECK(decoded->ctx.leaders[0].dogleg_vector.x == Catch::Approx(1));
+      found = true;
+    }
+    CHECK(found);
+    dwg_free(&read);
+  }
 }
 
 TEST_CASE("CadMultileader round-trips through native MULTILEADER DWG export (issue #619)",
@@ -4960,8 +5021,10 @@ TEST_CASE("DWG import maps POINT LEADER SOLID 3DFACE and mesh (REQ-170, issue #6
   AppCommandState st;
   std::vector<std::string> log;
   REQUIRE(ImportDwgFile(st, p.c_str(), log));
-  CHECK(st.cadPositionMarkers.size() == 1);
-  CHECK(st.cadPositionMarkers[0].x == Catch::Approx(1.0).margin(0.01));
+  REQUIRE(st.cadPoints.size() == 1);
+  CHECK(st.cadPoints[0].x == Catch::Approx(1.0).margin(0.01));
+  CHECK(st.cadPoints[0].y == Catch::Approx(2.0).margin(0.01));
+  CHECK(st.cadPositionMarkers.empty());
   CHECK(st.cadFilledRegions.size() >= 1);
   REQUIRE(st.cadMeshes.size() >= 1);
   CHECK(st.cadMeshes[0]->triangleCount() >= 2);
@@ -6071,11 +6134,11 @@ TEST_CASE("DWG writes and reads sheet points natively (REQ-456, issue #1010)",
   const auto p = (dir.path / "sheet-point.dwg").string();
   AppCommandState st;
   OneLine(st);
-  st.pointDisplayMode = 3;
-  st.pointDisplaySize = 0.1;
+  st.pdMode = 3;
+  st.pdSize = 0.1;
   PaperLayout sheet;
   sheet.name = "Sheet P";
-  sheet.paperPoints = {3.f, 4.f, 0.f, 7.5f, 1.25f, 0.f};
+  sheet.paperPoints = {CadPoint{3.0, 4.0, 0.0}, CadPoint{7.5, 1.25, 0.0}};
   sheet.paperPointAttrs.resize(2);
   st.paperLayouts.push_back(std::move(sheet));
   std::vector<std::string> log;
@@ -6086,15 +6149,15 @@ TEST_CASE("DWG writes and reads sheet points natively (REQ-456, issue #1010)",
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.paperLayouts.size() == 1);
   const PaperLayout& L = in.paperLayouts[0];
-  REQUIRE(L.paperPoints.size() == 6);
-  CHECK(L.paperPoints[0] == Catch::Approx(3.f).margin(1e-4f));
-  CHECK(L.paperPoints[1] == Catch::Approx(4.f).margin(1e-4f));
-  CHECK(L.paperPoints[3] == Catch::Approx(7.5f).margin(1e-4f));
-  CHECK(L.paperPoints[4] == Catch::Approx(1.25f).margin(1e-4f));
+  REQUIRE(L.paperPoints.size() == 2);
+  CHECK(L.paperPoints[0].x == Catch::Approx(3.0).margin(1e-4));
+  CHECK(L.paperPoints[0].y == Catch::Approx(4.0).margin(1e-4));
+  CHECK(L.paperPoints[1].x == Catch::Approx(7.5).margin(1e-4));
+  CHECK(L.paperPoints[1].y == Catch::Approx(1.25).margin(1e-4));
   CHECK(L.paperPointAttrs.size() == 2);
   CHECK(in.surveyPoints.empty());
-  CHECK(in.pointDisplayMode == 3);
-  CHECK(in.pointDisplaySize == Catch::Approx(0.1).margin(1e-9));
+  CHECK(in.pdMode == 3);
+  CHECK(in.pdSize == Catch::Approx(0.1).margin(1e-9));
 }
 
 // REQ-457 / issue #1010: a sheet raster image is written as a native DWG IMAGE with its IMAGEDEF and read back on
@@ -6250,16 +6313,16 @@ static void BuildOracleState(AppCommandState& st, int level) {
     dim.plottedHeightInches = 0.125f;
     sheet.paperTexts.push_back(dim);
     sheet.paperTextAttrs.push_back(EntityAttributes{});
-    sheet.paperPoints = {18.f, 12.f, 0.f, 20.f, 13.f, 0.f};  // REQ-456 sheet points
+    sheet.paperPoints = {CadPoint{18.0, 12.0, 0.0}, CadPoint{20.0, 13.0, 0.0}};  // REQ-456 sheet points
     sheet.paperPointAttrs.resize(2);
-    st.pointDisplayMode = 3;
+    st.pdMode = 3;
     CadRasterImage picture;  // REQ-457 sheet image: the repository icon, placed on the sheet
     std::string picWhy;
     if (MakeSheetRasterImage(RepoIconPath(), 26.f, 2.f, 4.f, 2.f, 0.f, &picture, &picWhy)) {
       sheet.paperImages.push_back(picture);
       sheet.paperImageAttrs.push_back(EntityAttributes{});
     }
-    st.pointDisplaySize = 0.1;
+    st.pdSize = 0.1;
     spline::Spline wave;
     // Fixed, valid fit points: MakeFit cannot fail here, so its result is deliberately unused.
     (void)spline::MakeFit({{2, 20, 0}, {6, 24, 0}, {10, 20, 0}, {14, 24, 0}}, false, &wave, nullptr);
@@ -6282,9 +6345,9 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
   REQUIRE(outDir != nullptr);
   const std::filesystem::path dir = std::filesystem::path(outDir);
   std::filesystem::create_directories(dir);
-  const std::pair<const char*, DwgSaveVersion> versions[] = {{"R2000", DwgSaveVersion::R2000},
-                                                               {"R2010", DwgSaveVersion::R2010},
-                                                               {"R2018", DwgSaveVersion::R2018}};
+  const std::pair<const char*, DwgSaveVersion> versions[] = {
+      {"R2000", DwgSaveVersion::R2000}, {"R2010", DwgSaveVersion::R2010},
+      {"R2018", DwgSaveVersion::R2018}};
   std::vector<std::string> log;
   for (int level = 0; level <= 4; ++level)
     for (const auto& v : versions) {
