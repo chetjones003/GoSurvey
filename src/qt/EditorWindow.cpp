@@ -1,4 +1,5 @@
 #include "EditorWindow.hpp"
+#include "DrawingDocumentTabBar.hpp"
 #include "QtAccent.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -28,6 +29,8 @@
 #include "AppPaths.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "UserPrefs.hpp"
+#include "ViewportZoomScale.hpp"
+#include <QInputDialog>
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "WhatsNewLogic.hpp"
@@ -356,6 +359,56 @@ void EditorWindow::LoadCoordinateSystemDictionaries() {
   geo::LoadDictionaries(directory);
 }
 
+void InstallDrawingDocumentTabStripImpl(QMainWindow* window, QTabBar* tabs) {
+  if (window == nullptr || tabs == nullptr) return;
+  auto* wrapper = window->findChild<QWidget*>("ribbonWrapper");
+  if (wrapper == nullptr) return;
+  if (wrapper->property("drawingTabStripInstalled").toBool()) return;
+  QLayout* strip = wrapper->layout();
+  if (strip == nullptr) return;
+
+  auto* outer = new QVBoxLayout;
+  outer->setObjectName("ribbonOuterLayout");
+  outer->setContentsMargins(0, 0, 0, 0);
+  outer->setSpacing(0);
+
+  auto* ribbonRow = new QHBoxLayout;
+  ribbonRow->setContentsMargins(0, 0, 0, 0);
+  ribbonRow->setSpacing(2);
+  while (QLayoutItem* item = strip->takeAt(0)) ribbonRow->addItem(item);
+  delete strip;
+  outer->addLayout(ribbonRow);
+
+  auto* docStrip = new QWidget(wrapper);
+  docStrip->setObjectName("drawingTabRow");
+  docStrip->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  const int tabHeight = tabs->height();
+  docStrip->setFixedHeight(tabHeight);
+  auto* docLayout = new QHBoxLayout(docStrip);
+  docLayout->setContentsMargins(0, 0, 0, 0);
+  docLayout->setSpacing(0);
+  tabs->setParent(docStrip);
+  tabs->setExpanding(false);
+  tabs->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+  docLayout->addWidget(tabs, 0);
+  auto* newDrawingTab = new QToolButton(docStrip);
+  newDrawingTab->setObjectName("drawingTabNew");
+  newDrawingTab->setText("+");
+  newDrawingTab->setToolTip("New drawing");
+  newDrawingTab->setFixedSize(26, 26);
+  newDrawingTab->setAutoRaise(true);
+  docLayout->addWidget(newDrawingTab, 0, Qt::AlignVCenter);
+  docLayout->addStretch(1);
+  outer->addWidget(docStrip);
+  wrapper->setLayout(outer);
+  wrapper->setProperty("drawingTabStripInstalled", true);
+
+  if (auto* ribbon = window->findChild<QTabWidget*>("ribbon")) {
+    wrapper->setMinimumHeight(ribbon->height() + tabHeight);
+    wrapper->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  }
+}
+
 EditorWindow::EditorWindow(QString developmentBranchLabel)
     : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
@@ -383,16 +436,12 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
 
   auto* center = new QWidget(this);
   auto* centerLayout = new QVBoxLayout(center);
-  centerLayout->setContentsMargins(0, 0, 0, 0);
+  centerLayout->setContentsMargins(0, 0, 0, 6);
   centerLayout->setSpacing(0);
-  m_Tabs = new QTabBar(center);
+  m_Tabs = new DrawingDocumentTabBar(this);
   m_Tabs->setObjectName("drawingTabs");
-  m_Tabs->setTabsClosable(true);
-  m_Tabs->setExpanding(false);
   m_Tabs->setAutoHide(false);
-  m_Tabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
-  m_Tabs->setMinimumHeight(m_Tabs->fontMetrics().height() + 12);
-  centerLayout->addWidget(m_Tabs);
+  m_Tabs->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
   m_Pages = new QStackedWidget(center);
   auto* start = new QWidget(m_Pages);
   start->setObjectName("startScreen");
@@ -762,12 +811,15 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   centerLayout->addWidget(m_Pages, 1);
   auto* spaceBar = new QWidget(center);
   spaceBar->setObjectName("paperSpaceBar");
+  spaceBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  spaceBar->setMinimumHeight(34);
   auto* spaceRow = new QHBoxLayout(spaceBar);
-  spaceRow->setContentsMargins(6, 2, 6, 2);
+  spaceRow->setContentsMargins(6, 4, 6, 6);
   spaceRow->setSpacing(4);
   m_SpaceTabs = new QTabBar(spaceBar);
   m_SpaceTabs->setObjectName("paperSpaceTabs");
-  m_SpaceTabs->setExpanding(false);
+  m_SpaceTabs->setExpanding(true);
+  m_SpaceTabs->setMinimumHeight(m_SpaceTabs->fontMetrics().height() + 10);
   m_SpaceTabs->setContextMenuPolicy(Qt::CustomContextMenu);
   spaceRow->addWidget(m_SpaceTabs, 1);
   auto* manageLayouts = new QToolButton(spaceBar);
@@ -780,6 +832,7 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   BuildDocks();
   UpdateChromeIcons();
   m_Coordinates = new QLabel(this);
+  statusBar()->setMinimumHeight(34);
   statusBar()->setSizeGripEnabled(false);
   statusBar()->addPermanentWidget(new VisibleSizeGrip(this));
   statusBar()->addPermanentWidget(m_Coordinates, 1);
@@ -801,6 +854,46 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     if (index < 0 || index >= static_cast<int>(m_State.annotationScales.size()) ||
         index == m_State.currentAnnotationScaleIndex) return;
     SetCurrentAnnotationScaleIndex(m_State, index);
+    Refresh();
+  });
+  auto* viewportZoom = new QComboBox(this);
+  viewportZoom->setObjectName("statusViewportZoom");
+  viewportZoom->setMinimumWidth(110);
+  viewportZoom->setAccessibleName("Viewport zoom scale");
+  viewportZoom->setToolTip("Model viewport zoom ratio (REQ-458)");
+  statusBar()->addWidget(viewportZoom);
+  connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
+    if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
+      bool ok = false;
+      const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
+          QLineEdit::Normal, QStringLiteral("1:50"), &ok);
+      if (!ok) {
+        Refresh();
+        return;
+      }
+      float paperUnits = 1.f, drawingUnits = 1.f;
+      const QByteArray utf8 = text.toUtf8();
+      if (!TryParseViewportZoomRatio(std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), &paperUnits,
+                                     &drawingUnits)) {
+        QMessageBox::warning(this, "Viewport zoom scale", "Enter a ratio like 1:50.");
+        Refresh();
+        return;
+      }
+      AddViewportZoomScale(m_State, std::string(utf8.constData(), static_cast<std::size_t>(utf8.size())), paperUnits,
+                           drawingUnits);
+      const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
+      ApplyViewportZoomScaleIndex(m_State, m_State.currentViewportZoomScaleIndex,
+                                  static_cast<float>(m_Viewport->height()), dpi);
+      Refresh();
+      m_Viewport->update();
+      return;
+    }
+    if (index < 0 || index >= static_cast<int>(m_State.viewportZoomScales.size()) ||
+        index == m_State.currentViewportZoomScaleIndex)
+      return;
+    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
+    ApplyViewportZoomScaleIndex(m_State, index, static_cast<float>(m_Viewport->height()), dpi);
+    m_Viewport->update();
     Refresh();
   });
   auto* multiSelect = new QToolButton(this);
@@ -992,6 +1085,9 @@ void EditorWindow::BuildRibbon() {
   aboutAction->setObjectName("aboutGoSurveyAction");
   BuildTitleBar(applicationMenu);
   BuildRibbonPages();
+  InstallDrawingDocumentTabStripImpl(this, m_Tabs);
+  if (auto* newTab = findChild<QToolButton*>("drawingTabNew"))
+    connect(newTab, &QToolButton::clicked, this, [this] { NewDrawing(); });
 }
 
 // Tab order in the Toolspace: Project, Prospector, Settings (REQ-142).
@@ -1693,6 +1789,8 @@ void EditorWindow::showEvent(QShowEvent* event) {
 #endif
   if (auto* grip = findChild<QSizeGrip*>("editorResizeGrip"))
     grip->setVisible(!isMaximized() && !isFullScreen());
+  if (statusBar() != nullptr && statusBar()->layout() != nullptr)
+    statusBar()->layout()->setContentsMargins(4, 3, 6, 8);
   m_Tabs->updateGeometry();
   if (centralWidget()->layout()) centralWidget()->layout()->activate();
   m_Tabs->update();
@@ -2267,6 +2365,23 @@ void EditorWindow::Refresh() {
     annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
     annotationScale->setEnabled(!m_State.annotationScales.empty());
   }
+  if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
+    EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
+    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
+    const float heightPx = m_Viewport != nullptr ? static_cast<float>(m_Viewport->height()) : 800.f;
+    SyncCurrentViewportZoomScaleIndex(m_State, heightPx, dpi);
+    const QSignalBlocker block(viewportZoom);
+    viewportZoom->clear();
+    for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
+      viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
+    viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
+    if (m_State.currentViewportZoomScaleIndex >= 0)
+      viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
+    else
+      viewportZoom->setCurrentIndex(-1);
+    const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
+    viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
+  }
   RefreshProjects();
   const QSignalBlocker tabBlock(m_Tabs);
   while (m_Tabs->count() > static_cast<int>(m_State.drawingTabs.size())) m_Tabs->removeTab(m_Tabs->count() - 1);
@@ -2278,6 +2393,8 @@ void EditorWindow::Refresh() {
     if (i == m_Tabs->count()) m_Tabs->addTab(title); else m_Tabs->setTabText(i, title);
   }
   m_Tabs->setTabButton(0, QTabBar::RightSide, nullptr);
+  if (m_Tabs->count() > 0)
+    m_Tabs->setTabIcon(0, windowIcon().pixmap(16, 16));
   m_Tabs->setCurrentIndex(m_State.activeDrawingIdx);
   {
     const QSignalBlocker spaceBlock(m_SpaceTabs);
@@ -2295,7 +2412,9 @@ void EditorWindow::Refresh() {
   }
   if (auto* spaceBar = findChild<QWidget*>("paperSpaceBar"))
     spaceBar->setVisible(m_State.activeDrawingIdx > 0);
-  m_Tabs->setMinimumHeight(std::max(m_Tabs->sizeHint().height(), m_Tabs->fontMetrics().height() + 12));
+  if (auto* drawingTabRow = findChild<QWidget*>("drawingTabRow"))
+    drawingTabRow->setVisible(true);
+  m_Tabs->update();
   m_Pages->setCurrentIndex(m_State.activeDrawingIdx == 0 ? 0 : 1);
   const bool drawingActive = m_State.activeDrawingIdx > 0;
   if (auto* drawingSettings = findChild<QAction*>("command_DRAWINGSETTINGS"))
@@ -2773,7 +2892,7 @@ bool EditorWindow::CreatePdfCoordinate(const pdfview::CoordCandidate& c) {
         [id](const SurveyPoint& p) { return p.id == id; })) ++id;
     SurveyPoint point{};
     point.id = id; point.easting = c.easting; point.northing = c.northing;
-    point.elevation = *c.elevation; point.description = c.description; point.rawDescription = c.description;
+    point.elevation = c.elevation.value_or(0.0); point.description = c.description; point.rawDescription = c.description;
     if (std::any_of(m_State.surveyPoints.begin(), m_State.surveyPoints.end(), [id](const SurveyPoint& p) { return p.id == id; })) {
       QMessageBox box(QMessageBox::Warning, "Point number already exists",
                       QString("Point %1 already exists. Choose how to resolve the conflict.").arg(id), QMessageBox::NoButton, this);

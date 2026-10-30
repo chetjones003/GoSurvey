@@ -227,6 +227,9 @@ private:
   QPointF m_ExtractEnd;
   std::optional<pdfview::ExtractResult> m_ExtractResult;
   QDialog* m_ExtractReview = nullptr;
+  QTableWidget* m_ExtractCandidatesTable = nullptr;
+  QLabel* m_ExtractSkippedIntro = nullptr;
+  QTableWidget* m_ExtractSkippedTable = nullptr;
   // REQ-429: the find bar. Results are read-only: nothing here touches the annotation session.
   struct SearchOutcome {
     bool ok = false;

@@ -20,9 +20,13 @@ MOVE/COPY: Base point — click or X,Y | ESC cancel
 MOVE/COPY: Second point — click or X,Y or @dx,dy from base | ESC cancel
 ```
 
-1. **Select** — click two opposite corners of a window, or have a selection already.
+1. **Select** — use the current selection, or add objects by clicking and/or box selection, then
+   press **Enter**. Hold **Shift** to remove objects from the selection.
 2. **Base point** — click or type `X,Y`. Snap to a corner or a survey point for an exact move.
 3. **Second point** — click, type `X,Y`, or type `@dx,dy` for an exact displacement from the base.
+
+Text and MTEXT show a live transform preview while choosing the destination, as linework does.
+Selected PDF underlays also preview MOVE, COPY, SCALE and ROTATE.
 
 **Example — shift everything 5 feet east and 2 feet north:**
 

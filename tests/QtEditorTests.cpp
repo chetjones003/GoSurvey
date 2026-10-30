@@ -1,9 +1,11 @@
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
+#include "DrawingDocumentTabBar.hpp"
 #include "io/DwgIo.hpp"
 #include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
+#include "ViewportZoomScale.hpp"
 #include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
 #include "EditorChrome.hpp"
@@ -1163,6 +1165,50 @@ private Q_SLOTS:
     review->findChild<QPushButton*>("pdfCoordinateDenyAll")->click();
     QCOMPARE(table->rowCount(), 0);
     QCOMPARE(state.surveyPoints.size(), size_t(4)); // Deny all never touches the drawing.
+  }
+
+  void pdfCoordinateReviewShowsSkippedTableRows() {
+    QTemporaryDir directory;
+    const QString path = Issue905WritePdf(directory, "coordinate-skipped.pdf", pdfview::MakeSyntheticPdf(1, 3, 0));
+    EditorWindow editor;
+    PdfWindow window(&editor);
+    window.SetEditor(&editor);
+    window.resize(1100, 820);
+    window.show();
+    QString error;
+    QVERIFY2(window.LoadFile(path, error), qPrintable(error));
+    QTRY_VERIFY_WITH_TIMEOUT(!window.IsBusy(), 10000);
+
+    pdfview::ExtractResult result;
+    result.status = pdfview::ExtractStatus::Ok;
+    pdfview::CoordCandidate candidate;
+    candidate.pointNumber = 1;
+    candidate.northing = 303398.59;
+    candidate.easting = 1887382.33;
+    candidate.sourceText = "1 / 303398.59 / 1887382.33";
+    result.candidates.push_back(candidate);
+    pdfview::SkippedTableRow skip;
+    skip.sourceText = "POINT TABLE TO BE REVISED";
+    skip.reason = "Missing northing and easting";
+    result.skippedTableRows.push_back(skip);
+    window.m_ExtractResult = std::move(result);
+    window.ShowExtractReview();
+
+    auto* review = window.findChild<QDialog*>("pdfCoordinateReview");
+    QVERIFY(review);
+    auto* skippedIntro = review->findChild<QLabel*>("pdfCoordinateSkippedIntro");
+    auto* skippedTable = review->findChild<QTableWidget*>("pdfCoordinateSkippedRows");
+    QVERIFY(skippedIntro && skippedTable);
+    QVERIFY(skippedIntro->isVisible());
+    QVERIFY(skippedTable->isVisible());
+    QCOMPARE(skippedTable->rowCount(), 1);
+    QCOMPARE(skippedTable->item(0, 0)->text(), QString("POINT TABLE TO BE REVISED"));
+    QCOMPARE(skippedTable->item(0, 1)->text(), QString("Missing northing and easting"));
+
+    window.m_ExtractResult->skippedTableRows.clear();
+    window.ShowExtractReview();
+    QVERIFY(!skippedIntro->isVisible());
+    QVERIFY(!skippedTable->isVisible());
   }
 
   void pdfCoordinateAcceptAllStopsAtFirstUncreatableCandidate() {
@@ -5411,6 +5457,238 @@ private Q_SLOTS:
         std::abs(st.pendingZoomMxY - st.pendingZoomMnY)));
   }
 
+  // TASK-0.7.8 / REQ-121: empty MOVE logs the shared selection prompt; an armed box corner must not
+  // consume a later entity click during PickSelection.
+  void task078ModifySelectionPromptAndEntityAfterBoxArm() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    DrawWideLine(window);
+    auto& st = window.State();
+    ParkCamera(st);
+    window.m_Log.clear();
+    window.Submit("MOVE");
+    QCOMPARE(st.active, AppCommandState::Kind::Move);
+    QCOMPARE(st.modifyPhase, AppCommandState::ModifyPhase::PickSelection);
+    QVERIFY(LogHas(window.m_Log, kSelectObjectsPrompt));
+    QVERIFY(st.selection.empty());
+    const Camera camera = CadViewCamera(st);
+    const auto screenAt = [&](double wx, double wy) {
+      float x = 0.f, y = 0.f;
+      camera.WorldToScreen(wx, wy, 0.f, static_cast<float>(window.m_Viewport->width()),
+          static_cast<float>(window.m_Viewport->height()), &x, &y);
+      return QPoint(qRound(x), qRound(y));
+    };
+    const QPoint onLine = screenAt(200.0, 100.0);
+    const QPoint empty = screenAt(-40.0, -30.0);
+    QTest::mouseMove(window.m_Viewport, onLine);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, onLine);
+    QCOMPARE(st.selection.size(), std::size_t(1));
+    QVERIFY(!st.selBoxWaitingSecond);
+    QTest::mouseMove(window.m_Viewport, empty);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, empty);
+    QVERIFY(st.selBoxWaitingSecond);
+    QCOMPARE(st.selection.size(), std::size_t(1));
+    QTest::mouseMove(window.m_Viewport, onLine);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, onLine);
+    QVERIFY(!st.selBoxWaitingSecond);
+    QCOMPARE(st.selection.size(), std::size_t(1));
+  }
+
+  // TASK-0.7.8 / REQ-458: GoSurvey captures for the Civil 3D comparison panel.
+  void task078IdleAndCommandDragBoxesAccumulateWithoutSwallowingClicks() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    auto& st = window.State();
+    st.userLinesFlat = {-30.f, -10.f, 0.f, -20.f, -10.f, 0.f, 20.f, 10.f, 0.f, 30.f, 10.f, 0.f};
+    st.userLineAttrs.resize(2);
+    st.viewportPanX = st.viewportPanY = 0.0; st.viewportZoom = 1.f;
+    window.Refresh();
+    const Camera camera = CadViewCamera(st);
+    auto screenAt = [&](double x, double y) {
+      float sx = 0.f, sy = 0.f;
+      camera.WorldToScreen(x, y, 0.f, window.m_Viewport->width(), window.m_Viewport->height(), &sx, &sy);
+      return QPoint(qRound(sx), qRound(sy));
+    };
+    auto dragSecondLine = [&] {
+      const QPoint first = screenAt(15, 15), second = screenAt(35, 5);
+      QTest::mouseMove(window.m_Viewport, first);
+      QTest::mousePress(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, first);
+      QTest::mouseMove(window.m_Viewport, second);
+      QTest::mouseRelease(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
+    };
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    dragSecondLine();
+    QCOMPARE(st.selection.size(), std::size_t(2));
+    const QPoint empty = screenAt(-70, -50), hit = screenAt(25, 10);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, empty);
+    QVERIFY(st.selBoxWaitingSecond);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, hit);
+    QVERIFY(!st.selBoxWaitingSecond);
+    QCOMPARE(st.selection.size(), std::size_t(2));
+    st.selection.clear(); window.Submit("MOVE");
+    QCOMPARE(st.modifyPhase, AppCommandState::ModifyPhase::PickSelection);
+    st.selection = {{SelectedEntity::Type::LineSeg, 0}};
+    dragSecondLine();
+    QCOMPARE(st.selection.size(), std::size_t(2));
+    window.CancelDraftingInput();
+  }
+
+  void task078MagneticCrosshairUsesLocalCoordinatesInRebasedDrawings() {
+    AppCommandState st;
+    st.active = AppCommandState::Kind::Line;
+    st.viewportPanX = st.viewportPanY = 0.0;
+    st.viewportZoom = 1.f;
+    std::vector<std::string> log;
+    EditorViewport viewport(st, log, nullptr);
+    viewport.resize(640, 480);
+    viewport.m_Cursor = {10.0, 10.0, 0.0};
+    viewport.m_Last = QPointF(50, 50);
+    viewport.m_Snap.valid = true;
+    auto cursorImage = [&] {
+      QImage image(640, 480, QImage::Format_ARGB32_Premultiplied);
+      image.fill(Qt::transparent);
+      QPainter painter(&image);
+      viewport.DrawCursor(painter);
+      painter.end();
+      return image;
+    };
+    const QImage local = cursorImage();
+    st.worldDocumentOriginX = 1000000.0;
+    st.worldDocumentOriginY = 2000000.0;
+    QCOMPARE(cursorImage(), local);
+    QImage blank(640, 480, QImage::Format_ARGB32_Premultiplied); blank.fill(Qt::transparent);
+    QVERIFY(local != blank);
+  }
+
+  void documentTabTrapezoidsNavigationCloseAndCaptures() {
+    IsolatedUserData userData;
+    const QString dir = QtTestArtifactDirectory() + "/document-tabs";
+    QVERIFY(QDir().mkpath(dir));
+    for (bool light : {false, true}) {
+      ApplyQtAppearance(*qApp, light);
+      EditorWindow window;
+      window.resize(1600, 900);
+      window.CreateDrawingFromTemplate();
+      window.show();
+      QVERIFY(QTest::qWaitForWindowActive(&window));
+      auto* tabs = dynamic_cast<DrawingDocumentTabBar*>(window.findChild<QTabBar*>("drawingTabs"));
+      QVERIFY(tabs);
+      auto* strip = window.findChild<QWidget*>("drawingTabRow"); QVERIFY(strip);
+      QCOMPARE(tabs->count(), 3);
+      QVERIFY(tabs->tabButton(0, QTabBar::RightSide) == nullptr);
+      const QString theme = light ? "light" : "dark";
+      auto capture = [&](const QString& state) {
+        QCoreApplication::processEvents();
+        return strip->grab().save(dir + "/" + theme + "-" + state + ".png");
+      };
+      // The empty corners between trapezoids must not change the active drawing.
+      const int before = tabs->currentIndex();
+      QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(0).topLeft() + QPoint(2, 2));
+      QCOMPARE(tabs->currentIndex(), before);
+      QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(1).center());
+      QCOMPARE(window.State().activeDrawingIdx, 1);
+      const QPixmap tabPixels = tabs->grab();
+      const QPoint sample = tabs->tabRect(1).topLeft() + QPoint(16, tabs->height() - 8);
+      const QColor fill = tabPixels.toImage().pixelColor(qRound(sample.x() * tabPixels.devicePixelRatio()),
+                                                        qRound(sample.y() * tabPixels.devicePixelRatio()));
+      QVERIFY(light ? fill.lightness() > 220 : fill.lightness() < 140);
+      QVERIFY(capture("drawing-active"));
+      QVERIFY(window.grab().save(dir + "/" + theme + "-workspace.png"));
+      QTest::mouseMove(tabs, tabs->tabRect(2).center());
+      QVERIFY(capture("hover"));
+      QTest::mouseMove(&window, QPoint(700, 400));
+      QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(0).center());
+      QCOMPARE(window.State().activeDrawingIdx, 0);
+      QVERIFY(capture("start-active"));
+      tabs->setFocus();
+      QTest::keyClick(tabs, Qt::Key_Right);
+      QCOMPARE(window.State().activeDrawingIdx, 1);
+      QVERIFY(capture("keyboard-focus"));
+
+      // Qt close buttons must keep their current index after another tab is removed.
+      auto* firstClose = qobject_cast<QToolButton*>(tabs->tabButton(1, QTabBar::RightSide));
+      QVERIFY(firstClose);
+      QTest::mouseMove(firstClose, firstClose->rect().center());
+      QVERIFY(capture("close-hover"));
+      firstClose->click();
+      QCOMPARE(tabs->count(), 2);
+      auto* remainingClose = qobject_cast<QToolButton*>(tabs->tabButton(1, QTabBar::RightSide));
+      QVERIFY(remainingClose); remainingClose->click();
+      QCOMPARE(tabs->count(), 1);
+      QCOMPARE(window.State().activeDrawingIdx, 0);
+
+      window.CreateDrawingFromTemplate();
+      window.CreateDrawingFromTemplate();
+      window.State().drawingTabs[1].name = "Site grading and utility coordination - North development";
+      window.Refresh();
+      tabs->setCurrentIndex(1);
+      window.m_Viewport->setFocus();
+      QVERIFY(capture("long-name"));
+      for (int i = 0; i < 10; ++i) window.CreateDrawingFromTemplate();
+      window.resize(1000, 800);
+      QCoreApplication::processEvents();
+      const auto arrows = tabs->findChildren<QToolButton*>();
+      QVERIFY(std::any_of(arrows.begin(), arrows.end(), [](const QToolButton* b) {
+        return b->isVisible() && b->arrowType() != Qt::NoArrow;
+      }));
+      QVERIFY(capture("overflow"));
+      tabs->setCurrentIndex(0);
+      QCOMPARE(window.State().activeDrawingIdx, 0);
+    }
+    ApplyQtAppearance(*qApp, false);
+  }
+
+  void task078ComparisonPanelCaptures() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    window.show();
+    QVERIFY(QTest::qWaitForWindowActive(&window));
+    QTRY_VERIFY(window.m_Viewport->IsRendererReady());
+    auto& st = window.State();
+    const QString dir = QtTestArtifactDirectory() + "/task-078-ui-comparison/gosurvey";
+    QVERIFY(QDir().mkpath(dir));
+    QVERIFY(window.statusBar()->grab().save(dir + "/01-status-bar-idle.png"));
+    if (auto* viewportZoom = window.findChild<QComboBox*>("statusViewportZoom")) {
+      EnsureDefaultViewportZoomScales(st.viewportZoomScales);
+      int index50 = -1;
+      for (int i = 0; i < static_cast<int>(st.viewportZoomScales.size()); ++i) {
+        if (st.viewportZoomScales[static_cast<std::size_t>(i)].name == "1:50") {
+          index50 = i;
+          break;
+        }
+      }
+      QVERIFY(index50 >= 0);
+      const float dpi = window.screen() != nullptr ? static_cast<float>(window.screen()->logicalDotsPerInchY()) : 96.f;
+      ApplyViewportZoomScaleIndex(st, index50, static_cast<float>(window.m_Viewport->height()), dpi);
+      window.Refresh();
+      QVERIFY(viewportZoom->grab().save(dir + "/02-status-bar-viewport-zoom-1-50.png"));
+    }
+    DrawWideLine(window);
+    window.Submit("MOVE");
+    window.Refresh();
+    QVERIFY(window.statusBar()->grab().save(dir + "/03-status-bar-move-pick.png"));
+    window.CancelDraftingInput();
+    window.Submit("LINE");
+    window.Submit("0,0");
+    st.orthoMode = true;
+    window.Refresh();
+    const Camera camera = CadViewCamera(st);
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(120.0, 0.0, 0.0, static_cast<float>(window.m_Viewport->width()),
+        static_cast<float>(window.m_Viewport->height()), &sx, &sy);
+    const QPoint cursor(qRound(sx), qRound(sy));
+    QTest::mouseMove(window.m_Viewport, cursor);
+    QTest::qWait(150);
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(dir + "/04-viewport-line-ortho-preview.png"));
+    const QRect statusCrop(0, window.height() - window.statusBar()->height() - 4, window.width(),
+                           window.statusBar()->height() + 4);
+    QVERIFY(window.grab(statusCrop).save(dir + "/05-status-bar-bottom-crop.png"));
+  }
+
   // REQ-201: with nothing to frame, say so and leave the view alone.
   void issue1024QtZoomExtentsOnAnEmptyDrawingSaysWhyAndKeepsTheView() {
     EditorWindow window; window.CreateDrawingFromTemplate(); window.resize(1280, 800); window.show();
@@ -5773,9 +6051,11 @@ private Q_SLOTS:
     QTRY_VERIFY(tabs->isVisible() && tabs->height() >= tabs->fontMetrics().height());
     QVERIFY(tabs->count() >= 2);
     QVERIFY(!window.findChild<QWidget*>("viewCubeControls"));
-    const int viewportTop = viewport->mapTo(window.centralWidget(), QPoint()).y();
-    QVERIFY(viewportTop > tabs->geometry().bottom());
-    QVERIFY(viewportTop - tabs->geometry().bottom() <= 3);
+    // Document tabs live in the ribbon wrapper; compare both widgets in window coordinates.
+    const int viewportTop = viewport->mapTo(&window, QPoint()).y();
+    const int tabsBottom = tabs->mapTo(&window, tabs->rect().bottomLeft()).y();
+    QVERIFY(viewportTop > tabsBottom);
+    QVERIFY(viewportTop - tabsBottom <= 3);
     auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
     auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
@@ -7003,7 +7283,7 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 280);  // 285 before issue #811 removed five placeholder palettes.
+    QCOMPARE(buttons, 282);  // Issue #811 removed five palettes; PDF options add clipping and snap controls.
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
@@ -12575,7 +12855,9 @@ private Q_SLOTS:
       path->setText(pdf);
       QVERIFY(QMetaObject::invokeMethod(path, "editingFinished", Qt::DirectConnection));
       QCOMPARE(dialog->findChild<QSpinBox*>("pdfAttachPage")->maximum(), 1);
-      QVERIFY(!dialog->findChild<QLabel*>("pdfAttachPreview")->pixmap().isNull());
+      auto* thumb = dialog->findChild<QToolButton*>("pdfAttachPageThumb0");
+      QVERIFY(thumb);
+      QVERIFY(!thumb->icon().isNull());
       dialog->grab().save(Issue907Shot("qt-909-option-a-app-theme.png"));
       dialog->setStyleSheet("QDialog#pdfAttachDialog { background:#203247; color:#f4f7fb; }"
                             "QLabel,QCheckBox { color:#f4f7fb; }"
