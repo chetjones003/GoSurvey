@@ -22,7 +22,8 @@
   scale list.
 
 **Recommendation:** Accept as **REQ-458** with a decision entry referencing this task and user
-2026-10-29 notes; then implement in a follow-up PR.
+2026-10-29 notes. Accepted and implemented in this branch; renumbered to REQ-458 because beta assigned
+REQ-457 to sheet raster IMAGE underlays. See `TASK-078-pr-preparation.md` for validation.
 
 ## Item 9 — PDF table mixed-validity rows (REQ-399 amendment)
 

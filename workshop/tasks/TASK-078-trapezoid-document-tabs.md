@@ -52,5 +52,6 @@ Civil captures, so their paired comparison remains **inconclusive**; only GoSurv
 reviewed for those states. Hover/focus crops alone do not strongly prove the additional feedback.
 See `COMPARISON-RECORD.md` in that artifact directory for the scope and limitations.
 
-Status: implemented, built, focused checks passed; screenshots prepared for user feedback.
-No commit or PR created. Broader changes already in this worktree are preserved.
+Status: implemented and visually reviewed; the user approved proceeding to PR on 2026-10-30.
+Included in commit 3480e331; see TASK-078-pr-preparation.md for final beta integration and the passing
+191-check suite. Broader authorized changes in this worktree are included in the same PR.

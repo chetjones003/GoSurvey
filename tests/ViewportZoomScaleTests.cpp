@@ -82,10 +82,11 @@ TEST_CASE("Viewport zoom presets stay with their drawing tab", "[req458]") {
 }
 
 TEST_CASE("Native DWG and DXF preserve zoom presets independently from annotation scales", "[req458]") {
-  const auto dir = std::filesystem::path(GOSURVEY_SOURCE_DIR) / "build" / "artifacts" / "viewport-zoom-roundtrip";
+  const auto dir = std::filesystem::path(GOSURVEY_TEST_DATA_DIR).parent_path() /
+      "build" / "artifacts" / "viewport-zoom-roundtrip";
   std::filesystem::create_directories(dir);
   for (bool asDxf : {false, true}) {
-    INFO(asDxf ? "DXF" : "DWG");
+    INFO((asDxf ? "DXF" : "DWG"));
     AppCommandState st;
     REQUIRE(AddViewportZoomScale(st, "1:75", 1.f, 75.f));
     st.annotationScales.push_back({"1:25", 1.f, 25.f});

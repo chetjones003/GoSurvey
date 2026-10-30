@@ -15033,6 +15033,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765); amendment adds dimension (D-2026-10-29-a, #1010) | accepted |
 | REQ-456 | IO/Domain | accepted — sheet POINT objects in DWG; UI point commands deferred (D-2026-10-29-a, #1010) | accepted |
 | REQ-457 | IO/Domain/Renderer | accepted — sheet raster IMAGE underlays in DWG, path-only storage (D-2026-10-29-a, #1010) | accepted |
+| REQ-458 | Commands/Qt/IO | `[req458]` presets, strict ratio validation, drawing-tab isolation, internal JSON and native DWG/DXF round-trips; status-bar comparison captures in TASK-0.7.8 | accepted |
 | REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |

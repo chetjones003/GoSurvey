@@ -1426,6 +1426,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       } else {
         BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
             static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
       }
     } else if (m_State.active == AppCommandState::Kind::None && m_State.selBoxWaitingSecond &&
                SubmitViewportSelectionAccumulateClick(
@@ -1547,6 +1549,8 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         m_SelectionBeforeBox = m_State.selection;
         m_SurveySelectionBeforeBox = m_State.selectedSurveyPointIndices;
         m_HasSelectionBoxSnapshot = true;
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
         BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
             static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
       }
@@ -1831,6 +1835,22 @@ void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
     ClearMtextGripInteraction(m_State);
   }
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton) m_GripMovedWithButton = false;
+  if (event->button() == Qt::LeftButton && m_LeftDragSelection) {
+    const QPointF delta = event->position() - m_SelectionPress;
+    if (std::abs(delta.x()) + std::abs(delta.y()) > 3.0 && m_State.selBoxWaitingSecond) {
+      ray3d::Vec3 point;
+      if (WorldPoint(event->position(), point)) {
+        const Camera camera = CadViewCamera(m_State);
+        const auto ray = camera.ScreenRay(event->position().x(), event->position().y(), width(), height());
+        SubmitViewportPick(m_State, point.x, point.y, m_Log, event->modifiers() & Qt::ShiftModifier,
+            event->position().x() >= m_SelectionPress.x(), CadViewIsPlan(m_State) ? nullptr : &ray);
+        m_HasSelectionBoxSnapshot = false;
+        m_SelectionBeforeBox.clear();
+        m_SurveySelectionBeforeBox.clear();
+      }
+    }
+    m_LeftDragSelection = false;
+  }
   if (event->button() == Qt::LeftButton) {
     const auto camera = CadViewCamera(m_State);
     const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()),

@@ -382,7 +382,6 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
     PopulateQtText(document, fontPixels, text, annotation.fontFamily, color);
     if (annotation.kind == CadAnnotation::Kind::Mtext) {
       const double boxWidth = std::max(1.0, (annotation.boxMaxX - annotation.boxMinX) / worldPerPixel);
-      const double boxHeight = std::max(1.0, (annotation.boxMaxY - annotation.boxMinY) / worldPerPixel);
       document.setTextWidth(boxWidth);
     } else {
       document.adjustSize();

@@ -6251,7 +6251,6 @@ void ImportViewportZoomScales(AppCommandState& st, Dwg_Data* dwg) {
       continue;
     st.viewportZoomScales.push_back(std::move(entry));
   }
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
 }
 
 bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log, bool asDxf) {

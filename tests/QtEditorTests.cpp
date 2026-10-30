@@ -5542,7 +5542,7 @@ private Q_SLOTS:
     st.viewportPanX = st.viewportPanY = 0.0;
     st.viewportZoom = 1.f;
     std::vector<std::string> log;
-    EditorViewport viewport(st, log);
+    EditorViewport viewport(st, log, nullptr);
     viewport.resize(640, 480);
     viewport.m_Cursor = {10.0, 10.0, 0.0};
     viewport.m_Last = QPointF(50, 50);
@@ -6051,9 +6051,11 @@ private Q_SLOTS:
     QTRY_VERIFY(tabs->isVisible() && tabs->height() >= tabs->fontMetrics().height());
     QVERIFY(tabs->count() >= 2);
     QVERIFY(!window.findChild<QWidget*>("viewCubeControls"));
-    const int viewportTop = viewport->mapTo(window.centralWidget(), QPoint()).y();
-    QVERIFY(viewportTop > tabs->geometry().bottom());
-    QVERIFY(viewportTop - tabs->geometry().bottom() <= 3);
+    // Document tabs live in the ribbon wrapper; compare both widgets in window coordinates.
+    const int viewportTop = viewport->mapTo(&window, QPoint()).y();
+    const int tabsBottom = tabs->mapTo(&window, tabs->rect().bottomLeft()).y();
+    QVERIFY(viewportTop > tabsBottom);
+    QVERIFY(viewportTop - tabsBottom <= 3);
     auto* input = window.findChild<QLineEdit*>("commandInput"); QVERIFY(input);
     auto* tree = window.findChild<QTreeWidget*>("toolspaceProspectorTree"); QVERIFY(tree);
     tree->setFocus(); QTRY_VERIFY(tree->hasFocus());
@@ -7281,7 +7283,7 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 280);  // 285 before issue #811 removed five placeholder palettes.
+    QCOMPARE(buttons, 282);  // Issue #811 removed five palettes; PDF options add clipping and snap controls.
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);

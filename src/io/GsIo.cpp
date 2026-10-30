@@ -2,7 +2,6 @@
 #include "GsAnnotationJson.hpp"
 
 #include "CadCommands.hpp"
-#include "ViewportZoomScale.hpp"
 #include "GsMigrate.hpp"
 #include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
@@ -3914,7 +3913,6 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     if (st.currentViewportZoomScaleIndex >= static_cast<int>(st.viewportZoomScales.size()))
       st.currentViewportZoomScaleIndex = st.viewportZoomScales.empty() ? -1 : 0;
   }
-  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
 
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;

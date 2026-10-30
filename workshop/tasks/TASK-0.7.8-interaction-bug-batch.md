@@ -1,7 +1,7 @@
 # TASK — 0.7.8 interaction and PDF extraction bug batch
 
 - Type: bug batch / Qt parity follow-up
-- Status: done — accepted REQ-458 and REQ-399 amendment recorded; implementation complete pending Civil 3D comparison for status bar chrome
+- Status: complete — beta-integrated Release build and all 191 checks pass; documentation published; ready for PR review
 - Opened: 2026-10-29
 - Owner: Workshop
 
@@ -22,7 +22,7 @@
 
 ## 2. Scope
 
-1. Box selection accumulates in modify-command selection steps.
+1. Box selection accumulates both while idle and during modify-command selection steps.
 2. MOVE text and any other in-scope modify operation missing its specified live preview show the
    preview through the existing transform preview path.
 3. A box gesture must not consume a later object-pick click.
@@ -37,11 +37,13 @@
 9. PDF extraction keeps valid table rows as candidates and reports incomplete or non-coordinate
    rows separately in review; it does not silently discard them or invalidate good rows.
 
-Out of scope: changing idle selection's documented Shift-to-add behavior; changing ORTHO geometry or
-snap priority; changing REQ-121's selection-step snapping rules; OCR; changing paper viewport scale;
-any persistent camera/file format unless existing view-state rules require it.
+Out of scope: changing REQ-121's selection-step snapping rules; OCR; changing paper viewport scale;
+new drawing formats. Requested DWG/DXF zoom preset persistence is governed by REQ-458.
 
 ## 3. Plan review
+
+The investigation notes below are historical. See `TASK-078-pr-preparation.md` for resolved findings,
+the completed documentation review, beta integration and final validation outcomes.
 
 Before implementation:
 
