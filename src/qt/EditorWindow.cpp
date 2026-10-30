@@ -999,6 +999,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
+  file->addAction(CommandAction("Save as &Template...", "Save_As.png", "SAVETEMPLATE"));
   file->addSeparator();
   file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
   file->addSeparator();
@@ -1335,6 +1336,7 @@ void EditorWindow::Submit(const QString& command) {
     if (!path.isEmpty()) OpenDrawing(path);
   } else if (verb == "SAVE" || verb == "QSAVE") SaveDrawing();
   else if (verb == "SAVEAS") SaveDrawing(true);
+  else if (verb == "SAVETEMPLATE") SaveDrawingTemplate();
   else if (verb == "PDFVIEW") ShowPdf();
   else if (verb == "LSA" || verb == "TRAVERSE") ShowAdjustment();
   else if (verb == "POINTDATABASE") ShowPoints(true);
@@ -1946,6 +1948,53 @@ bool EditorWindow::SaveDrawing(bool saveAs) {
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
   RefreshRecentDrawings();
   Refresh();
+  return true;
+}
+
+bool EditorWindow::SaveDrawingTemplate() {
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
+    QMessageBox::information(this, "Save as Template", "Open a drawing before saving a template.");
+    return false;
+  }
+
+  const auto userDataDirectory = UserDataDirectory();
+  if (userDataDirectory.empty()) {
+    QMessageBox::warning(this, "Save as Template", "The personal GoSurvey data folder is unavailable.");
+    return false;
+  }
+  const auto templateDirectory = userDataDirectory / "drawing-templates";
+  std::error_code directoryError;
+  std::filesystem::create_directories(templateDirectory, directoryError);
+  if (directoryError) {
+    QMessageBox::warning(this, "Save as Template", "The personal template folder could not be created.");
+    return false;
+  }
+
+  const auto& tab = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)];
+  QString baseName = QString::fromUtf8(tab.name.c_str()).trimmed();
+  if (!m_State.activeDocFilePath.empty())
+    baseName = QFileInfo(QString::fromUtf8(m_State.activeDocFilePath.c_str())).completeBaseName();
+  if (baseName.isEmpty()) baseName = "Drawing Template";
+  const QString initialPath = QString::fromStdWString((templateDirectory / (baseName + ".gst").toStdWString()).wstring());
+  QFileDialog dialog(this, "Save as Template", initialPath, "GoSurvey template (*.gst)");
+  dialog.setObjectName("saveDrawingTemplateDialog");
+  dialog.setAcceptMode(QFileDialog::AcceptSave);
+  dialog.setFileMode(QFileDialog::AnyFile);
+  dialog.setDefaultSuffix("gst");
+  dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+
+  m_ModalOpen = true;
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  m_ModalOpen = false;
+  if (!accepted) return false;
+
+  QString path = dialog.selectedFiles().value(0);
+  if (path.isEmpty()) return false;
+  if (!path.endsWith(".gst", Qt::CaseInsensitive)) path += ".gst";
+  if (!SaveGoSurveyTemplateFile(m_State, path.toUtf8().constData(), m_Log)) {
+    QMessageBox::warning(this, "Save as Template", "The template could not be saved. See the command log.");
+    return false;
+  }
   return true;
 }
 

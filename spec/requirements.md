@@ -12656,16 +12656,19 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. **Failure.** If the configured template cannot be read or validated, the failure is reported, no drawing tab is created, and the active drawing remains unchanged.
   4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone default template.
   5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; the source template is only read and need not be writable to create a drawing from it.
+  6. **Save as Template.** File → **Save as Template…** writes a `.gst` containing reusable drawing standards and setup: layers and linetype assignments, text styles, dimension styles, multileader styles, table styles, surface styles, survey-point styles and label styles, layouts and page setups, plot scale, insertion units, and drawing settings. Model and paper geometry, survey points, and point-group data are excluded. Block definitions referenced directly or recursively by retained block-marker point styles are preserved as style dependencies; their inserts and unrelated block definitions are excluded. The dialog defaults to `<UserDataDirectory>/drawing-templates/`. Saving does not change the active drawing path, saved revision, or recent-drawing list. Cancel writes nothing and changes no drawing state. `.gst` remains unsupported by File → Open; the saved template can be selected in Options → Files as the default for future standalone drawings.
 - Acceptance:
   - `[req424]` Qt workflow coverage: Options stages, saves, clears, and reloads the custom default drawing-template path.
   - `[req424]` Qt workflow coverage: New Drawing uses the configured template or the bundled default when no custom path is set, creates and focuses a new tab with the template content, and leaves the source template unchanged.
   - `[req424]` Qt workflow coverage: an unreadable or malformed configured template reports failure, creates no tab, and preserves the current drawing.
   - `[req424]` Qt workflow coverage: a new drawing from an active project remains empty, uses project defaults, and does not use the standalone default template.
-  - New Drawing from the Start screen and normal drawing entry points creates directly without showing a template chooser.
+  - `[req424]` Qt workflow coverage: Save as Template writes a loadable `.gst` containing custom styles and required point-marker block dependencies, while excluding unrelated geometry, survey points, point groups, block inserts, and unrelated block definitions; opening the saved template preserves these styles and dependencies.
+  - `[req424]` Qt workflow coverage: cancelling template save creates no file and changes no active drawing state; a failed save reports the failure and leaves active drawing state unchanged.
+  - `[req424]` Qt workflow coverage: File → Save as Template defaults to the per-user template directory without changing the active drawing path/revision; the saved file can be selected in Options → Files, and File → Open does not open `.gst` as a drawing.
   - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
 - Owner-layer: UI/Options (`src/qt/`); persisted preference (`src/io/UserPrefs`); shared `.gst` loading remains in IO (`src/io/GsIo`).
-- Status: accepted (2026-10-17; amended 2026-10-30).
-- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885); 2026-10-30 — chooser behavior replaced with the configurable default template (D-2026-10-30-a).
+- Status: accepted (2026-10-17; amended 2026-10-30 and 2026-11-02).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885); 2026-10-30 — chooser behavior replaced with the configurable default template (D-2026-10-30-a); 2026-11-02 — add Save as Template and reusable style/dependency content (D-2026-10-30-template-save and D-2026-11-02-a; GitHub issue #1134).
 
 ### REQ-425 — Crash and startup-failure reports
 

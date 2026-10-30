@@ -4596,12 +4596,52 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     return false;
   }
   try {
+    json root = BuildRoot(st);
+    json& doc = root["document"];
+    // A .gst carries standards and setup into a new drawing, not the source drawing's contents.
+    // Keep this list in sync with BuildRoot whenever a new model-space entity store is added.
+    for (const char* key : {
+             "lineVerts", "lineAttrs", "circles", "circlesZ", "circlesN", "circleAttrs", "arcs", "arcAttrs",
+             "ellipses", "ellAttrs", "polylineOffsets", "polylineVerts", "polylineVertsBulge",
+             "polylineVertsNormal", "polylineClosed", "polylineAttrs", "featureLineOffsets", "featureLineVerts",
+             "featureLineClosed", "featureLineElevPt", "featureLineInfo", "featureLineAttrs", "annotations",
+             "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
+             "multileaderAttrs", "splines", "splineAttrs", "cadPoints", "cadPointAttrs", "blockDefs", "blockRefs",
+             "blockRefAttrs", "filledRegions", "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
+             "surfaceAttrs", "surveyPoints", "pointGroups", "blockFavorites", "blockRecent"})
+      doc[key] = json::array();
+
+    // Viewport clipping and the source drawing's camera/view depend on geometry that is no longer
+    // present. Layout/page setup and viewport definitions remain, while sheet entities are removed.
+    doc.erase("sectionPlane");
+    doc.erase("pointVisibility");
+    doc["worldDocumentOriginX"] = 0.0;
+    doc["worldDocumentOriginY"] = 0.0;
+    doc["nextEntityId"] = 1;
+    doc["createPointsNextId"] = 1;
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
+      for (json& layout : doc["paperLayouts"]) {
+        for (const char* key : {
+                 "paperLines", "paperLineAttrs", "paperTexts", "paperTextAttrs", "paperCircles",
+                 "paperCircleAttrs", "paperArcs", "paperArcAttrs", "paperEllipses", "paperEllAttrs", "paperImages",
+                 "paperImageAttrs", "paperPolyOffsets", "paperPolyVerts", "paperPolyVertsBulge", "paperPolyClosed",
+                 "paperPolyAttrs", "paperFilledRegions", "paperFilledRegionAttrs", "paperBlockRefs",
+                 "paperBlockRefAttrs", "paperSplines", "paperSplineAttrs", "paperPoints", "paperPointAttrs"})
+          layout[key] = json::array();
+      }
+    }
+
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
       return false;
     }
-    f << SerializeGoSurveyJson(st);
+    f << root.dump(2);
+    if (!f) {
+      log.push_back(std::string("Could not finish writing template: ") + pathUtf8);
+      return false;
+    }
     log.push_back(std::string("Saved GoSurvey template (.gst): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
