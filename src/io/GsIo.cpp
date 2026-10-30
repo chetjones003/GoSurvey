@@ -1079,6 +1079,45 @@ SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
 // The solid `internal document payload` encoding lives in BrepJson.hpp (namespace `gsio`) so it is linkable without the
 // command layer this file drags in. `gsio::SolidToJson` / `gsio::SolidFromJson` are used below.
 
+// REQ-443 / REQ-113 (issue #1010): spline <-> trailer JSON, shared by the model-space and sheet stores.
+static json CadSplineToJson(const CadSpline& s) {
+  json o;
+  o["degree"] = s.degree;
+  o["periodic"] = s.periodic;
+  o["knots"] = s.knots;
+  o["ctrl"] = json::array();
+  for (const ray3d::Vec3& p : s.ctrl)
+    o["ctrl"].push_back({p.x, p.y, p.z});
+  o["weights"] = s.weights;
+  o["fit"] = json::array();
+  for (const ray3d::Vec3& p : s.fit)
+    o["fit"].push_back({p.x, p.y, p.z});
+  return o;
+}
+
+static CadSpline CadSplineFromJson(const json& o) {
+  CadSpline s;
+  s.degree = o.value("degree", 3);
+  s.periodic = o.value("periodic", false);
+  if (o.contains("knots") && o["knots"].is_array())
+    for (const auto& k : o["knots"])
+      if (k.is_number()) s.knots.push_back(k.get<double>());
+  const auto readPoints = [](const json& list, std::vector<ray3d::Vec3>* out) {
+    if (!list.is_array()) return;
+    for (const auto& p : list) {
+      if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
+        continue;
+      out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
+    }
+  };
+  if (o.contains("ctrl")) readPoints(o["ctrl"], &s.ctrl);
+  if (o.contains("fit")) readPoints(o["fit"], &s.fit);
+  if (o.contains("weights") && o["weights"].is_array())
+    for (const auto& w : o["weights"])
+      if (w.is_number()) s.weights.push_back(w.get<double>());
+  return s;
+}
+
 json BuildRoot(const AppCommandState& st) {
   json root;
   root["format"] = "gosurvey";
@@ -1136,6 +1175,8 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
+  doc["pointDisplayMode"] = st.pointDisplayMode;  // REQ-456 / issue #1010
+  doc["pointDisplaySize"] = st.pointDisplaySize;
   doc["drawingSettings"] = DrawingSettingsToJson(st.drawingSettings);  // REQ-357; additive: absent opens with the defaults
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
@@ -1378,6 +1419,28 @@ json BuildRoot(const AppCommandState& st) {
           ells.push_back(eo);
         }
         o["paperEllipses"] = std::move(ells);
+        json psplines = json::array();
+        for (const CadSpline& sp : l.paperSplines)
+          psplines.push_back(CadSplineToJson(sp));
+        o["paperSplines"] = std::move(psplines);
+        o["paperSplineAttrs"] = attrsToJson(l.paperSplineAttrs);
+        o["paperPoints"] = l.paperPoints;  // REQ-456 / issue #1010: flat x,y,z paper inches
+        o["paperPointAttrs"] = attrsToJson(l.paperPointAttrs);
+        json pimgs = json::array();  // REQ-457 / issue #1010: sheet raster IMAGE underlays
+        for (const CadRasterImage& im : l.paperImages) {
+          json io;
+          io["path"] = im.path;
+          io["insX"] = im.insX;
+          io["insY"] = im.insY;
+          io["width"] = im.width;
+          io["height"] = im.height;
+          io["rotationRad"] = im.rotationRad;
+          io["pixelW"] = im.pixelW;
+          io["pixelH"] = im.pixelH;
+          pimgs.push_back(io);
+        }
+        o["paperImages"] = std::move(pimgs);
+        o["paperImageAttrs"] = attrsToJson(l.paperImageAttrs);
         o["paperEllAttrs"] = attrsToJson(l.paperEllAttrs);
         o["paperPolyOffsets"] = l.paperPolyOffsets;
         o["paperPolyVerts"] = l.paperPolyVerts;
@@ -1673,20 +1736,8 @@ json BuildRoot(const AppCommandState& st) {
     doc["multileaderAttrs"] = std::move(multileaderAttrs);
 
   json splines = json::array();
-  for (const CadSpline& s : st.cadSplines) {
-    json o;
-    o["degree"] = s.degree;
-    o["periodic"] = s.periodic;
-    o["knots"] = s.knots;
-    o["ctrl"] = json::array();
-    for (const ray3d::Vec3& p : s.ctrl)
-      o["ctrl"].push_back({p.x, p.y, p.z});
-    o["weights"] = s.weights;
-    o["fit"] = json::array();
-    for (const ray3d::Vec3& p : s.fit)
-      o["fit"].push_back({p.x, p.y, p.z});
-    splines.push_back(std::move(o));
-  }
+  for (const CadSpline& s : st.cadSplines)
+    splines.push_back(CadSplineToJson(s));
   if (!splines.empty())
     doc["splines"] = std::move(splines);
   json splineAttrs = json::array();
@@ -1699,6 +1750,8 @@ json BuildRoot(const AppCommandState& st) {
     doc["splineAttrs"] = std::move(splineAttrs);
 
   doc["drawingInsUnits"] = st.drawingInsUnits;
+  doc["pointDisplayMode"] = st.pointDisplayMode;  // REQ-456 / issue #1010
+  doc["pointDisplaySize"] = st.pointDisplaySize;
   json blockDefs = json::array();
   for (const CadBlockDefinition& d : st.blockDefs)
     blockDefs.push_back(CadBlockDefToJson(d));
@@ -2589,6 +2642,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
+  st.pointDisplayMode = doc.value("pointDisplayMode", 0);  // REQ-456 / issue #1010
+  st.pointDisplaySize = doc.value("pointDisplaySize", 0.0);
   st.drawingSettings = DrawingSettings{};  // REQ-357: absent or partial → the defaults
   if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
     DrawingSettingsFromJson(doc["drawingSettings"], st.drawingSettings, log);
@@ -2729,6 +2784,37 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
               l.paperEllipses.push_back(CadEllipseFromJson(eo));
         readAttrs("paperEllAttrs", l.paperEllAttrs);
         l.paperEllAttrs.resize(l.paperEllipses.size());
+        if (o.contains("paperSplines") && o["paperSplines"].is_array())
+          for (const auto& so : o["paperSplines"])
+            if (so.is_object())
+              l.paperSplines.push_back(CadSplineFromJson(so));
+        readAttrs("paperSplineAttrs", l.paperSplineAttrs);
+        l.paperSplineAttrs.resize(l.paperSplines.size());
+        if (o.contains("paperPoints") && o["paperPoints"].is_array())
+          for (const auto& f : o["paperPoints"])
+            if (f.is_number())
+              l.paperPoints.push_back(f.get<float>());
+        if (l.paperPoints.size() % 3 != 0)
+          l.paperPoints.resize(l.paperPoints.size() - (l.paperPoints.size() % 3));
+        readAttrs("paperPointAttrs", l.paperPointAttrs);
+        l.paperPointAttrs.resize(l.paperPoints.size() / 3);
+        if (o.contains("paperImages") && o["paperImages"].is_array())
+          for (const auto& io : o["paperImages"]) {
+            if (!io.is_object() || !io.contains("path") || !io["path"].is_string())
+              continue;
+            CadRasterImage im;
+            im.path = io["path"].get<std::string>();
+            im.insX = io.value("insX", 0.f);
+            im.insY = io.value("insY", 0.f);
+            im.width = io.value("width", 0.f);
+            im.height = io.value("height", 0.f);
+            im.rotationRad = io.value("rotationRad", 0.f);
+            im.pixelW = io.value("pixelW", 0);
+            im.pixelH = io.value("pixelH", 0);
+            l.paperImages.push_back(im);
+          }
+        readAttrs("paperImageAttrs", l.paperImageAttrs);
+        l.paperImageAttrs.resize(l.paperImages.size());
         if (o.contains("paperPolyOffsets") && o["paperPolyOffsets"].is_array())
           for (const auto& v : o["paperPolyOffsets"])
             if (v.is_number())
@@ -3204,25 +3290,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       const size_t attrIndex = splineIndex++;
       if (!o.is_object())
         continue;
-      CadSpline s;
-      s.degree = o.value("degree", 3);
-      s.periodic = o.value("periodic", false);
-      if (o.contains("knots") && o["knots"].is_array())
-        for (const auto& k : o["knots"])
-          if (k.is_number()) s.knots.push_back(k.get<double>());
-      const auto readPoints = [](const json& list, std::vector<ray3d::Vec3>* out) {
-        if (!list.is_array()) return;
-        for (const auto& p : list) {
-          if (!p.is_array() || p.size() != 3 || !p[0].is_number() || !p[1].is_number() || !p[2].is_number())
-            continue;
-          out->push_back({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()});
-        }
-      };
-      if (o.contains("ctrl")) readPoints(o["ctrl"], &s.ctrl);
-      if (o.contains("fit")) readPoints(o["fit"], &s.fit);
-      if (o.contains("weights") && o["weights"].is_array())
-        for (const auto& w : o["weights"])
-          if (w.is_number()) s.weights.push_back(w.get<double>());
+      CadSpline s = CadSplineFromJson(o);
       if (spline::Validate(s).empty()) {
         st.cadSplines.push_back(std::move(s));
         st.cadSplineAttrs.push_back(attrs != nullptr && attrIndex < attrs->size() && (*attrs)[attrIndex].is_object()
@@ -3234,6 +3302,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadSplineAttrs.resize(st.cadSplines.size());
 
   st.drawingInsUnits = doc.value("drawingInsUnits", st.drawingInsUnits);
+  st.pointDisplayMode = doc.value("pointDisplayMode", st.pointDisplayMode);  // REQ-456 / issue #1010
+  st.pointDisplaySize = doc.value("pointDisplaySize", st.pointDisplaySize);
   st.blockDefs.clear();
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();

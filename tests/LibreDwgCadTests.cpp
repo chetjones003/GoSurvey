@@ -19,6 +19,7 @@
 #include "util/brep.hpp"
 #include "util/cadpiperun.hpp"
 #include "util/spline.hpp"
+#include "io/RasterImage.hpp"
 
 #include "SolidMeasure.hpp"
 
@@ -643,7 +644,17 @@ TEST_CASE("LibreDWG dwg_add_MULTILEADER encodes and decodes (issue #619)",
   const dwg_point_3d lpts[3] = {{0.0, 0.0, 0.0}, {10.0, 0.0, 0.0}, {12.0, 2.0, 0.0}};
   const dwg_point_3d textPt{12.0, 2.0, 0.0};
   const dwg_point_3d textDir{1.0, 0.0, 0.0};
-  REQUIRE(dwg_add_MULTILEADER(hdr, 3, lpts, "Monument A", &textPt, &textDir, 0.18, 8.0) != nullptr);
+  Dwg_Entity_MULTILEADER* leader =
+      dwg_add_MULTILEADER(hdr, 3, lpts, "Monument A", &textPt, &textDir, 0.18, 8.0);
+  REQUIRE(leader != nullptr);
+  REQUIRE(leader->ctx.num_leaders == 1);
+  const Dwg_LEADER_Node& node = leader->ctx.leaders[0];
+  CHECK(node.has_lastleaderlinepoint == 1);
+  CHECK(node.has_dogleg == 1);
+  CHECK(node.lastleaderlinepoint.x == Catch::Approx(12.0));
+  CHECK(node.lastleaderlinepoint.y == Catch::Approx(2.0));
+  CHECK(node.dogleg_vector.x == Catch::Approx(std::sqrt(0.5)));
+  CHECK(node.dogleg_vector.y == Catch::Approx(std::sqrt(0.5)));
   int inDoc = 0;
   for (unsigned i = 0; i < dwg->num_objects; ++i) {
     if (dwg->object[i].fixedtype == DWG_TYPE_MULTILEADER)
@@ -5966,6 +5977,203 @@ TEST_CASE("DXF writes a paper-space table as grid lines and cell text (issue #76
   CHECK(found == 4);
 }
 
+// REQ-113 / issue #1010: a sheet spline is written as a native DWG SPLINE on its layout's paper space and
+// read back into that layout. ExportLibreCadFile writes no GoSurvey trailer, so ImportDwgFile must take the
+// native path here (a trailer would hide a missing reader).
+TEST_CASE("DWG writes and reads a sheet spline natively (REQ-113, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010spline");
+  const auto p = (dir.path / "sheet-spline.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet S";
+  spline::Spline spl;
+  // Control-vertex form: LibreDWG reads fit-point SPLINEs back as control polygons, so this is the form
+  // the DWG round trip can check exactly (the same choice as the closed CV round trip above).
+  REQUIRE(spline::MakeControl({{1, 1, 0}, {4, 5, 0}, {8, 2, 0}, {10, 6, 0}}, false, &spl, nullptr));
+  sheet.paperSplines.push_back(spl);
+  sheet.paperSplineAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  REQUIRE(L.paperSplines.size() == 1);
+  const spline::Spline& back = L.paperSplines[0];
+  CHECK(back.degree == 3);
+  CHECK_FALSE(back.isFit());
+  REQUIRE(back.ctrl.size() == spl.ctrl.size());
+  for (std::size_t i = 0; i < spl.ctrl.size(); ++i) {
+    CHECK(back.ctrl[i].x == Catch::Approx(spl.ctrl[i].x).margin(1e-6));
+    CHECK(back.ctrl[i].y == Catch::Approx(spl.ctrl[i].y).margin(1e-6));
+  }
+  CHECK(spline::Length(back) == Catch::Approx(spline::Length(spl)).margin(1e-3));
+  CHECK(L.paperSplineAttrs.size() == 1);
+  CHECK(in.cadSplines.empty());
+}
+
+// REQ-113 / issue #1010: a sheet dimension is written as a native DWG DIMENSION on its layout and read back
+// into that layout's text store with its extension points and text (ExportLibreCadFile writes no trailer).
+TEST_CASE("DWG writes and reads a sheet dimension natively (REQ-113, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010dim");
+  const auto p = (dir.path / "sheet-dim.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet D";
+  CadAnnotation lin;
+  lin.kind = CadAnnotation::Kind::DimLinear;
+  lin.dimExt1X = 2.f;
+  lin.dimExt1Y = 2.f;
+  lin.dimExt2X = 10.f;
+  lin.dimExt2Y = 2.f;
+  lin.insX = 6.f;
+  lin.insY = 4.f;
+  lin.dimSignedOffset = 2.f;
+  lin.dimLinearVertical = false;
+  lin.text = "8.00";
+  lin.plottedHeightInches = 0.125f;
+  sheet.paperTexts.push_back(lin);
+  sheet.paperTextAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  size_t dims = 0;
+  for (const CadAnnotation& a : L.paperTexts) {
+    if (!CadAnnotationIsDimension(a))
+      continue;
+    ++dims;
+    CHECK(a.kind == CadAnnotation::Kind::DimLinear);
+    CHECK(a.dimExt1X == Catch::Approx(2.0).margin(1e-3));
+    CHECK(a.dimExt2X == Catch::Approx(10.0).margin(1e-3));
+    CHECK(a.text.find("8") != std::string::npos);
+  }
+  CHECK(dims == 1);
+}
+
+// REQ-456 / issue #1010: a sheet POINT is written as a native DWG POINT on its layout and read back there, never
+// as a survey point, and the drawing's point display (PDMODE, PDSIZE) is kept with the drawing.
+TEST_CASE("DWG writes and reads sheet points natively (REQ-456, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010point");
+  const auto p = (dir.path / "sheet-point.dwg").string();
+  AppCommandState st;
+  OneLine(st);
+  st.pointDisplayMode = 3;
+  st.pointDisplaySize = 0.1;
+  PaperLayout sheet;
+  sheet.name = "Sheet P";
+  sheet.paperPoints = {3.f, 4.f, 0.f, 7.5f, 1.25f, 0.f};
+  sheet.paperPointAttrs.resize(2);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, p.c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  const PaperLayout& L = in.paperLayouts[0];
+  REQUIRE(L.paperPoints.size() == 6);
+  CHECK(L.paperPoints[0] == Catch::Approx(3.f).margin(1e-4f));
+  CHECK(L.paperPoints[1] == Catch::Approx(4.f).margin(1e-4f));
+  CHECK(L.paperPoints[3] == Catch::Approx(7.5f).margin(1e-4f));
+  CHECK(L.paperPoints[4] == Catch::Approx(1.25f).margin(1e-4f));
+  CHECK(L.paperPointAttrs.size() == 2);
+  CHECK(in.surveyPoints.empty());
+  CHECK(in.pointDisplayMode == 3);
+  CHECK(in.pointDisplaySize == Catch::Approx(0.1).margin(1e-9));
+}
+
+// REQ-457 / issue #1010: a sheet raster image is written as a native DWG IMAGE with its IMAGEDEF and read back on
+// its layout with the same placement, size and file. A missing file unloads and is logged; a truncated file is refused.
+namespace {
+std::string RepoIconPath() {
+  return std::string(GOSURVEY_SAMPLES_DIR) + "/../resources/icons/Active_File.png";
+}
+}  // namespace
+
+TEST_CASE("Sheet raster images probe, refuse truncated files, and round-trip (REQ-457, issue #1010)",
+          "[dwg][libredwg][paperspace][issue1010]") {
+  ScratchDir dir("p1010img");
+  const std::string png = RepoIconPath();
+  REQUIRE(std::filesystem::exists(png));
+  int pw = 0;
+  int ph = 0;
+  std::string why;
+  REQUIRE(ProbeRasterImage(png, &pw, &ph, &why));
+  CHECK(pw > 0);
+  CHECK(ph > 0);
+
+  // A truncated copy is refused and no image is placed.
+  const auto truncated = (dir.path / "truncated.png").string();
+  {
+    std::ifstream in(png, std::ios::binary);
+    std::vector<char> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::ofstream out(truncated, std::ios::binary);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size() / 3));
+  }
+  CHECK_FALSE(ProbeRasterImage(truncated, nullptr, nullptr, &why));
+  CadRasterImage refused;
+  CHECK_FALSE(MakeSheetRasterImage(truncated, 1.f, 1.f, 3.f, 3.f, 0.f, &refused, &why));
+  CHECK(refused.path.empty());
+
+  // Round trip: a copy of the icon placed on a sheet, then deleted before reopening.
+  const auto copy = (dir.path / "sheet-image.png").string();
+  std::filesystem::copy_file(png, copy);
+  AppCommandState st;
+  OneLine(st);
+  PaperLayout sheet;
+  sheet.name = "Sheet I";
+  CadRasterImage placed;
+  REQUIRE(MakeSheetRasterImage(copy, 2.f, 3.f, 4.f, 2.f, 0.5f, &placed, &why));
+  sheet.paperImages.push_back(placed);
+  sheet.paperImageAttrs.resize(1);
+  st.paperLayouts.push_back(std::move(sheet));
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(st, (dir.path / "sheet-image.dwg").string().c_str(), log, /*asDxf=*/false));
+
+  AppCommandState in;
+  log.clear();
+  REQUIRE(ImportDwgFile(in, (dir.path / "sheet-image.dwg").string().c_str(), log));
+  REQUIRE(in.paperLayouts.size() == 1);
+  REQUIRE(in.paperLayouts[0].paperImages.size() == 1);
+  const CadRasterImage& back = in.paperLayouts[0].paperImages[0];
+  CHECK(back.path == copy);
+  CHECK(back.pixelW == pw);
+  CHECK(back.pixelH == ph);
+  CHECK(back.insX == Catch::Approx(2.f).margin(1e-3f));
+  CHECK(back.insY == Catch::Approx(3.f).margin(1e-3f));
+  CHECK(back.width == Catch::Approx(4.f).margin(1e-3f));
+  CHECK(back.height == Catch::Approx(2.f).margin(1e-3f));
+  CHECK(back.rotationRad == Catch::Approx(0.5f).margin(1e-3f));
+
+  // Missing file on reopen: the image is unloaded, the log says so, and the sheet still loads.
+  std::filesystem::remove(copy);
+  AppCommandState gone;
+  log.clear();
+  REQUIRE(ImportDwgFile(gone, (dir.path / "sheet-image.dwg").string().c_str(), log));
+  REQUIRE(gone.paperLayouts.size() == 1);
+  CHECK(gone.paperLayouts[0].paperImages.empty());
+  bool logged = false;
+  for (const std::string& l : log)
+    if (l.find("file is missing") != std::string::npos)
+      logged = true;
+  CHECK(logged);
+}
+
 // Issue #768 / REQ-113 acceptance 7 - hidden fixture writer for the AutoCAD oracle (accoreconsole).
 // Run with GOSURVEY_ORACLE_DIR=<dir> GoSurveyTests "[.oracle768]"; it writes <dir>/L<n>_<version>.dwg and
 // sheet.dxf. Levels add one feature at a time so a file AutoCAD rejects points at the feature:
@@ -6032,6 +6240,31 @@ static void BuildOracleState(AppCommandState& st, int level) {
     tb.plottedHeightInches = 0.15f;
     sheet.paperTables.push_back(tb);
     sheet.paperTableAttrs.push_back(EntityAttributes{});
+    CadAnnotation dim;
+    dim.kind = CadAnnotation::Kind::DimLinear;
+    dim.dimExt1X = 2.f; dim.dimExt1Y = 2.f;
+    dim.dimExt2X = 10.f; dim.dimExt2Y = 2.f;
+    dim.insX = 6.f; dim.insY = 4.f;
+    dim.dimSignedOffset = 2.f;
+    dim.text = "8.00";
+    dim.plottedHeightInches = 0.125f;
+    sheet.paperTexts.push_back(dim);
+    sheet.paperTextAttrs.push_back(EntityAttributes{});
+    sheet.paperPoints = {18.f, 12.f, 0.f, 20.f, 13.f, 0.f};  // REQ-456 sheet points
+    sheet.paperPointAttrs.resize(2);
+    st.pointDisplayMode = 3;
+    CadRasterImage picture;  // REQ-457 sheet image: the repository icon, placed on the sheet
+    std::string picWhy;
+    if (MakeSheetRasterImage(RepoIconPath(), 26.f, 2.f, 4.f, 2.f, 0.f, &picture, &picWhy)) {
+      sheet.paperImages.push_back(picture);
+      sheet.paperImageAttrs.push_back(EntityAttributes{});
+    }
+    st.pointDisplaySize = 0.1;
+    spline::Spline wave;
+    // Fixed, valid fit points: MakeFit cannot fail here, so its result is deliberately unused.
+    (void)spline::MakeFit({{2, 20, 0}, {6, 24, 0}, {10, 20, 0}, {14, 24, 0}}, false, &wave, nullptr);
+    sheet.paperSplines.push_back(wave);
+    sheet.paperSplineAttrs.push_back(EntityAttributes{});
   }
   st.paperLayouts.push_back(std::move(sheet));
   PaperLayout tall;
@@ -6064,4 +6297,99 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
   AppCommandState st;
   BuildOracleState(st, 4);
   REQUIRE(ExportDxfFile(st, (dir / "sheet.dxf").string().c_str(), log));
+  // Per-object isolation (issue #1010): one sheet holding only a fill, a leader or a table, written at R2000
+  // and R2018, so AutoCAD's open check can name the object that a version rejects.
+  const auto oneObject = [&](const char* tag, auto addObject) {
+    for (const auto& v : versions) {
+      AppCommandState one;
+      PaperLayout sheet;
+      sheet.name = "Plan";
+      sheet.portraitWidthIn = 24.f;
+      sheet.portraitHeightIn = 36.f;
+      sheet.landscape = true;
+      addObject(sheet);
+      one.paperLayouts.push_back(std::move(sheet));
+      one.dwgExportVersion = v.second;
+      REQUIRE(ExportLibreCadFile(one, (dir / (std::string(tag) + "_" + v.first + ".dwg")).string().c_str(), log,
+                                 /*asDxf=*/false));
+    }
+  };
+  // Model-space leader for comparison (issue #1010): the same multileader as ONLYLEADER, drawn in model space.
+  for (const auto& v : versions) {
+    AppCommandState model;
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    model.cadMultileaders.push_back(ml);
+    model.cadMultileaderAttrs.push_back(EntityAttributes{});
+    model.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(model, (dir / (std::string("MODELLEADER_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+    if (v.second == DwgSaveVersion::R2018)  // text form of the same entity, to diff against AutoCAD's own
+      REQUIRE(ExportLibreCadFile(model, (dir / "MODELLEADER_R2018.dxf").string().c_str(), log, /*asDxf=*/true));
+  }
+  oneObject("ONLYFILL", [](PaperLayout& sheet) {
+    sheet.paperFilledRegions.push_back(SquareHatchRegion(16.f, 3.f, 2.f));
+    sheet.paperFilledRegionAttrs.push_back(EntityAttributes{});
+  });
+  oneObject("ONLYLEADER", [](PaperLayout& sheet) {
+    CadMultileader ml{};
+    ml.pathXyz = {16.f, 8.f, 0.f, 18.f, 8.f, 0.f};
+    ml.label.kind = CadAnnotation::Kind::Mtext;
+    ml.label.insX = 18.f; ml.label.insY = 8.f;
+    ml.label.text = "SEE NOTE 4";
+    ml.label.plottedHeightInches = 0.2f;
+    ml.label.boxMinX = 18.f; ml.label.boxMinY = 7.8f; ml.label.boxMaxX = 21.f; ml.label.boxMaxY = 8.2f;
+    sheet.paperMultileaders.push_back(ml);
+    sheet.paperMultileaderAttrs.push_back(EntityAttributes{});
+  });
+  oneObject("ONLYTABLE", [](PaperLayout& sheet) {
+    CadTable tb;
+    tb.insX = 2.f; tb.insY = 14.f; tb.width = 4.f; tb.height = 2.f; tb.cols = 2;
+    tb.cells = {"ALPHA", "BETA", "GAMMA", "DELTA"};
+    tb.plottedHeightInches = 0.15f;
+    sheet.paperTables.push_back(tb);
+    sheet.paperTableAttrs.push_back(EntityAttributes{});
+  });
+  // REQ-457 isolation (issue #1010): one sheet holding only the image, written at R2000 and R2018.
+  for (const auto& v : versions) {
+    AppCommandState imgOnly;
+    PaperLayout sheet;
+    sheet.name = "Plan";
+    sheet.portraitWidthIn = 24.f;
+    sheet.portraitHeightIn = 36.f;
+    sheet.landscape = true;
+    CadRasterImage picture;
+    std::string picWhy;
+    REQUIRE(MakeSheetRasterImage(RepoIconPath(), 26.f, 2.f, 4.f, 2.f, 0.f, &picture, &picWhy));
+    sheet.paperImages.push_back(picture);
+    sheet.paperImageAttrs.push_back(EntityAttributes{});
+    imgOnly.paperLayouts.push_back(std::move(sheet));
+    imgOnly.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(imgOnly, (dir / (std::string("IMGONLY_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+  }
+  // Isolation fixtures (issue #1010): level 4 without the spline, and the spline alone on level 1's sheet.
+  for (const auto& v : versions) {
+    AppCommandState noSpline;
+    BuildOracleState(noSpline, 4);
+    noSpline.paperLayouts[0].paperSplines.clear();
+    noSpline.paperLayouts[0].paperSplineAttrs.clear();
+    noSpline.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(noSpline, (dir / (std::string("NOSPLINE_") + v.first + ".dwg")).string().c_str(), log,
+                               /*asDxf=*/false));
+    AppCommandState splineOnly;
+    BuildOracleState(splineOnly, 1);
+    spline::Spline wave;
+    (void)spline::MakeFit({{2, 20, 0}, {6, 24, 0}, {10, 20, 0}, {14, 24, 0}}, false, &wave, nullptr);
+    splineOnly.paperLayouts[0].paperSplines.push_back(wave);
+    splineOnly.paperLayouts[0].paperSplineAttrs.push_back(EntityAttributes{});
+    splineOnly.dwgExportVersion = v.second;
+    REQUIRE(ExportLibreCadFile(splineOnly, (dir / (std::string("SPLINEONLY_") + v.first + ".dwg")).string().c_str(),
+                               log, /*asDxf=*/false));
+  }
 }

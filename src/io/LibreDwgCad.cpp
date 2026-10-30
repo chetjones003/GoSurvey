@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
+#include <filesystem>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -945,12 +946,14 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   if (ml->ctx.num_leaders < 1 || ml->ctx.leaders == nullptr)
     return false;
   const Dwg_LEADER_Node& node = ml->ctx.leaders[0];
-  if (node.num_lines < 1 || node.lines == nullptr || node.lines[0].num_points < 2 ||
+  if (node.num_lines < 1 || node.lines == nullptr || node.lines[0].num_points < 1 ||
+      (node.lines[0].num_points < 2 && !node.has_lastleaderlinepoint) ||
       node.lines[0].points == nullptr)
     return false;
 
   auto importLeaderNodePath = [&](const Dwg_LEADER_Node& lnode, std::vector<float>* out) {
-    if (lnode.num_lines < 1 || lnode.lines == nullptr || lnode.lines[0].num_points < 2 ||
+    if (lnode.num_lines < 1 || lnode.lines == nullptr || lnode.lines[0].num_points < 1 ||
+        (lnode.lines[0].num_points < 2 && !lnode.has_lastleaderlinepoint) ||
         lnode.lines[0].points == nullptr)
       return;
     const Dwg_LEADER_Line& seg = lnode.lines[0];
@@ -3035,7 +3038,11 @@ Dwg_Object_BLOCK_HEADER* WriteDimAnonymousBlock(Dwg_Data* dwg, int* anonCounter,
                                                 const CadDimWorldStrokes& strokes, double z,
                                                 double originX, double originY,
                                                 const std::string& labelText, double labelHeight) {
-  const std::string name = "*D" + std::to_string(++(*anonCounter));
+  // Skip names already used: model space and sheets share one block table, and each keeps its own counter.
+  std::string name;
+  do {
+    name = "*D" + std::to_string(++(*anonCounter));
+  } while (dwg_find_tablehandle(dwg, name.c_str(), "BLOCK") != nullptr);
   Dwg_Object_BLOCK_HEADER* bh = dwg_add_BLOCK_HEADER(dwg, name.c_str());
   if (bh == nullptr)
     return nullptr;
@@ -4222,6 +4229,207 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
   }
 }
 
+// REQ-443 / #803 and REQ-113 (issue #1010): writes each spline into \p hdr. dwg_add_SPLINE only creates
+// fit-point curves, so use it to attach a correctly owned entity and then populate the standard SPLINE
+// arrays used by LibreDWG's encoder. \p world maps the caller's coordinates to DWG world coordinates.
+template <class World>
+static void WriteSplineEntities(TableWriter& tw, Dwg_Object_BLOCK_HEADER* hdr, const std::vector<CadSpline>& splines,
+                                const std::vector<EntityAttributes>& attrs, World world) {
+  for (size_t i = 0; i < splines.size(); ++i) {
+    const CadSpline& s = splines[i];
+    if (!spline::Validate(s).empty() || s.ctrl.empty()) continue;
+    std::vector<dwg_point_3d> seed;
+    const auto& source = s.fit.empty() ? s.ctrl : s.fit;
+    seed.reserve(source.size());
+    for (const auto& p : source) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(p.x), static_cast<float>(p.y), p.z, &wp);
+      seed.push_back(wp);
+    }
+    auto* knots = static_cast<BITCODE_BD*>(std::calloc(s.knots.size(), sizeof(BITCODE_BD)));
+    auto* ctrl = static_cast<Dwg_SPLINE_control_point*>(std::calloc(s.ctrl.size(), sizeof(Dwg_SPLINE_control_point)));
+    auto* fit = s.fit.empty() ? nullptr : static_cast<BITCODE_3DPOINT*>(std::calloc(s.fit.size(), sizeof(BITCODE_3DPOINT)));
+    if (knots == nullptr || ctrl == nullptr || (!s.fit.empty() && fit == nullptr)) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::copy(s.knots.begin(), s.knots.end(), knots);
+    for (size_t k = 0; k < s.fit.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.fit[k].x), static_cast<float>(s.fit[k].y), s.fit[k].z, &wp);
+      fit[k].x = wp.x;
+      fit[k].y = wp.y;
+      fit[k].z = wp.z;
+    }
+    dwg_point_3d tangent{};
+    Dwg_Entity_SPLINE* e = dwg_add_SPLINE(hdr, static_cast<int>(seed.size()), seed.data(), &tangent, &tangent);
+    if (e == nullptr) {
+      std::free(knots);
+      std::free(ctrl);
+      std::free(fit);
+      continue;
+    }
+    std::free(e->fit_pts);
+    e->fit_pts = fit;
+    e->num_fit_pts = static_cast<BITCODE_BS>(s.fit.size());
+    e->scenario = SPLINE_SCENARIO_SPLINE;
+    e->degree = static_cast<BITCODE_BS>(s.degree);
+    e->periodic = s.periodic ? 1 : 0;
+    e->closed_b = s.periodic ? 1 : 0;
+    e->rational = s.weights.empty() ? 0 : 1;
+    e->weighted = s.weights.empty() ? 0 : 1;
+    e->splineflags = s.periodic ? SPLINE_SPLINEFLAGS_CLOSED : 0;
+    e->knotparam = SPLINE_KNOTPARAM_CUSTOM;
+    e->num_knots = static_cast<BITCODE_BL>(s.knots.size());
+    e->knots = knots;
+    e->num_ctrl_pts = static_cast<BITCODE_BL>(s.ctrl.size());
+    e->ctrl_pts = ctrl;
+    for (size_t k = 0; k < s.ctrl.size(); ++k) {
+      dwg_point_3d wp{};
+      world(static_cast<float>(s.ctrl[k].x), static_cast<float>(s.ctrl[k].y), s.ctrl[k].z, &wp);
+      e->ctrl_pts[k].parent = e;
+      e->ctrl_pts[k].x = wp.x;
+      e->ctrl_pts[k].y = wp.y;
+      e->ctrl_pts[k].z = wp.z;
+      e->ctrl_pts[k].w = s.weights.empty() ? 1.0 : s.weights[k];
+    }
+    if (const EntityAttributes* a = AttrAt(attrs, i))
+      tw.Apply(e->parent, *a);
+  }
+}
+
+// REQ-366 / REQ-113 (issue #1010): one dimension (aligned, linear or angular) as a native DWG DIMENSION with its
+// anonymous block. Shared by model space and sheets; \p ox / \p oy shift local -> world (0 on a sheet).
+struct DimWriteState {
+  Dwg_Object_DIMSTYLE* dimStyle = nullptr;  ///< DIMSTYLE created lazily on the first dimension
+  int anonCounter = 0;                       ///< last "*D<n>" anonymous block number tried
+};
+
+static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, TableWriter& tw,
+                                     const AppCommandState& st, const CadAnnotation& an,
+                                     const EntityAttributes* at, double ox, double oy, bool r2018Write,
+                                     DwgExportAnnotContext& annotCtx, DimWriteState& ds) {
+  auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
+    p->x = static_cast<double>(lx) + ox;
+    p->y = static_cast<double>(ly) + oy;
+    p->z = z;
+  };
+  auto apply = [&](Dwg_Object_Entity* ent, const EntityAttributes* a) {
+    if (a != nullptr)
+      tw.Apply(ent, *a);
+  };
+  if (ds.dimStyle == nullptr) {
+    ds.dimStyle = EnsureDimStyleNamed(dwg, st.activeDimensionStyle.name);
+    if (ds.dimStyle != nullptr) {
+      const DimensionStyle& sty = st.activeDimensionStyle;
+      const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+      ds.dimStyle->DIMTXT = static_cast<double>(sty.textSizeInches) * mup;
+      ds.dimStyle->DIMASZ = static_cast<double>(sty.arrowSizeInches) * mup;
+      ds.dimStyle->DIMDEC = std::clamp(sty.unitPrecision, 0, 8);
+      ds.dimStyle->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(sty.arrowType));
+      DimStyleSetCmc(&ds.dimStyle->DIMCLRD, sty.dimLineColor, tw.useTrueColor);
+      DimStyleSetCmc(&ds.dimStyle->DIMCLRE, sty.extLineColor, tw.useTrueColor);
+      DimStyleSetCmc(&ds.dimStyle->DIMCLRT, sty.textColor, tw.useTrueColor);
+    }
+  }
+  CadDimStrokeParams sp;
+  sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+  sp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
+  sp.arrowType = st.activeDimensionStyle.arrowType;
+  CadDimWorldStrokes strokes;
+  CadDimBuildWorldStrokes(an, sp, &strokes);
+  const double labelH = std::max(static_cast<double>(an.plottedHeightInches) *
+                                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6),
+                                 1e-3);
+  Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
+      dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
+      st.worldDocumentOriginY, an.text, labelH);
+  dwg_point_3d textMid{};
+  world(an.insX, an.insY, an.insZ, &textMid);
+  Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
+  Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
+  Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
+  Dwg_DIMENSION_common* common = nullptr;
+  if (an.kind == CadAnnotation::Kind::DimAligned) {
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+      dwg_point_3d p1{}, p2{};
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+      dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
+      if (dimA != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimA);
+        dwg_point_3d dp{};
+        world(sx1, sy1, an.insZ, &dp);
+        common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
+        common->def_pt.y = dp.y;
+        common->def_pt.z = dp.z;
+        common->act_measurement = static_cast<double>(meas);
+      }
+    }
+  } else if (an.kind == CadAnnotation::Kind::DimLinear) {
+    float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
+    if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+      dwg_point_3d p1{}, p2{}, pd{};
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
+      world(sx1, sy1, an.insZ, &pd);
+      // AutoCAD's rotated-linear convention: 0 = horizontal dim line, pi/2 = vertical — matches
+      // CadDimLinearGeometry's own dimLinearVertical branch, so OPEN can recover it losslessly.
+      dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
+      if (dimL != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
+        common->text_midpt.x = textMid.x;
+        common->text_midpt.y = textMid.y;
+        common->act_measurement = static_cast<double>(meas);
+      }
+    }
+  } else if (an.kind == CadAnnotation::Kind::DimAngular) {
+    float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
+    if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
+      const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
+      dwg_point_3d center{}, x1{}, x2{};
+      world(an.dimAngVertexX, an.dimAngVertexY, an.insZ, &center);
+      world(an.dimExt1X, an.dimExt1Y, an.insZ, &x1);
+      world(an.dimExt2X, an.dimExt2Y, an.insZ, &x2);
+      dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
+      if (dimG != nullptr) {
+        common = reinterpret_cast<Dwg_DIMENSION_common*>(dimG);
+        // Arc point (DXF 10): bisector direction from the vertex, at radius R — the wrapper
+        // leaves def_pt unset (see dwg_add_DIMENSION_ANG3PT in dwg_api.c).
+        common->def_pt.x = center.x + static_cast<double>(bisx) * R;
+        common->def_pt.y = center.y + static_cast<double>(bisy) * R;
+        common->def_pt.z = center.z;
+        common->act_measurement = static_cast<double>(theta);
+      }
+    }
+  }
+  if (common != nullptr) {
+    common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.text).c_str());
+    common->text_rotation = static_cast<double>(an.rotationRad);
+    common->elevation = static_cast<double>(an.insZ);
+    if (anonBlk != nullptr) {
+      BITCODE_H blkRef = dwg_find_tablehandle(dwg, (anonBlk->name != nullptr ? anonBlk->name : ""),
+                                              "BLOCK");
+      if (blkRef != nullptr)
+        common->block = dwg_add_handleref(dwg, 5, blkRef->absolute_ref, nullptr);
+    }
+    apply(common->parent, at);
+    if (r2018Write && an.annotative && common->parent != nullptr)
+      WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
+    if (annotCtx.enabled && an.annotative && common->parent != nullptr) {
+      DwgExportDimContextKind dimCtxKind = DwgExportDimContextKind::Aligned;
+      if (an.kind == CadAnnotation::Kind::DimLinear)
+        dimCtxKind = DwgExportDimContextKind::Linear;
+      else if (an.kind == CadAnnotation::Kind::DimAngular)
+        dimCtxKind = DwgExportDimContextKind::Angular;
+      DwgExportAttachDimensionAnnotationContext(&annotCtx, common->parent, common, dimCtxKind, an, st);
+    }
+  }
+}
+
 static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADER* ps, TableWriter& tw,
                                     const AppCommandState& st, DwgExportFieldContext* fldCtx,
                                     DwgExportVisualStyleContext* vsCtx, DwgSaveVersion outputVersion,
@@ -4406,6 +4614,101 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
   for (size_t i = 0; i < L.paperBlockRefs.size(); ++i)
     WriteBlockRefInsertToHeader(ps, tw, st, L.paperBlockRefs[i], AttrAt(L.paperBlockRefAttrs, i), 0.0, 0.0,
                                 fldCtx);
+  // REQ-456 / issue #1010: sheet POINT objects, in paper inches (block-local, no origin shift).
+  for (size_t i = 0; i + 2 < L.paperPoints.size(); i += 3) {
+    dwg_point_3d pt{};
+    pt.x = static_cast<double>(L.paperPoints[i]);
+    pt.y = static_cast<double>(L.paperPoints[i + 1]);
+    pt.z = static_cast<double>(L.paperPoints[i + 2]);
+    if (Dwg_Entity_POINT* e = dwg_add_POINT(ps, &pt))
+      apply(e->parent, AttrAt(L.paperPointAttrs, i / 3));
+  }
+  // REQ-457 / issue #1010: sheet raster IMAGE underlays. dwg_add_IMAGE makes the IMAGE and its IMAGEDEF and
+  // reactor; the per-pixel vectors, pixel size and image size are set here from the sheet placement.
+  for (size_t i = 0; i < L.paperImages.size(); ++i) {
+    const CadRasterImage& im = L.paperImages[i];
+    dwg_point_3d pt{};
+    pt.x = static_cast<double>(im.insX);
+    pt.y = static_cast<double>(im.insY);
+    Dwg_Entity_IMAGE* e = dwg_add_IMAGE(ps, im.path.c_str(), &pt, 1.0, 0.0);
+    if (e == nullptr)
+      continue;
+    const double pw = static_cast<double>(std::max(im.pixelW, 1));
+    const double ph = static_cast<double>(std::max(im.pixelH, 1));
+    const double c = std::cos(static_cast<double>(im.rotationRad));
+    const double sn = std::sin(static_cast<double>(im.rotationRad));
+    e->uvec.x = c * static_cast<double>(im.width) / pw;
+    e->uvec.y = sn * static_cast<double>(im.width) / pw;
+    e->uvec.z = 0.0;
+    e->vvec.x = -sn * static_cast<double>(im.height) / ph;
+    e->vvec.y = c * static_cast<double>(im.height) / ph;
+    e->vvec.z = 0.0;
+    e->image_size.x = pw;
+    e->image_size.y = ph;
+    // The values AutoCAD writes for a plain attached image: shown and clipped to a rectangle that covers the
+    // whole pixel grid (corners at pixel centres -0.5 .. size-0.5).
+    e->display_props = 7;
+    e->clipping = 0;
+    e->clip_mode = 0;
+    e->clip_boundary_type = 1;
+    e->num_clip_verts = 2;
+    e->clip_verts = static_cast<BITCODE_2RD*>(std::calloc(2, sizeof(BITCODE_2RD)));
+    if (e->clip_verts != nullptr) {
+      e->clip_verts[0].x = -0.5;
+      e->clip_verts[0].y = -0.5;
+      e->clip_verts[1].x = pw - 0.5;
+      e->clip_verts[1].y = ph - 0.5;
+    }
+    e->fade = 0;
+    if (e->imagedef != nullptr) {
+      if (Dwg_Object* io = dwg_resolve_handle_silent(tw.dwg, e->imagedef->absolute_ref)) {
+        if (io->tio.object != nullptr && io->tio.object->tio.IMAGEDEF != nullptr) {
+          Dwg_Object_IMAGEDEF* def = io->tio.object->tio.IMAGEDEF;
+          def->image_size = e->image_size;
+          def->is_loaded = 1;
+          def->resunits = 0;  // AutoCAD writes no resolution units; pixel_size is in drawing units per pixel
+          def->pixel_size.x = static_cast<double>(im.width) / pw;
+          def->pixel_size.y = static_cast<double>(im.height) / ph;
+          // AutoCAD keeps every IMAGEDEF in the named ACAD_IMAGE_DICT dictionary and refuses the file without it.
+          const std::string itemName = "GS_IMG_" + std::to_string(static_cast<unsigned long long>(io->handle.value));
+          if (BITCODE_H dictRef = dwg_find_dictionary(tw.dwg, "ACAD_IMAGE_DICT")) {
+            if (Dwg_Object* dictObj = dwg_ref_object(tw.dwg, dictRef)) {
+              if (dictObj->tio.object != nullptr && dictObj->tio.object->tio.DICTIONARY != nullptr) {
+                dwg_add_DICTIONARY_item(dictObj->tio.object->tio.DICTIONARY, itemName.c_str(), io->handle.value);
+                io->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dictObj->handle.value, io);
+              }
+            }
+          } else if (Dwg_Object_DICTIONARY* created = dwg_add_DICTIONARY(tw.dwg, "ACAD_IMAGE_DICT", itemName.c_str(),
+                                                                         io->handle.value)) {
+            if (created->parent != nullptr)
+              io->tio.object->ownerhandle = dwg_add_handleref(tw.dwg, 4, dwg_obj_generic_handlevalue(created), io);
+          }
+        }
+      }
+    }
+    apply(e->parent, AttrAt(L.paperImageAttrs, i));
+  }
+  // REQ-113 / issue #1010: sheet dimensions are Dim-kind annotations kept in paperTexts (the sheet's text
+  // store, which Qt draws). Each is written as a native DIMENSION on this sheet, in paper inches.
+  {
+    DimWriteState dimState;
+    DwgExportAnnotContext dimAnnot;
+    DwgExportAnnotContextInit(&dimAnnot, tw.dwg, false);
+    const bool r2018Write = LibreDwgVersionFromExport(outputVersion) >= R_2018;
+    for (size_t i = 0; i < L.paperTexts.size(); ++i) {
+      const CadAnnotation& an = L.paperTexts[i];
+      if (CadAnnotationIsDimension(an))
+        WriteDimensionAnnotation(tw.dwg, ps, tw, st, an, AttrAt(L.paperTextAttrs, i), 0.0, 0.0, r2018Write,
+                                 dimAnnot, dimState);
+    }
+  }
+  // REQ-113 / issue #1010: sheet splines, in paper inches (no origin shift; the sheet is block-local).
+  WriteSplineEntities(tw, ps, L.paperSplines, L.paperSplineAttrs,
+                      [](float x, float y, double z, dwg_point_3d* p) {
+                        p->x = static_cast<double>(x);
+                        p->y = static_cast<double>(y);
+                        p->z = z;
+                      });
   // Issue #768 / REQ-113: fills -> HATCH and multileaders -> MULTILEADER (R2010+) or LEADER + MTEXT,
   // through the same writers model space uses. Paper inches, so no origin shift and 1 unit per plotted inch.
   DwgExportAnnotContext noAnnot;
@@ -4439,7 +4742,7 @@ static void FillPaperLayoutsFromState(const AppCommandState& st, Dwg_Data* dwg, 
         tw.EnsureLtype(a.linetype);
     for (const EntityAttributes& a : L.paperBlockRefAttrs)
       tw.EnsureLtype(a.linetype);
-    for (const std::vector<EntityAttributes>* v : {&L.paperCircleAttrs, &L.paperArcAttrs, &L.paperEllAttrs,
+    for (const std::vector<EntityAttributes>* v : {&L.paperCircleAttrs, &L.paperArcAttrs, &L.paperEllAttrs, &L.paperSplineAttrs, &L.paperPointAttrs, &L.paperImageAttrs,
                                                    &L.paperPolyAttrs, &L.paperTextAttrs})
       for (const EntityAttributes& a : *v)
         tw.EnsureLtype(a.linetype);
@@ -4627,13 +4930,52 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
                                     L.paperBlockRefAttrs, nullptr))
       return;
   }
+  // REQ-457 / issue #1010: an IMAGE on a sheet, placed from its IMAGEDEF path and pixel size. A file that is no
+  // longer there is unloaded and logged, and the rest of the sheet still loads (REQ-173).
+  if (ty == DWG_TYPE_IMAGE && ent->tio.IMAGE != nullptr) {
+    const Dwg_Entity_IMAGE* e = ent->tio.IMAGE;
+    const Dwg_Object* d = e->imagedef != nullptr ? dwg_resolve_handle_silent(dwg, e->imagedef->absolute_ref) : nullptr;
+    if (d == nullptr || d->tio.object == nullptr || d->tio.object->tio.IMAGEDEF == nullptr) {
+      NoteSkip(skipHist, "sheet IMAGE without an image definition (REQ-457)");
+      return;
+    }
+    const Dwg_Object_IMAGEDEF* def = d->tio.object->tio.IMAGEDEF;
+    CadRasterImage im;
+    im.path = FromT(dwg, def->file_path);
+    im.pixelW = static_cast<int>(std::lround(def->image_size.x > 0.0 ? def->image_size.x : e->image_size.x));
+    im.pixelH = static_cast<int>(std::lround(def->image_size.y > 0.0 ? def->image_size.y : e->image_size.y));
+    im.insX = static_cast<float>(e->pt0.x);
+    im.insY = static_cast<float>(e->pt0.y);
+    const double pw = static_cast<double>(std::max(im.pixelW, 1));
+    const double ph = static_cast<double>(std::max(im.pixelH, 1));
+    im.width = static_cast<float>(std::hypot(e->uvec.x, e->uvec.y) * pw);
+    im.height = static_cast<float>(std::hypot(e->vvec.x, e->vvec.y) * ph);
+    im.rotationRad = static_cast<float>(std::atan2(e->uvec.y, e->uvec.x));
+    if (!std::filesystem::exists(std::filesystem::u8path(im.path))) {
+      NoteSkip(skipHist, "sheet IMAGE unloaded: its file is missing (REQ-457)");
+      return;
+    }
+    L.paperImages.push_back(im);
+    L.paperImageAttrs.push_back(at);
+    return;
+  }
+  // REQ-456 / issue #1010: a POINT on a sheet stays on the sheet (REQ-023 survey points are model-space only).
+  if (ty == DWG_TYPE_POINT && ent->tio.POINT != nullptr) {
+    const Dwg_Entity_POINT* e = ent->tio.POINT;
+    L.paperPoints.push_back(static_cast<float>(e->x));
+    L.paperPoints.push_back(static_cast<float>(e->y));
+    L.paperPoints.push_back(static_cast<float>(e->z));
+    L.paperPointAttrs.push_back(at);
+    return;
+  }
   if (ty == DWG_TYPE_BLOCK || ty == DWG_TYPE_ENDBLK)
     return;
   // REQ-113 / issue #765: TEXT, MTEXT, CIRCLE, ARC, ELLIPSE and polylines reuse the model-space reader.
   // They land in a scratch state with origin 0 and 1 model unit per plotted inch, so every number is
   // already in paper inches, then move into the layout's own stores.
   if (ty == DWG_TYPE_TEXT || ty == DWG_TYPE_MTEXT || ty == DWG_TYPE_CIRCLE || ty == DWG_TYPE_ARC ||
-      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
+      ty == DWG_TYPE_ELLIPSE || ty == DWG_TYPE_SPLINE || ty == DWG_TYPE_LWPOLYLINE || ty == DWG_TYPE_POLYLINE_2D ||
+      ty == DWG_TYPE_DIMENSION_ALIGNED || ty == DWG_TYPE_DIMENSION_LINEAR || ty == DWG_TYPE_DIMENSION_ANG3PT ||
       ty == DWG_TYPE_HATCH || ty == DWG_TYPE_MULTILEADER || ty == DWG_TYPE_LEADER ||
       ty == DWG_TYPE_TABLE) {
     AppCommandState scratch;
@@ -5143,8 +5485,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   // REQ-366, issue #607: DIMSTYLE is created lazily on the first dimension written below, named
   // from the drawing's one active DimensionStyle (DimensionStyle.hpp: a single style today, not a
   // per-dimension table — see EnsureDimStyleNamed's comment).
-  Dwg_Object_DIMSTYLE* dimStyle = nullptr;
-  int dimAnonCounter = 0;
+  DimWriteState dimState;
   int dimsWritten = 0;
   for (size_t i = 0; i < st.cadAnnotations.size(); ++i) {
     const CadAnnotation& an = st.cadAnnotations[i];
@@ -5154,115 +5495,9 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     const EntityAttributes* at = AttrAt(st.cadAnnotationAttrs, i);
     const BITCODE_BL styleId = tw.StyleObjId(an.styleName);
     if (CadAnnotationIsDimension(an)) {
-      if (dimStyle == nullptr) {
-        dimStyle = EnsureDimStyleNamed(dwg, st.activeDimensionStyle.name);
-        if (dimStyle != nullptr) {
-          const DimensionStyle& sty = st.activeDimensionStyle;
-          const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
-          dimStyle->DIMTXT = static_cast<double>(sty.textSizeInches) * mup;
-          dimStyle->DIMASZ = static_cast<double>(sty.arrowSizeInches) * mup;
-          dimStyle->DIMDEC = std::clamp(sty.unitPrecision, 0, 8);
-          dimStyle->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(sty.arrowType));
-          DimStyleSetCmc(&dimStyle->DIMCLRD, sty.dimLineColor, tw.useTrueColor);
-          DimStyleSetCmc(&dimStyle->DIMCLRE, sty.extLineColor, tw.useTrueColor);
-          DimStyleSetCmc(&dimStyle->DIMCLRT, sty.textColor, tw.useTrueColor);
-        }
-      }
-      CadDimStrokeParams sp;
-      sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
-      sp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
-      sp.arrowType = st.activeDimensionStyle.arrowType;
-      CadDimWorldStrokes strokes;
-      CadDimBuildWorldStrokes(an, sp, &strokes);
-      const double labelH = std::max(static_cast<double>(an.plottedHeightInches) *
-                                         std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6),
-                                     1e-3);
-      Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
-          dwg, &dimAnonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
-          st.worldDocumentOriginY, an.text, labelH);
-      dwg_point_3d textMid{};
-      world(an.insX, an.insY, an.insZ, &textMid);
-      Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
-      Dwg_Entity_DIMENSION_LINEAR* dimL = nullptr;
-      Dwg_Entity_DIMENSION_ANG3PT* dimG = nullptr;
-      Dwg_DIMENSION_common* common = nullptr;
-      if (an.kind == CadAnnotation::Kind::DimAligned) {
-        float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
-        if (CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
-          dwg_point_3d p1{}, p2{};
-          world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
-          world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
-          dimA = dwg_add_DIMENSION_ALIGNED(hdr, &p1, &p2, &textMid);
-          if (dimA != nullptr) {
-            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimA);
-            dwg_point_3d dp{};
-            world(sx1, sy1, an.insZ, &dp);
-            common->def_pt.x = dp.x;  // REQ-366: dim-line point the wrapper omits
-            common->def_pt.y = dp.y;
-            common->def_pt.z = dp.z;
-            common->act_measurement = static_cast<double>(meas);
-          }
-        }
-      } else if (an.kind == CadAnnotation::Kind::DimLinear) {
-        float sx1 = 0, sy1 = 0, sx2 = 0, sy2 = 0, tx = 0, ty = 0, nx = 0, ny = 0, meas = 0;
-        if (CadDimLinearGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
-          dwg_point_3d p1{}, p2{}, pd{};
-          world(an.dimExt1X, an.dimExt1Y, an.insZ, &p1);
-          world(an.dimExt2X, an.dimExt2Y, an.insZ, &p2);
-          world(sx1, sy1, an.insZ, &pd);
-          // AutoCAD's rotated-linear convention: 0 = horizontal dim line, pi/2 = vertical — matches
-          // CadDimLinearGeometry's own dimLinearVertical branch, so OPEN can recover it losslessly.
-          dimL = dwg_add_DIMENSION_LINEAR(hdr, &p1, &p2, &pd, an.dimLinearVertical ? (kPi * 0.5) : 0.0);
-          if (dimL != nullptr) {
-            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimL);
-            common->text_midpt.x = textMid.x;
-            common->text_midpt.y = textMid.y;
-            common->act_measurement = static_cast<double>(meas);
-          }
-        }
-      } else if (an.kind == CadAnnotation::Kind::DimAngular) {
-        float a1 = 0, a2 = 0, sweep = 0, theta = 0, bisx = 0, bisy = 0;
-        if (CadDimAngularComputeFrame(an, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
-          const double R = std::max(static_cast<double>(an.dimSignedOffset), 1e-6);
-          dwg_point_3d center{}, x1{}, x2{};
-          world(an.dimAngVertexX, an.dimAngVertexY, an.insZ, &center);
-          world(an.dimExt1X, an.dimExt1Y, an.insZ, &x1);
-          world(an.dimExt2X, an.dimExt2Y, an.insZ, &x2);
-          dimG = dwg_add_DIMENSION_ANG3PT(hdr, &center, &x1, &x2, &textMid);
-          if (dimG != nullptr) {
-            common = reinterpret_cast<Dwg_DIMENSION_common*>(dimG);
-            // Arc point (DXF 10): bisector direction from the vertex, at radius R — the wrapper
-            // leaves def_pt unset (see dwg_add_DIMENSION_ANG3PT in dwg_api.c).
-            common->def_pt.x = center.x + static_cast<double>(bisx) * R;
-            common->def_pt.y = center.y + static_cast<double>(bisy) * R;
-            common->def_pt.z = center.z;
-            common->act_measurement = static_cast<double>(theta);
-          }
-        }
-      }
-      if (common != nullptr) {
-        common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.text).c_str());
-        common->text_rotation = static_cast<double>(an.rotationRad);
-        common->elevation = static_cast<double>(an.insZ);
-        if (anonBlk != nullptr) {
-          BITCODE_H blkRef = dwg_find_tablehandle(dwg, (anonBlk->name != nullptr ? anonBlk->name : ""),
-                                                  "BLOCK");
-          if (blkRef != nullptr)
-            common->block = dwg_add_handleref(dwg, 5, blkRef->absolute_ref, nullptr);
-        }
-        apply(common->parent, at);
-        if (r2018Write && an.annotative && common->parent != nullptr)
-          WriteAnnotativeEntityEed(dwg, common->parent, &an.annotativeVisibleScaleNames);
-        if (annotCtx.enabled && an.annotative && common->parent != nullptr) {
-          DwgExportDimContextKind dimCtxKind = DwgExportDimContextKind::Aligned;
-          if (an.kind == CadAnnotation::Kind::DimLinear)
-            dimCtxKind = DwgExportDimContextKind::Linear;
-          else if (an.kind == CadAnnotation::Kind::DimAngular)
-            dimCtxKind = DwgExportDimContextKind::Angular;
-          DwgExportAttachDimensionAnnotationContext(&annotCtx, common->parent, common, dimCtxKind, an, st);
-        }
-        ++dimsWritten;
-      }
+      WriteDimensionAnnotation(dwg, hdr, tw, st, an, at, st.worldDocumentOriginX, st.worldDocumentOriginY,
+                               r2018Write, annotCtx, dimState);
+      ++dimsWritten;
       continue;
     }
     if (an.kind == CadAnnotation::Kind::Mtext) {
@@ -5549,70 +5784,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     e->start_angle = 0.0;
     e->end_angle = 2.0 * kPi;
   }
-  // REQ-443 / #803: dwg_add_SPLINE only creates fit-point curves, so use it to attach a correctly
-  // owned entity and then populate the standard SPLINE arrays used by LibreDWG's encoder.
-  for (size_t i = 0; i < st.cadSplines.size(); ++i) {
-    const CadSpline& s = st.cadSplines[i];
-    if (!spline::Validate(s).empty() || s.ctrl.empty()) continue;
-    std::vector<dwg_point_3d> seed;
-    const auto& source = s.fit.empty() ? s.ctrl : s.fit;
-    seed.reserve(source.size());
-    for (const auto& p : source) {
-      dwg_point_3d wp{};
-      world(static_cast<float>(p.x), static_cast<float>(p.y), p.z, &wp);
-      seed.push_back(wp);
-    }
-    auto* knots = static_cast<BITCODE_BD*>(std::calloc(s.knots.size(), sizeof(BITCODE_BD)));
-    auto* ctrl = static_cast<Dwg_SPLINE_control_point*>(std::calloc(s.ctrl.size(), sizeof(Dwg_SPLINE_control_point)));
-    auto* fit = s.fit.empty() ? nullptr : static_cast<BITCODE_3DPOINT*>(std::calloc(s.fit.size(), sizeof(BITCODE_3DPOINT)));
-    if (knots == nullptr || ctrl == nullptr || (!s.fit.empty() && fit == nullptr)) {
-      std::free(knots);
-      std::free(ctrl);
-      std::free(fit);
-      continue;
-    }
-    std::copy(s.knots.begin(), s.knots.end(), knots);
-    for (size_t k = 0; k < s.fit.size(); ++k) {
-      dwg_point_3d wp{};
-      world(static_cast<float>(s.fit[k].x), static_cast<float>(s.fit[k].y), s.fit[k].z, &wp);
-      fit[k].x = wp.x;
-      fit[k].y = wp.y;
-      fit[k].z = wp.z;
-    }
-    dwg_point_3d tangent{};
-    Dwg_Entity_SPLINE* e = dwg_add_SPLINE(hdr, static_cast<int>(seed.size()), seed.data(), &tangent, &tangent);
-    if (e == nullptr) {
-      std::free(knots);
-      std::free(ctrl);
-      std::free(fit);
-      continue;
-    }
-    std::free(e->fit_pts);
-    e->fit_pts = fit;
-    e->num_fit_pts = static_cast<BITCODE_BS>(s.fit.size());
-    e->scenario = SPLINE_SCENARIO_SPLINE;
-    e->degree = static_cast<BITCODE_BS>(s.degree);
-    e->periodic = s.periodic ? 1 : 0;
-    e->closed_b = s.periodic ? 1 : 0;
-    e->rational = s.weights.empty() ? 0 : 1;
-    e->weighted = s.weights.empty() ? 0 : 1;
-    e->splineflags = s.periodic ? SPLINE_SPLINEFLAGS_CLOSED : 0;
-    e->knotparam = SPLINE_KNOTPARAM_CUSTOM;
-    e->num_knots = static_cast<BITCODE_BL>(s.knots.size());
-    e->knots = knots;
-    e->num_ctrl_pts = static_cast<BITCODE_BL>(s.ctrl.size());
-    e->ctrl_pts = ctrl;
-    for (size_t k = 0; k < s.ctrl.size(); ++k) {
-      dwg_point_3d wp{};
-      world(static_cast<float>(s.ctrl[k].x), static_cast<float>(s.ctrl[k].y), s.ctrl[k].z, &wp);
-      e->ctrl_pts[k].parent = e;
-      e->ctrl_pts[k].x = wp.x;
-      e->ctrl_pts[k].y = wp.y;
-      e->ctrl_pts[k].z = wp.z;
-      e->ctrl_pts[k].w = s.weights.empty() ? 1.0 : s.weights[k];
-    }
-    apply(e->parent, AttrAt(st.cadSplineAttrs, i));
-  }
+  // REQ-443 / #803: model-space splines in world coordinates (document origin shift).
+  WriteSplineEntities(tw, hdr, st.cadSplines, st.cadSplineAttrs, world);
   // REQ-170 / issue #608: filled regions → HATCH (solid or predefined pattern). Boundary loops are
   // built from temporary invisible LWPOLYLINE scaffolds that LibreDWG's dwg_add_HATCH copies into
   // the hatch path (non-associative).
@@ -6092,6 +6265,9 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   if (CadDrawingInsUnitsOffered(static_cast<int>(dwg.header_vars.INSUNITS)))
     st.drawingInsUnits = static_cast<int>(dwg.header_vars.INSUNITS);
+  // REQ-456 / issue #1010: point display travels with the drawing (PDMODE, PDSIZE).
+  st.pointDisplayMode = static_cast<int>(dwg.header_vars.PDMODE);
+  st.pointDisplaySize = dwg.header_vars.PDSIZE;
 
   const double minX = dwg.header_vars.EXTMIN.x;
   const double minY = dwg.header_vars.EXTMIN.y;
@@ -6256,6 +6432,8 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   // Drawing unit (REQ-022) and, with "Set drawing variables to match" (REQ-357), LUNITS / AUNITS.
   dwg->header_vars.INSUNITS = static_cast<BITCODE_BS>(st.drawingInsUnits);
+  dwg->header_vars.PDMODE = static_cast<BITCODE_BS>(st.pointDisplayMode);  // REQ-456 / issue #1010
+  dwg->header_vars.PDSIZE = st.pointDisplaySize;
   if (st.drawingSettings.setDrawingVariables) {
     dwg->header_vars.LUNITS = 2;
     dwg->header_vars.AUNITS = static_cast<BITCODE_BS>(DrawingAunitsCode(st.drawingSettings.angularUnits));
@@ -6311,4 +6489,3 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
   std::free(dwg);
   return ok;
 }
-

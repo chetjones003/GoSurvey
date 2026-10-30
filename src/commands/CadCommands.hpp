@@ -2226,6 +2226,10 @@ struct AppCommandState {
   /// geometry. Document property: persisted in the drawing and the DXF header. Offered codes:
   /// 0=Unitless, 1=Inches, 2=Feet, 4=Millimeters, 6=Meters (REQ-357). Per tab and undoable.
   int drawingInsUnits = 2;
+  /// Drawing point display (REQ-456, issue #1010): AutoCAD PDMODE and PDSIZE, kept with the drawing and
+  /// applied to every sheet POINT. 0 = dot (AutoCAD's default); PDSIZE 0 = 5% of the viewport height.
+  int pointDisplayMode = 0;
+  double pointDisplaySize = 0.0;
   /// The drawing's Drawing Settings (REQ-357): per tab, undoable, saved in the trailer JSON.
   DrawingSettings drawingSettings;
   /// REQ-377 (#696 P4): which points of the project database this drawing shows. Per tab, saved in the

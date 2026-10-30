@@ -1417,18 +1417,20 @@ DWG_ENTITY (MULTILEADER)
   FIELD_BS (style_attachment, 176);
   FIELD_B (is_annotative, 293);
 
+  /* GoSurvey (issue #1010): the arrowhead list is present in R2010+ files too (AutoCAD writes its count,
+     0, as a BL between is_annotative and is_neg_textdir). */
+  FIELD_BL (num_arrowheads, 0);
+  VALUEOUTOFBOUNDS (num_arrowheads, 5000)
+  REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
+  REPEAT_BLOCK
+      SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
+      SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
+      SET_PARENT_OBJ (arrowheads[rcount1]);
+  END_REPEAT_BLOCK
+  END_REPEAT (arrowheads);
+
   VERSIONS (R_14, R_2007)
     {
-      FIELD_BL (num_arrowheads, 0);
-      VALUEOUTOFBOUNDS (num_arrowheads, 5000)
-      REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
-      REPEAT_BLOCK
-          SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
-          SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
-          SET_PARENT_OBJ (arrowheads[rcount1]);
-      END_REPEAT_BLOCK
-      END_REPEAT (arrowheads);
-
       FIELD_BL (num_blocklabels, 0);
       VALUEOUTOFBOUNDS (num_blocklabels, 5000)
       REPEAT (num_blocklabels, blocklabels, Dwg_LEADER_BlockLabel)
@@ -1440,11 +1442,14 @@ DWG_ENTITY (MULTILEADER)
           SET_PARENT_OBJ (blocklabels[rcount1]);
       END_REPEAT_BLOCK
       END_REPEAT (blocklabels)
-      FIELD_B (is_neg_textdir, 294);
-      FIELD_BS (ipe_alignment, 178);
-      FIELD_BS (justification, 179);
-      FIELD_BD (scale_factor, 45);
     }
+  /* GoSurvey (issue #1010): AutoCAD also writes these four fields in R2010+ files, after the
+     arrowhead count (and the R2007 block-label list) and before attach_dir. Omitting them shifts every later bit, so AutoCAD
+     rejects the whole file. Found by comparing the bit stream of an AutoCAD-authored R2018 MULTILEADER. */
+  FIELD_B (is_neg_textdir, 294);
+  FIELD_BS (ipe_alignment, 178);
+  FIELD_BS (justification, 179);
+  FIELD_BD (scale_factor, 45);
 
   SINCE (R_2010b)
     {

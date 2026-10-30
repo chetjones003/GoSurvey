@@ -27807,6 +27807,30 @@ dwg_add_LEADER (
 }
 
 /* GoSurvey (issue #619): minimal MLEADERSTYLE + MULTILEADER writers for R2010+ export. */
+/* GoSurvey (issue #1010): AutoCAD's own classes for these two types use these application names and proxy
+   flags; the generic table gives MULTILEADER "ObjectDBX Classes" and flags 0, which AutoCAD does not accept. */
+static void
+dwg_set_class_app (Dwg_Data *restrict dwg, const char *restrict dxfname,
+                   const char *restrict appname, const BITCODE_BS proxyflag)
+{
+  BITCODE_BS i;
+  for (i = 0; i < dwg->num_classes; i++)
+    {
+      Dwg_Class *klass = &dwg->dwg_class[i];
+      if (klass->dxfname && strcmp (klass->dxfname, dxfname) == 0)
+        {
+          char *copy = strdup (appname);
+          if (copy)
+            {
+              free (klass->appname);
+              klass->appname = copy;
+            }
+          klass->proxyflag = proxyflag;
+          return;
+        }
+    }
+}
+
 static void
 dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
                                 Dwg_Object_MLEADERSTYLE *restrict sty)
@@ -27822,6 +27846,11 @@ dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
   sty->second_seg_angle = deg2rad (15.0);
   sty->type = 1;
   sty->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  /* AutoCAD writes ByBlock linetype and lineweight (-2) here; null handle / 0 is rejected on open. */
+  if (dwg->header_vars.LTYPE_BYBLOCK)
+    sty->line_type = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.LTYPE_BYBLOCK->absolute_ref, NULL);
+  sty->linewt = -2;
   sty->has_landing = 1;
   sty->has_dogleg = 1;
   sty->landing_gap = 0.09;
@@ -27872,6 +27901,7 @@ dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
   if (!dwg_is_valid_name_u8 (dwg, name))
     LOG_WARN ("Invalid name \"%s\"\n", name);
   REQUIRE_CLASS ("MLEADERSTYLE");
+  dwg_set_class_app (dwg, "MLEADERSTYLE", "ACDB_MLEADERSTYLE_CLASS", 4095);
   {
     API_ADD_OBJECT (MLEADERSTYLE);
     dictref = dwg_find_dictionary (dwg, "ACAD_MLEADERSTYLE");
@@ -27948,6 +27978,7 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         }
     }
   REQUIRE_CLASS ("MULTILEADER");
+  dwg_set_class_app (dwg, "MULTILEADER", "ACDB_MLEADER_CLASS", 1025);
   dwg_require_MLEADERSTYLE_Standard (dwg);
   API_ADD_ENTITY2 (MULTILEADER);
 
@@ -28025,8 +28056,19 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       const dwg_point_3d *points = branches[bi].points;
       Dwg_LEADER_Node *lnode = &ctx->leaders[bi];
       lnode->parent = _obj;
-      lnode->has_lastleaderlinepoint = 0;
-      lnode->has_dogleg = 0;
+      lnode->has_lastleaderlinepoint = 1;
+      lnode->has_dogleg = 1;
+      lnode->lastleaderlinepoint.x = points[num_points - 1].x;
+      lnode->lastleaderlinepoint.y = points[num_points - 1].y;
+      lnode->lastleaderlinepoint.z = points[num_points - 1].z;
+      {
+        const double dx = points[num_points - 1].x - points[num_points - 2].x;
+        const double dy = points[num_points - 1].y - points[num_points - 2].y;
+        const double length = sqrt (dx * dx + dy * dy);
+        lnode->dogleg_vector.x = length > 1e-9 ? dx / length : 1.0;
+        lnode->dogleg_vector.y = length > 1e-9 ? dy / length : 0.0;
+        lnode->dogleg_vector.z = 0.0;
+      }
       lnode->branch_index = bi;
       lnode->dogleg_length = 0.36;
       lnode->num_breaks = 0;
@@ -28036,11 +28078,12 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         return NULL;
       Dwg_LEADER_Line *lline = &lnode->lines[0];
       lline->parent = lnode;
-      lline->num_points = num_points;
-      lline->points = (BITCODE_3BD *)calloc (num_points, sizeof (BITCODE_3BD));
+      /* The node carries the final point; line points contain the preceding path. */
+      lline->num_points = num_points - 1;
+      lline->points = (BITCODE_3BD *)calloc (lline->num_points, sizeof (BITCODE_3BD));
       if (!lline->points)
         return NULL;
-      for (unsigned i = 0; i < num_points; i++)
+      for (unsigned i = 0; i < lline->num_points; i++)
         {
           lline->points[i].x = points[i].x;
           lline->points[i].y = points[i].y;
@@ -28050,7 +28093,8 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       lline->line_index = 0;
       lline->type = 1;
       lline->color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
-      lline->arrow_size = ctx->arrow_size;
+      lline->linewt = -2; /* as AutoCAD: ByBlock weight, null linetype, no arrow-size override */
+      lline->arrow_size = 0.0;
       lnode->attach_dir = 0;
     }
 
@@ -28063,6 +28107,10 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->flags = 0;
   _obj->type = 1;
   _obj->line_color = (BITCODE_CMC){ 256, CMC_DEFAULTS };
+  if (dwg->header_vars.LTYPE_BYBLOCK)
+    _obj->line_ltype = dwg_add_handleref (
+        dwg, 5, dwg->header_vars.LTYPE_BYBLOCK->absolute_ref, NULL);
+  _obj->line_linewt = -2;
   _obj->has_landing = 1;
   _obj->has_dogleg = 0;
   _obj->landing_dist = 0.36;
@@ -28081,10 +28129,15 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->block_scale.x = _obj->block_scale.y = _obj->block_scale.z = 1.0;
   _obj->style_attachment = 0;
   _obj->is_annotative = 0;
+  /* Values AutoCAD writes for a new mtext multileader (issue #1010). */
+  _obj->is_neg_textdir = 0;
+  _obj->ipe_alignment = 0;
+  _obj->justification = 1;
+  _obj->scale_factor = 1.0;
   _obj->attach_dir = 0;
-  _obj->attach_top = 0;
-  _obj->attach_bottom = 0;
-  _obj->is_text_extended = 0;
+  _obj->attach_top = 9;
+  _obj->attach_bottom = 9;
+  _obj->is_text_extended = 1;
 
   return _obj;
 }
@@ -31125,7 +31178,7 @@ dwg_add_IMAGE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
     _obj->file_path = dwg_add_u8_input (dwg, file_path);
     // TODO: get pixel props from the image. is_loaded, pixel_size, ...
     // needs -lpng -ljpeg ... load dynamically?
-    _img->imagedef = dwg_add_handleref (dwg, 4, obj->handle.value, img);
+    _img->imagedef = dwg_add_handleref (dwg, 5, obj->handle.value, img); /* 340 is a hard pointer (issue #1010) */
   }
   {
     Dwg_Data *dwg = img->parent;

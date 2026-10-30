@@ -187,6 +187,9 @@ See [[Layers]].
 In paper space, draw and modify commands act on **paper geometry** measured in paper inches. This
 is where a border, a titleblock, and sheet notes belong.
 
+DWG saves a sheet spline as a native `SPLINE` on that layout. Sheet leaders use `MULTILEADER` in
+R2018 DWG and `LEADER` with `MTEXT` in R2000 DWG.
+
 - The clipboard moves objects between model and paper space at 1:1 raw coordinates — copy in model
   space, switch to the layout, and **Paste**. See [[Modify Tools]].
 - Selecting, grips, hover highlighting, and the Properties panel all work on paper objects.

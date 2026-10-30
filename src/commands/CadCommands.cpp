@@ -758,6 +758,8 @@ bool AppendScratchToPaperLayout(PaperLayout& L, const AppCommandState& scratch) 
   L.paperArcs.insert(L.paperArcs.end(), scratch.userArcs.begin(), scratch.userArcs.end());
   L.paperArcAttrs.insert(L.paperArcAttrs.end(), scratch.userArcAttrs.begin(), scratch.userArcAttrs.end());
   L.paperEllipses.insert(L.paperEllipses.end(), scratch.userEllipses.begin(), scratch.userEllipses.end());
+  L.paperSplines.insert(L.paperSplines.end(), scratch.cadSplines.begin(), scratch.cadSplines.end());
+  L.paperSplineAttrs.insert(L.paperSplineAttrs.end(), scratch.cadSplineAttrs.begin(), scratch.cadSplineAttrs.end());
   L.paperEllAttrs.insert(L.paperEllAttrs.end(), scratch.userEllAttrs.begin(), scratch.userEllAttrs.end());
   for (size_t p = 0; p + 1 < scratch.userPolylineOffsets.size(); ++p) {
     if (L.paperPolyOffsets.empty())
