@@ -1,4 +1,4 @@
-# TASK-1111 — Configure the default new-drawing template
+# TASK-1112 — Configure the default new-drawing template
 
 - Type: feature
 - Status: self-verify
@@ -67,3 +67,4 @@ None.
 - Refactors: none.
 - Docs updated: `docs/qt-074-parity-ledger.md`, `resources/wiki/Files-and-Drawings.md`, `resources/wiki/Getting-Started.md`, `resources/wiki/User-Interface.md`.
 - Done: pending verification.
+- 2026-10-30 — Draft PR created: https://github.com/chetjones003/GoSurvey/pull/1143 (base `beta`, head `feat/configure-new-drawing-template`). Verification remains open pending test execution and the required visual comparison.
