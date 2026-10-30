@@ -7003,7 +7003,7 @@ private Q_SLOTS:
       }
       ++buttons;
     }
-    QCOMPARE(buttons, 285);
+    QCOMPARE(buttons, 280);  // 285 before issue #811 removed five placeholder palettes.
     window.resize(850, 650); QTest::qWait(100);
     QVERIFY(ribbon->width() > 500); QVERIFY(ribbon->width() <= window.width());
     auto* page = window.findChild<QWidget*>("ribbonPage_Home"); QVERIFY(page);
