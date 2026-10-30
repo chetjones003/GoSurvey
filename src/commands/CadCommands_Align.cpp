@@ -299,7 +299,7 @@ void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.alignHasSelection = false;
     st.alignPhase        = AppCommandState::AlignPhase::PickSelection;
     st.selBoxWaitingSecond = false;
-    log.push_back("ALIGN — click objects or drag a selection window to transform, then press Enter. ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
   }
 }
 

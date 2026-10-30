@@ -209,7 +209,18 @@ void EditorWindow::RefreshDraftingInput(const QString& hint) {
   m_DynamicInput->setVisible(active);
   if (!active) return;
   m_DynamicPrompt->setText(m_DynamicHint);
-  const int count = prompt.pointEntry ? dyninput::FieldCount(m_DynamicGroup) : 1;
+  const bool hintOnly = !prompt.pointEntry;
+  const int count = hintOnly ? 0 : dyninput::FieldCount(m_DynamicGroup);
+  const QFontMetrics promptMetrics(m_DynamicPrompt->font());
+  const int promptMaxWidth = std::max(200, m_Viewport->width() - 48);
+  const int hintWidth = promptMetrics.horizontalAdvance(m_DynamicHint) + 8;
+  if (hintOnly && hintWidth <= promptMaxWidth) {
+    m_DynamicPrompt->setWordWrap(false);
+    m_DynamicPrompt->setMaximumWidth(hintWidth);
+  } else {
+    m_DynamicPrompt->setWordWrap(true);
+    m_DynamicPrompt->setMaximumWidth(hintOnly ? promptMaxWidth : 420);
+  }
   const auto live = CadDynInputLive(m_State, prompt, m_DynamicGroup.mode,
       m_DynamicCursor.x, m_DynamicCursor.y, m_DynamicCursor.z);
   for (int i = 0; i < 3; ++i) {

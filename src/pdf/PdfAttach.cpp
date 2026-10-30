@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstring>
 #include <chrono>
+#include <filesystem>
 #include <future>
 #include <memory>
 #include <string>
@@ -683,13 +684,13 @@ static void ExtractSnapFromObjectRange(
       auto flushSubpath = [&](bool closed) {
         if (!inSubpath)
           return;
-        // Only attempt circle detection when the subpath uses Bézier curves.
-        // Every rectangle has all 4 corners equidistant from its centroid, so
-        // DetectCircle would return true for any closed rectangular LINETO path
-        // — mis-classifying building walls as circles and losing their corner
-        // endpoints for snap.  Real circles in PDF are always drawn with
-        // cubic Béziers; pure-LINETO closed paths are polygons, not circles.
-        if (doCircles && closed && subpathHasBez && subpathPts.size() >= 6) {
+        // Real circles in PDF are usually cubic Béziers; many GIS exports also
+        // approximate circles as closed LINETO polylines (8+ vertices). Rectangles
+        // stay excluded: 4 corners fail DetectCircle's radius-variance test, and
+        // we require at least 8 vertices before treating a pure-LINETO loop as a circle.
+        const size_t nSubPts = subpathPts.size() / 2;
+        const bool linetoCircleCandidate = !subpathHasBez && closed && nSubPts >= 8;
+        if (doCircles && closed && subpathPts.size() >= 6 && (subpathHasBez || linetoCircleCandidate)) {
           float cx = 0.f, cy = 0.f, cr = 0.f;
           if (DetectCircle(subpathPts, &cx, &cy, &cr)) {
             outCircles.push_back(cx);
@@ -944,6 +945,22 @@ static void BuildSnapEndptGrid(PdfAttachment& att) {
          static_cast<double>(grid.offsets.size() * sizeof(uint32_t) +
                               grid.pts.size()    * sizeof(float)) / (1024.0 * 1024.0),
          nEndpts);
+}
+
+/// REQ-391: the same snap point set the PDF viewer builds (PdfDocument::SnapPoints + SnapIndex).
+static void BuildCalmSnapIndex(const char* filePath, int pageIndex, pdfview::SnapIndex& out) {
+  out = pdfview::SnapIndex{};
+  if (filePath == nullptr || filePath[0] == '\0')
+    return;
+  std::lock_guard<std::recursive_mutex> pdfiumLock(pdfview::PdfiumMutex());
+  const pdfview::PdfDocument::OpenResult opened = pdfview::PdfDocument::Open(std::filesystem::path(filePath));
+  if (opened.doc == nullptr)
+    return;
+  std::vector<pdfview::SnapPoint> pts;
+  if (!opened.doc->SnapPoints(pageIndex, pts, [] { return false; }))
+    return;
+  out.Build(std::move(pts));
+  PdfLog("[PDF] BuildCalmSnapIndex: %zu points\n", out.Size());
 }
 
 // ---------------------------------------------------------------------------
@@ -1494,6 +1511,7 @@ bool PdfAttach_BuildToBuffer(const char* filePath, int pageIndex, float dpi,
       out.pageWidthPts  = wPts;
       out.pageHeightPts = hPts;
       out.success = true;
+      BuildCalmSnapIndex(filePath, pageIndex, out.snapCalmIndex);
       return true;
     }
 
@@ -1528,6 +1546,7 @@ bool PdfAttach_BuildToBuffer(const char* filePath, int pageIndex, float dpi,
 
   ExtractSnapFromPage(page, doSnapLines, doSnapCircles, doSnapText,
                       out.snapLinesFlat, out.snapCirclesCxCyR, out.snapTextPos);
+  BuildCalmSnapIndex(filePath, pageIndex, out.snapCalmIndex);
 
   FPDF_ClosePage(page);
   FPDF_CloseDocument(doc);
@@ -1616,6 +1635,29 @@ static void BuildVisibilityMask(const std::vector<uint8_t>& bgra,
         }
       }
       mask[static_cast<size_t>(my) * MW + mx] = found ? 1u : 0u;
+    }
+  }
+}
+
+// Expand foreground cells so vector snap points one cell away from raster ink still pass visOk.
+static void DilateVisMask(std::vector<uint8_t>& mask, int w, int h, int radius) {
+  if (mask.empty() || w <= 0 || h <= 0 || radius <= 0)
+    return;
+  const std::vector<uint8_t> src = mask;
+  mask.assign(static_cast<size_t>(w) * static_cast<size_t>(h), 0u);
+  for (int y = 0; y < h; ++y) {
+    for (int x = 0; x < w; ++x) {
+      if (src[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)] == 0)
+        continue;
+      for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+          const int nx = x + dx;
+          const int ny = y + dy;
+          if (nx < 0 || nx >= w || ny < 0 || ny >= h)
+            continue;
+          mask[static_cast<size_t>(ny) * static_cast<size_t>(w) + static_cast<size_t>(nx)] = 1u;
+        }
+      }
     }
   }
 }
@@ -1720,9 +1762,12 @@ bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath
   att.snapLinesFlat   = res.snapLinesFlat;
   att.snapCirclesCxCyR= res.snapCirclesCxCyR;
   att.snapTextPos     = res.snapTextPos;
+  att.snapCalmIndex   = std::move(res.snapCalmIndex);
   att.snapLines       = !res.snapLinesFlat.empty();
   att.snapCircles     = !res.snapCirclesCxCyR.empty();
   att.snapText        = !res.snapTextPos.empty();
+  if (att.snapCalmIndex.Size() == 0)
+    BuildCalmSnapIndex(filePath, pageIndex, att.snapCalmIndex);
 
   // Detect background type for snap-mask and shader selection.
   // Both light-bg and dark-bg PDFs now default to showBackground=false: the shader
@@ -1736,6 +1781,7 @@ bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath
   { PdfTimer t;
     BuildVisibilityMask(res.pixelBuf, res.texW, res.texH,
                         att.snapVisDark, att.snapVisMask);
+    DilateVisMask(att.snapVisMask, PdfAttachment::kVisMaskW, PdfAttachment::kVisMaskH, 1);
     PdfLog("[PDF] FinishBuild: BuildVisibilityMask %.1f ms\n", t.ms()); }
 
   // For dense PDFs (GIS exports, scanned drawings) the path-based snap extraction
@@ -1814,6 +1860,8 @@ bool PdfAttach_Build(const char* filePath, int pageIndex, float dpi,
            out.snapLinesFlat.size() / 4,
            out.snapCirclesCxCyR.size() / 3,
            out.snapTextPos.size() / 2); }
+
+  BuildCalmSnapIndex(filePath, pageIndex, out.snapCalmIndex);
 
   { PdfTimer t;
     BuildSnapEndptGrid(out);

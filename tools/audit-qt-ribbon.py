@@ -17,7 +17,7 @@ def main():
     for call in re.findall(r'\bcol\((.*?)\)\s*[,}]', body, re.S):
         expected.update(re.findall(r'"(##[^"\n]+)"', call))
     expected.update(re.findall(r'\{"(##[^"\n]+)"', release("src/ui/ModelingRibbon.hpp")))
-    expected.update({"##RibbonLAY", "##PdfBgBtn", "##PdfVecBtn", "##BeClose"})
+    expected.update({"##RibbonLAY", "##PdfShowBtn", "##PdfSnapBtn", "##PdfVecBtn", "##BeClose"})
     # Issue #811: Civil 3D project-data palettes are removed from the native ribbon (not implemented).
     expected -= {"##PalPanorama", "##PalRefMgr", "##PalCompEd", "##PalWorkFolder", "##ExpProjExplorer"}
     catalog = (ROOT / "src/qt/RibbonCatalog.hpp").read_text(encoding="utf-8")

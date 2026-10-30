@@ -16,7 +16,8 @@ void SnapIndex::Build(std::vector<SnapPoint>&& points) {
   }
 }
 
-bool SnapIndex::Nearest(float x, float y, float radius, Pt& out, float mergeRadius) const {
+bool SnapIndex::Nearest(float x, float y, float radius, Pt& out, float mergeRadius, float* outWeight,
+                        bool includeLinework, bool includeCenters) const {
   if (points_.empty() || radius <= 0.f)
     return false;
   const int x0 = static_cast<int>(std::floor((x - radius) / kCell)), x1 = static_cast<int>(std::floor((x + radius) / kCell));
@@ -33,6 +34,10 @@ bool SnapIndex::Nearest(float x, float y, float radius, Pt& out, float mergeRadi
         continue;
       for (uint32_t i : it->second) {
         const SnapPoint& p = points_[i];
+        // Centers carry weight 4. Filter before ranking/merging so a disabled center cannot
+        // masquerade as an endpoint or suppress a neighboring enabled linework target.
+        if ((p.weight >= 3.5f && !includeCenters) || (p.weight < 3.5f && !includeLinework))
+          continue;
         const float dx = p.x - x, dy = p.y - y, d = std::sqrt(dx * dx + dy * dy);
         if (d <= radius)
           near.push_back({i, d});
@@ -59,6 +64,8 @@ bool SnapIndex::Nearest(float x, float y, float radius, Pt& out, float mergeRadi
     if (effective < best) {
       best = effective;
       out = {p.x, p.y};
+      if (outWeight != nullptr)
+        *outWeight = p.weight;
       found = true;
     }
   }

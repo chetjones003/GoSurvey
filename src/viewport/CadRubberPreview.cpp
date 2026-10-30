@@ -467,6 +467,29 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  if (cmd.active == AppCommandState::Kind::PdfAttach &&
+      cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+      cmd.pdfAttachPreviewReady && cmd.pdfAttachPreview.pageWidthPts > 0.f &&
+      cmd.pdfAttachPreview.pageHeightPts > 0.f) {
+    const float cosR = std::cos(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float sinR = std::sin(cmd.pdfAttachRotDeg * 3.14159265f / 180.f);
+    const float W = cmd.pdfAttachPreview.pageWidthPts * cmd.pdfAttachScale;
+    const float H = cmd.pdfAttachPreview.pageHeightPts * cmd.pdfAttachScale;
+    const float corners[4][2] = {{0.f, 0.f}, {W, 0.f}, {W, H}, {0.f, H}};
+    float xs[4]{};
+    float ys[4]{};
+    for (int i = 0; i < 4; ++i) {
+      const float px = corners[i][0];
+      const float py = corners[i][1];
+      xs[i] = curXf + px * cosR - py * sinR;
+      ys[i] = curYf + px * sinR + py * cosR;
+    }
+    for (int i = 0; i < 4; ++i) {
+      const int j = (i + 1) % 4;
+      PushRubberSegViewRel(rubberLines, xs[i], ys[i], xs[j], ys[j], 0., 0., zc, zc);
+    }
+  }
+
   if (cmd.active == AppCommandState::Kind::InsertBlock) {
     using IPh = AppCommandState::InsertBlockPhase;
     if (cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale ||

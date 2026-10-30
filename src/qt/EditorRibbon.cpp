@@ -15,6 +15,7 @@
 #include <QColorDialog>
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QDialog>
@@ -34,6 +35,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSet>
+#include <QSlider>
 #include <QSpinBox>
 #include <QStyle>
 #include <QTabWidget>
@@ -130,6 +132,14 @@ public:
       auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);
       connect(menu, &QMenu::aboutToShow, mirror, [source, mirror] { const QSignalBlocker block(mirror); mirror->setValue(source->value()); mirror->setEnabled(source->isEnabled()); });
       connect(mirror, &QSpinBox::valueChanged, source, &QSpinBox::setValue);
+    }
+    for (auto* source : panel->findChildren<QCheckBox*>()) {
+      auto* mirror = new QCheckBox(source->text(), menu);
+      auto* entry = new QWidgetAction(menu); entry->setDefaultWidget(mirror); menu->addAction(entry);
+      connect(menu, &QMenu::aboutToShow, mirror, [source, mirror] {
+        const QSignalBlocker block(mirror); mirror->setChecked(source->isChecked()); mirror->setEnabled(source->isEnabled());
+      });
+      connect(mirror, &QCheckBox::toggled, source, &QCheckBox::setChecked);
     }
     m_Row->insertWidget(m_Row->count() - 2, panel); m_Row->insertWidget(m_Row->count() - 2, collapsed);
     m_Panels.push_back({panel, collapsed, menu, priority});
@@ -244,6 +254,8 @@ void FitRibbonChrome(QWidget* wrapper) {
   if (wrapper->property("ribbonChromeCompact").toBool() != compact) {
     ribbon->setFixedHeight(compact ? kRibbonHeight - kRibbonCompactHeaderHeight : kRibbonHeight);
     wrapper->setProperty("ribbonChromeCompact", compact);
+    if (auto* docRow = wrapper->findChild<QWidget*>("drawingTabRow"))
+      wrapper->setMinimumHeight(ribbon->height() + docRow->height());
   }
   UpdateRibbonTabMenu(wrapper);
 }
@@ -305,6 +317,7 @@ void EditorWindow::BuildRibbonPages() {
     if (name == "PointCloudCtx") panels.append("Centerline Fit");
     if (name == "HatchCtx") panels.append("Hatch");
     if (name == "Modeling") panels = {"Primitives", "Create", "Booleans", "Edit", "3D Modify", "Piping"};
+    if (name == "PdfCtx") panels = {"Adjust", "Clipping", "Options", "Import"};
     for (const auto& panelName : panels) {
       auto* panel = new QWidget(page); panel->setObjectName("ribbonPanel_" + name + "_" + panelName);
       auto* column = new QVBoxLayout(panel); column->setContentsMargins(5, 0, 5, kRibbonCaptionBottomSpace); column->setSpacing(1);
@@ -319,6 +332,8 @@ void EditorWindow::BuildRibbonPages() {
         action->setProperty("nativeDialogPending", NeedsNativeDialog(Text(item.command)));
         const QString help = Text(item.tooltip) + (NeedsNativeDialog(Text(item.command)) ? "\nThis command's dialog is not available in this editor yet." : "");
         action->setToolTip(help); action->setStatusTip(help); action->setEnabled(!item.placeholder && !NeedsNativeDialog(Text(item.command)));
+        if (Text(item.command) == "@pdfBackground" || Text(item.command) == "@pdfSnap")
+          action->setCheckable(true);
         connect(action, &QAction::triggered, this, [this, id = Text(item.id)] { RunRibbonAction(id); });
         actions.append(action);
         auto* button = new QToolButton(panel); button->setObjectName("tool_" + Text(item.id).mid(2)); button->setDefaultAction(action);
@@ -424,6 +439,64 @@ void EditorWindow::BuildRibbonPages() {
         connect(radius, &QDoubleSpinBox::valueChanged, this, [this](double value) { m_State.extractCenterlineSearchRadiusFt = value; m_Viewport->update(); });
         auto* tolerance = new QSpinBox(panel); tolerance->setObjectName("ribbonCenterlineTolerance"); tolerance->setRange(1, 90); tolerance->setPrefix("Tolerance "); tolerance->setSuffix(" %"); grid->addWidget(tolerance, 1, col++);
         connect(tolerance, &QSpinBox::valueChanged, this, [this](int value) { m_State.extractCenterlineMaxResidualRatio = value / 100.0; m_Viewport->update(); });
+      }
+      if (name == "PdfCtx" && panelName == "Adjust") {
+        auto* fadeSlider = new QSlider(Qt::Horizontal, panel);
+        fadeSlider->setObjectName("ribbonPdfFadeSlider");
+        fadeSlider->setRange(0, 100);
+        fadeSlider->setAccessibleName("Fade");
+        fadeSlider->setToolTip("Underlay opacity (0 = transparent, 100 = opaque).");
+        auto* fade = new QSpinBox(panel);
+        fade->setObjectName("ribbonPdfFade");
+        fade->setRange(0, 100);
+        fade->setPrefix("Fade ");
+        fade->setSuffix(" %");
+        fade->setButtonSymbols(QAbstractSpinBox::NoButtons);
+        fade->setFixedWidth(72);
+        auto* fadeRow = new QWidget(panel);
+        auto* fadeLayout = new QHBoxLayout(fadeRow);
+        fadeLayout->setContentsMargins(0, 0, 0, 0);
+        fadeLayout->addWidget(fadeSlider, 1);
+        fadeLayout->addWidget(fade);
+        grid->addWidget(fadeRow, 0, col, 1, 2);
+        auto* contrast = new QSpinBox(panel);
+        contrast->setObjectName("ribbonPdfContrast");
+        contrast->setRange(0, 100);
+        contrast->setPrefix("Contrast ");
+        contrast->setSuffix(" %");
+        contrast->setValue(50);
+        contrast->setEnabled(false);
+        contrast->setToolTip("Contrast adjustment is not available yet.");
+        grid->addWidget(contrast, 1, col, 1, 2);
+        auto* mono = new QCheckBox("Monochrome", panel);
+        mono->setObjectName("ribbonPdfMonochrome");
+        mono->setEnabled(false);
+        mono->setToolTip("Monochrome display is not available yet.");
+        grid->addWidget(mono, 2, col++, 1, 2);
+        connect(fadeSlider, &QSlider::valueChanged, fade, &QSpinBox::setValue);
+        connect(fade, qOverload<int>(&QSpinBox::valueChanged), fadeSlider, &QSlider::setValue);
+        connect(fade, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
+          EditRibbonPdf("fade", QString::number(value / 100.0, 'g', 6));
+        });
+        panel->setMinimumWidth(190);
+      }
+      if (name == "PdfCtx" && panelName == "Options") {
+        auto* snapLines = new QCheckBox("Lines", panel);
+        snapLines->setObjectName("ribbonPdfSnapLines");
+        snapLines->setToolTip("Snap to line endpoints on this underlay.");
+        grid->addWidget(snapLines, 0, col);
+        auto* snapCircles = new QCheckBox("Circles", panel);
+        snapCircles->setObjectName("ribbonPdfSnapCircles");
+        snapCircles->setToolTip("Snap to circle centers on this underlay.");
+        grid->addWidget(snapCircles, 1, col);
+        auto* snapText = new QCheckBox("Text", panel);
+        snapText->setObjectName("ribbonPdfSnapText");
+        snapText->setToolTip("Keep text snap data for this underlay.");
+        grid->addWidget(snapText, 2, col++);
+        connect(snapLines, &QCheckBox::toggled, this, [this](bool on) { EditRibbonPdf("snapLines", on ? "1" : "0"); });
+        connect(snapCircles, &QCheckBox::toggled, this, [this](bool on) { EditRibbonPdf("snapCircles", on ? "1" : "0"); });
+        connect(snapText, &QCheckBox::toggled, this, [this](bool on) { EditRibbonPdf("snapText", on ? "1" : "0"); });
+        panel->setMinimumWidth(220);
       }
       if (name == "HatchCtx") {
         QStringList patterns{"SOLID"}; QFile file(QtAsset("hatches/acadiso.pat"));
@@ -595,6 +668,43 @@ void EditorWindow::RefreshRibbon() {
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonPointColor")) { const QSignalBlocker block(combo); combo->setCurrentIndex(static_cast<int>(m_State.pointCloudDisplay.colorScheme)); }
   if (auto* radius = ribbon->findChild<QDoubleSpinBox*>("ribbonCenterlineRadius")) { const QSignalBlocker block(radius); radius->setValue(m_State.extractCenterlineSearchRadiusFt); }
   if (auto* tolerance = ribbon->findChild<QSpinBox*>("ribbonCenterlineTolerance")) { const QSignalBlocker block(tolerance); tolerance->setValue(qRound(m_State.extractCenterlineMaxResidualRatio * 100)); }
+  if (pdf >= 0 && pdf < static_cast<int>(m_State.pdfAttachments.size())) {
+    const PdfAttachment& att = m_State.pdfAttachments[static_cast<size_t>(pdf)];
+    if (auto* fade = ribbon->findChild<QSpinBox*>("ribbonPdfFade")) {
+      const QSignalBlocker block(fade);
+      fade->setValue(qRound(std::clamp(att.fade, 0.f, 1.f) * 100.f));
+    }
+    if (auto* fadeSlider = ribbon->findChild<QSlider*>("ribbonPdfFadeSlider")) {
+      const QSignalBlocker block(fadeSlider);
+      fadeSlider->setValue(qRound(std::clamp(att.fade, 0.f, 1.f) * 100.f));
+    }
+    if (auto* lines = ribbon->findChild<QCheckBox*>("ribbonPdfSnapLines")) {
+      const QSignalBlocker block(lines);
+      lines->setChecked(att.snapLines);
+    }
+    if (auto* circles = ribbon->findChild<QCheckBox*>("ribbonPdfSnapCircles")) {
+      const QSignalBlocker block(circles);
+      circles->setChecked(att.snapCircles);
+    }
+    if (auto* text = ribbon->findChild<QCheckBox*>("ribbonPdfSnapText")) {
+      const QSignalBlocker block(text);
+      text->setChecked(att.snapText);
+    }
+    if (auto* show = findChild<QAction*>("ribbon_PdfShowBtn")) {
+      show->setCheckable(true);
+      const QSignalBlocker block(show);
+      show->setChecked(att.showBackground);
+      show->setToolTip(att.showBackground
+                           ? "Full raster image visible. Click to hide paper (lines only)."
+                           : "Lines visible, paper transparent. Click to show paper.");
+    }
+    if (auto* snapBtn = findChild<QAction*>("ribbon_PdfSnapBtn")) {
+      snapBtn->setCheckable(true);
+      const QSignalBlocker block(snapBtn);
+      snapBtn->setChecked(att.snapEnabled);
+      snapBtn->setToolTip(att.snapEnabled ? "Underlay snap is on." : "Underlay snap is off.");
+    }
+  }
   for (auto* button : findChildren<QToolButton*>()) if (button->objectName().startsWith("collapsed_") && button->menu() && !button->menu()->actions().empty()) {
     button->setIcon(button->menu()->actions().front()->icon()); button->menu()->setIcon(button->icon());
   }
@@ -629,6 +739,41 @@ void EditorWindow::EditRibbonHatch(const QString& field, const QString& value) {
     else if (field == "color") { const QColor color(value); m_State.hatchColorRgb[0] = color.redF(); m_State.hatchColorRgb[1] = color.greenF(); m_State.hatchColorRgb[2] = color.blueF(); }
   }
   m_Viewport->InvalidateGeometry(); Refresh();
+}
+
+void EditorWindow::EditRibbonPdf(const QString& field, const QString& value) {
+  if (m_State.activeDrawingIdx > 0 && m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size())) {
+    const auto uid = m_State.drawingTabs[m_State.activeDrawingIdx].projectUid;
+    for (const auto& project : m_State.openProjects)
+      if (project.uid == uid && project.readOnly) {
+        Refresh();
+        return;
+      }
+  }
+  std::vector<int> selected;
+  for (const auto& item : m_State.selection)
+    if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 &&
+        item.index < static_cast<int>(m_State.pdfAttachments.size()))
+      selected.push_back(item.index);
+  if (selected.empty())
+    return;
+  PushUndoSnapshot(m_State, "Edit PDF underlay");
+  for (const int index : selected) {
+    PdfAttachment& att = m_State.pdfAttachments[static_cast<size_t>(index)];
+    if (field == "fade")
+      att.fade = std::clamp(value.toFloat(), 0.f, 1.f);
+    else if (field == "snapLines")
+      att.snapLines = (value == "1");
+    else if (field == "snapCircles")
+      att.snapCircles = (value == "1");
+    else if (field == "snapText")
+      att.snapText = (value == "1");
+    else if (field == "snapEnabled")
+      att.snapEnabled = (value == "1");
+  }
+  BumpCadGpuCache(m_State);
+  m_Viewport->update();
+  Refresh();
 }
 
 void EditorWindow::RunRibbonAction(const QString& id) {
@@ -677,9 +822,13 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   else if (command == "@surfaceSwapEdge" && surface >= 0) StartSurfSwapEdgeCommand(m_State, surfaceName, m_Log);
   else if (command == "@surfaceRebuild" && surface >= 0) Submit(Text(("SURFACEREBUILD " + surfaceName).c_str()));
   else if (command == "@extractContours" && surface >= 0) Submit(Text(("EXTRACT " + surfaceName).c_str()));
-  else if (command == "@pdfBackground" || command == "@pdfVectorize") {
+  else if (command == "@pdfBackground" || command == "@pdfVectorize" || command == "@pdfSnap") {
     for (const auto& item : m_State.selection) if (item.type == SelectedEntity::Type::PdfUnderlay && item.index >= 0 && item.index < static_cast<int>(m_State.pdfAttachments.size())) {
       if (command == "@pdfBackground") { PushUndoSnapshot(m_State, "PDF background"); m_State.pdfAttachments[item.index].showBackground = !m_State.pdfAttachments[item.index].showBackground; BumpCadGpuCache(m_State); }
+      else if (command == "@pdfSnap") {
+        PushUndoSnapshot(m_State, "PDF snap");
+        m_State.pdfAttachments[item.index].snapEnabled = !m_State.pdfAttachments[item.index].snapEnabled;
+      }
       else VectorizePdfAttachmentLines(m_State, item.index, m_Log);
       break;
     }

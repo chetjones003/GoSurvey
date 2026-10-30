@@ -13,6 +13,7 @@
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "ViewportZoomScale.hpp"
 #include "CadDimGeom.hpp"
 #include "CadDimStroke.hpp"
 #include "PolylineTiltedArc.hpp"
@@ -5109,6 +5110,26 @@ static void WriteAnnotationScalesFromState(const AppCommandState& st, Dwg_Data* 
   }
 }
 
+static void WriteViewportZoomScalesFromState(const AppCommandState& st, Dwg_Data* dwg,
+                                             std::vector<std::string>& log, DwgSaveVersion outputVersion) {
+  if (dwg == nullptr || st.viewportZoomScales.empty())
+    return;
+  if (LibreDwgVersionFromExport(outputVersion) < R_2007)
+    return;
+  size_t nWritten = 0;
+  for (const CadAnnotationScale& s : st.viewportZoomScales) {
+    CadAnnotationScale tagged = s;
+    tagged.name = std::string(kViewportZoomScaleDwgPrefix) + s.name;
+    BITCODE_HV scaleHandle = 0;
+    if (AppendDwgAnnotationScaleObject(dwg, tagged, &scaleHandle))
+      ++nWritten;
+  }
+  if (nWritten > 0) {
+    log.push_back("CAD export — wrote " + std::to_string(nWritten) +
+                  " viewport zoom SCALE object(s) (REQ-458).");
+  }
+}
+
 void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr,
                    std::vector<std::string>& log, DwgSaveVersion outputVersion, bool asDxf) {
   auto world = [&](float lx, float ly, double z, dwg_point_3d* p) {
@@ -5130,6 +5151,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
   WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
+  WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created
   // after the entity records have started going into the object array.
   for (const std::vector<EntityAttributes>* v :
@@ -6195,11 +6217,39 @@ void ImportAnnotationScales(AppCommandState& st, Dwg_Data* dwg) {
       continue;  // skip temporary scales
     CadAnnotationScale entry;
     entry.name = LayoutNameFromT(dwg, sc->name);
+    if (entry.name.rfind(kViewportZoomScaleDwgPrefix, 0) == 0)
+      continue;
     entry.paperUnits = static_cast<float>(sc->paper_units);
     entry.drawingUnits = static_cast<float>(sc->drawing_units);
     if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
       continue;
     st.annotationScales.push_back(std::move(entry));
+  }
+}
+
+void ImportViewportZoomScales(AppCommandState& st, Dwg_Data* dwg) {
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
+  if (dwg == nullptr)
+    return;
+  const std::size_t prefixLen = std::strlen(kViewportZoomScaleDwgPrefix);
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_SCALE || o->tio.object == nullptr || o->tio.object->tio.SCALE == nullptr)
+      continue;
+    const Dwg_Object_SCALE* sc = o->tio.object->tio.SCALE;
+    if (sc->flag != 0)
+      continue;
+    CadAnnotationScale entry;
+    entry.name = LayoutNameFromT(dwg, sc->name);
+    if (entry.name.rfind(kViewportZoomScaleDwgPrefix, 0) != 0)
+      continue;
+    entry.name = entry.name.substr(prefixLen);
+    entry.paperUnits = static_cast<float>(sc->paper_units);
+    entry.drawingUnits = static_cast<float>(sc->drawing_units);
+    if (entry.name.empty() || entry.paperUnits <= 0.f || entry.drawingUnits <= 0.f)
+      continue;
+    st.viewportZoomScales.push_back(std::move(entry));
   }
 }
 
@@ -6314,6 +6364,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (dwg.header.version >= R_2007)
     st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
   ImportAnnotationScales(st, &dwg);
+  ImportViewportZoomScales(st, &dwg);
   const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
   if (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
       !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object),

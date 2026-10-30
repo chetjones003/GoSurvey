@@ -84,6 +84,37 @@ bool TryParseDouble(const std::string& s, double& out) {
   }
 }
 
+/// Table and sheet coordinates often print a trailing foot mark (`626.319'`).
+bool TryParseCoordinateDouble(const std::string& raw, double& out) {
+  std::string s = Trim(raw);
+  for (;;) {
+    if (s.empty())
+      break;
+    if (s.size() >= 3 && static_cast<unsigned char>(s[s.size() - 3]) == 0xE2 &&
+        static_cast<unsigned char>(s[s.size() - 2]) == 0x80 &&
+        (static_cast<unsigned char>(s[s.size() - 1]) == 0xB2 ||
+         static_cast<unsigned char>(s[s.size() - 1]) == 0xB3)) {
+      s.erase(s.size() - 3);
+      continue;
+    }
+    const char back = s.back();
+    if (back == '\'' || back == '"') {
+      s.pop_back();
+      continue;
+    }
+    if (s.size() >= 2) {
+      const char a = s[s.size() - 1];
+      const char b = s[s.size() - 2];
+      if ((a == 't' || a == 'T') && (b == 'f' || b == 'F')) {
+        s.resize(s.size() - 2);
+        continue;
+      }
+    }
+    break;
+  }
+  return TryParseDouble(Trim(s), out);
+}
+
 bool TryParseInt(const std::string& s, int& out) {
   try {
     size_t pos = 0;
@@ -226,7 +257,7 @@ std::vector<CoordCandidate> PairNorthingEasting(const std::vector<Label>& labels
   return out;
 }
 
-enum class Col { None, Point, Description, Elevation, Northing, Easting };
+enum class Col { None, Other, Point, Description, Elevation, Northing, Easting };
 
 Col ClassifyHeaderCell(const std::string& raw) {
   const std::string u = Upper(Trim(raw));
@@ -236,10 +267,12 @@ Col ClassifyHeaderCell(const std::string& raw) {
     return Col::Easting;
   if (u.find("ELEV") != std::string::npos || u == "EL")
     return Col::Elevation;
-  if (u.find("DESC") != std::string::npos)
+  if (u.find("DESC") != std::string::npos || u.find("EQUIP") != std::string::npos)
     return Col::Description;
-  if (u.find("POINT") != std::string::npos || u == "PT" || u == "PT#" || u == "NO" || u == "NO." || u == "NUM" ||
-      u == "NUMBER")
+  if (u.find("DRAW") != std::string::npos || u.find("DWG") != std::string::npos || u.find("SHEET") != std::string::npos)
+    return Col::Other;
+  if (u == "MARK" || u.find("MARK") != std::string::npos || u.find("POINT") != std::string::npos || u == "PT" ||
+      u == "PT#" || u == "NO" || u == "NO." || u == "NUM" || u == "NUMBER" || u == "LRP")
     return Col::Point;
   return Col::None;
 }
@@ -251,14 +284,18 @@ struct HeaderCol {
 
 /// A table (REQ-399 clause 4b): a header line naming Northing and Easting columns, each following
 /// line being one row mapped to the header nearest (by x) to each of its cells.
-bool TryParseTable(const std::vector<Line>& lines, std::vector<CoordCandidate>& out) {
+bool TryParseTable(const std::vector<Line>& lines, std::vector<CoordCandidate>& out,
+                   std::vector<SkippedTableRow>* skippedRows) {
   for (size_t hi = 0; hi < lines.size(); ++hi) {
     std::vector<HeaderCol> cols;
     bool haveN = false, haveE = false;
     for (const auto& run : lines[hi]) {
-      const Col k = ClassifyHeaderCell(run.text);
-      if (k == Col::None)
+      const std::string headerText = Trim(run.text);
+      if (headerText.empty())
         continue;
+      Col k = ClassifyHeaderCell(run.text);
+      if (k == Col::None)
+        k = Col::Other; // MARK, DRAWING, etc. still occupy a column so data cells map correctly
       cols.push_back({k, (run.x0 + run.x1) * 0.5f});
       if (k == Col::Northing)
         haveN = true;
@@ -299,13 +336,13 @@ bool TryParseTable(const std::vector<Line>& lines, std::vector<CoordCandidate>& 
           break;
         case Col::Elevation: {
           double v;
-          if (TryParseDouble(cell, v))
+          if (TryParseCoordinateDouble(cell, v))
             c.elevation = v;
           break;
         }
         case Col::Northing: {
           double v;
-          if (TryParseDouble(cell, v)) {
+          if (TryParseCoordinateDouble(cell, v)) {
             c.northing = v;
             rowHaveN = true;
           }
@@ -313,12 +350,13 @@ bool TryParseTable(const std::vector<Line>& lines, std::vector<CoordCandidate>& 
         }
         case Col::Easting: {
           double v;
-          if (TryParseDouble(cell, v)) {
+          if (TryParseCoordinateDouble(cell, v)) {
             c.easting = v;
             rowHaveE = true;
           }
           break;
         }
+        case Col::Other:
         case Col::None:
           break;
         }
@@ -326,9 +364,19 @@ bool TryParseTable(const std::vector<Line>& lines, std::vector<CoordCandidate>& 
       if (rowHaveN && rowHaveE) {
         c.sourceText = sourceText;
         rows.push_back(std::move(c));
+      } else if (skippedRows != nullptr && !sourceText.empty()) {
+        SkippedTableRow skip;
+        skip.sourceText = sourceText;
+        if (!rowHaveN && !rowHaveE)
+          skip.reason = "Missing northing and easting";
+        else if (!rowHaveN)
+          skip.reason = "Missing northing";
+        else
+          skip.reason = "Missing easting";
+        skippedRows->push_back(std::move(skip));
       }
       // a row with no northing/easting (a footer note, e.g. "POINT TABLE TO BE REVISED") is
-      // simply skipped, not treated as ending the table.
+      // reported in review when table parsing produced at least one candidate.
     }
     if (!rows.empty()) {
       out = std::move(rows);
@@ -363,9 +411,11 @@ ExtractResult ExtractCoordinatesImpl(const std::vector<DimText>& texts, float rx
   }
 
   std::vector<CoordCandidate> tableRows;
-  if (TryParseTable(GroupIntoLines(runs), tableRows)) {
+  std::vector<SkippedTableRow> skipped;
+  if (TryParseTable(GroupIntoLines(runs), tableRows, &skipped)) {
     result.status = ExtractStatus::Ok;
     result.candidates = std::move(tableRows);
+    result.skippedTableRows = std::move(skipped);
     return result;
   }
 

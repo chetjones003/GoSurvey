@@ -108,6 +108,43 @@ TEST_CASE("PdfCoordExtract table skips a non-numeric footer row") {
   REQUIRE(r.status == ExtractStatus::Ok);
   REQUIRE(r.candidates.size() == 1);
   CHECK(r.candidates[0].pointNumber.value_or(-1) == 1);
+  REQUIRE(r.skippedTableRows.size() == 1);
+  CHECK(r.skippedTableRows[0].sourceText.find("REVISED") != std::string::npos);
+  CHECK(r.skippedTableRows[0].reason.find("Missing") != std::string::npos);
+}
+
+TEST_CASE("PdfCoordExtract LRP layout table with foot marks and drawing columns") {
+  // MARK | DRAWING | EQUIPMENT | NORTHING | EASTING — coordinates with trailing foot marks.
+  std::vector<DimText> texts = {
+      T("MARK", 0, 100, 35, 110),
+      T("DRAWING", 40, 100, 95, 110),
+      T("EQUIPMENT", 100, 100, 175, 110),
+      T("NORTHING", 180, 100, 235, 110),
+      T("EASTING", 240, 100, 290, 110),
+
+      T("LRP-1", 5, 85, 35, 95),
+      T("102", 45, 85, 65, 95),
+      T("01", 70, 85, 85, 95),
+      T("FAN EJECTOR", 100, 85, 170, 95),
+      T("626.319'", 185, 85, 230, 95),
+      T("825.298'", 245, 85, 290, 95),
+
+      T("LRP-2", 5, 70, 35, 80),
+      T("103", 45, 70, 65, 80),
+      T("01", 70, 70, 85, 80),
+      T("PDC E CONTAINER", 100, 70, 170, 80),
+      T("738.748'", 185, 70, 230, 80),
+      T("781.638'", 245, 70, 290, 80),
+  };
+  ExtractResult r = ExtractCoordinates(texts, 0, 0, 320, 120);
+  REQUIRE(r.status == ExtractStatus::Ok);
+  REQUIRE(r.candidates.size() == 2);
+  CHECK(r.candidates[0].northing == Catch::Approx(626.319).margin(1e-6));
+  CHECK(r.candidates[0].easting == Catch::Approx(825.298).margin(1e-6));
+  CHECK(r.candidates[0].description == "FAN EJECTOR");
+  CHECK(r.candidates[1].northing == Catch::Approx(738.748).margin(1e-6));
+  CHECK(r.candidates[1].easting == Catch::Approx(781.638).margin(1e-6));
+  CHECK(r.skippedTableRows.empty());
 }
 
 TEST_CASE("PdfCoordExtract no selectable text reports the scanned-document message") {

@@ -327,3 +327,68 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   }
   painter.restore();
 }
+
+void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState& state, float cursorLocalX,
+                                       float cursorLocalY, float width, float height) {
+  std::vector<CadAnnotation> previews;
+  CadAnnotationCollectTransformPreviews(state, cursorLocalX, cursorLocalY, &previews);
+  if (previews.empty())
+    return;
+  const auto camera = CadViewCamera(state);
+  auto project = [&](double x, double y, double z) {
+    float sx = 0, sy = 0;
+    camera.WorldToScreen(x, y, z, width, height, &sx, &sy);
+    return QPointF(sx, sy);
+  };
+  painter.save();
+  painter.setRenderHint(QPainter::Antialiasing);
+  painter.setOpacity(0.55);
+  for (const CadAnnotation& annotation : previews) {
+    if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext)
+      continue;
+    float rgb[3]{0.38f, 0.67f, 1.f};
+    QColor color = QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+    QPen pen(color, 1.2);
+    pen.setCosmetic(true);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    double x = annotation.insX, y = annotation.insY, rotation = annotation.rotationRad;
+    const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
+        state.modelUnitsPerPlottedInch, &state.annotationScales, state.currentAnnotationScaleIndex);
+    const double textWorld = CadAnnotationHeightWorld(annotation, annotationMup);
+    if (!(textWorld > 0) || !std::isfinite(textWorld))
+      continue;
+    std::string text = CadAnnotationResolvedText(state, annotation);
+    constexpr float fontPixels = 100;
+    const double worldPerPixel = textWorld / fontPixels;
+    if (annotation.kind == CadAnnotation::Kind::Mtext) {
+      x = annotation.boxMinX;
+      y = annotation.boxMaxY;
+    }
+    const QPointF origin = project(x, y, annotation.insZ);
+    const double c = std::cos(rotation), s = std::sin(rotation);
+    const QPointF right = project(x + c * worldPerPixel, y + s * worldPerPixel, annotation.insZ) - origin;
+    const QPointF down = project(x + s * worldPerPixel, y - c * worldPerPixel, annotation.insZ) - origin;
+    if (!std::isfinite(origin.x()) || !std::isfinite(origin.y()) ||
+        !std::isfinite(right.x()) || !std::isfinite(down.y()))
+      continue;
+    painter.save();
+    painter.setWorldTransform(QTransform(right.x(), right.y(), down.x(), down.y(), origin.x(), origin.y()));
+    if (DrawStrokeText(painter, annotation, fontPixels, text, annotation.kind == CadAnnotation::Kind::Text)) {
+      painter.restore();
+      continue;
+    }
+    QTextDocument document;
+    PopulateQtText(document, fontPixels, text, annotation.fontFamily, color);
+    if (annotation.kind == CadAnnotation::Kind::Mtext) {
+      const double boxWidth = std::max(1.0, (annotation.boxMaxX - annotation.boxMinX) / worldPerPixel);
+      document.setTextWidth(boxWidth);
+    } else {
+      document.adjustSize();
+      painter.translate(0, -QFontMetricsF(document.defaultFont()).ascent());
+    }
+    document.drawContents(&painter);
+    painter.restore();
+  }
+  painter.restore();
+}

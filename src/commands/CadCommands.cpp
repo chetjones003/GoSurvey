@@ -86,6 +86,8 @@
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
+  doc.viewportZoomScales = cmd.viewportZoomScales;
+  doc.currentViewportZoomScaleIndex = cmd.currentViewportZoomScaleIndex;
   doc.viewportPanX           = cmd.viewportPanX;
   doc.viewportPanY           = cmd.viewportPanY;
   doc.viewportZoom           = cmd.viewportZoom;
@@ -201,6 +203,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
   const DrawingDocument& doc     = cmd.documents[static_cast<size_t>(idx)];
+  cmd.viewportZoomScales = doc.viewportZoomScales;
+  cmd.currentViewportZoomScaleIndex = doc.currentViewportZoomScaleIndex;
   cmd.viewportPanX               = doc.viewportPanX;
   cmd.viewportPanY               = doc.viewportPanY;
   cmd.viewportZoom               = doc.viewportZoom;
@@ -8674,24 +8678,16 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
     const float H    = patt.pageHeightPts * patt.scale;
     const float cosR = std::cos(patt.rotationDeg * kPdfPi / 180.f);
     const float sinR = std::sin(patt.rotationDeg * kPdfPi / 180.f);
-    // Four corners in world space.
-    float cx[4] = {
-      patt.insertX,
-      patt.insertX + W * cosR,
-      patt.insertX + W * cosR - H * sinR,
-      patt.insertX - H * sinR
-    };
-    float cy[4] = {
-      patt.insertY,
-      patt.insertY + W * sinR,
-      patt.insertY + W * sinR + H * cosR,
-      patt.insertY + H * cosR
-    };
+    float cx[4] = {patt.insertX, patt.insertX + W * cosR, patt.insertX + W * cosR - H * sinR,
+                   patt.insertX - H * sinR};
+    float cy[4] = {patt.insertY, patt.insertY + W * sinR, patt.insertY + W * sinR + H * cosR,
+                   patt.insertY + H * cosR};
     float pmnX = cx[0], pmxX = cx[0], pmnY = cy[0], pmxY = cy[0];
     for (int k = 1; k < 4; ++k) {
       pmnX = std::min(pmnX, cx[k]); pmxX = std::max(pmxX, cx[k]);
       pmnY = std::min(pmnY, cy[k]); pmxY = std::max(pmxY, cy[k]);
     }
+    SPBox(pmnX, pmnY, pmxX, pmxY, &pmnX, &pmnY, &pmxX, &pmxY);
     bool hit = false;
     if (windowMode)
       hit = pmnX >= mnX && pmxX <= mxX && pmnY >= mnY && pmxY <= mxY;
@@ -14381,6 +14377,23 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   if (st.active == K::Trim) {
     (void)SubmitTrimViewportPick(st, static_cast<float>(wx), static_cast<float>(wy),
                                  CadOffsetEntityPickTolWorld(st), log, pickRay);
+    return;
+  }
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint)
+      SubmitPdfAttachInsertPoint(st, static_cast<float>(wx), static_cast<float>(wy), log);
+    return;
+  }
+  if (st.active == K::InsertBlock) {
+    using IPh = AppCommandState::InsertBlockPhase;
+    if (st.insertBlockPhase == IPh::WaitInsertPoint || st.insertBlockPhase == IPh::WaitScale ||
+        st.insertBlockPhase == IPh::WaitRotation || st.insertBlockPhase == IPh::WaitAlignFace) {
+      float wz = CadCommitElevation(st);
+      if (st.viewportSnapPickValid)
+        wz = st.viewportSnapPickLocalZ;
+      SubmitInsertBlockPick(st, static_cast<float>(wx), static_cast<float>(wy), wz, log);
+    }
     return;
   }
   if (st.active == K::None && st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st) &&
@@ -27613,6 +27626,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadFilledRegionAttrs.clear();
   st.annotationScales.clear();
   st.currentAnnotationScaleIndex = -1;
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;
   st.dwgImportedLightList = {};
@@ -33691,6 +33706,26 @@ bool PickClosestSolidEntity(const AppCommandState& st, const ray3d::Ray& ray, fl
   return false;
 }
 
+static int PickPdfUnderlayAt(const AppCommandState& st, double localX, double localY) {
+  constexpr float kPdfPi = 3.14159265f;
+  for (int pi = static_cast<int>(st.pdfAttachments.size()) - 1; pi >= 0; --pi) {
+    const PdfAttachment& att = st.pdfAttachments[static_cast<std::size_t>(pi)];
+    if (att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
+      continue;
+    const float W = att.pageWidthPts * att.scale;
+    const float H = att.pageHeightPts * att.scale;
+    const float cosR = std::cos(att.rotationDeg * kPdfPi / 180.f);
+    const float sinR = std::sin(att.rotationDeg * kPdfPi / 180.f);
+    const float dx = static_cast<float>(localX) - att.insertX;
+    const float dy = static_cast<float>(localY) - att.insertY;
+    const float px = dx * cosR + dy * sinR;
+    const float py = -dx * sinR + dy * cosR;
+    if (px >= 0.f && py >= 0.f && px <= W && py <= H)
+      return pi;
+  }
+  return -1;
+}
+
 ViewportPickResult ResolveViewportPick(const AppCommandState& st, const ViewportPickRequest& rq) {
   ViewportPickResult r;
   const ray3d::Vec3 eo = rq.eyeRay.origin;
@@ -33818,7 +33853,18 @@ ViewportPickResult ResolveViewportPick(const AppCommandState& st, const Viewport
     return r;
   }
 
-  // 5. Filled regions, lowest (REQ-042).
+  // 5. PDF underlays (behind linework; only when nothing closer was hit).
+  if (rq.modelSpace) {
+    const int pdf = PickPdfUnderlayAt(st, rq.rawX, rq.rawY);
+    if (pdf >= 0 && !hiddenAtZ(0.0)) {
+      r.family = ViewportPickFamily::PdfUnderlay;
+      r.entity.type = SelectedEntity::Type::PdfUnderlay;
+      r.entity.index = pdf;
+      return r;
+    }
+  }
+
+  // 6. Filled regions, lowest (REQ-042).
   const int fr = PickFilledRegionAt(st, rq.rawX, rq.rawY, rq.orbitRay);
   if (fr >= 0) {
     r.family = ViewportPickFamily::FilledRegion;
@@ -43887,9 +43933,7 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("MOVE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "MOVE — click objects or drag a selection window (Enter when done), then base point and destination. "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43907,9 +43951,7 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("COPY — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "COPY — click objects or drag a selection window (Enter when done), then base point and destination. "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43935,9 +43977,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.rotatePhase = AppCommandState::RotatePhase::NeedBase;
     log.push_back("ROTATE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "ROTATE — click objects or drag a selection window (Enter when done), then base point, then ° clockwise "
-        "from north / DMS, or R reference. ESC.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43962,10 +44002,7 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
     log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "SCALE — click objects or drag a selection window (Enter when done), then base point, then scale: "
-        "second point or factor (>0), or R for two-point reference length then new length (type or two picks). "
-        "ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -43992,9 +44029,7 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
     log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back(
-        "MIRROR — click objects or drag a selection window (Enter when done), then first and second point of "
-        "the mirror line. ESC.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 /// REQ-305. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
@@ -44018,9 +44053,7 @@ void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
     SetArrayAnchorFromSelection(st);
     log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
   } else
-    log.push_back(
-        "ARRAY — click objects or drag a selection window (Enter when done), then choose [R]ectangular / "
-        "[P]olar. ESC cancels.");
+    log.push_back(kSelectObjectsPrompt);
 }
 
 static bool HasPaperModifyPhase(const AppCommandState& st);
@@ -44708,6 +44741,96 @@ void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::
                          const ray3d::Ray* pickRay) {
   ClearPendingOneShotObjectSnap(st);
   SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode, pickRay);
+}
+
+static void ToggleAccumulateSelectedEntity(AppCommandState& st, const SelectedEntity& hit, bool shift) {
+  auto it = std::find_if(st.selection.begin(), st.selection.end(), [&](const SelectedEntity& entity) {
+    return entity.type == hit.type && entity.index == hit.index;
+  });
+  if (shift) {
+    if (it != st.selection.end())
+      st.selection.erase(it);
+  } else if (it == st.selection.end()) {
+    st.selection.push_back(hit);
+  }
+  EnsureAttrCounts(st);
+}
+
+bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocalX, double rawLocalY,
+                                            float anchorScreenX, float anchorScreenY, bool shiftModifier,
+                                            bool ctrlModifier, const ray3d::Ray* pickRay,
+                                            float viewportWidthPx, float viewportHeightPx, float orthoHalfH,
+                                            std::vector<std::string>& log, bool beginBoxOnMiss) {
+  using K = AppCommandState::Kind;
+  const bool modelSpace = st.activeSpaceIndex == kModelSpaceIndex;
+  const bool gizmoMoveSubObject =
+      st.active == K::Move3d && st.gizmoCmdPhase == AppCommandState::GizmoCmdPhase::SelectObjects;
+  if (modelSpace && ctrlModifier &&
+      ((st.active == K::PressPull &&
+        st.pressPullPhase == AppCommandState::PressPullPhase::SelectTarget) ||
+       gizmoMoveSubObject)) {
+    AbortMtextGripInteraction(st);
+    ClearDimGripInteraction(st);
+    solidpick::Tolerance subTol;
+    subTol.vertex = static_cast<double>(CadOffsetEntityPickTolWorld(st));
+    subTol.edge = subTol.vertex;
+    const Camera cam = CadViewCamera(st);
+    const ray3d::Ray subRay = pickRay ? *pickRay
+                                      : cam.ScreenRay(anchorScreenX, anchorScreenY, viewportWidthPx,
+                                                      viewportHeightPx);
+    SubmitSubObjectPick(st, subRay, subTol, shiftModifier, log);
+    BumpCadGpuCache(st);
+    return true;
+  }
+
+  const bool solidClickable = modelSpace && (!st.cadSolids.empty() || !st.pipeRunWorldSolids.empty());
+  ViewportPickRequest rq;
+  rq.rawX = rawLocalX;
+  rq.rawY = rawLocalY;
+  rq.orbitRay = CadViewIsPlan(st) ? nullptr : pickRay;
+  rq.eyeRayValid = solidClickable;
+  if (solidClickable) {
+    if (pickRay)
+      rq.eyeRay = *pickRay;
+    else {
+      const Camera cam = CadViewCamera(st);
+      rq.eyeRay = cam.ScreenRay(anchorScreenX, anchorScreenY, viewportWidthPx, viewportHeightPx);
+    }
+  }
+  rq.lineTol = CadOffsetEntityPickTolWorld(st);
+  rq.orthoHalfH = orthoHalfH;
+  rq.viewportHeightPx = viewportHeightPx;
+  rq.modelSpace = modelSpace;
+  const ViewportPickResult accPick = ResolveViewportClickPick(st, rq, CadHoverEntityPickTolWorld(st));
+
+  bool handled = false;
+  const auto toggleHit = [&](const SelectedEntity& entity) {
+    ToggleAccumulateSelectedEntity(st, entity, shiftModifier);
+    handled = true;
+  };
+  if (accPick.family == ViewportPickFamily::Table && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Annotation && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Linework)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::Solid)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::FilledRegion && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+  else if (accPick.family == ViewportPickFamily::PdfUnderlay && accPick.entity.index >= 0)
+    toggleHit(accPick.entity);
+
+  if (handled) {
+    if (!shiftModifier)
+      CadPropCommandSelectionChanged(st, log);
+    return true;
+  }
+  if (!beginBoxOnMiss)
+    return false;
+  BeginSelectionBoxCorner(st, static_cast<float>(rawLocalX), static_cast<float>(rawLocalY), anchorScreenX,
+                          anchorScreenY);
+  return false;
 }
 
 // REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of
@@ -46896,6 +47019,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::BlockFitting) {
     BlockFittingSubmitLine(st, line, log);
+    return;
+  }
+
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint) {
+      float px = 0.f;
+      float py = 0.f;
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+        log.push_back("PDFATTACH — pick in viewport or type X,Y.");
+        return;
+      }
+      SubmitPdfAttachInsertPoint(st, px, py, log);
+      return;
+    }
+    if (st.pdfAttachPhase == PAP::WaitDialog || st.pdfAttachPhase == PAP::Building)
+      log.push_back("PDFATTACH — complete the attach dialog, or ESC to cancel.");
+    else
+      log.push_back("PDFATTACH — pick the insertion point in the viewport, or ESC to cancel.");
     return;
   }
 

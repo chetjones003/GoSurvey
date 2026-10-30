@@ -44,6 +44,7 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTabWidget>
+#include <functional>
 #include <QStackedWidget>
 #include <QCloseEvent>
 #include <QKeyEvent>
@@ -529,9 +530,132 @@ void EditorWindow::ShowSurveyPointDisplay() {
   dialog->show();
 }
 
+void EditorWindow::ShowAlignResultsDialog() {
+  if (!m_State.showAlignResultsWindow)
+    return;
+  m_ModalOpen = true;
+  QDialog dialog(this);
+  dialog.setObjectName("alignResultsDialog");
+  dialog.setWindowTitle("ALIGN — Helmert transformation");
+  dialog.setWindowModality(Qt::ApplicationModal);
+  dialog.resize(680, 520);
+  auto* layout = new QVBoxLayout(&dialog);
+  layout->setContentsMargins(16, 14, 16, 12);
+  layout->setSpacing(10);
+  auto* summary = new QLabel(&dialog);
+  summary->setObjectName("alignResultsSummary");
+  summary->setWordWrap(true);
+  summary->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  layout->addWidget(summary);
+  auto* table = new QTableWidget(&dialog);
+  table->setObjectName("alignResultsPairs");
+  table->setColumnCount(7);
+  table->setHorizontalHeaderLabels({"", "Pair", "Src X", "Src Y", "Dst X", "Dst Y", "Resid"});
+  table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
+  table->setColumnWidth(0, 34);
+  table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  table->horizontalHeader()->setStretchLastSection(true);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  layout->addWidget(table, 1);
+  auto* applyScale = new QCheckBox("Apply scale", &dialog);
+  applyScale->setObjectName("alignResultsApplyScale");
+  applyScale->setChecked(true);
+  auto* buttons = new QDialogButtonBox(&dialog);
+  auto* apply = buttons->addButton("Apply", QDialogButtonBox::AcceptRole);
+  apply->setObjectName("alignResultsApply");
+  auto* close = buttons->addButton("Close", QDialogButtonBox::RejectRole);
+  close->setObjectName("alignResultsClose");
+  auto* buttonRow = new QHBoxLayout;
+  buttonRow->addWidget(applyScale);
+  buttonRow->addStretch();
+  buttonRow->addWidget(buttons);
+  layout->addLayout(buttonRow);
+
+  const int linearPrecision = m_State.displayLinearPrecision;
+  auto formatLinear = [linearPrecision](double value) {
+    return QString::number(value, 'f', linearPrecision);
+  };
+  std::function<void()> refreshUi;
+  refreshUi = [&] {
+    RecalcAlignResult(m_State);
+    const auto& res = m_State.alignLastResult;
+    if (res.valid) {
+      summary->setText(QString(
+          "Pairs: %1<br>Scale: %2<br>Rotation: %3<br>Translation: X = %4 &nbsp;&nbsp; Y = %5<br>Point error (RMS): %6")
+                           .arg(res.nPairs)
+                           .arg(QString::number(res.scale, 'f', 8))
+                           .arg(QString::fromUtf8(CadFormatBearingCwNorthDegMinSec(res.rotationCwNorthDeg).c_str()))
+                           .arg(formatLinear(res.tx))
+                           .arg(formatLinear(res.ty))
+                           .arg(formatLinear(res.rms)));
+      apply->setEnabled(true);
+    } else if (m_State.alignControlPts.empty()) {
+      summary->setText("No pairs — add control pairs and solve again.");
+      apply->setEnabled(false);
+    } else {
+      summary->setText("Degenerate — pairs are coincident or collinear.");
+      apply->setEnabled(false);
+    }
+    table->setRowCount(0);
+    table->setRowCount(static_cast<int>(m_State.alignControlPts.size()));
+    for (int i = 0; i < static_cast<int>(m_State.alignControlPts.size()); ++i) {
+      const auto& cp = m_State.alignControlPts[static_cast<std::size_t>(i)];
+      const float resid =
+          res.valid && i < static_cast<int>(res.pairResiduals.size()) ? res.pairResiduals[static_cast<std::size_t>(i)] : 0.f;
+      auto* remove = new QPushButton("-", table);
+      remove->setObjectName(QString("alignResultsRemove_%1").arg(i));
+      remove->setFixedWidth(28);
+      connect(remove, &QPushButton::clicked, &dialog, [&, i] {
+        if (i < 0 || i >= static_cast<int>(m_State.alignControlPts.size()))
+          return;
+        m_State.alignControlPts.erase(m_State.alignControlPts.begin() + i);
+        refreshUi();
+      });
+      table->setCellWidget(i, 0, remove);
+      auto* pairItem = new QTableWidgetItem(QString::number(i + 1));
+      pairItem->setTextAlignment(Qt::AlignCenter);
+      table->setItem(i, 1, pairItem);
+      const auto makeItem = [&](const QString& text) {
+        auto* item = new QTableWidgetItem(text);
+        item->setTextAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        return item;
+      };
+      table->setItem(i, 2, makeItem(formatLinear(cp.srcX)));
+      table->setItem(i, 3, makeItem(formatLinear(cp.srcY)));
+      table->setItem(i, 4, makeItem(formatLinear(cp.dstX)));
+      table->setItem(i, 5, makeItem(formatLinear(cp.dstY)));
+      table->setItem(i, 6, makeItem(res.valid ? formatLinear(resid) : QString("—")));
+    }
+  };
+  refreshUi();
+
+  connect(apply, &QPushButton::clicked, &dialog, [&] {
+    if (!m_State.alignLastResult.valid)
+      return;
+    ApplyAlignCommand(m_State, m_Log, applyScale->isChecked());
+    dialog.accept();
+  });
+  connect(close, &QPushButton::clicked, &dialog, &QDialog::reject);
+  connect(&dialog, &QDialog::rejected, &dialog, [&] {
+    m_State.alignControlPts.clear();
+    m_State.alignPhase = AppCommandState::AlignPhase::PickSrc;
+    m_State.showAlignResultsWindow = false;
+  });
+
+  dialog.exec();
+  m_State.showAlignResultsWindow = false;
+  m_ModalOpen = false;
+  Refresh();
+}
+
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();
   if (m_ModalOpen || m_TextDialogOpen) return;
+  if (m_State.showAlignResultsWindow) {
+    ShowAlignResultsDialog();
+    return;
+  }
   if (m_State.blockEditCloseAsked) {
     ShowBlockEditorClosePrompt();
     return;
