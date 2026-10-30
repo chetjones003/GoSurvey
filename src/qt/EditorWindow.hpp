@@ -103,6 +103,7 @@ private:
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);
+  bool SaveDrawingTemplate();
   bool ConfirmSave();
   void ShowWhatsNew();
   void RefreshRecentDrawings();

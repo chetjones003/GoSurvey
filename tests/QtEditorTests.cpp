@@ -74,6 +74,7 @@
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QFileDialog>
 #include <QPalette>
 #include <QMessageBox>
 #include <QDialog>
@@ -6154,9 +6155,7 @@ private Q_SLOTS:
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), beforeTabs + 1);
     QVERIFY(window.State().activeDrawingIdx > 1);
-    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
-    QCOMPARE(window.State().userLinesFlat[0], 31.0);
-    QCOMPARE(window.State().userLinesFlat[3], 41.0);
+    QVERIFY(window.State().userLinesFlat.empty());
     QCOMPARE(window.State().drawingTabs.back().projectUid, 0u);
     const auto drawingPath = QString::fromStdWString((userTemplateDir / L"Created.dwg").wstring());
     const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
@@ -6212,6 +6211,101 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
     QCOMPARE(window.State().activeDrawingIdx, activeIdx);
     QCOMPARE(window.State().userLinesFlat, activeLines);
+  }
+
+  void issue1134SaveAsTemplateOmitsDrawingContentAndKeepsDrawingState() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    window.SwitchDrawing(1);
+    auto& state = window.State();
+    state.activeDocFilePath = "Original.dwg";
+    state.cadGpuRevision = 41;
+    state.activeDocSavedRevision = 38;
+    state.drawingInsUnits = 2;
+    state.modelUnitsPerPlottedInch = 50.0;
+    state.currentLayer = "Field";
+    state.objectSnapEnabled = true;
+    state.drawingLayerTable = DefaultDrawingLayerTable();
+    CadLayerRow fieldLayer;
+    fieldLayer.name = "Field";
+    fieldLayer.linetype = "Dashed";
+    state.drawingLayerTable.push_back(fieldLayer);
+    TextStyle style;
+    style.name = "Boundary Notes";
+    style.fontFamily = "Arial";
+    state.textStyles.push_back(style);
+    state.activeTextStyleName = "Boundary Notes";
+    state.userLinesFlat = {0.0, 0.0, 0.0, 100.0, 0.0, 0.0};
+    state.userLineAttrs = {EntityAttributes{}};
+    state.surveyPoints.push_back(SurveyPoint{17, 100.0, 200.0, 3.0, "Control", "CTRL", "Field"});
+    state.pointGroups.push_back(PointGroup{});
+    if (state.paperLayouts.empty()) state.paperLayouts.emplace_back();
+    state.paperLayouts[0].name = "Plan Set";
+    state.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+    SaveDocumentToSnapshot(state, state.activeDrawingIdx);
+
+    auto* action = window.findChild<QAction*>("command_SAVETEMPLATE");
+    QVERIFY(action);
+    auto* fileMenu = window.findChild<QMenu*>("fileMenu");
+    QVERIFY(fileMenu);
+    fileMenu->popup(QPoint(100, 100));
+    QTRY_VERIFY(fileMenu->isVisible());
+    QVERIFY(fileMenu->grab().save(Issue886Shot("qt-1134-file-menu.png")));
+    fileMenu->hide();
+    const auto personalTemplateDir = UserDataDirectory() / "drawing-templates";
+    const QString targetPath = QString::fromStdWString((personalTemplateDir / L"Field Template.gst").wstring());
+    QVERIFY(!std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QFileDialog*>("saveDrawingTemplateDialog");
+      QVERIFY(dialog);
+      QCOMPARE(QDir::cleanPath(dialog->directory().absolutePath()),
+               QDir::cleanPath(QString::fromStdWString(personalTemplateDir.wstring())));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1134-save-template-dialog.png")));
+      dialog->reject();
+    });
+    action->trigger();
+    QVERIFY(!std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+    QCOMPARE(state.activeDocFilePath, std::string("Original.dwg"));
+    QCOMPARE(state.cadGpuRevision, uint64_t(41));
+    QCOMPARE(state.activeDocSavedRevision, uint64_t(38));
+    QCOMPARE(state.userLinesFlat.size(), size_t(6));
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QFileDialog*>("saveDrawingTemplateDialog");
+      QVERIFY(dialog);
+      dialog->selectFile(targetPath);
+      auto* buttons = dialog->findChild<QDialogButtonBox*>();
+      QVERIFY(buttons);
+      auto* save = buttons->button(QDialogButtonBox::Save);
+      QVERIFY(save);
+      save->click();
+    });
+    action->trigger();
+    QVERIFY(std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+    QCOMPARE(state.activeDocFilePath, std::string("Original.dwg"));
+    QCOMPARE(state.cadGpuRevision, uint64_t(41));
+    QCOMPARE(state.activeDocSavedRevision, uint64_t(38));
+
+    AppCommandState loaded;
+    std::vector<std::string> log;
+    const QByteArray targetUtf8 = targetPath.toUtf8();
+    QVERIFY2(LoadGoSurveyTemplateFile(loaded, targetUtf8.constData(), log), log.empty() ? "template load failed" : log.back().c_str());
+    QVERIFY(loaded.userLinesFlat.empty());
+    QVERIFY(loaded.surveyPoints.empty());
+    QVERIFY(loaded.pointGroups.empty());
+    QVERIFY(loaded.drawingLayerTable.size() >= 2);
+    QCOMPARE(loaded.drawingLayerTable[1].name, std::string("Field"));
+    QCOMPARE(loaded.drawingLayerTable[1].linetype, std::string("Dashed"));
+    QCOMPARE(loaded.activeTextStyleName, std::string("Boundary Notes"));
+    QCOMPARE(loaded.textStyles.back().name, std::string("Boundary Notes"));
+    QCOMPARE(loaded.drawingInsUnits, 2);
+    QCOMPARE(loaded.modelUnitsPerPlottedInch, 50.0);
+    QVERIFY(loaded.objectSnapEnabled);
+    QCOMPARE(loaded.paperLayouts.size(), state.paperLayouts.size());
+    QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
+    QVERIFY(loaded.paperLayouts[0].paperLines.empty());
   }
 
   void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {
