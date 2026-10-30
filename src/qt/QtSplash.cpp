@@ -15,6 +15,24 @@ constexpr int kLabelBaseline = 359;
 constexpr double kBarTop = 372;
 constexpr double kBarWidth = 280;
 constexpr double kBarHeight = 5;
+
+QPixmap ScaleBackdropSource(const QPixmap& source, int physW, int physH) {
+  if (source.isNull()) {
+    QPixmap card(physW, physH);
+    card.fill(QColor("#111820"));
+    return card;
+  }
+  QPixmap card =
+      source.scaled(QSize(physW, physH), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+  if (card.width() > physW || card.height() > physH) {
+    const int x = (card.width() - physW) / 2;
+    const int y = (card.height() - physH) / 2;
+    card = card.copy(x, y, physW, physH);
+  } else if (card.width() != physW || card.height() != physH) {
+    card = card.scaled(physW, physH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+  }
+  return card;
+}
 }  // namespace
 
 double ProgressAt(qint64 elapsedMs) {
@@ -31,10 +49,12 @@ QString PhaseLabelAt(qint64 elapsedMs) {
   return kPhases[phase];
 }
 
-QPixmap MakeBackdrop(const QPixmap& source) {
-  QPixmap card = source;
-  if (card.isNull()) { card = QPixmap(kCardWidth, kCardHeight); card.fill(QColor("#111820")); }
-  card = card.scaled(kCardWidth, kCardHeight, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+QPixmap MakeBackdrop(const QPixmap& source, qreal devicePixelRatio) {
+  const qreal dpr = std::max<qreal>(1.0, devicePixelRatio);
+  const int physW = qMax(1, qRound(static_cast<double>(kCardWidth) * dpr));
+  const int physH = qMax(1, qRound(static_cast<double>(kCardHeight) * dpr));
+  QPixmap card = ScaleBackdropSource(source, physW, physH);
+  card.setDevicePixelRatio(dpr);
   QPainter painter(&card);
   painter.setRenderHint(QPainter::TextAntialiasing);
   const QFont wordmarkFont("Segoe UI", 40, QFont::DemiBold);
@@ -51,7 +71,8 @@ QPixmap MakeBackdrop(const QPixmap& source) {
   return card;
 }
 
-QPixmap MakeFrame(const QPixmap& backdrop, double progress, const QString& label) {
+QPixmap MakeFrame(const QPixmap& backdrop, double progress, const QString& label, qreal devicePixelRatio) {
+  (void)devicePixelRatio;
   QPixmap frame = backdrop;
   QPainter painter(&frame);
   painter.setRenderHint(QPainter::TextAntialiasing);

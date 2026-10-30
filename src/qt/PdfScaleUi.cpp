@@ -280,6 +280,10 @@ void PdfWindow::UpdateStatusBarLayout() {
   hideInCompact("pdfFirstPage");
   hideInCompact("pdfLastPage");
   hideInCompact("pdfFitPage");
+  if (auto* previous = statusBar()->findChild<QToolButton*>("pdfStatus_pdfPreviousPage"))
+    previous->setVisible(true);
+  if (auto* next = statusBar()->findChild<QToolButton*>("pdfStatus_pdfNextPage"))
+    next->setVisible(true);
   m_StatusMore->setVisible(compact);
   m_ToolStatus->setMinimumWidth(compact ? 64 : 0);
   m_PageNumber->setMinimumWidth(compact ? 52 : 70);

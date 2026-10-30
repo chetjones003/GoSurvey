@@ -17,7 +17,7 @@ def main():
     for call in re.findall(r'\bcol\((.*?)\)\s*[,}]', body, re.S):
         expected.update(re.findall(r'"(##[^"\n]+)"', call))
     expected.update(re.findall(r'\{"(##[^"\n]+)"', release("src/ui/ModelingRibbon.hpp")))
-    expected.update({"##RibbonLAY", "##PdfBgBtn", "##PdfVecBtn", "##BeClose"})
+    expected.update({"##RibbonLAY", "##PdfShowBtn", "##PdfSnapBtn", "##PdfVecBtn", "##BeClose"})
     catalog = (ROOT / "src/qt/RibbonCatalog.hpp").read_text(encoding="utf-8")
     rows = []
     for line in catalog.splitlines():

@@ -1410,6 +1410,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const float arm =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
+      const float ex = static_cast<float>(sp.easting);
+      const float ey = static_cast<float>(sp.northing);
+      const float ez = static_cast<float>(sp.elevation);
+      // Exact centre: needed when the cursor sits on the point node (ALIGN / IMPORT workflows)
+      // even if it is not over the plotted X arms.
+      Consider(&acc, wx, wy, ex, ey, Kind::SurveyCenter, tolWorld, ez);
       // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
       // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
       // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
@@ -1417,11 +1423,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       float hy = 0.f;
       // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
       // double survey-point coordinate here, same as every other entity kind in this loop.
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(sp.elevation), &hx, &hy);
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, ez, &hx, &hy);
       const float p2 =
-          MinDistSqToSurveyMarker(hx, hy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), arm);
-      ConsiderSnap(&acc, wx, wy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
-                   p2, tolWorld, static_cast<float>(sp.elevation),
+          MinDistSqToSurveyMarker(hx, hy, ex, ey, arm);
+      ConsiderSnap(&acc, wx, wy, ex, ey, Kind::SurveyCenter,
+                   p2, tolWorld, ez,
                    /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
@@ -1782,6 +1788,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
     for (const PdfAttachment& att : cmd.pdfAttachments) {
+      if (!att.snapEnabled)
+        continue;
       const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
       const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
       const float sc   = att.scale;
@@ -1801,7 +1809,26 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const float pdfCurY   = (-dxW * sinR + dyW * cosR) / sc;
       const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
 
-      // ---- Endpoint snap via spatial grid (O(cells-near-cursor)) ----------
+      // ---- Calm snap (REQ-391): same SnapPoints + SnapIndex path as the PDF viewer ----
+      const bool useCalmSnap = att.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
+      const float calmMerge  = 0.6f * pdfTol;
+      if (useCalmSnap && (wantEndpoint || wantCenter)) {
+        const bool linesOk   = att.snapLines && wantEndpoint;
+        const bool circlesOk = att.snapCircles && wantCenter;
+        if (linesOk || circlesOk) {
+          pdfview::SnapIndex::Pt hit{};
+          float weight = 0.f;
+          if (att.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
+            float lx = 0.f, ly = 0.f;
+            pdfToLocal(hit.first, hit.second, &lx, &ly);
+            if (weight >= 3.5f && circlesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Center, tolWorld);
+            else if (linesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Endpoint, tolWorld);
+          }
+        }
+      } else {
+      // ---- Endpoint snap via spatial grid (legacy attachments without calm index) ----
       if (att.snapLines && wantEndpoint) {
         // Visibility-mask check: returns true if pdfX,pdfY is inside or
         // adjacent to a cell marked as having visible foreground content.
@@ -1814,13 +1841,27 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           if (!hasMask || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
             return true;
           // Map PDF coords (y-up, origin BL) to mask coords (row 0 = top of page).
-          // The endpoint coordinate and the line pixels that pass through it map to
-          // the same cell by construction, so an exact single-cell check is correct.
-          // A 3x3 neighbourhood is too permissive on dense drawings (13 pt cells → every
-          // "empty" area on a busy engineering plan is within one cell of some drawn line).
           const int cx = std::clamp(static_cast<int>(pdfX / att.pageWidthPts  * MW), 0, MW - 1);
           const int cy = std::clamp(static_cast<int>((1.f - pdfY / att.pageHeightPts) * MH), 0, MH - 1);
-          return att.snapVisMask[static_cast<size_t>(cy) * MW + cx] != 0;
+          auto cellForeground = [&](int mx, int my) -> bool {
+            if (mx < 0 || mx >= MW || my < 0 || my >= MH)
+              return false;
+            return att.snapVisMask[static_cast<size_t>(my) * MW + static_cast<size_t>(mx)] != 0;
+          };
+          if (cellForeground(cx, cy))
+            return true;
+          // Vector endpoints and the 256² raster mask can disagree by a few cells when strokes are
+          // thin, anti-aliased, or the point sits inside a ring (circle centre). Search a small
+          // neighbourhood before rejecting a path-derived endpoint.
+          for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+              if (dx == 0 && dy == 0)
+                continue;
+              if (cellForeground(cx + dx, cy + dy))
+                return true;
+            }
+          }
+          return false;
         };
 
         const auto& grid = att.snapEndptGrid;
@@ -1908,6 +1949,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
           const float lr = SC[i + 2] * sc;
+          // Small plan symbols: snap when the cursor is near the centre point itself.
+          Consider(&acc, wx, wy, lcx, lcy, Kind::Center, tolWorld, 0.f);
           float hx = 0.f;
           float hy = 0.f;
           // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
@@ -1917,6 +1960,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
         }
       }
+      } // !useCalmSnap
 
       // ---- Text insertion-point snap --------------------------------------
       // NOTE: Text positions are intentionally NOT emitted here.

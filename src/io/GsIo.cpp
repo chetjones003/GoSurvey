@@ -2,6 +2,7 @@
 #include "GsAnnotationJson.hpp"
 
 #include "CadCommands.hpp"
+#include "ViewportZoomScale.hpp"
 #include "GsMigrate.hpp"
 #include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
@@ -1816,6 +1817,20 @@ json BuildRoot(const AppCommandState& st) {
     doc["annotationScales"] = std::move(scales);
     if (st.currentAnnotationScaleIndex >= 0)
       doc["currentAnnotationScaleIndex"] = st.currentAnnotationScaleIndex;
+  }
+
+  if (!st.viewportZoomScales.empty()) {
+    json scales = json::array();
+    for (const CadAnnotationScale& s : st.viewportZoomScales) {
+      json o;
+      o["name"] = s.name;
+      o["paperUnits"] = s.paperUnits;
+      o["drawingUnits"] = s.drawingUnits;
+      scales.push_back(std::move(o));
+    }
+    doc["viewportZoomScales"] = std::move(scales);
+    if (st.currentViewportZoomScaleIndex >= 0)
+      doc["currentViewportZoomScaleIndex"] = st.currentViewportZoomScaleIndex;
   }
 
   if (!st.dwgImportedLights.empty() || st.dwgImportedSunPresent || st.dwgImportedLightListPresent) {
@@ -3842,6 +3857,23 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     if (st.currentAnnotationScaleIndex >= static_cast<int>(st.annotationScales.size()))
       st.currentAnnotationScaleIndex = st.annotationScales.empty() ? -1 : 0;
   }
+
+  st.viewportZoomScales.clear();
+  st.currentViewportZoomScaleIndex = -1;
+  if (doc.contains("viewportZoomScales") && doc["viewportZoomScales"].is_array()) {
+    for (const auto& el : doc["viewportZoomScales"]) {
+      CadAnnotationScale s;
+      s.name = el.value("name", std::string{});
+      s.paperUnits = el.value("paperUnits", 1.f);
+      s.drawingUnits = el.value("drawingUnits", 1.f);
+      if (!s.name.empty() && s.paperUnits > 0.f && s.drawingUnits > 0.f)
+        st.viewportZoomScales.push_back(std::move(s));
+    }
+    st.currentViewportZoomScaleIndex = doc.value("currentViewportZoomScaleIndex", -1);
+    if (st.currentViewportZoomScaleIndex >= static_cast<int>(st.viewportZoomScales.size()))
+      st.currentViewportZoomScaleIndex = st.viewportZoomScales.empty() ? -1 : 0;
+  }
+  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
 
   st.dwgImportedLights.clear();
   st.dwgImportedSunPresent = false;

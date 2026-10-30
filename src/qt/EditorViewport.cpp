@@ -36,6 +36,111 @@
 #include <QLayout>
 #include <QWheelEvent>
 #include <algorithm>
+#include <cassert>
+#include "CadCommands.hpp"
+#include "pdf/PdfAttach.hpp"
+
+namespace {
+
+// RenderScene reads only the raster/transform fields. Snap geometry and lookup grids stay borrowed
+// in the committed attachment rather than being copied on each cursor-move frame.
+static PdfAttachment PdfRenderCopy(const PdfAttachment& source) {
+  PdfAttachment result;
+  result.insertX = source.insertX;
+  result.insertY = source.insertY;
+  result.scale = source.scale;
+  result.rotationDeg = source.rotationDeg;
+  result.pageWidthPts = source.pageWidthPts;
+  result.pageHeightPts = source.pageHeightPts;
+  result.glTexId = source.glTexId;
+  result.fade = source.fade;
+  result.showBackground = source.showBackground;
+  result.snapVisDark = source.snapVisDark;
+  return result;
+}
+
+static void RotatePdfInsertAroundBase(float bx, float by, float rad, float* x, float* y) {
+  const float c = std::cos(rad);
+  const float s = std::sin(rad);
+  const float dx = *x - bx;
+  const float dy = *y - by;
+  *x = bx + dx * c - dy * s;
+  *y = by + dx * s + dy * c;
+}
+
+static void ScalePdfInsertAroundBase(float bx, float by, float sc, float* x, float* y) {
+  *x = bx + sc * (*x - bx);
+  *y = by + sc * (*y - by);
+}
+
+static bool SelectionIncludesPdfUnderlay(const AppCommandState& st, int index) {
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PdfUnderlay && e.index == index)
+      return true;
+  }
+  return false;
+}
+
+static void AppendModifyPdfGhostPreviews(const AppCommandState& st, float curX, float curY,
+                                         std::vector<PdfAttachment>* ghosts) {
+  assert(ghosts != nullptr);
+  if (ghosts == nullptr)
+    return;
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  const int count = static_cast<int>(st.pdfAttachments.size());
+  if (st.active == K::Move || st.active == K::Copy) {
+    if (st.modifyPhase != MP::NeedDestination)
+      return;
+    const float dx = curX - st.modifyBaseX;
+    const float dy = curY - st.modifyBaseY;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      ghost.insertX += dx;
+      ghost.insertY += dy;
+      ghosts->push_back(ghost);
+    }
+    return;
+  }
+  if (st.active == K::Rotate) {
+    float theta = 0.f;
+    if (!CadRotatePreviewTheta(st, curX, curY, &theta))
+      return;
+    const float bx = st.rotateBaseX;
+    const float by = st.rotateBaseY;
+    constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      RotatePdfInsertAroundBase(bx, by, theta, &ghost.insertX, &ghost.insertY);
+      ghost.rotationDeg += theta * kPdfRadToDeg;
+      ghosts->push_back(ghost);
+    }
+    return;
+  }
+  if (st.active == K::Scale) {
+    if (st.modifyPhase != MP::NeedDestination)
+      return;
+    float sc = 1.f;
+    if (!CadScalePreviewFactor(st, curX, curY, &sc))
+      return;
+    const float bx = st.modifyBaseX;
+    const float by = st.modifyBaseY;
+    for (int pi = 0; pi < count; ++pi) {
+      if (!SelectionIncludesPdfUnderlay(st, pi))
+        continue;
+      PdfAttachment ghost = PdfRenderCopy(st.pdfAttachments[static_cast<std::size_t>(pi)]);
+      ScalePdfInsertAroundBase(bx, by, sc, &ghost.insertX, &ghost.insertY);
+      ghost.scale = std::max(ghost.scale * sc, 1e-9f);
+      ghosts->push_back(ghost);
+    }
+  }
+}
+
+}  // namespace
 
 EditorViewport::EditorViewport(AppCommandState& state, std::vector<std::string>& log, QWidget* parent)
     : QOpenGLWidget(parent), m_State(state), m_Log(log), m_Renderer(std::make_unique<ViewportRenderer>()) {
@@ -312,11 +417,38 @@ void EditorViewport::paintGL() {
     m_OnlineMap->Update(m_State, m_State.activeSpaceIndex == kModelSpaceIndex, camera, w, h, m_Log);
     tuning.mapTiles = &m_OnlineMap->DrawList();
     m_Renderer->SetSize(w, h);
+    std::vector<PdfAttachment> pdfForRender;
+    const std::vector<PdfAttachment>* pdfAttachments = &m_State.pdfAttachments;
+    const bool placingPdf = m_State.active == AppCommandState::Kind::PdfAttach &&
+        m_State.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+        m_State.pdfAttachPreviewReady;
+    const bool modifyingPdf = (m_State.active == AppCommandState::Kind::Move ||
+        m_State.active == AppCommandState::Kind::Copy || m_State.active == AppCommandState::Kind::Scale ||
+        m_State.active == AppCommandState::Kind::Rotate) &&
+        std::any_of(m_State.selection.begin(), m_State.selection.end(), [](const SelectedEntity& e) {
+          return e.type == SelectedEntity::Type::PdfUnderlay;
+        });
+    if (placingPdf || modifyingPdf) {
+      pdfForRender.reserve(m_State.pdfAttachments.size() * 2 + 1);
+      for (const auto& attachment : m_State.pdfAttachments)
+        pdfForRender.push_back(PdfRenderCopy(attachment));
+      if (placingPdf) {
+        PdfAttachment ghost = PdfRenderCopy(m_State.pdfAttachPreview);
+        ghost.insertX = static_cast<float>(m_Cursor.x);
+        ghost.insertY = static_cast<float>(m_Cursor.y);
+        ghost.scale = m_State.pdfAttachScale;
+        ghost.rotationDeg = m_State.pdfAttachRotDeg;
+        pdfForRender.push_back(std::move(ghost));
+      }
+      AppendModifyPdfGhostPreviews(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+                                   &pdfForRender);
+      pdfAttachments = &pdfForRender;
+    }
     m_Renderer->RenderScene(camera, w, h, m_State.userLinesFlat, m_State.userCirclesCxCyZR,
         m_State.cadGpuRevision + m_RenderRevision, rubber, &m_Snap, 6.f,
         &preview, &previewCircles, &highlight, &highlightCircles, &subHoverLines, nullptr, nullptr,
         &m_State.userLineAttrs, &m_State.userCircleAttrs, &ext, m_Grid, &m_State.drawingLayerTable, tuning,
-        &m_State.pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
+        pdfAttachments, -1, &m_State.cadFilledRegions, &m_State.cadFilledRegionAttrs,
         &m_State.cadMeshes, &m_State.cadMeshAttrs, &m_State.solidDisplayGeometry,
         &m_State.surfaceDisplayGeometry, nullptr, nullptr, nullptr, nullptr, &subObjectOverlay,
         gizmoOverlay.empty() ? nullptr : &gizmoOverlay,
@@ -746,6 +878,8 @@ void EditorViewport::paintGL() {
     painter.restore();
   } else {
     DrawQtModelAnnotations(painter, m_State, static_cast<float>(width()), static_cast<float>(height()));
+    DrawQtTransformAnnotationPreviews(painter, m_State, static_cast<float>(m_Cursor.x),
+        static_cast<float>(m_Cursor.y), static_cast<float>(width()), static_cast<float>(height()));
     const Camera gripCamera = CadViewCamera(m_State);
     for (const SelectedEntity& selected : m_State.selection) {
       std::vector<ray3d::Vec3> grips;
@@ -909,6 +1043,23 @@ void EditorViewport::paintGL() {
       const double reach = std::hypot(width(), height());
       painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
     }
+  } else if (!paperSpace && inputPrompt.haveBase && m_State.orthoMode) {
+    const ray3d::Vec3 anchor{inputPrompt.baseWorld.x - m_State.worldDocumentOriginX,
+        inputPrompt.baseWorld.y - m_State.worldDocumentOriginY, inputPrompt.baseWorld.z};
+    float x = static_cast<float>(m_Cursor.x), y = static_cast<float>(m_Cursor.y), z = static_cast<float>(m_Cursor.z);
+    ApplyOrthoConstrainFromAnchor(m_State, static_cast<float>(anchor.x), static_cast<float>(anchor.y), &x, &y,
+                                  true, static_cast<float>(anchor.z), z, &z);
+    const auto camera = CadViewCamera(m_State);
+    float ax = 0, ay = 0, bx = 0, by = 0;
+    camera.WorldToScreen(anchor.x, anchor.y, anchor.z, width(), height(), &ax, &ay);
+    camera.WorldToScreen(x, y, z, width(), height(), &bx, &by);
+    const QLineF line(QPointF(ax, ay), QPointF(bx, by));
+    if (line.length() > 0.1) {
+      const QPointF direction = (line.p2() - line.p1()) / line.length();
+      painter.setPen(QPen(QColor("#78eb8c"), 1, Qt::DashLine));
+      const double reach = std::hypot(width(), height());
+      painter.drawLine(line.p1() - direction * reach, line.p1() + direction * reach);
+    }
   }
   painter.setPen(QColor("#bcc6d3"));
   painter.drawText(16, 26, paperSpace ? "[Paper]" : "[Model]  [Orthographic]");
@@ -936,7 +1087,18 @@ void EditorViewport::DrawCursor(QPainter& painter) {
   painter.setRenderHint(QPainter::Antialiasing, false);
   painter.setPen(QPen(color, 1.0));
   painter.setBrush(Qt::NoBrush);
-  const double x = std::floor(m_Last.x()) + 0.5, y = std::floor(m_Last.y()) + 0.5;
+  double x = std::floor(m_Last.x()) + 0.5;
+  double y = std::floor(m_Last.y()) + 0.5;
+  if (m_Snap.valid && !ViewportIsObjectSelectionStep(m_State)) {
+    const Camera camera = CadViewCamera(m_State);
+    float sx = 0.f, sy = 0.f;
+    camera.WorldToScreen(m_Cursor.x, m_Cursor.y, m_Cursor.z,
+        static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+    if (std::isfinite(sx) && std::isfinite(sy)) {
+      x = std::floor(static_cast<double>(sx)) + 0.5;
+      y = std::floor(static_cast<double>(sy)) + 0.5;
+    }
+  }
   const double half = static_cast<double>(shape.pickHalfPx);
   if (shape.arms) {
     const double arm = static_cast<double>(shape.armLengthPx) * 0.5;
@@ -1040,7 +1202,10 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     }
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
+    const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) &&
+                                !objectSelectionStep;
+    m_Snap = midCmdUsesSnap ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
     if (m_Snap.valid) m_Cursor = {m_Snap.x, m_Snap.y, m_Snap.z};
@@ -1221,6 +1386,61 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
       tolerance.vertex = aperture;
       tolerance.edge = aperture;
       SubmitSubObjectPick(m_State, ray, tolerance, event->modifiers() & Qt::ShiftModifier, m_Log);
+    } else if (route == ViewportClickRoute::SelectionAccumulate) {
+      const bool shift = event->modifiers() & Qt::ShiftModifier;
+      const bool ctrl = event->modifiers() & Qt::ControlModifier;
+      const bool fenceWindow = m_Last.x() >= m_State.selBoxAnchorScreenX;
+      if (m_State.selBoxWaitingSecond) {
+        if (SubmitViewportSelectionAccumulateClick(
+                m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                static_cast<float>(m_Last.y()), shift, ctrl, CadViewIsPlan(m_State) ? nullptr : &ray,
+                static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log, false)) {
+          CancelSelectionBox();
+        } else {
+          SubmitViewportPick(m_State, m_Cursor.x, m_Cursor.y, m_Log, shift, fenceWindow,
+              CadViewIsPlan(m_State) ? nullptr : &ray);
+        }
+        m_LeftDragSelection = false;
+        m_HasSelectionBoxSnapshot = false;
+        m_SelectionBeforeBox.clear();
+        m_SurveySelectionBeforeBox.clear();
+      } else if (SubmitViewportSelectionAccumulateClick(
+                     m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                     static_cast<float>(m_Last.y()), shift, ctrl, CadViewIsPlan(m_State) ? nullptr : &ray,
+                     static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log)) {
+        m_State.selBoxWaitingSecond = false;
+        m_LeftDragSelection = false;
+      } else if (m_State.selBoxWaitingSecond) {
+        m_SelectionPress = m_Last;
+        m_LeftDragSelection = true;
+      }
+    } else if (route == ViewportClickRoute::SelectionBox) {
+      const bool shift = event->modifiers() & Qt::ShiftModifier;
+      const bool fenceWindow = m_Last.x() >= m_State.selBoxAnchorScreenX;
+      if (m_State.selBoxWaitingSecond) {
+        const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
+        const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
+        SubmitViewportPick(m_State, pickX, pickY, m_Log, shift, fenceWindow,
+            CadViewIsPlan(m_State) ? nullptr : &ray);
+        m_LeftDragSelection = false;
+      } else {
+        BeginSelectionBoxCorner(m_State, static_cast<float>(rawCursor.x), static_cast<float>(rawCursor.y),
+            static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
+      }
+    } else if (m_State.active == AppCommandState::Kind::None && m_State.selBoxWaitingSecond &&
+               SubmitViewportSelectionAccumulateClick(
+                   m_State, rawCursor.x, rawCursor.y, static_cast<float>(m_Last.x()),
+                   static_cast<float>(m_Last.y()), event->modifiers() & Qt::ShiftModifier,
+                   event->modifiers() & Qt::ControlModifier, CadViewIsPlan(m_State) ? nullptr : &ray,
+                   static_cast<float>(width()), static_cast<float>(height()), camera.orthoHalfH, m_Log, false)) {
+      // An ordinary object click after an empty click is a pick, not the opposite box corner.
+      // Keep the new hit instead of restoring the pre-box snapshot through CancelSelectionBox.
+      m_State.selBoxWaitingSecond = false;
+      m_State.selBoxPreview.clear();
+      m_LeftDragSelection = false;
+      m_HasSelectionBoxSnapshot = false;
+      m_SelectionBeforeBox.clear();
+      m_SurveySelectionBeforeBox.clear();
     } else if (m_State.active != AppCommandState::Kind::None || m_State.selBoxWaitingSecond) {
       const double pickX = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.x : m_Cursor.x;
       const double pickY = m_State.active == AppCommandState::Kind::Zoom ? rawCursor.y : m_Cursor.y;
@@ -1327,9 +1547,6 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         m_SelectionBeforeBox = m_State.selection;
         m_SurveySelectionBeforeBox = m_State.selectedSurveyPointIndices;
         m_HasSelectionBoxSnapshot = true;
-        if (!(event->modifiers() & Qt::ShiftModifier)) ClearSelection(m_State);
-        m_SelectionPress = m_Last;
-        m_LeftDragSelection = true;
         BeginSelectionBoxCorner(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
             static_cast<float>(m_Last.x()), static_cast<float>(m_Last.y()));
       }
@@ -1459,7 +1676,10 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const auto* onlyKind = m_State.objectSnapKindOverrideValid ? &overrideKind : nullptr;
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
-    m_Snap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive)
+    const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive) &&
+                                !objectSelectionStep;
+    m_Snap = midCmdUsesSnap
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
             CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind)
@@ -1611,25 +1831,6 @@ void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
     ClearMtextGripInteraction(m_State);
   }
   if (event->button() == Qt::LeftButton && m_GripMovedWithButton) m_GripMovedWithButton = false;
-  if (event->button() == Qt::LeftButton && m_LeftDragSelection) {
-    const QPointF delta = event->position() - m_SelectionPress;
-    if (std::abs(delta.x()) + std::abs(delta.y()) > 3.0) {
-      ray3d::Vec3 point;
-      if (WorldPoint(event->position(), point)) {
-        m_State.uiCursorWorldZ = static_cast<float>(point.z);
-        const auto camera = CadViewCamera(m_State);
-        const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()), static_cast<float>(event->position().y()),
-            static_cast<float>(width()), static_cast<float>(height()));
-        SubmitViewportPick(m_State, point.x, point.y, m_Log, event->modifiers() & Qt::ShiftModifier,
-            event->position().x() >= m_SelectionPress.x(), CadViewIsPlan(m_State) ? nullptr : &ray);
-        m_State.selBoxWaitingSecond = false;
-        m_HasSelectionBoxSnapshot = false;
-        m_SelectionBeforeBox.clear();
-        m_SurveySelectionBeforeBox.clear();
-      }
-      m_LeftDragSelection = false;
-    }
-  }
   if (event->button() == Qt::LeftButton) {
     const auto camera = CadViewCamera(m_State);
     const auto ray = camera.ScreenRay(static_cast<float>(event->position().x()),

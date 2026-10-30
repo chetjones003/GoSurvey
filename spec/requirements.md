@@ -12288,7 +12288,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      - **b. Table** — a header row identifies columns (point number, description, elevation, northing, easting in any order); each subsequent row is one candidate point, point number taken from its column when present.
      - **c. Bare pair** — only a northing and an easting value, no description, elevation, or point number label found.
      Text that does not fit any shape, or is missing both northing and easting, is reported as **unparsed** for that region and produces no candidate.
-  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created.
+  5. **Review before anything changes.** Every parsed candidate is shown next to (or over) its source text in the PDF view, with the fields GoSurvey read, before any drawing is touched. Each candidate (or the batch, for a table) has **Accept** and **Deny** controls. Deny discards it; nothing is created or changed. The review also offers **Accept all** and **Deny all** for the whole list; Accept all goes through each candidate in order exactly as a single Accept would (an existing point number still asks overwrite/offset) and stops at the first candidate that could not be created. For **table** extractions, rows that are recognized as table body but lack both valid northing and easting values (or fail numeric parse) are listed separately as **skipped rows** with source text and a short reason; they do not appear as candidates and do not block review of valid rows.
   6. **What Accept creates.**
      - A candidate with northing, easting, elevation **and** description (shape a or b with all fields present) creates a **survey point**.
      - A candidate with only northing and easting (shape c, or shape a/b missing description/elevation) creates a **circle** at that location — not a survey point.
@@ -12298,6 +12298,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Acceptance:
   - `[req399]` test: given the single-monument fixture (description + `N:`/`E:`/`EL.` labels), the parsed candidate's northing, easting, elevation and description match the source, and accepting creates one survey point at that location with an auto-assigned lowest-unused point number.
   - `[req399]` test: given the multi-row table fixture, each row produces one candidate correctly mapped by its header columns (including point number), and accepting creates one survey point per row at the correct coordinates and point numbers.
+  - `[req399]` test: given a table whose body includes a row with incomplete coordinates (for example a footer note), valid rows still become candidates and each skipped row is listed separately in review with its source text and reason; accepting valid rows does not require fixing skipped rows.
   - `[req399]` test: given the bare northing/easting fixture, the candidate has no description/elevation/point number, and accepting creates a circle (not a survey point) at that location.
   - `[req399]` test: a region with no selectable text produces the "likely scanned, no OCR yet" message and creates nothing.
   - `[req399]` test: a region whose text has no recognizable northing/easting is reported unparsed and creates nothing.
@@ -12307,7 +12308,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: after Accept, the drawing window has focus and the view is framed to include the newly created point(s)/circle(s).
 - Owner-layer: Domain/IO (`src/pdf/PdfCoordExtract`, PDFium text + pure parsing), UI (PDF viewer selection + review panel), Commands (survey point/circle creation, zoom-to-extents)
 - Status: accepted
-- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing.
+- Revisions: 2026-10-08 — initial (D-2026-10-08-d). 2026-10-08 — accepted. 2026-10-25 — Qt review panel (REQ-455, GitHub issue #1037): **Accept all** creates every candidate in list order through the same per-candidate path (an id conflict still asks, and it stops at the first candidate that cannot be created, framing the view once at the end); **Deny all** discards the whole list without touching the drawing. 2026-10-29 — table review lists skipped/incomplete rows separately (TASK-0.7.8 item 9 / D-2026-10-29-h).
 
 ### REQ-400 — Command-line resolution: an exact typed command or alias always wins (GitHub issue #766)
 
@@ -12867,7 +12868,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. **Surfaces.** The Qt **Dark** appearance uses graphite surfaces throughout the application: the Start page, drawing workspace and canvas ground/grid, shell chrome, menus, and Qt-owned dialogs and panels.
   2. **Primary accent.** In both the **Dark** and **Light** appearances, the primary accent — the colour of active and interactive states in Qt application chrome (selected and hovered controls, pressed and checked buttons, focus rings, selected rows and tabs, links, the application-menu button, checked radio/check indicators, progress and highlight fills) — is the **topo-line amber**: the hue of the amber contours in the topographic artwork (`src/qt/TopographicArtwork.hpp`, RGB 185,100,12, hue about 30 degrees). Each appearance picks its own lightness and saturation of that hue so text on it and the control itself stay readable; the hue is the same in both. Aqua and the Light appearance's light-blue/Windows-blue accent no longer appear as a primary accent in Qt chrome.
   3. **Secondary emphasis.** Secondary emphasis (informational notes, "recommended"/tag labels, secondary cards, quiet detail) uses a calm neutral tone (soft grey-blue in Dark, grey in Light), never the primary amber, so "active" and "secondary" remain distinguishable. Warnings keep a distinct warning look that is readable in both appearances and is not mistaken for an active state.
-  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged except for the Qt drawing-workspace chrome treatment explicitly accepted by D-2026-10-28-b / issue #1041: its specified workspace seams, subtle rounding, and elevation marks only.
+  4. **Unchanged.** The ImGui frontend, drawing entities, entity colors, the default crosshair colour (REQ-450), the Dark canvas ground and its grid colouring, and persisted drawing data are unchanged. Light surfaces (non-accent colours) are unchanged except for the Qt drawing-workspace chrome treatment explicitly accepted by D-2026-10-28-b / issue #1041 and the document-tab treatment in clause 5.
+  5. **Document tabs (user direction 2026-10-30).** Start and drawing tabs have trapezoid outlines with sloping sides, visible separation from adjacent tabs and the strip behind them, and readable labels in both appearances. The active tab has a lighter fill and the existing amber indicator. Start remains unclosable; drawing close controls, the new-drawing button, keyboard navigation and overflow scrolling remain usable. Ribbon tabs retain their existing treatment.
 - Acceptance:
   - Start, drawing workspace, menus, and representative Qt dialogs render with the topo-line amber for active, hover, pressed, checked, focus and selected states in Dark and in Light; no aqua (`#55d8d0`/`#168e8a` family) or light/Windows blue (`#0078d7`/`#438fda`/`#0878c5` family) remains as a primary accent in `QtAppearance.cpp`, `EditorSurfaceUi.hpp`, the Start page, or the dialogs that carried their own accent colours.
   - Primary text on an accent-filled control meets 4.5:1 contrast, and an accent border/indicator against its surface meets 3:1, in both appearances; hover, pressed, checked and disabled states are visibly distinct from one another.
@@ -12983,6 +12985,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
   6. **Migration boundary.** This requirement does not change the existing beta editor, switch the
      production default, remove ImGui, or add new geometry/edit operations. The 3D gizmo and
      section-plane overlay work remains under issue #900.
+  7. **Additive boxes (0.7.8 report, user direction 2026-10-29).** A plain idle or command-selection
+     box adds its hits to the existing selection; Shift removes hits. A completed drag must not leave
+     a pending box that consumes the next object click. Clicking an object after an empty click
+     selects the object and ends the pending box.
 - Acceptance:
   - Qt tests prove ordinary click/Shift selection and left-to-right window / right-to-left crossing
     drags, including live preview and cancellation without a selection change, in line with
@@ -15204,6 +15210,36 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands / Domain / IO / Qt UI
 - Decision: D-2026-10-28-c.
 - Status: accepted (2026-10-28, user chose Option C on issue #1019)
+
+### REQ-458 — Model viewport zoom ratio on the status bar (TASK-0.7.8 item 8)
+
+- Purpose: surveyors set and recall **model-space** editor viewport zoom as a named ratio (such as 1:50),
+  distinct from drawing plot scale, paper viewport model-to-paper scale (REQ-027), and annotative
+  annotation scales (issue #622).
+- Priority: should
+- Type: functional
+- Decision: D-2026-10-29-h (user direction 2026-10-29, TASK-0.7.8).
+- Depends on: REQ-027, REQ-101.
+- Statement:
+  1. While **model space** is active, the Qt status bar shows a **viewport zoom** control listing ratio
+     presets (for example 1:50). Choosing a preset adjusts the model viewport zoom so one plotted inch
+     on screen represents the preset's model-units-per-inch ratio, using the current viewport height and
+     display DPI.
+  2. The user can **add custom ratios** through a dialog; custom entries join the drawing's zoom-scale
+     list. That list is **separate** from `annotationScales`; changing viewport zoom presets does not
+     change annotation scale behavior.
+  3. Custom and preset zoom scales persist with the drawing through **DWG/DXF** round-trip (SCALE objects
+     tagged for viewport zoom, not annotation scales) and through the internal drawing JSON trailer.
+  4. Paper space and floating model space disable the control; it applies only to the model editor view.
+  5. Wheel zoom and other gestures may leave the control on a non-preset zoom until the user picks a
+     preset again; the control may show the closest preset or a neutral label when no preset matches.
+- Acceptance:
+  - `[req458]` test: default presets load on a new drawing; selecting 1:50 changes `viewportZoom` predictably for a fixed viewport height and DPI.
+  - `[req458]` test: adding a custom scale persists through GsIo JSON round-trip and reappears in the status bar list.
+  - `[req458]` test: DWG export writes tagged SCALE objects for viewport zoom scales; re-import restores them into the viewport zoom list and not into annotation scales.
+  - Manual: annotation scale combo and viewport zoom combo show independent lists.
+- Owner-layer: Commands / Qt UI / IO (`ViewportZoomScale`, `EditorWindow`, `GsIo`, `LibreDwgCad`)
+- Status: accepted (2026-10-29, user continued TASK-0.7.8 items 8–9)
 
 ## Anti-requirements
 

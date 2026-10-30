@@ -1463,6 +1463,8 @@ constexpr size_t kUcsPreviousDepth = 10;
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
@@ -2249,6 +2251,9 @@ struct AppCommandState {
   std::vector<CadAnnotationScale> annotationScales;
   /// Index into \ref annotationScales for model-space annotative display (-1 = drawing plot scale only).
   int currentAnnotationScaleIndex = -1;
+  /// REQ-458: model editor viewport zoom ratio presets (separate from annotationScales).
+  std::vector<CadAnnotationScale> viewportZoomScales;
+  int currentViewportZoomScaleIndex = -1;
   /// REQ-385: LIGHT entities and SUN object from DWG import (issue #624 lights slice).
   std::vector<CadDwgImportedLight> dwgImportedLights;
   CadDwgImportedSun dwgImportedSun{};
@@ -7732,7 +7737,7 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
 int PickFilledRegionAt(const AppCommandState& st, double wx, double wy, const ray3d::Ray* ray = nullptr);
 
 /// Which kind of thing \ref ResolveViewportPick found under the cursor (GitHub issue #564 §2).
-enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion };
+enum class ViewportPickFamily : std::uint8_t { None, Table, Annotation, Linework, Solid, FilledRegion, PdfUnderlay };
 
 /// The inputs a viewport hover or click already has, gathered so both ask the SAME question.
 struct ViewportPickRequest {
@@ -8544,6 +8549,16 @@ float CadPolylineDraftBulgeForNextPoint(const AppCommandState& st, float x, floa
 void SubmitViewportPick(AppCommandState& st, double localX, double localY, std::vector<std::string>& log,
                         bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false,
                         const ray3d::Ray* pickRay = nullptr);
+
+/// One click during \c ViewportClickRoute::SelectionAccumulate: toggle a hit into the growing
+/// selection, or arm a selection box on empty space. Returns true when an entity/sub-object was
+/// toggled; false when a box corner was armed instead (or when \p beginBoxOnMiss is false and the
+/// click missed).
+bool SubmitViewportSelectionAccumulateClick(AppCommandState& st, double rawLocalX, double rawLocalY,
+                                            float anchorScreenX, float anchorScreenY, bool shiftModifier,
+                                            bool ctrlModifier, const ray3d::Ray* pickRay,
+                                            float viewportWidthPx, float viewportHeightPx, float orthoHalfH,
+                                            std::vector<std::string>& log, bool beginBoxOnMiss = true);
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);

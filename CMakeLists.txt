@@ -494,6 +494,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
+  src/commands/ViewportZoomScale.cpp
   src/commands/CadColor.cpp
   # Issue #891: property-panel edit services shared by the Qt Properties panels
   src/commands/CadPropertyEdit.cpp
@@ -502,6 +503,7 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
+  src/pdf/PdfSnap.cpp
 
   # Preview geometry (pure geometry; no GL, same as CadSnap.cpp above — it builds vertex lists, it
   # does not draw them). Moved into the shared list by TASK-101 so the headless driver can assert
@@ -1372,7 +1374,6 @@ if(GOSURVEY_BUILD_TESTS)
     src/font/ShxFont.cpp
     src/pdf/PdfRaw.cpp
     src/pdf/PdfMeasure.cpp
-    src/pdf/PdfSnap.cpp
     src/pdf/PdfScaleCheck.cpp
     src/pdf/PdfDimAudit.cpp
     src/pdf/PdfCoordExtract.cpp
@@ -1477,6 +1478,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/RibbonWiringGapTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
+    # TASK-0.7.8 — modify selection accumulate, annotation MOVE preview, REQ-121 prompt.
+    tests/Task078InteractionTests.cpp
+    tests/ViewportZoomScaleTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
     tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).

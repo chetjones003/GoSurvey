@@ -22,6 +22,29 @@
 #include "TransformPreview.hpp"
 
 using Kind = CadSnap::Kind;
+
+TEST_CASE("PDF calm snaps filter disabled categories before ranking", "[CadSnap][pdf]") {
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnapEndpoint = true;
+  st.objectSnapCenter = false;
+  PdfAttachment att;
+  att.snapLines = true;
+  att.snapCircles = false;
+  att.snapCalmIndex.Build({{40.f, 60.f, 4.f}});
+  SECTION("a disabled circle center is not an endpoint") {
+    st.pdfAttachments.push_back(std::move(att));
+    CHECK_FALSE(CadSnap::FindBest(40.f, 60.f, st, true, 2.f).valid);
+  }
+  SECTION("a disabled center does not hide enabled linework") {
+    att.snapCalmIndex.Build({{40.f, 60.f, 4.f}, {40.5f, 60.f, 3.f}});
+    st.pdfAttachments.push_back(std::move(att));
+    const auto hit = CadSnap::FindBest(40.f, 60.f, st, true, 2.f);
+    REQUIRE(hit.valid);
+    CHECK(hit.kind == Kind::Endpoint);
+    CHECK(hit.x == Catch::Approx(40.5f));
+  }
+}
 using Catch::Approx;
 
 namespace {
@@ -2180,6 +2203,90 @@ TEST_CASE("A VERTICAL section outline snaps at the corner's own height", "[CadSn
   CHECK(hit.y == Approx(0.f));
   // Either corner at that plan position is a correct answer; a height of zero would not be.
   CHECK(std::fabs(hit.z) == Approx(25.f));
+}
+
+TEST_CASE("PDF underlay endpoint snap accepts vis mask ink in a neighbor cell", "[CadSnap][pdf]") {
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnapEndpoint = true;
+
+  PdfAttachment att;
+  att.pageWidthPts = 100.f;
+  att.pageHeightPts = 100.f;
+  att.scale = 1.f;
+  att.rotationDeg = 0.f;
+  att.insertX = 0.f;
+  att.insertY = 0.f;
+  att.snapLines = true;
+  att.snapLinesFlat = {50.f, 50.f, 70.f, 50.f};
+
+  constexpr int MW = PdfAttachment::kVisMaskW;
+  constexpr int MH = PdfAttachment::kVisMaskH;
+  att.snapVisMask.assign(static_cast<size_t>(MW * MH), 0u);
+  const int cx = static_cast<int>(50.f / att.pageWidthPts * MW);
+  const int cy = static_cast<int>((1.f - 50.f / att.pageHeightPts) * MH);
+  REQUIRE(cx >= 1);
+  REQUIRE(cy >= 1);
+  att.snapVisMask[static_cast<size_t>(cy) * MW + static_cast<size_t>(cx - 1)] = 1u;
+
+  att.snapEndptGrid.cols = 1;
+  att.snapEndptGrid.rows = 1;
+  att.snapEndptGrid.originX = 0.f;
+  att.snapEndptGrid.originY = 0.f;
+  att.snapEndptGrid.cellW = att.pageWidthPts;
+  att.snapEndptGrid.cellH = att.pageHeightPts;
+  att.snapEndptGrid.offsets = {0u, 2u};
+  att.snapEndptGrid.pts = {50.f, 50.f, 70.f, 50.f};
+
+  st.pdfAttachments.push_back(std::move(att));
+
+  const CadSnap::Hit hit = CadSnap::FindBest(50.0, 50.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Approx(50.f));
+  CHECK(hit.y == Approx(50.f));
+}
+
+TEST_CASE("PDF underlay circle centre snaps near the centre point", "[CadSnap][pdf]") {
+  AppCommandState st;
+  st.objectSnapEnabled = true;
+  st.objectSnapCenter = true;
+
+  PdfAttachment att;
+  att.pageWidthPts = 100.f;
+  att.pageHeightPts = 100.f;
+  att.scale = 1.f;
+  att.insertX = 0.f;
+  att.insertY = 0.f;
+  att.snapCircles = true;
+  att.snapCirclesCxCyR = {40.f, 60.f, 5.f};
+
+  st.pdfAttachments.push_back(std::move(att));
+
+  const CadSnap::Hit hit = CadSnap::FindBest(40.2, 59.8, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Center);
+  CHECK(hit.x == Approx(40.f));
+  CHECK(hit.y == Approx(60.f));
+}
+
+TEST_CASE("Survey point centre snaps when the cursor is on the node, not only on the X arms",
+          "[CadSnap][survey]") {
+  AppCommandState st;
+  st.objectSnapSurveyPoint = true;
+  SurveyPoint sp;
+  sp.easting = 100.f;
+  sp.northing = 200.f;
+  sp.elevation = 0.f;
+  st.surveyPoints.push_back(sp);
+  st.surveyPointCrossSpanPlottedInches = 0.08f;
+  st.modelUnitsPerPlottedInch = 1.f;
+
+  const CadSnap::Hit hit = CadSnap::FindBest(100.05f, 200.05f, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::SurveyCenter);
+  CHECK(hit.x == Approx(100.f));
+  CHECK(hit.y == Approx(200.f));
 }
 
 TEST_CASE("A flat ellipse snaps at its centre; a TILTED one is not answered in plan",

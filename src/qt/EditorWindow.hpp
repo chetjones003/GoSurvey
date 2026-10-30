@@ -75,6 +75,7 @@ private:
   void RunRibbonAction(const QString& id);
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
+  void EditRibbonPdf(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);
   void UpdateChromeIcons();
   void BuildDocks();
@@ -143,6 +144,7 @@ private:
   bool ActiveDrawingReadOnly() const;
   void ShowToolspaceContextMenu(const QPoint& position);
   void ShowPasteWarning();
+  void ShowAlignResultsDialog();
   void ShowProjectAttachPrompt();
   void ShowPdfAttachDialog();
   void AddPdfToProjectFromDisk();
