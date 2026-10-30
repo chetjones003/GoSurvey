@@ -3959,10 +3959,10 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
     DimensionStyles::BakeTextOntoDimension(a, st.activeDimensionStyle);
   {
     AngleDisplaySettings angleSet{};
-    CadDimRefreshMeasurementText(&st.cadAnnotations[0], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[1], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[2], st.activeDimensionStyle.unitPrecision, angleSet);
-    CadDimRefreshMeasurementText(&st.cadAnnotations[3], st.activeDimensionStyle.unitPrecision, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[0], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[1], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[2], st.activeDimensionStyle, angleSet);
+    CadDimRefreshMeasurementText(&st.cadAnnotations[3], st.activeDimensionStyle, angleSet);
   }
 
   std::vector<std::string> log;
@@ -4284,7 +4284,7 @@ TEST_CASE("GOSURVEY annoVisScales EED round-trips on annotative dimension (issue
   aligned.insZ = 0.f;
   DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(aligned));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
   std::vector<std::string> log;
@@ -4314,7 +4314,7 @@ TEST_CASE("AcadAnnotative EED imports annotative aligned dimension (issue #622)"
   aligned.insZ = 0.f;
   DimensionStyles::BakeTextOntoDimension(aligned, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&aligned, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(aligned));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
   std::vector<std::string> log;
@@ -5162,7 +5162,7 @@ TEST_CASE("Annotative TEXT, INSERT, and DIMENSION export annotation context (REQ
   dim.insY = 2.f;
   DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(dim));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
 
@@ -5336,7 +5336,7 @@ TEST_CASE("R2018 export re-read preserves MTEXT and DIMENSION annotation context
   dim.insY = 3.f;
   DimensionStyles::BakeTextOntoDimension(dim, st.activeDimensionStyle);
   AngleDisplaySettings angleSet{};
-  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle.unitPrecision, angleSet);
+  CadDimRefreshMeasurementText(&dim, st.activeDimensionStyle, angleSet);
   st.cadAnnotations.push_back(std::move(dim));
   st.cadAnnotationAttrs.push_back(EntityAttributes{});
 
@@ -6455,4 +6455,62 @@ TEST_CASE("Write the paper-space oracle fixtures (issue #768)", "[.][oracle768]"
     REQUIRE(ExportLibreCadFile(splineOnly, (dir / (std::string("SPLINEONLY_") + v.first + ".dwg")).string().c_str(),
                                log, /*asDxf=*/false));
   }
+}
+
+// Issue #804 dimension audit (REQ-477, REQ-459). Regression coverage for dimensions picked in the
+// reverse direction (text was stored upside down), for angular text placement, and for the value
+// after an edit (the refresh path used to drop the active style's unit scale).
+TEST_CASE("Dimension text rotation is normalised so text reads upright (REQ-477)", "[dim][issue804]") {
+  REQUIRE(CadDimReadableTextRotation(0.f) == Catch::Approx(0.f));
+  REQUIRE(CadDimReadableTextRotation(3.14159265f) == Catch::Approx(0.f));
+  REQUIRE(CadDimReadableTextRotation(-1.57079633f) == Catch::Approx(1.57079633f));
+  REQUIRE(CadDimReadableTextRotation(-2.35619449f) == Catch::Approx(0.78539816f));
+  REQUIRE(CadDimReadableTextRotation(0.78539816f) == Catch::Approx(0.78539816f));
+}
+
+TEST_CASE("DIMLINEAR picked right to left stores upright text (REQ-477)", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimLinear;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 10.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 0.f;
+  st.dimE2y = 0.f;
+  st.dimLinearDraftVertical = false;
+  CadAnnotation d{};
+  REQUIRE(CadDimLinearBuildDraft(st, 5.f, 5.f, &d));
+  REQUIRE(d.rotationRad == Catch::Approx(0.f));
+}
+
+TEST_CASE("DIMANGULAR text is horizontal at any bisector direction (REQ-477)", "[dim][issue804]") {
+  CadAnnotation a{};
+  a.kind = CadAnnotation::Kind::DimAngular;
+  a.dimAngVertexX = 0.f;
+  a.dimAngVertexY = 0.f;
+  a.dimExt1X = -10.f;
+  a.dimExt1Y = 0.f;
+  a.dimExt2X = 0.f;
+  a.dimExt2Y = -10.f;
+  a.dimSignedOffset = 4.f;
+  a.plottedHeightInches = 0.1f;
+  CadDimAngularSyncTextPlacement(&a, 1.f);
+  REQUIRE(a.rotationRad == Catch::Approx(0.f));
+}
+
+TEST_CASE("Dimension value keeps the style's unit scale after a refresh (REQ-459)", "[dim][issue804]") {
+  DimensionStyle sty = DimensionStyles::Default();
+  sty.unitScale = 2.0;
+  CadAnnotation a{};
+  a.kind = CadAnnotation::Kind::DimLinear;
+  a.dimExt1X = 0.f;
+  a.dimExt1Y = 0.f;
+  a.dimExt2X = 10.f;
+  a.dimExt2Y = 0.f;
+  a.dimSignedOffset = 3.f;
+  AngleDisplaySettings angleSet{};
+  CadDimRefreshMeasurementText(&a, sty, angleSet);
+  REQUIRE(a.text == "20.00");
+  sty.unitPrecision = 0;
+  CadDimRefreshMeasurementText(&a, sty, angleSet);
+  REQUIRE(a.text == "20");
 }

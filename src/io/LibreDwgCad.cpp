@@ -1742,7 +1742,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     return false;
   }
   const AngleDisplaySettings angle = CadAngleDisplaySettings(st);
-  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle.unitPrecision, angle);
+  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, angle);
   // A user-overridden DIMENSION text (DXF 1) takes priority over the geometry-derived label
   // above, matching what AutoCAD itself shows for the entity.
   if (common->user_text != nullptr) {

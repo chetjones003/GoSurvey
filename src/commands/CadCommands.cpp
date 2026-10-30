@@ -6177,7 +6177,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
     const float ty = std::cos(mid);
     ann->insX = mx + bisx * alongN + tx * alongT;
     ann->insY = my + bisy * alongN + ty * alongT;
-    ann->rotationRad = std::atan2(bisy, bisx);
+    ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
     return;
   }
   if (ann->kind != CadAnnotation::Kind::DimAligned && ann->kind != CadAnnotation::Kind::DimLinear)
@@ -6228,7 +6228,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
-  d.rotationRad = std::atan2(vy, vx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6325,7 +6325,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  d.rotationRad = std::atan2(ty, tx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6392,18 +6392,16 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
   return std::string(buf);
 }
 
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle) {
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle) {
   if (!ann)
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    {
-      DimensionStyle tmp = DimensionStyles::Default();
-      tmp.unitPrecision = linearPrecision;
-      ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), tmp);
-    }
+    // REQ-459 (issue #804): the value uses the dimension style's unit scale, format and precision, the same
+    // formatting the commit path uses, so moving a dimension never changes its number.
+    ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), style);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
@@ -6427,7 +6425,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   const float lift = 1.12f * hWorld;
   ann->insX = mx + bisx * lift;
   ann->insY = my + bisy * lift;
-  ann->rotationRad = std::atan2(bisy, bisx);
+  ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
 }
 
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
@@ -7071,6 +7069,9 @@ const CmdEntry kRegistry[] = {
     {"divide", "div", "Place points that divide an object into equal segments"},
     {"area", "aa", "Measure the area and perimeter of points or a closed object"},
     {"list", "li", "List type, layer, space and geometry of selected objects"},
+    {"dataextraction", "", "Extract selected objects to an Excel or CSV file: type, layer, text, coordinates"},
+    {"table", "", "Insert an empty table: style, columns, rows, then the insertion point"},
+    {"addpointtable", "", "Add a point table of survey points in a point table style (dialog in the editor)"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
     {"text", "", "Place single-line text"},
     {"mtext", "mt", "Place multiline text"},
@@ -7556,6 +7557,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "list") {
     StartListCommand(st, log);
+    return true;
+  }
+  if (primary == "dataextraction") {
+    StartDataExtractCommand(st, log);
+    return true;
+  }
+  if (primary == "table") {
+    StartTableCommand(st, log);
+    return true;
+  }
+  if (primary == "addpointtable") {
+    StartAddPointTableCommand(st, log);
     return true;
   }
   if (primary == "text") {
@@ -8817,7 +8830,7 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 /// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
@@ -8847,7 +8860,7 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static float NormalizeAngleRadMinusPiToPi(float a) {
@@ -9887,7 +9900,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
           RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -10252,7 +10265,7 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
           RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -10611,7 +10624,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
           ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
           // corners and re-fit — the same weaker path ROTATE takes for these kinds.
@@ -10912,7 +10925,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
       RotateAroundBase(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
       if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-        a.rotationRad = std::atan2(ty, tx);
+        a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
     } else {
       float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
       float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -11370,7 +11383,7 @@ static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotat
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outCx, float* outCy) {
@@ -11649,7 +11662,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
     ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
@@ -11658,8 +11671,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -11668,7 +11681,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   }
 }
 
@@ -13042,7 +13055,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimSignedOffset = dOff;
   ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
   ann.fontFamily = st.activeDimensionStyle.textFont;
-  ann.rotationRad = std::atan2(vy, vx);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
@@ -13103,7 +13116,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  ann.rotationRad = std::atan2(ty, tx);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
@@ -22063,7 +22076,7 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
     RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
     float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -22107,7 +22120,7 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -22161,7 +22174,7 @@ static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, fl
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
@@ -44176,6 +44189,21 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     ResetCadDrawInquiryDrafts(st);
     log.push_back("LIST canceled.");
   }
+  else if (st.active == AppCommandState::Kind::DataExtract) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("DATAEXTRACTION canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Table) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("TABLE canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::PointTable) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("ADDPOINTTABLE canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Rect)
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
@@ -48876,6 +48904,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Divide:     StartDivideCommand(st, log);     break;
     case K::Area:       StartAreaCommand(st, log);       break;
     case K::List:       StartListCommand(st, log);       break;
+    case K::DataExtract: StartDataExtractCommand(st, log); break;
+    case K::Table:      StartTableCommand(st, log);      break;
+    case K::PointTable: StartAddPointTableCommand(st, log); break;
     case K::Text:       StartTextCommand(st, log);       break;
     case K::Mtext:      StartMtextCommand(st, log);      break;
     case K::Mleader:    StartMleaderCommand(st, log);    break;

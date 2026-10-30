@@ -359,6 +359,8 @@ void EditorWindow::LoadCoordinateSystemDictionaries() {
 EditorWindow::EditorWindow(QString developmentBranchLabel)
     : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
+  // ADDPOINTTABLE opens the point table dialog in this editor rather than asking typed prompts (REQ-474).
+  m_State.addPointTableDialogAvailable = true;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();

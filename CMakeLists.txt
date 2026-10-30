@@ -466,6 +466,38 @@ endif()
 #   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
 # PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
 # ---------------------------------------------------------------------------
+# --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
+# Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
+# copy above; zip support comes from the vendored miniz.
+set(GOSURVEY_OPENXLSX_SOURCES
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCell.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellIterator.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellRange.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellReference.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellValue.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLColor.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLColumn.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLComments.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLContentTypes.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDateTime.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDocument.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDrawing.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLFormula.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLMergeCells.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLProperties.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRelationships.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRow.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRowData.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLSharedStrings.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLSheet.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLStyles.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLTables.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLWorkbook.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlData.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlFile.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlParser.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLZipArchive.cpp
+)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
@@ -532,6 +564,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/traverse/Rw5Import.cpp
   src/traverse/JobXmlImport.cpp
   ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
+  ${GOSURVEY_OPENXLSX_SOURCES}
+  # REQ-467 / REQ-468 (#804): spreadsheet read/write over OpenXLSX and hand-written CSV.
+  src/io/SpreadsheetIo.cpp
 
   # I/O
   src/io/GsIo.cpp
@@ -702,6 +737,10 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
   ${PUGIXML_INCLUDE}
+  ${GOSURVEY_TP}/OpenXLSX
+  ${GOSURVEY_TP}/OpenXLSX/headers
+  ${GOSURVEY_TP}/OpenXLSX/generated
+  ${GOSURVEY_TP}/OpenXLSX/shims
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
@@ -715,6 +754,7 @@ gosurvey_enable_pch(gosurvey_domain)
 # Vendored sources compiled into our own target are not ours to triage (issue #977).
 set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
+  ${GOSURVEY_OPENXLSX_SOURCES}
   "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/StbImage.cpp"
   PROPERTIES COMPILE_OPTIONS "/analyze-")
 
@@ -990,6 +1030,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
     tests/DimViewportTests.cpp
+    tests/SpreadsheetIoTests.cpp
+    tests/TableStyleTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp

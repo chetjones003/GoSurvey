@@ -210,6 +210,12 @@ DIMANGULAR: Arc radius (bisector) | click | X,Y | @ from vertex | ESC
 3. **Second ray point**
 4. **Arc position** — sets the radius of the dimension arc along the bisector
 
+### Text and angle size
+
+Linear and aligned dimension text reads upright whichever way the extension points are picked. Angular
+dimension text is always horizontal, and an angular dimension measures up to 180 degrees. See
+[[Known Limitations]].
+
 ### Editing dimensions
 
 Select a dimension and drag its grips to move the dimension line or the text. Properties shows its
@@ -232,6 +238,14 @@ inch**. Changing it:
 Existing text is not resized. See [[Plotting]].
 
 ---
+
+## Tables
+
+**Ribbon:** Annotate → Tables. **Commands:** `TABLE`, `ADDPOINTTABLE`, `DATAEXTRACTION`.
+
+- [[Commands/table]] inserts an empty table. **Double-click** a cell to type its text.
+- [[Commands/addpointtable]] makes a table of survey points, chosen in a dialog.
+- [[Commands/dataextraction]] writes the selected objects to an Excel or CSV file.
 
 ## Related
 

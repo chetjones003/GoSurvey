@@ -171,6 +171,8 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   o["plottedHeightInches"] = t.plottedHeightInches;
   if (!t.fontFamily.empty())
     o["fontFamily"] = t.fontFamily;
+  if (!t.styleName.empty())
+    o["styleName"] = t.styleName;
 }
 
 [[nodiscard]] inline CadTable CadTableFromJson(const nlohmann::json& o) {
@@ -187,5 +189,6 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
     t.cells = o["cells"].get<std::vector<std::string>>();
   t.plottedHeightInches = o.value("plottedHeightInches", t.plottedHeightInches);
   t.fontFamily = o.value("fontFamily", t.fontFamily);
+  t.styleName = o.value("styleName", t.styleName);
   return t;
 }

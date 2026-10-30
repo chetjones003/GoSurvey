@@ -2,6 +2,7 @@
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
+#include "EditorPointTableDialog.hpp"
 #include "EditorLayerManager.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
@@ -557,6 +558,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
+  } else if (m_State.addPointTableDialogRequested) {
+    m_State.addPointTableDialogRequested = false;
+    m_ModalOpen = true;
+    ShowAddPointTableDialog(this, m_State, m_Log);
+    m_ModalOpen = false;
+    Refresh();
   } else if (m_State.showPointGroupManagerWindow) {
     m_State.showPointGroupManagerWindow = false;
     m_ModalOpen = true;

@@ -90,6 +90,10 @@ bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char*) {
   return NextAnswer(utf8Out, utf8Cap);
 }
 
+bool BrowseSaveFileSpreadsheetUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  return NextAnswer(utf8Out, utf8Cap);
+}
+
 bool BrowseOpenFileDxfUtf8(char* utf8Out, size_t utf8Cap) { return NextAnswer(utf8Out, utf8Cap); }
 
 bool BrowseSaveFileDxfUtf8(char* utf8Out, size_t utf8Cap, const char*) {

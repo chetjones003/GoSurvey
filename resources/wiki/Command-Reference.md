@@ -61,6 +61,8 @@ for a compact list inside the program.
 
 | Command | Aliases | Description | Details |
 |---|---|---|---|
+| `ADDPOINTTABLE` | — | Table of survey points in a point table style, chosen in a dialog | [[Commands/addpointtable]] |
+| `DATAEXTRACTION` | — | Write the selected objects' type, layer, text and coordinates to an Excel or CSV file | [[Commands/dataextraction]] |
 | `DIMALIGNED` | `DAL` | Aligned dimension | [[Commands/dimaligned]] |
 | `DIMANGULAR` | `DAN` | Angular dimension | [[Commands/dimangular]] |
 | `DIMLINEAR` | `DLI` | Linear dimension | [[Commands/dimlinear]] |
@@ -68,6 +70,7 @@ for a compact list inside the program.
 | `LEADER` | `LE` | Draw a leader (Mtext or None) | [[Commands/leader]] |
 | `MLEADER` | `ML` | Draw a multileader | [[Commands/mleader]] |
 | `MTEXT` | `MT` | Place multiline text | [[Commands/mtext]] |
+| `TABLE` | — | Insert an empty table: style, columns, rows, then the insertion point | [[Commands/table]] |
 | `STYLE` | `ST`, `DDSTYLE` | Text style manager: create / edit named text styles | [[Commands/style]] |
 | `TEXT` | — | Place single-line text | [[Commands/text]] |
 

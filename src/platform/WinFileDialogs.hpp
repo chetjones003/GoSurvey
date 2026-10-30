@@ -13,6 +13,8 @@ bool BrowseOpenFileCsvUtf8(char* utf8Out, size_t utf8Cap);
 /// a name typed with `.csv` or `.txt` is returned as typed; a name with neither picks up the
 /// extension of the filter the user chose.
 bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+// REQ-467 / REQ-468 (#804): one dialog for .xlsx or .csv; returns the chosen path with an extension.
+bool BrowseSaveFileSpreadsheetUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
 bool BrowseOpenFileDxfUtf8(char* utf8Out, size_t utf8Cap);
 

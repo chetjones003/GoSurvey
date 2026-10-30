@@ -1,0 +1,21 @@
+# REQ-474 (GitHub issue #804 follow-up, D-2026-10-30-b) — ADDPOINTTABLE, typed path (no dialog in headless runs).
+#
+# The five survey points from the state-plane sample are listed in the NameNEZD style with the Enter default for
+# the point selection, then placed at (100,100). The NameNEZD with Comments style refuses a Data style name.
+
+NEW
+
+IMPORT POINTS samples/state-plane-points.csv
+EXPECT SURVEYPOINTS 5
+
+CMD ADDPOINTTABLE
+CMD Standard
+EXPECT LOG no point table style named "Standard"
+
+CMD ADDPOINTTABLE
+CMD
+CMD
+PICK 100 100
+
+EXPECT TABLES 1
+EXPECT LOG ADDPOINTTABLE inserted: 5 point(s) in style NameNEZD.
