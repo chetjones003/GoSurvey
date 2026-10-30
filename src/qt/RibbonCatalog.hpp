@@ -9,13 +9,8 @@ struct Button {
 };
 inline constexpr Button kButtons[] = {
   {"Home", "Palettes", "##RibbonToolspaceHome", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Project, Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
-  {"Home", "Palettes", "##PalPanorama", "Panorama", "c3d_panorama", "", "Panorama — not implemented yet.", false, true},
   {"Home", "Palettes", "##PalProps", "Properties", "c3d_properties", "@properties", "Properties — the side Properties panel for the current selection.", false, false},
-  {"Home", "Palettes", "##PalRefMgr", "Reference Manager", "c3d_refmgr", "", "Reference Manager — not implemented yet.", false, true},
-  {"Home", "Palettes", "##PalCompEd", "Component Editor", "c3d_comped", "", "Component Editor — not implemented yet.", false, true},
   {"Home", "Palettes", "##PalSettings", "Drawing Settings", "c3d_dwgsettings", "@drawingSettings", "Drawing Settings — the drawing's units, scale and settings.\nCommand bar: DRAWINGSETTINGS", false, false},
-  {"Home", "Palettes", "##PalWorkFolder", "Set Working Folder", "c3d_workfolder", "", "Set Working Folder — not implemented yet.", false, true},
-  {"Home", "Explore", "##ExpProjExplorer", "Project\nExplorer", "c3d_projexplorer", "", "Project Explorer — not implemented yet.", true, true},
   {"Home", "Optimize", "##OptGrading", "Grading\nOptimization", "c3d_gradingopt", "", "Grading Optimization — not implemented yet.", true, true},
   {"Home", "Create Ground Data", "##CgdPoints", "Points", "Point_Style", "CREATEPOINTS", "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", false, false},
   {"Home", "Create Ground Data", "##CgdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
