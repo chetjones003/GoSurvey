@@ -308,7 +308,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       auto m2p = [&](double wx, double wy, float* px, float* py) { m2pz(wx, wy, 0.0, px, py); };
       // Projects a model-space chain through this viewport's camera and strokes it, clipped to the viewport.
       const PlotRect vpRect{vx0, vy0, vx1, vy1};
-      curDashUnit = plotstroke::DashUnitIn(vp.paperWIn, vp.paperHIn);
+      curDashUnit = plotstroke::DashUnitIn(vp.safeScale());
       auto emitModelChain = [&](const std::vector<std::array<double, 3>>& w, bool closed) {
         std::vector<std::array<float, 2>> pp(w.size());
         for (size_t i = 0; i < w.size(); ++i)
@@ -454,12 +454,28 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           continue;
         curColor = resolveRgb(attr.layer, attr.color);
         setLineStyle(&attr, attr.layer);
-        // Surface edges are stroked one edge at a time, so a dashed surface edge restarts its pattern per edge.
+        // Edges arrive as independent segments. Consecutive edges that share an end point (a contour's run of
+        // edges) are stroked as one chain, so a dashed edge keeps its pattern across the joints. Unconnected
+        // edges (e.g. triangle edges) start their own chain, as before.
         auto emitSurf = [&](const std::vector<float>& verts) {
-          for (size_t i = 0; i + 5 < verts.size(); i += 6)
-            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
-                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
-                         static_cast<double>(verts[i + 2]), static_cast<double>(verts[i + 5]));
+          std::vector<std::array<double, 3>> run;
+          auto flushRun = [&]() {
+            if (run.size() >= 2)
+              emitModelChain(run, false);
+            run.clear();
+          };
+          for (size_t i = 0; i + 5 < verts.size(); i += 6) {
+            const std::array<double, 3> a{static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                                          static_cast<double>(verts[i + 2])};
+            const std::array<double, 3> b{static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                                          static_cast<double>(verts[i + 5])};
+            if (run.empty() || run.back() != a) {  // exact match: the same vertex, so the same float values
+              flushRun();
+              run.push_back(a);
+            }
+            run.push_back(b);
+          }
+          flushRun();
         };
         emitSurf(it->triangleEdges);
         emitSurf(it->minorContours);
@@ -676,7 +692,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       auto sheetAttr = [&](const std::vector<EntityAttributes>& v, size_t i) -> const EntityAttributes* {
         return i < v.size() ? &v[i] : nullptr;
       };
-      curDashUnit = plotstroke::DashUnitIn(L.sheetWidthIn(), L.sheetHeightIn());
+      curDashUnit = plotstroke::kSheetDashUnitIn;
       // Sheet geometry is already in paper inches and is not clipped, so it strokes with a null clip rectangle.
       const PlotRect* noClip = nullptr;
       // REQ-446 style for a sheet entity: its own lineweight/linetype, ByLayer through its layer.

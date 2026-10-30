@@ -54,13 +54,16 @@ TEST_CASE("Equal widths share one stroke group, to 1/100 pt (REQ-446)", "[plotst
   REQUIRE(plotstroke::WidthKey(0.5f) == 50u);
 }
 
-TEST_CASE("The dash unit tracks paper size with the on-screen proportion (REQ-446)", "[plotstroke]") {
+TEST_CASE("The dash unit follows AutoCAD's viewport scale rule (REQ-446)", "[plotstroke]") {
   using Catch::Matchers::WithinAbs;
-  // ViewportRenderer uses dashPatScale = 0.045 x half-extent; on paper the half-extent is max(w, h) / 2.
-  REQUIRE_THAT(plotstroke::DashUnitIn(11.f, 8.5f), WithinAbs(0.045 * 11.0 * 0.5, 1e-6));
-  REQUIRE(plotstroke::DashUnitIn(22.f, 17.f) > plotstroke::DashUnitIn(11.f, 8.5f));
-  // A degenerate sheet still yields a positive unit, so the dash tessellator always advances.
-  REQUIRE(plotstroke::DashUnitIn(0.f, 0.f) > 0.f);
+  // A pattern unit is LTSCALE (1) model units, shrunk by the viewport: at 1 paper inch = 50 model units it is 0.02 in.
+  REQUIRE_THAT(plotstroke::DashUnitIn(50.f), WithinAbs(0.02, 1e-6));
+  // A finer viewport (fewer model units per paper inch) draws dashes longer on paper.
+  REQUIRE(plotstroke::DashUnitIn(10.f) > plotstroke::DashUnitIn(50.f));
+  // The sheet itself uses one paper inch per pattern unit at LTSCALE 1.
+  REQUIRE_THAT(plotstroke::kSheetDashUnitIn, WithinAbs(1.0, 1e-6));
+  // A degenerate scale still yields a positive unit, so the dash tessellator always advances.
+  REQUIRE(plotstroke::DashUnitIn(0.f) > 0.f);
 }
 
 TEST_CASE("A DASHED line plots with gaps and a CONTINUOUS line stays solid (REQ-446 acceptance 2)", "[plotstroke]") {

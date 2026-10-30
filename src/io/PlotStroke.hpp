@@ -28,11 +28,18 @@ inline uint32_t WidthKey(float widthPt) {
   return static_cast<uint32_t>(std::lround(std::max(widthPt, 0.f) * 100.f));
 }
 
-// Dash unit in paper inches for a sheet or viewport of the given paper size. Uses the same proportion the on-screen
-// view uses (ViewportRenderer: dashPatScale = 0.045 x half-extent), so a dashed line on the sheet looks like the
-// one on screen. Clamped away from zero so the dash tessellator always advances.
-inline float DashUnitIn(float paperWIn, float paperHIn) {
-  return std::max(0.01f, 0.045f * std::max(paperWIn, paperHIn) * 0.5f);
+// Linetype scale. The drawing has no LTSCALE setting yet, so it is fixed at 1, the value the DXF export writes.
+constexpr float kLtScale = 1.f;
+
+// Dash unit in paper inches (one linetype pattern unit) for a viewport at \p modelUnitsPerPaperIn. AutoCAD's rule:
+// a model-space pattern unit is LTSCALE model units, and the viewport shrinks it by its scale. Clamped away from
+// zero so the dash tessellator always advances.
+inline float DashUnitIn(float modelUnitsPerPaperIn) {
+  return std::max(kLtScale / std::max(modelUnitsPerPaperIn, 1.e-6f), 1.e-4f);
 }
+
+// Dash unit on the sheet itself. Paper-space geometry is already in paper inches, so one pattern unit is LTSCALE
+// inches (AutoCAD's PSLTSCALE default).
+constexpr float kSheetDashUnitIn = kLtScale;
 
 }  // namespace plotstroke
