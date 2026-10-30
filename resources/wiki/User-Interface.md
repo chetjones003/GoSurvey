@@ -55,7 +55,7 @@ The Undo item names the action it will reverse, for example *Undo: Edit hatch*.
 | **Layout ▸ Save current as… / Switch to** | — | Saves and recalls named panel layouts as `.ini` files |
 | **Command line** | `Ctrl+9` | Shows and hides the floating command bar |
 | **Classic command dock** | — | Switches the command line between the floating bar and a docked panel |
-| **Toolspace** | — | Shows and hides the Toolspace panel (Prospector and Settings) |
+| **Toolspace** | — | Shows and hides the Toolspace panel (Project, Prospector and Settings tabs) |
 | **Settings…** | — | Opens the Options dialog ([[Settings and Options]]) |
 
 ---

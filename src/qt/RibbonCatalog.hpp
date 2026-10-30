@@ -8,14 +8,9 @@ struct Button {
   const char* icon; const char* command; const char* tooltip; bool large; bool placeholder;
 };
 inline constexpr Button kButtons[] = {
-  {"Home", "Palettes", "##RibbonToolspaceHome", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
-  {"Home", "Palettes", "##PalPanorama", "Panorama", "c3d_panorama", "", "Panorama — not implemented yet.", false, true},
+  {"Home", "Palettes", "##RibbonToolspaceHome", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Project, Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
   {"Home", "Palettes", "##PalProps", "Properties", "c3d_properties", "@properties", "Properties — the side Properties panel for the current selection.", false, false},
-  {"Home", "Palettes", "##PalRefMgr", "Reference Manager", "c3d_refmgr", "", "Reference Manager — not implemented yet.", false, true},
-  {"Home", "Palettes", "##PalCompEd", "Component Editor", "c3d_comped", "", "Component Editor — not implemented yet.", false, true},
   {"Home", "Palettes", "##PalSettings", "Drawing Settings", "c3d_dwgsettings", "@drawingSettings", "Drawing Settings — the drawing's units, scale and settings.\nCommand bar: DRAWINGSETTINGS", false, false},
-  {"Home", "Palettes", "##PalWorkFolder", "Set Working Folder", "c3d_workfolder", "", "Set Working Folder — not implemented yet.", false, true},
-  {"Home", "Explore", "##ExpProjExplorer", "Project\nExplorer", "c3d_projexplorer", "", "Project Explorer — not implemented yet.", true, true},
   {"Home", "Optimize", "##OptGrading", "Grading\nOptimization", "c3d_gradingopt", "", "Grading Optimization — not implemented yet.", true, true},
   {"Home", "Create Ground Data", "##CgdPoints", "Points", "Point_Style", "CREATEPOINTS", "Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS", false, false},
   {"Home", "Create Ground Data", "##CgdFeatureLine", "Feature Line", "c3d_featureline", "FEATURELINE", "Feature Line — draw a named 3D line with an elevation at each point.\nCommand bar: FEATURELINE", false, false},
@@ -102,7 +97,7 @@ inline constexpr Button kButtons[] = {
   {"Survey", "Labels & Tables", "##SvyRenumber", "Renumber\nTags", "svyrenumber", "", "Renumber Tags — not implemented yet.", true, true},
   {"Survey", "General Tools", "##SvyProps", "Properties", "c3d_properties", "@properties", "Properties — the side Properties panel for the current selection.", false, false},
   {"Survey", "General Tools", "##SvyIsolate", "Isolate Objects", "c3d_isolate", "@isolateMenu", "Isolate Objects — isolate, hide, or end isolation (REQ-084).", false, false},
-  {"Survey", "Survey", "##SvyToolspace", "Survey\nToolspace", "svytripod", "TOOLSPACE", "Survey Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
+  {"Survey", "Survey", "##SvyToolspace", "Survey\nToolspace", "svytripod", "TOOLSPACE", "Survey Toolspace — drawing explorer (Project, Prospector and Settings).\nCommand bar: TOOLSPACE", true, false},
   {"Survey", "Survey", "##SvyNetProps", "Network\nProperties", "svypda", "", "Network Properties — not implemented yet.", true, true},
   {"Survey", "Survey", "##SvyFigProps", "Figure\nProperties", "svyfigure", "", "Figure Properties — not implemented yet.", true, true},
   {"Survey", "Modify", "##SvyQuery", "Survey\nQuery", "svyquery", "", "Survey Query — not implemented yet.", true, true},
@@ -205,7 +200,7 @@ inline constexpr Button kButtons[] = {
   {"View", "Coordinates", "##RibbonUcsObj", "Object", "layers", "UCS OB", "Align the frame to a picked line, arc, circle, ellipse or text.\nCommand bar: UCS OB", false, false},
   {"View", "Coordinates", "##RibbonUcsZ", "Rotate Z", "layers", "UCS Z", "Spin the frame about its own Z axis. Type an angle, or 2P to take it from\ntwo picked points.\nCommand bar: UCS Z", false, false},
   {"View", "Settings", "##RibbonSettings", "Settings", "settings", "@settings", "Open application settings (same as View menu → Settings…).\nCommand bar: OPTIONS", false, false},
-  {"View", "Settings", "##RibbonToolspace", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE", false, false},
+  {"View", "Settings", "##RibbonToolspace", "Toolspace", "toolspace", "TOOLSPACE", "Toolspace — drawing explorer (Project, Prospector and Settings).\nCommand bar: TOOLSPACE", false, false},
   {"Insert", "Import", "##RibbonImportDxf", "Import DXF", "Import", "@importDxf", "Import a DXF drawing into the current session.\nSame as File menu → Import DXF...", false, false},
   {"Insert", "Import", "##RibbonImportDwg", "Import DWG", "Import", "@importDwg", "Import a DWG drawing (LibreDWG, no converter).\nSame as File menu → Import DWG...", false, false},
   {"Insert", "Import", "##RibbonImportPdf", "Import PDF", "PDF_Import", "PDFATTACH", "Attach a PDF page as a raster underlay.\nCommand bar: PDFATTACH", false, false},

@@ -413,6 +413,16 @@ struct PageSetup {
   bool  centerPlot = false;
 };
 
+/// REQ-457 / issue #1010: a raster IMAGE underlay on a sheet (JPEG, PNG or BMP). Stored by file path
+/// (REQ-173), placed in paper inches. The pixel size is recorded when the file is attached.
+struct CadRasterImage {
+  std::string path;                          ///< file path as attached
+  float insX = 0.f, insY = 0.f;              ///< insertion point (lower-left corner), paper inches
+  float width = 0.f, height = 0.f;           ///< size on the sheet, paper inches
+  float rotationRad = 0.f;                   ///< CCW from +X
+  int pixelW = 0, pixelH = 0;                ///< pixel size of the image file
+};
+
 struct PaperLayout {
   std::string name = "Layout1";
   // Portrait dimensions in inches (width <= height); orientation chooses how they map to the sheet.
@@ -438,6 +448,9 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperArcAttrs;
   std::vector<CadEllipse>       paperEllipses;
   std::vector<EntityAttributes> paperEllAttrs;
+  /// REQ-457 / issue #1010: sheet raster IMAGE underlays; paperImageAttrs is parallel.
+  std::vector<CadRasterImage>   paperImages;
+  std::vector<EntityAttributes> paperImageAttrs;
   std::vector<int>              paperPolyOffsets;  ///< vertex-offset table (starts with 0); empty = no polylines
   std::vector<float>            paperPolyVerts;    ///< flat x,y,z triples
   std::vector<float>            paperPolyVertsBulge;  ///< REQ-456 PEDIT Fit: one bulge per vertex, like model

@@ -86,10 +86,32 @@ inline void AppendToolspaceSettingsLines(const AppCommandState& st, std::vector<
   for (const CadLayerRow& row : st.drawingLayerTable)
     out->push_back(row.name);
   out->push_back("Dimension Style");
+  out->push_back(st.activeDimensionStyle.name);
   out->push_back("Surface");
   out->push_back("Surface Styles");
   for (const SurfaceStyle& ss : st.surfaceStyles)
     out->push_back(ss.name);
+}
+
+// The Project tab (REQ-142): open projects with their tracked items, then the open drawings that belong to a project.
+inline void AppendToolspaceProjectLines(const AppCommandState& st, std::vector<std::string>* out) {
+  if (out == nullptr)
+    return;
+  if (st.openProjects.empty()) {
+    out->push_back("No project is open");
+  } else {
+    out->push_back("Projects");
+    for (const auto& session : st.openProjects) {
+      out->push_back(session.project.name + (session.readOnly ? " (read-only)" : ""));
+      for (const auto& item : session.project.items)
+        out->push_back(item.path);
+    }
+  }
+  out->push_back("Drawings");
+  for (size_t i = 1; i < st.drawingTabs.size(); ++i) {
+    if (st.drawingTabs[i].projectUid != 0)  // project drawings only (REQ-142)
+      out->push_back(st.drawingTabs[i].name);
+  }
 }
 
 [[nodiscard]] inline bool ToolspaceLineIsForbiddenCivil3d(const std::string& line) {

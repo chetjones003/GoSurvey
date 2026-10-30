@@ -4577,13 +4577,34 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: The **paper-space entity set** that DXF and DWG must carry is: LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE, polyline, block reference (INSERT) and VIEWPORT. DXF export writes every member of that set from each layout's `PaperLayout` store into that layout's paper space; DXF import and DWG import reconstruct every member into the matching layout's native store (REQ-037/ADR-009), the same way model-space entities reconstruct. A paper-space entity of any type outside the set is named in the log with its count and type, never silently dropped (REQ-201).
 - Acceptance (sketch): (1) a drawing with a paper line, circle, arc, ellipse, polyline, text, MTEXT, block reference and a viewport survives DXF export then DXF import with each present on the same layout, with equal geometry; (2) `samples/duke-main-clean-r2018.dwg` imports its paper-space members of the set (it logs 203 "unsupported type" skips today) and any remaining skip is reported by type per REQ-201; (3) a paper-space type outside the set is reported, not dropped silently; (4) a malformed paper-space entity is rejected per REQ-001, not partially absorbed.
-- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image and point, each with its own paper store in paper inches (REQ-037, ADR-009). DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
+- Also in this requirement (D-2026-10-20-a): the set additionally includes hatch/fill, leader, table, spline, image, point and dimension, each with its own paper store in paper inches (REQ-037, ADR-009). A sheet dimension is written with the same DIMENSION writer model space uses (D-2026-10-29-a). Sheet points and sheet images are defined by REQ-456 and REQ-457. DWG and DXF also carry each layout's **paper size and orientation** and each viewport's **view direction, frozen layers, lock and on/off**; the values read back equal the values written. DWG export writes the full set into the AutoCAD-readable part of the file, not only the GoSurvey trailer (issue #753 I3). Paper-object persistence is DWG and DXF; the retired .gs format (D-2026-09-03-h) is not a target, and the older .gs wording in REQ-037/REQ-039 is superseded by this requirement. Delivery order is DWG first, then DXF, one increment per PR.
 - Further viewport state (D-2026-10-25-a/b/c, issue #1013): DWG and DXF export/import also carry each viewport's full camera orientation and projection (REQ-061), per-viewport layer color overrides (REQ-046), active UCS frame (REQ-155), and an **independent per-viewport annotative scale** chosen from the drawing's annotation scale list. New viewports initialize this choice from the drawing's current annotation scale. The Viewports controls allow changing it independently of viewport zoom. These properties use AutoCAD-readable viewport and layer records in both formats and survive save/open; they are not trailer-only data. DXF export is R2018 regardless of the selected DWG version so the annotation scale list is representable.
 - Acceptance (additional): (5) each of hatch, leader, table, spline, image and point drawn on a sheet survives DWG save then open on the same layout; (6) paper size, orientation and each viewport's view direction, frozen layers, lock and on/off survive DWG save then open; (7) AutoCAD opens our DWG sheet showing the paper text, arcs, polylines and fills (checked with the local AutoCAD oracle); (8) the same holds for DXF in a later increment.
 - Acceptance (issue #1013): (9) a DWG and a DXF viewport with a non-plan camera/projection, per-viewport layer color override, non-World UCS and an annotative scale different from its zoom each survive GoSurvey export/import with those values preserved; (10) both emitted formats contain the state in AutoCAD-readable data, and AutoCAD shows the expected view, layer color and annotative visibility; (11) a plan/World/no-override viewport and a legacy DWG or DXF without the added fields load with existing defaults; (12) new viewports inherit the drawing's current annotation scale and users can change the viewport's annotative scale independently from its zoom.
+- Acceptance (issue #1010, proposed, D-2026-10-29-a): (13) a sheet dimension (linear, aligned or angular, with its measured points, text and dimension style) survives DWG save then open on the same layout with the same measured geometry and text; (14) AutoCAD shows each sheet dimension, sheet point (REQ-456) and sheet image (REQ-457) on the same layout in the oracle check.
 - Owner-layer: IO
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768). 2026-10-25 — widened viewport persistence to camera/projection, layer color overrides, UCS and annotative scale in both DWG and DXF; DXF export set to R2018 for native scale support (D-2026-10-25-a/b/c, issue #1013). 2026-10-28 — a paper-space VIEWPORT is imported whatever its size; the sheet-span test that dropped full-sheet viewports (issue #1012) is removed, and AutoCAD's own layout frame may therefore appear as a viewport the user can delete (D-2026-10-28-a).
+- Revisions: 2026-10-29 — amended (D-2026-10-29-a, issue #1010, accepted by the user): dimension added to the paper set, and acceptance (13)–(14) added. 2026-08-23 — catalogued (D-2026-08-23-i). 2026-10-06 — accepted, widened from "DXF paper-space import" to the entity set above for DXF export, DXF import and DWG import (D-2026-10-06-o). First increment: DXF export + DWG import (issue #765); DXF import and DWG export are follow-on increments. 2026-10-20 — widened again to hatch/leader/table/spline/image/point paper stores, paper size/orientation, viewport state and DWG-first full export; persistence restated against DWG/DXF (D-2026-10-20-a, issue #768). 2026-10-25 — widened viewport persistence to camera/projection, layer color overrides, UCS and annotative scale in both DWG and DXF; DXF export set to R2018 for native scale support (D-2026-10-25-a/b/c, issue #1013). 2026-10-28 — a paper-space VIEWPORT is imported whatever its size; the sheet-span test that dropped full-sheet viewports (issue #1012) is removed, and AutoCAD's own layout frame may therefore appear as a viewport the user can delete (D-2026-10-28-a).
+
+### REQ-456 — Sheet POINT objects in DWG (issue #1010)
+- Purpose: a drawn point on a sheet is a marker for a fixed place on the printed page; today a DWG save drops it, so AutoCAD shows an empty spot
+- Priority: should
+- Type: functional
+- Statement: A layout's paper store may hold POINT objects in paper inches, each with position, layer, colour and linetype (EntityAttributes, REQ-037). A sheet point is **not** a survey point: it never enters the survey-point store, point groups or surface data (REQ-023, REQ-067). DWG export writes each sheet point as a DWG POINT entity in that layout's paper space. DWG import reads a POINT found in a paper-space block into that layout's paper store. A POINT in model space keeps REQ-023 behaviour. Point display follows the drawing's point mode and size (PDMODE, PDSIZE), read and written with the drawing; they are drawing-level, not per point. Creating or editing sheet points through commands is not part of this requirement; the store and its DWG round trip are (user decision, D-2026-10-29-a).
+- Acceptance: (1) a sheet point at a given paper position, layer and colour survives DWG save then open on the same layout with equal position, layer and colour; (2) a POINT in model space still imports as a survey point, unchanged; (3) a POINT in a paper-space block never appears as a survey point after import; (4) PDMODE and PDSIZE survive save then open; (5) AutoCAD shows the point at its paper position in the oracle check (REQ-113 acceptance 14).
+- Owner-layer: IO / Domain
+- Status: accepted
+- Revisions: 2026-10-29 — proposed and accepted with D-2026-10-29-a (issue #1010). Command creation and editing of sheet points is deferred to a later requirement by user decision.
+
+### REQ-457 — Sheet raster IMAGE underlays in DWG (issue #1010)
+- Purpose: a photo, scan or logo placed on a sheet should survive a DWG save as an AutoCAD IMAGE object, not only in GoSurvey's own trailer
+- Priority: should
+- Type: functional
+- Statement: A layout's paper store may hold raster IMAGE underlays under the same rules as REQ-173 (JPEG, PNG, BMP; insertion point, rotation, width and height; layer; a missing file unloads that image and logs it; a truncated file is refused), with all placement in paper inches. DWG export writes each sheet image as an AutoCAD IMAGE entity in that layout's paper space, with an IMAGEDEF object that records the file path and the pixel size taken when the image was attached. DWG import reads IMAGE entities in a paper-space block into that layout's paper store. Image data is referenced by path, as REQ-173 stores it; embedding pixel data is not part of this requirement. A model-space IMAGE keeps REQ-173 behaviour.
+- Acceptance: (1) a PNG attached to a sheet at a given position, size and rotation survives DWG save then open on the same layout with the same insertion point, size and rotation; (2) when the image file is missing on open, the image unloads, the log says so, and the rest of the sheet loads (REQ-173); (3) a truncated PNG is refused and no image is added; (4) AutoCAD shows the image on the sheet in the oracle check when the file exists at the stored path (REQ-113 acceptance 14).
+- Owner-layer: IO / Domain / Renderer
+- Status: accepted
+- Revisions: 2026-10-29 — proposed and accepted with D-2026-10-29-a (issue #1010). Storage is by path only, matching REQ-173 (user decision); embedding pixel data was considered and not chosen.
 
 ### REQ-114 — Autosave, backup, and crash recovery
 - Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
@@ -5803,8 +5824,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
-  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
-  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  tree, a right-edge set of three **readable** vertical tabs (**Project**, **Prospector**, **Settings**), and an empty
+  preview strip. Each tab shows only its own data and keeps its own tree; switching tabs changes no project or drawing data:
+  - **Project** lists open projects with their tracked items (REQ-379), and the open drawings that belong to a project. Its header carries **Refresh** (REQ-379 clause 6) and **Project Health** (REQ-379 clause 4). With no project open it shows "No project is open"; Refresh and Project Health are disabled unless the active drawing belongs to a project (Refresh also in a read-only project).
+  - **Prospector** is the active drawing's object tree, made of the collections described in this requirement. With no drawing open it shows "No drawing is open".
+  - **Settings** lists drawing-level style tables only (General and Surface, below). It does not repeat app-wide preferences, which stay in View → Settings. With no drawing open it shows "No drawing is open". There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
   installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
   Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
   Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
@@ -5826,10 +5850,15 @@ requirements is a planning failure, not a sign of rigor.
   - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
     or Grading;
   - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+  - the Qt Toolspace shows three tabs in the order Project, Prospector, Settings; choosing a tab with the mouse and `TOOLSPACE PROJECT` / `PROSPECTOR` / `SETTINGS` select the same tab;
+  - with no project open the Project tab shows "No project is open" and its Refresh and Project Health buttons are disabled;
+  - with a drawing in a project, Project Health and (if the project is not read-only) Refresh are enabled and run the same actions as the File menu items;
+  - the Settings tab does not contain a button or entry that opens app-wide Settings.
 - Owner-layer: UI, Commands
-- Status: accepted (2026-08-28)
+- Status: accepted (2026-08-28); amended to three tabs (D-2026-10-28-d)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
   2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
+  2026-10-28 — D-2026-10-28-d (GitHub issue #1040): Project tab added; Project items and open drawings move from Prospector to Project; Settings no longer contains the application-settings button.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
@@ -11445,7 +11474,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      missing at its stored path is resolved to the tracked item of the same file name associated with
      the drawing. A tracked file that is missing on open is reported (REQ-201) and the drawing still
      opens. A drawing outside any project is unchanged.
-  3. **Project Files section** in the Toolspace lists tracked items by folder, with a link badge on
+  3. **Project Files section** in the Toolspace **Project tab** (REQ-142) lists tracked items by folder, with a link badge on
      `local-link` entries.
   4. **Project Health** reports: linked (non-travelling) files, missing files, unsaved drawings, and
      offers **copy links into the project**. It runs before **Pack Project** (REQ-380) and before a
@@ -11457,7 +11486,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
      the clause 1 prompt (copy into the PDFs folder by default, or link, flagged). It has no drawing
      association and no placements. Tracking the same file twice changes nothing. Files other than
      PDFs are not accepted here (point clouds and point files keep their own import commands).
-  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace (project drawings
+  6. **Refresh (D-2026-10-06-d).** A **Refresh** button at the top of the Toolspace **Project tab** (project drawings
      only; disabled in a read-only project) looks through the project folder for **new files** — files
      of a kind the Project Files list understands (`.dwg`, `.pdf`, `.e57`) that the project does not
      track — and, **only when the user pressed Refresh**, asks which of them to track. The question
@@ -15001,7 +15030,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
-| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765) | accepted |
+| REQ-113 | IO | DXF/DWG paper-space entity set (D-2026-10-06-o); first increment DXF export + DWG import (#765); amendment adds dimension (D-2026-10-29-a, #1010) | accepted |
+| REQ-456 | IO/Domain | accepted — sheet POINT objects in DWG; UI point commands deferred (D-2026-10-29-a, #1010) | accepted |
+| REQ-457 | IO/Domain/Renderer | accepted — sheet raster IMAGE underlays in DWG, path-only storage (D-2026-10-29-a, #1010) | accepted |
 | REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | accepted |

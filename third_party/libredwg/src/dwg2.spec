@@ -1316,9 +1316,14 @@ DWG_ENTITY (MULTILEADER)
       #define lnode ctx.leaders[rcount1]
       SUB_FIELD_B (lnode, has_lastleaderlinepoint, 290);
       SUB_FIELD_B (lnode, has_dogleg, 291);
+      /* DWG stores the vectors even when their validity flags are clear. */
+#ifdef IS_DXF
       if (FIELD_VALUE (lnode.has_lastleaderlinepoint))
+#endif
         SUB_FIELD_3BD (lnode, lastleaderlinepoint, 10);
+#ifdef IS_DXF
       if (FIELD_VALUE (lnode.has_dogleg))
+#endif
         SUB_FIELD_3BD (lnode, dogleg_vector, 11);
       SUB_FIELD_BL (lnode, num_breaks, 0);
       VALUEOUTOFBOUNDS (lnode.num_breaks, 5000)
@@ -1417,6 +1422,18 @@ DWG_ENTITY (MULTILEADER)
   FIELD_BS (style_attachment, 176);
   FIELD_B (is_annotative, 293);
 
+  /* GoSurvey (issue #1010): the arrowhead list is present in R2010+ files too (AutoCAD writes its count,
+     0, as a BL between is_annotative and is_neg_textdir). */
+  FIELD_BL (num_arrowheads, 0);
+  VALUEOUTOFBOUNDS (num_arrowheads, 5000)
+  REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
+  REPEAT_BLOCK
+      SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
+      SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
+      SET_PARENT_OBJ (arrowheads[rcount1]);
+  END_REPEAT_BLOCK
+  END_REPEAT (arrowheads);
+
   VERSIONS (R_14, R_2007)
     {
       FIELD_BL (num_arrowheads, 0);
@@ -1428,23 +1445,25 @@ DWG_ENTITY (MULTILEADER)
           SET_PARENT_OBJ (arrowheads[rcount1]);
       END_REPEAT_BLOCK
       END_REPEAT (arrowheads);
-
-      FIELD_BL (num_blocklabels, 0);
-      VALUEOUTOFBOUNDS (num_blocklabels, 5000)
-      REPEAT (num_blocklabels, blocklabels, Dwg_LEADER_BlockLabel)
-      REPEAT_BLOCK
-          SUB_FIELD_HANDLE (blocklabels[rcount1],attdef, 4, 330);
-          SUB_FIELD_T (blocklabels[rcount1],label_text, 302);
-          SUB_FIELD_BS (blocklabels[rcount1],ui_index, 177);
-          SUB_FIELD_BD (blocklabels[rcount1],width, 44);
-          SET_PARENT_OBJ (blocklabels[rcount1]);
-      END_REPEAT_BLOCK
-      END_REPEAT (blocklabels)
-      FIELD_B (is_neg_textdir, 294);
-      FIELD_BS (ipe_alignment, 178);
-      FIELD_BS (justification, 179);
-      FIELD_BD (scale_factor, 45);
     }
+
+  /* Only the arrowhead list is R2007-only. R2010+ still stores the block
+     labels and the text-direction/alignment/scale fields before attachment. */
+  FIELD_BL (num_blocklabels, 0);
+  VALUEOUTOFBOUNDS (num_blocklabels, 5000)
+  REPEAT (num_blocklabels, blocklabels, Dwg_LEADER_BlockLabel)
+  REPEAT_BLOCK
+      SUB_FIELD_HANDLE (blocklabels[rcount1],attdef, 4, 330);
+      SUB_FIELD_T (blocklabels[rcount1],label_text, 302);
+      SUB_FIELD_BS (blocklabels[rcount1],ui_index, 177);
+      SUB_FIELD_BD (blocklabels[rcount1],width, 44);
+      SET_PARENT_OBJ (blocklabels[rcount1]);
+  END_REPEAT_BLOCK
+  END_REPEAT (blocklabels)
+  FIELD_B (is_neg_textdir, 294);
+  FIELD_BS (ipe_alignment, 178);
+  FIELD_BS (justification, 179);
+  FIELD_BD (scale_factor, 45);
 
   SINCE (R_2010b)
     {

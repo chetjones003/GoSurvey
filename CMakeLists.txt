@@ -550,6 +550,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
   src/platform/MapTileService.cpp
   src/platform/StbImage.cpp
+  # REQ-457 / issue #1010: probe and place sheet raster images (JPEG/PNG/BMP)
+  src/io/RasterImage.cpp
   # REQ-363: the online map controller (GL-free; the app injects texture upload)
   src/commands/CadOnlineMap.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
@@ -1022,6 +1024,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
+    # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
+    tests/PlotStrokeTests.cpp
     tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
