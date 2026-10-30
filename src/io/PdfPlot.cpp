@@ -8,7 +8,9 @@
 #include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
+#include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
 #include "CadFontName.hpp"
+#include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
 #include "render/ViewportProjection.hpp"  // REQ-061: per-viewport camera projection
 #include "util/cadtable.hpp"
@@ -35,6 +37,11 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
+
+// Paper-inch rectangle a model-space stroke is clipped to (a viewport's paper rect).
+struct PlotRect {
+  float x0, y0, x1, y1;
+};
 
 // FPDF_FILEWRITE that streams into an ofstream. fw MUST be the first member (PDFium passes &fw back).
 struct PdfWriter {
@@ -189,13 +196,76 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     if (!page)
       continue;
 
-    // Accumulate stroked segments (paper inches) for this page, grouped by stroke color so a per-viewport
-    // layer color override (REQ-046) prints in its color; everything else stays black. std::map keeps a
-    // deterministic emit order for build reproducibility (REQ-200). Key = 0xRRGGBB, default 0x000000.
-    std::map<uint32_t, std::vector<std::array<float, 4>>> segsByColor;
+    // Accumulate stroked segments (paper inches) for this page, grouped by stroke style: colour (so a per-viewport
+    // layer color override (REQ-046) prints in its color) and width (REQ-446 lineweight). std::map keeps a
+    // deterministic emit order for build reproducibility (REQ-200). Key = {0xRRGGBB, WidthKey}.
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<std::array<float, 4>>> segsByStyle;
     uint32_t curColor = 0x000000u;  // set per entity before emitting
+    uint32_t curWidthKey = plotstroke::WidthKey(plotstroke::kDefaultWidthPt);
+    std::string curLinetype;  // REQ-446: linetype of the entity being emitted; empty = Continuous
+    float curDashUnit = 0.1f;  // paper inches per linetype pattern unit for the current sheet or viewport
     auto addSeg = [&](float ax, float ay, float bx, float by) {
-      segsByColor[curColor].push_back({ax, ay, bx, by});
+      segsByStyle[{curColor, curWidthKey}].push_back({ax, ay, bx, by});
+    };
+    // REQ-446: lineweight and linetype of an entity, resolved ByLayer through its layer (an unset lineweight
+    // plots at the default width, as before).
+    auto setLineStyle = [&](const EntityAttributes* a, const std::string& layer) {
+      const CadLayerRow* lr = FindDrawingLayerRowCi(st, layer);
+      float mm = a ? a->lineweightMm : -1.f;
+      if (mm < 0.f && lr)
+        mm = lr->lineweightMm;
+      curWidthKey = plotstroke::WidthKey(plotstroke::WidthPt(mm));
+      curLinetype = EffectiveEntityLinetypeNameForViewport(a ? *a : EntityAttributes{}, lr);
+    };
+    auto setDefaultStyle = [&]() {
+      curWidthKey = plotstroke::WidthKey(plotstroke::kDefaultWidthPt);
+      curLinetype.clear();
+    };
+    // Stroke one chain of paper-inch points with the current style (REQ-446). A solid linetype strokes each chord
+    // exactly as before. A dashed linetype lays its dashes along the whole chain, so the pattern carries across the
+    // joints of a circle, arc or polyline. With \p clip, each piece is clipped to the viewport and a chain entirely
+    // outside it is skipped (it would clip away anyway, and its dashes would be wasted work).
+    auto addChain = [&](const std::vector<std::array<float, 2>>& pts, bool closed, const PlotRect* clip) {
+      if (pts.size() < 2)
+        return;
+      if (clip) {
+        float mnx = pts[0][0], mxx = pts[0][0], mny = pts[0][1], mxy = pts[0][1];
+        for (const auto& p : pts) {
+          mnx = (std::min)(mnx, p[0]);
+          mxx = (std::max)(mxx, p[0]);
+          mny = (std::min)(mny, p[1]);
+          mxy = (std::max)(mxy, p[1]);
+        }
+        if (mxx < clip->x0 || mnx > clip->x1 || mxy < clip->y0 || mny > clip->y1)
+          return;
+      }
+      auto emitPiece = [&](float ax, float ay, float bx, float by) {
+        if (clip && !ClipSeg(clip->x0, clip->y0, clip->x1, clip->y1, ax, ay, bx, by))
+          return;
+        addSeg(ax, ay, bx, by);
+      };
+      if (CadLinetypeIsSolidCi(curLinetype)) {
+        const size_t nSeg = closed ? pts.size() : pts.size() - 1;
+        for (size_t i = 0; i < nSeg; ++i) {
+          const auto& a = pts[i];
+          const auto& b = pts[(i + 1) % pts.size()];
+          emitPiece(a[0], a[1], b[0], b[1]);
+        }
+        return;
+      }
+      std::vector<float> xy;
+      xy.reserve(pts.size() * 2);
+      for (const auto& p : pts) {
+        xy.push_back(p[0]);
+        xy.push_back(p[1]);
+      }
+      // The shared tessellator returns 14 floats per dash: two vertices of xyz + rgba.
+      std::vector<float> dashes;
+      const float rgba[4] = {0.f, 0.f, 0.f, 1.f};
+      CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, closed, curLinetype, curDashUnit,
+                                   rgba, &dashes);
+      for (size_t k = 0; k + 13 < dashes.size(); k += 14)
+        emitPiece(dashes[k], dashes[k + 1], dashes[k + 7], dashes[k + 8]);
     };
 
     struct VpDimLabel {
@@ -236,13 +306,18 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         ModelToPaperInThroughCamera(vp, wx, wy, wz, px, py);
       };
       auto m2p = [&](double wx, double wy, float* px, float* py) { m2pz(wx, wy, 0.0, px, py); };
+      // Projects a model-space chain through this viewport's camera and strokes it, clipped to the viewport.
+      const PlotRect vpRect{vx0, vy0, vx1, vy1};
+      curDashUnit = plotstroke::DashUnitIn(vp.safeScale());
+      auto emitModelChain = [&](const std::vector<std::array<double, 3>>& w, bool closed) {
+        std::vector<std::array<float, 2>> pp(w.size());
+        for (size_t i = 0; i < w.size(); ++i)
+          m2pz(w[i][0], w[i][1], w[i][2], &pp[i][0], &pp[i][1]);
+        addChain(pp, closed, &vpRect);
+      };
       auto emitModelSeg = [&](double w0x, double w0y, double w1x, double w1y, double w0z = 0.0,
                               double w1z = 0.0) {
-        float p0x, p0y, p1x, p1y;
-        m2pz(w0x, w0y, w0z, &p0x, &p0y);
-        m2pz(w1x, w1y, w1z, &p1x, &p1y);
-        if (ClipSeg(vx0, vy0, vx1, vy1, p0x, p0y, p1x, p1y))
-          addSeg(p0x, p0y, p1x, p1y);
+        emitModelChain({{w0x, w0y, w0z}, {w1x, w1y, w1z}}, false);
       };
 
       // Lines (REQ-028: also skip layers frozen in THIS viewport, matching the on-screen viewport render).
@@ -254,6 +329,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = (idx < st.userLineAttrs.size())
                        ? resolveRgb(st.userLineAttrs[idx].layer, st.userLineAttrs[idx].color)
                        : 0x000000u;
+        setLineStyle(idx < st.userLineAttrs.size() ? &st.userLineAttrs[idx] : nullptr,
+                     idx < st.userLineAttrs.size() ? st.userLineAttrs[idx].layer : std::string("0"));
         emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
                      st.userLinesFlat[i + 4] + oY, st.userLinesFlat[i + 2], st.userLinesFlat[i + 5]);
       }
@@ -265,17 +342,18 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = (pi < st.userPolylineAttrs.size())
                        ? resolveRgb(st.userPolylineAttrs[pi].layer, st.userPolylineAttrs[pi].color)
                        : 0x000000u;
+        setLineStyle(pi < st.userPolylineAttrs.size() ? &st.userPolylineAttrs[pi] : nullptr,
+                     pi < st.userPolylineAttrs.size() ? st.userPolylineAttrs[pi].layer : std::string("0"));
         const int start = st.userPolylineOffsets[pi];
         const int end = (pi + 1 < st.userPolylineOffsets.size())
                             ? st.userPolylineOffsets[pi + 1]
                             : static_cast<int>(st.userPolylineVerts.size() / 3);
-        for (int k = start; k + 1 < end; ++k)
-          emitModelSeg(st.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
-                       st.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY,
-                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3] + oX,
-                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 1] + oY,
-                       st.userPolylineVerts[static_cast<size_t>(k) * 3 + 2],
-                       st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 2]);
+        std::vector<std::array<double, 3>> w;
+        for (int k = start; k < end; ++k) {
+          const size_t b = static_cast<size_t>(k) * 3;
+          w.push_back({st.userPolylineVerts[b] + oX, st.userPolylineVerts[b + 1] + oY, st.userPolylineVerts[b + 2]});
+        }
+        emitModelChain(w, false);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {  // cx,cy,z,r
@@ -286,19 +364,18 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = (idx < st.userCircleAttrs.size())
                        ? resolveRgb(st.userCircleAttrs[idx].layer, st.userCircleAttrs[idx].color)
                        : 0x000000u;
+        setLineStyle(idx < st.userCircleAttrs.size() ? &st.userCircleAttrs[idx] : nullptr,
+                     idx < st.userCircleAttrs.size() ? st.userCircleAttrs[idx].layer : std::string("0"));
         const double cx = st.userCirclesCxCyZR[i] + oX, cy = st.userCirclesCxCyZR[i + 1] + oY;
         const double cz = st.userCirclesCxCyZR[i + 2];  // REQ-061: carried through the viewport camera
         const double r = st.userCirclesCxCyZR[i + 3];
         constexpr int kSeg = 72;
-        double pxp = 0, pyp = 0;
-        for (int k = 0; k <= kSeg; ++k) {
+        std::vector<std::array<double, 3>> w;
+        for (int k = 0; k <= kSeg; ++k) {  // the last point repeats the first, closing the polygon
           const double t = 2.0 * 3.14159265358979 * k / kSeg;
-          const double wx = cx + r * std::cos(t), wy = cy + r * std::sin(t);
-          if (k > 0)
-            emitModelSeg(pxp, pyp, wx, wy, cz, cz);
-          pxp = wx;
-          pyp = wy;
+          w.push_back({cx + r * std::cos(t), cy + r * std::sin(t), cz});
         }
+        emitModelChain(w, false);
       }
       // Arcs (sampled). REQ-028: skip layers frozen in this viewport (matches the on-screen viewport render).
       for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
@@ -307,18 +384,17 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         curColor = (ai < st.userArcAttrs.size())
                        ? resolveRgb(st.userArcAttrs[ai].layer, st.userArcAttrs[ai].color)
                        : 0x000000u;
+        setLineStyle(ai < st.userArcAttrs.size() ? &st.userArcAttrs[ai] : nullptr,
+                     ai < st.userArcAttrs.size() ? st.userArcAttrs[ai].layer : std::string("0"));
         const CadArc& a = st.userArcs[ai];
         const int kSeg = std::clamp(static_cast<int>(std::fabs(a.sweepRad) / 0.1f) + 2, 2, 256);
-        double pxp = 0, pyp = 0;
+        std::vector<std::array<double, 3>> w;
         for (int k = 0; k <= kSeg; ++k) {
           const float t = a.startRad + a.sweepRad * (static_cast<float>(k) / static_cast<float>(kSeg));
-          const double wx = static_cast<double>(a.cx + a.r * std::cos(t)) + oX;
-          const double wy = static_cast<double>(a.cy + a.r * std::sin(t)) + oY;
-          if (k > 0)
-            emitModelSeg(pxp, pyp, wx, wy, a.z, a.z);
-          pxp = wx;
-          pyp = wy;
+          w.push_back({static_cast<double>(a.cx + a.r * std::cos(t)) + oX,
+                       static_cast<double>(a.cy + a.r * std::sin(t)) + oY, a.z});
         }
+        emitModelChain(w, false);
       }
       // SPLINEs use adaptive tessellation, then each chord is projected through this viewport's
       // camera and clipped to its paper rectangle.
@@ -328,13 +404,13 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
         curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
+        setLineStyle(attr, layer);
         std::vector<spline::Vec3> points;
         spline::Tessellate(st.cadSplines[si], kSplineSampleTolerance, &points);
-        for (size_t pi = 1; pi < points.size(); ++pi) {
-          const auto& a = points[pi - 1];
-          const auto& b = points[pi];
-          emitModelSeg(a.x + oX, a.y + oY, b.x + oX, b.y + oY, a.z, b.z);
-        }
+        std::vector<std::array<double, 3>> w;
+        for (const auto& p : points)
+          w.push_back({p.x + oX, p.y + oY, p.z});
+        emitModelChain(w, false);
       }
       {
         const double viewH = std::max(1.0, static_cast<double>(vy1 - vy0));
@@ -346,6 +422,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
             continue;
           curColor = attr ? resolveRgb(layer, attr->color) : resolveRgb(layer, "ByLayer");
+          setLineStyle(attr, layer);
           CadPointDisplayStrokes(st.cadPoints[pi], st.pdMode, halfSize, &strokes);
           for (const CadPointStroke& s : strokes)
             emitModelSeg(s.x0 + oX, s.y0 + oY, s.x1 + oX, s.y1 + oY, s.z0, s.z1);
@@ -356,15 +433,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
           continue;
         curColor = resolveRgb(sp.layer, "ByLayer");
+        setLineStyle(nullptr, sp.layer);
         float pcx, pcy;
         m2p(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY, &pcx, &pcy);
         constexpr float hc = 0.05f;
-        float ax = pcx - hc, ay = pcy, bx = pcx + hc, by = pcy;
-        if (ClipSeg(vx0, vy0, vx1, vy1, ax, ay, bx, by))
-          addSeg(ax, ay, bx, by);
-        float cx2 = pcx, cy2 = pcy - hc, dx2 = pcx, dy2 = pcy + hc;
-        if (ClipSeg(vx0, vy0, vx1, vy1, cx2, cy2, dx2, dy2))
-          addSeg(cx2, cy2, dx2, dy2);
+        addChain({{pcx - hc, pcy}, {pcx + hc, pcy}}, false, &vpRect);
+        addChain({{pcx, pcy - hc}, {pcx, pcy + hc}}, false, &vpRect);
       }
       // Surfaces (REQ-135): stroke the same display-geometry batches as the viewport.
       for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
@@ -379,11 +453,29 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         if (it == st.surfaceDisplayCache.end())
           continue;
         curColor = resolveRgb(attr.layer, attr.color);
+        setLineStyle(&attr, attr.layer);
+        // Edges arrive as independent segments. Consecutive edges that share an end point (a contour's run of
+        // edges) are stroked as one chain, so a dashed edge keeps its pattern across the joints. Unconnected
+        // edges (e.g. triangle edges) start their own chain, as before.
         auto emitSurf = [&](const std::vector<float>& verts) {
-          for (size_t i = 0; i + 5 < verts.size(); i += 6)
-            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
-                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
-                         static_cast<double>(verts[i + 2]), static_cast<double>(verts[i + 5]));
+          std::vector<std::array<double, 3>> run;
+          auto flushRun = [&]() {
+            if (run.size() >= 2)
+              emitModelChain(run, false);
+            run.clear();
+          };
+          for (size_t i = 0; i + 5 < verts.size(); i += 6) {
+            const std::array<double, 3> a{static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                                          static_cast<double>(verts[i + 2])};
+            const std::array<double, 3> b{static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY,
+                                          static_cast<double>(verts[i + 5])};
+            if (run.empty() || run.back() != a) {  // exact match: the same vertex, so the same float values
+              flushRun();
+              run.push_back(a);
+            }
+            run.push_back(b);
+          }
+          flushRun();
         };
         emitSurf(it->triangleEdges);
         emitSurf(it->minorContours);
@@ -400,6 +492,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         }
       }
       {
+        setDefaultStyle();
         auto emitPreview = [&](const std::vector<float>& verts) {
           for (size_t i = 0; i + 5 < verts.size(); i += 6)
             emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
@@ -424,6 +517,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
         curColor = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+        setLineStyle(aa, layer);
         CadDimWorldStrokes strokes;
         if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
           continue;
@@ -431,8 +525,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           float p0x = 0.f, p0y = 0.f, p1x = 0.f, p1y = 0.f;
           m2p(static_cast<double>(seg.x0) + oX, static_cast<double>(seg.y0) + oY, &p0x, &p0y);
           m2p(static_cast<double>(seg.x1) + oX, static_cast<double>(seg.y1) + oY, &p1x, &p1y);
-          if (ClipSeg(vx0, vy0, vx1, vy1, p0x, p0y, p1x, p1y))
-            addSeg(p0x, p0y, p1x, p1y);
+          addChain({{p0x, p0y}, {p1x, p1y}}, false, &vpRect);
         }
         float lpx = 0.f, lpy = 0.f;
         m2p(static_cast<double>(strokes.labelX) + oX, static_cast<double>(strokes.labelY) + oY, &lpx, &lpy);
@@ -571,6 +664,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {
         curColor = 0x000000u;
+        setDefaultStyle();
         addSeg(vx0, vy0, vx1, vy0);
         addSeg(vx1, vy0, vx1, vy1);
         addSeg(vx1, vy1, vx0, vy1);
@@ -597,6 +691,13 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       };
       auto sheetAttr = [&](const std::vector<EntityAttributes>& v, size_t i) -> const EntityAttributes* {
         return i < v.size() ? &v[i] : nullptr;
+      };
+      curDashUnit = plotstroke::kSheetDashUnitIn;
+      // Sheet geometry is already in paper inches and is not clipped, so it strokes with a null clip rectangle.
+      const PlotRect* noClip = nullptr;
+      // REQ-446 style for a sheet entity: its own lineweight/linetype, ByLayer through its layer.
+      auto sheetStyle = [&](const EntityAttributes* a) {
+        setLineStyle(a, a ? a->layer : std::string("0"));
       };
 
       // Solid sheet fills (REQ-049 — closes the ADR-011 plot gap). Every native filled region plots as a
@@ -660,71 +761,80 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         const EntityAttributes* a = sheetAttr(L.paperLineAttrs, i / 6);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
-        addSeg(L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3], L.paperLines[i + 4]);
+        sheetStyle(a);
+        addChain({{L.paperLines[i], L.paperLines[i + 1]}, {L.paperLines[i + 3], L.paperLines[i + 4]}}, false, noClip);
       }
       for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
         const EntityAttributes* a = sheetAttr(L.paperBlockRefAttrs, bi);
         if (a && !plottable(a->layer))
           continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         std::vector<CadBlockWorldSeg> segs;
         CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], a ? *a : EntityAttributes{}, &segs);
         for (const CadBlockWorldSeg& s : segs)
-          addSeg(s.x0, s.y0, s.x1, s.y1);
+          addChain({{s.x0, s.y0}, {s.x1, s.y1}}, false, noClip);
       }
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
         const EntityAttributes* a = sheetAttr(L.paperCircleAttrs, i / 3);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
         constexpr int kSeg = 72;
-        for (int k = 0; k < kSeg; ++k) {
-          const float t0 = 6.2831853f * static_cast<float>(k) / kSeg, t1 = 6.2831853f * static_cast<float>(k + 1) / kSeg;
-          addSeg(cx + r * std::cos(t0), cy + r * std::sin(t0), cx + r * std::cos(t1), cy + r * std::sin(t1));
+        std::vector<std::array<float, 2>> pts;  // the last point repeats the first, closing the polygon
+        for (int k = 0; k <= kSeg; ++k) {
+          const float t = 6.2831853f * static_cast<float>(k) / kSeg;
+          pts.push_back({cx + r * std::cos(t), cy + r * std::sin(t)});
         }
+        addChain(pts, false, noClip);
       }
       // Arcs (sampled).
       for (size_t ai = 0; ai < L.paperArcs.size(); ++ai) {
         const EntityAttributes* a = sheetAttr(L.paperArcAttrs, ai);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         const CadArc& arc = L.paperArcs[ai];
         const int kSeg = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.1f) + 2, 2, 256);
-        float pxp = 0, pyp = 0;
+        std::vector<std::array<float, 2>> pts;
         for (int k = 0; k <= kSeg; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(kSeg));
-          const float wx = arc.cx + arc.r * std::cos(t), wy = arc.cy + arc.r * std::sin(t);
-          if (k > 0) addSeg(pxp, pyp, wx, wy);
-          pxp = wx; pyp = wy;
+          pts.push_back({static_cast<float>(arc.cx + arc.r * std::cos(t)),
+                         static_cast<float>(arc.cy + arc.r * std::sin(t))});
         }
+        addChain(pts, false, noClip);
       }
       // Ellipses (sampled).
       for (size_t ei = 0; ei < L.paperEllipses.size(); ++ei) {
         const EntityAttributes* a = sheetAttr(L.paperEllAttrs, ei);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         const CadEllipse& e = L.paperEllipses[ei];
         const float mnx = -e.majVy * e.ratio, mny = e.majVx * e.ratio;  // minor axis = perp(major) × ratio
         constexpr int kSeg = 64;
-        float pxp = 0, pyp = 0;
+        std::vector<std::array<float, 2>> pts;
         for (int k = 0; k <= kSeg; ++k) {
           const float t = 6.2831853f * (static_cast<float>(k) / static_cast<float>(kSeg));
           const float ct = std::cos(t), stt = std::sin(t);
-          const float wx = e.cx + e.majVx * ct + mnx * stt, wy = e.cy + e.majVy * ct + mny * stt;
-          if (k > 0) addSeg(pxp, pyp, wx, wy);
-          pxp = wx; pyp = wy;
+          pts.push_back({static_cast<float>(e.cx + e.majVx * ct + mnx * stt),
+                         static_cast<float>(e.cy + e.majVy * ct + mny * stt)});
         }
+        addChain(pts, false, noClip);
       }
       for (size_t si = 0; si < L.paperSplines.size(); ++si) {
         const EntityAttributes* a = sheetAttr(L.paperSplineAttrs, si);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         std::vector<ray3d::Vec3> pts;
         spline::Tessellate(L.paperSplines[si], kSplineSampleTolerance, &pts);
-        for (size_t k = 1; k < pts.size(); ++k)
-          addSeg(static_cast<float>(pts[k - 1].x), static_cast<float>(pts[k - 1].y),
-                 static_cast<float>(pts[k].x), static_cast<float>(pts[k].y));
+        std::vector<std::array<float, 2>> chain;
+        for (const ray3d::Vec3& p : pts)
+          chain.push_back({static_cast<float>(p.x), static_cast<float>(p.y)});
+        addChain(chain, false, noClip);
       }
       {
         const double viewH = std::max(1.0, static_cast<double>(L.sheetHeightIn()));
@@ -734,10 +844,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const EntityAttributes* a = sheetAttr(L.paperPointAttrs, pi);
           if (a && !plottable(a->layer)) continue;
           curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+          sheetStyle(a);
           CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, halfSize, &strokes);
           for (const CadPointStroke& s : strokes)
-            addSeg(static_cast<float>(s.x0), static_cast<float>(s.y0),
-                   static_cast<float>(s.x1), static_cast<float>(s.y1));
+            addChain({{static_cast<float>(s.x0), static_cast<float>(s.y0)},
+                      {static_cast<float>(s.x1), static_cast<float>(s.y1)}},
+                     false, noClip);
         }
       }
       // Polylines.
@@ -746,12 +858,15 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         const EntityAttributes* a = sheetAttr(L.paperPolyAttrs, static_cast<size_t>(pi));
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
         const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
         const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() &&
                             L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
         const int nVert = v1 - v0;
         const int nSeg = closed ? nVert : nVert - 1;
+        // The bulge chords of consecutive edges join end to end, so the whole polyline is one dashed chain.
+        std::vector<std::array<float, 2>> chain;
         for (int s = 0; s < nSeg; ++s) {
           const int ia = v0 + s;
           const int ib = v0 + ((s + 1) % nVert);
@@ -761,10 +876,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                                                                                     : 0.f;
           ForEachBulgeChord(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1],
                             bulge, 16, [&](double ax, double ay, double bx, double by) {
-                              addSeg(static_cast<float>(ax), static_cast<float>(ay), static_cast<float>(bx),
-                                     static_cast<float>(by));
+                              if (chain.empty())
+                                chain.push_back({static_cast<float>(ax), static_cast<float>(ay)});
+                              chain.push_back({static_cast<float>(bx), static_cast<float>(by)});
                             });
         }
+        addChain(chain, false, noClip);
       }
 
       // Multileader leader paths (issue #768): arrow tip to landing, plus extra branches. The label plots
@@ -773,18 +890,22 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         const EntityAttributes* a = sheetAttr(L.paperMultileaderAttrs, mi);
         if (a && !plottable(a->layer)) continue;
         curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        sheetStyle(a);
         auto path = [&](const std::vector<float>& pts) {
-          for (size_t k = 0; k + 5 < pts.size(); k += 3)
-            addSeg(pts[k], pts[k + 1], pts[k + 3], pts[k + 4]);
+          std::vector<std::array<float, 2>> chain;
+          for (size_t k = 0; k + 5 < pts.size(); k += 3) {
+            if (chain.empty())
+              chain.push_back({pts[k], pts[k + 1]});
+            chain.push_back({pts[k + 3], pts[k + 4]});
+          }
+          addChain(chain, false, noClip);
         };
         auto arrow = [&](const CadMultileader& ml, const std::vector<float>& pts) {
           const float sz = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
           const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, sz);
           if (!a.valid)
             return;
-          addSeg(a.tipX, a.tipY, a.b1x, a.b1y);
-          addSeg(a.b1x, a.b1y, a.b2x, a.b2y);
-          addSeg(a.b2x, a.b2y, a.tipX, a.tipY);
+          addChain({{a.tipX, a.tipY}, {a.b1x, a.b1y}, {a.b2x, a.b2y}}, /*closed=*/true, noClip);
         };
         path(L.paperMultileaders[mi].pathXyz);
         arrow(L.paperMultileaders[mi], L.paperMultileaders[mi].pathXyz);
@@ -800,16 +921,17 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         const EntityAttributes* ta = sheetAttr(L.paperTableAttrs, tbi);
         if (ta && !plottable(ta->layer)) continue;
         curColor = ta ? sheetRgb(ta->layer, ta->color) : 0x000000u;
+        sheetStyle(ta);
         float cx[4], cy[4];
         for (int c = 0; c < 4; ++c) CadTableWorldCorner(tb, c, &cx[c], &cy[c]);
-        for (int c = 0; c < 4; ++c) addSeg(cx[c], cy[c], cx[(c + 1) % 4], cy[(c + 1) % 4]);
+        addChain({{cx[0], cy[0]}, {cx[1], cy[1]}, {cx[2], cy[2]}, {cx[3], cy[3]}}, /*closed=*/true, noClip);
         const float tw = std::max(tb.width, 1.e-3f), th = std::max(tb.height, 1.e-3f);
         for (int c = 1; c < tb.cols; ++c) {
           float ax, ay, bx, by;
           const float lx = tw * static_cast<float>(c) / static_cast<float>(tb.cols);
           CadTableLocalToWorld(tb, lx, 0.f, &ax, &ay);
           CadTableLocalToWorld(tb, lx, th, &bx, &by);
-          addSeg(ax, ay, bx, by);
+          addChain({{ax, ay}, {bx, by}}, false, noClip);
         }
         const int rows = CadTableRowCount(tb);
         for (int r = 1; r < rows; ++r) {
@@ -817,7 +939,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const float ly = th * static_cast<float>(r) / static_cast<float>(rows);
           CadTableLocalToWorld(tb, 0.f, ly, &ax, &ay);
           CadTableLocalToWorld(tb, tw, ly, &bx, &by);
-          addSeg(ax, ay, bx, by);
+          addChain({{ax, ay}, {bx, by}}, false, noClip);
         }
       }
 
@@ -932,6 +1054,8 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         if (!shx && !tfont)
           continue;
         curColor = rgb;  // stroke color for the SHX branch
+        setLineStyle(at, at ? at->layer : std::string("0"));  // SHX strokes take the lineweight, never a dash
+        curLinetype.clear();
         auto emitLine = [&](const std::string& s, float bx, float by, float rot) {
           if (shx)
             emitShxLine(*sfont, s, bx, by, H, rot);
@@ -972,6 +1096,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           emitLine(a.text, a.insX, a.insY - H, a.rotationRad);
         }
       }
+      setDefaultStyle();  // viewport dimension and table labels carry no lineweight of their own
       for (const VpDimLabel& lab : vpDimLabels) {
         if (lab.text.empty())
           continue;
@@ -990,10 +1115,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
     }
 
-    // One stroked path object per color group (REQ-046: overridden layers print in their color).
-    for (const auto& [color, segs] : segsByColor) {
+    // One stroked path object per style group: colour (REQ-046: overridden layers print in their color) and width
+    // (REQ-446: lineweight). Dashes are already laid into the segments, so every path is solid.
+    for (const auto& [style, segs] : segsByStyle) {
       if (segs.empty())
         continue;
+      const uint32_t color = style.first;
       FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(segs[0][0] * kPtPerIn, segs[0][1] * kPtPerIn);
       FPDFPath_LineTo(path, segs[0][2] * kPtPerIn, segs[0][3] * kPtPerIn);
       for (size_t i = 1; i < segs.size(); ++i) {
@@ -1002,7 +1129,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       FPDFPageObj_SetStrokeColor(path, static_cast<int>((color >> 16) & 0xff), static_cast<int>((color >> 8) & 0xff),
                                  static_cast<int>(color & 0xff), 255);
-      FPDFPageObj_SetStrokeWidth(path, 0.5f);
+      FPDFPageObj_SetStrokeWidth(path, static_cast<float>(style.second) / 100.f);
       FPDFPath_SetDrawMode(path, 0 /*no fill*/, 1 /*stroke*/);
       FPDFPage_InsertObject(page, path);
     }
