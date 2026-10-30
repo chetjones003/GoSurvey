@@ -5109,6 +5109,7 @@ struct AppCommandState {
   char surveyExportCsvPath[512]{};
   /// UTF-8 path to optional startup .gst template (Settings → Startup). Empty = use bundled resources/default-template.gst.
   char defaultWorkspaceTemplatePathUtf8[768]{};
+  char defaultDrawingTemplatePathUtf8[768]{};
   /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
   char activeUiLayoutNameUtf8[64]{"default"};
   bool openSaveLayoutAsPopup = false;

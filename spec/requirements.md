@@ -12649,22 +12649,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: must
 - Type: functional
 - Decision: D-2026-10-17-a.
-- Depends on: REQ-055 (drawing tabs), REQ-175 (drawing document), REQ-308 (Start tab), REQ-374 (project defaults).
+- Depends on: REQ-055 (drawing tabs), REQ-175 (drawing document), REQ-308 (Start tab), REQ-374 (project defaults), REQ-449 (Qt Options).
 - Statement:
-  1. **Template library.** The Qt drawing-template chooser discovers `.gst` files from the bundled `resources/drawing-templates/` directory and the per-user `<UserDataDirectory>/drawing-templates/` directory. It also always offers **Blank Drawing**. The startup workspace template (`resources/default-template.gst` or the configured startup `.gst`) remains a separate startup concern and is not implicitly added to this chooser.
-  2. **Selection.** Choosing a template loads its document content into a fresh drawing tab and focuses that tab. The source template is read-only for this operation. Choosing Blank Drawing creates the same empty drawing as the existing 0.7.4 New Drawing action.
-  3. **Cancel and failure.** Cancelling the chooser creates no tab and leaves the active drawing unchanged. A template that cannot be read or validated is reported; it creates no tab, leaves the active drawing unchanged, and does not prevent choosing another template or Blank Drawing.
-  4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone template chooser.
+  1. **Default template setting.** Qt Options lets the user choose a `.gst` file to use as the default for standalone new drawings, or clear the selection. The setting is stored in `gosurvey-user.json` and is independent of the startup workspace template setting.
+  2. **New standalone drawing.** New Drawing from the Start screen, ribbon, tab control, or `NEW` command creates a drawing from the configured default template. If no custom path is configured, it uses the GoSurvey-supplied `resources/default-template.gst`. The template is loaded into a fresh drawing tab and remains unchanged. The blank/template chooser is not shown.
+  3. **Failure.** If the configured template cannot be read or validated, the failure is reported, no drawing tab is created, and the active drawing remains unchanged.
+  4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone default template.
   5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
 - Acceptance:
-  - `[req424]` Qt workflow coverage: chooser lists Blank Drawing and valid bundled/user `.gst` templates, ignores unrelated file types, and presents deterministic ordering with duplicate names distinguishable.
-  - `[req424]` Qt workflow coverage: selecting a valid template creates and focuses a new tab with its content; saving/reopening preserves that content; the source template remains byte-identical.
-  - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
-  - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
-  - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
-  - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
+  - `[req424]` Qt workflow coverage: Options stages, saves, clears, and reloads the custom default drawing-template path.
+  - `[req424]` Qt workflow coverage: New Drawing uses the configured template or the bundled default when no custom path is set, creates and focuses a new tab with the template content, and leaves the source template unchanged.
+  - `[req424]` Qt workflow coverage: an unreadable or malformed configured template reports failure, creates no tab, and preserves the current drawing.
+  - `[req424]` Qt workflow coverage: a new drawing from an active project remains empty, uses project defaults, and does not use the standalone default template.
+  - New Drawing from the Start screen and normal drawing entry points creates directly without showing a template chooser.
   - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
-- Owner-layer: UI (`src/qt/`); shared `.gst` loading remains in IO (`src/io/GsIo`).
+- Owner-layer: UI/Options (`src/qt/`); persisted preference (`src/io/UserPrefs`); shared `.gst` loading remains in IO (`src/io/GsIo`).
 - Status: accepted (2026-10-17).
 - Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
 

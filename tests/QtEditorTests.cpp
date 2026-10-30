@@ -6103,7 +6103,7 @@ private Q_SLOTS:
     dock->setFloating(false);
   }
 
-  void qtDrawingTemplateWorkflowDiscoversCreatesCancelsAndPreservesFailure() {
+  void qtNewDrawingUsesConfiguredOrBundledTemplateAndPreservesFailure() {
     IsolatedUserData userData;
     const auto userTemplateDir = UserDataDirectory() / "drawing-templates";
     std::filesystem::create_directories(userTemplateDir);
@@ -6120,8 +6120,6 @@ private Q_SLOTS:
     const QString alphaPath = writeTemplate("Alpha.gst", 21.0);
     const QString userDuplicatePath = writeTemplate("Field Survey.gst", 31.0);
     QVERIFY(!alphaPath.isEmpty()); QVERIFY(!userDuplicatePath.isEmpty());
-    QFile ignoredFile(QString::fromStdWString((userTemplateDir / L"ignore.txt").wstring()));
-    QVERIFY(ignoredFile.open(QIODevice::WriteOnly)); ignoredFile.write("not a template"); ignoredFile.close();
     QFile sourceFile(userDuplicatePath); QVERIFY(sourceFile.open(QIODevice::ReadOnly));
     const QByteArray sourceBytes = sourceFile.readAll(); sourceFile.close();
 
@@ -6129,35 +6127,30 @@ private Q_SLOTS:
     window.SwitchDrawing(1);
     window.State().userLinesFlat = {1.0, 3.0, 0.0, 4.0, 3.0, 0.0};
     SaveDocumentToSnapshot(window.State(), window.State().activeDrawingIdx);
-    const auto beforeLines = window.State().userLinesFlat;
     const auto beforeTabs = window.State().drawingTabs.size();
-
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      QVERIFY(list->count() >= 4);
-      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
-      bool bundledDuplicate = false, userDuplicate = false, hasAlpha = false, hasIgnored = false;
-      int userRow = -1;
-      for (int row = 0; row < list->count(); ++row) {
-        const auto* item = list->item(row);
-        bundledDuplicate |= item->text() == "Field Survey — Bundled";
-        if (item->text() == "Field Survey — Personal") { userDuplicate = true; userRow = row; }
-        hasAlpha |= item->text() == "Alpha — Personal";
-        hasIgnored |= item->text().contains("ignore");
-      }
-      QVERIFY(bundledDuplicate); QVERIFY(userDuplicate); QVERIFY(hasAlpha); QVERIFY(!hasIgnored);
-      QVERIFY(userRow >= 0);
-      list->setCurrentRow(userRow);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
+    AppCommandState expectedDefault;
+    const auto bundled = ResolveDefaultWorkspaceTemplateGstPath();
+    QVERIFY(!bundled.empty());
+    std::vector<std::string> defaultLog;
+    QVERIFY(LoadGoSurveyTemplateFile(expectedDefault,
+        QString::fromStdWString(bundled.wstring()).toUtf8().constData(), defaultLog));
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), beforeTabs + 1);
     QVERIFY(window.State().activeDrawingIdx > 1);
+    QCOMPARE(window.State().userLinesFlat, expectedDefault.userLinesFlat);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
+
+    const QByteArray customTemplatePath = userDuplicatePath.toUtf8();
+    CopyUtf8PathCapped(window.State().defaultDrawingTemplatePathUtf8,
+                       sizeof(window.State().defaultDrawingTemplatePathUtf8), customTemplatePath.constData());
+    const auto customTabs = window.State().drawingTabs.size();
+    window.NewDrawing();
+    QCOMPARE(window.State().drawingTabs.size(), customTabs + 1);
     QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
     QCOMPARE(window.State().userLinesFlat[0], 31.0);
     QCOMPARE(window.State().userLinesFlat[3], 41.0);
     QCOMPARE(window.State().drawingTabs.back().projectUid, 0u);
+    QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
     const auto drawingPath = QString::fromStdWString((userTemplateDir / L"Created.dwg").wstring());
     const QByteArray drawingPathUtf8 = drawingPath.toUtf8();
     std::vector<std::string> drawingLog;
@@ -6171,45 +6164,18 @@ private Q_SLOTS:
     const auto activeIdx = window.State().activeDrawingIdx;
     const auto activeLines = window.State().userLinesFlat;
     const auto tabCount = window.State().drawingTabs.size();
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
+    const auto badPath = userTemplateDir / L"Broken.gst";
+    { std::ofstream bad(badPath, std::ios::binary); bad << "{ malformed"; }
+    const QByteArray brokenTemplatePath = QString::fromStdWString(badPath.wstring()).toUtf8();
+    CopyUtf8PathCapped(window.State().defaultDrawingTemplatePathUtf8,
+                       sizeof(window.State().defaultDrawingTemplatePathUtf8), brokenTemplatePath.constData());
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
     });
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
-    QCOMPARE(window.State().activeDrawingIdx, activeIdx);
-    QCOMPARE(window.State().userLinesFlat, activeLines);
-
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
-      list->setCurrentRow(0);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
-    window.NewDrawing();
-    QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
-    QVERIFY(window.State().userLinesFlat.empty());
-    window.SwitchDrawing(activeIdx);
-
-    const auto badPath = userTemplateDir / L"Broken.gst";
-    { std::ofstream bad(badPath, std::ios::binary); bad << "{ malformed"; }
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int brokenRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
-      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
-      QTimer::singleShot(0, [] {
-        for (auto* widget : QApplication::topLevelWidgets())
-          if (auto* warning = qobject_cast<QMessageBox*>(widget))
-            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
-      });
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
-    window.NewDrawing();
-    QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
     QCOMPARE(window.State().activeDrawingIdx, activeIdx);
     QCOMPARE(window.State().userLinesFlat, activeLines);
   }
@@ -6303,7 +6269,7 @@ private Q_SLOTS:
     QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
   }
 
-  void qtDrawingTemplateScreenshotEvidenceForIssue885() {
+  void qtDefaultDrawingTemplateOptionsScreenshotEvidence() {
     IsolatedUserData userData;
     const auto templateDir = UserDataDirectory() / "drawing-templates";
     std::filesystem::create_directories(templateDir);
@@ -6313,39 +6279,16 @@ private Q_SLOTS:
     std::vector<std::string> log;
     const auto templatePath = QString::fromStdWString((templateDir / L"Example.gst").wstring()).toUtf8();
     QVERIFY(SaveGoSurveyTemplateFile(source, templatePath.constData(), log));
-    { std::ofstream broken(templateDir / L"Broken.gst", std::ios::binary); broken << "{ malformed"; }
-
     EditorWindow window;
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser.png")));
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int exampleRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Example — Personal") exampleRow = row;
-      QVERIFY(exampleRow >= 0); list->setCurrentRow(exampleRow);
-      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser-selected.png")));
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
-    });
-    window.NewDrawing();
-
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int brokenRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
-      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
-      QTimer::singleShot(0, [] {
-        for (auto* widget : QApplication::topLevelWidgets())
-          if (auto* warning = qobject_cast<QMessageBox*>(widget)) {
-            QVERIFY(warning->grab().save(QDir::current().filePath("qt-885-template-error.png")));
-            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
-          }
-      });
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
-    window.NewDrawing();
+    window.ShowSettings();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings"); QVERIFY(dialog);
+    auto* categories = dialog->findChild<QListWidget*>("settingsCategories"); QVERIFY(categories);
+    const auto filesRow = categories->findItems("Files", Qt::MatchExactly);
+    QCOMPARE(filesRow.size(), 1);
+    categories->setCurrentItem(filesRow.front());
+    const QString artifacts = QDir::current().filePath("build/artifacts");
+    QVERIFY(QDir().mkpath(artifacts));
+    QVERIFY(dialog->grab().save(QDir(artifacts).filePath("qt-default-drawing-template-options.png")));
   }
 
   void appearanceChangesKeepDrawingAndToolspaceState() {

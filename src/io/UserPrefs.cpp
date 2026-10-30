@@ -296,6 +296,7 @@ void CopyUtf8PathCapped(char* dest, size_t cap, const char* utf8) {
 
 void LoadUserStartupPrefs(AppCommandState& st) {
   st.defaultWorkspaceTemplatePathUtf8[0] = '\0';
+  st.defaultDrawingTemplatePathUtf8[0] = '\0';
   CopyUtf8PathCapped(st.activeUiLayoutNameUtf8, sizeof(st.activeUiLayoutNameUtf8), "default");
   const auto path = UserPrefsJsonPath();
   std::ifstream f(path, std::ios::binary);
@@ -309,6 +310,10 @@ void LoadUserStartupPrefs(AppCommandState& st) {
     if (j.contains("defaultWorkspaceTemplatePath") && j["defaultWorkspaceTemplatePath"].is_string()) {
       const std::string s = j["defaultWorkspaceTemplatePath"].get<std::string>();
       CopyUtf8PathCapped(st.defaultWorkspaceTemplatePathUtf8, sizeof(st.defaultWorkspaceTemplatePathUtf8), s.c_str());
+    }
+    if (j.contains("defaultDrawingTemplatePath") && j["defaultDrawingTemplatePath"].is_string()) {
+      const std::string s = j["defaultDrawingTemplatePath"].get<std::string>();
+      CopyUtf8PathCapped(st.defaultDrawingTemplatePathUtf8, sizeof(st.defaultDrawingTemplatePathUtf8), s.c_str());
     }
     if (j.contains("activeUiLayout") && j["activeUiLayout"].is_string()) {
       const std::string s = j["activeUiLayout"].get<std::string>();
@@ -352,6 +357,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
     j = nlohmann::json::object();
 
   j["defaultWorkspaceTemplatePath"] = std::string(st.defaultWorkspaceTemplatePathUtf8);
+  j["defaultDrawingTemplatePath"] = std::string(st.defaultDrawingTemplatePathUtf8);
   j["activeUiLayout"] = std::string(st.activeUiLayoutNameUtf8);
 
   nlohmann::json s = nlohmann::json::object();
