@@ -52,8 +52,8 @@
 - Public GitHub wiki — cloned read-only and reviewed; same pages, same statements; no update needed.
 
 ## 6. Assumptions and technical debt
-- Dash length is the on-screen proportion of the viewport, not the drawing's LTSCALE × paper-space scale. Matches on-screen look; not AutoCAD's exact plotted dash length.
-- A dashed surface edge restarts its pattern per edge (surface edges are emitted one at a time).
+- Dash size follows AutoCAD's viewport scale rule with LTSCALE fixed at 1 (D-2026-10-29-a); there is no drawing LTSCALE setting yet.
+- Surface edges join into one chain only where consecutive edges share an end point; unconnected triangle edges still restart per edge.
 - Dashes are laid in paper space after projection, so a rotated camera dashes in projected units.
 - The viewport border uses default style, not its layer's lineweight.
 - Lineweight 0 mm plots as a zero-width stroke (the PDF thinnest-line convention).
