@@ -70,7 +70,8 @@ for a compact list inside the program.
 | `LEADER` | `LE` | Draw a leader (Mtext or None) | [[Commands/leader]] |
 | `MLEADER` | `ML` | Draw a multileader | [[Commands/mleader]] |
 | `MTEXT` | `MT` | Place multiline text | [[Commands/mtext]] |
-| `TABLE` | — | Insert an empty table: style, columns, rows, then the insertion point | [[Commands/table]] |
+| `TABLE` | — | Insert Table dialog and placement preview; typed style/count prompts in scripts | [[Commands/table]] |
+| `MSTY` | `MLEADERSTYLE`, `MLSTY` | Edit the active multileader style | [[Commands/mleader]] |
 | `STYLE` | `ST`, `DDSTYLE` | Text style manager: create / edit named text styles | [[Commands/style]] |
 | `TEXT` | — | Place single-line text | [[Commands/text]] |
 

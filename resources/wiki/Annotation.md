@@ -179,7 +179,7 @@ DIMALIGNED — extension 1, extension 2, then offset (point away from measured l
 
 ### DIMLINEAR (`DLI`)
 
-**Ribbon:** Inquiry → Linear
+**Ribbon:** Annotate → Dimensions → Linear
 
 Measures the **horizontal or vertical** component between two points.
 
@@ -189,8 +189,15 @@ DIMLINEAR — ortho distance in X or Y between extension points; third pick sets
 
 1. **First extension point**
 2. **Second extension point**
-3. **Dimension line position** — moving the cursor chooses the orientation. Typing **`H`** locks it
-   horizontal and **`V`** locks it vertical; moving the cursor again unlocks.
+3. **Dimension line position** — a live dimension preview follows the cursor. Moving the cursor chooses
+   the orientation. Typing **`H`** locks it horizontal and **`V`** locks it vertical; moving the cursor
+   again unlocks.
+
+### Dimension styles
+
+Type `DIMSTY` to open the drawing-wide dimension style manager. Set a listed style current, create one,
+or modify supported properties. Named dimension styles are saved in drawing data and mapped to DWG
+`DIMSTYLE` records; see [[Commands/dimsty]] for the current AutoCAD compatibility limits.
 
 ### DIMANGULAR (`DAN`)
 
@@ -243,7 +250,8 @@ Existing text is not resized. See [[Plotting]].
 
 **Ribbon:** Annotate → Tables. **Commands:** `TABLE`, `ADDPOINTTABLE`, `DATAEXTRACTION`.
 
-- [[Commands/table]] inserts an empty table. **Double-click** a cell to type its text.
+- [[Commands/table]] opens Insert Table, previews its row/column layout, then prompts for an insertion
+  point. **Double-click** an in-app table cell to type its text.
 - [[Commands/addpointtable]] makes a table of survey points, chosen in a dialog.
 - [[Commands/dataextraction]] writes the selected objects to an Excel or CSV file.
 

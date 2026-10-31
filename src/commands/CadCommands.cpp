@@ -150,6 +150,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.tableStyles            = cmd.tableStyles;
   doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
   doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
   doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
@@ -178,6 +179,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
+  doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
@@ -266,6 +268,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.tableStyles                = doc.tableStyles.empty() ? CadTableBuiltinStyles() : doc.tableStyles;
   cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
   cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
   cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
@@ -301,6 +304,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
+  cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
   cmd.mleaderStyleDraft          = doc.multileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
@@ -1923,6 +1927,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.tableStyles          = st.tableStyles;
   snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
   snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
   snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
@@ -1970,6 +1975,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
+  snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
@@ -2037,6 +2043,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.tableStyles          = snap.tableStyles.empty() ? CadTableBuiltinStyles() : snap.tableStyles;
   st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
   st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
   st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
@@ -2060,6 +2067,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
   st.activeDimensionStyle = snap.dimensionStyle;
+  st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
   st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
@@ -7083,6 +7091,7 @@ const CmdEntry kRegistry[] = {
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
     {"dimsty", "dimstyle, dsty", "Dimension style editor"},
+    {"msty", "mleaderstyle, mlsty", "Multileader style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"dist", "di", "3D distance between two points: dX, dY, dZ, slope distance"},
@@ -7482,7 +7491,62 @@ bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector
   return true;
 }
 
+void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  struct Mark { double x, y, z, radius; };
+  std::vector<Mark> marks;
+  for (const SelectedEntity& entity : st.selection) {
+    if (entity.type == SelectedEntity::Type::Circle && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 4 + 3 < st.userCirclesCxCyZR.size()) {
+      const std::size_t i = static_cast<std::size_t>(entity.index) * 4;
+      marks.push_back({st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1],
+                       st.userCirclesCxCyZR[i + 2], st.userCirclesCxCyZR[i + 3]});
+    } else if (entity.type == SelectedEntity::Type::Arc && entity.index >= 0 &&
+               static_cast<std::size_t>(entity.index) < st.userArcs.size()) {
+      const CadArc& arc = st.userArcs[static_cast<std::size_t>(entity.index)];
+      marks.push_back({arc.cx, arc.cy, arc.z, arc.r});
+    }
+  }
+  if (marks.empty()) { log.push_back("CENTERMARK — select one or more circles/arcs first, then run CENTERMARK."); return; }
+  PushUndoSnapshot(st, "CENTERMARK");
+  for (const Mark& mark : marks) {
+    const double half = std::max(mark.radius * 0.18, 0.01);
+    const double gap = half * 0.16;
+    st.userLinesFlat.insert(st.userLinesFlat.end(), {mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z,
+                                                     mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z,
+                                                     mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z,
+                                                     mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
+    for (int i = 0; i < 4; ++i) st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("CENTERMARK — center marks created for " + std::to_string(marks.size()) + " selected circle/arc(s).");
+}
+
+void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<const SelectedEntity*> lines;
+  for (const SelectedEntity& entity : st.selection)
+    if (entity.type == SelectedEntity::Type::LineSeg && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 6 + 5 < st.userLinesFlat.size()) lines.push_back(&entity);
+  if (lines.size() != 2) { log.push_back("CENTERLINE — select exactly two lines first, then run CENTERLINE."); return; }
+  const std::size_t a = static_cast<std::size_t>(lines[0]->index) * 6;
+  const std::size_t b = static_cast<std::size_t>(lines[1]->index) * 6;
+  const double ax0 = st.userLinesFlat[a], ay0 = st.userLinesFlat[a + 1], az0 = st.userLinesFlat[a + 2];
+  const double ax1 = st.userLinesFlat[a + 3], ay1 = st.userLinesFlat[a + 4], az1 = st.userLinesFlat[a + 5];
+  double bx0 = st.userLinesFlat[b], by0 = st.userLinesFlat[b + 1], bz0 = st.userLinesFlat[b + 2];
+  double bx1 = st.userLinesFlat[b + 3], by1 = st.userLinesFlat[b + 4], bz1 = st.userLinesFlat[b + 5];
+  const double same = std::hypot(ax0 - bx0, ay0 - by0) + std::hypot(ax1 - bx1, ay1 - by1);
+  const double reverse = std::hypot(ax0 - bx1, ay0 - by1) + std::hypot(ax1 - bx0, ay1 - by0);
+  if (reverse < same) { std::swap(bx0, bx1); std::swap(by0, by1); std::swap(bz0, bz1); }
+  PushUndoSnapshot(st, "CENTERLINE");
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {(ax0 + bx0) * 0.5, (ay0 + by0) * 0.5, (az0 + bz0) * 0.5,
+                                                   (ax1 + bx1) * 0.5, (ay1 + by1) * 0.5, (az1 + bz1) * 0.5});
+  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("CENTERLINE — centerline created between the two selected lines.");
+}
+
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log) {
+  if (primary == "centermark") { ExecuteCenterMarkFromSelection(st, log); return true; }
+  if (primary == "centerline") { ExecuteCenterlineFromSelection(st, log); return true; }
   if (primary == "line") {
     StartLineCommand(st, log);
     return true;

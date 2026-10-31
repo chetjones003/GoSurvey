@@ -5,6 +5,7 @@
 #include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
+#include "EditorPointTableDialog.hpp"
 #include "ViewportZoomScale.hpp"
 #include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
@@ -13083,6 +13084,102 @@ private Q_SLOTS:
       EditorWindow darkStart;
       QVERIFY(darkStart.grab().save(Issue886Shot("qt-1031-dark-start.png")));
     }
+  }
+
+  void issue804AnnotateDialogsAndTablePreviewScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto& commandState = window.State();
+    commandState.active = AppCommandState::Kind::DimLinear;
+    commandState.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+    commandState.dimE1x = 0.0f; commandState.dimE1y = 0.0f;
+    commandState.dimE2x = 30.0f; commandState.dimE2y = 10.0f;
+    commandState.uiCursorWorldX = 15.0f; commandState.uiCursorWorldY = 25.0f;
+    commandState.dimLinearDraftVertical = false;
+    window.Refresh();
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue886Shot("qt-804-dimlinear-live-preview.png")));
+    commandState.active = AppCommandState::Kind::None;
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QVERIFY(dialog->objectName() == "dimensionStyleManager");
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-dimstyle-manager.png")));
+      dialog->accept();
+    });
+    window.Submit("DIMSTY");
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QCOMPARE(dialog->objectName(), QString("mleaderStyleDialog"));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-mleader-style.png")));
+      dialog->accept();
+    });
+    window.Submit("MSTY");
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QCOMPARE(dialog->objectName(), QString("insertTableDialog"));
+      auto* tablePreview = dialog->findChild<QTableWidget*>("insertTablePreview");
+      QVERIFY(tablePreview);
+      QCOMPARE(tablePreview->rowCount(), 3);  // title, header, one data row
+      QCOMPARE(tablePreview->columnCount(), 3);
+      QVERIFY(tablePreview->item(0, 0));
+      QVERIFY(tablePreview->item(1, 0));
+      QVERIFY(tablePreview->item(2, 0));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-insert-table-dialog.png")));
+      dialog->reject();
+    });
+    window.Submit("TABLE");
+
+    window.State().surveyPoints = {{1, 10.0, 20.0, 3.0, "Control"}};
+    std::vector<std::string> log;
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QVERIFY(dialog->objectName() == "addPointTableDialog");
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-add-point-table.png")));
+      dialog->reject();
+    });
+    ShowAddPointTableDialog(&window, window.State(), log);
+
+    window.State().active = AppCommandState::Kind::Table;
+    window.State().tableStage = 3;
+    window.State().tablePendingStyle = "Standard";
+    window.State().tablePendingCols = 3;
+    window.State().tablePendingRows = 3;
+    window.State().uiCursorWorldX = 10.0f;
+    window.State().uiCursorWorldY = 15.0f;
+    window.State().viewportPanX = 10.0;
+    window.State().viewportPanY = 15.0;
+    window.State().viewportZoom = 0.3f;
+    window.Refresh();
+    QTest::qWait(100);
+    QVERIFY(window.State().active == AppCommandState::Kind::Table);
+    QImage tablePreview(1200, 700, QImage::Format_ARGB32_Premultiplied);
+    tablePreview.fill(QColor("#20262b"));
+    {
+      QPainter painter(&tablePreview);
+      DrawQtModelAnnotations(painter, window.State(), static_cast<float>(tablePreview.width()),
+                             static_cast<float>(tablePreview.height()));
+    }
+    int visibleTablePixels = 0;
+    for (int y = 0; y < tablePreview.height(); ++y) {
+      for (int x = 0; x < tablePreview.width(); ++x) {
+        const QColor pixel = tablePreview.pixelColor(x, y);
+        if (pixel.red() > 180 && pixel.green() > 130 && pixel.blue() < 150)
+          ++visibleTablePixels;
+      }
+    }
+    QVERIFY2(visibleTablePixels > 100, "TABLE placement preview must paint visible table geometry and cell text");
+    QVERIFY(tablePreview.save(Issue886Shot("qt-804-table-placement-preview.png")));
   }
 };
 

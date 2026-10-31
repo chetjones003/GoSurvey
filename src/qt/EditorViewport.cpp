@@ -1719,8 +1719,13 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
     const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
-    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive) &&
-                                !objectSelectionStep;
+    // CREATEPOINTS is a modeless dialog: no AppCommandState::Kind is active, but placement still
+    // follows the normal object-snap pipeline. Without this branch its click path receives raw cursor
+    // coordinates and survey-point snaps appear disabled only while the dialog is open.
+    const bool createPointsPlacement = m_State.showCreatePointsWindow &&
+                                       m_State.active == AppCommandState::Kind::None;
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag ||
+                                 paperModifyActive || createPointsPlacement) && !objectSelectionStep;
     m_Snap = midCmdUsesSnap
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},

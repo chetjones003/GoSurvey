@@ -15453,7 +15453,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Decided (D-2026-10-29-c, item 7): plain line segments, not linked to the circle. Documented as a difference
   from AutoCAD's CENTERMARK. Arm length (D-2026-10-29-d): half the style's text height.
 - Owner-layer: Commands / Domain.
-- Status: proposed (2026-10-29, issue #804)
+- Status: accepted (2026-10-30, user request; D-2026-10-30-annotate-controls)
 
 ### REQ-465 — CENTERLINE: a centreline between two lines or polylines (GitHub issue #804, Annotate › Centerlines › Centerline)
 - Purpose: draw the symmetry line between two parallel or near-parallel lines.
@@ -15480,7 +15480,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   from AutoCAD. If the drawing has no CENTER linetype, the standard CENTER pattern is added to the drawing
   (D-2026-10-29-d).
 - Owner-layer: Commands / Domain.
-- Status: proposed (2026-10-29, issue #804)
+- Status: accepted (2026-10-30, user request; D-2026-10-30-annotate-controls)
 
 ### REQ-466 — TABLE: insert an annotation table (GitHub issue #804, Annotate › Tables › Table)
 - Purpose: insert an editable grid of cells, as AutoCAD's TABLE does, reusing the drawing TABLE entity
@@ -15723,8 +15723,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Enter takes `Standard` for TABLE and `NameNEZD` for ADDPOINTTABLE.
   4. A Point style table cannot be used for TABLE, and a Data style table cannot be used for ADDPOINTTABLE.
   5. A table records the name of its style, and the name persists with the drawing (the drawing's JSON payload).
-  6. In this increment the styles are the built-in set (clause 2). Editing a style's settings, and saving styles
-     with the drawing, are a follow-up requirement. Changing a built-in style is not possible.
+  6. Styles are drawing-owned and editable. The built-in styles in clause 2 are present in a new drawing; users can
+     create, copy, rename, edit, and delete eligible styles. A style used by a table cannot be deleted until the
+     table is reassigned. The complete style collection persists in DWG and maps to AutoCAD TABLESTYLE data.
 - Acceptance:
   1. A new drawing lists exactly the three built-in styles.
   2. TABLE with `NameNEZD` is refused by name and creates nothing; ADDPOINTTABLE with `Standard` is refused by name.
@@ -15783,6 +15784,45 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - Manual: annotation scale combo and viewport zoom combo show independent lists.
 - Owner-layer: Commands / Qt UI / IO (`ViewportZoomScale`, `EditorWindow`, `GsIo`, `LibreDwgCad`)
 - Status: accepted (2026-10-29, user continued TASK-0.7.8 items 8–9)
+
+### REQ-478 — Drawing-owned styles round-trip through DWG and compatible Autodesk products
+
+- Purpose: a DWG carries the drawing's style definitions so compatible Autodesk products can display and edit
+  styled objects after open/save/reopen.
+- Priority: must
+- Type: functional + interop
+- Depends on: REQ-044, REQ-111, REQ-367, REQ-475, REQ-201.
+- Statement:
+  1. The drawing owns named collections for dimension, text, multileader, table, survey-point, and survey-point
+     label styles. Existing drawings without these collections load with the existing Standard/default styles.
+  2. DIMSTY lists all drawing dimension styles, marks the current style, previews the selected style, and offers
+     Set Current, New, Modify, Override, Compare, Close, and Help. New/Modify includes the tabs and controls shown
+     in the user's AutoCAD references. Unsupported domain fields are not silently accepted and discarded.
+  3. New dimensions reference the current style. Changing the current style leaves existing dimensions attached
+     to their prior style. Editing a style updates referencing dimensions after regeneration; per-object overrides
+     remain local.
+  4. Text, multileader, table, and survey-point entities reference drawing-owned styles by name. Used styles
+     cannot be deleted until references are reassigned. Missing foreign style references use Standard only after
+     an explicit REQ-201 log entry.
+  5. DWG export/import maps supported fields to native DIMSTYLE, STYLE, MLEADERSTYLE, and TABLESTYLE records.
+     Style names, supported settings, current style, and entity references survive GoSurvey DWG export, Autodesk
+     open/save, and GoSurvey re-import.
+  6. Survey point and point-label styles use Civil 3D native style objects. Civil 3D is the editability and
+     round-trip target for these styles; plain AutoCAD proxy display does not satisfy this clause. Unsupported
+     Civil 3D fields are preserved or named in the import/export log.
+  7. `.gs` and DWG round trips preserve every supported style field and entity reference. Legacy files remain
+     readable and receive defaults for absent style tables.
+- Acceptance:
+  1. Non-default styles in all six collections survive GoSurvey DWG export, Civil 3D open/save, and GoSurvey
+     re-import with names, supported settings, current-style selection, and entity references intact.
+  2. DIMSTY's manager and seven create/modify tabs match the supplied screenshots and perform their named actions.
+  3. Changing current dimension style affects newly created dimensions only; modifying one named style updates
+     its referencing dimensions and leaves dimensions on other styles unchanged.
+  4. Legacy drawings without named style tables load with the prior Standard/default appearance and save again.
+  5. Unsupported style data logs a specific reason and never silently removes its referencing entity.
+- Owner-layer: Domain / Commands / Qt UI / DWG IO.
+- Decision: D-2026-10-30-style-roundtrip.
+- Status: accepted (2026-10-30, explicit user request)
 
 ## Anti-requirements
 

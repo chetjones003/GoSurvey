@@ -12,6 +12,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadField.hpp"
 #include "CadDimStroke.hpp"
+#include "CadRubberPreview.hpp"
 #include "SurveyPoints.hpp"
 #include "io/SurveyCsv.hpp"
 #include "util/ucs.hpp"
@@ -3916,6 +3917,12 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
   st.activeDimensionStyle.dimLineColor = "ACI:1";
   st.activeDimensionStyle.extLineColor = "ACI:2";
   st.activeDimensionStyle.textColor = "ACI:3";
+  st.dimensionStyles = {DimensionStyles::Default(), st.activeDimensionStyle};
+  DimensionStyle archived = DimensionStyles::Default();
+  archived.name = "Unused Drawing Style";
+  archived.textSizeInches = 0.18f;
+  archived.unitPrecision = 4;
+  st.dimensionStyles.push_back(archived);
 
   CadAnnotation aligned{};
   aligned.kind = CadAnnotation::Kind::DimAligned;
@@ -3996,6 +4003,11 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
 
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
+  CHECK(DimensionStyles::Find(in.dimensionStyles, "Unused Drawing Style") != nullptr);
+  if (const DimensionStyle* roundTripped = DimensionStyles::Find(in.dimensionStyles, "Unused Drawing Style")) {
+    CHECK(roundTripped->unitPrecision == 4);
+    CHECK(roundTripped->textSizeInches == Catch::Approx(0.18f).epsilon(0.02));
+  }
 
   std::vector<const CadAnnotation*> dims;
   for (const CadAnnotation& a : in.cadAnnotations)
@@ -4043,6 +4055,28 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
     if (l.find("REQ-366") != std::string::npos && l.find("import") != std::string::npos)
       loggedImportDims = true;
   CHECK(loggedImportDims);
+}
+
+TEST_CASE("Annotate Center Mark and Centerline ribbon commands create drawing geometry", "[issue804][annotate]") {
+  AppCommandState mark;
+  mark.userCirclesCxCyZR = {10.0, 20.0, 0.0, 5.0};
+  mark.selection.push_back({SelectedEntity::Type::Circle, 0});
+  std::vector<std::string> log;
+  REQUIRE(DispatchByPrimaryForTest("centermark", mark, log));
+  CHECK(mark.userLinesFlat.size() == 24);
+  CHECK(mark.userLineAttrs.size() == 4);
+
+  AppCommandState line;
+  line.userLinesFlat = {0, 0, 0, 10, 0, 0, 0, 4, 0, 10, 4, 0};
+  line.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  line.selection.push_back({SelectedEntity::Type::LineSeg, 1});
+  REQUIRE(DispatchByPrimaryForTest("centerline", line, log));
+  REQUIRE(line.userLinesFlat.size() == 18);
+  CHECK(line.userLinesFlat[12] == Catch::Approx(0.0));
+  CHECK(line.userLinesFlat[13] == Catch::Approx(2.0));
+  CHECK(line.userLinesFlat[15] == Catch::Approx(10.0));
+  CHECK(line.userLinesFlat[16] == Catch::Approx(2.0));
+  CHECK(line.userLineAttrs.size() == 1);
 }
 
 // REQ-366 statement 3: a DIMENSION subtype GoSurvey does not model (Radius here, hand-built
@@ -6480,6 +6514,20 @@ TEST_CASE("DIMLINEAR picked right to left stores upright text (REQ-477)", "[dim]
   CadAnnotation d{};
   REQUIRE(CadDimLinearBuildDraft(st, 5.f, 5.f, &d));
   REQUIRE(d.rotationRad == Catch::Approx(0.f));
+}
+
+TEST_CASE("DIMLINEAR draft adds visible strokes to viewport rubber preview", "[dim][issue804][preview]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimLinear;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  std::vector<float> rubber;
+  AppendCadDraftRubberLines(st, 5.f, 3.f, false, 0., 0., 100.f, 800, rubber);
+  REQUIRE_FALSE(rubber.empty());
+  REQUIRE(rubber.size() >= 18);
 }
 
 TEST_CASE("DIMANGULAR text is horizontal at any bisector direction (REQ-477)", "[dim][issue804]") {

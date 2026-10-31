@@ -237,3 +237,33 @@ TEST_CASE("DXF export writes LUNITS and AUNITS only with Set drawing variables o
   CHECK(DxfHeaderValue(dxf, "$LUNITS").empty());
   std::filesystem::remove_all(dir, ec);
 }
+
+TEST_CASE("Drawing payload round-trips named dimension and table style collections", "[issue804][styles]") {
+  AppCommandState original;
+  DimensionStyle dim = DimensionStyles::Default();
+  dim.name = "Project Survey";
+  dim.textSizeInches = 0.18f;
+  dim.unitPrecision = 4;
+  original.dimensionStyles.push_back(dim);
+  original.activeDimensionStyle = dim;
+  CadTableStyle table;
+  table.name = "Field Notes";
+  table.point = true;
+  table.headerRow = false;
+  table.pointColumns = {CadPointTableColumn::Name, CadPointTableColumn::Description};
+  original.tableStyles.push_back(table);
+
+  const std::string payload = SerializeGoSurveyJson(original);
+  AppCommandState loaded;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, payload, log));
+  const DimensionStyle* loadedDim = DimensionStyles::Find(loaded.dimensionStyles, "Project Survey");
+  REQUIRE(loadedDim != nullptr);
+  CHECK(loadedDim->unitPrecision == 4);
+  CHECK(loadedDim->textSizeInches == Catch::Approx(0.18f));
+  CHECK(loaded.activeDimensionStyle.name == "Project Survey");
+  const CadTableStyle* loadedTable = CadTableFindStyle(loaded.tableStyles, "Field Notes");
+  REQUIRE(loadedTable != nullptr);
+  CHECK_FALSE(loadedTable->headerRow);
+  CHECK(loadedTable->pointColumns == table.pointColumns);
+}

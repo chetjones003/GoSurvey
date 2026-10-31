@@ -14,6 +14,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
+#include "util/cadtablestyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
@@ -1355,6 +1356,7 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -1391,6 +1393,7 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
@@ -1541,6 +1544,7 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -1577,6 +1581,7 @@ struct DrawingDocument {
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
@@ -3585,8 +3590,18 @@ struct AppCommandState {
   std::string tablePendingStyle;
   int tablePendingCols = 3;
   int tablePendingRows = 2;
+  float tablePendingColumnWidthInches = 1.5f;
+  float tablePendingRowHeightInches = 0.375f;
+  bool tableInsertDialogRequested = false;
   int pointTableStage = 0;
   std::string pointTableStyle;
+  std::string pointTableLayer;
+  bool pointTableSplitEnabled = true;
+  int pointTableMaxRows = 20;
+  int pointTableMaxStack = 3;
+  double pointTableOffset = 0.3;
+  bool pointTableTileAcross = true;
+  bool pointTableDynamic = true;
   std::vector<int> pointTableIds;
   /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
   bool addPointTableDialogAvailable = false;
@@ -4869,6 +4884,7 @@ struct AppCommandState {
   /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();

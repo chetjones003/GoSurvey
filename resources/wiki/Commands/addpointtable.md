@@ -11,6 +11,7 @@ Make a table of survey points in a point table style. Each survey point is one r
 Choosing **Add Tables** (or typing `ADDPOINTTABLE`) opens **Add Point Table**:
 
 - **Table style** — `NameNEZD` or `NameNEZD with Comments`.
+- **Edit style** — adjust the supported text, row and column sizes for the selected point-table style.
 - **Point group** — pick a group to check all of its points at once. The check boxes then show the group's members.
 - **Survey point list** — tick the points you want. Each row shows the point number, northing, easting, elevation
   and description.
@@ -37,6 +38,10 @@ Type point numbers such as `1-5,8`, a point group name, or press **Enter** for e
 - **NameNEZD with Comments** adds a Description column with each point's description.
 
 The table goes on the current layer. A drawing with no survey points is refused.
+
+GoSurvey survey-label settings persist in GoSurvey drawing data. Native Civil 3D point and point-label
+style objects are not currently written to or read from DWG; verify point-style editing in Civil 3D
+before relying on a DWG as the style source of record.
 
 > **Check before relying on the layout.** The NameNEZD column list follows the point file layout used in
 > common survey workflows. It has not yet been checked against the same table style in Civil 3D.

@@ -2317,6 +2317,47 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     ts.fontFamily = FromT(dwg, s->font_file);
     st.textStyles.push_back(ts);
   }
+  st.dimensionStyles.clear();
+  const double mup = std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DIMSTYLE || o->tio.object == nullptr || o->tio.object->tio.DIMSTYLE == nullptr)
+      continue;
+    const Dwg_Object_DIMSTYLE* ds = o->tio.object->tio.DIMSTYLE;
+    DimensionStyle style = DimensionStyles::Default();
+    style.name = FromT(dwg, ds->name);
+    if (style.name.empty()) continue;
+    style.textSizeInches = static_cast<float>(std::max(0.001, ds->DIMTXT / mup));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / mup));
+    style.unitPrecision = std::clamp<int>(ds->DIMDEC, 0, 8);
+    style.unitScale = ds->DIMLFAC == 0.0 ? 1.0 : ds->DIMLFAC;
+    switch (ds->DIMLUNIT) {
+      case 3: style.unitFormat = DimUnitFormat::Engineering; break;
+      case 4: style.unitFormat = DimUnitFormat::Architectural; break;
+      case 5: style.unitFormat = DimUnitFormat::Fractional; break;
+      default: style.unitFormat = DimUnitFormat::Decimal; break;
+    }
+    const std::string arrow = FromT(dwg, ds->DIMBLK_T);
+    if (arrow.find("CLOSEDBLANK") != std::string::npos) style.arrowType = DimArrowType::ClosedBlank;
+    else if (arrow.find("ARCHTICK") != std::string::npos) style.arrowType = DimArrowType::Tick;
+    else if (arrow.find("DOT") != std::string::npos) style.arrowType = DimArrowType::Dot;
+    else if (arrow.find("OPEN") != std::string::npos) style.arrowType = DimArrowType::Open;
+    else if (arrow.find("NONE") != std::string::npos) style.arrowType = DimArrowType::None;
+    st.dimensionStyles.push_back(std::move(style));
+  }
+  if (st.dimensionStyles.empty()) st.dimensionStyles = DimensionStyles::DefaultStyles();
+  std::string activeName;
+  if (dwg->header_vars.DIMSTYLE != nullptr) {
+    Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.DIMSTYLE->absolute_ref);
+    if (activeObject && activeObject->fixedtype == DWG_TYPE_DIMSTYLE && activeObject->tio.object &&
+        activeObject->tio.object->tio.DIMSTYLE)
+      activeName = FromT(dwg, activeObject->tio.object->tio.DIMSTYLE->name);
+  }
+  if (const DimensionStyle* current = DimensionStyles::Find(st.dimensionStyles, activeName))
+    st.activeDimensionStyle = *current;
+  else if (const DimensionStyle* standard = DimensionStyles::Find(st.dimensionStyles, "Standard"))
+    st.activeDimensionStyle = *standard;
+  else st.activeDimensionStyle = st.dimensionStyles.front();
 }
 
 bool LoadDwgData(const char* pathUtf8, bool asDxf, Dwg_Data* dwg, std::vector<std::string>& log) {
@@ -2461,6 +2502,10 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
 // Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
 // entity to its layer / colour / linetype (issue #140 / DEBT-151-b — the DWG writer previously
 // emitted geometry only, so a saved drawing lost every layer).
+const char* DimArrowBlockName(DimArrowType t);
+Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName);
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor);
+
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
   bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
@@ -2555,6 +2600,30 @@ struct TableWriter {
       // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
       sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
       styles[LowerAscii(ts.name)] = sy->parent->objid;
+    }
+  }
+
+  void BuildDimensionStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    const auto& named = st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    for (const DimensionStyle& style : named) {
+      if (style.name.empty()) continue;
+      Dwg_Object_DIMSTYLE* ds = EnsureDimStyleNamed(dwg, style.name);
+      if (!ds) continue;
+      const double mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
+      ds->DIMTXT = static_cast<double>(style.textSizeInches) * mup;
+      ds->DIMASZ = static_cast<double>(style.arrowSizeInches) * mup;
+      ds->DIMDEC = std::clamp(style.unitPrecision, 0, 8);
+      ds->DIMSCALE = 1.0;
+      ds->DIMLUNIT = static_cast<BITCODE_BS>(style.unitFormat == DimUnitFormat::Architectural ? 4 :
+                                             style.unitFormat == DimUnitFormat::Engineering ? 3 :
+                                             style.unitFormat == DimUnitFormat::Fractional ? 5 : 2);
+      ds->DIMLFAC = style.unitScale;
+      ds->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(style.arrowType));
+      DimStyleSetCmc(&ds->DIMCLRD, style.dimLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRE, style.extLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRT, style.textColor, useTrueColor);
+      if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
+        dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
     }
   }
 
@@ -5150,6 +5219,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildDimensionStyleTable(st, st.modelUnitsPerPlottedInch);
   WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
   WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created

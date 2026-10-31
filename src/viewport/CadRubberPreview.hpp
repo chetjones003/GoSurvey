@@ -17,6 +17,6 @@ void AppendWorldRectRubberViewRel(std::vector<float>& o, float xa, float ya, flo
                                   double anchorY, float z = 0.f);
 
 /// Draft-command rubber for the drawing viewport (view-relative coords for GPU precision at high zoom).
-void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
+void AppendCadDraftRubberLines(AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
                                double viewAnchorX, double viewAnchorY, float orthoHalfH, int fbHeightPx,
                                std::vector<float>& rubberLines);

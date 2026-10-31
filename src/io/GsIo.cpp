@@ -1266,6 +1266,7 @@ json BuildRoot(const AppCommandState& st) {
     const bool isDefault = (ds == def);
     if (!isDefault) {
       json o;
+      o["name"] = ds.name;
       o["textSizeInches"] = ds.textSizeInches;
       if (!ds.textFont.empty()) o["textFont"] = ds.textFont;
       o["textColor"] = ds.textColor;
@@ -1282,6 +1283,28 @@ json BuildRoot(const AppCommandState& st) {
       o["unitScale"] = ds.unitScale;
       doc["dimensionStyle"] = std::move(o);
     }
+    json all = json::array();
+    const auto& styles = st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    for (const DimensionStyle& style : styles) {
+      json o;
+      o["name"] = style.name;
+      o["textSizeInches"] = style.textSizeInches;
+      o["textFont"] = style.textFont;
+      o["textColor"] = style.textColor;
+      o["textAlign"] = static_cast<int>(style.textAlign);
+      o["dimLineColor"] = style.dimLineColor;
+      o["dimLineType"] = style.dimLineType;
+      o["extLineColor"] = style.extLineColor;
+      o["extLineType"] = style.extLineType;
+      o["arrowSizeInches"] = style.arrowSizeInches;
+      o["arrowType"] = static_cast<int>(style.arrowType);
+      o["arrowColor"] = style.arrowColor;
+      o["unitFormat"] = static_cast<int>(style.unitFormat);
+      o["unitPrecision"] = style.unitPrecision;
+      o["unitScale"] = style.unitScale;
+      all.push_back(std::move(o));
+    }
+    doc["dimensionStyles"] = std::move(all);
   }
   {
     const MultileaderStyle& ms = st.activeMultileaderStyle;
@@ -1299,6 +1322,23 @@ json BuildRoot(const AppCommandState& st) {
       o["landingGapInches"] = ms.landingGapInches;
       doc["multileaderStyle"] = std::move(o);
     }
+  }
+  {
+    json styles = json::array();
+    for (const CadTableStyle& style : st.tableStyles) {
+      json o;
+      o["name"] = style.name;
+      o["point"] = style.point;
+      o["headerRow"] = style.headerRow;
+      o["textHeightInches"] = style.textHeightInches;
+      o["columnWidthInches"] = style.columnWidthInches;
+      o["rowHeightInches"] = style.rowHeightInches;
+      json columns = json::array();
+      for (CadPointTableColumn column : style.pointColumns) columns.push_back(static_cast<int>(column));
+      o["pointColumns"] = std::move(columns);
+      styles.push_back(std::move(o));
+    }
+    doc["tableStyles"] = std::move(styles);
   }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
@@ -3104,6 +3144,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     DimensionStyle ds = DimensionStyles::Default();
     if (doc.contains("dimensionStyle") && doc["dimensionStyle"].is_object()) {
       const auto& o = doc["dimensionStyle"];
+      ds.name = o.value("name", ds.name);
       ds.textSizeInches = o.value("textSizeInches", ds.textSizeInches);
       ds.textFont = o.value("textFont", ds.textFont);
       ds.textColor = o.value("textColor", ds.textColor);
@@ -3119,6 +3160,33 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ds.unitPrecision = o.value("unitPrecision", ds.unitPrecision);
       ds.unitScale = o.value("unitScale", ds.unitScale);
     }
+    st.dimensionStyles.clear();
+    if (doc.contains("dimensionStyles") && doc["dimensionStyles"].is_array()) {
+      for (const auto& o : doc["dimensionStyles"]) {
+        if (!o.is_object()) continue;
+        DimensionStyle style = DimensionStyles::Default();
+        style.name = o.value("name", style.name);
+        style.textSizeInches = o.value("textSizeInches", style.textSizeInches);
+        style.textFont = o.value("textFont", style.textFont);
+        style.textColor = o.value("textColor", style.textColor);
+        style.textAlign = static_cast<DimTextAlign>(o.value("textAlign", static_cast<int>(style.textAlign)));
+        style.dimLineColor = o.value("dimLineColor", style.dimLineColor);
+        style.dimLineType = o.value("dimLineType", style.dimLineType);
+        style.extLineColor = o.value("extLineColor", style.extLineColor);
+        style.extLineType = o.value("extLineType", style.extLineType);
+        style.arrowSizeInches = o.value("arrowSizeInches", style.arrowSizeInches);
+        style.arrowType = static_cast<DimArrowType>(o.value("arrowType", static_cast<int>(style.arrowType)));
+        style.arrowColor = o.value("arrowColor", style.arrowColor);
+        style.unitFormat = static_cast<DimUnitFormat>(o.value("unitFormat", static_cast<int>(style.unitFormat)));
+        style.unitPrecision = o.value("unitPrecision", style.unitPrecision);
+        style.unitScale = o.value("unitScale", style.unitScale);
+        if (std::none_of(st.dimensionStyles.begin(), st.dimensionStyles.end(), [&](const DimensionStyle& existing) {
+              return existing.name == style.name;
+            })) st.dimensionStyles.push_back(std::move(style));
+      }
+    }
+    if (st.dimensionStyles.empty()) st.dimensionStyles.push_back(ds);
+    if (const DimensionStyle* active = DimensionStyles::Find(st.dimensionStyles, ds.name)) ds = *active;
     st.activeDimensionStyle = ds;
     st.dimStyleDraft = ds;
   }
@@ -3137,6 +3205,31 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
   }
+  st.tableStyles.clear();
+  if (doc.contains("tableStyles") && doc["tableStyles"].is_array()) {
+    for (const auto& o : doc["tableStyles"]) {
+      if (!o.is_object()) continue;
+      CadTableStyle style;
+      style.name = o.value("name", std::string());
+      if (style.name.empty()) continue;
+      style.point = o.value("point", false);
+      style.headerRow = o.value("headerRow", true);
+      style.textHeightInches = o.value("textHeightInches", style.textHeightInches);
+      style.columnWidthInches = o.value("columnWidthInches", style.columnWidthInches);
+      style.rowHeightInches = o.value("rowHeightInches", style.rowHeightInches);
+      if (o.contains("pointColumns") && o["pointColumns"].is_array()) {
+        for (const auto& column : o["pointColumns"]) {
+          const int value = column.get<int>();
+          if (value >= 0 && value <= static_cast<int>(CadPointTableColumn::Description))
+            style.pointColumns.push_back(static_cast<CadPointTableColumn>(value));
+        }
+      }
+      if (std::none_of(st.tableStyles.begin(), st.tableStyles.end(), [&](const CadTableStyle& existing) {
+            return existing.name == style.name;
+          })) st.tableStyles.push_back(std::move(style));
+    }
+  }
+  if (st.tableStyles.empty()) st.tableStyles = CadTableBuiltinStyles();
 
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])

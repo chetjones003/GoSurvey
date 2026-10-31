@@ -46,6 +46,12 @@ constexpr double kJoinTol = 1.0e-3;
 void BeginInteractive(AppCommandState& st, AppCommandState::Kind kind) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
+  // Ribbon commands can replace an in-progress MLEADER without passing through Escape. Clear its
+  // cursor/label draft as part of the command transition or stale MLEADER dynamic input remains
+  // painted while TABLE (and other draw/inquiry commands) owns the active prompt.
+  ResetMleaderDraft(st);
+  if (st.mtextRichEditorMultileaderIndex >= 0)
+    CancelMtextRichEditor(st, nullptr);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = kind;
@@ -1739,6 +1745,17 @@ void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.tablePendingStyle.clear();
   st.tablePendingCols = 3;
   st.tablePendingRows = 2;
+  if (const CadTableStyle* standard = CadTableFindStyle(st.tableStyles, "Standard")) {
+    st.tablePendingColumnWidthInches = standard->columnWidthInches;
+    st.tablePendingRowHeightInches = standard->rowHeightInches;
+  }
+  if (st.addPointTableDialogAvailable) {
+    st.tablePendingStyle = "Standard";
+    st.tablePendingRows = 3;  // one title row, one header row and one initial data row
+    st.tableStage = 3;
+    st.tableInsertDialogRequested = true;
+    return;
+  }
   log.push_back("TABLE — table style (Standard) or Enter:");
 }
 
@@ -1751,6 +1768,8 @@ bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<s
       return true;
     }
     st.tablePendingStyle = s->name;
+    st.tablePendingColumnWidthInches = s->columnWidthInches;
+    st.tablePendingRowHeightInches = s->rowHeightInches;
     st.tableStage = 1;
     log.push_back("TABLE — number of columns <3>:");
     return true;
@@ -1784,7 +1803,10 @@ void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::s
     return;
   }
   CadTable t;
-  CadTableApplyStyleSize(&t, *s, st.tablePendingRows, st.tablePendingCols, st.modelUnitsPerPlottedInch);
+  CadTableStyle sizing = *s;
+  sizing.columnWidthInches = st.tablePendingColumnWidthInches;
+  sizing.rowHeightInches = st.tablePendingRowHeightInches;
+  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.modelUnitsPerPlottedInch);
   t.insX = static_cast<float>(wx);
   t.insY = static_cast<float>(wy);
   t.insZ = static_cast<float>(CadCommitElevation(st));
@@ -1908,21 +1930,48 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
     EndTableCommand(st);
     return;
   }
-  CadTable t;
+  const std::size_t maxRows = st.pointTableSplitEnabled
+      ? static_cast<std::size_t>(std::max(1, st.pointTableMaxRows)) : rows.size();
+  const std::size_t chunkCount = (rows.size() + maxRows - 1) / maxRows;
   const int cols = static_cast<int>(s->pointColumns.size());
-  CadTableApplyStyleSize(&t, *s, static_cast<int>(rows.size()) + 1, cols, st.modelUnitsPerPlottedInch);
-  t.cells = CadPointTableCells(*s, rows, st.displayLinearPrecision);
-  t.insX = static_cast<float>(wx);
-  t.insY = static_cast<float>(wy);
-  t.insZ = static_cast<float>(CadCommitElevation(st));
-  if (const TextStyle* ts = ActiveTextStyle(st))
-    t.fontFamily = ts->fontFamily;
+  std::vector<CadTable> tables;
+  tables.reserve(chunkCount);
+  float firstWidth = 0.f, firstHeight = 0.f;
+  for (std::size_t chunk = 0; chunk < chunkCount; ++chunk) {
+    const std::size_t first = chunk * maxRows;
+    const std::size_t count = std::min(maxRows, rows.size() - first);
+    std::vector<CadTablePointRow> subset(rows.begin() + static_cast<std::ptrdiff_t>(first),
+                                         rows.begin() + static_cast<std::ptrdiff_t>(first + count));
+    CadTable table;
+    CadTableApplyStyleSize(&table, *s, static_cast<int>(count) + 1, cols, st.modelUnitsPerPlottedInch);
+    table.cells = CadPointTableCells(*s, subset, st.displayLinearPrecision);
+    const std::size_t stackLimit = static_cast<std::size_t>(std::max(1, st.pointTableMaxStack));
+    const std::size_t stack = chunk / stackLimit;
+    const std::size_t tile = chunk % stackLimit;
+    if (st.pointTableTileAcross) {
+      table.insX = static_cast<float>(wx + stack * (table.width + st.pointTableOffset));
+      table.insY = static_cast<float>(wy + tile * (table.height + st.pointTableOffset));
+    } else {
+      table.insX = static_cast<float>(wx + tile * (table.width + st.pointTableOffset));
+      table.insY = static_cast<float>(wy - stack * (table.height + st.pointTableOffset));
+    }
+    table.insZ = static_cast<float>(CadCommitElevation(st));
+    if (const TextStyle* ts = ActiveTextStyle(st)) table.fontFamily = ts->fontFamily;
+    if (chunk == 0) { firstWidth = table.width; firstHeight = table.height; }
+    tables.push_back(std::move(table));
+  }
   PushUndoSnapshot(st, "ADDPOINTTABLE");
-  st.cadTables.push_back(std::move(t));
-  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  for (CadTable& table : tables) {
+    st.cadTables.push_back(std::move(table));
+    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+    if (!st.pointTableLayer.empty()) st.cadTableAttrs.back().layer = st.pointTableLayer;
+  }
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
-  log.push_back("ADDPOINTTABLE inserted: " + std::to_string(rows.size()) + " point(s) in style " + s->name + ".");
+  log.push_back("ADDPOINTTABLE inserted: " + std::to_string(rows.size()) + " point(s) in style " + s->name +
+                ". " + std::to_string(chunkCount) + " table(s) (" +
+                (st.pointTableDynamic ? "dynamic" : "static") + " setting, " +
+                std::to_string(firstWidth) + " x " + std::to_string(firstHeight) + " first table).");
   EndTableCommand(st);
 }
 

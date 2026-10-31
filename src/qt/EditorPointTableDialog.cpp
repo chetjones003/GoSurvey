@@ -8,10 +8,18 @@
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
+#include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QObject>
+#include <QRadioButton>
+#include <QPushButton>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
@@ -47,7 +55,17 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
   QDialog dialog(parent);
   dialog.setObjectName("addPointTableDialog");
   dialog.setWindowTitle("Add Point Table");
-  dialog.resize(780, 560);
+  dialog.resize(940, 760);
+  dialog.setStyleSheet("QDialog { background: #f0f0f0; color: #202020; }"
+                       "QLabel, QCheckBox, QRadioButton, QGroupBox { color: #202020; }"
+                       "QComboBox, QLineEdit, QSpinBox, QDoubleSpinBox { background: #ffffff; color: #202020;"
+                       " border: 1px solid #aab1b5; padding: 3px; }"
+                       "QPushButton { background: #f8f8f8; color: #202020; border: 1px solid #aab1b5; padding: 5px 10px; }"
+                       "QGroupBox { border: 1px solid #b8b8b8; margin-top: 8px; padding-top: 8px; }"
+                       "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px; }"
+                       "QTableWidget { background: #ffffff; alternate-background-color: #f5f5f5;"
+                       " gridline-color: #c8c8c8; color: #202020; }"
+                       "QHeaderView::section { background: #e7e7e7; color: #202020; padding: 4px; }");
 
   auto* root = new QVBoxLayout(&dialog);
   root->setContentsMargins(18, 16, 18, 14);
@@ -60,6 +78,9 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
   for (const CadTableStyle* s : pointStyles)
     styleCombo->addItem(FromUtf8(s->name));
   controls->addWidget(styleCombo, 1);
+  auto* styleEdit = new QPushButton("Edit style…", &dialog);
+  styleEdit->setObjectName("pointTableEditStyle");
+  controls->addWidget(styleEdit);
   controls->addWidget(new QLabel("Point group:", &dialog));
   auto* groupCombo = new QComboBox(&dialog);
   groupCombo->setObjectName("pointTableGroup");
@@ -69,8 +90,22 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
   controls->addWidget(groupCombo, 1);
   root->addLayout(controls);
 
+  auto* layerRow = new QHBoxLayout;
+  layerRow->addWidget(new QLabel("Table layer:", &dialog));
+  auto* tableLayer = new QLineEdit(QString::fromUtf8(state.currentLayer.c_str()), &dialog);
+  tableLayer->setObjectName("pointTableLayer");
+  layerRow->addWidget(tableLayer, 1);
+  root->addLayout(layerRow);
+
+  auto* selection = new QGroupBox("Selection", &dialog);
+  auto* selectionLayout = new QVBoxLayout(selection);
+  auto* selectHint = new QLabel("Choose point groups or check individual points. Selected points are listed once.", selection);
+  selectionLayout->addWidget(selectHint);
+  root->addWidget(selection);
+
   auto* list = new QTableWidget(static_cast<int>(points.size()), 6, &dialog);
   list->setObjectName("pointTableList");
+  list->setAlternatingRowColors(true);
   list->setHorizontalHeaderLabels({"Use", "Point", "Northing", "Easting", "Elevation", "Description"});
   list->verticalHeader()->setVisible(false);
   list->setSelectionMode(QAbstractItemView::NoSelection);
@@ -90,7 +125,85 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
     list->setItem(r, 4, new QTableWidgetItem(QString::number(p.elevation, 'f', state.displayLinearPrecision)));
     list->setItem(r, 5, new QTableWidgetItem(FromUtf8(p.description)));
   }
-  root->addWidget(list, 1);
+  selectionLayout->addWidget(list, 1);
+
+  auto* split = new QGroupBox("Split table", &dialog);
+  auto* splitLayout = new QFormLayout(split);
+  auto* splitEnabled = new QCheckBox("Split table", split);
+  splitEnabled->setObjectName("pointTableSplit");
+  splitEnabled->setChecked(true);
+  splitLayout->addRow(splitEnabled);
+  auto* maxRows = new QSpinBox(split);
+  maxRows->setObjectName("pointTableMaxRows");
+  maxRows->setRange(1, 10000);
+  maxRows->setValue(20);
+  splitLayout->addRow("Maximum rows per table:", maxRows);
+  auto* maxTables = new QSpinBox(split);
+  maxTables->setObjectName("pointTableMaxStack");
+  maxTables->setRange(1, 1000);
+  maxTables->setValue(3);
+  splitLayout->addRow("Maximum tables per stack:", maxTables);
+  auto* offset = new QDoubleSpinBox(split);
+  offset->setObjectName("pointTableOffset");
+  offset->setRange(0.0, 100000.0);
+  offset->setDecimals(4);
+  offset->setValue(0.3);
+  splitLayout->addRow("Offset:", offset);
+  auto* tileRow = new QHBoxLayout;
+  tileRow->addWidget(new QLabel("Tile tables:", split));
+  auto* across = new QRadioButton("Across", split);
+  across->setObjectName("pointTableAcross");
+  across->setChecked(true);
+  auto* down = new QRadioButton("Down", split);
+  down->setObjectName("pointTableDown");
+  tileRow->addWidget(across);
+  tileRow->addWidget(down);
+  tileRow->addStretch(1);
+  splitLayout->addRow(tileRow);
+  root->addWidget(split);
+
+  auto* behavior = new QGroupBox("Behavior", &dialog);
+  auto* behaviorLayout = new QHBoxLayout(behavior);
+  behaviorLayout->addWidget(new QLabel("Reactivity mode:", behavior));
+  auto* staticMode = new QRadioButton("Static", behavior);
+  staticMode->setObjectName("pointTableStatic");
+  auto* dynamicMode = new QRadioButton("Dynamic", behavior);
+  dynamicMode->setObjectName("pointTableDynamic");
+  dynamicMode->setChecked(true);
+  behaviorLayout->addWidget(staticMode);
+  behaviorLayout->addWidget(dynamicMode);
+  behaviorLayout->addStretch(1);
+  root->addWidget(behavior);
+
+  QObject::connect(styleEdit, &QPushButton::clicked, &dialog, [&state, styleCombo, &dialog] {
+    auto it = std::find_if(state.tableStyles.begin(), state.tableStyles.end(), [&](const CadTableStyle& style) {
+      return style.name == styleCombo->currentText().toUtf8().toStdString();
+    });
+    if (it == state.tableStyles.end()) return;
+    QDialog editor(&dialog);
+    editor.setWindowTitle("Modify Table Style: " + QString::fromUtf8(it->name.c_str()));
+    editor.setStyleSheet("QDialog { background: #f0f0f0; color: #202020; } QLabel { color: #202020; }");
+    auto* form = new QFormLayout(&editor);
+    auto* textHeight = new QDoubleSpinBox(&editor);
+    textHeight->setRange(0.001, 100000.0); textHeight->setDecimals(4); textHeight->setValue(it->textHeightInches);
+    auto* columnWidth = new QDoubleSpinBox(&editor);
+    columnWidth->setRange(0.001, 100000.0); columnWidth->setDecimals(4); columnWidth->setValue(it->columnWidthInches);
+    auto* rowHeight = new QDoubleSpinBox(&editor);
+    rowHeight->setRange(0.001, 100000.0); rowHeight->setDecimals(4); rowHeight->setValue(it->rowHeightInches);
+    form->addRow("Text height:", textHeight);
+    form->addRow("Column width:", columnWidth);
+    form->addRow("Row height:", rowHeight);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &editor);
+    form->addRow(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &editor, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &editor, &QDialog::reject);
+    if (editor.exec() == QDialog::Accepted) {
+      PushUndoSnapshot(state, "ADDPOINTTABLE table style");
+      it->textHeightInches = static_cast<float>(textHeight->value());
+      it->columnWidthInches = static_cast<float>(columnWidth->value());
+      it->rowHeightInches = static_cast<float>(rowHeight->value());
+    }
+  });
 
   // A point group checks exactly its members (REQ-474 clause 2). "(none)" leaves the check boxes as they are.
   QObject::connect(groupCombo, &QComboBox::currentIndexChanged, &dialog, [&state, list](int index) {
@@ -124,5 +237,12 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
     return;
   }
   const std::string style = styleCombo->currentText().toUtf8().toStdString();
+  state.pointTableLayer = tableLayer->text().trimmed().toUtf8().toStdString();
+  state.pointTableSplitEnabled = splitEnabled->isChecked();
+  state.pointTableMaxRows = maxRows->value();
+  state.pointTableMaxStack = maxTables->value();
+  state.pointTableOffset = offset->value();
+  state.pointTableTileAcross = across->isChecked();
+  state.pointTableDynamic = dynamicMode->isChecked();
   BeginAddPointTableWithPoints(state, style, std::move(ids), log);
 }

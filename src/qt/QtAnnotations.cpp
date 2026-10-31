@@ -247,6 +247,51 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     document.drawContents(&painter);
     painter.restore();
   }
+  if ((state.active == AppCommandState::Kind::DimAligned &&
+       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
+      (state.active == AppCommandState::Kind::DimLinear &&
+       state.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) ||
+      (state.active == AppCommandState::Kind::DimAngular &&
+       state.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)) {
+    CadAnnotation draft{};
+    bool hasDraft = false;
+    if (state.active == AppCommandState::Kind::DimAligned)
+      hasDraft = CadDimAlignedBuildDraft(state, state.uiCursorWorldX, state.uiCursorWorldY, &draft);
+    else if (state.active == AppCommandState::Kind::DimLinear)
+      hasDraft = CadDimLinearBuildDraft(const_cast<AppCommandState&>(state), state.uiCursorWorldX,
+                                        state.uiCursorWorldY, &draft);
+    else
+      hasDraft = CadDimAngularBuildDraft(state, state.uiCursorWorldX, state.uiCursorWorldY, &draft);
+    if (hasDraft) {
+      CadDimStrokeParams parameters;
+      parameters.modelUnitsPerPlottedInch = state.modelUnitsPerPlottedInch;
+      parameters.arrowSizeInches = state.activeDimensionStyle.arrowSizeInches;
+      parameters.arrowScale = state.viewportDimArrowScale;
+      parameters.arrowType = state.activeDimensionStyle.arrowType;
+      CadDimWorldStrokes strokes;
+      if (CadDimBuildWorldStrokes(draft, parameters, &strokes)) {
+        painter.save();
+        const QColor color("#f0c75e");
+        painter.setPen(QPen(color, 1.2));
+        painter.setBrush(color);
+        for (const auto& segment : strokes.segs)
+          painter.drawLine(project(segment.x0, segment.y0, draft.insZ),
+                           project(segment.x1, segment.y1, draft.insZ));
+        for (const auto& arrow : strokes.arrows)
+          painter.drawPolygon(QPolygonF{project(arrow.x0, arrow.y0, draft.insZ),
+                                        project(arrow.x1, arrow.y1, draft.insZ),
+                                        project(arrow.x2, arrow.y2, draft.insZ)});
+        const double textWorld = CadAnnotationHeightWorld(draft, state.modelUnitsPerPlottedInch);
+        const QPointF base = project(strokes.labelX, strokes.labelY, draft.insZ);
+        const QPointF top = project(strokes.labelX, strokes.labelY + textWorld, draft.insZ);
+        QFont font = painter.font();
+        font.setPixelSize(std::clamp(qRound(std::hypot(top.x() - base.x(), top.y() - base.y())), 7, 80));
+        painter.setFont(font);
+        painter.drawText(base, QString::fromUtf8(draft.text.c_str()));
+        painter.restore();
+      }
+    }
+  }
   const float leaderArrow = std::max(state.activeMultileaderStyle.arrowSizeInches, 0.01f) *
                             std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
   for (std::size_t i = 0; i < state.cadMultileaders.size(); ++i) {
@@ -299,6 +344,73 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.setPen(color);
       painter.drawText(QPointF(center.x() + radius + 4, center.y() - 4),
                        QString::fromUtf8(marker.label.text.c_str()));
+    }
+  }
+  // TABLE lives in the dedicated cadTables store, so the annotation loop above never paints it.
+  // Keep model-space tables in the same overlay pass as selectable annotations; otherwise picking
+  // succeeds on geometry that the user cannot see.
+  for (std::size_t ti = 0; ti < state.cadTables.size(); ++ti) {
+    const CadTable& table = state.cadTables[ti];
+    const EntityAttributes* attrs = ti < state.cadTableAttrs.size() ? &state.cadTableAttrs[ti] : nullptr;
+    if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id))
+      continue;
+    const bool selected = std::any_of(state.selection.begin(), state.selection.end(), [ti](const SelectedEntity& e) {
+      return e.type == SelectedEntity::Type::Table && e.index == static_cast<int>(ti);
+    });
+    const QColor color = selected ? QColor("#62aaff") : QColor("#f0c75e");
+    QPen tablePen(color, selected ? 1.8 : 1.2);
+    tablePen.setCosmetic(true);
+    painter.setPen(tablePen);
+    std::vector<CadTableCellRect> cells;
+    CadTableLayoutWorldCells(table, &cells);
+    const float textWorld = std::max(table.plottedHeightInches * state.modelUnitsPerPlottedInch, 1.e-5f);
+    const QPointF p0 = project(table.insX, table.insY, table.insZ);
+    const QPointF p1 = project(table.insX, table.insY - textWorld, table.insZ);
+    const int fontPx = std::clamp(qRound(std::hypot(p1.x() - p0.x(), p1.y() - p0.y()) * 0.8), 7, 80);
+    painter.setFont(QFont(QString::fromUtf8(table.fontFamily.c_str()), fontPx));
+    for (std::size_t ci = 0; ci < cells.size(); ++ci) {
+      const auto& cell = cells[ci];
+      const QRectF rect(project(cell.x0, cell.y0, table.insZ), project(cell.x1, cell.y1, table.insZ));
+      painter.drawRect(rect.normalized());
+      if (ci < table.cells.size())
+        painter.drawText(rect.normalized().adjusted(3, 1, -2, -1), Qt::AlignLeft | Qt::AlignVCenter,
+                         QString::fromUtf8(table.cells[ci].c_str()));
+    }
+  }
+  // TABLE remains in its own command state until insertion. Show the same layout
+  // the user is about to place, anchored at the current cursor, so placement is
+  // visible before the click instead of leaving a stale prompt as the only cue.
+  if (state.active == AppCommandState::Kind::Table && state.tableStage == 3) {
+    if (const CadTableStyle* style = CadTableFindStyle(state.tableStyles, state.tablePendingStyle)) {
+      CadTable preview;
+      CadTableStyle sizing = *style;
+      sizing.columnWidthInches = state.tablePendingColumnWidthInches;
+      sizing.rowHeightInches = state.tablePendingRowHeightInches;
+      CadTableApplyStyleSize(&preview, sizing, state.tablePendingRows, state.tablePendingCols,
+                             state.modelUnitsPerPlottedInch);
+      preview.insX = state.uiCursorWorldX;
+      preview.insY = state.uiCursorWorldY;
+      preview.insZ = state.uiCursorWorldZ;
+      const QColor color("#f0c75e");
+      QPen pen(color, 1.5);
+      pen.setCosmetic(true);
+      painter.save();
+      painter.setPen(pen);
+      painter.setBrush(Qt::NoBrush);
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(preview, &cells);
+      const float textWorld = std::max(preview.plottedHeightInches * state.modelUnitsPerPlottedInch, 1.e-5f);
+      const QPointF textBase = project(preview.insX, preview.insY, preview.insZ);
+      const QPointF textTop = project(preview.insX, preview.insY - textWorld, preview.insZ);
+      painter.setFont(QFont(QString::fromUtf8(preview.fontFamily.c_str()),
+                            std::clamp(qRound(std::hypot(textTop.x() - textBase.x(),
+                                                         textTop.y() - textBase.y()) * 0.8), 7, 80)));
+      for (const auto& cell : cells) {
+        const QRectF rect(project(cell.x0, cell.y0, preview.insZ), project(cell.x1, cell.y1, preview.insZ));
+        painter.drawRect(rect.normalized());
+        painter.drawText(rect.normalized().adjusted(3, 1, -2, -1), Qt::AlignLeft | Qt::AlignVCenter, "Data");
+      }
+      painter.restore();
     }
   }
   if (state.drawingSettings.Geolocated()) {
