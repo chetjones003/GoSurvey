@@ -94,6 +94,11 @@ presets
 | **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels |
 | **Coordinate system / projection library** | Coordinates are unprojected numbers. Use `ALIGN` to fit to control |
 | **Unit conversion** | The `UNITS` insertion setting is a **relabel only** — coordinates are never scaled |
+| **Table styles** | Only the built-in `Standard`, `NameNEZD` and `NameNEZD with Comments` styles exist; styles cannot be edited or saved |
+| **DATAEXTRACTION into a drawing table** | Output goes to a `.xlsx` or `.csv` file only |
+| **Linked spreadsheets (`DATALINK`)** | Not available |
+| **Reflex angles on angular dimensions** | Angles larger than 180° are not measured; the smaller angle is shown |
+| **Point table layout** | The `NameNEZD` column list has not yet been checked against Civil 3D |
 | **Native DWG reading** | Planned; today DWG needs an external converter |
 | **Associative dimensions in DXF** | Aligned dimensions export as exploded lines plus text |
 

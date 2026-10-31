@@ -208,7 +208,7 @@ inline bool CadDimBuildWorldStrokes(const CadAnnotation& a, const CadDimStrokePa
   out->ok = false;
   out->labelX = a.insX;
   out->labelY = a.insY;
-  out->labelRotRad = a.rotationRad;
+  out->labelRotRad = CadDimReadableTextRotation(a.rotationRad);
   bool built = false;
   if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear)
     built = CadDimBuildLinearStrokes(a, p, out);

@@ -935,6 +935,25 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
 
 [[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
 
+static std::string MleaderStyleNameFromObject(Dwg_Data* dwg, const Dwg_Object* styleObject) {
+  if (dwg == nullptr || styleObject == nullptr || styleObject->fixedtype != DWG_TYPE_MLEADERSTYLE)
+    return "Standard";
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "ACAD_MLEADERSTYLE");
+  Dwg_Object* dictObject = dictRef != nullptr ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObject == nullptr || dictObject->fixedtype != DWG_TYPE_DICTIONARY || dictObject->tio.object == nullptr ||
+      dictObject->tio.object->tio.DICTIONARY == nullptr)
+    return "Standard";
+  const Dwg_Object_DICTIONARY* dict = dictObject->tio.object->tio.DICTIONARY;
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr &&
+        dict->itemhandles[i]->absolute_ref == styleObject->handle.value && dict->texts != nullptr) {
+      const std::string name = FromT(dwg, dict->texts[i]);
+      return name.empty() ? "Standard" : name;
+    }
+  }
+  return "Standard";
+}
+
 static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
                                     const Xf2& xf, const EntityAttributes& at,
                                     const Dwg_Object_Entity* ownerEnt) {
@@ -975,6 +994,11 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   };
 
   CadMultileader m{};
+  if (ml->mleaderstyle != nullptr) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, ml->mleaderstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_MLEADERSTYLE)
+      m.styleName = MleaderStyleNameFromObject(dwg, styleObject);
+  }
   importLeaderNodePath(node, &m.pathXyz);
   if (m.pathXyz.size() < 6)
     return false;
@@ -1675,6 +1699,12 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
   CadAnnotation a{};
   a.insZ = common->elevation;
   a.rotationRad = static_cast<float>(common->text_rotation);
+  if (common->dimstyle != nullptr) {
+    Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, common->dimstyle->absolute_ref);
+    if (styleObject != nullptr && styleObject->fixedtype == DWG_TYPE_DIMSTYLE && styleObject->tio.object &&
+        styleObject->tio.object->tio.DIMSTYLE)
+      a.dimensionStyleName = FromT(dwg, styleObject->tio.object->tio.DIMSTYLE->name);
+  }
   double tmx = 0.0, tmy = 0.0;
   xf.apply(common->text_midpt.x, common->text_midpt.y, &tmx, &tmy);
   a.insX = static_cast<float>(tmx - st.worldDocumentOriginX);
@@ -1743,7 +1773,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
     return false;
   }
   const AngleDisplaySettings angle = CadAngleDisplaySettings(st);
-  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle.unitPrecision, angle);
+  CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, angle);
   // A user-overridden DIMENSION text (DXF 1) takes priority over the geometry-derived label
   // above, matching what AutoCAD itself shows for the entity.
   if (common->user_text != nullptr) {
@@ -2244,6 +2274,17 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
       NoteSkip(skipHist, (plant + "(inside a block, not placed)").c_str());
     return;
   }
+  // LibreDWG represents unmodeled Civil 3D classes as UNKNOWN_ENT. The variable type still
+  // identifies the drawing's CLASS table entry (type - 500); use that name in the loss report so
+  // a real baseline tells us which Civil 3D records need support instead of collapsing thousands
+  // of different objects into the unhelpful "UNKNOWN_ENT" bucket.
+  if (ty == DWG_TYPE_UNKNOWN_ENT && dwg != nullptr && obj->type >= 500 && dwg->dwg_class != nullptr) {
+    const unsigned classIndex = static_cast<unsigned>(obj->type - 500u);
+    if (classIndex < dwg->num_classes && dwg->dwg_class[classIndex].dxfname != nullptr) {
+      NoteSkip(skipHist, dwg->dwg_class[classIndex].dxfname);
+      return;
+    }
+  }
   NoteSkip(skipHist, obj->dxfname != nullptr ? obj->dxfname : "UNKNOWN");
 }
 
@@ -2317,6 +2358,65 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     ts.fontFamily = FromT(dwg, s->font_file);
     st.textStyles.push_back(ts);
   }
+  st.dimensionStyles.clear();
+  const double mup = std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_DIMSTYLE || o->tio.object == nullptr || o->tio.object->tio.DIMSTYLE == nullptr)
+      continue;
+    const Dwg_Object_DIMSTYLE* ds = o->tio.object->tio.DIMSTYLE;
+    DimensionStyle style = DimensionStyles::Default();
+    style.name = FromT(dwg, ds->name);
+    if (style.name.empty()) continue;
+    style.textSizeInches = static_cast<float>(std::max(0.001, ds->DIMTXT / mup));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / mup));
+    style.unitPrecision = std::clamp<int>(ds->DIMDEC, 0, 8);
+    style.unitScale = ds->DIMLFAC == 0.0 ? 1.0 : ds->DIMLFAC;
+    switch (ds->DIMLUNIT) {
+      case 3: style.unitFormat = DimUnitFormat::Engineering; break;
+      case 4: style.unitFormat = DimUnitFormat::Architectural; break;
+      case 5: style.unitFormat = DimUnitFormat::Fractional; break;
+      default: style.unitFormat = DimUnitFormat::Decimal; break;
+    }
+    const std::string arrow = FromT(dwg, ds->DIMBLK_T);
+    if (arrow.find("CLOSEDBLANK") != std::string::npos) style.arrowType = DimArrowType::ClosedBlank;
+    else if (arrow.find("ARCHTICK") != std::string::npos) style.arrowType = DimArrowType::Tick;
+    else if (arrow.find("DOT") != std::string::npos) style.arrowType = DimArrowType::Dot;
+    else if (arrow.find("OPEN") != std::string::npos) style.arrowType = DimArrowType::Open;
+    else if (arrow.find("NONE") != std::string::npos) style.arrowType = DimArrowType::None;
+    st.dimensionStyles.push_back(std::move(style));
+  }
+  if (st.dimensionStyles.empty()) st.dimensionStyles = DimensionStyles::DefaultStyles();
+  std::string activeName;
+  if (dwg->header_vars.DIMSTYLE != nullptr) {
+    Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.DIMSTYLE->absolute_ref);
+    if (activeObject && activeObject->fixedtype == DWG_TYPE_DIMSTYLE && activeObject->tio.object &&
+        activeObject->tio.object->tio.DIMSTYLE)
+      activeName = FromT(dwg, activeObject->tio.object->tio.DIMSTYLE->name);
+  }
+  if (const DimensionStyle* current = DimensionStyles::Find(st.dimensionStyles, activeName))
+    st.activeDimensionStyle = *current;
+  else if (const DimensionStyle* standard = DimensionStyles::Find(st.dimensionStyles, "Standard"))
+    st.activeDimensionStyle = *standard;
+  else st.activeDimensionStyle = st.dimensionStyles.front();
+
+  st.multileaderStyles.clear();
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_MLEADERSTYLE || o->tio.object == nullptr || o->tio.object->tio.MLEADERSTYLE == nullptr)
+      continue;
+    const Dwg_Object_MLEADERSTYLE* record = o->tio.object->tio.MLEADERSTYLE;
+    MultileaderStyle style = MultileaderStyles::Default();
+    style.name = MleaderStyleNameFromObject(dwg, o);
+    if (style.name.empty()) continue;
+    style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / mup));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / mup));
+    style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / mup));
+    style.annotativeDefault = record->is_annotative != 0;
+    st.multileaderStyles.push_back(std::move(style));
+  }
+  if (st.multileaderStyles.empty()) st.multileaderStyles = MultileaderStyles::DefaultStyles();
+  st.activeMultileaderStyle = st.multileaderStyles.front();
 }
 
 bool LoadDwgData(const char* pathUtf8, bool asDxf, Dwg_Data* dwg, std::vector<std::string>& log) {
@@ -2461,6 +2561,10 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
 // Builds the DWG LAYER and LTYPE tables from the GoSurvey layer table and wires each exported
 // entity to its layer / colour / linetype (issue #140 / DEBT-151-b — the DWG writer previously
 // emitted geometry only, so a saved drawing lost every layer).
+const char* DimArrowBlockName(DimArrowType t);
+Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName);
+void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor);
+
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
   bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
@@ -2471,6 +2575,7 @@ struct TableWriter {
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
   std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
   std::unordered_map<std::string, BITCODE_BL> styles;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> mleaderStyles;  // lower(name) -> parent objid
 
   static bool IsPlainLinetype(const std::string& n) {
     const std::string l = LowerAscii(n);
@@ -2556,6 +2661,57 @@ struct TableWriter {
       sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
       styles[LowerAscii(ts.name)] = sy->parent->objid;
     }
+  }
+
+  void BuildDimensionStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    const auto& named = st.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : st.dimensionStyles;
+    for (const DimensionStyle& style : named) {
+      if (style.name.empty()) continue;
+      Dwg_Object_DIMSTYLE* ds = EnsureDimStyleNamed(dwg, style.name);
+      if (!ds) continue;
+      const double mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
+      ds->DIMTXT = static_cast<double>(style.textSizeInches) * mup;
+      ds->DIMASZ = static_cast<double>(style.arrowSizeInches) * mup;
+      ds->DIMDEC = std::clamp(style.unitPrecision, 0, 8);
+      ds->DIMSCALE = 1.0;
+      ds->DIMLUNIT = static_cast<BITCODE_BS>(style.unitFormat == DimUnitFormat::Architectural ? 4 :
+                                             style.unitFormat == DimUnitFormat::Engineering ? 3 :
+                                             style.unitFormat == DimUnitFormat::Fractional ? 5 : 2);
+      ds->DIMLFAC = style.unitScale;
+      ds->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(style.arrowType));
+      DimStyleSetCmc(&ds->DIMCLRD, style.dimLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRE, style.extLineColor, useTrueColor);
+      DimStyleSetCmc(&ds->DIMCLRT, style.textColor, useTrueColor);
+      if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
+        dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
+    }
+  }
+
+  void BuildMleaderStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
+    const auto& named = st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
+    const double mup = std::max<double>(modelUnitsPerPlottedInch, 1.e-6);
+    for (const MultileaderStyle& style : named) {
+      if (style.name.empty()) continue;
+      Dwg_Object_MLEADERSTYLE* record = nullptr;
+      BITCODE_H existing = dwg_find_tablehandle(dwg, style.name.c_str(), "MLEADERSTYLE");
+      if (existing != nullptr) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+        if (object != nullptr && object->fixedtype == DWG_TYPE_MLEADERSTYLE && object->tio.object != nullptr)
+          record = object->tio.object->tio.MLEADERSTYLE;
+      }
+      if (record == nullptr) record = dwg_add_MLEADERSTYLE(dwg, style.name.c_str());
+      if (record == nullptr || record->parent == nullptr) continue;
+      record->arrow_head_size = static_cast<double>(style.arrowSizeInches) * mup;
+      record->landing_gap = static_cast<double>(style.landingGapInches) * mup;
+      record->text_height = static_cast<double>(style.textSizeInches) * mup;
+      record->is_annotative = style.annotativeDefault ? 1 : 0;
+      mleaderStyles[LowerAscii(style.name)] = record->parent->objid;
+    }
+  }
+
+  BITCODE_BL MleaderStyleObjId(const std::string& name) const {
+    const auto it = mleaderStyles.find(LowerAscii(name.empty() ? "Standard" : name));
+    return it == mleaderStyles.end() ? static_cast<BITCODE_BL>(-1) : it->second;
   }
 
   // Returns the STYLE table objid for `name`, or -1 (meaning "leave the entity's default alone" —
@@ -4185,6 +4341,8 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
       if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
               hdr, static_cast<unsigned>(branches.size()), branches.data(),
               wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
+        const BITCODE_BL styleId = tw.MleaderStyleObjId(ml.styleName);
+        if (styleId >= 0) mld->mleaderstyle = tw.RefObjId(styleId);
         mld->is_annotative = ml.annotative ? 1 : 0;
         if (r2018Write && ml.annotative && mld->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
@@ -4398,6 +4556,9 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
     }
   }
   if (common != nullptr) {
+    const std::string dimStyleName = an.dimensionStyleName.empty() ? st.activeDimensionStyle.name : an.dimensionStyleName;
+    if (BITCODE_H styleRef = dwg_find_tablehandle(dwg, dimStyleName.c_str(), "DIMSTYLE"))
+      common->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
     common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.text).c_str());
     common->text_rotation = static_cast<double>(an.rotationRad);
     common->elevation = static_cast<double>(an.insZ);
@@ -5150,6 +5311,8 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.annotContext = &annotCtx;
   tw.BuildLayerTable(st);
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildDimensionStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildMleaderStyleTable(st, st.modelUnitsPerPlottedInch);
   WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
   WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created

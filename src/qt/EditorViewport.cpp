@@ -248,7 +248,7 @@ bool EditorViewport::CancelGripEdit() {
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
-      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, m_State.activeDimensionStyle, CadAngleDisplaySettings(m_State));
     }
     ClearDimGripInteraction(m_State);
   } else {
@@ -1616,6 +1616,44 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
       }
     }
   }
+  // REQ-476 (D-2026-10-30-b): a double-click on a model-space table cell edits its text, as the paper cell does.
+  if (m_State.activeSpaceIndex == kModelSpaceIndex) {
+    const float wx = static_cast<float>(m_Cursor.x);
+    const float wy = static_cast<float>(m_Cursor.y);
+    for (int ti = static_cast<int>(m_State.cadTables.size()) - 1; ti >= 0; --ti) {
+      const CadTable& table = m_State.cadTables[static_cast<std::size_t>(ti)];
+      const int cell = CadTableCellAtWorld(table, wx, wy);
+      if (cell < 0)
+        continue;
+      const auto uid = m_State.activeDrawingIdx > 0 && m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size())
+          ? m_State.drawingTabs[m_State.activeDrawingIdx].projectUid : 0;
+      const auto readOnly = std::find_if(m_State.openProjects.begin(), m_State.openProjects.end(),
+          [uid](const auto& session) { return uid && session.uid == uid && session.readOnly; });
+      if (readOnly != m_State.openProjects.end()) {
+        QMessageBox::warning(this, "Read-only project", "This project was opened read-only. The table cell cannot be changed.");
+        event->accept();
+        return;
+      }
+      OpenTableCellEditor(m_State, ti, cell);
+      bool accepted = false;
+      const int row = cell / table.cols + 1;
+      const int column = cell % table.cols + 1;
+      const QString value = QInputDialog::getText(this, "Edit table cell",
+          QString("Row %1, column %2:").arg(row).arg(column), QLineEdit::Normal,
+          QString::fromUtf8(m_State.tableCellEditorBuf.c_str()), &accepted);
+      if (accepted) {
+        m_State.tableCellEditorBuf = value.toUtf8().toStdString();
+        std::vector<std::string> cellLog;
+        CommitTableCellEditor(m_State, cellLog);
+        if (changed) changed();
+      } else {
+        CancelTableCellEditor(m_State);
+      }
+      update();
+      event->accept();
+      return;
+    }
+  }
   QOpenGLWidget::mouseDoubleClickEvent(event);
 }
 
@@ -1681,8 +1719,13 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
     const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
-    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag || paperModifyActive) &&
-                                !objectSelectionStep;
+    // CREATEPOINTS is a modeless dialog: no AppCommandState::Kind is active, but placement still
+    // follows the normal object-snap pipeline. Without this branch its click path receives raw cursor
+    // coordinates and survey-point snaps appear disabled only while the dialog is open.
+    const bool createPointsPlacement = m_State.showCreatePointsWindow &&
+                                       m_State.active == AppCommandState::Kind::None;
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || sectionGripDrag ||
+                                 paperModifyActive || createPointsPlacement) && !objectSelectionStep;
     m_Snap = midCmdUsesSnap
         ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State, true,
             camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), {},
@@ -1798,9 +1841,9 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
         default: break;
       }
-      CadDimRefreshMeasurementText(&ann, m_State.displayLinearPrecision, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, m_State.activeDimensionStyle, CadAngleDisplaySettings(m_State));
       float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
-      if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = std::atan2(ty, tx);
+      if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
       BumpCadGpuCache(m_State);
     }
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);

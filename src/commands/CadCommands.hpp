@@ -14,6 +14,7 @@
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
+#include "util/cadtablestyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "render/SectionClip.hpp"  // GL-free; the pick and snap paths honour the live clip (REQ-341)
 // The one authoritative WCS <-> UCS implementation (REQ-154). Pure and dependency-free, like
@@ -49,6 +50,7 @@
 #include "util/hoverdwell.hpp"
 #include "util/hoverpickgate.hpp"  // per-frame viewport hover-pick throttle (GitHub issue #166)
 #include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
+#include "util/cadtablestyle.hpp"  // table styles and point rows (REQ-474, REQ-475)
 #include "util/cadblock.hpp"   // Block definitions + INSERT refs (GitHub issue #124)
 #include "util/cadsolid.hpp"   // B-rep solids + their tessellation cache (REQ-313 / ADR-045)
 #include "util/solidpick.hpp"  // solidpick::Kind, for SelectedSubObject (REQ-318 / ADR-049)
@@ -328,7 +330,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlott
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle);
 
 // CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
 
@@ -1354,6 +1356,7 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -1378,6 +1381,8 @@ struct DrawingGeometrySnapshot {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
   std::vector<PointGroup>       pointGroups;
@@ -1390,7 +1395,9 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -1540,6 +1547,7 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadSolidAttrs;
   std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
   std::vector<EntityAttributes> cadTableAttrs;
+  std::vector<CadTableStyle>    tableStyles = CadTableBuiltinStyles();
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -1564,6 +1572,8 @@ struct DrawingDocument {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -1576,7 +1586,9 @@ struct DrawingDocument {
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -2104,6 +2116,9 @@ struct AppCommandState {
     Divide,
     Area,
     List,
+    DataExtract,
+    Table,
+    PointTable,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -2123,6 +2138,9 @@ struct AppCommandState {
     case Kind::Divide:        return "DIVIDE";
     case Kind::Area:          return "AREA";
     case Kind::List:          return "LIST";
+    case Kind::DataExtract:   return "DATAEXTRACTION";
+    case Kind::Table:         return "TABLE";
+    case Kind::PointTable:    return "ADDPOINTTABLE";
     case Kind::Text:          return "TEXT";
     case Kind::Mtext:         return "MTEXT";
     case Kind::Mleader:          return "MLEADER";
@@ -3571,6 +3589,29 @@ struct AppCommandState {
   /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
   std::vector<CadTable> cadTables;
   std::vector<EntityAttributes> cadTableAttrs;
+  /// Table styles of this drawing (REQ-475). The built-in set; style editing is a follow-up.
+  std::vector<CadTableStyle> tableStyles = CadTableBuiltinStyles();
+  /// TABLE and ADDPOINTTABLE prompt state (REQ-466, REQ-474).
+  int tableStage = 0;
+  std::string tablePendingStyle;
+  int tablePendingCols = 3;
+  int tablePendingRows = 2;
+  float tablePendingColumnWidthInches = 1.5f;
+  float tablePendingRowHeightInches = 0.375f;
+  bool tableInsertDialogRequested = false;
+  int pointTableStage = 0;
+  std::string pointTableStyle;
+  std::string pointTableLayer;
+  bool pointTableSplitEnabled = true;
+  int pointTableMaxRows = 20;
+  int pointTableMaxStack = 3;
+  double pointTableOffset = 0.3;
+  bool pointTableTileAcross = true;
+  bool pointTableDynamic = true;
+  std::vector<int> pointTableIds;
+  /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
+  bool addPointTableDialogAvailable = false;
+  bool addPointTableDialogRequested = false;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -4671,6 +4712,8 @@ struct AppCommandState {
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
   std::vector<PointGroup> pointGroups;
   CreatePointsOptions createPointsOpts;
@@ -4849,6 +4892,8 @@ struct AppCommandState {
   /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
@@ -7309,6 +7354,15 @@ void StartMeasureCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDivideCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartAreaCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartListCommand(AppCommandState& st, std::vector<std::string>& log);
+/// DATAEXTRACTION (REQ-467, issue #804): selection, typed columns, then a spreadsheet file.
+void StartDataExtractCommand(AppCommandState& st, std::vector<std::string>& log);
+/// TABLE (REQ-466): typed style, columns and rows, then the insertion point.
+void StartTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// ADDPOINTTABLE (REQ-474): opens the point table dialog in the Qt editor, or runs typed prompts.
+void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Continues ADDPOINTTABLE with points chosen in the dialog; returns false (and logs why) when none apply.
+bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
+                                  std::vector<std::string>& log);
 void ExecutePdModeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 bool HandleCadDrawInquiryTextInput(const std::string& line, AppCommandState& st, std::vector<std::string>& log);

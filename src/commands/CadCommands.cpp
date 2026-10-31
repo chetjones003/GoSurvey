@@ -150,6 +150,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadSolidAttrs          = cmd.cadSolidAttrs;
   doc.cadTables              = cmd.cadTables;
   doc.cadTableAttrs          = cmd.cadTableAttrs;
+  doc.tableStyles            = cmd.tableStyles;
   doc.cadPositionMarkers     = cmd.cadPositionMarkers;  // REQ-359: per drawing
   doc.cadPositionMarkerAttrs = cmd.cadPositionMarkerAttrs;
   doc.cadMultileaders        = cmd.cadMultileaders;  // REQ-367
@@ -167,6 +168,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadBlockRefs           = cmd.cadBlockRefs;
   doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
+  doc.surveyPointStyles      = cmd.surveyPointStyles;
+  doc.surveyPointLabelStyles = cmd.surveyPointLabelStyles;
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
@@ -178,7 +181,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
+  doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
+  doc.multileaderStyles      = cmd.multileaderStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -266,6 +271,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadSolidAttrs              = doc.cadSolidAttrs;
   cmd.cadTables                  = doc.cadTables;
   cmd.cadTableAttrs              = doc.cadTableAttrs;
+  cmd.tableStyles                = doc.tableStyles.empty() ? CadTableBuiltinStyles() : doc.tableStyles;
   cmd.cadPositionMarkers         = doc.cadPositionMarkers;  // REQ-359
   cmd.cadPositionMarkerAttrs     = doc.cadPositionMarkerAttrs;
   cmd.cadMultileaders            = doc.cadMultileaders;  // REQ-367
@@ -290,6 +296,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadBlockRefs               = doc.cadBlockRefs;
   cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
+  cmd.surveyPointStyles          = doc.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : doc.surveyPointStyles;
+  cmd.surveyPointLabelStyles     = doc.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : doc.surveyPointLabelStyles;
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
@@ -301,7 +309,9 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
+  cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
+  cmd.multileaderStyles          = doc.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : doc.multileaderStyles;
   cmd.mleaderStyleDraft          = doc.multileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
@@ -1923,6 +1933,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadSolidAttrs        = st.cadSolidAttrs;
   snap.cadTables            = st.cadTables;
   snap.cadTableAttrs        = st.cadTableAttrs;
+  snap.tableStyles          = st.tableStyles;
   snap.cadPositionMarkers   = st.cadPositionMarkers;  // REQ-359
   snap.cadPositionMarkerAttrs = st.cadPositionMarkerAttrs;
   snap.cadMultileaders      = st.cadMultileaders;  // REQ-367
@@ -1965,12 +1976,16 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadFilledRegions     = st.cadFilledRegions;
   snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
+  snap.surveyPointStyles    = st.surveyPointStyles;
+  snap.surveyPointLabelStyles = st.surveyPointLabelStyles;
   snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
+  snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
+  snap.multileaderStyles    = st.multileaderStyles;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -2037,6 +2052,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadSolidAttrs        = snap.cadSolidAttrs;
   st.cadTables            = snap.cadTables;
   st.cadTableAttrs        = snap.cadTableAttrs;
+  st.tableStyles          = snap.tableStyles.empty() ? CadTableBuiltinStyles() : snap.tableStyles;
   st.cadPositionMarkers   = snap.cadPositionMarkers;  // REQ-359
   st.cadPositionMarkerAttrs = snap.cadPositionMarkerAttrs;
   st.cadMultileaders      = snap.cadMultileaders;  // REQ-367
@@ -2055,12 +2071,16 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadBlockRefs         = snap.cadBlockRefs;
   st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
   st.surveyPoints         = snap.surveyPoints;
+  st.surveyPointStyles    = snap.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : snap.surveyPointStyles;
+  st.surveyPointLabelStyles = snap.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : snap.surveyPointLabelStyles;
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
   st.activeDimensionStyle = snap.dimensionStyle;
+  st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
+  st.multileaderStyles      = snap.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : snap.multileaderStyles;
   st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
@@ -6181,7 +6201,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
     const float ty = std::cos(mid);
     ann->insX = mx + bisx * alongN + tx * alongT;
     ann->insY = my + bisy * alongN + ty * alongT;
-    ann->rotationRad = std::atan2(bisy, bisx);
+    ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
     return;
   }
   if (ann->kind != CadAnnotation::Kind::DimAligned && ann->kind != CadAnnotation::Kind::DimLinear)
@@ -6223,6 +6243,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6232,7 +6253,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
   d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
-  d.rotationRad = std::atan2(vy, vx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6311,6 +6332,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   }
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimLinear;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6329,7 +6351,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  d.rotationRad = std::atan2(ty, tx);
+  d.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
   *out = std::move(d);
@@ -6396,18 +6418,16 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
   return std::string(buf);
 }
 
-void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle) {
+void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle) {
   if (!ann)
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    {
-      DimensionStyle tmp = DimensionStyles::Default();
-      tmp.unitPrecision = linearPrecision;
-      ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), tmp);
-    }
+    // REQ-459 (issue #804): the value uses the dimension style's unit scale, format and precision, the same
+    // formatting the commit path uses, so moving a dimension never changes its number.
+    ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), style);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
@@ -6431,7 +6451,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
   const float lift = 1.12f * hWorld;
   ann->insX = mx + bisx * lift;
   ann->insY = my + bisy * lift;
-  ann->rotationRad = std::atan2(bisy, bisx);
+  ann->rotationRad = 0.f;  // angular text is horizontal (REQ-477, issue #804)
 }
 
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
@@ -6441,6 +6461,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float vx = st.dimAngVx, vy = st.dimAngVy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
@@ -7075,6 +7096,9 @@ const CmdEntry kRegistry[] = {
     {"divide", "div", "Place points that divide an object into equal segments"},
     {"area", "aa", "Measure the area and perimeter of points or a closed object"},
     {"list", "li", "List type, layer, space and geometry of selected objects"},
+    {"dataextraction", "", "Extract selected objects to an Excel or CSV file: type, layer, text, coordinates"},
+    {"table", "", "Insert an empty table: style, columns, rows, then the insertion point"},
+    {"addpointtable", "", "Add a point table of survey points in a point table style (dialog in the editor)"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
     {"text", "", "Place single-line text"},
     {"mtext", "mt", "Place multiline text"},
@@ -7082,6 +7106,7 @@ const CmdEntry kRegistry[] = {
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
     {"dimsty", "dimstyle, dsty", "Dimension style editor"},
+    {"msty", "mleaderstyle, mlsty", "Multileader style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"dist", "di", "3D distance between two points: dX, dY, dZ, slope distance"},
@@ -7337,6 +7362,7 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   d.dimAngVertexX = st.dimAngVx;
   d.dimAngVertexY = st.dimAngVy;
@@ -7481,7 +7507,62 @@ bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector
   return true;
 }
 
+void ExecuteCenterMarkFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  struct Mark { double x, y, z, radius; };
+  std::vector<Mark> marks;
+  for (const SelectedEntity& entity : st.selection) {
+    if (entity.type == SelectedEntity::Type::Circle && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 4 + 3 < st.userCirclesCxCyZR.size()) {
+      const std::size_t i = static_cast<std::size_t>(entity.index) * 4;
+      marks.push_back({st.userCirclesCxCyZR[i], st.userCirclesCxCyZR[i + 1],
+                       st.userCirclesCxCyZR[i + 2], st.userCirclesCxCyZR[i + 3]});
+    } else if (entity.type == SelectedEntity::Type::Arc && entity.index >= 0 &&
+               static_cast<std::size_t>(entity.index) < st.userArcs.size()) {
+      const CadArc& arc = st.userArcs[static_cast<std::size_t>(entity.index)];
+      marks.push_back({arc.cx, arc.cy, arc.z, arc.r});
+    }
+  }
+  if (marks.empty()) { log.push_back("CENTERMARK — select one or more circles/arcs first, then run CENTERMARK."); return; }
+  PushUndoSnapshot(st, "CENTERMARK");
+  for (const Mark& mark : marks) {
+    const double half = std::max(mark.radius * 0.18, 0.01);
+    const double gap = half * 0.16;
+    st.userLinesFlat.insert(st.userLinesFlat.end(), {mark.x - half, mark.y, mark.z, mark.x - gap, mark.y, mark.z,
+                                                     mark.x + gap, mark.y, mark.z, mark.x + half, mark.y, mark.z,
+                                                     mark.x, mark.y - half, mark.z, mark.x, mark.y - gap, mark.z,
+                                                     mark.x, mark.y + gap, mark.z, mark.x, mark.y + half, mark.z});
+    for (int i = 0; i < 4; ++i) st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("CENTERMARK — center marks created for " + std::to_string(marks.size()) + " selected circle/arc(s).");
+}
+
+void ExecuteCenterlineFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<const SelectedEntity*> lines;
+  for (const SelectedEntity& entity : st.selection)
+    if (entity.type == SelectedEntity::Type::LineSeg && entity.index >= 0 &&
+        static_cast<std::size_t>(entity.index) * 6 + 5 < st.userLinesFlat.size()) lines.push_back(&entity);
+  if (lines.size() != 2) { log.push_back("CENTERLINE — select exactly two lines first, then run CENTERLINE."); return; }
+  const std::size_t a = static_cast<std::size_t>(lines[0]->index) * 6;
+  const std::size_t b = static_cast<std::size_t>(lines[1]->index) * 6;
+  const double ax0 = st.userLinesFlat[a], ay0 = st.userLinesFlat[a + 1], az0 = st.userLinesFlat[a + 2];
+  const double ax1 = st.userLinesFlat[a + 3], ay1 = st.userLinesFlat[a + 4], az1 = st.userLinesFlat[a + 5];
+  double bx0 = st.userLinesFlat[b], by0 = st.userLinesFlat[b + 1], bz0 = st.userLinesFlat[b + 2];
+  double bx1 = st.userLinesFlat[b + 3], by1 = st.userLinesFlat[b + 4], bz1 = st.userLinesFlat[b + 5];
+  const double same = std::hypot(ax0 - bx0, ay0 - by0) + std::hypot(ax1 - bx1, ay1 - by1);
+  const double reverse = std::hypot(ax0 - bx1, ay0 - by1) + std::hypot(ax1 - bx0, ay1 - by0);
+  if (reverse < same) { std::swap(bx0, bx1); std::swap(by0, by1); std::swap(bz0, bz1); }
+  PushUndoSnapshot(st, "CENTERLINE");
+  st.userLinesFlat.insert(st.userLinesFlat.end(), {(ax0 + bx0) * 0.5, (ay0 + by0) * 0.5, (az0 + bz0) * 0.5,
+                                                   (ax1 + bx1) * 0.5, (ay1 + by1) * 0.5, (az1 + bz1) * 0.5});
+  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  log.push_back("CENTERLINE — centerline created between the two selected lines.");
+}
+
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log) {
+  if (primary == "centermark") { ExecuteCenterMarkFromSelection(st, log); return true; }
+  if (primary == "centerline") { ExecuteCenterlineFromSelection(st, log); return true; }
   if (primary == "line") {
     StartLineCommand(st, log);
     return true;
@@ -7560,6 +7641,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "list") {
     StartListCommand(st, log);
+    return true;
+  }
+  if (primary == "dataextraction") {
+    StartDataExtractCommand(st, log);
+    return true;
+  }
+  if (primary == "table") {
+    StartTableCommand(st, log);
+    return true;
+  }
+  if (primary == "addpointtable") {
+    StartAddPointTableCommand(st, log);
     return true;
   }
   if (primary == "text") {
@@ -8813,7 +8906,7 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 /// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
@@ -8843,7 +8936,7 @@ static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static float NormalizeAngleRadMinusPiToPi(float a) {
@@ -9883,7 +9976,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
           RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -10248,7 +10341,7 @@ static void RotateSelectionAboutAxis(AppCommandState& st, const ray3d::Vec3& axi
           RotateAroundBase(static_cast<float>(axisPoint.x), static_cast<float>(axisPoint.y), angleRad, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -10607,7 +10700,7 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
           ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
           float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
           if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-            c.rotationRad = std::atan2(ty, tx);
+            c.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
         } else {
           // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
           // corners and re-fit — the same weaker path ROTATE takes for these kinds.
@@ -10908,7 +11001,7 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
       RotateAroundBase(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
       if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-        a.rotationRad = std::atan2(ty, tx);
+        a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
     } else {
       float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
       float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -11366,7 +11459,7 @@ static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotat
     ann->dimSignedOffset = dmx - ncmx;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
   if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-    ann->rotationRad = std::atan2(ty, tx);
+    ann->rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
 }
 
 static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outCx, float* outCy) {
@@ -11645,7 +11738,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
     ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
@@ -11654,8 +11747,8 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -11664,7 +11757,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-    CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   }
 }
 
@@ -13030,6 +13123,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -13038,7 +13132,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimSignedOffset = dOff;
   ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
   ann.fontFamily = st.activeDimensionStyle.textFont;
-  ann.rotationRad = std::atan2(vy, vx);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
@@ -13082,6 +13176,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   }
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -13099,7 +13194,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     tx = 0.f;
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
-  ann.rotationRad = std::atan2(ty, tx);
+  ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
@@ -22076,7 +22171,7 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
     RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
     float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -22120,7 +22215,7 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -22174,7 +22269,7 @@ static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, fl
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt2X, &a.dimExt2Y);
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
-      a.rotationRad = std::atan2(ty, tx);
+      a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   } else {
     ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
@@ -44209,6 +44304,21 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     ResetCadDrawInquiryDrafts(st);
     log.push_back("LIST canceled.");
   }
+  else if (st.active == AppCommandState::Kind::DataExtract) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("DATAEXTRACTION canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::Table) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("TABLE canceled.");
+  }
+  else if (st.active == AppCommandState::Kind::PointTable) {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("ADDPOINTTABLE canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Rect)
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
@@ -49018,6 +49128,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Divide:     StartDivideCommand(st, log);     break;
     case K::Area:       StartAreaCommand(st, log);       break;
     case K::List:       StartListCommand(st, log);       break;
+    case K::DataExtract: StartDataExtractCommand(st, log); break;
+    case K::Table:      StartTableCommand(st, log);      break;
+    case K::PointTable: StartAddPointTableCommand(st, log); break;
     case K::Text:       StartTextCommand(st, log);       break;
     case K::Mtext:      StartMtextCommand(st, log);      break;
     case K::Mleader:    StartMleaderCommand(st, log);    break;

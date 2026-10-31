@@ -96,6 +96,17 @@ inline DimensionStyle Default() {
   return s;
 }
 
+inline std::vector<DimensionStyle> DefaultStyles() {
+  return {Default()};
+}
+
+inline const DimensionStyle* Find(const std::vector<DimensionStyle>& styles, const std::string& name) {
+  const auto it = std::find_if(styles.begin(), styles.end(), [&name](const DimensionStyle& style) {
+    return style.name == name;
+  });
+  return it == styles.end() ? nullptr : &*it;
+}
+
 /// Copy the active style's text face and plotted height onto a dimension annotation (DIMSTY Apply).
 inline void BakeTextOntoDimension(CadAnnotation& a, const DimensionStyle& sty) {
   if (a.kind != CadAnnotation::Kind::DimAligned && a.kind != CadAnnotation::Kind::DimLinear &&

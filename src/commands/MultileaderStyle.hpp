@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <string>
+#include <vector>
 
 #include "CadEntities.hpp"
 
@@ -29,6 +30,15 @@ inline MultileaderStyle Default() {
   MultileaderStyle s;
   s.name = "Standard";
   return s;
+}
+
+inline std::vector<MultileaderStyle> DefaultStyles() { return {Default()}; }
+
+inline const MultileaderStyle* Find(const std::vector<MultileaderStyle>& styles, const std::string& name) {
+  const auto it = std::find_if(styles.begin(), styles.end(), [&name](const MultileaderStyle& style) {
+    return style.name == name;
+  });
+  return it == styles.end() ? nullptr : &*it;
 }
 
 inline void BakeOntoMultileaderLabel(CadAnnotation& label, const MultileaderStyle& sty) {

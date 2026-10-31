@@ -33,6 +33,8 @@ struct CadTable {
   std::vector<std::string> cells;
   float plottedHeightInches = 0.125f;
   std::string fontFamily;
+  /// Table style name (REQ-475). Empty for tables made before table styles existed; they draw as Standard.
+  std::string styleName;
 };
 
 [[nodiscard]] inline int CadTableRowCount(int cols, const std::vector<std::string>& cells) {

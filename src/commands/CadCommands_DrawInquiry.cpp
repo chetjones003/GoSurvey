@@ -5,11 +5,17 @@
 
 #include "util/NumFormat.hpp"
 #include "util/StringUtil.hpp"
+#include "util/DataExtract.hpp"
+#include "util/cadtablestyle.hpp"
+#include "SpreadsheetIo.hpp"
+#include "platform/WinFileDialogs.hpp"
 #include "util/geom2d.hpp"
 #include "util/spline.hpp"
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <cstdlib>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -34,12 +40,18 @@ constexpr double kJoinTol = 1.0e-3;
 [[nodiscard]] bool IsCadDrawInquiryKind(AppCommandState::Kind k) {
   using K = AppCommandState::Kind;
   return k == K::Point || k == K::Leader || k == K::Pedit || k == K::Measure || k == K::Divide ||
-         k == K::Area || k == K::List;
+         k == K::Area || k == K::List || k == K::Table || k == K::PointTable;
 }
 
 void BeginInteractive(AppCommandState& st, AppCommandState::Kind kind) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
+  // Ribbon commands can replace an in-progress MLEADER without passing through Escape. Clear its
+  // cursor/label draft as part of the command transition or stale MLEADER dynamic input remains
+  // painted while TABLE (and other draw/inquiry commands) owns the active prompt.
+  ResetMleaderDraft(st);
+  if (st.mtextRichEditorMultileaderIndex >= 0)
+    CancelMtextRichEditor(st, nullptr);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = kind;
@@ -1700,11 +1712,290 @@ void ExecutePdSizeCommand(AppCommandState& st, const std::string& args, std::vec
   log.push_back(buf);
 }
 
+// TABLE and ADDPOINTTABLE (REQ-466, REQ-474; D-2026-10-30-b). Typed prompts drive both commands. The Qt editor
+// opens the point table dialog for ADDPOINTTABLE and then calls BeginAddPointTableWithPoints.
+namespace {
+
+bool ParseTableCount(const std::string& line, int lo, int hi, int dflt, int* out) {
+  if (line.empty()) {
+    *out = dflt;
+    return true;
+  }
+  char* end = nullptr;
+  const long v = std::strtol(line.c_str(), &end, 10);
+  if (end == line.c_str() || *end != '\0' || v < lo || v > hi)
+    return false;
+  *out = static_cast<int>(v);
+  return true;
+}
+
+void EndTableCommand(AppCommandState& st) {
+  ResetCadDrawInquiryDrafts(st);
+  st.active = AppCommandState::Kind::None;
+  st.tableStage = 0;
+  st.pointTableStage = 0;
+}
+
+// Places a sized table with its upper-left corner at (\p wx, \p wy) and logs the result.
+}  // namespace
+
+void StartTableCommand(AppCommandState& st, std::vector<std::string>& log) {
+  BeginInteractive(st, AppCommandState::Kind::Table);
+  st.tableStage = 0;
+  st.tablePendingStyle.clear();
+  st.tablePendingCols = 3;
+  st.tablePendingRows = 2;
+  if (const CadTableStyle* standard = CadTableFindStyle(st.tableStyles, "Standard")) {
+    st.tablePendingColumnWidthInches = standard->columnWidthInches;
+    st.tablePendingRowHeightInches = standard->rowHeightInches;
+  }
+  if (st.addPointTableDialogAvailable) {
+    st.tablePendingStyle = "Standard";
+    st.tablePendingRows = 3;  // one title row, one header row and one initial data row
+    st.tableStage = 3;
+    st.tableInsertDialogRequested = true;
+    return;
+  }
+  log.push_back("TABLE — table style (Standard) or Enter:");
+}
+
+bool HandleTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.tableStage == 0) {
+    const std::string name = line.empty() ? std::string("Standard") : line;
+    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    if (!s || s->point) {
+      log.push_back("TABLE — no data table style named \"" + name + "\". Type Standard or press Enter.");
+      return true;
+    }
+    st.tablePendingStyle = s->name;
+    st.tablePendingColumnWidthInches = s->columnWidthInches;
+    st.tablePendingRowHeightInches = s->rowHeightInches;
+    st.tableStage = 1;
+    log.push_back("TABLE — number of columns <3>:");
+    return true;
+  }
+  if (st.tableStage == 1) {
+    if (!ParseTableCount(line, 1, 50, 3, &st.tablePendingCols)) {
+      log.push_back("TABLE — enter a whole number of columns from 1 to 50.");
+      return true;
+    }
+    st.tableStage = 2;
+    log.push_back("TABLE — number of rows <2>:");
+    return true;
+  }
+  if (st.tableStage == 2) {
+    if (!ParseTableCount(line, 1, 500, 2, &st.tablePendingRows)) {
+      log.push_back("TABLE — enter a whole number of rows from 1 to 500.");
+      return true;
+    }
+    st.tableStage = 3;
+    log.push_back("TABLE — specify the insertion point (upper-left corner):");
+    return true;
+  }
+  log.push_back("TABLE — pick the insertion point.");
+  return true;
+}
+
+void CommitTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.tablePendingStyle);
+  if (!s) {
+    EndTableCommand(st);
+    return;
+  }
+  CadTable t;
+  CadTableStyle sizing = *s;
+  sizing.columnWidthInches = st.tablePendingColumnWidthInches;
+  sizing.rowHeightInches = st.tablePendingRowHeightInches;
+  CadTableApplyStyleSize(&t, sizing, st.tablePendingRows, st.tablePendingCols, st.modelUnitsPerPlottedInch);
+  t.insX = static_cast<float>(wx);
+  t.insY = static_cast<float>(wy);
+  t.insZ = static_cast<float>(CadCommitElevation(st));
+  if (const TextStyle* ts = ActiveTextStyle(st))
+    t.fontFamily = ts->fontFamily;
+  PushUndoSnapshot(st, "TABLE");
+  st.cadTables.push_back(std::move(t));
+  AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+  log.push_back("TABLE inserted: " + std::to_string(st.tablePendingCols) + " x " +
+                std::to_string(st.tablePendingRows) + " in style " + s->name + ".");
+  EndTableCommand(st);
+}
+
+void StartAddPointTableCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.addPointTableDialogAvailable) {
+    st.addPointTableDialogRequested = true;  // the Qt editor opens the dialog and calls BeginAddPointTableWithPoints
+    return;
+  }
+  BeginInteractive(st, AppCommandState::Kind::PointTable);
+  st.pointTableStage = 0;
+  st.pointTableStyle.clear();
+  st.pointTableIds.clear();
+  log.push_back("ADDPOINTTABLE — point table style (NameNEZD) or Enter:");
+}
+
+bool BeginAddPointTableWithPoints(AppCommandState& st, const std::string& styleName, std::vector<int> ids,
+                                  std::vector<std::string>& log) {
+  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, styleName);
+  if (!s || !s->point) {
+    log.push_back("ADDPOINTTABLE — no point table style named \"" + styleName + "\".");
+    return false;
+  }
+  std::sort(ids.begin(), ids.end());
+  ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+  std::vector<int> present;
+  for (int id : ids) {
+    for (const SurveyPoint& p : st.surveyPoints) {
+      if (p.id == id) {
+        present.push_back(id);
+        break;
+      }
+    }
+  }
+  if (present.empty()) {
+    log.push_back("ADDPOINTTABLE — no survey points to list.");
+    return false;
+  }
+  BeginInteractive(st, AppCommandState::Kind::PointTable);
+  st.pointTableStage = 2;
+  st.pointTableStyle = s->name;
+  st.pointTableIds = std::move(present);
+  log.push_back("ADDPOINTTABLE — " + std::to_string(st.pointTableIds.size()) +
+                " point(s). Specify the insertion point (upper-left corner):");
+  return true;
+}
+
+bool HandlePointTableText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  if (st.pointTableStage == 0) {
+    const std::string name = line.empty() ? std::string("NameNEZD") : line;
+    const CadTableStyle* s = CadTableFindStyle(st.tableStyles, name);
+    if (!s || !s->point) {
+      log.push_back("ADDPOINTTABLE — no point table style named \"" + name + "\". Type NameNEZD or press Enter.");
+      return true;
+    }
+    st.pointTableStyle = s->name;
+    st.pointTableStage = 1;
+    log.push_back("ADDPOINTTABLE — points: numbers such as 1-5,8, a point group name, or Enter for all survey points:");
+    return true;
+  }
+  if (st.pointTableStage == 1) {
+    std::vector<int> ids;
+    if (line.empty()) {
+      for (const SurveyPoint& p : st.surveyPoints)
+        ids.push_back(p.id);
+    } else if (const int g = FindPointGroupIndex(st, line); g >= 0) {
+      ids = ResolvePointGroup(st, st.pointGroups[static_cast<size_t>(g)], &log);
+    } else {
+      std::vector<std::string> bad;
+      const std::vector<PointIdRange> ranges = ParseIdRanges(line, &bad);
+      if (!bad.empty()) {
+        log.push_back("ADDPOINTTABLE — cannot read \"" + bad.front() + "\". Type numbers such as 1-5,8.");
+        return true;
+      }
+      for (const SurveyPoint& p : st.surveyPoints) {
+        if (IdInRanges(ranges, p.id))
+          ids.push_back(p.id);
+      }
+    }
+    BeginAddPointTableWithPoints(st, st.pointTableStyle, std::move(ids), log);
+    return true;
+  }
+  log.push_back("ADDPOINTTABLE — pick the insertion point.");
+  return true;
+}
+
+void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
+  const CadTableStyle* s = CadTableFindStyle(st.tableStyles, st.pointTableStyle);
+  if (!s) {
+    EndTableCommand(st);
+    return;
+  }
+  std::vector<CadTablePointRow> rows;
+  for (int id : st.pointTableIds) {
+    for (const SurveyPoint& p : st.surveyPoints) {
+      if (p.id != id)
+        continue;
+      CadTablePointRow r;
+      r.id = p.id;
+      r.northing = p.northing;
+      r.easting = p.easting;
+      r.elevation = p.elevation;
+      r.description = p.description;
+      rows.push_back(std::move(r));
+      break;
+    }
+  }
+  if (rows.empty()) {
+    log.push_back("ADDPOINTTABLE — no survey points to list.");
+    EndTableCommand(st);
+    return;
+  }
+  const std::size_t maxRows = st.pointTableSplitEnabled
+      ? static_cast<std::size_t>(std::max(1, st.pointTableMaxRows)) : rows.size();
+  const std::size_t chunkCount = (rows.size() + maxRows - 1) / maxRows;
+  const int cols = static_cast<int>(s->pointColumns.size());
+  std::vector<CadTable> tables;
+  tables.reserve(chunkCount);
+  float firstWidth = 0.f, firstHeight = 0.f;
+  for (std::size_t chunk = 0; chunk < chunkCount; ++chunk) {
+    const std::size_t first = chunk * maxRows;
+    const std::size_t count = std::min(maxRows, rows.size() - first);
+    std::vector<CadTablePointRow> subset(rows.begin() + static_cast<std::ptrdiff_t>(first),
+                                         rows.begin() + static_cast<std::ptrdiff_t>(first + count));
+    CadTable table;
+    CadTableApplyStyleSize(&table, *s, static_cast<int>(count) + 1, cols, st.modelUnitsPerPlottedInch);
+    table.cells = CadPointTableCells(*s, subset, st.displayLinearPrecision);
+    const std::size_t stackLimit = static_cast<std::size_t>(std::max(1, st.pointTableMaxStack));
+    const std::size_t stack = chunk / stackLimit;
+    const std::size_t tile = chunk % stackLimit;
+    if (st.pointTableTileAcross) {
+      table.insX = static_cast<float>(wx + stack * (table.width + st.pointTableOffset));
+      table.insY = static_cast<float>(wy + tile * (table.height + st.pointTableOffset));
+    } else {
+      table.insX = static_cast<float>(wx + tile * (table.width + st.pointTableOffset));
+      table.insY = static_cast<float>(wy - stack * (table.height + st.pointTableOffset));
+    }
+    table.insZ = static_cast<float>(CadCommitElevation(st));
+    if (const TextStyle* ts = ActiveTextStyle(st)) table.fontFamily = ts->fontFamily;
+    if (chunk == 0) { firstWidth = table.width; firstHeight = table.height; }
+    tables.push_back(std::move(table));
+  }
+  PushUndoSnapshot(st, "ADDPOINTTABLE");
+  for (CadTable& table : tables) {
+    st.cadTables.push_back(std::move(table));
+    AppendNewObjectAttrs(st, st.cadTableAttrs, st.cadTables.size(), ObjectLayerKind::Table, {});  // REQ-361
+    if (!st.pointTableLayer.empty()) st.cadTableAttrs.back().layer = st.pointTableLayer;
+  }
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+  log.push_back("ADDPOINTTABLE inserted: " + std::to_string(rows.size()) + " point(s) in style " + s->name +
+                ". " + std::to_string(chunkCount) + " table(s) (" +
+                (st.pointTableDynamic ? "dynamic" : "static") + " setting, " +
+                std::to_string(firstWidth) + " x " + std::to_string(firstHeight) + " first table).");
+  EndTableCommand(st);
+}
+
 bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   if (!IsCadDrawInquiryKind(st.active))
     return false;
   const double z = CadCommitElevation(st);
+  if (st.active == K::Table) {
+    if (st.tableStage != 3) {
+      log.push_back("TABLE — answer the prompt first.");
+      return true;
+    }
+    CommitTableAt(st, wx, wy, log);
+    return true;
+  }
+  if (st.active == K::PointTable) {
+    if (st.pointTableStage != 2) {
+      log.push_back("ADDPOINTTABLE — answer the prompt first.");
+      return true;
+    }
+    CommitPointTableAt(st, wx, wy, log);
+    return true;
+  }
   if (st.active == K::Point) {
     CommitCadPointAt(st, wx, wy, z, log);
     return true;
@@ -1745,9 +2036,154 @@ bool SubmitCadDrawInquiryViewportPick(AppCommandState& st, double wx, double wy,
   return true;
 }
 
+// DATAEXTRACTION (REQ-467, issue #804). Selection first, then a typed column list, then a file.
+// The drawing-table target waits for REQ-466 and is not offered here.
+namespace {
+
+const char* DataExtractTypeName(const SelectedEntity& e, const AppCommandState& st) {
+  using T = SelectedEntity::Type;
+  switch (e.type) {
+    case T::LineSeg:  return "LINE";
+    case T::Circle:   return "CIRCLE";
+    case T::Arc:      return "ARC";
+    case T::Ellipse:  return "ELLIPSE";
+    case T::Polyline: return "POLYLINE";
+    case T::Point:    return "POINT";
+    case T::Spline:   return "SPLINE";
+    case T::Multileader: return "MLEADER";
+    case T::FilledRegion: return "HATCH";
+    case T::Annotation: {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadAnnotations.size())
+        return "ANNOTATION";
+      switch (st.cadAnnotations[static_cast<size_t>(e.index)].kind) {
+        case CadAnnotation::Kind::Text:      return "TEXT";
+        case CadAnnotation::Kind::Mtext:     return "MTEXT";
+        case CadAnnotation::Kind::DimAligned:
+        case CadAnnotation::Kind::DimLinear:
+        case CadAnnotation::Kind::DimAngular: return "DIMENSION";
+        default:                             return "ANNOTATION";
+      }
+    }
+    default: return "OBJECT";
+  }
+}
+
+// One row for a selected object. Coordinates are the object's defining point (REQ-467 implementation notes).
+ExtractRecord DataExtractRecord(const AppCommandState& st, const SelectedEntity& e) {
+  using T = SelectedEntity::Type;
+  ExtractRecord r;
+  r.type = DataExtractTypeName(e, st);
+  const EntityAttributes* at = CadEntityAttrsForSelected(st, e);
+  r.layer = (at && !at->layer.empty()) ? at->layer : "0";
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 2 < st.userLinesFlat.size()) {
+      r.hasPoint = true;
+      r.x = st.userLinesFlat[k];
+      r.y = st.userLinesFlat[k + 1];
+      r.z = st.userLinesFlat[k + 2];
+    }
+  } else if (e.type == T::Circle) {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 2 < st.userCirclesCxCyZR.size()) {
+      r.hasPoint = true;
+      r.x = st.userCirclesCxCyZR[k];
+      r.y = st.userCirclesCxCyZR[k + 1];
+      r.z = st.userCirclesCxCyZR[k + 2];
+    }
+  } else if (e.type == T::Polyline) {
+    if (e.index >= 0 && static_cast<size_t>(e.index) + 1 < st.userPolylineOffsets.size()) {
+      const size_t v = static_cast<size_t>(st.userPolylineOffsets[static_cast<size_t>(e.index)]) * 3;
+      if (v + 2 < st.userPolylineVerts.size()) {
+        r.hasPoint = true;
+        r.x = st.userPolylineVerts[v];
+        r.y = st.userPolylineVerts[v + 1];
+        r.z = st.userPolylineVerts[v + 2];
+      }
+    }
+  } else if (e.type == T::Point) {
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadPoints.size()) {
+      const CadPoint& p = st.cadPoints[static_cast<size_t>(e.index)];
+      r.hasPoint = true;
+      r.x = p.x;
+      r.y = p.y;
+      r.z = p.z;
+    }
+  } else if (e.type == T::Annotation) {
+    if (e.index >= 0 && static_cast<size_t>(e.index) < st.cadAnnotations.size()) {
+      const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(e.index)];
+      r.hasPoint = true;
+      r.x = a.insX;
+      r.y = a.insY;
+      r.z = a.insZ;
+      r.hasText = true;
+      r.text = a.text;
+    }
+  }
+  return r;
+}
+
+bool DataExtractWrite(const std::string& path, const SheetGrid::Grid& grid, std::string* err) {
+  const std::string lower = [&] {
+    std::string s = path;
+    for (char& ch : s)
+      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    return s;
+  }();
+  if (lower.size() >= 4 && lower.compare(lower.size() - 4, 4, ".csv") == 0)
+    return SpreadsheetIo::WriteCsv(path, grid, err);
+  return SpreadsheetIo::WriteXlsx(path, grid, err);
+}
+
+}  // namespace
+
+void StartDataExtractCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.selectedPaperEntities.empty()) {
+    log.push_back("DATAEXTRACTION — paper-space selections are not supported yet (REQ-201); select model objects.");
+    return;
+  }
+  if (st.selection.empty() || st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("DATAEXTRACTION — select the objects to extract first, then run the command.");
+    return;
+  }
+  BeginInteractive(st, AppCommandState::Kind::DataExtract);
+  log.push_back("DATAEXTRACTION — " + std::to_string(st.selection.size()) +
+                " object(s). Columns: TYPE, LAYER, TEXT, X, Y, Z separated by commas, or Enter for all:");
+}
+
+bool HandleDataExtractText(const std::string& line, AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<ExtractColumn> cols;
+  std::string err;
+  if (!ParseExtractColumns(line, &cols, &err)) {
+    log.push_back("DATAEXTRACTION — " + err + ".");
+    return true;
+  }
+  std::vector<ExtractRecord> records;
+  records.reserve(st.selection.size());
+  for (const SelectedEntity& e : st.selection)
+    records.push_back(DataExtractRecord(st, e));
+  const SheetGrid::Grid grid = BuildExtractGrid(cols, records);
+
+  char path[1024]{};
+  if (!BrowseSaveFileSpreadsheetUtf8(path, sizeof(path), "extract.xlsx") || path[0] == '\0') {
+    ResetCadDrawInquiryDrafts(st);
+    st.active = AppCommandState::Kind::None;
+    log.push_back("DATAEXTRACTION canceled — no file chosen.");
+    return true;
+  }
+  if (!DataExtractWrite(path, grid, &err)) {
+    log.push_back("DATAEXTRACTION — " + err + ".");
+    return true;
+  }
+  ResetCadDrawInquiryDrafts(st);
+  st.active = AppCommandState::Kind::None;
+  log.push_back("DATAEXTRACTION wrote " + std::to_string(records.size()) + " row(s) to " + path + ".");
+  return true;
+}
+
 bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
-  if (!IsCadDrawInquiryKind(st.active))
+  if (!IsCadDrawInquiryKind(st.active) && st.active != K::DataExtract)
     return false;
   const std::string line = StringUtil::trimCopy(lineIn);
   const std::string opt = UpperTrim(line);
@@ -1808,6 +2244,12 @@ bool HandleCadDrawInquiryTextInput(const std::string& lineIn, AppCommandState& s
   if (st.active == K::Measure || st.active == K::Divide)
     return HandleMeasureDivideText(line, st, log);
 
+  if (st.active == K::Table)
+    return HandleTableText(line, st, log);
+  if (st.active == K::PointTable)
+    return HandlePointTableText(line, st, log);
+  if (st.active == K::DataExtract)
+    return HandleDataExtractText(line, st, log);
   if (st.active == K::Area)
     return HandleAreaText(line, opt, st, log);
 

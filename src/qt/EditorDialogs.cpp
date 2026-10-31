@@ -2,6 +2,7 @@
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
+#include "EditorPointTableDialog.hpp"
 #include "EditorLayerManager.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
@@ -50,6 +51,7 @@
 #include <QKeyEvent>
 #include <QFrame>
 #include <QGroupBox>
+#include <QRadioButton>
 #include <QScreen>
 #include <QStyle>
 #include <algorithm>
@@ -660,6 +662,323 @@ void EditorWindow::ServiceUiRequests() {
     ShowBlockEditorClosePrompt();
     return;
   }
+  if (m_State.tableInsertDialogRequested) {
+    m_State.tableInsertDialogRequested = false;
+    m_ModalOpen = true;
+    QDialog dialog(this);
+    dialog.setObjectName("insertTableDialog");
+    dialog.setWindowTitle("Insert Table");
+    dialog.resize(940, 570);
+    auto* root = new QVBoxLayout(&dialog);
+    auto* body = new QHBoxLayout;
+    auto* left = new QVBoxLayout;
+    auto* styleForm = new QFormLayout;
+    auto* style = new QComboBox(&dialog);
+    style->setObjectName("insertTableStyle");
+    for (const CadTableStyle& candidate : m_State.tableStyles)
+      if (!candidate.point) style->addItem(QString::fromUtf8(candidate.name.c_str()));
+    const int selectedStyle = style->findText(QString::fromUtf8(m_State.tablePendingStyle.c_str()));
+    if (selectedStyle >= 0) style->setCurrentIndex(selectedStyle);
+    styleForm->addRow("Table style:", style);
+    left->addLayout(styleForm);
+    auto* options = new QGroupBox("Insert options", &dialog);
+    auto* optionLayout = new QVBoxLayout(options);
+    auto* empty = new QRadioButton("Start from empty table", options);
+    empty->setChecked(true);
+    optionLayout->addWidget(empty);
+    auto* dataLink = new QRadioButton("From a data link", options);
+    dataLink->setEnabled(false);
+    optionLayout->addWidget(dataLink);
+    auto* extraction = new QRadioButton("From object data in the drawing (Data Extraction)", options);
+    extraction->setEnabled(false);
+    optionLayout->addWidget(extraction);
+    left->addWidget(options);
+    auto* previewCheck = new QCheckBox("Preview", &dialog);
+    previewCheck->setChecked(true);
+    left->addWidget(previewCheck);
+    auto* preview = new QTableWidget(&dialog);
+    preview->setObjectName("insertTablePreview");
+    preview->setMinimumSize(400, 260);
+    preview->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    preview->setSelectionMode(QAbstractItemView::NoSelection);
+    preview->horizontalHeader()->hide();
+    preview->verticalHeader()->hide();
+    preview->setStyleSheet("QTableWidget{background:#202830;color:#e8a61a;border:1px solid #87939b;gridline-color:#e85b24;font:14px monospace;} QTableWidget::item{border:1px solid #e85b24;padding:4px;}");
+    left->addWidget(preview, 1);
+    QObject::connect(previewCheck, &QCheckBox::toggled, preview, &QWidget::setVisible);
+    auto* right = new QVBoxLayout;
+    auto* insertion = new QGroupBox("Insertion behavior", &dialog);
+    auto* insertionLayout = new QVBoxLayout(insertion);
+    auto* insertionPoint = new QRadioButton("Specify insertion point", insertion);
+    insertionPoint->setChecked(true);
+    insertionLayout->addWidget(insertionPoint);
+    auto* windowInsert = new QRadioButton("Specify window", insertion);
+    windowInsert->setEnabled(false);
+    windowInsert->setToolTip("Window insertion is not supported yet.");
+    insertionLayout->addWidget(windowInsert);
+    right->addWidget(insertion);
+    auto* dimensions = new QGroupBox("Column & row settings", &dialog);
+    auto* dimensionsForm = new QFormLayout(dimensions);
+    auto* columns = new QSpinBox(&dialog);
+    columns->setObjectName("insertTableColumns");
+    columns->setRange(1, 50);
+    columns->setValue(m_State.tablePendingCols);
+    auto* rows = new QSpinBox(&dialog);
+    rows->setObjectName("insertTableRows");
+    rows->setRange(1, 500);
+    rows->setValue(std::max(1, m_State.tablePendingRows - 2));
+    auto* columnWidth = new QDoubleSpinBox(&dialog);
+    columnWidth->setRange(0.001, 100000.0);
+    columnWidth->setDecimals(4);
+    auto* rowHeight = new QDoubleSpinBox(&dialog);
+    rowHeight->setRange(0.001, 100000.0);
+    rowHeight->setDecimals(4);
+    auto updateDimensions = [&] {
+      if (const CadTableStyle* candidate = CadTableFindStyle(m_State.tableStyles,
+                                                             style->currentText().toUtf8().toStdString())) {
+        columnWidth->setValue(candidate->columnWidthInches);
+        rowHeight->setValue(candidate->rowHeightInches);
+        m_State.tablePendingColumnWidthInches = candidate->columnWidthInches;
+        m_State.tablePendingRowHeightInches = candidate->rowHeightInches;
+      }
+    };
+    dimensionsForm->addRow("Columns:", columns);
+    dimensionsForm->addRow("Column width:", columnWidth);
+    dimensionsForm->addRow("Data rows:", rows);
+    dimensionsForm->addRow("Row height:", rowHeight);
+    right->addWidget(dimensions);
+    auto* cellStyles = new QGroupBox("Set cell styles", &dialog);
+    auto* cellStyleForm = new QFormLayout(cellStyles);
+    auto addCellStyle = [&](const char* label, const char* selectedValue) {
+      auto* value = new QComboBox(cellStyles);
+      value->addItems({"Title", "Header", "Data"});
+      value->setCurrentText(QString::fromUtf8(selectedValue));
+      cellStyleForm->addRow(label, value);
+      return value;
+    };
+    auto* titleCellStyle = addCellStyle("First row cell style:", "Title");
+    auto* headerCellStyle = addCellStyle("Second row cell style:", "Header");
+    auto* dataCellStyle = addCellStyle("All other row cell styles:", "Data");
+    right->addWidget(cellStyles);
+    right->addStretch(1);
+    body->addLayout(left, 3);
+    body->addLayout(right, 2);
+    root->addLayout(body, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+                                             QDialogButtonBox::Help,
+                                         &dialog);
+    root->addWidget(buttons);
+    auto updatePreview = [&] {
+      const int dataRows = std::clamp(rows->value(), 1, 8);
+      const int rowCount = dataRows + 2;
+      const int colCount = std::clamp(columns->value(), 1, 8);
+      preview->clear();
+      preview->setRowCount(rowCount);
+      preview->setColumnCount(colCount);
+      preview->setSpan(0, 0, 1, colCount);
+      auto setCell = [&](int row, int col, const QString& value, const QComboBox* cellStyle) {
+        auto* item = new QTableWidgetItem(value);
+        item->setTextAlignment(Qt::AlignCenter);
+        const QString cellType = cellStyle->currentText();
+        if (cellType == "Title") item->setBackground(QColor("#202830"));
+        else if (cellType == "Header") item->setBackground(QColor("#293239"));
+        else item->setBackground(QColor("#202830"));
+        item->setForeground(QColor("#ef5424"));
+        preview->setItem(row, col, item);
+      };
+      setCell(0, 0, style->currentText(), titleCellStyle);
+      for (int col = 0; col < colCount; ++col) setCell(1, col, "Header", headerCellStyle);
+      for (int row = 2; row < rowCount; ++row)
+        for (int col = 0; col < colCount; ++col) setCell(row, col, "Data", dataCellStyle);
+      preview->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+      preview->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    };
+    QObject::connect(titleCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(headerCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(dataCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(style, &QComboBox::currentTextChanged, &dialog, [&] { updateDimensions(); updatePreview(); });
+    QObject::connect(columns, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    QObject::connect(rows, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    updateDimensions();
+    updatePreview();
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() == QDialog::Accepted) {
+      m_State.tablePendingStyle = style->currentText().toUtf8().toStdString();
+      m_State.tablePendingCols = columns->value();
+      m_State.tablePendingRows = rows->value() + 2;  // title, header, and requested data rows
+      m_State.tablePendingColumnWidthInches = static_cast<float>(columnWidth->value());
+      m_State.tablePendingRowHeightInches = static_cast<float>(rowHeight->value());
+      m_State.tableStage = 3;
+      m_Log.push_back("TABLE — specify the insertion point (upper-left corner):");
+    } else {
+      m_State.active = AppCommandState::Kind::None;
+      m_State.tableStage = 0;
+    }
+    m_ModalOpen = false;
+    Refresh();
+    return;
+  }
+  if (m_State.showDimStyleDialog) {
+    m_State.showDimStyleDialog = false;
+    m_ModalOpen = true;
+    auto editStyle = [this](DimensionStyle* style, bool create) {
+      if (!style) return false;
+      QDialog edit(this);
+      edit.setObjectName("dimensionStyleEditor");
+      edit.setWindowTitle((create ? "New Dimension Style" : "Modify Dimension Style: ") +
+                          QString::fromUtf8(style->name.c_str()));
+      edit.resize(820, 560);
+      edit.setStyleSheet("QDialog{background:#f1f1f1;color:#202020;} QTabWidget::pane{border:1px solid #b8b8b8;background:#fafafa;} QTabBar::tab{padding:6px 9px;color:#202020;} QGroupBox{border:1px solid #c8c8c8;margin-top:8px;padding:8px;} QLabel{color:#202020;}");
+      auto* root = new QVBoxLayout(&edit);
+      auto* name = new QLineEdit(QString::fromUtf8(style->name.c_str()), &edit);
+      name->setObjectName("dimensionStyleName");
+      if (!create) name->setReadOnly(true);
+      root->addWidget(name);
+      auto* tabs = new QTabWidget(&edit);
+      const auto page = [&](const char* title) {
+        auto* w = new QWidget(tabs);
+        auto* layout = new QFormLayout(w);
+        tabs->addTab(w, title);
+        return layout;
+      };
+      auto* lines = page("Lines");
+      auto* dimColor = new QLineEdit(QString::fromUtf8(style->dimLineColor.c_str()), &edit);
+      dimColor->setObjectName("dimensionLineColor"); lines->addRow("Dimension line color:", dimColor);
+      auto* dimType = new QLineEdit(QString::fromUtf8(style->dimLineType.c_str()), &edit);
+      lines->addRow("Dimension line linetype:", dimType);
+      auto* extColor = new QLineEdit(QString::fromUtf8(style->extLineColor.c_str()), &edit);
+      lines->addRow("Extension line color:", extColor);
+      auto* extType = new QLineEdit(QString::fromUtf8(style->extLineType.c_str()), &edit);
+      lines->addRow("Extension line linetype:", extType);
+      auto* symbols = page("Symbols and Arrows");
+      auto* arrow = new QComboBox(&edit);
+      for (int i = 0; i <= static_cast<int>(DimArrowType::None); ++i)
+        arrow->addItem(DimArrowTypeName(static_cast<DimArrowType>(i)), i);
+      arrow->setCurrentIndex(static_cast<int>(style->arrowType));
+      symbols->addRow("Arrowhead:", arrow);
+      auto* arrowSize = new QDoubleSpinBox(&edit); arrowSize->setRange(0.001, 100000); arrowSize->setDecimals(4); arrowSize->setValue(style->arrowSizeInches);
+      symbols->addRow("Arrow size (in):", arrowSize);
+      auto* text = page("Text");
+      auto* font = new QComboBox(&edit);
+      for (const TextStyle& ts : m_State.textStyles) font->addItem(QString::fromUtf8(ts.name.c_str()));
+      if (font->findText(QString::fromUtf8(style->textFont.c_str())) < 0 && !style->textFont.empty()) font->addItem(QString::fromUtf8(style->textFont.c_str()));
+      font->setCurrentText(style->textFont.empty() ? QStringLiteral("Standard") : QString::fromUtf8(style->textFont.c_str()));
+      text->addRow("Text style:", font);
+      auto* textHeight = new QDoubleSpinBox(&edit); textHeight->setRange(0.001, 100000); textHeight->setDecimals(4); textHeight->setValue(style->textSizeInches);
+      text->addRow("Text height (in):", textHeight);
+      auto* textColor = new QLineEdit(QString::fromUtf8(style->textColor.c_str()), &edit); text->addRow("Text color:", textColor);
+      auto* alignment = new QComboBox(&edit); alignment->addItems({"Centered", "Above", "Beside"}); alignment->setCurrentIndex(static_cast<int>(style->textAlign)); text->addRow("Placement:", alignment);
+      auto* fit = page("Fit"); auto* fitHint = new QLabel("Dimensions use the drawing scale and keep text and arrows inside when space allows.", &edit); fit->addRow(fitHint);
+      auto* units = page("Primary Units"); auto* unitFormat = new QComboBox(&edit); for (int i=0;i<=static_cast<int>(DimUnitFormat::Fractional);++i) unitFormat->addItem(DimUnitFormatName(static_cast<DimUnitFormat>(i)), i); unitFormat->setCurrentIndex(static_cast<int>(style->unitFormat)); units->addRow("Unit format:", unitFormat);
+      auto* precision = new QSpinBox(&edit); precision->setRange(0, 8); precision->setValue(style->unitPrecision); units->addRow("Precision:", precision);
+      auto* scale = new QDoubleSpinBox(&edit); scale->setRange(0.000001, 100000); scale->setDecimals(6); scale->setValue(style->unitScale); units->addRow("Scale factor:", scale);
+      auto* alternate = page("Alternate Units"); alternate->addRow(new QLabel("Alternate unit fields are retained from DWG and will be shown when this drawing supports them.", &edit));
+      auto* tolerances = page("Tolerances"); tolerances->addRow(new QLabel("Tolerance fields are retained from DWG and will be shown when this drawing supports them.", &edit));
+      root->addWidget(tabs, 1);
+      auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel | QDialogButtonBox::Help, &edit);
+      root->addWidget(buttons);
+      QObject::connect(buttons, &QDialogButtonBox::accepted, &edit, &QDialog::accept);
+      QObject::connect(buttons, &QDialogButtonBox::rejected, &edit, &QDialog::reject);
+      if (edit.exec() != QDialog::Accepted) return false;
+      const QString enteredName = name->text().trimmed();
+      if (enteredName.isEmpty()) return false;
+      style->name = enteredName.toUtf8().toStdString();
+      style->dimLineColor = dimColor->text().toUtf8().toStdString(); style->dimLineType = dimType->text().toUtf8().toStdString();
+      style->extLineColor = extColor->text().toUtf8().toStdString(); style->extLineType = extType->text().toUtf8().toStdString();
+      style->arrowType = static_cast<DimArrowType>(arrow->currentData().toInt()); style->arrowSizeInches = static_cast<float>(arrowSize->value());
+      style->textFont = font->currentText() == "Standard" ? std::string() : font->currentText().toUtf8().toStdString();
+      style->textSizeInches = static_cast<float>(textHeight->value()); style->textColor = textColor->text().toUtf8().toStdString();
+      style->textAlign = static_cast<DimTextAlign>(alignment->currentIndex());
+      style->unitFormat = static_cast<DimUnitFormat>(unitFormat->currentData().toInt()); style->unitPrecision = precision->value(); style->unitScale = scale->value();
+      return true;
+    };
+    if (m_State.dimensionStyles.empty()) m_State.dimensionStyles = DimensionStyles::DefaultStyles();
+    QDialog manager(this);
+    manager.setObjectName("dimensionStyleManager"); manager.setWindowTitle("Dimension Style Manager"); manager.resize(760, 530);
+    manager.setStyleSheet("QDialog{background:#f1f1f1;color:#202020;} QLabel{color:#202020;} QListWidget{background:white;color:#202020;border:1px solid #aab1b5;} QPushButton{min-height:27px;color:#202020;background:#f8f8f8;border:1px solid #9ca3a8;padding:3px 8px;} QPushButton:hover{background:#e7edf2;}");
+    auto* root = new QVBoxLayout(&manager);
+    root->addWidget(new QLabel("Current dimension style: " + QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()), &manager));
+    auto* body = new QHBoxLayout;
+    auto* list = new QListWidget(&manager); list->setObjectName("dimensionStyleList"); list->setMinimumWidth(240);
+    for (const DimensionStyle& style : m_State.dimensionStyles) list->addItem(QString::fromUtf8(style.name.c_str()));
+    list->setCurrentRow(std::max(0, list->row(list->findItems(QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()), Qt::MatchExactly).value(0))));
+    body->addWidget(list, 1);
+    auto* details = new QVBoxLayout;
+    auto* preview = new QLabel(QString("Preview of: %1\n\n←──── 25.40 ────→\n       ╲ 45°\n      ◯───────╱").arg(QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())), &manager);
+    preview->setObjectName("dimensionStylePreview"); preview->setAlignment(Qt::AlignCenter); preview->setMinimumSize(290, 220); preview->setStyleSheet("background:#202830;color:#e8a61a;font:16px monospace;border:1px solid #8d9295;");
+    details->addWidget(preview, 1); details->addWidget(new QLabel("Description", &manager)); details->addWidget(new QLabel("Dimension style settings for this drawing.", &manager));
+    body->addLayout(details, 2);
+    auto* actions = new QVBoxLayout;
+    auto* setCurrent = new QPushButton("Set Current", &manager); setCurrent->setObjectName("dimensionStyleSetCurrent"); actions->addWidget(setCurrent);
+    auto* create = new QPushButton("New…", &manager); create->setObjectName("dimensionStyleNew"); actions->addWidget(create);
+    auto* modify = new QPushButton("Modify…", &manager); modify->setObjectName("dimensionStyleModify"); actions->addWidget(modify);
+    auto* override = new QPushButton("Override…", &manager); override->setObjectName("dimensionStyleOverride"); actions->addWidget(override);
+    auto* compare = new QPushButton("Compare…", &manager); compare->setObjectName("dimensionStyleCompare"); actions->addWidget(compare); actions->addStretch();
+    body->addLayout(actions); root->addLayout(body, 1);
+    auto* bottom = new QHBoxLayout; bottom->addStretch(); auto* close = new QPushButton("Close", &manager); auto* help = new QPushButton("Help", &manager); bottom->addWidget(close); bottom->addWidget(help); root->addLayout(bottom);
+    auto selectedName = [&]() { return list->currentItem() ? list->currentItem()->text().toUtf8().toStdString() : std::string(); };
+    QObject::connect(list, &QListWidget::currentRowChanged, &manager, [&, preview](int row) { if (row >= 0 && row < static_cast<int>(m_State.dimensionStyles.size())) preview->setText(QString("Preview of: %1\n\n←──── 25.40 ────→\n       ╲ 45°\n      ◯───────╱").arg(QString::fromUtf8(m_State.dimensionStyles[static_cast<std::size_t>(row)].name.c_str()))); });
+    QObject::connect(setCurrent, &QPushButton::clicked, &manager, [&] { const auto n = selectedName(); if (const auto* style = DimensionStyles::Find(m_State.dimensionStyles, n)) { PushUndoSnapshot(m_State, "DIMSTY current"); m_State.activeDimensionStyle = *style; manager.accept(); } });
+    QObject::connect(modify, &QPushButton::clicked, &manager, [&] { const auto n = selectedName(); auto it = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(), [&](const auto& s) { return s.name == n; }); if (it != m_State.dimensionStyles.end()) { DimensionStyle edited = *it; if (editStyle(&edited, false)) { PushUndoSnapshot(m_State, "DIMSTY modify"); *it = std::move(edited); if (m_State.activeDimensionStyle.name == n) m_State.activeDimensionStyle = *it; if (list->currentItem()) list->currentItem()->setText(QString::fromUtf8(it->name.c_str())); } } });
+    QObject::connect(create, &QPushButton::clicked, &manager, [&] { bool ok = false; const QString n = QInputDialog::getText(&manager, "New Dimension Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed(); if (!ok || n.isEmpty()) return; if (DimensionStyles::Find(m_State.dimensionStyles, n.toUtf8().toStdString())) { QMessageBox::warning(&manager, "Dimension Style", "That style name already exists."); return; } DimensionStyle copy = m_State.activeDimensionStyle; copy.name = n.toUtf8().toStdString(); if (editStyle(&copy, true)) { PushUndoSnapshot(m_State, "DIMSTY new"); m_State.dimensionStyles.push_back(copy); list->addItem(n); list->setCurrentRow(list->count() - 1); } });
+    QObject::connect(override, &QPushButton::clicked, &manager, [&] { QMessageBox::information(&manager, "Dimension Style", "Overrides are not available for this style model."); });
+    QObject::connect(compare, &QPushButton::clicked, &manager, [&] { QMessageBox::information(&manager, "Dimension Style", "Select Modify to inspect and edit supported style values."); });
+    QObject::connect(close, &QPushButton::clicked, &manager, &QDialog::accept);
+    manager.exec();
+    m_State.showDimStyleDialog = false; m_ModalOpen = false; Refresh(); return;
+  }
+  if (m_State.showMleaderStyleDialog) {
+    m_State.showMleaderStyleDialog = false;
+    m_ModalOpen = true;
+    QDialog dialog(this);
+    dialog.setObjectName("mleaderStyleDialog");
+    dialog.setWindowTitle("Multileader Style: " + QString::fromUtf8(m_State.activeMultileaderStyle.name.c_str()));
+    auto* form = new QFormLayout(&dialog);
+    auto* textHeight = new QDoubleSpinBox(&dialog);
+    textHeight->setObjectName("mleaderTextHeight");
+    textHeight->setRange(0.001, 100000.0);
+    textHeight->setDecimals(4);
+    textHeight->setValue(m_State.activeMultileaderStyle.textSizeInches);
+    form->addRow("Text height (in):", textHeight);
+    auto* arrowSize = new QDoubleSpinBox(&dialog);
+    arrowSize->setObjectName("mleaderArrowSize");
+    arrowSize->setRange(0.001, 100000.0);
+    arrowSize->setDecimals(4);
+    arrowSize->setValue(m_State.activeMultileaderStyle.arrowSizeInches);
+    form->addRow("Arrow size (in):", arrowSize);
+    auto* landingGap = new QDoubleSpinBox(&dialog);
+    landingGap->setObjectName("mleaderLandingGap");
+    landingGap->setRange(0.0, 100000.0);
+    landingGap->setDecimals(4);
+    landingGap->setValue(m_State.activeMultileaderStyle.landingGapInches);
+    form->addRow("Landing gap (in):", landingGap);
+    auto* annotative = new QCheckBox("Annotative by default", &dialog);
+    annotative->setObjectName("mleaderAnnotativeDefault");
+    annotative->setChecked(m_State.activeMultileaderStyle.annotativeDefault);
+    form->addRow(annotative);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() == QDialog::Accepted) {
+      PushUndoSnapshot(m_State, "MSTY");
+      m_State.activeMultileaderStyle.textSizeInches = static_cast<float>(textHeight->value());
+      m_State.activeMultileaderStyle.arrowSizeInches = static_cast<float>(arrowSize->value());
+      m_State.activeMultileaderStyle.landingGapInches = static_cast<float>(landingGap->value());
+      m_State.activeMultileaderStyle.annotativeDefault = annotative->isChecked();
+      auto it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& style) {
+        return style.name == m_State.activeMultileaderStyle.name;
+      });
+      if (it == m_State.multileaderStyles.end())
+        m_State.multileaderStyles.push_back(m_State.activeMultileaderStyle);
+      else
+        *it = m_State.activeMultileaderStyle;
+    }
+    m_ModalOpen = false;
+    Refresh();
+    return;
+  }
   if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
   else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
   if (m_State.pipeFittingPaletteOpen) ShowPipeFittingPalette();
@@ -681,6 +1000,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
+  } else if (m_State.addPointTableDialogRequested) {
+    m_State.addPointTableDialogRequested = false;
+    m_ModalOpen = true;
+    ShowAddPointTableDialog(this, m_State, m_Log);
+    m_ModalOpen = false;
+    Refresh();
   } else if (m_State.showPointGroupManagerWindow) {
     m_State.showPointGroupManagerWindow = false;
     m_ModalOpen = true;
