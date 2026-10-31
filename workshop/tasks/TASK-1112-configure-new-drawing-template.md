@@ -49,6 +49,7 @@ None.
 - 2026-10-30 — Implemented Options path persistence, direct standalone template creation, bundled fallback, and chooser removal. Updated in-app wiki and parity ledger.
 - 2026-10-30 — Updated the public GoSurvey Wiki pages `Files-and-Drawings.md` and `Settings-and-Options.md`, commit `eea40bb`.
 - 2026-10-30 — `build.bat` PASS (Release, all targets built). The first build attempt caught an `addHeading` declaration-order compile error; replaced that call with a local heading widget and rebuilt successfully. `git diff --check` PASS. Tests were not run. Required screenshots and the three-reviewer Civil 3D comparison remain pending.
+- 2026-10-30 — PR CI initially failed `qt.editor.shard-3` because `issue1032SettingsWindowStagesAndPersists` still expected the pre-Files Options category list, and failed `qt.parity-ledger` because the new template workflow remained marked pending. Updated the expected ordered categories and ledger status/evidence. `cmake --build --preset ninja-release --target GoSurveyQtTests` PASS; `ctest --preset ninja-release -R "qt[.]editor[.]shard-3|qt[.]parity-ledger" --output-on-failure` PASS (2/2). The Qt visual comparison remains pending.
 
 ## 9. Self-verification
 - Build: `build.bat` Release PASS.
