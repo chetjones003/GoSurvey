@@ -14,6 +14,7 @@ using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Geometry;
 using Autodesk.AutoCAD.Runtime;
+using Autodesk.Civil;
 using Autodesk.Civil.ApplicationServices;
 using Autodesk.Civil.DatabaseServices;
 using Autodesk.Civil.DatabaseServices.Styles;
@@ -424,19 +425,24 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
                 continue;
             Point3dCollection vertices = new Point3dCollection();
             HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            List<Point3d[]> sourceTriangles = new List<Point3d[]>();
             foreach (JsonElement triangle in triangles.EnumerateArray())
             {
                 if (triangle.ValueKind != JsonValueKind.Array || triangle.GetArrayLength() != 3) continue;
+                Point3d[] sourceTriangle = new Point3d[3];
+                int triangleVertex = 0;
                 foreach (JsonElement vertex in triangle.EnumerateArray())
                 {
                     if (vertex.ValueKind != JsonValueKind.Array || vertex.GetArrayLength() != 3) continue;
                     double x = vertex[0].GetDouble(), y = vertex[1].GetDouble(), z = vertex[2].GetDouble();
                     Point3d point = new Point3d(x, y, z);
+                    sourceTriangle[triangleVertex++] = point;
                     string key = x.ToString("R", CultureInfo.InvariantCulture) + "," +
                                  y.ToString("R", CultureInfo.InvariantCulture) + "," +
                                  z.ToString("R", CultureInfo.InvariantCulture);
                     if (seen.Add(key)) vertices.Add(point);
                 }
+                if (triangleVertex == 3) sourceTriangles.Add(sourceTriangle);
             }
             if (vertices.Count < 3) continue;
             using (Transaction transaction = database.TransactionManager.StartTransaction())
@@ -447,6 +453,13 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
                 TinSurface created = transaction.GetObject(surfaceId, OpenMode.ForWrite) as TinSurface;
                 if (created == null) continue;
                 created.AddVertices(vertices);
+                List<Point3dCollection> boundaries = BuildTinBoundaries(sourceTriangles);
+                for (int boundaryIndex = 0; boundaryIndex < boundaries.Count; ++boundaryIndex)
+                {
+                    SurfaceBoundaryType type = boundaryIndex == 0
+                        ? SurfaceBoundaryType.Outer : SurfaceBoundaryType.Hide;
+                    created.BoundariesDefinition.AddBoundaries(boundaries[boundaryIndex], 1.0, type, true);
+                }
                 created.Rebuild();
                 ObjectId surfaceStyle = FindSurfaceStyleId(transaction, civil.Styles.SurfaceStyles, ReadString(item, "style"));
                 if (!surfaceStyle.IsNull) created.StyleId = surfaceStyle;
@@ -456,6 +469,99 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
             added++;
         }
         return added;
+    }
+
+    private static List<Point3dCollection> BuildTinBoundaries(List<Point3d[]> triangles)
+    {
+        Dictionary<string, int> edgeUseCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        Dictionary<string, Tuple<string, string>> edgeEnds = new Dictionary<string, Tuple<string, string>>(StringComparer.Ordinal);
+        Dictionary<string, Point3d> points = new Dictionary<string, Point3d>(StringComparer.Ordinal);
+        foreach (Point3d[] triangle in triangles)
+        {
+            string[] keys = new string[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                Point3d point = triangle[i];
+                keys[i] = point.X.ToString("R", CultureInfo.InvariantCulture) + "," +
+                          point.Y.ToString("R", CultureInfo.InvariantCulture);
+                points[keys[i]] = point;
+            }
+            for (int i = 0; i < 3; ++i)
+            {
+                string first = keys[i], second = keys[(i + 1) % 3];
+                string edge = String.CompareOrdinal(first, second) <= 0
+                    ? first + "|" + second : second + "|" + first;
+                int uses;
+                edgeUseCounts.TryGetValue(edge, out uses);
+                edgeUseCounts[edge] = uses + 1;
+                edgeEnds[edge] = Tuple.Create(first, second);
+            }
+        }
+
+        Dictionary<string, List<string>> incidentEdges = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        HashSet<string> unusedEdges = new HashSet<string>(StringComparer.Ordinal);
+        foreach (KeyValuePair<string, int> entry in edgeUseCounts)
+        {
+            if (entry.Value != 1) continue;
+            unusedEdges.Add(entry.Key);
+            Tuple<string, string> ends = edgeEnds[entry.Key];
+            if (!incidentEdges.ContainsKey(ends.Item1)) incidentEdges[ends.Item1] = new List<string>();
+            if (!incidentEdges.ContainsKey(ends.Item2)) incidentEdges[ends.Item2] = new List<string>();
+            incidentEdges[ends.Item1].Add(entry.Key);
+            incidentEdges[ends.Item2].Add(entry.Key);
+        }
+
+        List<Point3dCollection> result = new List<Point3dCollection>();
+        while (unusedEdges.Count > 0)
+        {
+            string edge = null;
+            foreach (string candidate in unusedEdges) { edge = candidate; break; }
+            Tuple<string, string> ends = edgeEnds[edge];
+            string start = ends.Item1, current = ends.Item2;
+            List<string> loop = new List<string> { start, current };
+            unusedEdges.Remove(edge);
+            while (!String.Equals(current, start, StringComparison.Ordinal))
+            {
+                List<string> adjacent;
+                if (!incidentEdges.TryGetValue(current, out adjacent)) break;
+                string nextEdge = null;
+                foreach (string candidate in adjacent)
+                    if (unusedEdges.Contains(candidate)) { nextEdge = candidate; break; }
+                if (nextEdge == null) break;
+                unusedEdges.Remove(nextEdge);
+                Tuple<string, string> nextEnds = edgeEnds[nextEdge];
+                current = String.Equals(nextEnds.Item1, current, StringComparison.Ordinal)
+                    ? nextEnds.Item2 : nextEnds.Item1;
+                loop.Add(current);
+            }
+            if (!String.Equals(current, start, StringComparison.Ordinal) || loop.Count < 4) continue;
+            Point3dCollection boundary = new Point3dCollection();
+            double twiceArea = 0.0;
+            for (int i = 0; i < loop.Count; ++i)
+            {
+                Point3d point = points[loop[i]];
+                boundary.Add(point);
+                if (i + 1 < loop.Count)
+                {
+                    Point3d next = points[loop[i + 1]];
+                    twiceArea += point.X * next.Y - next.X * point.Y;
+                }
+            }
+            if (Math.Abs(twiceArea) > 0.0) result.Add(boundary);
+        }
+        result.Sort(delegate(Point3dCollection left, Point3dCollection right)
+        {
+            return TinBoundaryArea(right).CompareTo(TinBoundaryArea(left));
+        });
+        return result;
+    }
+
+    private static double TinBoundaryArea(Point3dCollection points)
+    {
+        double twiceArea = 0.0;
+        for (int i = 0; i + 1 < points.Count; ++i)
+            twiceArea += points[i].X * points[i + 1].Y - points[i + 1].X * points[i].Y;
+        return Math.Abs(twiceArea);
     }
 
     private static int ImportAlignments(JsonElement root, CivilDocument civil, Database database)

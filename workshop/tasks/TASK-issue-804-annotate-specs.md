@@ -107,9 +107,10 @@ stay open decisions for that reason.
   therefore uses Civil 3D APIs to recreate supported COGO points, TIN surfaces, and alignments while
   cloning drawing-owned AutoCAD and Civil 3D style records. This avoids corrupting the point manager.
 - Reopened-DWG smoke verification using the supplied 353-point / 1-surface baseline found 353 saved
-  COGO points, 1 saved native TIN surface, and the `no points` point style on readback. The rebuilt
-  TIN has 406 triangles compared with 398 in the source, so exact triangulation preservation is not
-  established; source vertex coordinates are transferred and Civil 3D rebuilds topology.
+  COGO points, 1 saved native TIN surface, and the `no points` point style on readback. The first
+  rebuild produced 406 triangles vs 398 because clipped boundary loops were absent from the
+  transfer data. The bridge now derives native Outer/Hide boundaries from one-use triangle edges;
+  the final reopen produced exactly 398 triangles with zero missing or additional source triangles.
 - Latest Release build and `build.output-layout` passed. `GoSurveyTests.exe "[issue804]"` passed 23
   cases / 128 assertions. The focused Qt issue804 dialog/table-preview test passed earlier in this
   run. A full CTest run previously hit an unrelated 300-second timeout in the existing Qt GUI
