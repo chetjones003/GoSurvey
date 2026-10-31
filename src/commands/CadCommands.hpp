@@ -1381,6 +1381,8 @@ struct DrawingGeometrySnapshot {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
   std::vector<PointGroup>       pointGroups;
@@ -1395,6 +1397,7 @@ struct DrawingGeometrySnapshot {
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -1569,6 +1572,8 @@ struct DrawingDocument {
   std::vector<CadBlockRef>        cadBlockRefs;
   std::vector<EntityAttributes>   cadBlockRefAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -1583,6 +1588,7 @@ struct DrawingDocument {
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -4706,6 +4712,8 @@ struct AppCommandState {
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
+  std::vector<SurveyPointStyleDefinition> surveyPointStyles = DefaultSurveyPointStyles();
+  std::vector<SurveyPointLabelStyleDefinition> surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
   std::vector<PointGroup> pointGroups;
   CreatePointsOptions createPointsOpts;
@@ -4885,6 +4893,7 @@ struct AppCommandState {
   /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
   DimensionStyle activeDimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle> dimensionStyles = DimensionStyles::DefaultStyles();
+  std::vector<MultileaderStyle> multileaderStyles = MultileaderStyles::DefaultStyles();
   DimensionStyle dimStyleDraft = DimensionStyles::Default();
   bool showDimStyleDialog = false;
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();

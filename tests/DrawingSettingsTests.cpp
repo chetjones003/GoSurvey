@@ -252,6 +252,26 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   table.headerRow = false;
   table.pointColumns = {CadPointTableColumn::Name, CadPointTableColumn::Description};
   original.tableStyles.push_back(table);
+  MultileaderStyle mleader = MultileaderStyles::Default();
+  mleader.name = "Site Callout";
+  mleader.textSizeInches = 0.16f;
+  original.multileaderStyles.push_back(mleader);
+  original.activeMultileaderStyle = mleader;
+  SurveyPointStyleDefinition pointStyle;
+  pointStyle.name = "Construction Point";
+  pointStyle.crossSpanPlottedInches = 0.22f;
+  pointStyle.color = "ACI:3";
+  original.surveyPointStyles.push_back(pointStyle);
+  SurveyPointLabelStyleDefinition labelStyle;
+  labelStyle.name = "Coordinates";
+  labelStyle.templates.northEast = "N={north}\nE={east}";
+  labelStyle.fontFamily = "ROMANS";
+  original.surveyPointLabelStyles.push_back(labelStyle);
+  SurveyPoint point;
+  point.id = 42;
+  point.styleName = pointStyle.name;
+  point.labelStyleName = labelStyle.name;
+  original.surveyPoints.push_back(point);
 
   const std::string payload = SerializeGoSurveyJson(original);
   AppCommandState loaded;
@@ -266,4 +286,35 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   REQUIRE(loadedTable != nullptr);
   CHECK_FALSE(loadedTable->headerRow);
   CHECK(loadedTable->pointColumns == table.pointColumns);
+  CHECK(MultileaderStyles::Find(loaded.multileaderStyles, "Site Callout") != nullptr);
+  CHECK(loaded.activeMultileaderStyle.name == "Site Callout");
+  REQUIRE(loaded.surveyPointStyles.size() == 2);
+  CHECK(loaded.surveyPointStyles.back().name == "Construction Point");
+  CHECK(loaded.surveyPointStyles.back().crossSpanPlottedInches == Catch::Approx(0.22f));
+  REQUIRE(loaded.surveyPointLabelStyles.size() == 2);
+  CHECK(loaded.surveyPointLabelStyles.back().templates.northEast == "N={north}\nE={east}");
+  REQUIRE(loaded.surveyPoints.size() == 1);
+  CHECK(loaded.surveyPoints.front().styleName == "Construction Point");
+  CHECK(loaded.surveyPoints.front().labelStyleName == "Coordinates");
+}
+
+TEST_CASE("Active styles are merged into their named collections on save", "[issue804][styles]") {
+  AppCommandState original;
+  original.activeDimensionStyle.name = "Legacy Dimension";
+  original.activeDimensionStyle.textSizeInches = 0.19f;
+  original.activeMultileaderStyle.name = "Legacy Leader";
+  original.activeMultileaderStyle.textSizeInches = 0.21f;
+
+  AppCommandState loaded;
+  std::vector<std::string> log;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(loaded, SerializeGoSurveyJson(original), log));
+
+  const DimensionStyle* dimension = DimensionStyles::Find(loaded.dimensionStyles, "Legacy Dimension");
+  REQUIRE(dimension != nullptr);
+  CHECK(dimension->textSizeInches == Catch::Approx(0.19f));
+  CHECK(loaded.activeDimensionStyle.name == "Legacy Dimension");
+  const MultileaderStyle* leader = MultileaderStyles::Find(loaded.multileaderStyles, "Legacy Leader");
+  REQUIRE(leader != nullptr);
+  CHECK(leader->textSizeInches == Catch::Approx(0.21f));
+  CHECK(loaded.activeMultileaderStyle.name == "Legacy Leader");
 }

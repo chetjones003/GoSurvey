@@ -124,6 +124,8 @@ if /i "%CFGNAME%"=="debug" set "RUNTIMEDIR=%CD%\build\debug"
 if "%VSMULTI%"=="1" set "RUNTIMEDIR=%CD%\build\%VSCONFIG%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\tidy-build-output.ps1" -RuntimeDirectory "%RUNTIMEDIR%"
 if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0interop\civil3d\build-installed-bridge.ps1" -RuntimeDirectory "%RUNTIMEDIR%"
+if errorlevel 1 exit /b 1
 
 echo.
 echo Built ^(%CFGNAME%^). Applications: %RUNTIMEDIR%

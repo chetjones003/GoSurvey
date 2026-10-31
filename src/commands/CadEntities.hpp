@@ -442,6 +442,8 @@ struct CadAnnotation {
   /// text, so older drawings render unchanged). Resolution is bake-on-write (see TextStyle.hpp): the
   /// fields above always hold the effective values, so renderers read them directly.
   std::string styleName;
+  /// DIMSTYLE used by native dimensions. Kept separate from STYLE for dimension label text.
+  std::string dimensionStyleName;
   /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
   /// shear faithfully; TTF approximates (the UI font renderer has no glyph shear).
   float obliqueDeg = 0.f;
@@ -491,6 +493,8 @@ struct CadMultileader {
   /// REQ-456 LEADER Format: spline-fit path vs straight segments; Arrow vs None arrowhead.
   bool splinePath = false;
   bool showArrow = true;
+  /// Drawing-owned MLEADERSTYLE referenced by this object (empty/legacy resolves to Standard).
+  std::string styleName = "Standard";
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 

@@ -263,6 +263,61 @@ int CountDwgMultileaders(const char* pathUtf8) {
   return CountDwgFixedType(pathUtf8, DWG_TYPE_MULTILEADER);
 }
 
+TEST_CASE("DWG multileaders reference named MLEADERSTYLE records", "[dwg][libredwg][req478][mleader-style]") {
+  ScratchDir dir("dwg-mleader-style");
+  const auto p = (dir.path / "mleader-style.dwg").string();
+  AppCommandState st;
+  MultileaderStyle style = MultileaderStyles::Default();
+  style.name = "Site Callout";
+  style.textSizeInches = 0.16f;
+  style.arrowSizeInches = 0.18f;
+  style.landingGapInches = 0.07f;
+  st.multileaderStyles = {MultileaderStyles::Default(), style};
+  st.activeMultileaderStyle = style;
+  CadMultileader ml;
+  ml.styleName = style.name;
+  ml.pathXyz = {1.f, 2.f, 0.f, 5.f, 6.f, 0.f};
+  ml.label.kind = CadAnnotation::Kind::Mtext;
+  ml.label.text = "Test callout";
+  ml.label.insX = 5.f;
+  ml.label.insY = 6.f;
+  ml.label.plottedHeightInches = style.textSizeInches;
+  ml.label.boxMinX = 5.f;
+  ml.label.boxMinY = 5.f;
+  ml.label.boxMaxX = 20.f;
+  ml.label.boxMaxY = 7.f;
+  st.cadMultileaders.push_back(ml);
+  st.cadMultileaderAttrs.push_back(EntityAttributes{});
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(st, p.c_str(), log));
+
+  Dwg_Data dwg{};
+  REQUIRE(dwg_read_file(p.c_str(), &dwg) < DWG_ERR_CRITICAL);
+  BITCODE_H styleRef = dwg_find_tablehandle(&dwg, "Site Callout", "MLEADERSTYLE");
+  REQUIRE(styleRef != nullptr);
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(&dwg, styleRef->absolute_ref);
+  REQUIRE(styleObject != nullptr);
+  REQUIRE(styleObject->fixedtype == DWG_TYPE_MLEADERSTYLE);
+  REQUIRE(styleObject->tio.object != nullptr);
+  const Dwg_Object_MLEADERSTYLE* nativeStyle = styleObject->tio.object->tio.MLEADERSTYLE;
+  REQUIRE(nativeStyle != nullptr);
+  CHECK(nativeStyle->text_height == Catch::Approx(8.0));
+  CHECK(nativeStyle->arrow_head_size == Catch::Approx(9.0));
+  CHECK(nativeStyle->landing_gap == Catch::Approx(3.5));
+  int referenced = 0;
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    Dwg_Object* object = &dwg.object[i];
+    if (object->fixedtype != DWG_TYPE_MULTILEADER || object->tio.entity == nullptr ||
+        object->tio.entity->tio.MULTILEADER == nullptr)
+      continue;
+    const Dwg_Entity_MULTILEADER* entity = object->tio.entity->tio.MULTILEADER;
+    if (entity->mleaderstyle != nullptr && entity->mleaderstyle->absolute_ref == styleRef->absolute_ref)
+      ++referenced;
+  }
+  CHECK(referenced == 1);
+  dwg_free(&dwg);
+}
+
 }  // namespace
 
 TEST_CASE("ExportDwgFile writes a CYLINDER recipe cadSolid as 3DSOLID (issue #612)",
@@ -4024,6 +4079,7 @@ TEST_CASE("DWG round-trips Aligned, Linear and Angular dimensions (REQ-366, issu
 
   const CadAnnotation* ba = findKind(CadAnnotation::Kind::DimAligned, false);
   REQUIRE(ba != nullptr);
+  CHECK(ba->dimensionStyleName == "GSDIM");
   CHECK(ba->dimExt1X + in.worldDocumentOriginX == Catch::Approx(0.0).margin(0.02));
   CHECK(ba->dimExt1Y + in.worldDocumentOriginY == Catch::Approx(0.0).margin(0.02));
   CHECK(ba->dimExt2X + in.worldDocumentOriginX == Catch::Approx(30.0).margin(0.02));

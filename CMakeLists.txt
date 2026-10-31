@@ -616,6 +616,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DxfIo.cpp
   src/io/DwgIo.cpp
   src/io/DwgProbe.cpp
+  src/io/Civil3dBridge.cpp
   src/io/LibreDwg.cpp
   src/io/LibreDwgCad.cpp
   src/io/LibreDwgField.cpp

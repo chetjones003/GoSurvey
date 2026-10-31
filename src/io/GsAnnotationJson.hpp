@@ -69,6 +69,8 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
     o["underline"] = true;
   if (!a.styleName.empty())
     o["styleName"] = a.styleName;
+  if (!a.dimensionStyleName.empty())
+    o["dimensionStyleName"] = a.dimensionStyleName;
   if (a.obliqueDeg != 0.f)
     o["obliqueDeg"] = a.obliqueDeg;
   if (a.ovFont)
@@ -126,6 +128,7 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.italic = o.value("italic", a.italic);
   a.underline = o.value("underline", a.underline);
   a.styleName = o.value("styleName", a.styleName);
+  a.dimensionStyleName = o.value("dimensionStyleName", a.dimensionStyleName);
   a.obliqueDeg = o.value("obliqueDeg", a.obliqueDeg);
   a.ovFont = o.value("ovFont", a.ovFont);
   a.ovHeight = o.value("ovHeight", a.ovHeight);

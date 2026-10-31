@@ -2,6 +2,7 @@
 
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
+#include "Civil3dBridge.hpp"
 #include "util/SaveTrace.hpp"
 
 #include <chrono>
@@ -175,7 +176,13 @@ bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
     log.push_back(std::string("DWG open — GoSurvey document in ") + pathUtf8);
     return LoadGoSurveyFromJsonUtf8(st, json, log);
   }
-  return ImportLibreCadFile(st, pathUtf8, log, /*asDxf=*/false);
+  if (!ImportLibreCadFile(st, pathUtf8, log, /*asDxf=*/false))
+    return false;
+  // LibreDWG can import the AutoCAD entity table, but Civil 3D COGO points and surfaces live in
+  // Civil 3D's custom database classes. When Civil 3D is installed, use its own API to recover
+  // those model objects into GoSurvey's editable point/TIN model.
+  ImportCivil3dModelObjects(st, pathUtf8, log);
+  return true;
 }
 
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
@@ -195,6 +202,10 @@ bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     AppendSaveTrace("export: libredwg failed");
     return false;
   }
+  // Civil 3D's COGO and surface records are custom database objects that LibreDWG cannot author.
+  // When Civil 3D is installed, let its database API add those native records before embedding the
+  // GoSurvey document payload (the AutoCAD save would otherwise invalidate that trailing payload).
+  ExportCivil3dModelObjects(st, stagedUtf8.c_str(), log);
   AppendSaveTrace("export: append trailer");
   if (!AppendGoSurveyPayloadToDwgFile(stagedUtf8.c_str(), st, log)) {
     std::filesystem::remove(staged, ec);

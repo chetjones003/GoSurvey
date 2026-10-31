@@ -168,6 +168,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadBlockRefs           = cmd.cadBlockRefs;
   doc.cadBlockRefAttrs       = cmd.cadBlockRefAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
+  doc.surveyPointStyles      = cmd.surveyPointStyles;
+  doc.surveyPointLabelStyles = cmd.surveyPointLabelStyles;
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
@@ -181,6 +183,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
+  doc.multileaderStyles      = cmd.multileaderStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -293,6 +296,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadBlockRefs               = doc.cadBlockRefs;
   cmd.cadBlockRefAttrs           = doc.cadBlockRefAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
+  cmd.surveyPointStyles          = doc.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : doc.surveyPointStyles;
+  cmd.surveyPointLabelStyles     = doc.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : doc.surveyPointLabelStyles;
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
@@ -306,6 +311,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
+  cmd.multileaderStyles          = doc.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : doc.multileaderStyles;
   cmd.mleaderStyleDraft          = doc.multileaderStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
@@ -1970,6 +1976,8 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.cadFilledRegions     = st.cadFilledRegions;
   snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
+  snap.surveyPointStyles    = st.surveyPointStyles;
+  snap.surveyPointLabelStyles = st.surveyPointLabelStyles;
   snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
@@ -1977,6 +1985,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
+  snap.multileaderStyles    = st.multileaderStyles;
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -2062,6 +2071,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.cadBlockRefs         = snap.cadBlockRefs;
   st.cadBlockRefAttrs     = snap.cadBlockRefAttrs;
   st.surveyPoints         = snap.surveyPoints;
+  st.surveyPointStyles    = snap.surveyPointStyles.empty() ? DefaultSurveyPointStyles() : snap.surveyPointStyles;
+  st.surveyPointLabelStyles = snap.surveyPointLabelStyles.empty() ? DefaultSurveyPointLabelStyles() : snap.surveyPointLabelStyles;
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
@@ -2069,6 +2080,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.activeDimensionStyle = snap.dimensionStyle;
   st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
+  st.multileaderStyles      = snap.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : snap.multileaderStyles;
   st.mleaderStyleDraft = snap.multileaderStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   // A restore that adds/removes a layout (undo/redo of layout delete or add) shifts every layout
@@ -6231,6 +6243,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6319,6 +6332,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   }
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimLinear;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
@@ -6447,6 +6461,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float vx = st.dimAngVx, vy = st.dimAngVy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
@@ -7347,6 +7362,7 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimensionStyleName = st.activeDimensionStyle.name;
   d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   d.dimAngVertexX = st.dimAngVx;
   d.dimAngVertexY = st.dimAngVy;
@@ -13107,6 +13123,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
@@ -13159,6 +13176,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   }
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
+  ann.dimensionStyleName = st.activeDimensionStyle.name;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;

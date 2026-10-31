@@ -1,0 +1,466 @@
+// Loaded by the Civil 3D runtime (NETLOAD) when GoSurvey requests native Civil 3D data.
+// This bridge deliberately runs inside Civil 3D: AECC database objects are not AutoCAD entities.
+using System;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Text.Json;
+using System.Collections.Generic;
+using System.Linq;
+using Autodesk.AutoCAD.ApplicationServices;
+using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.EditorInput;
+using Autodesk.AutoCAD.Geometry;
+using Autodesk.AutoCAD.Runtime;
+using Autodesk.Civil.ApplicationServices;
+using Autodesk.Civil.DatabaseServices;
+using Autodesk.Civil.DatabaseServices.Styles;
+
+public sealed class GoSurveyCivilBridge : IExtensionApplication
+{
+    public void Initialize() { }
+    public void Terminate() { }
+
+#if !GOSURVEY_IMPORT_ONLY
+    [CommandMethod("GOSURVEY_CIVIL_EXPORT", CommandFlags.Session)]
+    public void ExportCivilObjects()
+    {
+        Document document = Application.DocumentManager.MdiActiveDocument;
+        if (document == null)
+            throw new InvalidOperationException("No active Civil 3D document.");
+
+        PromptResult prompt = document.Editor.GetString("\nGoSurvey Civil data JSON path: ");
+        if (prompt.Status != PromptStatus.OK || String.IsNullOrWhiteSpace(prompt.StringResult))
+            return;
+
+        CivilDocument civil = CivilDocument.GetCivilDocument(document.Database);
+        StringBuilder json = new StringBuilder(1024 * 1024);
+        json.Append("{\"schema\":1,\"points\":[");
+        bool first = true;
+        using (Transaction transaction = document.Database.TransactionManager.StartTransaction())
+        {
+            ObjectIdCollection allPointIds = civil.GetAllPointIds();
+            foreach (ObjectId id in allPointIds)
+            {
+                CogoPoint point = transaction.GetObject(id, OpenMode.ForRead) as CogoPoint;
+                if (point == null) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append("{\"number\":").Append(point.PointNumber.ToString(CultureInfo.InvariantCulture));
+                Point3d location = point.Location;
+                AddNumber(json, "easting", location.X);
+                AddNumber(json, "northing", location.Y);
+                AddNumber(json, "elevation", location.Z);
+                AddString(json, "rawDescription", point.RawDescription ?? String.Empty);
+                AddString(json, "pointStyle", StyleName(transaction, point.StyleId));
+                AddString(json, "labelStyle", StyleName(transaction, point.LabelStyleId));
+                AddString(json, "pointStyleOverride", StyleName(transaction, point.StyleIdOverride));
+                AddString(json, "labelStyleOverride", StyleName(transaction, point.LabelStyleIdOverride));
+                json.Append('}');
+            }
+
+            json.Append("],\"pointStyles\":[");
+            first = true;
+            foreach (ObjectId id in civil.Styles.PointStyles)
+            {
+                PointStyle style = transaction.GetObject(id, OpenMode.ForRead) as PointStyle;
+                if (style == null) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append('{');
+                AddString(json, "name", style.Name, false);
+                json.Append('}');
+            }
+
+            json.Append("],\"pointLabelStyles\":[");
+            first = true;
+            foreach (ObjectId id in civil.Styles.LabelStyles.PointLabelStyles.LabelStyles)
+            {
+                LabelStyle style = transaction.GetObject(id, OpenMode.ForRead) as LabelStyle;
+                if (style == null) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append('{');
+                AddString(json, "name", style.Name, false);
+                json.Append('}');
+            }
+
+            json.Append("],\"surfaces\":[");
+            first = true;
+            foreach (ObjectId id in civil.GetSurfaceIds())
+            {
+                Autodesk.Civil.DatabaseServices.Surface surface = transaction.GetObject(id, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
+                if (surface == null) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append('{');
+                AddString(json, "name", surface.Name, false);
+                AddString(json, "type", surface.GetType().Name);
+                AddString(json, "style", surface.StyleName);
+                json.Append(",\"triangles\":[");
+                TinSurface tin = surface as TinSurface;
+                bool firstTriangle = true;
+                if (tin != null)
+                {
+                    foreach (TinSurfaceTriangle triangle in tin.Triangles)
+                    {
+                        if (!firstTriangle) json.Append(',');
+                        firstTriangle = false;
+                        json.Append('[');
+                        AddPoint(json, triangle.Vertex1.Location);
+                        json.Append(',');
+                        AddPoint(json, triangle.Vertex2.Location);
+                        json.Append(',');
+                        AddPoint(json, triangle.Vertex3.Location);
+                        json.Append(']');
+                    }
+                }
+                json.Append("]}");
+            }
+
+            json.Append("],\"alignments\":[");
+            first = true;
+            foreach (ObjectId id in civil.GetAlignmentIds())
+            {
+                Alignment alignment = transaction.GetObject(id, OpenMode.ForRead) as Alignment;
+                if (alignment == null) continue;
+                if (!first) json.Append(',');
+                first = false;
+                json.Append('{');
+                AddString(json, "name", alignment.Name, false);
+                AddNumber(json, "startStation", alignment.StartingStation);
+                AddNumber(json, "endStation", alignment.EndingStation);
+                json.Append(",\"vertices\":[");
+                double startStation = alignment.StartingStation;
+                double endStation = alignment.EndingStation;
+                int intervals = Math.Max(1, Math.Min(10000, (int)Math.Ceiling(Math.Abs(endStation - startStation))));
+                for (int vertex = 0; vertex <= intervals; ++vertex)
+                {
+                    double station = startStation + (endStation - startStation) * vertex / intervals;
+                    double easting = 0.0, northing = 0.0;
+                    alignment.PointLocation(station, 0.0, ref easting, ref northing);
+                    if (vertex != 0) json.Append(',');
+                    json.Append('[').Append(Number(easting)).Append(',').Append(Number(northing)).Append(",0,0]");
+                }
+                json.Append("]}");
+            }
+            transaction.Commit();
+        }
+
+        json.Append("]}");
+        File.WriteAllText(prompt.StringResult, json.ToString(), new UTF8Encoding(false));
+        document.Editor.WriteMessage("\nGoSurvey exported Civil 3D data: {0}", prompt.StringResult);
+    }
+#endif
+
+#if !GOSURVEY_EXPORT_ONLY
+    [CommandMethod("GOSURVEY_CIVIL_IMPORT")]
+    public void ImportCivilObjects()
+    {
+        Document document = Application.DocumentManager.MdiActiveDocument;
+        if (document == null)
+            throw new InvalidOperationException("No active Civil 3D document.");
+        PromptResult prompt = document.Editor.GetString("\nGoSurvey model JSON path: ");
+        if (prompt.Status != PromptStatus.OK || String.IsNullOrWhiteSpace(prompt.StringResult))
+            return;
+
+        string resultPath = prompt.StringResult + ".result";
+        try
+        {
+            using (JsonDocument json = JsonDocument.Parse(File.ReadAllText(prompt.StringResult)))
+            {
+            CivilDocument civil = CivilDocument.GetCivilDocument(document.Database);
+            JsonElement root = json.RootElement;
+            int pointCount = ImportPoints(root, civil, document.Database);
+            int surfaceCount = ImportSurfaces(root, civil, document.Database);
+            int alignmentCount = ImportAlignments(root, civil, document.Database);
+            File.WriteAllText(resultPath, "{\"ok\":true,\"points\":" + pointCount +
+                ",\"surfaces\":" + surfaceCount + ",\"alignments\":" + alignmentCount + "}", new UTF8Encoding(false));
+            document.Editor.WriteMessage("\nGoSurvey Civil 3D import complete: {0} points, {1} surfaces, {2} alignments.",
+                pointCount, surfaceCount, alignmentCount);
+            }
+        }
+        catch (System.Exception exception)
+        {
+            File.WriteAllText(resultPath, JsonSerializer.Serialize(new { ok = false, error = exception.ToString() }),
+                new UTF8Encoding(false));
+            document.Editor.WriteMessage("\nGoSurvey Civil 3D import failed: {0}", exception.Message);
+        }
+    }
+
+    private static int ImportPoints(JsonElement root, CivilDocument civil, Database database)
+    {
+        JsonElement points;
+        if (!root.TryGetProperty("points", out points) || points.ValueKind != JsonValueKind.Array)
+            return 0;
+        HashSet<uint> existing = new HashSet<uint>();
+        using (Transaction scan = database.TransactionManager.StartOpenCloseTransaction())
+        {
+            foreach (ObjectId id in civil.GetAllPointIds())
+            {
+                CogoPoint point = scan.GetObject(id, OpenMode.ForRead) as CogoPoint;
+                if (point != null) existing.Add(point.PointNumber);
+            }
+            scan.Commit();
+        }
+
+        int added = 0;
+        foreach (JsonElement item in points.EnumerateArray())
+        {
+            uint number = (uint)Math.Max(1, ReadInteger(item, "number", 1));
+            if (existing.Contains(number)) continue;
+            double x = ReadNumber(item, "easting");
+            double y = ReadNumber(item, "northing");
+            double z = ReadNumber(item, "elevation");
+            string description = ReadString(item, "rawDescription");
+            // Do not ask Civil 3D to allocate from its next-point-number setting: it can conflict
+            // with imported/nonsequential point numbers. The bridge assigns the original number below.
+            using (Transaction transaction = database.TransactionManager.StartTransaction())
+            {
+                ObjectId pointId = civil.CogoPoints.Add(new Point3d(x, y, z), description, false);
+                CogoPoint created = transaction.GetObject(pointId, OpenMode.ForWrite) as CogoPoint;
+                if (created == null) continue;
+                civil.CogoPoints.SetPointNumber(pointId, number);
+                ObjectId pointStyle = FindPointStyleId(transaction, civil.Styles.PointStyles, ReadString(item, "pointStyle"));
+                if (!pointStyle.IsNull) created.StyleId = pointStyle;
+                ObjectId labelStyle = FindPointLabelStyleId(transaction,
+                    civil.Styles.LabelStyles.PointLabelStyles.LabelStyles, ReadString(item, "labelStyle"));
+                if (!labelStyle.IsNull) created.LabelStyleId = labelStyle;
+                transaction.Commit();
+            }
+            existing.Add(number);
+            added++;
+        }
+        return added;
+    }
+
+    private static int ImportSurfaces(JsonElement root, CivilDocument civil, Database database)
+    {
+        JsonElement surfaces;
+        if (!root.TryGetProperty("surfaces", out surfaces) || surfaces.ValueKind != JsonValueKind.Array)
+            return 0;
+        HashSet<string> existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (Transaction scan = database.TransactionManager.StartOpenCloseTransaction())
+        {
+            foreach (ObjectId id in civil.GetSurfaceIds())
+            {
+                Autodesk.Civil.DatabaseServices.Surface current =
+                    scan.GetObject(id, OpenMode.ForRead) as Autodesk.Civil.DatabaseServices.Surface;
+                if (current != null) existing.Add(current.Name);
+            }
+            scan.Commit();
+        }
+        int added = 0;
+        foreach (JsonElement item in surfaces.EnumerateArray())
+        {
+            string name = ReadString(item, "name");
+            if (String.IsNullOrWhiteSpace(name)) name = "GoSurvey Surface";
+            if (existing.Contains(name)) continue;
+            JsonElement triangles;
+            if (!item.TryGetProperty("triangles", out triangles) || triangles.ValueKind != JsonValueKind.Array)
+                continue;
+            Point3dCollection vertices = new Point3dCollection();
+            HashSet<string> seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (JsonElement triangle in triangles.EnumerateArray())
+            {
+                if (triangle.ValueKind != JsonValueKind.Array || triangle.GetArrayLength() != 3) continue;
+                foreach (JsonElement vertex in triangle.EnumerateArray())
+                {
+                    if (vertex.ValueKind != JsonValueKind.Array || vertex.GetArrayLength() != 3) continue;
+                    double x = vertex[0].GetDouble(), y = vertex[1].GetDouble(), z = vertex[2].GetDouble();
+                    string key = x.ToString("R", CultureInfo.InvariantCulture) + "," +
+                                 y.ToString("R", CultureInfo.InvariantCulture) + "," +
+                                 z.ToString("R", CultureInfo.InvariantCulture);
+                    if (seen.Add(key)) vertices.Add(new Point3d(x, y, z));
+                }
+            }
+            if (vertices.Count < 3) continue;
+            using (Transaction transaction = database.TransactionManager.StartTransaction())
+            {
+                // The database overload uses the target drawing's Civil 3D default surface style.
+                // An ObjectId borrowed from a different drawing is not valid for this database.
+                ObjectId surfaceId = TinSurface.Create(database, name);
+                TinSurface created = transaction.GetObject(surfaceId, OpenMode.ForWrite) as TinSurface;
+                if (created == null) continue;
+                created.AddVertices(vertices);
+                created.Rebuild();
+                ObjectId surfaceStyle = FindSurfaceStyleId(transaction, civil.Styles.SurfaceStyles, ReadString(item, "style"));
+                if (!surfaceStyle.IsNull) created.StyleId = surfaceStyle;
+                transaction.Commit();
+            }
+            existing.Add(name);
+            added++;
+        }
+        return added;
+    }
+
+    private static int ImportAlignments(JsonElement root, CivilDocument civil, Database database)
+    {
+        JsonElement alignments;
+        if (!root.TryGetProperty("alignments", out alignments) || alignments.ValueKind != JsonValueKind.Array)
+            return 0;
+        HashSet<string> existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using (Transaction scan = database.TransactionManager.StartOpenCloseTransaction())
+        {
+            foreach (ObjectId id in civil.GetAlignmentIds())
+            {
+                Alignment alignment = scan.GetObject(id, OpenMode.ForRead) as Alignment;
+                if (alignment != null) existing.Add(alignment.Name);
+            }
+            scan.Commit();
+        }
+
+        int added = 0;
+        foreach (JsonElement item in alignments.EnumerateArray())
+        {
+            string name = ReadString(item, "name");
+            JsonElement vertices;
+            if (String.IsNullOrWhiteSpace(name) || existing.Contains(name) ||
+                !item.TryGetProperty("vertices", out vertices) || vertices.ValueKind != JsonValueKind.Array ||
+                vertices.GetArrayLength() < 2)
+                continue;
+
+            using (Transaction transaction = database.TransactionManager.StartTransaction())
+            {
+                BlockTable blockTable = (BlockTable)transaction.GetObject(database.BlockTableId, OpenMode.ForRead);
+                BlockTableRecord modelSpace = (BlockTableRecord)transaction.GetObject(
+                    blockTable[BlockTableRecord.ModelSpace], OpenMode.ForWrite);
+                Polyline centerline = new Polyline(vertices.GetArrayLength());
+                int index = 0;
+                foreach (JsonElement vertex in vertices.EnumerateArray())
+                {
+                    if (vertex.ValueKind != JsonValueKind.Array || vertex.GetArrayLength() < 2 ||
+                        !vertex[0].TryGetDouble(out double x) || !vertex[1].TryGetDouble(out double y))
+                        continue;
+                    double bulge = vertex.GetArrayLength() > 3 && vertex[3].TryGetDouble(out double value)
+                        ? value : 0.0;
+                    centerline.AddVertexAt(index++, new Point2d(x, y), bulge, 0.0, 0.0);
+                }
+                if (centerline.NumberOfVertices < 2) continue;
+                ObjectId polylineId = modelSpace.AppendEntity(centerline);
+                transaction.AddNewlyCreatedDBObject(centerline, true);
+                PolylineOptions options = new PolylineOptions
+                {
+                    PlineId = polylineId,
+                    EraseExistingEntities = true,
+                    AddCurvesBetweenTangents = false
+                };
+                if (civil.Styles.AlignmentStyles.Count == 0 ||
+                    civil.Styles.LabelSetStyles.AlignmentLabelSetStyles.Count == 0)
+                    continue;
+                AlignmentStyle alignmentStyle = transaction.GetObject(
+                    civil.Styles.AlignmentStyles[0], OpenMode.ForRead) as AlignmentStyle;
+                AlignmentLabelSetStyle labelSetStyle = transaction.GetObject(
+                    civil.Styles.LabelSetStyles.AlignmentLabelSetStyles[0], OpenMode.ForRead) as AlignmentLabelSetStyle;
+                if (alignmentStyle == null || labelSetStyle == null) continue;
+                Alignment.Create(civil, options, name, null, "0", alignmentStyle.Name, labelSetStyle.Name);
+                transaction.Commit();
+            }
+            existing.Add(name);
+            added++;
+        }
+        return added;
+    }
+
+    private static ObjectId FindPointStyleId(Transaction transaction, System.Collections.IEnumerable ids, string name)
+    {
+        if (String.IsNullOrWhiteSpace(name)) return ObjectId.Null;
+        foreach (object value in ids)
+        {
+            ObjectId id = (ObjectId)value;
+            PointStyle style = transaction.GetObject(id, OpenMode.ForRead, false) as PointStyle;
+            if (style != null && String.Equals(style.Name, name, StringComparison.OrdinalIgnoreCase)) return id;
+        }
+        return ObjectId.Null;
+    }
+
+    private static ObjectId FindPointLabelStyleId(Transaction transaction, System.Collections.IEnumerable ids, string name)
+    {
+        if (String.IsNullOrWhiteSpace(name)) return ObjectId.Null;
+        foreach (object value in ids)
+        {
+            ObjectId id = (ObjectId)value;
+            LabelStyle style = transaction.GetObject(id, OpenMode.ForRead, false) as LabelStyle;
+            if (style != null && String.Equals(style.Name, name, StringComparison.OrdinalIgnoreCase)) return id;
+        }
+        return ObjectId.Null;
+    }
+
+    private static ObjectId FindSurfaceStyleId(Transaction transaction, System.Collections.IEnumerable ids, string name)
+    {
+        if (String.IsNullOrWhiteSpace(name)) return ObjectId.Null;
+        foreach (object value in ids)
+        {
+            ObjectId id = (ObjectId)value;
+            SurfaceStyle style = transaction.GetObject(id, OpenMode.ForRead, false) as SurfaceStyle;
+            if (style != null && String.Equals(style.Name, name, StringComparison.OrdinalIgnoreCase)) return id;
+        }
+        return ObjectId.Null;
+    }
+
+    private static int ReadInteger(JsonElement item, string name, int fallback)
+    {
+        JsonElement value;
+        return item.TryGetProperty(name, out value) && value.TryGetInt32(out int number) ? number : fallback;
+    }
+
+    private static double ReadNumber(JsonElement item, string name)
+    {
+        JsonElement value;
+        return item.TryGetProperty(name, out value) && value.TryGetDouble(out double number) ? number : 0.0;
+    }
+
+    private static string ReadString(JsonElement item, string name)
+    {
+        JsonElement value;
+        return item.TryGetProperty(name, out value) && value.ValueKind == JsonValueKind.String ? value.GetString() : String.Empty;
+    }
+
+#endif
+
+#if !GOSURVEY_IMPORT_ONLY
+    private static string StyleName(Transaction transaction, ObjectId id)
+    {
+        if (id.IsNull || !id.IsValid) return String.Empty;
+        Autodesk.AutoCAD.DatabaseServices.DBObject value = transaction.GetObject(id, OpenMode.ForRead, false);
+        if (value is PointStyle pointStyle) return pointStyle.Name;
+        if (value is LabelStyle labelStyle) return labelStyle.Name;
+        if (value is SurfaceStyle surfaceStyle) return surfaceStyle.Name;
+        return String.Empty;
+    }
+
+    private static void AddPoint(StringBuilder json, Point3d point)
+    {
+        json.Append('[').Append(Number(point.X)).Append(',').Append(Number(point.Y)).Append(',').Append(Number(point.Z)).Append(']');
+    }
+
+    private static void AddNumber(StringBuilder json, string name, double value)
+    {
+        json.Append(',').Append('"').Append(name).Append("\":").Append(Number(value));
+    }
+
+    private static string Number(double value) => value.ToString("R", CultureInfo.InvariantCulture);
+
+    private static void AddString(StringBuilder json, string name, string value, bool comma = true)
+    {
+        if (comma) json.Append(',');
+        json.Append('"').Append(name).Append("\":\"");
+        foreach (char ch in value ?? String.Empty)
+        {
+            switch (ch)
+            {
+                case '"': json.Append("\\\""); break;
+                case '\\': json.Append("\\\\"); break;
+                case '\n': json.Append("\\n"); break;
+                case '\r': json.Append("\\r"); break;
+                case '\t': json.Append("\\t"); break;
+                default:
+                    if (ch < 0x20) json.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                    else json.Append(ch);
+                    break;
+            }
+        }
+        json.Append('"');
+    }
+#endif
+}

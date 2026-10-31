@@ -30,6 +30,33 @@ struct SurveyLabelStyleTemplates {
   std::string numberNorthEastElev = "{id}\nN={north}\nE={east}\nZ={elev}";
 };
 
+/// Drawing-owned Civil 3D point-style data carried by GoSurvey's DWG payload. The DWG adapter maps
+/// marker size/color where the target record supports them; AECC-native authoring remains the Civil 3D API's job.
+struct SurveyPointStyleDefinition {
+  std::string name = "Standard";
+  float crossSpanPlottedInches = 0.14f;
+  std::string color = "ByLayer";
+  std::string labelStyleName = "Standard";
+};
+
+/// Named point-label style data. The format selector on each point remains for legacy compatibility;
+/// these templates and text properties travel with the drawing style record.
+struct SurveyPointLabelStyleDefinition {
+  std::string name = "Standard";
+  SurveyLabelStyleTemplates templates;
+  std::string fontFamily;
+  float textHeightPlottedInches = 0.10f;
+  std::string color = "ByLayer";
+};
+
+inline std::vector<SurveyPointStyleDefinition> DefaultSurveyPointStyles() {
+  return {SurveyPointStyleDefinition{}};
+}
+
+inline std::vector<SurveyPointLabelStyleDefinition> DefaultSurveyPointLabelStyles() {
+  return {SurveyPointLabelStyleDefinition{}};
+}
+
 struct SurveyPoint {
   int id = 0;
   double easting = 0.0;
@@ -45,6 +72,8 @@ struct SurveyPoint {
   std::string rawDescription;
   std::string layer;
   SurveyPointLabelStyle labelStyle = SurveyPointLabelStyle::NumberDesc;
+  std::string styleName = "Standard";
+  std::string labelStyleName = "Standard";
   /// Stable id (\ref EntityAttributes::id) of this point's linked MTEXT label, or 0 for none.
   ///
   /// **An id, not an index** (REQ-076 / architecture §11.9). It was `labelMtextAnnIndex`, and

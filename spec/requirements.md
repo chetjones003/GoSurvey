@@ -15812,6 +15812,11 @@ capability that does not exist. They are recorded here rather than quietly dropp
      Civil 3D fields are preserved or named in the import/export log.
   7. `.gs` and DWG round trips preserve every supported style field and entity reference. Legacy files remain
      readable and receive defaults for absent style tables.
+  8. Civil 3D model objects in an imported drawing retain their native Civil 3D identity and data through
+     GoSurvey DWG open/save. This includes COGO points, surfaces, alignments, parcels, and other supported
+     Civil 3D classes. An object that GoSurvey cannot interpret or edit must still be retained losslessly or
+     explicitly refused before saving; silently dropping it or replacing it with unrelated proxy geometry
+     is not a successful round trip.
 - Acceptance:
   1. Non-default styles in all six collections survive GoSurvey DWG export, Civil 3D open/save, and GoSurvey
      re-import with names, supported settings, current-style selection, and entity references intact.
@@ -15820,8 +15825,43 @@ capability that does not exist. They are recorded here rather than quietly dropp
      its referencing dimensions and leaves dimensions on other styles unchanged.
   4. Legacy drawings without named style tables load with the prior Standard/default appearance and save again.
   5. Unsupported style data logs a specific reason and never silently removes its referencing entity.
+  6. The supplied Rapides Substation baseline opens in GoSurvey and saves to DWG without reducing its native
+     Civil 3D COGO points, TIN surface, parcels, and their drawing-owned styles to skipped records; Civil 3D
+     reopens the output with the same native object classes and data.
 - Owner-layer: Domain / Commands / Qt UI / DWG IO.
 - Decision: D-2026-10-30-style-roundtrip.
+- Status: accepted (2026-10-30, explicit user request)
+
+### REQ-479 — Civil 3D model objects round-trip through GoSurvey DWG IO
+
+- Purpose: users can open a Civil 3D project in GoSurvey, make supported edits, save it, and reopen it in
+  Civil 3D without losing the drawing-owned model objects that carry survey and design data.
+- Priority: must
+- Type: functional + interop
+- Depends on: REQ-044, REQ-111, REQ-170, REQ-201, REQ-478.
+- Statement:
+  1. DWG import recognizes and retains Civil 3D native COGO points, point and label styles, surfaces and
+     surface styles, alignments and alignment styles, parcels and parcel styles, and associated data needed
+     by those objects. Additional Civil 3D classes remain losslessly retained when GoSurvey does not yet
+     expose their semantics.
+  2. DWG export preserves supported Civil 3D object classes and their drawing-owned relationships. Native
+     Civil 3D API objects are used for classes GoSurvey creates or edits; converting those objects to plain
+     CAD geometry is not an equivalent save.
+  3. Unknown custom classes and their payloads are never silently discarded. If lossless preservation is
+     unavailable for a class, GoSurvey reports the exact class and refuses the save until the user chooses
+     an explicit loss policy.
+  4. GoSurvey's own `.gs` persistence also preserves the same object data, style ownership, and references.
+- Acceptance:
+  1. The supplied Rapides Substation baseline imports 353 native COGO points, its TIN surface, parcel
+     objects, drawing-owned point styles, and other supported Civil 3D objects into a GoSurvey representation
+     without silently skipping native classes.
+  2. Saving that drawing as DWG and opening it in Civil 3D preserves native object classes, counts, IDs/data,
+     style assignments, and relationships; saving from Civil 3D and reopening in GoSurvey preserves the same
+     supported content.
+  3. A fixture containing a Civil 3D class not yet modeled by GoSurvey remains present and byte/data-lossless
+     after save/reopen, or the save is refused with a specific REQ-201 loss report.
+- Owner-layer: Domain / DWG IO / Civil 3D interoperability.
+- Decision: D-2026-10-30-c.
 - Status: accepted (2026-10-30, explicit user request)
 
 ## Anti-requirements

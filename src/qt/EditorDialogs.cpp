@@ -967,6 +967,13 @@ void EditorWindow::ServiceUiRequests() {
       m_State.activeMultileaderStyle.arrowSizeInches = static_cast<float>(arrowSize->value());
       m_State.activeMultileaderStyle.landingGapInches = static_cast<float>(landingGap->value());
       m_State.activeMultileaderStyle.annotativeDefault = annotative->isChecked();
+      auto it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& style) {
+        return style.name == m_State.activeMultileaderStyle.name;
+      });
+      if (it == m_State.multileaderStyles.end())
+        m_State.multileaderStyles.push_back(m_State.activeMultileaderStyle);
+      else
+        *it = m_State.activeMultileaderStyle;
     }
     m_ModalOpen = false;
     Refresh();
