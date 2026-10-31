@@ -99,7 +99,6 @@ private:
   void Refresh();
   void NewDrawing(std::uint32_t projectUid = 0);
   void CreateDrawingFromTemplate(std::uint32_t projectUid = 0, const QString& templatePath = {});
-  void ShowDrawingTemplateChooser();
   void SwitchDrawing(int index);
   void CloseDrawing(int index);
   bool SaveDrawing(bool saveAs = false);

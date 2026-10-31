@@ -19,8 +19,8 @@ Only three menus. Almost everything else is on the ribbon or the command line.
 
 | Item | Shortcut | What it does |
 |---|---|---|
-| **New** | — | Opens the New Drawing chooser; choose Blank Drawing or a template |
-| **Open** | `Ctrl+O` | Opens a DWG drawing directly in a new, active tab without showing the New Drawing chooser |
+| **New** | — | Creates a new drawing from the configured default template |
+| **Open** | `Ctrl+O` | Opens a DWG drawing directly in a new, active tab |
 | **Save** | `Ctrl+S` | Saves to the current path; prompts for one if there is none |
 | **Save As…** | — | Saves under a new name and renames the tab |
 | **Import DXF…** | — | Replaces the CAD geometry from a DXF; keeps survey points ([[Import and Export]]) |
