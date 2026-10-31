@@ -1,8 +1,10 @@
 // Loaded by the Civil 3D runtime (NETLOAD) when GoSurvey requests native Civil 3D data.
 // This bridge deliberately runs inside Civil 3D: AECC database objects are not AutoCAD entities.
 using System;
+using System.Collections;
 using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Collections.Generic;
@@ -52,8 +54,25 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
                 AddNumber(json, "northing", location.Y);
                 AddNumber(json, "elevation", location.Z);
                 AddString(json, "rawDescription", point.RawDescription ?? String.Empty);
-                AddString(json, "pointStyle", StyleName(transaction, point.StyleId));
-                AddString(json, "labelStyle", StyleName(transaction, point.LabelStyleId));
+                string pointStyle = StyleName(transaction, point.StyleId);
+                string labelStyle = StyleName(transaction, point.LabelStyleId);
+                // In Civil 3D, points commonly inherit their visible style from the primary
+                // point group. The per-point style IDs are then null even though the points have
+                // a concrete effective marker and label style in the drawing.
+                if ((String.IsNullOrEmpty(pointStyle) || String.IsNullOrEmpty(labelStyle)) &&
+                    !point.PrimaryPointGroupId.IsNull && point.PrimaryPointGroupId.IsValid)
+                {
+                    PointGroup primaryGroup = transaction.GetObject(point.PrimaryPointGroupId, OpenMode.ForRead, false) as PointGroup;
+                    if (primaryGroup != null)
+                    {
+                        if (String.IsNullOrEmpty(pointStyle))
+                            pointStyle = StyleName(transaction, primaryGroup.PointStyleId);
+                        if (String.IsNullOrEmpty(labelStyle))
+                            labelStyle = StyleName(transaction, primaryGroup.PointLabelStyleId);
+                    }
+                }
+                AddString(json, "pointStyle", pointStyle);
+                AddString(json, "labelStyle", labelStyle);
                 AddString(json, "pointStyleOverride", StyleName(transaction, point.StyleIdOverride));
                 AddString(json, "labelStyleOverride", StyleName(transaction, point.LabelStyleIdOverride));
                 json.Append('}');
@@ -171,13 +190,35 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
             {
             CivilDocument civil = CivilDocument.GetCivilDocument(document.Database);
             JsonElement root = json.RootElement;
-            int pointCount = ImportPoints(root, civil, document.Database);
+            int clonedAutoCadStyles = 0;
+            int clonedCivilStyles = 0;
+            int pointCount = -1;
+            string sourceDrawing = ReadString(root, "sourceDwg");
+            if (!String.IsNullOrWhiteSpace(sourceDrawing) && File.Exists(sourceDrawing) &&
+                !String.Equals(Path.GetFullPath(sourceDrawing), Path.GetFullPath(document.Database.Filename), StringComparison.OrdinalIgnoreCase))
+            {
+                using (Database sourceDatabase = new Database(false, true))
+                {
+                    sourceDatabase.ReadDwgFile(sourceDrawing, FileOpenMode.OpenForReadAndAllShare, true, null);
+                    clonedAutoCadStyles = CloneAutoCadStyleRecords(sourceDatabase, document.Database);
+                    CivilDocument sourceCivil = CivilDocument.GetCivilDocument(sourceDatabase);
+                    clonedCivilStyles = CloneCivilStyleCollections(sourceCivil.Styles, civil.Styles,
+                        sourceDatabase, document.Database);
+                    // Recreate Civil 3D objects through Civil APIs so points remain valid in
+                    // the saved target drawing.
+                    pointCount = ImportPoints(root, civil, document.Database);
+                    sourceDatabase.CloseInput(true);
+                }
+            }
+            if (pointCount < 0) pointCount = ImportPoints(root, civil, document.Database);
             int surfaceCount = ImportSurfaces(root, civil, document.Database);
             int alignmentCount = ImportAlignments(root, civil, document.Database);
             File.WriteAllText(resultPath, "{\"ok\":true,\"points\":" + pointCount +
-                ",\"surfaces\":" + surfaceCount + ",\"alignments\":" + alignmentCount + "}", new UTF8Encoding(false));
-            document.Editor.WriteMessage("\nGoSurvey Civil 3D import complete: {0} points, {1} surfaces, {2} alignments.",
-                pointCount, surfaceCount, alignmentCount);
+                ",\"surfaces\":" + surfaceCount + ",\"alignments\":" + alignmentCount +
+                ",\"autocadStyleGroups\":" + clonedAutoCadStyles + ",\"civilStyleGroups\":" + clonedCivilStyles +
+                "}", new UTF8Encoding(false));
+            document.Editor.WriteMessage("\nGoSurvey Civil 3D import complete: {0} points, {1} surfaces, {2} alignments; cloned {3} AutoCAD style groups and {4} Civil 3D style groups.",
+                pointCount, surfaceCount, alignmentCount, clonedAutoCadStyles, clonedCivilStyles);
             }
         }
         catch (System.Exception exception)
@@ -186,6 +227,128 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
                 new UTF8Encoding(false));
             document.Editor.WriteMessage("\nGoSurvey Civil 3D import failed: {0}", exception.Message);
         }
+    }
+
+    private static int CloneAutoCadStyleRecords(Database source, Database target)
+    {
+        int groups = 0;
+        groups += CloneSymbolTable(source, target, source.DimStyleTableId, target.DimStyleTableId);
+        groups += CloneSymbolTable(source, target, source.TextStyleTableId, target.TextStyleTableId);
+        groups += CloneStyleDictionary(source, target, "ACAD_MLEADERSTYLE");
+        groups += CloneStyleDictionary(source, target, "ACAD_TABLESTYLE");
+        return groups;
+    }
+
+    private static int CloneSymbolTable(Database source, Database target, ObjectId sourceId, ObjectId targetId)
+    {
+        ObjectIdCollection ids = new ObjectIdCollection();
+        using (Transaction transaction = source.TransactionManager.StartOpenCloseTransaction())
+        {
+            SymbolTable table = transaction.GetObject(sourceId, OpenMode.ForRead) as SymbolTable;
+            if (table == null) return 0;
+            foreach (ObjectId id in table)
+            {
+                SymbolTableRecord record = transaction.GetObject(id, OpenMode.ForRead) as SymbolTableRecord;
+                if (record != null && !String.IsNullOrWhiteSpace(record.Name) && !record.Name.StartsWith("*", StringComparison.Ordinal))
+                    ids.Add(id);
+            }
+            transaction.Commit();
+        }
+        if (ids.Count == 0) return 0;
+        source.WblockCloneObjects(ids, targetId, new IdMapping(), DuplicateRecordCloning.Replace, false);
+        return 1;
+    }
+
+    private static int CloneStyleDictionary(Database source, Database target, string dictionaryName)
+    {
+        ObjectId sourceOwner = ObjectId.Null;
+        ObjectId targetOwner = ObjectId.Null;
+        ObjectIdCollection ids = new ObjectIdCollection();
+        using (Transaction transaction = source.TransactionManager.StartOpenCloseTransaction())
+        {
+            DBDictionary namedObjects = transaction.GetObject(source.NamedObjectsDictionaryId, OpenMode.ForRead) as DBDictionary;
+            if (namedObjects == null || !namedObjects.Contains(dictionaryName)) return 0;
+            DBDictionary dictionary = transaction.GetObject(namedObjects.GetAt(dictionaryName), OpenMode.ForRead) as DBDictionary;
+            if (dictionary == null) return 0;
+            sourceOwner = dictionary.ObjectId;
+            foreach (DBDictionaryEntry entry in dictionary)
+                ids.Add(entry.Value);
+            transaction.Commit();
+        }
+        if (ids.Count == 0) return 0;
+        using (Transaction transaction = target.TransactionManager.StartTransaction())
+        {
+            DBDictionary namedObjects = transaction.GetObject(target.NamedObjectsDictionaryId, OpenMode.ForRead) as DBDictionary;
+            if (namedObjects == null) return 0;
+            if (!namedObjects.Contains(dictionaryName))
+            {
+                namedObjects.UpgradeOpen();
+                DBDictionary created = new DBDictionary();
+                targetOwner = namedObjects.SetAt(dictionaryName, created);
+                transaction.AddNewlyCreatedDBObject(created, true);
+            }
+            else
+            {
+                targetOwner = namedObjects.GetAt(dictionaryName);
+            }
+            transaction.Commit();
+        }
+        if (sourceOwner.IsNull || targetOwner.IsNull) return 0;
+        source.WblockCloneObjects(ids, targetOwner, new IdMapping(), DuplicateRecordCloning.Replace, false);
+        return 1;
+    }
+
+    private static int CloneCivilStyleCollections(object sourceStyles, object targetStyles,
+        Database sourceDatabase, Database targetDatabase)
+    {
+        HashSet<string> copiedOwners = new HashSet<string>(StringComparer.Ordinal);
+        return CloneCivilStyleTree(sourceStyles, targetStyles, sourceDatabase, targetDatabase, copiedOwners, 0);
+    }
+
+    private static int CloneCivilStyleTree(object source, object target, Database sourceDatabase,
+        Database targetDatabase, HashSet<string> copiedOwners, int depth)
+    {
+        if (source == null || target == null || depth > 4) return 0;
+        int groups = 0;
+        foreach (PropertyInfo property in source.GetType().GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        {
+            if (!property.CanRead || !(property.Name.EndsWith("Styles", StringComparison.Ordinal) ||
+                                       property.Name.EndsWith("LabelStyles", StringComparison.Ordinal))) continue;
+            PropertyInfo targetProperty = target.GetType().GetProperty(property.Name, BindingFlags.Instance | BindingFlags.Public);
+            if (targetProperty == null || !targetProperty.CanRead) continue;
+            object sourceValue, targetValue;
+            try { sourceValue = property.GetValue(source); targetValue = targetProperty.GetValue(target); }
+            catch { continue; }
+            if (sourceValue == null || targetValue == null) continue;
+
+            ObjectIdCollection sourceIds = CollectObjectIds(sourceValue);
+            if (sourceIds.Count > 0)
+            {
+                string key = source.GetType().FullName + ":" + property.Name;
+                if (copiedOwners.Add(key))
+                {
+                    // Civil styles contain AECC-owned dictionaries and dependencies. Autodesk's
+                    // style exporter understands those owners; AutoCAD WblockCloneObjects does not.
+                    StyleBase.ExportTo(sourceIds, targetDatabase, Autodesk.Civil.StyleConflictResolverType.Override);
+                    groups++;
+                }
+                continue;
+            }
+
+            if (depth < 4 && property.Name.EndsWith("LabelStyles", StringComparison.Ordinal))
+                groups += CloneCivilStyleTree(sourceValue, targetValue, sourceDatabase, targetDatabase, copiedOwners, depth + 1);
+        }
+        return groups;
+    }
+
+    private static ObjectIdCollection CollectObjectIds(object collection)
+    {
+        ObjectIdCollection ids = new ObjectIdCollection();
+        IEnumerable enumerable = collection as IEnumerable;
+        if (enumerable == null) return ids;
+        foreach (object value in enumerable)
+            if (value is ObjectId id && !id.IsNull) ids.Add(id);
+        return ids;
     }
 
     private static int ImportPoints(JsonElement root, CivilDocument civil, Database database)
@@ -268,10 +431,11 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
                 {
                     if (vertex.ValueKind != JsonValueKind.Array || vertex.GetArrayLength() != 3) continue;
                     double x = vertex[0].GetDouble(), y = vertex[1].GetDouble(), z = vertex[2].GetDouble();
+                    Point3d point = new Point3d(x, y, z);
                     string key = x.ToString("R", CultureInfo.InvariantCulture) + "," +
                                  y.ToString("R", CultureInfo.InvariantCulture) + "," +
                                  z.ToString("R", CultureInfo.InvariantCulture);
-                    if (seen.Add(key)) vertices.Add(new Point3d(x, y, z));
+                    if (seen.Add(key)) vertices.Add(point);
                 }
             }
             if (vertices.Count < 3) continue;
@@ -426,6 +590,14 @@ public sealed class GoSurveyCivilBridge : IExtensionApplication
         if (value is PointStyle pointStyle) return pointStyle.Name;
         if (value is LabelStyle labelStyle) return labelStyle.Name;
         if (value is SurfaceStyle surfaceStyle) return surfaceStyle.Name;
+        // Some Civil 3D versions return a database proxy for style IDs accessed through a point
+        // group. Read its public Name property without depending on the concrete wrapper type.
+        PropertyInfo name = value.GetType().GetProperty("Name", BindingFlags.Instance | BindingFlags.Public);
+        if (name != null && name.PropertyType == typeof(string))
+        {
+            try { return name.GetValue(value) as string ?? String.Empty; }
+            catch { }
+        }
         return String.Empty;
     }
 

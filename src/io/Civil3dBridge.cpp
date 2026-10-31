@@ -445,6 +445,9 @@ bool ExportCivil3dModelObjects(const AppCommandState& state, const char* dwgPath
   }
   Json data;
   data["schema"] = 1;
+  // During Save As, activeDocFilePath still points at the source drawing. Civil 3D uses that
+  // source database to clone native style records before rebuilding AECC objects in the target.
+  data["sourceDwg"] = state.activeDocFilePath;
   data["points"] = Json::array();
   for (const SurveyPoint& point : state.surveyPoints) {
     data["points"].push_back({

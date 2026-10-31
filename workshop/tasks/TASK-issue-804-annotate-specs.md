@@ -91,3 +91,29 @@ stay open decisions for that reason.
 - New tests: 4 cases tagged [issue804] in tests/LibreDwgCadTests.cpp.
 - Verification: GoSurveyTests full run passed (2594 test cases, 0 failures). ctest qt.editor shards 0-5 passed, headless issue125 and issue252 dimangular transcripts passed.
 - Not done: the Civil 3D paired-screenshot panel required by CLAUDE.md section 3 for visible Qt changes. The result is therefore not a completion-gate pass.
+
+## 10. PR #1141 follow-up — DWG styles and Civil 3D round-trip
+
+- User-approved scope: all six reported Annotate defects, a DIMSTY manager/editor modeled on the
+  supplied AutoCAD dialogs, and drawing-owned style/object persistence that can be reopened in
+  Civil 3D. The supplied Rapides Substation DWG is the baseline.
+- REA inspection of the installed Civil 3D assemblies confirmed the managed `CogoPoint`, `PointGroup`,
+  `TinSurface`, and `Alignment` APIs and their style relationships. Autodesk documents
+  `StyleBase.ExportTo` as the Civil 3D style transfer API, with conflict choices Ignore, Rename,
+  Override, and CancelRemaining.
+- Native `WblockCloneObjects` experiments on the supplied drawing exposed a Civil 3D API limitation:
+  cloning an AECC surface into another database invalidates the destination point manager metadata;
+  a subsequent `CogoPointCollection.SetPointNumber` throws `NullReferenceException`. The importer
+  therefore uses Civil 3D APIs to recreate supported COGO points, TIN surfaces, and alignments while
+  cloning drawing-owned AutoCAD and Civil 3D style records. This avoids corrupting the point manager.
+- Reopened-DWG smoke verification using the supplied 353-point / 1-surface baseline found 353 saved
+  COGO points, 1 saved native TIN surface, and the `no points` point style on readback. The rebuilt
+  TIN has 406 triangles compared with 398 in the source, so exact triangulation preservation is not
+  established; source vertex coordinates are transferred and Civil 3D rebuilds topology.
+- Latest Release build and `build.output-layout` passed. `GoSurveyTests.exe "[issue804]"` passed 23
+  cases / 128 assertions. The focused Qt issue804 dialog/table-preview test passed earlier in this
+  run. A full CTest run previously hit an unrelated 300-second timeout in the existing Qt GUI
+  `documentTabTrapezoidsNavigationCloseAndCaptures` case after 21 other cases passed.
+- Civil 3D comparison-panel status remains inconclusive: the UI screenshots are captured, but the
+  required three-reviewer paired comparison has not been completed. Do not treat this task log as a
+  clean full-suite or comparison-panel pass.
