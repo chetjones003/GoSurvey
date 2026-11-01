@@ -1624,6 +1624,9 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
     const float wy = static_cast<float>(m_Cursor.y);
     for (int ti = static_cast<int>(m_State.cadTables.size()) - 1; ti >= 0; --ti) {
       const CadTable& table = m_State.cadTables[static_cast<std::size_t>(ti)];
+      if (!m_State.hiddenEntityIds.empty() && static_cast<std::size_t>(ti) < m_State.cadTableAttrs.size() &&
+          CadEntityIdHidden(&m_State.hiddenEntityIds, m_State.cadTableAttrs[static_cast<std::size_t>(ti)].id))
+        continue;  // a hidden table cannot be picked or edited
       const int cell = CadTableCellAtWorld(table, wx, wy);
       if (cell < 0)
         continue;

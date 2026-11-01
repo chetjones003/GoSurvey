@@ -2195,6 +2195,17 @@ void EditorWindow::RefreshToolspace() {
   key << "#layers";
   for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
   key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
+  // The Settings tree lists every style table, so its names belong in the key too.
+  key << "#dimstyles";
+  for (const auto& style : m_State.dimensionStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#mleaderstyles";
+  for (const auto& style : m_State.multileaderStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#tablestyles";
+  for (const auto& style : m_State.tableStyles) key << QString::fromUtf8(style.name.c_str()) + (style.point ? "|p" : "|d");
+  key << "#pointstyles";
+  for (const auto& style : m_State.surveyPointStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#pointlabelstyles";
+  for (const auto& style : m_State.surveyPointLabelStyles) key << QString::fromUtf8(style.name.c_str());
   key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
   key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
   for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);

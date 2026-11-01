@@ -82,6 +82,9 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&moved->vertsXyz[i], &moved->vertsXyz[i + 1]);
     surface.tin = std::move(moved);
   }
+  // Feature-line vertices are stored local as XYZ triples: X and Y rebase, Z is absolute.
+  for (size_t i = 0; i + 2 < st.featureLineVerts.size(); i += 3)
+    add2(&st.featureLineVerts[i], &st.featureLineVerts[i + 1]);
   // Point and edge edits are stored in the same local frame; a later rebuild would otherwise apply them
   // at their old positions. Z values are absolute and stay as they are.
   for (CadSurface& surface : st.cadSurfaces) {
