@@ -2398,8 +2398,18 @@ void EditorWindow::RefreshToolspace() {
     point->setIcon(0, ToolspaceIcon("Single_Point.png"));
     point->setData(0, Qt::UserRole + 1, "pointSettingsFolder");
     settingsFolder(point, "User-Defined Property Classifications");
-    settingsFolder(point, "Point Styles");
-    settingsFolder(point, "Label Styles");
+    auto* pointStyleFolder = settingsFolder(point, "Point Styles");
+    for (const auto& pointStyle : m_State.surveyPointStyles) {
+      auto* entry = new QTreeWidgetItem(pointStyleFolder, {QString::fromUtf8(pointStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Single_Point.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointStyle");
+    }
+    auto* pointLabelFolder = settingsFolder(point, "Label Styles");
+    for (const auto& labelStyle : m_State.surveyPointLabelStyles) {
+      auto* entry = new QTreeWidgetItem(pointLabelFolder, {QString::fromUtf8(labelStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("text.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointLabelStyle");
+    }
     settingsFolder(point, "Point File Formats");
     settingsFolder(point, "Description Key Sets");
     settingsFolder(point, "External Data References");

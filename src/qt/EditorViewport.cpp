@@ -248,7 +248,7 @@ bool EditorViewport::CancelGripEdit() {
       ann.dimExt1X = m_State.dimGripOrigExt1X; ann.dimExt1Y = m_State.dimGripOrigExt1Y;
       ann.dimExt2X = m_State.dimGripOrigExt2X; ann.dimExt2Y = m_State.dimGripOrigExt2Y;
       ann.dimSignedOffset = m_State.dimGripOrigSignedOffset; ann.insX = m_State.dimGripOrigInsX; ann.insY = m_State.dimGripOrigInsY;
-      CadDimRefreshMeasurementText(&ann, m_State.activeDimensionStyle, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
     }
     ClearDimGripInteraction(m_State);
   } else {
@@ -1203,8 +1203,10 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     const bool paperModifyActive = m_State.paperLengthenPhase || m_State.paperExtendPhase || m_State.paperBreakPhase ||
         m_State.paperStretchPhase || m_State.paperFilletPhase || m_State.paperChamferPhase;
     const bool objectSelectionStep = ViewportIsObjectSelectionStep(m_State);
-    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive) &&
-                                !objectSelectionStep;
+    const bool createPointsPlacement = m_State.showCreatePointsWindow &&
+                                       m_State.active == AppCommandState::Kind::None;
+    const bool midCmdUsesSnap = (m_State.active != AppCommandState::Kind::None || gripActive || paperModifyActive ||
+                                 createPointsPlacement) && !objectSelectionStep;
     m_Snap = midCmdUsesSnap ? CadSnap::FindBest(m_Cursor.x, m_Cursor.y, m_State,
         true, camera.orthoHalfH * 16.f / static_cast<float>(std::max(1, height())), exclude,
         CadViewIsPlan(m_State) ? nullptr : &ray, onlyKind) : CadSnap::Hit{};
@@ -1851,7 +1853,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
         case 4: ann.insX = m_State.dimGripOrigInsX + (x - m_State.dimGripDownWorldX); ann.insY = m_State.dimGripOrigInsY + (y - m_State.dimGripDownWorldY); break;
         default: break;
       }
-      CadDimRefreshMeasurementText(&ann, m_State.activeDimensionStyle, CadAngleDisplaySettings(m_State));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(m_State, ann), CadAngleDisplaySettings(m_State));
       float sx1=0, sy1=0, sx2=0, sy2=0, tx=0, ty=0, nx=0, ny=0, length=0;
       if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
       BumpCadGpuCache(m_State);

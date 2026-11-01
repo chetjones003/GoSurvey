@@ -1951,7 +1951,10 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
     if (mergedTitle) {
       table.mergeTitleRow = true;
       table.surveyPointDataRows = true;
-      table.cells.insert(table.cells.begin(), s->title);
+      // A merged title row still occupies one cell per column, so the header and data cells keep their row-major slots.
+      std::vector<std::string> titleRow(static_cast<std::size_t>(std::max(cols, 1)));
+      titleRow[0] = s->title;
+      table.cells.insert(table.cells.begin(), titleRow.begin(), titleRow.end());
       table.rowTextHeightsInches = {s->titleTextHeightInches, s->headerTextHeightInches};
       table.rowWeights = {s->titleTextHeightInches * 3.f, s->headerTextHeightInches * 3.f};
       for (std::size_t row = 0; row < count; ++row) {

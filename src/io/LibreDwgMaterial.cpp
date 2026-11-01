@@ -235,9 +235,10 @@ const void* DwgTestAddDiffuseMaterial(_dwg_struct* dwgIn, const char* name, unsi
   Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, factor);
   if (obj == nullptr)
     return nullptr;
+  const auto materialHandle = obj->handle.value;  // the dictionary may relocate the object array
   AddMaterialToDictionary(dwg, obj);
   dwg_resolve_objectrefs_silent(dwg);
-  return dwg_add_handleref(dwg, 5, obj->handle.value, nullptr);
+  return dwg_add_handleref(dwg, 5, materialHandle, nullptr);
 }
 
 void DwgExportMaterialContextInit(DwgExportMaterialContext* ctx, bool r2007OrNewer) {
@@ -282,8 +283,8 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* 
       Dwg_Object* obj = AppendMaterialObject(dwg, attr->materialName.c_str(), rgb24, 1.0);
       if (obj == nullptr)
         return;
+      absRef = obj->handle.value;  // read before the dictionary can relocate the object array
       AddMaterialToDictionary(dwg, obj);
-      absRef = obj->handle.value;
       ctx->materialNameToHandle.emplace(attr->materialName, absRef);
       ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
       ++ctx->materialsWritten;
@@ -298,8 +299,8 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* 
       Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, 1.0);
       if (obj == nullptr)
         return;
+      absRef = obj->handle.value;  // read before the dictionary can relocate the object array
       AddMaterialToDictionary(dwg, obj);
-      absRef = obj->handle.value;
       ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
       ++ctx->materialsWritten;
     } else {

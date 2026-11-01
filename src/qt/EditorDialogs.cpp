@@ -1053,6 +1053,8 @@ void EditorWindow::ServiceUiRequests() {
       if (DimensionStyles::Find(m_State.dimensionStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
       DimensionStyle copy = m_State.activeDimensionStyle; copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
+      // The editor lets the name be changed: check again so two styles never share a name.
+      if (DimensionStyles::Find(m_State.dimensionStyles, copy.name)) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
       PushUndoSnapshot(m_State, "DIMSTY new"); m_State.dimensionStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
@@ -1143,6 +1145,7 @@ void EditorWindow::ServiceUiRequests() {
       if (MultileaderStyles::Find(m_State.multileaderStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
       MultileaderStyle copy = m_State.activeMultileaderStyle; copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
+      if (MultileaderStyles::Find(m_State.multileaderStyles, copy.name)) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
       PushUndoSnapshot(m_State, "MSTY new"); m_State.multileaderStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
@@ -1194,9 +1197,12 @@ void EditorWindow::ServiceUiRequests() {
       const QString n = QInputDialog::getText(this, "New Text Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
       if (!ok || n.isEmpty()) return false;
       if (TextStyles::Find(m_State.textStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
-      TextStyle copy = *TextStyles::Find(m_State.textStyles, m_State.activeTextStyleName);
+      const TextStyle* base = TextStyles::Find(m_State.textStyles, m_State.activeTextStyleName);
+      if (!base) base = TextStyles::Find(m_State.textStyles, TextStyles::kStandardName);
+      TextStyle copy = base ? *base : TextStyle{};
       copy.name = n.toUtf8().toStdString();
       if (!editStyle(&copy, true)) return false;
+      if (TextStyles::Find(m_State.textStyles, copy.name)) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
       PushUndoSnapshot(m_State, "STYLE new"); m_State.textStyles.push_back(copy); return true;
     };
     spec.modify = [this, editStyle](const QString& name) {
@@ -1954,6 +1960,7 @@ void EditorWindow::ShowTableStyles() {
     CadTableStyle style = current ? *current : CadTableBuiltinStyles().front();
     style.name = name.toUtf8().toStdString();
     if (!edit(&style, true)) return false;
+    if (CadTableFindStyle(m_State.tableStyles, style.name)) { QMessageBox::warning(this, "Table Style", "That style name already exists."); return false; }
     PushUndoSnapshot(m_State, "TABLESTYLE new"); m_State.tableStyles.push_back(std::move(style)); return true;
   };
   spec.modify = [this, edit](const QString& name) {

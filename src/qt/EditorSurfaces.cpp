@@ -698,7 +698,7 @@ QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
     const int index = item->data(0, Qt::UserRole).toInt();
     add("Switch to Drawing", "toolspaceSwitchDrawing", true, [this, index] { SwitchDrawing(index); });
     add("Drawing Settings...", "toolspaceDrawingSettingsOf", true, [this, index] { SwitchDrawing(index); Submit("DRAWINGSETTINGS"); });
-  } else if (kind == "settingsFolder" || kind == "pointSettingsFolder" || kind == "tableStylesFolder" ||
+  } else if (kind == "settingsFolder" || kind == "pointSettingsFolder" || kind == "pointStyle" || kind == "pointLabelStyle" || kind == "tableStylesFolder" ||
              kind == "tableStyle") {
     // Civil-style Settings folders without their own manager yet: the drawing's settings are the one place to edit them.
     add("Drawing Settings...", "toolspaceFolderSettings", true, [this] { Submit("DRAWINGSETTINGS"); });

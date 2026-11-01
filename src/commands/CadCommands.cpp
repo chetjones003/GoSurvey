@@ -7040,6 +7040,8 @@ struct CmdEntry {
 
 const CmdEntry kRegistry[] = {
     {"line", "l", "Draw line segments"},
+    {"centermark", "", "Add a center mark to the selected circles and arcs"},
+    {"centerline", "", "Draw a centerline between the two selected lines"},
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
@@ -11760,7 +11762,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     ScaleCadDimLinearAroundBase(bx, by, sc, &a);
     ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
     a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
     ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
@@ -11770,7 +11772,7 @@ static void ScaleAnnotationAroundBase(const AppCommandState& st, CadAnnotation& 
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       a.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-    CadDimRefreshMeasurementText(&a, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+    CadDimRefreshMeasurementText(&a, CadDimensionStyleForAnnotation(st, a), CadAngleDisplaySettings(st));
   } else if (a.kind == CadAnnotation::Kind::DimAngular) {
     ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
     ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -13162,7 +13164,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimSignedOffset = dOff;
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
   DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
-  CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+  CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -13229,7 +13231,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   }
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
   DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
-  CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+  CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);

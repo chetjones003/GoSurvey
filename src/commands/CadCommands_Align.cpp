@@ -227,7 +227,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &ttx, &tty, &nx, &ny, &ml))
         ann.rotationRad = CadDimReadableTextRotation(std::atan2(tty, ttx));
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
-      CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
       break;
     }
     case CadAnnotation::Kind::DimAngular:
@@ -237,7 +237,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       ann.dimSignedOffset *= sc;
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
       CadDimAngularSyncTextPlacement(&ann, st.modelUnitsPerPlottedInch);
-      CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
+      CadDimRefreshMeasurementText(&ann, CadDimensionStyleForAnnotation(st, ann), CadAngleDisplaySettings(st));
       break;
     }
   }

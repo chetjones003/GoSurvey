@@ -82,6 +82,19 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&moved->vertsXyz[i], &moved->vertsXyz[i + 1]);
     surface.tin = std::move(moved);
   }
+  // Point and edge edits are stored in the same local frame; a later rebuild would otherwise apply them
+  // at their old positions. Z values are absolute and stay as they are.
+  for (CadSurface& surface : st.cadSurfaces) {
+    for (size_t i = 0; i + 2 < surface.addedPointXyz.size(); i += 3)
+      add2(&surface.addedPointXyz[i], &surface.addedPointXyz[i + 1]);
+    for (auto& pick : surface.deletedPointPicks) add2(&pick.first, &pick.second);
+    for (auto& pick : surface.swappedEdgePicks) add2(&pick.first, &pick.second);
+    for (auto& pick : surface.deletedEdgePicks) add2(&pick.first, &pick.second);
+    for (auto& moved : surface.movedPoints) {
+      add2(&moved.fromX, &moved.fromY);
+      add2(&moved.toX, &moved.toY);
+    }
+  }
 }
 
 void ApplyDocumentOriginRebase(AppCommandState& st, double newOriginX, double newOriginY,
