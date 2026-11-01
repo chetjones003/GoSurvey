@@ -46,8 +46,6 @@ GoSurvey is licensed under **GPL-3.0-or-later** (LibreDWG linkage). See [`instal
 
 GoSurvey is built with CMake, MSVC, and Ninja on Windows. See [`dev/README.md`](dev/README.md) for the full build adapter reference (`./dev/build`, `./dev/run`, `./dev/test`, etc.).
 
-For a spare Windows 11 build machine, see the [self-hosted runner setup guide](docs/windows-self-hosted-runner.md) and its PowerShell toolchain installer.
-
 ### Project workflow
 
 This repo follows a three-layer governance model — **SPEC → VERIFICATION → WORKSHOP** — defined in full in [`CLAUDE.md`](CLAUDE.md):
@@ -96,7 +94,7 @@ Currently this project is funded solely by my own means. If you'd like to suppor
 
 ### Unified local build
 
-Use `build.bat` to build the Qt frontend, domain tests and headless helpers. Add `debug` for Debug. `build-qt.bat` forwards to the same entry point. Set `GOSURVEY_QT_ROOT` to your installed MSVC x64 Qt 6 kit (default `C:\Qt\6.8.3\msvc2022_64`).
+Use `build.bat` to build the Qt frontend, domain tests and headless helpers. Add `debug` for Debug. Set `GOSURVEY_QT_ROOT` to your installed MSVC x64 Qt 6 kit (default `C:\Qt\6.8.3\msvc2022_64`).
 
 The supported application is `build/GoSurvey.exe` (Qt); `build/GoSurveyQtTests.exe` is its GUI test runner. Required DLLs, `qt-plugins/` and `resources/` accompany the application. CMake caches, generated headers, static libraries, symbols and test/headless helper programs live under `build/.cmake/<preset>/`. Test screenshots and reports live under `build/artifacts/`. Debug applications live under `build/debug/`.
 
