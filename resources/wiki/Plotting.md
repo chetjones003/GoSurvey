@@ -106,6 +106,25 @@ not appear in that viewport's page.
 
 ---
 
+## Page Setup plot options
+
+The layout's **Page Setup Manager** holds four placement options that the PDF plot honours:
+
+| Option | What the PDF does |
+|---|---|
+| **Plot scale** (1 : N) | Draws the whole sheet at 1 / N of its size, text sizes included. `1 : 1` is the default |
+| **Fit to paper** | Scales the sheet content until it fills the sheet in its limiting direction, with its lower-left corner at the sheet's corner |
+| **Center the plot** | Centres the sheet content on the sheet. The offsets are ignored while this is on |
+| **Plot offset X / Y** | Moves the sheet content by that many inches from the sheet's lower-left corner |
+
+Fit and centre measure the content on the sheet: viewport frames, lines, circles, polyline vertices and
+text anchors. Lineweights keep the width the layer or entity asks for.
+
+> AutoCAD plots layouts at 1:1 and turns fit and centre off for them. GoSurvey applies them, so a sheet
+> plotted in GoSurvey can differ from the same layout plotted in AutoCAD.
+
+---
+
 ## Messages
 
 | Message | Meaning |

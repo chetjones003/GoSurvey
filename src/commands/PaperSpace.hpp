@@ -406,7 +406,7 @@ struct PageSetup {
   float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
   bool  landscape = true;
   bool  fitToPaper = false;
-  float scaleModelPerPaperIn = 1.f;  // plot scale: model units per paper inch (when not fit-to-paper)
+  float scaleModelPerPaperIn = 1.f;  // plot ratio N for "1 : N" (when not fit-to-paper); name kept for persistence (REQ-445)
   int   plotArea = 0;                // 0 = Layout (only option for now)
   float offsetXIn = 0.f;
   float offsetYIn = 0.f;

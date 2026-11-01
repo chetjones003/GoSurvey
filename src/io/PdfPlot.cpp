@@ -9,6 +9,7 @@
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
+#include "PlotSheetTransform.hpp"  // pure sheet placement: fit, centre, offset and plot ratio (REQ-445)
 #include "CadFontName.hpp"
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
@@ -37,6 +38,30 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
+
+// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, line ends,
+// circle and polyline vertices, and text anchors. Arcs, ellipses, blocks and fills are not included yet.
+plotsheet::Extent SheetContentExtent(const PaperLayout& L) {
+  plotsheet::Extent e;
+  for (const Viewport& vp : L.viewports) {
+    e.Add(vp.paperXIn, vp.paperYIn);
+    e.Add(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
+  }
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    e.Add(L.paperLines[i], L.paperLines[i + 1]);
+    e.Add(L.paperLines[i + 3], L.paperLines[i + 4]);
+  }
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
+    e.Add(cx - r, cy - r);
+    e.Add(cx + r, cy + r);
+  }
+  for (size_t i = 0; i + 1 < L.paperPolyVerts.size(); i += 3)
+    e.Add(L.paperPolyVerts[i], L.paperPolyVerts[i + 1]);
+  for (const CadAnnotation& a : L.paperTexts)
+    e.Add(a.insX, a.insY);
+  return e;
+}
 
 // Paper-inch rectangle a model-space stroke is clipped to (a viewport's paper rect).
 struct PlotRect {
@@ -192,6 +217,10 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     const PaperLayout& L = st.paperLayouts[static_cast<size_t>(li)];
     const double wPts = static_cast<double>(L.sheetWidthIn()) * kPtPerIn;
     const double hPts = static_cast<double>(L.sheetHeightIn()) * kPtPerIn;
+    // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
+    const plotsheet::Transform tr = plotsheet::Compute(
+        {L.fitToPaper, L.scaleModelPerPaperIn, L.offsetXIn, L.offsetYIn, L.centerPlot}, L.sheetWidthIn(),
+        L.sheetHeightIn(), SheetContentExtent(L));
     FPDF_PAGE page = FPDFPage_New(doc, pages, wPts, hPts);
     if (!page)
       continue;
@@ -735,7 +764,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           for (int k = 0; k < cnt; ++k) {
             const size_t vi = static_cast<size_t>(begin + k);
             // Paper fills are 2D (ADR-025 (g)) — Z is ignored here, the sheet has no depth.
-            const float vx = fr.vertsXyz[vi * 3] * kPtPerIn, vy = fr.vertsXyz[vi * 3 + 1] * kPtPerIn;
+            const float vx = tr.X(fr.vertsXyz[vi * 3]) * kPtPerIn, vy = tr.Y(fr.vertsXyz[vi * 3 + 1]) * kPtPerIn;
             if (!fillObj) {
               fillObj = FPDFPageObj_CreateNewPath(vx, vy);  // first subpath starts here (implicit MoveTo)
               if (!fillObj) break;
@@ -979,14 +1008,14 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                              float rot, uint32_t rgb) {
         if (!font || s.empty())
           return;
-        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, Hin * kPtPerIn / kCapEmRatio);
+        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, tr.k * Hin * kPtPerIn / kCapEmRatio);
         if (!to)
           return;
         std::vector<unsigned short> u16 = plotfont::Utf8ToUtf16(s);
         FPDFText_SetText(to, u16.data());
         FPDFPageObj_SetFillColor(to, (rgb >> 16) & 0xffu, (rgb >> 8) & 0xffu, rgb & 0xffu, 255u);
         const float cr = std::cos(rot), sr = std::sin(rot);
-        FS_MATRIX m{cr, sr, -sr, cr, baseXin * kPtPerIn, baseYin * kPtPerIn};
+        FS_MATRIX m{cr, sr, -sr, cr, tr.X(baseXin) * kPtPerIn, tr.Y(baseYin) * kPtPerIn};
         FPDFPageObj_SetMatrix(to, &m);
         FPDFPage_InsertObject(page, to);
       };
@@ -1121,11 +1150,13 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       if (segs.empty())
         continue;
       const uint32_t color = style.first;
-      FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(segs[0][0] * kPtPerIn, segs[0][1] * kPtPerIn);
-      FPDFPath_LineTo(path, segs[0][2] * kPtPerIn, segs[0][3] * kPtPerIn);
+      auto ptX = [&](float x) { return tr.X(x) * kPtPerIn; };
+      auto ptY = [&](float y) { return tr.Y(y) * kPtPerIn; };
+      FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(ptX(segs[0][0]), ptY(segs[0][1]));
+      FPDFPath_LineTo(path, ptX(segs[0][2]), ptY(segs[0][3]));
       for (size_t i = 1; i < segs.size(); ++i) {
-        FPDFPath_MoveTo(path, segs[i][0] * kPtPerIn, segs[i][1] * kPtPerIn);
-        FPDFPath_LineTo(path, segs[i][2] * kPtPerIn, segs[i][3] * kPtPerIn);
+        FPDFPath_MoveTo(path, ptX(segs[i][0]), ptY(segs[i][1]));
+        FPDFPath_LineTo(path, ptX(segs[i][2]), ptY(segs[i][3]));
       }
       FPDFPageObj_SetStrokeColor(path, static_cast<int>((color >> 16) & 0xff), static_cast<int>((color >> 8) & 0xff),
                                  static_cast<int>(color & 0xff), 255);

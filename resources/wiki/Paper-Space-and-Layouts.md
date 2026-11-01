@@ -102,16 +102,17 @@ The dialog reports the result: `Plot size: 17.00 x 11.00 inches (ANSI B (11" x 1
 | Setting | Notes |
 |---|---|
 | **What to plot** / **Plot area** | What part of the sheet is plotted |
-| **Plot scale** | Sheet plot scale |
-| **Fit to paper** | Scale to fit |
+| **Plot scale** | Plot ratio **1 : N**. The whole sheet, text sizes included, is drawn at 1 / N |
+| **Fit to paper** | Scales the sheet content to fill the sheet |
 | **Plot offset (inches)** — X, Y | Shifts the plot on the sheet |
-| **Center the plot** | Centres it instead |
+| **Center the plot** | Centres the sheet content on the sheet and ignores the offsets |
 | **Plot object lineweights** | Honour lineweights |
 | **Plot transparency** | Honour transparency |
 | **Plot paperspace last** | Drawing order |
 
-> *Plot styles / options apply once PDF plotting lands (a later update).* Some of these controls
-> are recorded but not yet acted on by the PDF writer.
+Fit to paper, centre, offset and the plot ratio all act on the PDF. Fit and centre measure the sheet's
+content (viewport frames, lines, circles, polylines and text anchors). Lineweights keep their width.
+**Plot transparency** and **Plot paperspace last** are recorded but not yet acted on by the PDF writer.
 
 ---
 

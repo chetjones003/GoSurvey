@@ -13608,9 +13608,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: The PDF plot of a paper layout honours four Page Setup options, each read from the
   layout's saved settings: (a) **plot offset X and Y**, which move the sheet content by the stated
   amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
-  scales the content to fill the printable area; (d) **plot scale**, which sets the scale of the
-  content on the sheet. A Page Setup control that the plot does not honour is a defect, not an
-  accepted limitation.
+  scales the content to fill the sheet in its limiting direction, with its lower-left corner at the
+  sheet's lower-left corner; (d) **plot scale**, a ratio 1 : N that scales the content by 1 / N. Fit and
+  centre use the sheet content extent (viewport frames, line ends, circle and polyline vertices and text
+  anchors); when centre is on, the offsets are ignored. Lineweights keep their width; text sizes and
+  positions scale with the content. A Page Setup control that the plot does not honour is a defect, not
+  an accepted limitation.
 - Acceptance:
   1. with each option set on its own, the PDF differs from the same layout plotted with no option
      set, and a measured offset, centre position, fitted extent or plotted scale matches the stated
@@ -13620,7 +13623,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. a test exists for each of the four options.
 - Owner-layer: IO / Renderer
 - Status: accepted
-- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1).
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1). 2026-11-01 — plot scale defined as a ratio 1 : N and the fit, centre and offset rules stated (D-2026-11-01-a, GitHub issue #1145).
 
 ### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
 
