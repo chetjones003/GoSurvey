@@ -35,6 +35,13 @@ struct CadTable {
   std::string fontFamily;
   /// Table style name (REQ-475). Empty for tables made before table styles existed; they draw as Standard.
   std::string styleName;
+  std::vector<float> columnWeights;
+  std::vector<float> rowWeights;
+  std::vector<float> rowTextHeightsInches;
+  bool mergeTitleRow = false;
+  bool centerText = false;
+  /// When true, data rows are filled from survey points; cell text must not be edited in place.
+  bool surveyPointDataRows = false;
 };
 
 [[nodiscard]] inline int CadTableRowCount(int cols, const std::vector<std::string>& cells) {
@@ -50,6 +57,39 @@ struct CadTable {
 
 [[nodiscard]] inline float CadTableHeightWorld(const CadTable& t, float modelUnitsPerPlottedInch) {
   return t.plottedHeightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f);
+}
+
+/// A band boundary scaled to the current table size. Invalid/incomplete weights use equal bands.
+[[nodiscard]] inline float CadTableBandBoundary(const std::vector<float>& weights, int bands,
+                                               int boundary, float extent) {
+  if (bands <= 0) return 0;
+  boundary = std::clamp(boundary, 0, bands);
+  if (weights.size() == static_cast<std::size_t>(bands)) {
+    double total = 0, before = 0;
+    bool valid = true;
+    for (int i = 0; i < bands; ++i) {
+      if (!std::isfinite(weights[i]) || weights[i] <= 0) { valid = false; break; }
+      total += weights[i];
+      if (i < boundary) before += weights[i];
+    }
+    if (valid && total > 0) return static_cast<float>(extent * before / total);
+  }
+  return extent * static_cast<float>(boundary) / static_cast<float>(bands);
+}
+
+/// Cell rectangle in local coordinates, with y increasing downwards. Covered title cells are empty.
+[[nodiscard]] inline CadTableCellRect CadTableLocalCellRect(const CadTable& t, int index) {
+  CadTableCellRect rect;
+  const int rows = CadTableRowCount(t);
+  if (t.cols <= 0 || index < 0 || index >= rows * t.cols) return rect;
+  const int row = index / t.cols, column = index % t.cols;
+  if (t.mergeTitleRow && row == 0 && column != 0) return rect;
+  rect.x0 = CadTableBandBoundary(t.columnWeights, t.cols, column, t.width);
+  rect.x1 = t.mergeTitleRow && row == 0 ? t.width :
+      CadTableBandBoundary(t.columnWeights, t.cols, column + 1, t.width);
+  rect.y0 = CadTableBandBoundary(t.rowWeights, rows, row, t.height);
+  rect.y1 = CadTableBandBoundary(t.rowWeights, rows, row + 1, t.height);
+  return rect;
 }
 
 inline void CadTableLocalToWorld(const CadTable& t, float lx, float lyDown, float* wx, float* wy) {
@@ -153,16 +193,13 @@ inline void CadTableLayoutWorldCells(const CadTable& t, std::vector<CadTableCell
   if (t.cols <= 0)
     return;
   const int rows = CadTableRowCount(t);
-  const float w = std::max(t.width, 1.e-3f);
-  const float h = std::max(t.height, 1.e-3f);
-  const float cw = w / static_cast<float>(t.cols);
-  const float rh = h / static_cast<float>(rows);
   const int n = rows * t.cols;
   out->resize(static_cast<size_t>(n));
   for (int r = 0; r < rows; ++r) {
     for (int c = 0; c < t.cols; ++c) {
-      const float lx0 = static_cast<float>(c) * cw;
-      const float ly0 = static_cast<float>(r) * rh;
+      const auto local = CadTableLocalCellRect(t, r * t.cols + c);
+      const float lx0 = local.x0, ly0 = local.y0;
+      const float cw = local.x1 - local.x0, rh = local.y1 - local.y0;
       float x00 = 0.f, y00 = 0.f, x10 = 0.f, y10 = 0.f, x01 = 0.f, y01 = 0.f, x11 = 0.f, y11 = 0.f;
       CadTableLocalToWorld(t, lx0, ly0, &x00, &y00);
       CadTableLocalToWorld(t, lx0 + cw, ly0, &x10, &y10);
@@ -194,7 +231,7 @@ inline void CadTableLayoutWorldCells(const CadTable& t, std::vector<CadTableCell
 }
 
 /// Glyph width as a fraction of text height (wider than average so TTF text stays inside the cell).
-inline constexpr float kCadTableEmPerHeight = 0.70f;
+inline constexpr float kCadTableEmPerHeight = 0.78f;
 /// Horizontal padding on each side of a cell, in text-heights.
 inline constexpr float kCadTableCellPadXEm = 0.45f;
 /// Row height as a multiple of text height (leading + padding).
@@ -208,6 +245,35 @@ inline constexpr float kCadTableRowToText = 1.60f;
 
 /// Size the axis-aligned box so equal-width columns and equal-height rows contain the cell strings
 /// at the table's plotted height. Grows from insertion (top-left); does not move `insX`/`insY`.
+/// When Civil column widths are absent, distribute the table width by each column's widest cell.
+inline void CadTableFitColumnWeightsFromContent(CadTable* t, float modelUnitsPerPlottedInch) {
+  if (!t || t->cols <= 0)
+    return;
+  const int rows = CadTableRowCount(*t);
+  if (rows <= 0)
+    return;
+  const float mupi = modelUnitsPerPlottedInch > 1.e-6f ? modelUnitsPerPlottedInch : 1.f;
+  std::vector<float> widest(static_cast<size_t>(t->cols), 0.f);
+  for (int row = 0; row < rows; ++row) {
+    const float rowHeightInches = row < static_cast<int>(t->rowTextHeightsInches.size()) ?
+        t->rowTextHeightsInches[static_cast<size_t>(row)] : t->plottedHeightInches;
+    const float textHeightWorld = rowHeightInches * mupi;
+    for (int column = 0; column < t->cols; ++column) {
+      if (t->mergeTitleRow && row == 0 && column != 0)
+        continue;
+      const std::size_t index = static_cast<size_t>(row * t->cols + column);
+      if (index >= t->cells.size())
+        break;
+      widest[static_cast<size_t>(column)] = std::max(
+          widest[static_cast<size_t>(column)], CadTableEstimatedTextWidth(t->cells[index], textHeightWorld));
+    }
+  }
+  const float pad = t->plottedHeightInches * mupi * kCadTableCellPadXEm * 2.f;
+  t->columnWeights.clear();
+  for (float width : widest)
+    t->columnWeights.push_back(std::max(width + pad, 1.f));
+}
+
 inline void CadTableFitToContent(CadTable* t, float modelUnitsPerPlottedInch) {
   if (!t || t->cols <= 0)
     return;
@@ -240,19 +306,36 @@ inline void CadTableFitToContent(CadTable* t, float modelUnitsPerPlottedInch) {
   if (lx < 0.f || lx > w || ly < 0.f || ly > h)
     return -1;
   const int rows = CadTableRowCount(t);
-  const float cw = w / static_cast<float>(t.cols);
-  const float rh = h / static_cast<float>(rows);
-  int c = static_cast<int>(lx / cw);
-  int r = static_cast<int>(ly / rh);
-  if (c >= t.cols)
-    c = t.cols - 1;
-  if (r >= rows)
-    r = rows - 1;
-  if (c < 0)
-    c = 0;
-  if (r < 0)
-    r = 0;
+  int c = 0;
+  int r = 0;
+  while (c + 1 < t.cols && lx >= CadTableBandBoundary(t.columnWeights, t.cols, c + 1, w)) ++c;
+  while (r + 1 < rows && ly >= CadTableBandBoundary(t.rowWeights, rows, r + 1, h)) ++r;
+  if (t.mergeTitleRow && r == 0) return 0;
   return r * t.cols + c;
+}
+
+/// True when \p cellIndex is a survey-point data cell (not title/header) on a linked point table.
+[[nodiscard]] inline bool CadTableCellIsSurveyPointData(const CadTable& t, int cellIndex) {
+  if (!t.surveyPointDataRows || t.cols <= 0 || cellIndex < 0) return false;
+  const int rows = CadTableRowCount(t);
+  if (rows <= 0) return false;
+  const int row = cellIndex / t.cols;
+  const int firstDataRow = t.mergeTitleRow ? 2 : 1;
+  return row >= firstDataRow && row < rows;
+}
+
+inline void CadTableExpandWidthForColumnWeights(CadTable* t) {
+  if (!t || t->cols <= 0 || t->columnWeights.size() != static_cast<std::size_t>(t->cols)) return;
+  float sum = 0.f;
+  for (float weight : t->columnWeights) sum += weight;
+  if (sum > t->width) t->width = sum;
+}
+
+/// Recompute column weights for point tables when layout metadata is missing.
+inline void CadTableEnsurePointTableLayout(CadTable* t, float modelUnitsPerPlottedInch) {
+  if (!t || t->cols <= 0) return;
+  if (t->columnWeights.size() != static_cast<std::size_t>(t->cols))
+    CadTableFitColumnWeightsFromContent(t, modelUnitsPerPlottedInch);
 }
 
 [[nodiscard]] inline CadTable CadTableFromAxisAlignedBox(float boxMinX, float boxMinY, float boxMaxX,

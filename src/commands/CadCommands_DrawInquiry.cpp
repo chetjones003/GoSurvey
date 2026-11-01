@@ -1934,6 +1934,7 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
       ? static_cast<std::size_t>(std::max(1, st.pointTableMaxRows)) : rows.size();
   const std::size_t chunkCount = (rows.size() + maxRows - 1) / maxRows;
   const int cols = static_cast<int>(s->pointColumns.size());
+  const bool mergedTitle = !s->title.empty();
   std::vector<CadTable> tables;
   tables.reserve(chunkCount);
   float firstWidth = 0.f, firstHeight = 0.f;
@@ -1943,8 +1944,29 @@ void CommitPointTableAt(AppCommandState& st, double wx, double wy, std::vector<s
     std::vector<CadTablePointRow> subset(rows.begin() + static_cast<std::ptrdiff_t>(first),
                                          rows.begin() + static_cast<std::ptrdiff_t>(first + count));
     CadTable table;
-    CadTableApplyStyleSize(&table, *s, static_cast<int>(count) + 1, cols, st.modelUnitsPerPlottedInch);
+    const int tableRows = static_cast<int>(count) + 1 + (mergedTitle ? 1 : 0);
+    CadTableApplyStyleSize(&table, *s, tableRows, cols, st.modelUnitsPerPlottedInch);
     table.cells = CadPointTableCells(*s, subset, st.displayLinearPrecision);
+    table.surveyPointDataRows = true;
+    if (mergedTitle) {
+      table.mergeTitleRow = true;
+      table.surveyPointDataRows = true;
+      table.cells.insert(table.cells.begin(), s->title);
+      table.rowTextHeightsInches = {s->titleTextHeightInches, s->headerTextHeightInches};
+      table.rowWeights = {s->titleTextHeightInches * 3.f, s->headerTextHeightInches * 3.f};
+      for (std::size_t row = 0; row < count; ++row) {
+        table.rowTextHeightsInches.push_back(s->textHeightInches);
+        table.rowWeights.push_back(s->textHeightInches * 3.f);
+      }
+      if (!s->columnWidths.empty()) {
+        table.columnWeights.clear();
+        for (double width : s->columnWidths) table.columnWeights.push_back(static_cast<float>(width));
+      } else {
+        CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+      }
+    } else {
+      CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+    }
     const std::size_t stackLimit = static_cast<std::size_t>(std::max(1, st.pointTableMaxStack));
     const std::size_t stack = chunk / stackLimit;
     const std::size_t tile = chunk % stackLimit;

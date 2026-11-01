@@ -210,6 +210,7 @@ struct TextStyle {
   std::string name;            ///< Unique within the drawing; "Standard" always exists and is not deletable.
   std::string fontFamily;  ///< "" = app default (`romans.shx`); TrueType family or SHX file name.
   float heightInches = 0.125f; ///< Plotted text height in inches (model height = this × drawing scale).
+  float widthFactor = 1.f;     ///< STYLE width factor (1 = normal); retained in drawing data embedded in DWG.
   float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
   bool bold = false;
   bool italic = false;

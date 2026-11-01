@@ -73,6 +73,15 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     if (sp)
       sp = std::make_shared<const brep::Solid>(brep::Translate(*sp, ray3d::Vec3{dx, dy, 0.0}));
   }
+  // A built TIN is likewise shared and immutable, so it is replaced by a shifted copy. A surface
+  // imported as a fixed triangulation (DWG Civil 3D TIN) has no sources to rebuild it from.
+  for (CadSurface& surface : st.cadSurfaces) {
+    if (!surface.tin) continue;
+    auto moved = std::make_shared<CadTin>(*surface.tin);
+    for (size_t i = 0; i + 2 < moved->vertsXyz.size(); i += 3)
+      add2(&moved->vertsXyz[i], &moved->vertsXyz[i + 1]);
+    surface.tin = std::move(moved);
+  }
 }
 
 void ApplyDocumentOriginRebase(AppCommandState& st, double newOriginX, double newOriginY,

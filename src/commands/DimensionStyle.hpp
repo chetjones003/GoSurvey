@@ -75,6 +75,7 @@ struct DimensionStyle {
   DimUnitFormat unitFormat = DimUnitFormat::Decimal;
   int unitPrecision = 2;                 // 0..4  -> 0 / 0.0 / 0.00 / 0.000 / 0.0000
   double unitScale = 1.0;                // display value = measured * scale
+  std::string unitSuffix;                // DWG DIMPOST (often a trailing foot mark after <>)
 
   bool operator==(const DimensionStyle& o) const {
     return name == o.name && textSizeInches == o.textSizeInches && textFont == o.textFont &&
@@ -82,7 +83,8 @@ struct DimensionStyle {
            dimLineColor == o.dimLineColor && dimLineType == o.dimLineType &&
            extLineColor == o.extLineColor && extLineType == o.extLineType &&
            arrowSizeInches == o.arrowSizeInches && arrowType == o.arrowType && arrowColor == o.arrowColor &&
-           unitFormat == o.unitFormat && unitPrecision == o.unitPrecision && unitScale == o.unitScale;
+           unitFormat == o.unitFormat && unitPrecision == o.unitPrecision && unitScale == o.unitScale &&
+           unitSuffix == o.unitSuffix;
   }
   bool operator!=(const DimensionStyle& o) const { return !(*this == o); }
 };
@@ -117,18 +119,38 @@ inline void BakeTextOntoDimension(CadAnnotation& a, const DimensionStyle& sty) {
 }
 
 // Format a linear measurement according to the style's units (scale + precision + format).
-// Architectural/Engineering/Fractional fall back to Decimal for now — the format enum is stored
-// and the UI exposes it, but the formatter is decimal-only until the measurement system carries
-// feet-inch knowledge.  Keeping the enum now means internal document payload files already carry the choice.
 inline std::string FormatLinearDim(double measured, const DimensionStyle& sty) {
-  double scaled = measured * sty.unitScale;
-  int prec = sty.unitPrecision;
-  if (prec < 0) prec = 0;
-  if (prec > 8) prec = 8;
-  char buf[64];
-  // Use fixed notation; precision is number of decimal places.
-  std::snprintf(buf, sizeof(buf), "%.*f", prec, scaled);
-  return std::string(buf);
+  const double scaled = measured * sty.unitScale;
+  const int prec = std::clamp(sty.unitPrecision, 0, 8);
+  char buf[96];
+  std::string core;
+  switch (sty.unitFormat) {
+  case DimUnitFormat::Architectural:
+  case DimUnitFormat::Engineering: {
+    const int feet = static_cast<int>(std::floor(scaled + 1.e-9));
+    const double inches = (scaled - static_cast<double>(feet)) * 12.0;
+    if (feet == 0)
+      std::snprintf(buf, sizeof(buf), "%.*f\"", prec, inches);
+    else
+      std::snprintf(buf, sizeof(buf), "%d'-%.*f\"", feet, prec, inches);
+    core = buf;
+    break;
+  }
+  case DimUnitFormat::Fractional:
+  default:
+    std::snprintf(buf, sizeof(buf), "%.*f", prec, scaled);
+    core = buf;
+    break;
+  }
+  if (sty.unitSuffix.empty())
+    return core;
+  const std::size_t placeholder = sty.unitSuffix.find("<>");
+  if (placeholder != std::string::npos) {
+    std::string out = sty.unitSuffix;
+    out.replace(placeholder, 2, core);
+    return out;
+  }
+  return core + sty.unitSuffix;
 }
 
 } // namespace DimensionStyles

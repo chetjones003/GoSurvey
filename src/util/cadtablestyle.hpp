@@ -34,6 +34,23 @@ struct CadTableStyle {
   float columnWidthInches = 1.5f;
   float rowHeightInches = 0.375f;
   std::vector<CadPointTableColumn> pointColumns;
+  // Civil source column expressions remain drawing-owned, including fields that do not yet
+  // have a GoSurvey point-column enum (latitude/longitude and custom formatted expressions).
+  std::vector<std::string> columnHeaders;
+  std::vector<std::string> columnExpressions;
+  std::vector<double> columnWidths;
+  std::string title;
+  std::string civilStyleName;
+  std::string textStyleName;
+  std::string headerTextStyleName;
+  std::string titleTextStyleName;
+  float headerTextHeightInches = 0.125f;
+  float titleTextHeightInches = 0.125f;
+  std::string dataTextColor;
+  std::string headerTextColor;
+  std::string titleTextColor;
+  std::string gridLineColor;
+  std::string borderColor;
 };
 
 /// The styles every drawing has (REQ-475 clause 2). The point column lists follow the NRCS point file layout
@@ -144,13 +161,37 @@ inline int CadTableCellAtWorld(const CadTable& t, float wx, float wy) {
   CadTableWorldToLocal(t, wx, wy, &lx, &ly);
   if (lx < 0.f || ly < 0.f || lx > t.width || ly > t.height)
     return -1;
-  const float cellW = t.width / static_cast<float>(t.cols);
-  const float cellH = t.height / static_cast<float>(rows);
-  int c = static_cast<int>(lx / cellW);
-  int r = static_cast<int>(ly / cellH);
-  if (c >= t.cols)
-    c = t.cols - 1;
-  if (r >= rows)
-    r = rows - 1;
+  int c = 0, r = 0;
+  while (c + 1 < t.cols && lx >= CadTableBandBoundary(t.columnWeights, t.cols, c + 1, t.width)) ++c;
+  while (r + 1 < rows && ly >= CadTableBandBoundary(t.rowWeights, rows, r + 1, t.height)) ++r;
+  if (t.mergeTitleRow && r == 0) return 0;
   return r * t.cols + c;
+}
+
+/// True when the table uses a Civil/point-table style (survey-linked body cells).
+inline bool CadTableUsesSurveyPointData(const std::vector<CadTableStyle>& styles, const CadTable& t) {
+  if (t.surveyPointDataRows) return true;
+  const CadTableStyle* style = CadTableFindStyle(styles, t.styleName);
+  return style != nullptr && style->point;
+}
+
+[[nodiscard]] inline bool CadTableCellIsSurveyPointData(const std::vector<CadTableStyle>& styles,
+                                                        const CadTable& t, int cellIndex) {
+  if (!CadTableUsesSurveyPointData(styles, t) || t.cols <= 0 || cellIndex < 0) return false;
+  const int rows = CadTableRowCount(t);
+  if (rows <= 0) return false;
+  const int row = cellIndex / t.cols;
+  const int firstDataRow = t.mergeTitleRow ? 2 : 1;
+  return row >= firstDataRow && row < rows;
+}
+
+inline void CadTableSyncSurveyPointTables(std::vector<CadTable>& tables,
+                                          const std::vector<CadTableStyle>& styles,
+                                          float modelUnitsPerPlottedInch) {
+  for (CadTable& table : tables) {
+    if (!CadTableUsesSurveyPointData(styles, table)) continue;
+    table.surveyPointDataRows = true;
+    CadTableEnsurePointTableLayout(&table, modelUnitsPerPlottedInch);
+    CadTableExpandWidthForColumnWeights(&table);
+  }
 }

@@ -13086,6 +13086,58 @@ private Q_SLOTS:
     }
   }
 
+  void issue479CivilPointStyleScreenshots() {
+    EditorWindow window;
+    window.resize(1440, 900);
+    window.show();
+    window.OpenDrawing(QString::fromUtf8(GOSURVEY_SOURCE_DIR) +
+                       "/samples/rapides-substation-civil3d-pointtables.dwg");
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(353));
+    QCOMPARE(window.State().surveyPointStyles.size(), std::size_t(179));
+    for (const auto& point : window.State().surveyPoints) QCOMPARE(point.styleName, std::string("Basic"));
+    window.Refresh();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue886Shot("qt-479-resaved-point-styles.png")));
+    QCOMPARE(window.State().cadTables.size(), std::size_t(18));
+    {
+      auto& state = window.State();
+      const auto& table = state.cadTables.front();
+      state.viewportPanX = table.insX + table.width * .5;
+      state.viewportPanY = table.insY - table.height * .5;
+      state.viewportZoom = 50.f / (table.height * .65f);
+      state.selection = {{SelectedEntity::Type::Table, 0}};
+      window.Refresh();
+      QTest::qWait(150);
+      QVERIFY(window.grab().save(Issue886Shot("qt-479-imported-point-table-selected.png")));
+    }
+
+    EditorWindow gallery;
+    gallery.CreateDrawingFromTemplate();
+    gallery.resize(1440, 900);
+    auto& state = gallery.State();
+    state.drawingInsUnits = 2;
+    state.modelUnitsPerPlottedInch = 20.f;
+    state.surveyPointStyles = window.State().surveyPointStyles;
+    state.drawingLayerTable = window.State().drawingLayerTable;
+    state.blockDefs = window.State().blockDefs;
+    const std::array<std::string, 3> names = {"Basic", "no points", "PUBLISHED MONUMENT"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      SurveyPoint point;
+      point.id = static_cast<int>(i + 1);
+      point.easting = static_cast<double>(i) * 10;
+      point.styleName = names[i];
+      point.layer = "0";
+      point.labelStyle = SurveyPointLabelStyle::None;
+      state.surveyPoints.push_back(point);
+    }
+    gallery.show();
+    gallery.Submit("ZOOM");
+    gallery.Submit("E");
+    gallery.Refresh();
+    QTest::qWait(150);
+    QVERIFY(gallery.grab().save(Issue886Shot("qt-479-imported-marker-gallery.png")));
+  }
+
   void issue804AnnotateDialogsAndTablePreviewScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

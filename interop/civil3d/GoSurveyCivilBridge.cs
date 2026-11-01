@@ -1,5 +1,6 @@
-// Loaded by the Civil 3D runtime (NETLOAD) when GoSurvey requests native Civil 3D data.
-// This bridge deliberately runs inside Civil 3D: AECC database objects are not AutoCAD entities.
+// Development-only reference generator, loaded manually into Civil 3D with NETLOAD.
+// GoSurvey does not build, load or invoke this code. Its output is an oracle for testing the
+// independent DWG decoder; it is not part of the installed application's import/export path.
 using System;
 using System.Collections;
 using System.Globalization;

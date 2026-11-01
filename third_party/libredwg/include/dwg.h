@@ -7870,7 +7870,7 @@ typedef struct _dwg_object_MTEXTATTRIBUTEOBJECTCONTEXTDATA
 typedef struct _dwg_object_MLEADEROBJECTCONTEXTDATA
 {
   ANNOTSCALEOBJECTCONTEXTDATA_fields;
-  // ...??
+  Dwg_MLEADER_AnnotContext ctx;
 } Dwg_Object_MLEADEROBJECTCONTEXTDATA;
 
 typedef struct _dwg_object_LEADEROBJECTCONTEXTDATA

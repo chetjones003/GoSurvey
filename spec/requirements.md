@@ -15807,62 +15807,84 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. DWG export/import maps supported fields to native DIMSTYLE, STYLE, MLEADERSTYLE, and TABLESTYLE records.
      Style names, supported settings, current style, and entity references survive GoSurvey DWG export, Autodesk
      open/save, and GoSurvey re-import.
-  6. Survey point and point-label styles use Civil 3D native style objects. Civil 3D is the editability and
-     round-trip target for these styles; plain AutoCAD proxy display does not satisfy this clause. Unsupported
-     Civil 3D fields are preserved or named in the import/export log.
-  7. `.gs` and DWG round trips preserve every supported style field and entity reference. Legacy files remain
-     readable and receive defaults for absent style tables.
-  8. Civil 3D model objects in an imported drawing retain their native Civil 3D identity and data through
-     GoSurvey DWG open/save. This includes COGO points, surfaces, alignments, parcels, and other supported
-     Civil 3D classes. An object that GoSurvey cannot interpret or edit must still be retained losslessly or
-     explicitly refused before saving; silently dropping it or replacing it with unrelated proxy geometry
-     is not a successful round trip.
+  6. Survey point and point-label styles are drawing-owned GoSurvey styles. When imported from Civil 3D,
+     every source field with a GoSurvey equivalent maps into these GoSurvey style definitions. Marker
+     visibility and label visibility are independent and remain off when the source point style suppresses
+     that component. Point-style marker geometry, size, color and label-style references; label templates,
+     text style, height and color; and point-to-style references are retained. DWG export represents mapped
+     values using supported AutoCAD style records and ordinary entities. Civil 3D native style objects are
+     not authored. Unsupported source fields are named in the import/export log.
+  7. DWG round trips preserve every supported style field and entity reference, including GoSurvey-specific
+     style data embedded in the DWG. Standalone `.gs` drawings are not a supported persistence path. Legacy
+     DWGs remain readable and receive defaults for absent style tables.
+  8. Civil 3D objects supported by GoSurvey are decoded into GoSurvey domain objects and saved as ordinary
+     DWG entities and style records supported by AutoCAD. The supported mappings include COGO point number,
+     location, elevation, description, point groups, and mapped point/label styles; TIN vertices and triangle
+     topology, surface style and supported surface-label text/locations; alignment geometry and labels; plus
+     drawing-owned text, dimension, multileader, and table styles. GoSurvey does not author Civil 3D custom
+     objects. Source fields without a GoSurvey representation are named in the import/export log and are not
+     silently represented as semantic GoSurvey data.
 - Acceptance:
-  1. Non-default styles in all six collections survive GoSurvey DWG export, Civil 3D open/save, and GoSurvey
+  1. Non-default styles in all six collections survive GoSurvey DWG export, AutoCAD open/save, and GoSurvey
      re-import with names, supported settings, current-style selection, and entity references intact.
   2. DIMSTY's manager and seven create/modify tabs match the supplied screenshots and perform their named actions.
   3. Changing current dimension style affects newly created dimensions only; modifying one named style updates
      its referencing dimensions and leaves dimensions on other styles unchanged.
   4. Legacy drawings without named style tables load with the prior Standard/default appearance and save again.
   5. Unsupported style data logs a specific reason and never silently removes its referencing entity.
-  6. The supplied Rapides Substation baseline opens in GoSurvey and saves to DWG without reducing its native
-     Civil 3D COGO points, TIN surface, parcels, and their drawing-owned styles to skipped records; Civil 3D
-     reopens the output with the same native object classes and data.
+  6. The supplied Rapides Substation baseline opens in GoSurvey with its 353 COGO points and TIN represented
+     by GoSurvey points and a GoSurvey TIN with matching supported metadata/topology. Supported point/surface
+     label locations and style settings map into GoSurvey objects. Point marker and label visibility match
+     each source point's resolved style, including styles that suppress both components; point groups retain
+     their membership rules and style references. Drawing-owned text, dimension, multileader, table, surface,
+     point and point-label style names and supported fields import and remain attached to GoSurvey objects.
+     Saving to DWG emits valid ordinary AutoCAD entities and styles that AutoCAD opens without Recover;
+     re-import preserves the supported mapped data.
 - Owner-layer: Domain / Commands / Qt UI / DWG IO.
 - Decision: D-2026-10-30-style-roundtrip.
 - Status: accepted (2026-10-30, explicit user request)
 
-### REQ-479 — Civil 3D model objects round-trip through GoSurvey DWG IO
+### REQ-479 — Civil 3D model data maps to GoSurvey objects through DWG IO
 
-- Purpose: users can open a Civil 3D project in GoSurvey, make supported edits, save it, and reopen it in
-  Civil 3D without losing the drawing-owned model objects that carry survey and design data.
+- Purpose: users can open a Civil 3D project in GoSurvey, convert supported survey/design data into editable
+  GoSurvey objects, and save a valid DWG that AutoCAD accepts.
 - Priority: must
 - Type: functional + interop
 - Depends on: REQ-044, REQ-111, REQ-170, REQ-201, REQ-478.
 - Statement:
-  1. DWG import recognizes and retains Civil 3D native COGO points, point and label styles, surfaces and
-     surface styles, alignments and alignment styles, parcels and parcel styles, and associated data needed
-     by those objects. Additional Civil 3D classes remain losslessly retained when GoSurvey does not yet
-     expose their semantics.
-  2. DWG export preserves supported Civil 3D object classes and their drawing-owned relationships. Native
-     Civil 3D API objects are used for classes GoSurvey creates or edits; converting those objects to plain
-     CAD geometry is not an equivalent save.
-  3. Unknown custom classes and their payloads are never silently discarded. If lossless preservation is
-     unavailable for a class, GoSurvey reports the exact class and refuses the save until the user chooses
-     an explicit loss policy.
-  4. GoSurvey's own `.gs` persistence also preserves the same object data, style ownership, and references.
+  GoSurvey opens and saves these drawings entirely in-process. AutoCAD, Civil 3D, their Object Enablers,
+  and a separate CAD process are not runtime or build prerequisites. The DWG codec and the GoSurvey
+  implementation decode and write the supported Civil 3D object data directly.
+  1. GoSurvey's in-process DWG import decodes supported Civil 3D data into GoSurvey domain objects without
+     requiring AutoCAD, Civil 3D, an Object Enabler, a bridge, or another CAD process. Supported data includes
+     COGO point number/location/elevation/descriptions and mapped styles; TIN vertex and triangle data,
+     surface styles and supported label text/locations; and supported alignment geometry and labels.
+     Civil point tables map to editable GoSurvey table cells using their drawing-owned point-group
+     membership, split row offsets and source table styles. Preserve source column order, headers,
+     formatting expressions, text-style references, paper text sizes and insertion geometry.
+  2. DWG export writes the mapped GoSurvey objects as ordinary AutoCAD entities and supported AutoCAD style
+     records. It does not create Civil 3D custom objects or promise preservation of Civil 3D object identity.
+     Output must be accepted by AutoCAD without Recover.
+  3. Unsupported or undecoded Civil 3D data is listed by class and count in the import/export log; supported
+     data must not be silently omitted or substituted with proxy display graphics as semantic content.
+  4. GoSurvey's DWG-embedded persistence preserves the same mapped object data, style ownership, and references.
 - Acceptance:
-  1. The supplied Rapides Substation baseline imports 353 native COGO points, its TIN surface, parcel
-     objects, drawing-owned point styles, and other supported Civil 3D objects into a GoSurvey representation
-     without silently skipping native classes.
-  2. Saving that drawing as DWG and opening it in Civil 3D preserves native object classes, counts, IDs/data,
-     style assignments, and relationships; saving from Civil 3D and reopening in GoSurvey preserves the same
-     supported content.
-  3. A fixture containing a Civil 3D class not yet modeled by GoSurvey remains present and byte/data-lossless
-     after save/reopen, or the save is refused with a specific REQ-201 loss report.
+  1. The GoSurvey-only test environment has no AutoCAD or Civil 3D installed, and opening, displaying,
+     editing supported data, and saving the supplied DWG does not launch an external CAD process or use
+     an external bridge.
+  2. The supplied Rapides Substation baseline imports 353 COGO points as GoSurvey survey points with matching
+     identifiers, coordinates, elevations, descriptions, and supported point/label style mappings. Its TIN
+     imports with matching vertices and triangle topology; supported surface label text and locations map to
+     GoSurvey annotations. Alignment data represented by GoSurvey is imported as editable GoSurvey geometry.
+     The resaved baseline's 18 point-table segments retain all 353 point rows, source ordering and values;
+     its four point-table style definitions remain drawing-owned and persist through DWG save/reopen.
+  3. Saving the imported drawing as DWG produces ordinary entities and style records accepted by AutoCAD
+     without Recover; importing that DWG into GoSurvey preserves all supported mapped values and relationships.
+  4. Unsupported Civil 3D classes/fields are listed with exact class names and counts; no native-class
+     preservation, editability, or lossless round-trip is claimed for data outside GoSurvey's mapped model.
 - Owner-layer: Domain / DWG IO / Civil 3D interoperability.
-- Decision: D-2026-10-30-c.
-- Status: accepted (2026-10-30, explicit user request)
+- Decision: D-2026-10-31-b (amends D-2026-10-30-c).
+- Status: accepted (2026-10-31, user clarification)
 
 ## Anti-requirements
 

@@ -2281,6 +2281,30 @@ void EditorWindow::RefreshToolspace() {
       surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
       surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
       surface->setData(0, Qt::UserRole + 2, i);
+      // Civil 3D's surface branch: Masks, Watersheds and a Definition node listing what builds it.
+      // These are informational nodes; their data lives in the surface's properties.
+      const CadSurface& source = m_State.cadSurfaces[static_cast<size_t>(i)];
+      const auto folder = [&](QTreeWidgetItem* parent, const QString& label) {
+        auto* node = new QTreeWidgetItem(parent, {label});
+        node->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+        node->setData(0, Qt::UserRole + 1, "surfaceDefinitionNode");
+        node->setData(0, Qt::UserRole + 2, i);
+        return node;
+      };
+      folder(surface, "Masks");
+      folder(surface, "Watersheds");
+      auto* definition = folder(surface, "Definition");
+      folder(definition, "Boundaries");
+      folder(definition, "Breaklines");
+      folder(definition, "Contours");
+      folder(definition, "DEM Files");
+      folder(definition, "Drawing Objects");
+      folder(definition, "Edits");
+      folder(definition, "Point Files");
+      auto* definitionGroups = folder(definition, "Point Groups");
+      for (const std::string& groupName : source.sourcePointGroups) folder(definitionGroups, QString::fromUtf8(groupName.c_str()));
+      folder(definition, "Point Survey Queries");
+      folder(definition, "Figure Survey Queries");
     }
     auto* blocks = new QTreeWidgetItem(root, {"Blocks"});
     blocks->setIcon(0, ToolspaceIcon("block.png"));
@@ -2329,13 +2353,30 @@ void EditorWindow::RefreshToolspace() {
       entry->setData(0, Qt::UserRole + 1, "layer");
       entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(row.name.c_str()));
     }
-    auto* dimensionStyles = new QTreeWidgetItem(general, {"Dimension Style"});
+    auto* dimensionStyles = new QTreeWidgetItem(general, {"Dimension Styles"});
     dimensionStyles->setIcon(0, ToolspaceIcon("Dim_Style.png"));
     dimensionStyles->setData(0, Qt::UserRole + 1, "dimensionFolder");
-    auto* dimensionEntry = new QTreeWidgetItem(dimensionStyles, {QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())});
-    dimensionEntry->setIcon(0, ToolspaceIcon("dimstyle.png"));
-    dimensionEntry->setData(0, Qt::UserRole + 1, "dimensionStyle");
-    dimensionEntry->setData(0, Qt::UserRole + 3, QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()));
+    for (const auto& dimensionStyle : m_State.dimensionStyles) {
+      QString label = QString::fromUtf8(dimensionStyle.name.c_str());
+      if (dimensionStyle.name == m_State.activeDimensionStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(dimensionStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("dimstyle.png"));
+      entry->setData(0, Qt::UserRole + 1, "dimensionStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(dimensionStyle.name.c_str()));
+    }
+    auto* multileaderStyles = new QTreeWidgetItem(general, {"Multileader Styles"});
+    multileaderStyles->setIcon(0, ToolspaceIcon("Multileader.png"));
+    multileaderStyles->setData(0, Qt::UserRole + 1, "multileaderStylesFolder");
+    for (const auto& mleaderStyle : m_State.multileaderStyles) {
+      QString label = QString::fromUtf8(mleaderStyle.name.c_str());
+      if (mleaderStyle.name == m_State.activeMultileaderStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(multileaderStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("Multileader.png"));
+      entry->setData(0, Qt::UserRole + 1, "multileaderStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(mleaderStyle.name.c_str()));
+    }
     dimensionStyles->setExpanded(true);
     general->setExpanded(true);
     auto* surface = new QTreeWidgetItem(m_ToolspaceSettings, {"Surface"});

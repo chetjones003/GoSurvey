@@ -3800,6 +3800,16 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       continue;
     }
 
+    // A fixed triangulation (a TIN imported from a Civil 3D DWG) has no sources to rebuild from, so a
+    // revision change must leave it alone rather than "rebuild" it from nothing.
+    if (surface.tin && !surface.isVolumeSurface() && surface.sourcePointGroups.empty() &&
+        surface.sourcePointFiles.empty() && surface.addedPointXyz.empty() && surface.breaklines.empty() &&
+        surface.contourSources.empty() && surface.boundaries.empty() && surface.movedPoints.empty() &&
+        surface.corridorFeatureLines.empty()) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      continue;
+    }
+
     std::vector<std::string> resolveLog;
     SurfaceBuildInputs inputs;
     if (surface.isVolumeSurface()) {
@@ -6673,6 +6683,8 @@ void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex) {
   if (tableIndex < 0 || static_cast<size_t>(tableIndex) >= st.cadTables.size() || cellIndex < 0)
     return;
   CadTable& t = st.cadTables[static_cast<size_t>(tableIndex)];
+  if (CadTableCellIsSurveyPointData(st.tableStyles, t, cellIndex))
+    return;
   const int n = CadTableRowCount(t) * std::max(t.cols, 1);
   if (cellIndex >= n)
     return;
@@ -6691,8 +6703,12 @@ void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
   const int ti = st.tableCellEditorIndex;
   const int ci = st.tableCellEditorCell;
   if (ti >= 0 && static_cast<size_t>(ti) < st.cadTables.size() && ci >= 0) {
-    PushUndoSnapshot(st, "Edit table cell");
     CadTable& t = st.cadTables[static_cast<size_t>(ti)];
+    if (CadTableCellIsSurveyPointData(st.tableStyles, t, ci)) {
+      CancelTableCellEditor(st);
+      return;
+    }
+    PushUndoSnapshot(st, "Edit table cell");
     while (static_cast<int>(t.cells.size()) <= ci)
       t.cells.emplace_back();
     t.cells[static_cast<size_t>(ci)] = st.tableCellEditorBuf;
@@ -13096,6 +13112,14 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   log.push_back("ARC complete.");
 }
 
+static std::string DimStyleEntityColor(const DimensionStyle& sty, const EntityAttributes& base) {
+  if (!sty.dimLineColor.empty() && sty.dimLineColor != "ByLayer" && sty.dimLineColor != "ByBlock")
+    return sty.dimLineColor;
+  if (!base.color.empty() && base.color != "ByLayer" && base.color != "ByBlock")
+    return base.color;
+  return std::string("ByLayer");
+}
+
 static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
   const float x1 = st.dimE1x, y1 = st.dimE1y;
   const float x2 = st.dimE2x, y2 = st.dimE2y;
@@ -13130,17 +13154,22 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimExt2X = x2;
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
-  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  ann.fontFamily = st.activeDimensionStyle.textFont;
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(vy, vx));
-  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
+  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
-  at.color = "#e1b12c";
+  const std::string preferredLayer = at.layer;
+  at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
+  if (at.layer != preferredLayer)
+    log.push_back("DIMALIGNED — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
+  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMALIGNED");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
+  ClearCadSelection(st);
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMALIGNED complete.");
@@ -13184,8 +13213,6 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
   ann.dimLinearVertical = vert;
-  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
-  ann.fontFamily = st.activeDimensionStyle.textFont;
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -13195,14 +13222,21 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
   ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
-  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
+  DimensionStyles::BakeTextOntoDimension(ann, st.activeDimensionStyle);
+  CadDimRefreshMeasurementText(&ann, st.activeDimensionStyle, CadAngleDisplaySettings(st));
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
-  at.color = "#e1b12c";
+  const std::string preferredLayer = at.layer;
+  at.layer = CadVisibleLayerForNewEntity(st, preferredLayer);
+  if (at.layer != preferredLayer)
+    log.push_back("DIMLINEAR — current layer is off or frozen; dimension placed on layer \"" + at.layer + "\".");
+  at.color = DimStyleEntityColor(st.activeDimensionStyle, at);
   PushUndoSnapshot(st, "DIMLINEAR");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
+  ClearCadSelection(st);
+  st.selection.push_back({SelectedEntity::Type::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   BumpCadGpuCache(st);
   ResetDimDraft(st);
   log.push_back("DIMLINEAR complete.");
@@ -45562,6 +45596,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
       return;
     }
+    if ((st.active == K::DimAligned || st.active == K::DimLinear) &&
+        st.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) {
+      float lx = 0.f;
+      float ly = 0.f;
+      CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                               &lx, &ly);
+      if (st.active == K::DimLinear)
+        CommitDimLinearAt(st, lx, ly, log);
+      else
+        CommitDimAlignedAt(st, lx, ly, log);
+      return;
+    }
     if (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint) {
       // REQ-303 (issue #80) / REQ-118: blank Enter finishes POLYLINE/3DPOLY OPEN, mirroring the
       // typed END keyword below (same minimum-segment gate, same commit call). Unlike LINE's blank
@@ -48151,14 +48197,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       allowRel = true;
       ax = st.dimE1x;
       ay = st.dimE1y;
-    } else if (linear && st.dimPhase == DP::WaitDimLinePt) {
+    } else if (st.dimPhase == DP::WaitDimLinePt) {
       allowRel = true;
       ax = 0.5f * (st.dimE1x + st.dimE2x);
       ay = 0.5f * (st.dimE1y + st.dimE2y);
     }
     if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
-      log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy; at line step H / V locks orientation; move cursor to unlock."
-                           : "DIMALIGNED — X,Y or @dx,dy from first extension.");
+      log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy from chord mid; H / V locks orientation."
+                           : "DIMALIGNED — X,Y or @dx,dy from chord mid.");
       return;
     }
     SubmitViewportPick(st, px, py, log, false, false);

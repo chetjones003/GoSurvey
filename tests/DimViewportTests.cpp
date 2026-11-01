@@ -2,6 +2,8 @@
 #include <catch2/catch_approx.hpp>
 
 #include "commands/CadDimStroke.hpp"
+#include "commands/CadCoordinateFrame.hpp"
+#include "commands/CadCommands.hpp"
 #include "commands/PaperSpace.hpp"
 
 #include <cmath>
@@ -189,4 +191,62 @@ TEST_CASE("TEXT annotations are not dimension strokes", "[dim-viewport]") {
   t.text = "A";
   CadDimWorldStrokes s;
   REQUIRE_FALSE(CadDimBuildWorldStrokes(t, CadDimStrokeParams{}, &s));
+}
+
+TEST_CASE("DIMALIGNED Enter on offset step commits at crosshair", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  st.uiCursorWorldX = 5.f;
+  st.uiCursorWorldY = 3.f;
+  std::vector<std::string> log;
+  char buf[8] = "";
+  ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), st, log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotations[0].kind == CadAnnotation::Kind::DimAligned);
+  REQUIRE(st.cadAnnotations[0].dimSignedOffset == Catch::Approx(3.f));
+}
+
+TEST_CASE("DIMALIGNED offset pick commits through SubmitViewportPick", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitExt1;
+  std::vector<std::string> log;
+  SubmitViewportPick(st, 0.0, 0.0, log, false, false);
+  SubmitViewportPick(st, 10.0, 0.0, log, false, false);
+  SubmitViewportPick(st, 5.0, 4.0, log, false, false);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotations[0].dimSignedOffset == Catch::Approx(4.f));
+  REQUIRE(st.selection.size() == 1);
+  REQUIRE(st.selection[0].type == SelectedEntity::Type::Annotation);
+  REQUIRE(st.selection[0].index == 0);
+}
+
+TEST_CASE("DIMALIGNED on off layer commits to a visible layer", "[dim][issue804]") {
+  AppCommandState st;
+  st.currentLayer = "Hidden";
+  CadLayerRow layer0;
+  layer0.name = "0";
+  layer0.on = true;
+  layer0.frozen = false;
+  st.drawingLayerTable.push_back(layer0);
+  CadLayerRow hidden;
+  hidden.name = "Hidden";
+  hidden.on = false;
+  st.drawingLayerTable.push_back(hidden);
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  std::vector<std::string> log;
+  SubmitViewportPick(st, 5.f, 3.f, log, false, false);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotationAttrs.size() == 1);
+  REQUIRE(st.cadAnnotationAttrs[0].layer == "0");
 }

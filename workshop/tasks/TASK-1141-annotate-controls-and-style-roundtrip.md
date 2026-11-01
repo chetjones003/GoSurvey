@@ -65,3 +65,17 @@ Style collections affect drawing domain state, undo, serialization, and DWG tran
 ## 8. Completion status
 
 **Incomplete against the user-approved full scope.** The six reported UI/command defects are implemented. COGO point and TIN surface transfers have full baseline-sized Core Console evidence; a synthetic alignment plan-geometry transfer has a passing Core Console round trip. Native table/table-style round-trip, full AutoCAD DIMSTY fields, custom Civil 3D style-definition cloning, alignment curve/profile fidelity, and broad Civil 3D object coverage remain incomplete. Do not describe the broad DWG/Civil 3D round-trip requirement as satisfied until the remaining objects and styles are integrated and verified in AutoCAD/Civil 3D.
+
+### Resaved point-table fixture (2026-10-31)
+
+- Added the user's resaved 3,765,575-byte DWG as `samples/rapides-substation-civil3d-pointtables.dwg`,
+  SHA-256 `9BB529D7AF9F71A7D500FFDF40AD794AA2272F365B1D9612D7CED2A9CD124413`. The original baseline
+  remains at `samples/rapides-substation-civil3d.dwg`, SHA-256
+  `D8DF451C16F1C595B8AD65D026B52D826837D67E845E05A0855529A0EF320635`.
+- The new file contains 18 `AECC_POINT_TABLE` records, zero native AutoCAD `TABLE` entities, and three
+  `TABLESTYLE` records. Current import recognizes 353 COGO points but skips the 18 point tables;
+  their 332-byte Civil proxy previews use a different format from the already decoded point/TIN proxy
+  graphics. A fixture test checks the 18 records and that they carry preview data.
+- `build.bat debug` and `[civil3d]` pass (503 assertions in 6 cases) with the updated fixture present.
+  Point tables and Civil 3D style definitions are still not mapped into editable GoSurvey objects;
+  REQ-478/479 remain incomplete.

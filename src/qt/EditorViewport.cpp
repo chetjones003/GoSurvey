@@ -1625,6 +1625,12 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
       const int cell = CadTableCellAtWorld(table, wx, wy);
       if (cell < 0)
         continue;
+      if (CadTableCellIsSurveyPointData(m_State.tableStyles, table, cell)) {
+        QMessageBox::information(this, "Point table",
+                                 "Point table values come from survey points and cannot be edited here.");
+        event->accept();
+        return;
+      }
       const auto uid = m_State.activeDrawingIdx > 0 && m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size())
           ? m_State.drawingTabs[m_State.activeDrawingIdx].projectUid : 0;
       const auto readOnly = std::find_if(m_State.openProjects.begin(), m_State.openProjects.end(),
@@ -1635,6 +1641,10 @@ void EditorViewport::mouseDoubleClickEvent(QMouseEvent* event) {
         return;
       }
       OpenTableCellEditor(m_State, ti, cell);
+      if (!m_State.tableCellEditorOpen) {
+        event->accept();
+        return;
+      }
       bool accepted = false;
       const int row = cell / table.cols + 1;
       const int column = cell % table.cols + 1;

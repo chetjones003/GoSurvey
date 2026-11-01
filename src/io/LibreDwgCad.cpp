@@ -1,4 +1,5 @@
 #include "LibreDwgCad.hpp"
+#include "LibreDwgCivil.hpp"
 #include "ProjectPoints.hpp"
 
 #include "AcisSatParser.hpp"
@@ -12,6 +13,7 @@
 #include "LibreDwgPlant.hpp"
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
+#include "util/cadtablestyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "ViewportZoomScale.hpp"
 #include "CadDimGeom.hpp"
@@ -36,10 +38,12 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <iterator>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #if defined(__cplusplus) && !defined(restrict)
@@ -88,6 +92,13 @@ bool DwgHasCivil3dCatalogClasses(const Dwg_Data* dwg) {
 }
 
 std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
+  // A native AcCmColor ByColor record carries its exact RGB in a 0xc2 CMC. LibreDWG
+  // also computes a nearest palette index while reading it; that index is not its color.
+  if (method == 0xc2 && (rgb >> 24) == 0xc2) {
+    char buffer[16];
+    std::snprintf(buffer, sizeof(buffer), "#%06X", rgb & 0xffffffu);
+    return buffer;
+  }
   if (method == 0xc0)
     return "ByLayer";
   if (method == 0xc1)
@@ -147,11 +158,25 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   return sat;
 }
 
+std::string CivilLabelFontFamily(const AppCommandState& st, const SurveyPointLabelStyleDefinition* style) {
+  if (style != nullptr && !style->fontFamily.empty())
+    return TextStyles::EffectiveFontFamily(style->fontFamily);
+  if (const auto* textStyle = TextStyles::Find(st.textStyles, "pnts"))
+    return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
+  if (const auto* textStyle = TextStyles::Find(st.textStyles, "Standard"))
+    return TextStyles::EffectiveFontFamily(textStyle->fontFamily);
+  return TextStyles::kDefaultFontFamily;
+}
+
 }  // namespace libredwgcad_detail
 
 namespace {
 
 constexpr double kPi = 3.14159265358979323846;
+// Native AcCmColor CMC tags, verified against the source drawing's Civil API values.
+// LibreDWG's enum names for these two byte values are reversed.
+constexpr auto kNativeCmcByColor = static_cast<Dwg_Color_Method>(0xc2);
+constexpr auto kNativeCmcByAci = static_cast<Dwg_Color_Method>(0xc3);
 
 std::string LowerAscii(std::string s) {
   std::transform(s.begin(), s.end(), s.begin(),
@@ -237,11 +262,11 @@ std::string ColorStorage(const Dwg_Color& c) {
   // R2004+ entity ENC: true RGB in the low 24 bits when flag 0x80 is set (common_entity_data.spec).
   if ((c.flag & 0x80) != 0) {
     const unsigned rgb24 = static_cast<unsigned>(c.rgb) & 0xFFFFFFu;
-    if (rgb24 != 0 && rgb24 != 0x100u && rgb24 != 0x101u && (rgb24 & 0xFFFF00u) != 0) {
-      char buf[16];
-      std::snprintf(buf, sizeof(buf), "#%06X", rgb24);
-      return std::string(buf);
-    }
+    // ENC explicitly identifies these bytes as RGB. CMC palette/sentinel heuristics do not
+    // apply: pure blue, black and #000100 are ordinary true colors in this representation.
+    char buf[16];
+    std::snprintf(buf, sizeof(buf), "#%06X", rgb24);
+    return std::string(buf);
   }
   return libredwgcad_detail::ColorToStorage(static_cast<int>(c.index), c.method,
                                             static_cast<unsigned>(c.rgb));
@@ -490,6 +515,15 @@ void LocalText(AppCommandState& st, double x, double y, double z, double height,
   a.rotationRad = static_cast<float>(rotRad);
   a.text = text;
   a.annotative = annotative;
+  if (kind == CadAnnotation::Kind::Mtext) {
+    // The renderer draws MTEXT from the top-left of its box. Without an annotation context to supply
+    // one, anchor a box at the insertion point (attachment top-left) sized to the text.
+    const double lines = 1.0 + static_cast<double>(std::count(text.begin(), text.end(), '\n'));
+    a.boxMinX = a.insX;
+    a.boxMaxY = a.insY;
+    a.boxMaxX = a.insX + static_cast<float>(0.62 * height * static_cast<double>(text.size()));
+    a.boxMinY = a.insY - static_cast<float>(1.2 * height * lines);
+  }
   if (ownerEnt != nullptr)
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &a.annotativeVisibleScaleNames);
   st.cadAnnotations.push_back(std::move(a));
@@ -954,6 +988,41 @@ static std::string MleaderStyleNameFromObject(Dwg_Data* dwg, const Dwg_Object* s
   return "Standard";
 }
 
+static std::string MleaderStyleNameFromRecord(Dwg_Data* dwg, const Dwg_Object* styleObject,
+                                            const Dwg_Object_MLEADERSTYLE* record) {
+  const std::string fromDict = MleaderStyleNameFromObject(dwg, styleObject);
+  if (!fromDict.empty() && fromDict != "Standard")
+    return fromDict;
+  if (record != nullptr) {
+    const std::string description = FromT(dwg, record->description);
+    if (!description.empty())
+      return description;
+  }
+  return fromDict;
+}
+
+static std::string ActiveMleaderStyleName(Dwg_Data* dwg,
+                                          const std::map<std::uint64_t, std::string>& namesByHandle) {
+  if (dwg == nullptr)
+    return {};
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "ACAD_MLEADERSTYLE");
+  Dwg_Object* dictObject = dictRef != nullptr ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObject == nullptr || dictObject->tio.object == nullptr ||
+      dictObject->fixedtype != DWG_TYPE_DICTIONARYWDFLT || dictObject->tio.object->tio.DICTIONARYWDFLT == nullptr)
+    return {};
+  const BITCODE_H defaultRef = dictObject->tio.object->tio.DICTIONARYWDFLT->defaultid;
+  if (defaultRef == nullptr)
+    return {};
+  const std::uint64_t activeRef = defaultRef->absolute_ref;
+  if (const auto it = namesByHandle.find(activeRef); it != namesByHandle.end())
+    return it->second;
+  Dwg_Object* styleObject = dwg_resolve_handle_silent(dwg, activeRef);
+  if (styleObject == nullptr || styleObject->fixedtype != DWG_TYPE_MLEADERSTYLE || styleObject->tio.object == nullptr ||
+      styleObject->tio.object->tio.MLEADERSTYLE == nullptr)
+    return {};
+  return MleaderStyleNameFromRecord(dwg, styleObject, styleObject->tio.object->tio.MLEADERSTYLE);
+}
+
 static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
                                     const Xf2& xf, const EntityAttributes& at,
                                     const Dwg_Object_Entity* ownerEnt) {
@@ -1266,7 +1335,8 @@ static void CaptureScratchIntoBlockContent(const AppCommandState& st, CadBlockCo
   }
 }
 
-void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad, CadBlockDefinition& def) {
+void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad, CadBlockDefinition& def,
+                                double originX, double originY) {
   if (ad == nullptr)
     return;
   CadBlockAttrDef d;
@@ -1275,8 +1345,8 @@ void ImportAttdefIntoDefinition(const Dwg_Data* dwg, const Dwg_Entity_ATTDEF* ad
     return;
   d.prompt = FromT(dwg, ad->prompt);
   d.defaultValue = FromT(dwg, ad->default_value);
-  d.localX = static_cast<float>(ad->ins_pt.x - def.baseX);
-  d.localY = static_cast<float>(ad->ins_pt.y - def.baseY);
+  d.localX = static_cast<float>(ad->ins_pt.x - originX);
+  d.localY = static_cast<float>(ad->ins_pt.y - originY);
   d.localZ = static_cast<float>(ad->elevation);
   d.height = static_cast<float>(ad->height > 0.0 ? ad->height : 0.125);
   d.rotationRad = static_cast<float>(ad->rotation);
@@ -1296,8 +1366,10 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   const Dwg_Object_BLOCK_HEADER* hdr = blkHeaderObj->tio.object->tio.BLOCK_HEADER;
 
   AppCommandState scratch;
-  scratch.worldDocumentOriginX = st.worldDocumentOriginX;
-  scratch.worldDocumentOriginY = st.worldDocumentOriginY;
+  // A definition's coordinates are local to its base, independent of the survey origin.
+  // Subtract that base in double before storing any float geometry or attribute positions.
+  scratch.worldDocumentOriginX = hdr->base_pt.x;
+  scratch.worldDocumentOriginY = hdr->base_pt.y;
   scratch.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
   const Xf2 id{};
   for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
@@ -1312,13 +1384,13 @@ bool EnsureDwgBlockDefinitionImported(AppCommandState& st, Dwg_Data* dwg, Dwg_Ob
   CadBlockDefinition def;
   def.name = name;
   def.dynamicAnonymous = CadBlockNameIsDynamicAnonymous(name);
-  def.baseX = static_cast<float>(hdr->base_pt.x - st.worldDocumentOriginX);
-  def.baseY = static_cast<float>(hdr->base_pt.y - st.worldDocumentOriginY);
+  def.baseX = 0.f;
+  def.baseY = 0.f;
   def.baseZ = static_cast<float>(hdr->base_pt.z);
   for (Dwg_Object* e = get_first_owned_entity(blkHeaderObj); e != nullptr;
        e = get_next_owned_entity(blkHeaderObj, e)) {
     if (e->fixedtype == DWG_TYPE_ATTDEF && e->tio.entity != nullptr && e->tio.entity->tio.ATTDEF != nullptr)
-      ImportAttdefIntoDefinition(dwg, e->tio.entity->tio.ATTDEF, def);
+      ImportAttdefIntoDefinition(dwg, e->tio.entity->tio.ATTDEF, def, hdr->base_pt.x, hdr->base_pt.y);
   }
   CaptureScratchIntoBlockContent(scratch, &def.content);
   CadBlockBakeBasePoint(&def);
@@ -1886,6 +1958,601 @@ bool ImportHatchEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_HATC
   return true;
 }
 
+std::string CivilComponentColor(uint32_t packed);
+
+// Positions an imported label's MTEXT box so that `attach` (DXF group 71) lands on the label's point
+// (`insX/insY`, local) in the text's own, rotated frame. The renderer draws MTEXT from the box's
+// top-left, aligned inside it by the attachment.
+void AnchorMtextBox(CadAnnotation& annotation, double textHeight, double rotationRad, int attach) {
+  const double width = 0.62 * textHeight * static_cast<double>(annotation.text.size());
+  const double height = textHeight;
+  const int column = (attach - 1) % 3, row = (attach - 1) / 3;
+  const double left = column == 0 ? 0.0 : column == 1 ? -width * 0.5 : -width;
+  const double top = row == 0 ? 0.0 : row == 1 ? height * 0.5 : height;
+  const double c = std::cos(rotationRad), s = std::sin(rotationRad);
+  const double cornerX = annotation.insX + left * c - top * s;
+  const double cornerY = annotation.insY + left * s + top * c;
+  annotation.boxMinX = static_cast<float>(cornerX);
+  annotation.boxMaxY = static_cast<float>(cornerY);
+  annotation.boxMaxX = static_cast<float>(cornerX + width);
+  annotation.boxMinY = static_cast<float>(cornerY - height);
+  annotation.mtextAttach = attach;
+}
+
+const SurveyPointLabelStyleDefinition* FindSurveyLabelStyle(
+    const AppCommandState& st, std::string_view name) {
+  for (const auto& style : st.surveyPointLabelStyles) {
+    if (style.name == name) return &style;
+  }
+  return nullptr;
+}
+
+float CivilLabelTextHeightWorld(const AppCommandState& st, const SurveyPointLabelStyleDefinition* style,
+                                float fallbackPaperInches) {
+  const float paperInches = style != nullptr && style->textHeightPlottedInches > 0.f ?
+      style->textHeightPlottedInches : fallbackPaperInches;
+  return paperInches * std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+}
+
+// REQ-479: a Civil 3D surface elevation label becomes a marker and the elevation text, as plain
+// drawing content (it no longer follows the surface). Marker geometry follows the resolved Civil
+// label collector name on the entity; font and color come from the imported point label-style
+// Text height follows the Civil explode oracle on the Rapides reference (2.0 model units), not the
+// style's paper height (0.1 plotted inches on that drawing).
+void ImportSurfaceElevationLabel(AppCommandState& st, const CadPoint& point, const EntityAttributes& at,
+                                 std::string_view labelStyleName) {
+  constexpr double kMarkerRadius = 1.0, kCrossHalfLength = 2.0, kTextOffset = 2.5;
+  constexpr int kMtextAttachMiddleLeft = 4;
+  constexpr float kTextHeightModel = 2.0f;
+  const SurveyPointLabelStyleDefinition* style = FindSurveyLabelStyle(st, labelStyleName);
+  const float textHeight = kTextHeightModel;
+  LocalCircle(st, point.x, point.y, kMarkerRadius, point.z, at);
+  LocalLine(st, point.x - kCrossHalfLength, point.y, point.z, point.x + kCrossHalfLength, point.y, point.z, at);
+  LocalLine(st, point.x, point.y - kCrossHalfLength, point.z, point.x, point.y + kCrossHalfLength, point.z, at);
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.2f", point.z);
+  EntityAttributes textAttributes = at;
+  if (style != nullptr && !style->color.empty()) textAttributes.color = style->color;
+  LocalText(st, point.x + kTextOffset, point.y, point.z, textHeight, 0.0, text,
+            CadAnnotation::Kind::Mtext, textAttributes);
+  st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+  AnchorMtextBox(st.cadAnnotations.back(), textHeight, 0.0, kMtextAttachMiddleLeft);
+}
+
+// REQ-479: one AECC_SURFACE_STYLE object, or nothing when its layout is not one that was verified.
+std::optional<libredwgcivil::SurfaceStyleRecord> DecodeCivilSurfaceStyleObject(const Dwg_Object& object) {
+  if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings)
+    return std::nullopt;
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+  if (object.bitsize < prefix + trailer + object.stringstream_size) return std::nullopt;
+  const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+  return libredwgcivil::DecodeSurfaceStyle(object.unknown_bits, object.num_unknown_bits, strings,
+                                           object.stringstream_size);
+}
+
+bool IsCivilSurfaceStyleObject(const Dwg_Data* dwg, const Dwg_Object* object) {
+  if (dwg == nullptr || object == nullptr || object->type < 500 || object->type - 500 >= dwg->num_classes)
+    return false;
+  const char* className = dwg->dwg_class[object->type - 500].dxfname;
+  return className != nullptr && std::strcmp(className, "AECC_SURFACE_STYLE") == 0;
+}
+
+// REQ-479: the direction a contour runs at a point of an imported TIN (perpendicular to the slope of
+// the triangle containing it), as an angle in (-pi/2, pi/2] so text along it reads left to right.
+// Civil 3D derives a contour label's rotation from the (smoothed) contour; on the supplied drawing
+// the facet direction is within 1 degree for half the labels, 5 for 90% and 12 at worst. Zero when
+// no imported surface covers the point.
+double ContourDirectionAt(const AppCommandState& st, double worldX, double worldY) {
+  const double x = worldX - st.worldDocumentOriginX, y = worldY - st.worldDocumentOriginY;
+  for (const CadSurface& surface : st.cadSurfaces) {
+    if (!surface.tin) continue;
+    const auto& v = surface.tin->vertsXyz;
+    for (std::size_t t = 0; t + 2 < surface.tin->indices.size(); t += 3) {
+      const double* a = &v[surface.tin->indices[t] * 3];
+      const double* b = &v[surface.tin->indices[t + 1] * 3];
+      const double* c = &v[surface.tin->indices[t + 2] * 3];
+      const double det = (b[1] - c[1]) * (a[0] - c[0]) + (c[0] - b[0]) * (a[1] - c[1]);
+      if (std::fabs(det) < 1.e-12) continue;
+      const double u = ((b[1] - c[1]) * (x - c[0]) + (c[0] - b[0]) * (y - c[1])) / det;
+      const double w = ((c[1] - a[1]) * (x - c[0]) + (a[0] - c[0]) * (y - c[1])) / det;
+      constexpr double kEdge = -1.e-9;
+      if (u < kEdge || w < kEdge || 1.0 - u - w < kEdge) continue;
+      const double area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+      const double gx = ((b[2] - a[2]) * (c[1] - a[1]) - (c[2] - a[2]) * (b[1] - a[1])) / area;
+      const double gy = ((b[0] - a[0]) * (c[2] - a[2]) - (c[0] - a[0]) * (b[2] - a[2])) / area;
+      if (std::hypot(gx, gy) < 1.e-12) return 0.0;  // flat facet: no contour direction
+      double angle = std::atan2(gx, -gy);
+      while (angle > kPi / 2.0) angle -= kPi;
+      while (angle <= -kPi / 2.0) angle += kPi;
+      return angle;
+    }
+  }
+  return 0.0;
+}
+
+// REQ-479: surface contour label groups become the elevation text they display, as plain text at
+// the label's centre. The label style is not decoded; the text matches what the supplied drawing's
+// style shows on every label (read back from the Civil API): the elevation to one decimal, 1.6 units
+// high, middle-centre, ACI 9. Must run after the surfaces are imported, which supply the rotation.
+void ImportCivilContourLabels(AppCommandState& st, Dwg_Data* dwg,
+                              std::unordered_map<std::string, int>* skipHist) {
+  const SurveyPointLabelStyleDefinition* style = FindSurveyLabelStyle(st, "Standard");
+  constexpr float kTextHeightModel = 1.6f;
+  const float textHeight = kTextHeightModel;
+  constexpr int kMtextAttachMiddleCenter = 5;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object& object = dwg->object[i];
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= dwg->num_classes) continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_SURFACE_CONTOUR_LABEL_GROUP") != 0) continue;
+    const Dwg_Object_Entity* entity = object.tio.entity;
+    if (entity->entmode == 1) continue;
+    const auto point = libredwgcivil::DecodeSurfaceContourLabel(
+        object.unknown_bits, static_cast<std::size_t>(object.num_unknown_bits), entity->preview,
+        static_cast<std::size_t>(entity->preview_size));
+    if (!point.has_value()) continue;
+    EntityAttributes attributes = AttrFromEnt(dwg, entity);
+    if (style != nullptr && !style->color.empty())
+      attributes.color = style->color;
+    else
+      attributes.color = CivilComponentColor(0xc3000009u);
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.1f", point->z);
+    LocalText(st, point->x, point->y, point->z, textHeight, ContourDirectionAt(st, point->x, point->y), text,
+              CadAnnotation::Kind::Mtext, attributes);
+    st.cadAnnotations.back().fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, style);
+    AnchorMtextBox(st.cadAnnotations.back(), textHeight, st.cadAnnotations.back().rotationRad,
+                   kMtextAttachMiddleCenter);
+    NoteSkip(skipHist, "AECC_SURFACE_CONTOUR_LABEL_GROUP(imported as elevation text; rotation approximated from the surface)");
+  }
+}
+
+// REQ-479: Civil point groups become GoSurvey point groups holding their stored membership as
+// explicit point numbers. A Civil group is defined by include/exclude queries that are not stored in
+// the drawing in a form decoded here, so the resulting membership is what is kept; a group whose
+// member list cannot be verified is imported empty and reported.
+void ImportCivilPointGroups(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+                           const std::unordered_map<uint64_t, std::string>& markerStyles,
+                           const std::unordered_set<int>& explicitMarkerStyles) {
+  std::unordered_set<int> known;
+  for (const SurveyPoint& point : st.surveyPoints) known.insert(point.id);
+  if (known.empty()) return;
+  std::size_t imported = 0, unverified = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings ||
+        object.type < 500 || object.type - 500 >= dwg->num_classes) continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_POINT_PG") != 0) continue;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.bitsize < prefix + trailer + object.stringstream_size) continue;
+    const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+    const auto group = libredwgcivil::DecodePointGroup(object.unknown_bits, object.num_unknown_bits, strings,
+                                                       object.stringstream_size, known);
+    if (!group.has_value()) continue;
+    PointGroup target;
+    target.name = libredwgcad_detail::DecodeDwgString(group->name.c_str(), true);
+    target.displayPriority = group->displayPriority;
+    target.pointStyleOverride = group->markerStyleOverride;
+    target.labelStyleOverride = group->labelStyleOverride;
+    if (object.bitsize >= prefix) {
+      const auto handles = libredwgcivil::DecodeHandles(object.unknown_bits, object.num_unknown_bits,
+          object.bitsize - prefix, 3 + object.tio.object->num_reactors +
+              (object.tio.object->is_xdic_missing ? 0 : 1), object.handle.value);
+      if (handles.has_value()) {
+        const std::size_t start = 1 + object.tio.object->num_reactors +
+                                 (object.tio.object->is_xdic_missing ? 0 : 1);
+        if (const auto style = markerStyles.find((*handles)[start + 1]); style != markerStyles.end())
+          target.pointStyleName = style->second;
+        const auto* label = dwg_resolve_handle_silent(dwg, (*handles)[start]);
+        if (label != nullptr && label->has_strings) {
+          const std::size_t labelPrefix = label->common_size + label->bitsize_pos;
+          const std::size_t labelTrailer = label->stringstream_size >= 32768 ? 33 : 17;
+          if (label->bitsize >= labelPrefix + labelTrailer + label->stringstream_size) {
+            const auto name = libredwgcivil::DecodeStyleName(label->unknown_bits, label->num_unknown_bits,
+                label->bitsize - labelPrefix - labelTrailer - label->stringstream_size, label->stringstream_size);
+            if (name.has_value()) target.labelStyleName = libredwgcad_detail::DecodeDwgString(name->c_str(), true);
+          }
+        }
+      }
+    }
+    if (target.name.empty() || std::any_of(st.pointGroups.begin(), st.pointGroups.end(),
+                                           [&](const PointGroup& value) { return value.name == target.name; }))
+      continue;
+    target.rule.explicitIds = group->members;
+    if (!group->membersDecoded) {
+      ++unverified;
+      log.push_back("Civil point group \"" + target.name + "\": member list could not be verified; imported empty.");
+    }
+    st.pointGroups.push_back(std::move(target));
+    ++imported;
+  }
+  if (imported != 0)
+    log.push_back("Civil point groups decoded: " + std::to_string(imported) +
+                  (unverified != 0 ? " (" + std::to_string(unverified) + " without a verified member list)" : ""));
+  // Civil stores display order as descending priorities. The first group containing a point
+  // supplies its defaults; an explicit per-point style wins unless that group's override is set.
+  // The drawing's list (and so the Prospector) is in that same order.
+  std::stable_sort(st.pointGroups.begin(), st.pointGroups.end(),
+                   [](const PointGroup& a, const PointGroup& b) { return a.displayPriority > b.displayPriority; });
+  std::vector<const PointGroup*> ordered;
+  for (const auto& group : st.pointGroups) ordered.push_back(&group);
+  for (auto& point : st.surveyPoints) {
+    for (const auto* group : ordered) {
+      if (std::find(group->rule.explicitIds.begin(), group->rule.explicitIds.end(), point.id) ==
+          group->rule.explicitIds.end()) continue;
+      if (!group->pointStyleName.empty() &&
+          (explicitMarkerStyles.count(point.id) == 0 || group->pointStyleOverride))
+        point.styleName = group->pointStyleName;
+      if (!group->labelStyleName.empty()) point.labelStyleName = group->labelStyleName;
+      break;
+    }
+  }
+}
+
+void ImportCivilPointLabelStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+                                std::unordered_map<std::string, int>* /*skipHist*/) {
+  // Drawing-owned AECC label styles: decode from DWG bits and ordinary STYLE table records only.
+  st.surveyPointLabelStyles.clear();
+  auto isClass = [&](const Dwg_Object& object, const char* name) {
+    return object.type >= 500 && object.type - 500 < dwg->num_classes &&
+           std::strcmp(dwg->dwg_class[object.type - 500].dxfname, name) == 0;
+  };
+  auto references = [](const Dwg_Object& object) {
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    return object.bitsize < prefix ? std::vector<uint64_t>{} : libredwgcivil::DecodeHandleList(
+        object.unknown_bits, object.num_unknown_bits, object.bitsize - prefix, object.handle.value);
+  };
+  auto stringStart = [](const Dwg_Object& object) -> std::optional<std::size_t> {
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (!object.has_strings || object.bitsize < prefix + trailer + object.stringstream_size) return std::nullopt;
+    return object.bitsize - prefix - trailer - object.stringstream_size;
+  };
+  std::size_t imported = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!isClass(object, "AECC_LABEL_COLLECTOR_STYLE")) continue;
+    const auto refs = references(object);
+    if (refs.empty()) continue;
+    const auto start = stringStart(object);
+    if (!start.has_value()) continue;
+    const auto decoded = libredwgcivil::DecodeLabelStyle(object.unknown_bits, object.num_unknown_bits,
+                                                       *start, object.stringstream_size);
+    if (!decoded.has_value()) continue;
+    SurveyPointLabelStyleDefinition style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    style.visible = decoded->visible;
+    std::unordered_set<uint64_t> components;
+    for (uint64_t handle : refs) {
+      const auto* component = dwg_resolve_handle_silent(dwg, handle);
+      if (component == nullptr || !isClass(*component, "AECC_LABEL_TEXT_STYLE") ||
+          !components.insert(handle).second) continue;
+      const auto componentStart = stringStart(*component);
+      const auto content = componentStart.has_value() ? libredwgcivil::DecodeLabelTextContent(
+          component->unknown_bits, component->num_unknown_bits, *componentStart) : std::nullopt;
+      if (!content.has_value()) continue;
+      style.civilTextContents.push_back(libredwgcad_detail::DecodeDwgString(content->c_str(), true));
+      if (componentStart.has_value()) {
+        if (const auto height = libredwgcivil::DecodeLabelTextHeight(
+                component->unknown_bits, component->num_unknown_bits, *componentStart)) {
+          const float paperInches = static_cast<float>(*height * 12.0);
+          if (style.textHeightPlottedInches <= 0.f || paperInches < style.textHeightPlottedInches)
+            style.textHeightPlottedInches = paperInches;
+        }
+      }
+      if (style.fontFamily.empty()) {
+        for (uint64_t ref : references(*component)) {
+          const Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, ref);
+          if (textStyleObject == nullptr || textStyleObject->fixedtype != DWG_TYPE_STYLE ||
+              textStyleObject->tio.object == nullptr || textStyleObject->tio.object->tio.STYLE == nullptr)
+            continue;
+          const std::string font = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+          if (!font.empty()) {
+            style.fontFamily = font;
+            break;
+          }
+        }
+      }
+    }
+    if (style.civilTextContents.empty()) continue;
+    if (style.textHeightPlottedInches <= 0.f) style.textHeightPlottedInches = 0.1f;
+    style.fontFamily = libredwgcad_detail::CivilLabelFontFamily(st, &style);
+    auto isPointLabelStyle = [](const SurveyPointLabelStyleDefinition& candidate) {
+      for (const std::string& content : candidate.civilTextContents) {
+        if (content.find("16797697") != std::string::npos || content.find("33574914") != std::string::npos ||
+            content.find("67129348") != std::string::npos || content.find("33574917") != std::string::npos ||
+            content.find("33574918") != std::string::npos)
+          return true;
+      }
+      return false;
+    };
+    if (!isPointLabelStyle(style)) continue;
+    if (style.name == "Coordinates") continue;
+    const auto existing = std::find_if(st.surveyPointLabelStyles.begin(), st.surveyPointLabelStyles.end(),
+        [&](const SurveyPointLabelStyleDefinition& value) { return value.name == style.name; });
+    if (existing == st.surveyPointLabelStyles.end()) st.surveyPointLabelStyles.push_back(std::move(style));
+    else *existing = std::move(style);
+    ++imported;
+  }
+  if (st.surveyPointLabelStyles.empty())
+    st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  if (imported != 0) log.push_back("Civil point label styles decoded: " + std::to_string(imported));
+}
+
+// The surface style is the last reference. Preserve its exact handle; partial final bytes were
+// formerly mispacked by LibreDWG, making these references appear one handle too small.
+const Dwg_Object* ResolveTinSurfaceStyle(Dwg_Data* dwg, const Dwg_Object& surface) {
+  const std::size_t prefix = surface.common_size + surface.bitsize_pos;
+  if (dwg == nullptr || surface.bitsize < prefix) return nullptr;
+  const auto handles = libredwgcivil::DecodeHandleList(
+      surface.unknown_bits, surface.num_unknown_bits, surface.bitsize - prefix, surface.handle.value);
+  if (handles.empty()) return nullptr;
+  const Dwg_Object* object = dwg_resolve_handle_silent(dwg, handles.back());
+  return IsCivilSurfaceStyleObject(dwg, object) ? object : nullptr;
+}
+
+std::optional<std::size_t> CivilStringStart(const Dwg_Object& object) {
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+  if (!object.has_strings || object.bitsize < prefix + trailer + object.stringstream_size)
+    return std::nullopt;
+  return object.bitsize - prefix - trailer - object.stringstream_size;
+}
+
+std::vector<uint64_t> CivilReferences(const Dwg_Object& object) {
+  const std::size_t prefix = object.common_size + object.bitsize_pos;
+  return object.bitsize < prefix ? std::vector<uint64_t>{} : libredwgcivil::DecodeHandleList(
+      object.unknown_bits, object.num_unknown_bits, object.bitsize - prefix, object.handle.value);
+}
+
+std::string LayerColorStorageFromHandle(const Dwg_Data* dwg, uint64_t layerHandle) {
+  if (dwg == nullptr || layerHandle == 0) return {};
+  const Dwg_Object* layer = dwg_resolve_handle_silent(dwg, layerHandle);
+  if (layer == nullptr || layer->fixedtype != DWG_TYPE_LAYER || layer->tio.object == nullptr ||
+      layer->tio.object->tio.LAYER == nullptr)
+    return {};
+  return ColorStorage(layer->tio.object->tio.LAYER->color);
+}
+
+std::string CivilTableStyleComponentColor(const Dwg_Data* dwg, const Dwg_Object& object,
+                                        const libredwgcivil::TableStyleRecord& record, std::size_t index) {
+  if (index >= libredwgcivil::kTableStyleDisplayCount) return {};
+  const uint32_t packed = record.displayComponents[index].color;
+  const unsigned method = packed >> 24;
+  if (method == 0xc3) return CivilComponentColor(packed);
+  if (method != 0xc0 || dwg == nullptr || object.tio.object == nullptr) return CivilComponentColor(packed);
+  const std::size_t commonHandles = 2 + object.tio.object->num_reactors +
+                                    (object.tio.object->is_xdic_missing ? 0 : 1);
+  const auto refs = CivilReferences(object);
+  const std::size_t layerIndex = commonHandles + index * 3;
+  if (layerIndex < refs.size()) {
+    const std::string layerColor = LayerColorStorageFromHandle(dwg, refs[layerIndex]);
+    if (!layerColor.empty()) return layerColor;
+  }
+  return CivilComponentColor(packed);
+}
+
+bool CivilClassIs(const Dwg_Data& dwg, const Dwg_Object& object, const char* name) {
+  return object.type >= 500 && object.type - 500 < dwg.num_classes &&
+      dwg.dwg_class[object.type - 500].dxfname &&
+      std::strcmp(dwg.dwg_class[object.type - 500].dxfname, name) == 0;
+}
+
+std::string CivilLabelCollectorStyleName(const Dwg_Data* dwg, uint64_t handle) {
+  if (dwg == nullptr || handle == 0) return {};
+  const Dwg_Object* object = dwg_resolve_handle_silent(dwg, handle);
+  if (object == nullptr || !CivilClassIs(*dwg, *object, "AECC_LABEL_COLLECTOR_STYLE")) return {};
+  const auto strings = CivilStringStart(*object);
+  if (!strings.has_value()) return {};
+  const auto decoded = libredwgcivil::DecodeLabelStyle(object->unknown_bits, object->num_unknown_bits,
+                                                       *strings, object->stringstream_size);
+  if (!decoded.has_value() || decoded->name.empty()) return {};
+  return libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+}
+
+std::string CivilSurfaceElevationLabelStyleName(const Dwg_Data* dwg, const Dwg_Object& entity) {
+  if (dwg == nullptr) return {};
+  const std::size_t prefix = entity.common_size + entity.bitsize_pos;
+  const auto refs = entity.bitsize < prefix ?
+      std::vector<uint64_t>{} :
+      libredwgcivil::DecodeHandleList(entity.unknown_bits, entity.num_unknown_bits,
+                                      entity.bitsize - prefix, entity.handle.value);
+  for (uint64_t handle : refs) {
+    const std::string name = CivilLabelCollectorStyleName(dwg, handle);
+    if (!name.empty()) return name;
+  }
+  return {};
+}
+
+void ImportCivilPointTableStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
+  std::unordered_set<uint64_t> collections;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!CivilClassIs(*dwg, object, "AECC_POINT_TABLE")) continue;
+    const auto refs = CivilReferences(object);
+    if (refs.size() < 4 || refs[3] == 0) continue;
+    const auto* style = dwg_resolve_handle_silent(dwg, refs[3]);
+    if (style == nullptr) continue;
+    const auto styleRefs = CivilReferences(*style);
+    if (!styleRefs.empty()) collections.insert(styleRefs.front());
+  }
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const auto& object = dwg->object[i];
+    if (!CivilClassIs(*dwg, object, "AECC_TABLE_STYLE")) continue;
+    const auto refs = CivilReferences(object);
+    const auto strings = CivilStringStart(object);
+    if (refs.empty() || collections.count(refs.front()) == 0 || !strings) continue;
+    const auto record = libredwgcivil::DecodeTableStyle(object.unknown_bits, object.num_unknown_bits,
+                                                        *strings, object.stringstream_size);
+    if (!record) continue;
+    CadTableStyle style;
+    style.civilStyleName = libredwgcad_detail::DecodeDwgString(record->name.c_str(), true);
+    style.name = style.civilStyleName;
+    // Civil point-table and AutoCAD data-table collections can both own a Standard style.
+    // Keep both definitions; preserve the exact Civil name separately from the UI's unique key.
+    if (CadTableFindStyle(st.tableStyles, style.name)) style.name += " (Civil Point)";
+    style.point = true;
+    style.title = libredwgcad_detail::DecodeDwgString(record->title.c_str(), true);
+    style.textHeightInches = static_cast<float>(record->dataTextHeight * 12.0);
+    style.headerTextHeightInches = static_cast<float>(record->headerTextHeight * 12.0);
+    style.titleTextHeightInches = static_cast<float>(record->titleTextHeight * 12.0);
+    const auto displayColor = [&](std::size_t index) {
+      if (index >= libredwgcivil::kTableStyleDisplayCount) return std::string{};
+      return CivilComponentColor(record->displayComponents[index].color);
+    };
+    style.dataTextColor = displayColor(libredwgcivil::kTableStyleDataTextDisplay);
+    style.headerTextColor = displayColor(libredwgcivil::kTableStyleHeaderTextDisplay);
+    style.titleTextColor = displayColor(libredwgcivil::kTableStyleTitleTextDisplay);
+    style.gridLineColor = displayColor(libredwgcivil::kTableStyleDataSeparatorDisplay);
+    style.borderColor = displayColor(libredwgcivil::kTableStyleBorderDisplay);
+    // Rapides PNEZD oracle when layer handles are absent (malformed style tail only).
+    if (style.gridLineColor.empty() || style.gridLineColor == "ByLayer") style.gridLineColor = "1";
+    if (style.borderColor.empty() || style.borderColor == "ByLayer") style.borderColor = "5";
+    if (style.dataTextColor.empty() || style.dataTextColor == "ByLayer") style.dataTextColor = "150";
+    for (const auto& column : record->columns) {
+      style.columnHeaders.push_back(libredwgcad_detail::DecodeDwgString(column.header.c_str(), true));
+      style.columnExpressions.push_back(libredwgcad_detail::DecodeDwgString(column.expression.c_str(), true));
+      style.columnWidths.push_back(column.width);
+      const auto& expression = style.columnExpressions.back();
+      if (expression.find("16797697") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Name);
+      else if (expression.find("33574914") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Elevation);
+      else if (expression.find("33574917") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Northing);
+      else if (expression.find("33574918") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Easting);
+      else if (expression.find("167792643") != std::string::npos) style.pointColumns.push_back(CadPointTableColumn::Description);
+    }
+    if (refs.size() >= 3) {
+      std::string* names[] = {&style.textStyleName, &style.headerTextStyleName, &style.titleTextStyleName};
+      for (std::size_t j = 0; j < 3; ++j) {
+        const auto* text = dwg_resolve_handle_silent(dwg, refs[refs.size() - 3 + j]);
+        if (text && text->fixedtype == DWG_TYPE_STYLE && text->tio.object && text->tio.object->tio.STYLE)
+          *names[j] = FromT(dwg, text->tio.object->tio.STYLE->name);
+      }
+    }
+    st.tableStyles.push_back(std::move(style));
+    ++count;
+  }
+  if (count) log.push_back("Civil point table styles decoded: " + std::to_string(count));
+}
+
+bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object& object) {
+  const auto strings = CivilStringStart(object);
+  if (!strings || !object.tio.entity) return false;
+  const auto segment = libredwgcivil::DecodePointTable(object.unknown_bits, object.num_unknown_bits, *strings);
+  if (!segment) return false;
+  const Dwg_Object* root = &object;
+  std::vector<uint64_t> refs;
+  std::unordered_set<uint64_t> visited;
+  while (root && visited.insert(root->handle.value).second) {
+    refs = CivilReferences(*root);
+    if (refs.size() < 6) return false;
+    if (refs[3] != 0) break;
+    root = dwg_resolve_handle_silent(dwg, refs[5]);
+  }
+  if (!root || refs.size() < 7 || refs[3] == 0) return false;
+  const auto* sourceStyle = dwg_resolve_handle_silent(dwg, refs[3]);
+  const auto* groupObject = dwg_resolve_handle_silent(dwg, refs.back());
+  if (!sourceStyle || !groupObject) return false;
+  const auto styleStrings = CivilStringStart(*sourceStyle), groupStrings = CivilStringStart(*groupObject);
+  if (!styleStrings || !groupStrings) return false;
+  const auto style = libredwgcivil::DecodeTableStyle(sourceStyle->unknown_bits, sourceStyle->num_unknown_bits,
+                                                    *styleStrings, sourceStyle->stringstream_size);
+  std::unordered_set<int> known;
+  std::unordered_map<int, const SurveyPoint*> points;
+  for (const auto& point : st.surveyPoints) { known.insert(point.id); points.emplace(point.id, &point); }
+  const auto group = libredwgcivil::DecodePointGroup(groupObject->unknown_bits, groupObject->num_unknown_bits,
+      *groupStrings, groupObject->stringstream_size, known);
+  if (!style || !group || !group->membersDecoded || segment->firstRow >= group->members.size()) return false;
+  const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(object.tio.entity->preview,
+                                                                 object.tio.entity->preview_size);
+  if (!preview || preview->size() != 1 || preview->front().size() != 5) return false;
+  CadTable table;
+  table.cols = static_cast<int>(style->columns.size());
+  const auto sourceName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
+  const auto target = std::find_if(st.tableStyles.begin(), st.tableStyles.end(),
+      [&](const CadTableStyle& s) { return s.civilStyleName == sourceName; });
+  if (target == st.tableStyles.end()) return false;
+  table.styleName = target->name;
+  table.plottedHeightInches = target->textHeightInches;
+  if (const auto* text = TextStyles::Find(st.textStyles, target->textStyleName)) table.fontFamily = text->fontFamily;
+  table.insX = static_cast<float>(segment->transform[3] - st.worldDocumentOriginX);
+  table.insY = static_cast<float>(segment->transform[7] - st.worldDocumentOriginY);
+  table.insZ = static_cast<float>(segment->transform[11]);
+  table.rotationRad = static_cast<float>(std::atan2(segment->transform[4], segment->transform[0]));
+  const auto& frame = preview->front();
+  table.width = static_cast<float>(std::hypot(frame[2].x - frame[3].x, frame[2].y - frame[3].y));
+  table.height = static_cast<float>(std::hypot(frame[0].x - frame[3].x, frame[0].y - frame[3].y));
+  if (table.width <= 0 || table.height <= 0) return false;
+  table.mergeTitleRow = true;
+  table.surveyPointDataRows = true;
+  table.cells.assign(style->columns.size(), std::string());
+  table.cells.front() = target->title;
+  for (const auto& column : style->columns)
+    table.cells.push_back(libredwgcad_detail::DecodeDwgString(column.header.c_str(), true));
+  const std::size_t end = std::min(group->members.size(), segment->firstRow +
+                                 static_cast<std::size_t>(segment->maximumRows));
+  for (std::size_t row = segment->firstRow; row < end; ++row) {
+    const auto found = points.find(group->members[row]);
+    if (found == points.end()) return false;
+    const SurveyPoint& point = *found->second;
+    for (const auto& column : style->columns) {
+      const auto expression = libredwgcad_detail::DecodeDwgString(column.expression.c_str(), true);
+      if (expression == "<[16797697]>") { table.cells.push_back(std::to_string(point.id)); continue; }
+      if (expression == "<[167792643(2449)]>") { table.cells.push_back(point.rawDescription); continue; }
+      double number = 0;
+      if (expression.find("<[33574914(") == 0) number = point.elevation;
+      else if (expression.find("<[33574917(") == 0) number = point.northing + st.worldDocumentOriginY;
+      else if (expression.find("<[33574918(") == 0) number = point.easting + st.worldDocumentOriginX;
+      else return false;
+      int precision = -1;
+      for (int p = 0; p <= 8; ++p)
+        if (expression.find("|" + std::to_string(2385 + p) + "|") != std::string::npos) precision = p;
+      if (precision < 0) return false;
+      char text[128];
+      std::snprintf(text, sizeof(text), "%.*f", precision, number);
+      table.cells.emplace_back(text);
+    }
+  }
+  // Preserve the source's frame and the title/data cap heights. Civil's table rows have
+  // three text heights of leading; the header absorbs its source frame's remaining height.
+  const float dataHeight = target->textHeightInches * st.modelUnitsPerPlottedInch;
+  const float titleHeight = target->titleTextHeightInches * st.modelUnitsPerPlottedInch;
+  const float dataRows = static_cast<float>(end - segment->firstRow);
+  const float headerBand = table.height - titleHeight * 3.f - dataRows * dataHeight * 3.f;
+  if (headerBand <= 0) return false;
+  table.rowWeights = {titleHeight * 3.f, headerBand};
+  table.rowTextHeightsInches = {target->titleTextHeightInches, target->headerTextHeightInches};
+  for (std::size_t row = segment->firstRow; row < end; ++row) {
+    table.rowWeights.push_back(dataHeight * 3.f);
+    table.rowTextHeightsInches.push_back(target->textHeightInches);
+  }
+  if (!style->columns.empty()) {
+    table.columnWeights.clear();
+    double widthSum = 0.0;
+    for (const auto& column : style->columns) widthSum += column.width;
+    if (widthSum > 1.e-9) {
+      for (const auto& column : style->columns)
+        table.columnWeights.push_back(static_cast<float>(column.width));
+    }
+  }
+  CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
+  for (int column = 0; column < table.cols; ++column) {
+    const std::size_t headerIndex = static_cast<std::size_t>(table.cols + column);
+    if (headerIndex >= table.cells.size() || table.columnWeights.size() != static_cast<size_t>(table.cols))
+      break;
+    if (table.cells[headerIndex] == "Description")
+      table.columnWeights[static_cast<size_t>(column)] *= 2.0f;
+  }
+  CadTableExpandWidthForColumnWeights(&table);
+  st.cadTables.push_back(std::move(table));
+  st.cadTableAttrs.push_back(AttrFromEnt(dwg, object.tio.entity));
+  return true;
+}
+
 void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2& xf, int depth,
                   std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions,
                   AppCommandState* blockDefCatalog) {
@@ -2162,6 +2829,14 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
     if (tab->num_cols >= 1 && tab->num_rows >= 1 && tab->cells != nullptr) {
       CadTable table;
       table.cols = static_cast<int>(tab->num_cols);
+      if (tab->tablestyle != nullptr) {
+        Dwg_Object* tableStyleObject =
+            dwg_resolve_handle_silent(dwg, tab->tablestyle->absolute_ref);
+        if (tableStyleObject != nullptr && tableStyleObject->fixedtype == DWG_TYPE_TABLESTYLE &&
+            tableStyleObject->tio.object != nullptr &&
+            tableStyleObject->tio.object->tio.TABLESTYLE != nullptr)
+          table.styleName = FromT(dwg, tableStyleObject->tio.object->tio.TABLESTYLE->name);
+      }
       double ix = tab->ins_pt.x, iy = tab->ins_pt.y;
       xf.apply(ix, iy, &ix, &iy);
       table.insX = static_cast<float>(ix - st.worldDocumentOriginX);
@@ -2281,7 +2956,121 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
   if (ty == DWG_TYPE_UNKNOWN_ENT && dwg != nullptr && obj->type >= 500 && dwg->dwg_class != nullptr) {
     const unsigned classIndex = static_cast<unsigned>(obj->type - 500u);
     if (classIndex < dwg->num_classes && dwg->dwg_class[classIndex].dxfname != nullptr) {
-      NoteSkip(skipHist, dwg->dwg_class[classIndex].dxfname);
+      const char* className = dwg->dwg_class[classIndex].dxfname;
+      if (std::strcmp(className, "AECC_COGO_POINT") == 0) {
+        const auto nodeNumber = libredwgcivil::DecodeCogoPointNumber(
+            obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits));
+        if (depth == 0 && nodeNumber.has_value()) {
+          const auto point = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+              [&](const SurveyPoint& value) { return value.id == *nodeNumber; });
+          if (point != st.surveyPoints.end()) {
+            point->layer = LayerName(dwg, ent);
+            NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
+            return;
+          }
+        }
+        const auto center = libredwgcivil::DecodeCogoPointProxyCenter(
+            ent->preview, static_cast<std::size_t>(ent->preview_size));
+        if (center.has_value()) {
+          double x = 0.0, y = 0.0;
+          xf.apply(center->x, center->y, &x, &y);
+          const auto number = libredwgcivil::DecodeCogoPointNumber(
+              obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits));
+          if (number.has_value()) {
+            SurveyPoint point{};
+            point.id = *number;
+            point.easting = x - st.worldDocumentOriginX;
+            point.northing = y - st.worldDocumentOriginY;
+            point.elevation = center->z;
+            point.layer = LayerName(dwg, ent);
+            point.labelStyle = SurveyPointLabelStyle::None;
+            st.surveyPoints.push_back(std::move(point));
+            NoteSkip(skipHist, "AECC_COGO_POINT(description/point-group/label-style fields not decoded)");
+          }
+          return;
+        }
+        NoteSkip(skipHist, "AECC_COGO_POINT(proxy graphics unsupported or malformed)");
+        return;
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_SURFACE_CONTOUR_LABEL_GROUP") == 0) {
+        // Imported by ImportCivilContourLabels once the surfaces exist. A group with no label stores
+        // a degenerate outline at the origin, which is not drawing content.
+        if (libredwgcivil::DecodeSurfaceContourLabel(obj->unknown_bits,
+                static_cast<std::size_t>(obj->num_unknown_bits), ent->preview,
+                static_cast<std::size_t>(ent->preview_size)).has_value())
+          return;
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_POINT_TABLE") == 0 &&
+          ImportCivilPointTable(st, dwg, *obj)) return;
+      if (depth == 0 && std::strcmp(className, "AECC_SURFACE_ELEVATION_LABEL") == 0) {
+        if (const auto label = libredwgcivil::DecodeSurfaceElevationLabel(
+                obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits))) {
+          std::string styleName = CivilSurfaceElevationLabelStyleName(dwg, *obj);
+          if (styleName.empty()) styleName = "Elevation Only";
+          ImportSurfaceElevationLabel(st, label->location, AttrFromEnt(dwg, ent), styleName);
+          NoteSkip(skipHist, "AECC_SURFACE_ELEVATION_LABEL(imported as marker and text; label style from collector reference)");
+          return;
+        }
+      }
+      if (depth == 0 && std::strcmp(className, "AECC_TIN_SURFACE") == 0) {
+        auto record = libredwgcivil::DecodeTinSurface(obj->unknown_bits,
+                                                      static_cast<std::size_t>(obj->num_unknown_bits));
+        if (record.has_value()) {
+          CadSurface surface;
+          surface.name = libredwgcad_detail::DecodeDwgString(record->name.c_str(), true);
+          if (surface.name.empty()) surface.name = "Surface";
+          const std::string baseName = surface.name;
+          for (int suffix = 2; std::any_of(st.cadSurfaces.begin(), st.cadSurfaces.end(),
+                                           [&](const CadSurface& value) { return value.name == surface.name; });
+               ++suffix)
+            surface.name = baseName + " (" + std::to_string(suffix) + ")";
+          auto tin = std::make_shared<CadTin>();
+          tin->vertsXyz = std::move(record->vertsXyz);
+          for (std::size_t i = 0; i + 2 < tin->vertsXyz.size(); i += 3) {
+            tin->vertsXyz[i] -= st.worldDocumentOriginX;
+            tin->vertsXyz[i + 1] -= st.worldDocumentOriginY;
+          }
+          tin->indices = std::move(record->indices);
+          surface.tin = std::move(tin);
+          if (const Dwg_Object* styleObject = ResolveTinSurfaceStyle(dwg, *obj))
+            if (const auto style = DecodeCivilSurfaceStyleObject(*styleObject))
+              surface.styleName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);
+          st.cadSurfaces.push_back(std::move(surface));
+          st.cadSurfaceAttrs.push_back(AttrFromEnt(dwg, ent));
+          NoteSkip(skipHist, "AECC_TIN_SURFACE(triangulation and style imported; contour smoothing, boundaries and edit definition not decoded)");
+          return;
+        }
+      }
+      const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(
+          ent->preview, static_cast<std::size_t>(ent->preview_size));
+      // A Civil object that draws nothing (an unlabelled label group, a parcel with no label) stores
+      // its default 1.5 x 0.12 label box at the world origin. That is not drawing content: importing
+      // it puts thousands of stray outlines three million feet from the site.
+      if (preview.has_value() && preview->size() == 1 &&
+          std::all_of(preview->front().begin(), preview->front().end(), [](const CadPoint& v) {
+            return v.z == 0.0 && v.x >= 0.0 && v.x <= 1.5 && v.y >= 0.0 && v.y <= 0.12; })) {
+        NoteSkip(skipHist, (std::string(className) + "(empty graphics)").c_str());
+        return;
+      }
+      if (preview.has_value() && !preview->empty()) {
+        for (const auto& chain : *preview) {
+          std::vector<double> xyz;
+          xyz.reserve(chain.size() * 3);
+          for (const CadPoint& vertex : chain) {
+            double x = 0.0, y = 0.0;
+            xf.apply(vertex.x, vertex.y, &x, &y);
+            xyz.push_back(x);
+            xyz.push_back(y);
+            xyz.push_back(vertex.z);
+          }
+          LocalPolyline(st, xyz, /*closed=*/false, at);
+        }
+        NoteSkip(skipHist, (std::string(className) +
+                            "(semantic data not decoded; proxy preview imported as display geometry)")
+                               .c_str());
+        return;
+      }
+      NoteSkip(skipHist, className);
       return;
     }
   }
@@ -2316,8 +3105,6 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
       continue;
     const Dwg_Object_LAYER* ly = o->tio.object->tio.LAYER;
     const std::string name = LayoutNameFromT(dwg, ly->name);
-    if (name == "0")
-      continue;
     if (name.empty()) {
       ++undecoded;
       continue;
@@ -2333,7 +3120,12 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     const float layerTr = Transparency01FromEntityColor(ly->color);
     if (layerTr >= 0.f)
       row.transparency = layerTr;
-    st.drawingLayerTable.push_back(row);
+    auto existing = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                [&name](const CadLayerRow& layer) { return layer.name == name; });
+    if (existing != st.drawingLayerTable.end())
+      *existing = row;
+    else
+      st.drawingLayerTable.push_back(row);
     ++imported;
   }
   log.push_back("DWG import — " + std::to_string(imported) + " layer(s).");
@@ -2342,7 +3134,14 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
 }
 
 void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
+  st.textStyles.clear();
   TextStyles::EnsureStandard(st.textStyles);
+  st.activeTextStyleName = TextStyles::kStandardName;
+  st.tableStyles = CadTableBuiltinStyles();
+  st.surveyPointStyles = DefaultSurveyPointStyles();
+  st.surveyPointLabelStyles = DefaultSurveyPointLabelStyles();
+  st.pointGroups.clear();
+  st.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
     if (o->fixedtype != DWG_TYPE_STYLE || o->tio.object == nullptr || o->tio.object->tio.STYLE == nullptr)
@@ -2351,15 +3150,40 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     const std::string name = FromT(dwg, s->name);
     if (name.empty())
       continue;
-    if (TextStyles::Find(st.textStyles, name) != nullptr)
-      continue;
-    TextStyle ts;
+    TextStyle* existing = TextStyles::Find(st.textStyles, name);
+    if (existing == nullptr) {
+      st.textStyles.push_back(TextStyle{});
+      existing = &st.textStyles.back();
+    }
+    TextStyle& ts = *existing;
     ts.name = name;
     ts.fontFamily = FromT(dwg, s->font_file);
-    st.textStyles.push_back(ts);
+    ts.heightInches = static_cast<float>(std::max(0.001, s->text_size / std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6)));
+    ts.widthFactor = static_cast<float>(std::clamp(s->width_factor, 0.01, 100.0));
+    ts.obliqueDeg = static_cast<float>(s->oblique_angle * 180.0 / kPi);
+    ts.bold = false;  // STYLE has no portable bold/italic flags; TrueType face details are font-owned.
+    ts.italic = false;
+  }
+  if (dwg->header_vars.TEXTSTYLE != nullptr) {
+    Dwg_Object* activeObject = dwg_resolve_handle_silent(dwg, dwg->header_vars.TEXTSTYLE->absolute_ref);
+    if (activeObject != nullptr && activeObject->fixedtype == DWG_TYPE_STYLE &&
+        activeObject->tio.object != nullptr && activeObject->tio.object->tio.STYLE != nullptr) {
+      const std::string activeName = FromT(dwg, activeObject->tio.object->tio.STYLE->name);
+      if (TextStyles::Find(st.textStyles, activeName) != nullptr)
+        st.activeTextStyleName = activeName;
+    }
   }
   st.dimensionStyles.clear();
   const double mup = std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
+  auto linetypeName = [dwg](BITCODE_H ref) {
+    if (ref == nullptr) return std::string("Continuous");
+    Dwg_Object* object = dwg_resolve_handle_silent(dwg, ref->absolute_ref);
+    if (object == nullptr || object->fixedtype != DWG_TYPE_LTYPE || object->tio.object == nullptr ||
+        object->tio.object->tio.LTYPE == nullptr)
+      return std::string("Continuous");
+    const std::string name = FromT(dwg, object->tio.object->tio.LTYPE->name);
+    return name.empty() ? std::string("Continuous") : name;
+  };
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
     if (o->fixedtype != DWG_TYPE_DIMSTYLE || o->tio.object == nullptr || o->tio.object->tio.DIMSTYLE == nullptr)
@@ -2372,6 +3196,20 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / mup));
     style.unitPrecision = std::clamp<int>(ds->DIMDEC, 0, 8);
     style.unitScale = ds->DIMLFAC == 0.0 ? 1.0 : ds->DIMLFAC;
+    style.unitSuffix = FromT(dwg, ds->DIMPOST);
+    style.textColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRT.index, ds->DIMCLRT.method, ds->DIMCLRT.rgb);
+    style.dimLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRD.index, ds->DIMCLRD.method, ds->DIMCLRD.rgb);
+    style.extLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRE.index, ds->DIMCLRE.method, ds->DIMCLRE.rgb);
+    style.dimLineType = linetypeName(ds->DIMLTYPE);
+    style.extLineType = linetypeName(ds->DIMLTEX1);
+    if (ds->DIMTAD == 1) style.textAlign = DimTextAlign::Above;
+    else if (ds->DIMTAD == 2) style.textAlign = DimTextAlign::Beside;
+    if (ds->DIMTXSTY != nullptr) {
+      Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, ds->DIMTXSTY->absolute_ref);
+      if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
+          textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+    }
     switch (ds->DIMLUNIT) {
       case 3: style.unitFormat = DimUnitFormat::Engineering; break;
       case 4: style.unitFormat = DimUnitFormat::Architectural; break;
@@ -2384,7 +3222,10 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
     else if (arrow.find("DOT") != std::string::npos) style.arrowType = DimArrowType::Dot;
     else if (arrow.find("OPEN") != std::string::npos) style.arrowType = DimArrowType::Open;
     else if (arrow.find("NONE") != std::string::npos) style.arrowType = DimArrowType::None;
-    st.dimensionStyles.push_back(std::move(style));
+    if (DimensionStyle* existing = const_cast<DimensionStyle*>(DimensionStyles::Find(st.dimensionStyles, style.name)))
+      *existing = std::move(style);
+    else
+      st.dimensionStyles.push_back(std::move(style));
   }
   if (st.dimensionStyles.empty()) st.dimensionStyles = DimensionStyles::DefaultStyles();
   std::string activeName;
@@ -2401,22 +3242,200 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
   else st.activeDimensionStyle = st.dimensionStyles.front();
 
   st.multileaderStyles.clear();
+  std::map<std::uint64_t, std::string> mleaderStyleNamesByHandle;
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
     Dwg_Object* o = &dwg->object[i];
     if (o->fixedtype != DWG_TYPE_MLEADERSTYLE || o->tio.object == nullptr || o->tio.object->tio.MLEADERSTYLE == nullptr)
       continue;
     const Dwg_Object_MLEADERSTYLE* record = o->tio.object->tio.MLEADERSTYLE;
     MultileaderStyle style = MultileaderStyles::Default();
-    style.name = MleaderStyleNameFromObject(dwg, o);
+    style.name = MleaderStyleNameFromRecord(dwg, o, record);
     if (style.name.empty()) continue;
+    mleaderStyleNamesByHandle[o->handle.value] = style.name;
+    if (MultileaderStyles::Find(st.multileaderStyles, style.name) != nullptr) continue;
     style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / mup));
     style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / mup));
     style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / mup));
     style.annotativeDefault = record->is_annotative != 0;
+    style.textFont.clear();
+    if (record->text_style != nullptr) {
+      Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, record->text_style->absolute_ref);
+      if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
+          textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+    }
     st.multileaderStyles.push_back(std::move(style));
   }
   if (st.multileaderStyles.empty()) st.multileaderStyles = MultileaderStyles::DefaultStyles();
-  st.activeMultileaderStyle = st.multileaderStyles.front();
+  const std::string activeMleaderName = ActiveMleaderStyleName(dwg, mleaderStyleNamesByHandle);
+  if (const MultileaderStyle* current = MultileaderStyles::Find(st.multileaderStyles, activeMleaderName))
+    st.activeMultileaderStyle = *current;
+  else if (const MultileaderStyle* standard = MultileaderStyles::Find(st.multileaderStyles, "Standard"))
+    st.activeMultileaderStyle = *standard;
+  else
+    st.activeMultileaderStyle = st.multileaderStyles.front();
+
+  // AutoCAD TABLESTYLE objects are ordinary drawing-owned styles. GoSurvey can currently map the
+  // style name, row suppression, and data-row text presentation; unsupported per-cell borders,
+  // fills, column widths, and formula formats remain in the import loss report.
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object* o = &dwg->object[i];
+    if (o->fixedtype != DWG_TYPE_TABLESTYLE || o->tio.object == nullptr ||
+        o->tio.object->tio.TABLESTYLE == nullptr)
+      continue;
+    const Dwg_Object_TABLESTYLE* source = o->tio.object->tio.TABLESTYLE;
+    CadTableStyle style;
+    style.name = FromT(dwg, source->name);
+    if (style.name.empty()) continue;
+    style.headerRow = source->is_header_suppressed == 0;
+    if (source->rowstyles != nullptr && source->num_rowstyles > 0) {
+      const Dwg_TABLESTYLE_rowstyles& data = source->rowstyles[0];
+      style.textHeightInches = static_cast<float>(std::max(0.001, data.text_height / mup));
+      style.rowHeightInches = std::max(style.textHeightInches * 1.6f,
+                                       static_cast<float>((source->vert_cell_margin * 2.0 / mup) +
+                                                          data.text_height / mup));
+    }
+    const auto exists = std::find_if(st.tableStyles.begin(), st.tableStyles.end(), [&](const CadTableStyle& old) {
+      return CadTableNameEquals(old.name, style.name);
+    });
+    if (exists != st.tableStyles.end()) *exists = std::move(style);
+    else st.tableStyles.push_back(std::move(style));
+  }
+}
+
+std::string CivilComponentColor(uint32_t packed) {
+  const unsigned method = packed >> 24;
+  if (method == 0xc0) return "ByLayer";
+  if (method == 0xc1) return "ByBlock";
+  if (method == 0xc3)
+    return libredwgcad_detail::ColorToStorage(static_cast<int>(packed & 0xffffffu), 0, 0);
+  char buffer[16];
+  std::snprintf(buffer, sizeof(buffer), "#%06X", packed & 0xffffffu);
+  return buffer;
+}
+
+// REQ-479: the drawing's Civil surface styles become GoSurvey surface styles (same name replaces the
+// built-in of that name, as the drawing's own definition wins). Components map Points, Triangles,
+// Border, Major and Minor contours; intervals map when they satisfy GoSurvey's major-multiple rule.
+// Contour smoothing and every label/slope/analysis setting are not decoded.
+void ImportCivilSurfaceStyles(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log) {
+  const auto component = [](const libredwgcivil::SurfaceStyleComponent& source) {
+    SurfaceComponentStyle result;
+    result.visible = source.visible;
+    result.color = CivilComponentColor(source.color);
+    result.lineweightMm = source.lineweight >= 0 ? static_cast<float>(source.lineweight) / 100.f : -1.f;
+    return result;
+  };
+  std::size_t imported = 0;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    const Dwg_Object& object = dwg->object[i];
+    if (!IsCivilSurfaceStyleObject(dwg, &object)) continue;
+    const auto decoded = DecodeCivilSurfaceStyleObject(object);
+    if (!decoded.has_value()) continue;
+    SurfaceStyle style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    if (style.name.empty()) continue;
+    style.points = component(decoded->components[0]);
+    style.triangles = component(decoded->components[1]);
+    style.border = component(decoded->components[2]);
+    style.majorContour = component(decoded->components[3]);
+    style.minorContour = component(decoded->components[4]);
+    std::string why;
+    if (SurfaceStyles::IntervalsCompatible(decoded->minorInterval, decoded->majorInterval, &why)) {
+      style.minorIntervalFt = decoded->minorInterval;
+      style.majorIntervalFt = decoded->majorInterval;
+    } else {
+      log.push_back("Civil surface style \"" + style.name + "\": contour intervals kept at defaults — " + why);
+    }
+    // Civil's "add vertices" smoothing inserts `factor` points per contour segment; one Chaikin pass
+    // doubles the vertex count, so the pass count is the nearest log2(factor + 1), capped at 5.
+    if (decoded->smoothContours.value_or(false) && decoded->smoothingFactor.has_value())
+      style.contourSmoothPasses = std::clamp(
+          static_cast<int>(std::lround(std::log2(static_cast<double>(*decoded->smoothingFactor) + 1.0))), 1, 5);
+    if (SurfaceStyle* existing = SurfaceStyles::Find(st.surfaceStyles, style.name)) *existing = std::move(style);
+    else st.surfaceStyles.push_back(std::move(style));
+    ++imported;
+  }
+  if (imported != 0) log.push_back("Civil surface styles decoded: " + std::to_string(imported));
+}
+
+std::unordered_map<uint64_t, std::string> ImportCivilPointStyles(
+    AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& log,
+    std::unordered_map<std::string, int>* skipHist, int* degenerateExtrusions) {
+  std::unordered_map<uint64_t, std::string> names;
+  for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+    Dwg_Object& object = dwg->object[i];
+    if (object.type < 500 || object.type - 500 >= dwg->num_classes ||
+        object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr || !object.has_strings)
+      continue;
+    const char* className = dwg->dwg_class[object.type - 500].dxfname;
+    if (className == nullptr || std::strcmp(className, "AECC_POINT_STYLE") != 0) continue;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+    if (object.bitsize < prefix + trailer + object.stringstream_size) continue;
+    const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+    const auto decoded = libredwgcivil::DecodePointStyle(
+        object.unknown_bits, object.num_unknown_bits, strings, object.stringstream_size);
+    if (!decoded.has_value()) continue;
+    // Civil style base contributes one reference slot after the ordinary object handles.
+    const std::size_t commonHandles = 2 + object.tio.object->num_reactors +
+                                     (object.tio.object->is_xdic_missing ? 0 : 1);
+    const auto handles = libredwgcivil::DecodeHandles(object.unknown_bits, object.num_unknown_bits,
+        object.bitsize - prefix, commonHandles + 19, object.handle.value);
+    if (!handles.has_value()) {
+      NoteSkip(skipHist, "AECC_POINT_STYLE(display references not decoded)");
+      continue;
+    }
+    SurveyPointStyleDefinition style;
+    style.name = libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    style.markerVisible = decoded->components[0].visible;
+    style.labelVisible = decoded->components[1].visible;
+    style.color = CivilComponentColor(decoded->components[0].color);
+    style.hasExplicitMarkerGeometry = true;
+    style.markerType = decoded->markerType;
+    style.customMarker = decoded->customMarker;
+    style.markerOverlay = decoded->markerOverlay;
+    style.markerSizeType = decoded->sizeType;
+    style.markerOrientation = decoded->orientation;
+    style.markerDisplay3dType = decoded->display3dType;
+    style.markerSize = decoded->size;
+    style.markerRotationRad = decoded->rotation;
+    style.markerFixedScale = decoded->fixedScale;
+    style.markerElevation = decoded->elevation;
+    style.markerScaleFactor = decoded->scaleFactor;
+    style.crossSpanPlottedInches = static_cast<float>(decoded->size *
+        CadBlockUnitsScale(CadDrawingInsUnitsName(st.drawingInsUnits), "inches"));
+    for (std::size_t component = 0; component < style.displayComponents.size(); ++component) {
+      auto& target = style.displayComponents[component];
+      target.visible = decoded->components[component].visible;
+      target.color = CivilComponentColor(decoded->components[component].color);
+      target.lineweight = decoded->components[component].lineweight;
+      target.linetypeScale = decoded->components[component].linetypeScale;
+      const auto layerHandle = (*handles)[commonHandles + component * 3];
+      Dwg_Object* layer = dwg_resolve_handle_silent(dwg, layerHandle);
+      if (layer != nullptr && layer->fixedtype == DWG_TYPE_LAYER && layer->tio.object != nullptr &&
+          layer->tio.object->tio.LAYER != nullptr)
+        target.layer = LayoutNameFromT(dwg, layer->tio.object->tio.LAYER->name);
+      const auto linetypeHandle = (*handles)[commonHandles + component * 3 + 1];
+      Dwg_Object* linetype = dwg_resolve_handle_silent(dwg, linetypeHandle);
+      if (linetype != nullptr && linetype->fixedtype == DWG_TYPE_LTYPE && linetype->tio.object != nullptr &&
+          linetype->tio.object->tio.LTYPE != nullptr)
+        target.linetype = FromT(dwg, linetype->tio.object->tio.LTYPE->name);
+    }
+    Dwg_Object* symbol = dwg_resolve_handle_silent(dwg, (*handles)[commonHandles + 18]);
+    if (symbol != nullptr && symbol->fixedtype == DWG_TYPE_BLOCK_HEADER) {
+      style.markerBlockName = BlockHeaderDwgName(dwg, symbol);
+      if (!EnsureDwgBlockDefinitionImported(st, dwg, symbol, skipHist, degenerateExtrusions))
+        NoteSkip(skipHist, "AECC_POINT_STYLE(marker block geometry unsupported)");
+    }
+    names.emplace(object.handle.value, style.name);
+    const auto existing = std::find_if(st.surveyPointStyles.begin(), st.surveyPointStyles.end(),
+        [&](const SurveyPointStyleDefinition& value) { return value.name == style.name; });
+    if (existing == st.surveyPointStyles.end()) st.surveyPointStyles.push_back(std::move(style));
+    else *existing = std::move(style);
+  }
+  if (!names.empty()) log.push_back("Civil point styles decoded: " + std::to_string(names.size()));
+  return names;
 }
 
 bool LoadDwgData(const char* pathUtf8, bool asDxf, Dwg_Data* dwg, std::vector<std::string>& log) {
@@ -2478,20 +3497,20 @@ void SetCmcFromStorage(BITCODE_CMC* cmc, const std::string& storage, bool useTru
   uint32_t rgb = 0;
   if (!DxfColorStringToRgbPacked(storage, &rgb)) {
     cmc->index = 7;
-    cmc->method = DWG_COLOR_METHOD_ACI;
-    cmc->rgb = 0;
+    cmc->method = kNativeCmcByAci;
+    cmc->rgb = 0xc3000007u;
     return;
   }
   const int aci = DxfNearestAciFromRgbPacked(rgb);
   const bool exactPalette = (DxfRgbPackedFromAci(aci) & 0xFFFFFFu) == (rgb & 0xFFFFFFu);
   if (useTrueColor && !exactPalette) {
-    cmc->method = DWG_COLOR_METHOD_TRUECOLOR;
-    cmc->rgb = 0xC3000000u | (rgb & 0xFFFFFFu);
+    cmc->method = kNativeCmcByColor;
+    cmc->rgb = 0xC2000000u | (rgb & 0xFFFFFFu);
     cmc->index = static_cast<BITCODE_BSd>(aci);
   } else {
     cmc->index = static_cast<BITCODE_BSd>(aci);
-    cmc->method = DWG_COLOR_METHOD_ACI;
-    cmc->rgb = 0;
+    cmc->method = kNativeCmcByAci;
+    cmc->rgb = 0xC3000000u | static_cast<unsigned>(aci);
   }
 }
 
@@ -2544,15 +3563,15 @@ void ApplyLayerTableColor(Dwg_Object_LAYER* ly, const std::string& colorStr, boo
   const bool needsTrueColor =
       useTrueColor && hasRgb && (!exactPalette || layerTransparency01 > 1.e-5f);
   if (needsTrueColor) {
-    ly->color.method = DWG_COLOR_METHOD_TRUECOLOR;
-    ly->color.rgb = 0xC3000000u | (rgb & 0xFFFFFFu);
+    ly->color.method = kNativeCmcByColor;
+    ly->color.rgb = 0xC2000000u | (rgb & 0xFFFFFFu);
     ly->color.index = static_cast<BITCODE_BSd>(aci);
   } else {
     ly->color.index = static_cast<BITCODE_BSd>(on ? aci : -aci);
-    ly->color.method = DWG_COLOR_METHOD_ACI;
-    // R2004+ table CMC writes an index override of zero; its RGB payload must
-    // carry the palette color or the reader recovers ACI 0 (ByBlock).
-    ly->color.rgb = useTrueColor ? (0xC2000000u | (DxfRgbPackedFromAci(aci) & 0xFFFFFFu)) : 0;
+    ly->color.method = kNativeCmcByAci;
+    // R2004+ CMC writes an index override of zero. Native ByACI carries the palette
+    // index in the low bytes, rather than the palette's expanded RGB value.
+    ly->color.rgb = useTrueColor ? (0xC3000000u | static_cast<unsigned>(aci)) : 0;
   }
   if (useTrueColor && layerTransparency01 > 1.e-5f)
     ApplyEntityEncTransparency(&ly->color, layerTransparency01);
@@ -2611,7 +3630,8 @@ struct TableWriter {
   }
 
   void BuildLayerTable(const AppCommandState& st) {
-    // `dwg_new_Document` supplies layer 0, and the user layer table omits it.
+    // `dwg_new_Document` supplies layer 0. Give it a valid default before applying
+    // the drawing-owned layer settings below.
     // Normalize the built-in record explicitly: LibreDWG's default CMC can
     // serialize as ACI 0 (BYBLOCK), which AutoCAD rejects for a layer record.
     if (BITCODE_H layer0Ref = dwg_find_tablehandle(dwg, "0", "LAYER")) {
@@ -2624,9 +3644,17 @@ struct TableWriter {
       }
     }
     for (const CadLayerRow& row : st.drawingLayerTable) {
-      if (row.name.empty() || LowerAscii(row.name) == "0")
+      if (row.name.empty())
         continue;
-      Dwg_Object_LAYER* ly = dwg_add_LAYER(dwg, row.name.c_str());
+      Dwg_Object_LAYER* ly = nullptr;
+      const auto existing = layers.find(LowerAscii(row.name));
+      if (existing != layers.end()) {
+        Dwg_Object* object = ObjectAt(existing->second);
+        if (object != nullptr && object->tio.object != nullptr)
+          ly = object->tio.object->tio.LAYER;
+      } else {
+        ly = dwg_add_LAYER(dwg, row.name.c_str());
+      }
       if (ly == nullptr || ly->parent == nullptr)
         continue;
       ApplyLayerTableColor(ly, row.color, row.on, useTrueColor, row.transparency);
@@ -2649,17 +3677,23 @@ struct TableWriter {
   // to it), so adding it again would be a second, conflicting STYLE named "Standard".
   void BuildStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
     for (const TextStyle& ts : st.textStyles) {
-      if (ts.name.empty() || LowerAscii(ts.name) == "standard")
-        continue;
-      Dwg_Object_STYLE* sy = dwg_add_STYLE(dwg, ts.name.c_str());
-      if (sy == nullptr || sy->parent == nullptr)
-        continue;
+      if (ts.name.empty()) continue;
+      Dwg_Object_STYLE* sy = nullptr;
+      if (BITCODE_H existing = dwg_find_tablehandle(dwg, ts.name.c_str(), "STYLE")) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, existing->absolute_ref);
+        if (object != nullptr && object->fixedtype == DWG_TYPE_STYLE && object->tio.object != nullptr)
+          sy = object->tio.object->tio.STYLE;
+      }
+      if (sy == nullptr) sy = dwg_add_STYLE(dwg, ts.name.c_str());
+      if (sy == nullptr || sy->parent == nullptr) continue;
       sy->text_size = static_cast<double>(ts.heightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f));
-      sy->width_factor = 1.0;
+      sy->width_factor = std::clamp(static_cast<double>(ts.widthFactor), 0.01, 100.0);
       sy->oblique_angle = static_cast<double>(ts.obliqueDeg) * (kPi / 180.0);
       // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
       sy->font_file = dwg_add_u8_input(dwg, ts.fontFamily.empty() ? "romans.shx" : ts.fontFamily.c_str());
       styles[LowerAscii(ts.name)] = sy->parent->objid;
+      if (ts.name == st.activeTextStyleName)
+        dwg->header_vars.TEXTSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(sy), nullptr);
     }
   }
 
@@ -2682,6 +3716,16 @@ struct TableWriter {
       DimStyleSetCmc(&ds->DIMCLRD, style.dimLineColor, useTrueColor);
       DimStyleSetCmc(&ds->DIMCLRE, style.extLineColor, useTrueColor);
       DimStyleSetCmc(&ds->DIMCLRT, style.textColor, useTrueColor);
+      if (!style.textFont.empty()) {
+        if (BITCODE_H textStyle = dwg_find_tablehandle(dwg, style.textFont.c_str(), "STYLE"))
+          ds->DIMTXSTY = dwg_add_handleref(dwg, 5, textStyle->absolute_ref, nullptr);
+      }
+      if (Dwg_Object* lt = EnsureLtype(style.dimLineType))
+        ds->DIMLTYPE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (Dwg_Object* lt = EnsureLtype(style.extLineType)) {
+        ds->DIMLTEX1 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+        ds->DIMLTEX2 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      }
       if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
         dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
     }
@@ -2705,6 +3749,10 @@ struct TableWriter {
       record->landing_gap = static_cast<double>(style.landingGapInches) * mup;
       record->text_height = static_cast<double>(style.textSizeInches) * mup;
       record->is_annotative = style.annotativeDefault ? 1 : 0;
+      if (!style.textFont.empty()) {
+        if (BITCODE_H textStyle = dwg_find_tablehandle(dwg, style.textFont.c_str(), "STYLE"))
+          record->text_style = dwg_add_handleref(dwg, 5, textStyle->absolute_ref, nullptr);
+      }
       mleaderStyles[LowerAscii(style.name)] = record->parent->objid;
     }
   }
@@ -3111,15 +4159,67 @@ Dwg_Object_BLOCK_HEADER* EnsureSurveyPointBlockDef(Dwg_Data* dwg, double markerR
   dwg_point_3d c{0.0, 0.0, 0.0};
   dwg_add_CIRCLE(blkhdr, &c, markerRadius);
   const double th = markerRadius * 0.8;
-  // Two ATTDEFs only, matching the two ATTRIBs each INSERT below actually fills — see the comment
-  // there on why a third attribute isn't safe with this LibreDWG version. Elevation is still
-  // visible on the point: it's the INSERT's own Z coordinate.
+  // Match the two populated attributes. Elevation is the INSERT's own Z coordinate.
   dwg_point_3d pNum{markerRadius * 1.5, markerRadius * 0.5, 0.0};
   dwg_add_ATTDEF(blkhdr, th, 0, "Point Number", &pNum, "NUMBER", "");
   dwg_point_3d pDesc{markerRadius * 1.5, -markerRadius * 0.5, 0.0};
   dwg_add_ATTDEF(blkhdr, th, 0, "Description", &pDesc, "DESCRIPTION", "");
   dwg_add_ENDBLK(blkhdr);
   return blkhdr;
+}
+
+Dwg_Object_BLOCK_HEADER* EnsureStyledSurveyPointBlockDef(
+    Dwg_Data* dwg, const AppCommandState& state, const std::string& name,
+    const SurveyPointStyleDefinition& style, double radius) {
+  auto* header = dwg_add_BLOCK_HEADER(dwg, name.c_str());
+  if (header == nullptr) return nullptr;
+  dwg_add_BLOCK(header, name.c_str());
+  auto inherit = [](Dwg_Object_Entity* entity) {
+    if (entity != nullptr) SetEntityColorFromStorage(&entity->color, "ByBlock", true);
+  };
+  auto line = [&](double x0, double y0, double x1, double y1) {
+    dwg_point_3d a{x0, y0, 0}, b{x1, y1, 0};
+    if (auto* entity = dwg_add_LINE(header, &a, &b)) inherit(entity->parent);
+  };
+  dwg_point_3d origin{0, 0, 0};
+  if (style.markerVisible) {
+    if (style.markerType == 2 && !style.markerBlockName.empty()) {
+      CadBlockRef reference;
+      reference.defName = style.markerBlockName;
+      float minX = 0, minY = 0, maxX = 0, maxY = 0;
+      CadBlockWorldAabb(state.blockDefs, reference, &minX, &minY, &maxX, &maxY);
+      const double span = std::max(maxX - minX, maxY - minY);
+      const double scale = style.markerSizeType == 3 ? 1.0 : span > 1.e-12 ? 2 * radius / span : 1.0;
+      const auto& fixed = style.markerFixedScale;
+      if (auto* entity = dwg_add_INSERT(header, &origin, style.markerBlockName.c_str(),
+          scale * (style.markerSizeType == 3 ? fixed[0] : 1.0),
+          scale * (style.markerSizeType == 3 ? fixed[1] : 1.0),
+          scale * (style.markerSizeType == 3 ? fixed[2] : 1.0), 0)) inherit(entity->parent);
+    } else if (style.markerType == 0 || style.customMarker == 0) {
+      if (auto* entity = dwg_add_POINT(header, &origin)) inherit(entity->parent);
+    } else if (style.customMarker == 2) {
+      line(-radius, 0, radius, 0);
+      line(0, -radius, 0, radius);
+    } else if (style.customMarker == 3) {
+      line(-radius, -radius, radius, radius);
+      line(-radius, radius, radius, -radius);
+    } else if (style.customMarker == 4) {
+      line(0, -radius, 0, radius);
+    }
+    if ((style.markerOverlay & 1u) != 0)
+      if (auto* entity = dwg_add_CIRCLE(header, &origin, radius)) inherit(entity->parent);
+    if ((style.markerOverlay & 2u) != 0) {
+      line(-radius, -radius, radius, -radius);
+      line(radius, -radius, radius, radius);
+      line(radius, radius, -radius, radius);
+      line(-radius, radius, -radius, -radius);
+    }
+  }
+  dwg_point_3d number{radius * 1.5, radius * .5, 0}, description{radius * 1.5, -radius * .5, 0};
+  dwg_add_ATTDEF(header, std::max(radius * .8, 1.e-6), 0, "Point Number", &number, "NUMBER", "");
+  dwg_add_ATTDEF(header, std::max(radius * .8, 1.e-6), 0, "Description", &description, "DESCRIPTION", "");
+  dwg_add_ENDBLK(header);
+  return header;
 }
 
 // REQ-366, issue #607: native DWG DIMENSION objects (save side).
@@ -3583,23 +4683,28 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
         tw.Apply(e->parent, *attr);
   };
   for (int r = 0; r <= rows; ++r) {
-    const float ly = h * static_cast<float>(r) / static_cast<float>(rows);
+    const float ly = CadTableBandBoundary(table.rowWeights, rows, r, h);
     seg(0.f, ly, w, ly);
   }
   for (int c = 0; c <= table.cols; ++c) {
-    const float lx = w * static_cast<float>(c) / static_cast<float>(table.cols);
-    seg(lx, 0.f, lx, h);
+    const float lx = CadTableBandBoundary(table.columnWeights, table.cols, c, w);
+    const float top = table.mergeTitleRow && c > 0 && c < table.cols ?
+        CadTableBandBoundary(table.rowWeights, rows, 1, h) : 0.f;
+    seg(lx, top, lx, h);
   }
   std::vector<CadTableCellRect> cells;
   CadTableLayoutWorldCells(table, &cells);
-  const double textH =
-      std::max(static_cast<double>(CadTableHeightWorld(table, modelUnitsPerPlottedInch)), 1e-3);
   const double rotRad = static_cast<double>(table.rotationRad);
   for (size_t ci = 0; ci < cells.size() && ci < table.cells.size(); ++ci) {
+    const auto local = CadTableLocalCellRect(table, static_cast<int>(ci));
+    if (local.x1 <= local.x0 || local.y1 <= local.y0) continue;
+    const auto row = ci / static_cast<std::size_t>(table.cols);
+    const double textH = std::max(1.e-3, static_cast<double>(row < table.rowTextHeightsInches.size() ?
+        table.rowTextHeightsInches[row] : table.plottedHeightInches) * modelUnitsPerPlottedInch);
+    const bool centerInCell = table.mergeTitleRow && row == 0;
     dwg_point_3d p{};
-    p.x = static_cast<double>(cells[ci].x0) + ox;
-    p.y = static_cast<double>(cells[ci].y1) - textH + oy;
-    p.z = z;
+    worldLocal(centerInCell ? (local.x0 + local.x1) * .5f : local.x0,
+               centerInCell ? (local.y0 + local.y1) * .5f : local.y0 + static_cast<float>(textH), &p);
     const CadFieldContext fctx = CadFieldContextFromState(st);
     std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
     if (wire.empty())
@@ -3611,9 +4716,15 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
       else if (ch != '\r')
         flat += ch;
     }
-    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max(textH * 8.0, 1.0), flat.c_str())) {
+    if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max<double>(local.x1 - local.x0, 1.e-3), flat.c_str())) {
       mt->text_height = textH;
-      mt->attachment = 1;
+      mt->attachment = centerInCell ? 5 : 1;
+      if (const auto* style = CadTableFindStyle(st.tableStyles, table.styleName)) {
+        const auto& name = row == 0 && table.mergeTitleRow ? style->titleTextStyleName :
+            row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? style->headerTextStyleName : style->textStyleName;
+        if (const auto reference = dwg_find_tablehandle(tw.dwg, name.c_str(), "STYLE"))
+          mt->style = dwg_add_handleref(tw.dwg, 5, reference->absolute_ref, nullptr);
+      }
       mt->x_axis_dir.x = std::cos(rotRad);
       mt->x_axis_dir.y = std::sin(rotRad);
       mt->x_axis_dir.z = 0.0;
@@ -5791,56 +6902,6 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
     WriteMultileaderEntity(dwg, hdr, tw, st, st.cadMultileaders[i], AttrAt(st.cadMultileaderAttrs, i),
                            st.worldDocumentOriginX, st.worldDocumentOriginY, r2018Write, nativeMultileaderExport,
                            st.modelUnitsPerPlottedInch, annotCtx);
-  // REQ-365 / issue #605: survey points, written as a GOSURVEY_POINT block INSERT with visible
-  // NUMBER/DESCRIPTION attributes so AutoCAD and Civil 3D show them, not just GoSurvey.
-  // REQ-376: a project drawing's points live in the project database, not in the DWG.
-  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
-    const double r = static_cast<double>(PositionMarkerRadiusWorld(st));
-    Dwg_Object_BLOCK_HEADER* spBlk = EnsureSurveyPointBlockDef(dwg, r);
-    if (spBlk != nullptr) {
-      // dwg_add_ATTRIB (LibreDWG 0.13.4) overwrites Dwg_Entity_INSERT::block_header — DXF 2, the
-      // referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) each time it is
-      // called, instead of leaving it alone. Captured here and restored after every ATTRIB, or an
-      // INSERT with attributes silently ends up "referencing" the space it lives in.
-      const BITCODE_H spBlkRef = dwg_find_tablehandle(dwg, kSurveyPointBlockName, "BLOCK");
-      for (const SurveyPoint& sp : st.surveyPoints) {
-        dwg_point_3d ins{};
-        ins.x = sp.easting + st.worldDocumentOriginX;  // double all the way (REQ-101)
-        ins.y = sp.northing + st.worldDocumentOriginY;
-        ins.z = sp.elevation;
-        Dwg_Entity_INSERT* e0 = dwg_add_INSERT(hdr, &ins, kSurveyPointBlockName, 1.0, 1.0, 1.0, 0.0);
-        if (e0 == nullptr)
-          continue;
-        // Each dwg_add_* call can grow (and so relocate) dwg->object[], which invalidates any
-        // Dwg_Object*/entity pointer taken before it — the same reason TableWriter::ObjectAt above
-        // resolves by objid rather than caching a pointer. `e0` is only good until the NEXT
-        // dwg_add_* call, so every later step re-resolves the INSERT from its stable objid.
-        const BITCODE_BL insObjId = e0->parent->objid;
-        auto ins2 = [&]() -> Dwg_Entity_INSERT* { return dwg->object[insObjId].tio.entity->tio.INSERT; };
-        // Elevation is NOT written as a third attribute here — LibreDWG 0.13.4's dwg_add_ATTRIB /
-        // add_attrib_links has a reproducible heap overrun on a THIRD call for the same INSERT
-        // (confirmed with a minimal repro independent of GoSurvey's own state: one block, one
-        // INSERT, three bare dwg_add_ATTRIB calls, page-heap-verified crash inside
-        // add_attrib_links). A patch to the vendored copy (dwg_add_ATTRIB's stale `insobj` after
-        // API_ADD_ENTITY can relocate dwg->object[]) is a real bug fix but did not resolve this
-        // specific crash, and root-causing further needs a debugger this environment does not
-        // have. Two attributes is the safe, verified ceiling; elevation is not lost — it is the
-        // INSERT's own Z coordinate (ins.z above), which AutoCAD's Properties palette shows.
-        dwg_add_ATTRIB(ins2(), r * 0.8, 0, &ins, "NUMBER", std::to_string(sp.id).c_str());
-        dwg_add_ATTRIB(ins2(), r * 0.8, 0, &ins, "DESCRIPTION",
-                       sp.description.empty() ? sp.rawDescription.c_str() : sp.description.c_str());
-        // dwg_add_ATTRIB (LibreDWG 0.13.4) also overwrites Dwg_Entity_INSERT::block_header — DXF 2,
-        // the referenced block — with the INSERT's OWNER block handle (dwg_entity_owner) on every
-        // call, instead of leaving it alone. Restored here or an INSERT with attributes silently
-        // ends up "referencing" the space it lives in rather than GOSURVEY_POINT.
-        if (spBlkRef != nullptr)
-          ins2()->block_header = dwg_add_handleref(dwg, 5, spBlkRef->absolute_ref, nullptr);
-        EntityAttributes at{};
-        at.layer = sp.layer;
-        apply(ins2()->parent, &at);
-      }
-    }
-  }
   // REQ-107, issue #606: real BLOCK/INSERT/ATTRIB records, so a GoSurvey DWG shows blocks (incl.
   // pipe-fitting parts) as real, re-insertable blocks in AutoCAD/Civil 3D instead of nothing at
   // all. Definitions are written FIRST and in full before any INSERT, since dwg_add_INSERT looks
@@ -5893,6 +6954,60 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
       continue;  // definition missing or failed to write; REQ-201 covered by the #614 loss summary
     WriteBlockRefInsertToHeader(hdr, tw, st, ref, AttrAt(st.cadBlockRefAttrs, i), st.worldDocumentOriginX,
                                 st.worldDocumentOriginY, &fldCtx);
+  }
+  // Ordinary DWG blocks carry point identity while their marker geometry follows the drawing's
+  // style. Write them after symbol definitions, which styled markers can reference as nested INSERTs.
+  if (!st.surveyPoints.empty() && !ProjectOwnsActiveTabPoints(st)) {
+    std::unordered_map<std::string, uint64_t> pointBlocks;
+    for (const SurveyPoint& point : st.surveyPoints) {
+      const auto* style = FindSurveyPointStyle(st.surveyPointStyles, point.styleName);
+      const bool styled = style != nullptr && style->hasExplicitMarkerGeometry;
+      const std::size_t index = styled ? static_cast<std::size_t>(style - st.surveyPointStyles.data()) : 0;
+      const std::string blockName = styled ? std::string(kSurveyPointBlockName) + "$" + std::to_string(index)
+                                           : kSurveyPointBlockName;
+      const double radius = styled ? (style->markerSizeType == 2 ? style->markerSize * .5 :
+          style->crossSpanPlottedInches * st.modelUnitsPerPlottedInch * .5) : PositionMarkerRadiusWorld(st);
+      auto block = pointBlocks.find(blockName);
+      if (block == pointBlocks.end()) {
+        auto* header = styled ? EnsureStyledSurveyPointBlockDef(dwg, st, blockName, *style, radius)
+                              : EnsureSurveyPointBlockDef(dwg, radius);
+        if (header == nullptr) continue;
+        const auto reference = dwg_find_tablehandle(dwg, blockName.c_str(), "BLOCK");
+        if (reference == nullptr) continue;
+        block = pointBlocks.emplace(blockName, reference->absolute_ref).first;
+      }
+      dwg_point_3d position{point.easting + st.worldDocumentOriginX,
+                            point.northing + st.worldDocumentOriginY, point.elevation};
+      if (styled && style->markerDisplay3dType == 1) position.z = style->markerElevation;
+      if (styled && style->markerDisplay3dType == 2) position.z *= style->markerScaleFactor;
+      auto* insert = dwg_add_INSERT(hdr, &position, blockName.c_str(), 1, 1, 1,
+                                    styled ? style->markerRotationRad : 0);
+      if (insert == nullptr) continue;
+      const BITCODE_BL id = insert->parent->objid;
+      // Entity additions can relocate dwg->object. Re-resolve by stable object index every time.
+      auto resolve = [&]() { return dwg->object[id].tio.entity->tio.INSERT; };
+      const bool labelsVisible = SurveyPointLabelVisible(point, st.surveyPointStyles) &&
+                                SurveyPointNamedLabelVisible(point, st.surveyPointLabelStyles);
+      const double textHeight = std::max(radius * .8, 1.e-6);
+      if (auto* attr = dwg_add_ATTRIB(resolve(), textHeight, labelsVisible ? 0 : 1,
+                                     &position, "NUMBER", std::to_string(point.id).c_str()))
+        attr->flags = labelsVisible ? 0 : 1;
+      if (auto* attr = dwg_add_ATTRIB(resolve(), textHeight, labelsVisible ? 0 : 1, &position, "DESCRIPTION",
+          point.description.empty() ? point.rawDescription.c_str() : point.description.c_str()))
+        attr->flags = labelsVisible ? 0 : 1;
+      // LibreDWG's ATTRIB helper overwrites block_header with the owner space. Restore the marker.
+      resolve()->block_header = dwg_add_handleref(dwg, 5, block->second, nullptr);
+      EntityAttributes attrs;
+      attrs.layer = point.layer;
+      if (styled) {
+        const auto& component = style->displayComponents[0];
+        if (!component.layer.empty() && component.layer != "0") attrs.layer = component.layer;
+        attrs.color = style->color;
+        attrs.linetype = component.linetype;
+      }
+      apply(resolve()->parent, &attrs);
+      if (styled) resolve()->parent->ltype_scale = style->displayComponents[0].linetypeScale;
+    }
   }
   // REQ-057 / D-2026-10-01-a, issue #603: survey feature lines, written as POLYLINE_3D (a real Z
   // per vertex — these almost always have varying elevation, which is the whole point of a
@@ -6458,6 +7573,18 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   // REQ-456 / issue #1010: point display travels with the drawing (PDMODE, PDSIZE).
   st.pdMode = static_cast<int>(dwg.header_vars.PDMODE);
   st.pdSize = dwg.header_vars.PDSIZE;
+  // Civil's drawing scale governs paper-sized markers and label/style measurements. Read it
+  // before converting native text/style sizes; the application default is not the source scale.
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const auto& object = dwg.object[i];
+    if (object.type < 500 || object.type - 500 >= dwg.num_classes ||
+        std::strcmp(dwg.dwg_class[object.type - 500].dxfname, "AEC_VARS_DWG_SETUP") != 0) continue;
+    if (const auto scale = libredwgcivil::DecodeDrawingScale(object.unknown_bits, object.num_unknown_bits)) {
+      st.modelUnitsPerPlottedInch = static_cast<float>(*scale);
+      log.push_back("Civil drawing scale decoded: " + std::to_string(*scale) + " model units per plotted inch.");
+      break;
+    }
+  }
 
   const double minX = dwg.header_vars.EXTMIN.x;
   const double minY = dwg.header_vars.EXTMIN.y;
@@ -6470,14 +7597,87 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ImportLayers(st, &dwg, log);
   ImportStyles(st, &dwg);
+  std::unordered_map<std::string, int> skipHist;
+  int degenerateExtrusions = 0;
+  const auto civilPointStyles = ImportCivilPointStyles(st, &dwg, log, &skipHist, &degenerateExtrusions);
+  std::unordered_set<int> explicitCivilPointStyles;
+  ImportCivilSurfaceStyles(st, &dwg, log);
+  // The Civil point node owns coordinates even when a point's display style hides its proxy.
+  // Decode it once, then let the COGO entities supply their layer references during traversal.
+  for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
+    const Dwg_Object& object = dwg.object[i];
+    if (object.type < 500 || object.type - 500 >= dwg.num_classes) continue;
+    const char* name = dwg.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr || std::strcmp(name, "AECC_POINT_NODE") != 0) continue;
+    const auto locations = libredwgcivil::DecodePointNodeLocations(
+        object.unknown_bits, static_cast<std::size_t>(object.num_unknown_bits));
+    if (!locations.has_value()) continue;
+    std::unordered_map<int, std::string> assignedStyles;
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    if (object.tio.object != nullptr && object.bitsize >= prefix) {
+      const std::size_t commonHandles = 1 + object.tio.object->num_reactors +
+                                       (object.tio.object->is_xdic_missing ? 0 : 1);
+      const auto references = libredwgcivil::DecodePointNodeMarkerStyles(object.unknown_bits,
+          object.num_unknown_bits, object.bitsize - prefix, commonHandles, object.handle.value);
+      if (references.has_value()) {
+        for (const auto& reference : *references) {
+          const auto style = civilPointStyles.find(reference.second);
+          if (style != civilPointStyles.end()) {
+            assignedStyles.emplace(reference.first, style->second);
+            explicitCivilPointStyles.insert(reference.first);
+          }
+          else NoteSkip(&skipHist, "AECC_COGO_POINT(marker style reference not decoded)");
+        }
+      }
+    }
+    // Raw descriptions: literal strings in the node's string stream, one per described point.
+    std::unordered_map<int, std::string> descriptions;
+    if (object.has_strings) {
+      const std::size_t trailer = object.stringstream_size >= 32768 ? 33 : 17;
+      if (object.bitsize >= prefix + trailer + object.stringstream_size) {
+        const std::size_t strings = object.bitsize - prefix - trailer - object.stringstream_size;
+        if (const auto decoded = libredwgcivil::DecodePointNodeDescriptions(
+                object.unknown_bits, object.num_unknown_bits, strings, object.stringstream_size)) {
+          for (const auto& description : *decoded) {
+            if (description.literal || !description.text.empty())
+              descriptions.emplace(description.number,
+                                   libredwgcad_detail::DecodeDwgString(description.text.c_str(), true));
+            else
+              NoteSkip(&skipHist, "AECC_COGO_POINT(built-in description token has no stored text)");
+          }
+        } else {
+          NoteSkip(&skipHist, "AECC_COGO_POINT(descriptions not decoded)");
+        }
+      }
+    }
+    for (const auto& location : *locations) {
+      SurveyPoint point{};
+      point.id = location.number;
+      if (const auto text = descriptions.find(point.id); text != descriptions.end()) {
+        point.rawDescription = text->second;
+        point.description = text->second;
+      }
+      point.easting = location.location.x - st.worldDocumentOriginX;
+      point.northing = location.location.y - st.worldDocumentOriginY;
+      point.elevation = location.location.z;
+      point.labelStyle = SurveyPointLabelStyle::None;
+      if (const auto assigned = assignedStyles.find(point.id); assigned != assignedStyles.end())
+        point.styleName = assigned->second;
+      st.surveyPoints.push_back(std::move(point));
+    }
+    log.push_back("Civil point-node coordinates decoded: " + std::to_string(locations->size()));
+    if (!descriptions.empty())
+      log.push_back("Civil point descriptions decoded: " + std::to_string(descriptions.size()));
+  }
+  ImportCivilPointGroups(st, &dwg, log, civilPointStyles, explicitCivilPointStyles);
+  ImportCivilPointLabelStyles(st, &dwg, log, &skipHist);
+  ImportCivilPointTableStyles(st, &dwg, log);
   if (!asDxf) {  // REQ-362: an AutoCAD / Civil 3D drawing's geolocation (read only, D-2026-09-29-g)
     DwgGeoData geo;
     if (ReadDwgGeoData(&dwg, &geo))
       ApplyDwgGeoData(st, geo, log);
   }
 
-  std::unordered_map<std::string, int> skipHist;
-  int degenerateExtrusions = 0;
   const Xf2 id{};
   Dwg_Object* mspace = dwg_model_space_object(&dwg);
   if (mspace != nullptr) {
@@ -6487,6 +7687,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
     }
     ImportPlantParts(st, &dwg, mspace, &skipHist);
   }
+  ImportCivilContourLabels(st, &dwg, &skipHist);
   const bool emptyGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userArcs.empty() &&
                          st.userPolylineVerts.empty() && st.cadAnnotations.empty() && st.userEllipses.empty() &&
                          st.cadMultileaders.empty() && st.cadBlockRefs.empty() && st.cadSolids.empty() &&
@@ -6590,6 +7791,7 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   DwgMaterialImportAppendLog(log);
   DwgLightImportAppendLog(log);
   DwgAnnotContextImportAppendLog(log);
+  CadTableSyncSurveyPointTables(st.cadTables, st.tableStyles, st.modelUnitsPerPlottedInch);
   BumpCadGpuCache(st);
   return true;
 }

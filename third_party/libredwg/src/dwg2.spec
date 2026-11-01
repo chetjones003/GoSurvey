@@ -1308,86 +1308,7 @@ DWG_ENTITY (MULTILEADER)
 #ifdef IS_DXF
   MLEADER_CONTEXT_DATA_fields;
 #endif
-  FIELD_BL (ctx.num_leaders, 0);
-  VALUEOUTOFBOUNDS (ctx.num_leaders, 5000) // MAX_LEADER_NUMBER
-  DXF_OR_PRINT { VALUE_TFF ("LEADER{", 302); }
-  REPEAT (ctx.num_leaders, ctx.leaders, Dwg_LEADER_Node)
-  REPEAT_BLOCK
-      #define lnode ctx.leaders[rcount1]
-      SUB_FIELD_B (lnode, has_lastleaderlinepoint, 290);
-      SUB_FIELD_B (lnode, has_dogleg, 291);
-      /* DWG stores the vectors even when their validity flags are clear. */
-#ifdef IS_DXF
-      if (FIELD_VALUE (lnode.has_lastleaderlinepoint))
-#endif
-        SUB_FIELD_3BD (lnode, lastleaderlinepoint, 10);
-#ifdef IS_DXF
-      if (FIELD_VALUE (lnode.has_dogleg))
-#endif
-        SUB_FIELD_3BD (lnode, dogleg_vector, 11);
-      SUB_FIELD_BL (lnode, num_breaks, 0);
-      VALUEOUTOFBOUNDS (lnode.num_breaks, 5000)
-      REPEAT2 (lnode.num_breaks, lnode.breaks, Dwg_LEADER_Break)
-      REPEAT_BLOCK
-          SUB_FIELD_3BD (lnode.breaks[rcount2], start, 11);
-          SUB_FIELD_3BD (lnode.breaks[rcount2], end, 12);
-          SET_PARENT (lnode.breaks[rcount2], (struct _dwg_LEADER_Line *)&_obj->lnode);
-      END_REPEAT_BLOCK
-      END_REPEAT (lnode.breaks);
-
-      SUB_FIELD_BL (lnode, branch_index, 90);
-      SUB_FIELD_BD (lnode, dogleg_length, 40);
-      DXF_OR_PRINT { VALUE_TFF ("LEADER_LINE{", 304); }
-      SUB_FIELD_BL (lnode, num_lines, 0);
-      VALUEOUTOFBOUNDS (lnode.num_lines, 5000)
-      REPEAT2 (lnode.num_lines, lnode.lines, Dwg_LEADER_Line)
-      REPEAT_BLOCK
-          #define lline lnode.lines[rcount2]
-          SUB_FIELD_BL (lline, num_points, 0);
-          FIELD_3DPOINT_VECTOR (lline.points, lline.num_points, 10);
-          SUB_FIELD_BL (lline, num_breaks, 0);
-          VALUEOUTOFBOUNDS (lline.num_breaks, 5000)
-          REPEAT3 (lline.num_breaks, lline.breaks, Dwg_LEADER_Break)
-          REPEAT_BLOCK
-              SUB_FIELD_3BD (lline.breaks[rcount3], start, 11);
-              SUB_FIELD_3BD (lline.breaks[rcount3], end, 12);
-              SET_PARENT (lline.breaks[rcount3], &_obj->lline);
-          END_REPEAT_BLOCK
-          END_REPEAT (lline.breaks);
-          SUB_FIELD_BL (lline, line_index, 91);
-
-          SINCE (R_2010b)
-            {
-              SUB_FIELD_BS (lline, type, 170);
-              SUB_FIELD_CMC (lline, color, 92);
-              SUB_FIELD_HANDLE (lline, ltype, 5, 340);
-              SUB_FIELD_BLd (lline, linewt, 171);
-              SUB_FIELD_BD (lline, arrow_size, 40);
-              SUB_FIELD_HANDLE (lline, arrow_handle, 5, 341);
-              SUB_FIELD_BL (lline, flags, 93);
-            }
-            SET_PARENT (lline, &_obj->lnode);
-            #undef lline
-      END_REPEAT_BLOCK
-      END_REPEAT (lnode.lines)
-      SINCE (R_2010b)
-        SUB_FIELD_BS (lnode, attach_dir, 271);
-      DXF_OR_PRINT { VALUE_TFF ("}", 305); }
-      SET_PARENT_OBJ (lnode);
-  END_REPEAT_BLOCK
-  END_REPEAT (ctx.leaders)
-
-#ifndef IS_DXF
-  MLEADER_CONTEXT_DATA_fields; // lgtm[cpp/use-after-free] codeql[cpp/use-after-free]
-#endif
-  DXF_OR_PRINT { VALUE_TFF ("}", 303); }
-  SINCE (R_2010b)
-    {
-      FIELD_BS (ctx.text_top, 273);
-      FIELD_BS (ctx.text_bottom, 272);
-    }
-  DXF_OR_PRINT { VALUE_TFF ("}", 301); }
-  /* end CONTEXT_DATA */
+#include "mleader_context.spec"
 
   FIELD_HANDLE (mleaderstyle, 5, 340);
   FIELD_BLx (flags, 90); // override flags
@@ -1422,18 +1343,8 @@ DWG_ENTITY (MULTILEADER)
   FIELD_BS (style_attachment, 176);
   FIELD_B (is_annotative, 293);
 
-  /* GoSurvey (issue #1010): the arrowhead list is present in R2010+ files too (AutoCAD writes its count,
-     0, as a BL between is_annotative and is_neg_textdir). */
-  FIELD_BL (num_arrowheads, 0);
-  VALUEOUTOFBOUNDS (num_arrowheads, 5000)
-  REPEAT (num_arrowheads, arrowheads, Dwg_LEADER_ArrowHead)
-  REPEAT_BLOCK
-      SUB_FIELD_B (arrowheads[rcount1],is_default, 94);
-      SUB_FIELD_HANDLE (arrowheads[rcount1],arrowhead, 5, 345);
-      SET_PARENT_OBJ (arrowheads[rcount1]);
-  END_REPEAT_BLOCK
-  END_REPEAT (arrowheads);
-
+  /* The arrowhead list is R2007-only. An AutoCAD-authored R2018 control has only the
+     block-label count here; an extra count makes the next count decode as 32. */
   VERSIONS (R_14, R_2007)
     {
       FIELD_BL (num_arrowheads, 0);
@@ -4496,7 +4407,10 @@ DWG_OBJECT (MLEADEROBJECTCONTEXTDATA)
   HANDLE_UNKNOWN_BITS;
   AcDbAnnotScaleObjectContextData_fields;
   SUBCLASS (AcDbMLeaderObjectContextData);
-  // ?? ...
+#ifdef IS_DXF
+  MLEADER_CONTEXT_DATA_fields;
+#endif
+#include "mleader_context.spec"
   START_OBJECT_HANDLE_STREAM;
 DWG_OBJECT_END
 

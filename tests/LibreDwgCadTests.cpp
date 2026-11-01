@@ -1,12 +1,14 @@
 #include "DxfIo.hpp"
 #include "DxfColors.hpp"
 #include "DwgIo.hpp"
+#include "LibreDwgCivil.hpp"
 #include "GsIo.hpp"
 #include "LibreDwg.hpp"
 #include "LibreDwgCad.hpp"
 #include "LibreDwgAnnotContext.hpp"
 #include "LibreDwgMaterial.hpp"
 #include "LibreDwgLights.hpp"
+#include "TextStyle.hpp"
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -26,9 +28,12 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <nlohmann/json.hpp>
 
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -37,9 +42,12 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #if defined(_WIN32)
@@ -2643,12 +2651,12 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   bool sawVersion = false, sawCount = false;
   for (const std::string& l : log) {
     if (l.find("AutoCAD 2018") != std::string::npos) sawVersion = true;
-    if (l.find("154 layer(s)") != std::string::npos) sawCount = true;
+    if (l.find("155 layer(s)") != std::string::npos) sawCount = true;
   }
   CHECK(sawVersion);
   CHECK(sawCount);
 
-  // 154 imported + the always-present default layer "0".
+  // All 155 source layers, including the drawing-owned layer "0".
   CHECK(in.drawingLayerTable.size() == 155);
 
   auto row = [&](const char* n) -> const CadLayerRow* {
@@ -2672,7 +2680,7 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   CHECK(row("C-FIRE-PIPE-12IN")->color == "#00BFFF");   // ACI 140
   CHECK(row("C-TOPO-MAJR")->color == "#0000FF");        // 0xc2 true colour, unchanged
   CHECK(row("V-SSWR-PIPE")->color == "#BF00FF");        // 0xc2 true colour
-  CHECK(row("C-PRKG-STRP")->color == "ByLayer");
+  CHECK(row("C-PRKG-STRP")->color == "#ADADAD");        // 0xc2 true colour (was misread as ByLayer)
 
   // Linetypes: the layer's assigned LTYPE name is imported, not forced to Continuous.
   CHECK(row("0 Center Lines")->linetype == "CENTER2");
@@ -2695,6 +2703,1472 @@ TEST_CASE("LibreDWG imports the full layer table of a real R2018 DWG (issue #160
   for (const EntityAttributes& a : in.userPolylineAttrs)
     if (a.layer == "C-FIRE-PIPE-12IN") ++firePipe12;
   CHECK(firePipe12 > 100);
+}
+
+TEST_CASE("DWG import preserves the drawing's layer zero appearance",
+          "[dwg][libredwg][civil3d][styles]") {
+  ScratchDir dir("layerzeroappearance");
+  const auto path = (dir.path / "source.dwg").string();
+  AppCommandState source;
+  source.drawingLayerTable = DefaultDrawingLayerTable();
+  auto& zero = source.drawingLayerTable.front();
+  REQUIRE(zero.name == "0");
+  zero.color = "#FFFF00";
+  zero.linetype = "DASHED";
+  zero.lineweightMm = 0.5f;
+  source.userLinesFlat = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  source.userLineAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, false));
+  const auto layer = std::find_if(imported.drawingLayerTable.begin(), imported.drawingLayerTable.end(),
+      [](const CadLayerRow& row) { return row.name == "0"; });
+  REQUIRE(layer != imported.drawingLayerTable.end());
+  CHECK(layer->color == "#FFFF00");
+  CHECK(layer->linetype == "DASHED");
+  CHECK(layer->lineweightMm == Catch::Approx(0.5f));
+}
+
+TEST_CASE("Explicit DWG entity RGB preserves dark blue and black without palette substitution",
+          "[dwg][libredwg][styles]") {
+  ScratchDir dir("entitydarkrgb");
+  const auto path = (dir.path / "source.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  const std::vector<std::string> colors = {"#000080", "#000001", "#000000", "#000100"};
+  for (const auto& color : colors) {
+    source.userLinesFlat.insert(source.userLinesFlat.end(), {0.f, 0.f, 0.f, 1.f, 1.f, 0.f});
+    EntityAttributes attributes;
+    attributes.color = color;
+    source.userLineAttrs.push_back(attributes);
+  }
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, path.c_str(), log, false));
+  REQUIRE(imported.userLineAttrs.size() == colors.size());
+  for (std::size_t i = 0; i < colors.size(); ++i)
+    CHECK(imported.userLineAttrs[i].color == colors[i]);
+}
+
+TEST_CASE("Native CMC ByColor preserves RGB instead of its derived palette index",
+          "[dwg][libredwg][styles]") {
+  CHECK(libredwgcad_detail::ColorToStorage(5, 0xc2, 0xc2000080u) == "#000080");
+  CHECK(libredwgcad_detail::ColorToStorage(7, 0xc2, 0xc2123456u) == "#123456");
+  CHECK(libredwgcad_detail::ColorToStorage(0, 0xc2, 0xc2000000u) == "#000000");
+}
+
+TEST_CASE("DWG layer and dimension colors carry native AutoCAD CMC method tags",
+          "[dwg][libredwg][styles]") {
+  ScratchDir dir("nativecmctags");
+  const auto path = (dir.path / "colors.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  CadLayerRow indexed;
+  indexed.name = "Indexed red";
+  indexed.color = "#FF0000";
+  CadLayerRow rgb;
+  rgb.name = "Exact RGB";
+  rgb.color = "#123456";
+  source.drawingLayerTable = {indexed, rgb};
+  source.dimensionStyles = {source.activeDimensionStyle};
+  source.dimensionStyles.front().dimLineColor = "#123456";
+  source.dimensionStyles.front().extLineColor = "#FF0000";
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  bool sawIndexed = false, sawRgb = false, sawDimension = false;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.supertype != DWG_SUPERTYPE_OBJECT || object.tio.object == nullptr) continue;
+    if (object.fixedtype == DWG_TYPE_LAYER && object.tio.object->tio.LAYER != nullptr) {
+      const auto* layer = object.tio.object->tio.LAYER;
+      const auto name = libredwgcad_detail::DecodeDwgString(layer->name, true);
+      if (name == indexed.name) { sawIndexed = true; CHECK(layer->color.rgb == 0xc3000001u); }
+      if (name == rgb.name) { sawRgb = true; CHECK(layer->color.rgb == 0xc2123456u); }
+    }
+    if (object.fixedtype == DWG_TYPE_DIMSTYLE && object.tio.object->tio.DIMSTYLE != nullptr) {
+      const auto* style = object.tio.object->tio.DIMSTYLE;
+      if (libredwgcad_detail::DecodeDwgString(style->name, true) != source.dimensionStyles.front().name) continue;
+      sawDimension = true;
+      CHECK(style->DIMCLRD.rgb == 0xc2123456u);
+      CHECK(style->DIMCLRE.rgb == 0xc3000001u);
+    }
+  }
+  CHECK(sawIndexed);
+  CHECK(sawRgb);
+  CHECK(sawDimension);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("DWG block symbols keep small details in a large-coordinate survey drawing",
+          "[dwg][libredwg][styles][precision]") {
+  ScratchDir dir("surveymarkersymbol");
+  const auto path = (dir.path / "symbol.dwg").string();
+  AppCommandState source;
+  source.dwgExportVersion = DwgSaveVersion::R2018;
+  source.worldDocumentOriginX = 3254000.1234;
+  source.worldDocumentOriginY = 313000.4321;
+  source.userLinesFlat = {0.f, 0.f, 0.f, 100.f, 100.f, 0.f};
+  source.userLineAttrs = {EntityAttributes{}};
+  CadBlockDefinition symbol;
+  symbol.name = "Small survey marker";
+  symbol.content.lines = {0.0, 0.0, 0.0, 0.01, 0.025, 0.0};
+  symbol.content.lineAttrs = {EntityAttributes{}};
+  source.blockDefs.push_back(symbol);
+  CadBlockRef insert;
+  insert.defName = symbol.name;
+  insert.xf.x = 20.f;
+  insert.xf.y = 30.f;
+  source.cadBlockRefs.push_back(insert);
+  source.cadBlockRefAttrs = {EntityAttributes{}};
+  std::vector<std::string> log;
+  REQUIRE(ExportLibreCadFile(source, path.c_str(), log, false));
+  // Match the real survey fixture's populated extents so rebasing happens before block import.
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  drawing.header_vars.EXTMIN.x = source.worldDocumentOriginX;
+  drawing.header_vars.EXTMIN.y = source.worldDocumentOriginY;
+  drawing.header_vars.EXTMAX.x = source.worldDocumentOriginX + 100.0;
+  drawing.header_vars.EXTMAX.y = source.worldDocumentOriginY + 100.0;
+  const auto withExtents = (dir.path / "populated-extents.dwg").string();
+  REQUIRE(dwg_write_file(withExtents.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  dwg_free(&drawing);
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, withExtents.c_str(), log, false));
+  REQUIRE(std::fabs(imported.worldDocumentOriginX) > 3000000.0);
+  const auto definition = std::find_if(imported.blockDefs.begin(), imported.blockDefs.end(),
+      [&](const CadBlockDefinition& value) { return value.name == symbol.name; });
+  REQUIRE(definition != imported.blockDefs.end());
+  REQUIRE(definition->content.lines.size() == 6);
+  CHECK(definition->content.lines[0] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.lines[1] == Catch::Approx(0.0).margin(1.e-7));
+  CHECK(definition->content.lines[3] - definition->content.lines[0] == Catch::Approx(0.01).margin(1.e-7));
+  CHECK(definition->content.lines[4] - definition->content.lines[1] == Catch::Approx(0.025).margin(1.e-7));
+}
+
+TEST_CASE("Civil 3D COGO point preview imports as GoSurvey survey points",
+          "[dwg][libredwg][civil3d][req479]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  const std::string path = SamplePath("rapides-substation-civil3d.dwg");
+  REQUIRE(ImportLibreCadFile(state, path.c_str(), log, /*asDxf=*/false));
+
+  // COGO markers become the domain point objects, without also leaving a duplicate generic CAD POINT.
+  // Coordinates and descriptions come from the point node; the hidden marker inherits its group style.
+  REQUIRE(state.surveyPoints.size() == 353);
+  std::unordered_set<int> pointNumbers;
+  for (const SurveyPoint& point : state.surveyPoints)
+    CHECK(pointNumbers.insert(point.id).second);
+  const auto pointOne = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                     [](const SurveyPoint& point) { return point.id == 1; });
+  REQUIRE(pointOne != state.surveyPoints.end());
+  CHECK(std::fabs(pointOne->easting + state.worldDocumentOriginX - 3254449.911) < 0.001);
+  CHECK(std::fabs(pointOne->northing + state.worldDocumentOriginY - 313894.831) < 0.001);
+  CHECK(std::fabs(pointOne->elevation - 83.445) < 0.001);
+  CHECK(std::none_of(state.cadPoints.begin(), state.cadPoints.end(), [&](const CadPoint& point) {
+    return std::fabs(point.x + state.worldDocumentOriginX - 3254449.911) < 0.001 &&
+           std::fabs(point.y + state.worldDocumentOriginY - 313894.831) < 0.001 &&
+           std::fabs(point.z - 83.445) < 0.001;
+  }));
+  CHECK(pointOne->rawDescription == "CP");
+  CHECK(pointOne->styleName == "no points");
+  const auto pointSixtyFive = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                           [](const SurveyPoint& point) { return point.id == 65; });
+  REQUIRE(pointSixtyFive != state.surveyPoints.end());
+  CHECK(std::fabs(pointSixtyFive->easting + state.worldDocumentOriginX - 3254495.084) < 0.001);
+  CHECK(std::fabs(pointSixtyFive->northing + state.worldDocumentOriginY - 313792.433) < 0.001);
+  CHECK(std::fabs(pointSixtyFive->elevation - 83.671) < 0.001);
+}
+
+TEST_CASE("Civil 3D COGO point number is decoded from its compact DWG field",
+          "[dwg][libredwg][civil3d][req479]") {
+  const unsigned char pointOne[] = {0x2f, 0x81, 0x10, 0x12, 0x8a, 0x40, 0xdb, 0x02};
+  const unsigned char point1000[] = {0x2f, 0x81, 0x0e, 0x80, 0x30, 0x00, 0x02, 0x8a, 0x40, 0xdb, 0x02};
+  const unsigned char point2000[] = {0x2f, 0x81, 0x0d, 0x00, 0x70, 0x00, 0x02, 0x8a, 0x40, 0xdb, 0x02};
+  const auto decodedOne = libredwgcivil::DecodeCogoPointNumber(pointOne, 59);
+  const auto decoded1000 = libredwgcivil::DecodeCogoPointNumber(point1000, 83);
+  const auto decoded2000 = libredwgcivil::DecodeCogoPointNumber(point2000, 83);
+  REQUIRE(decodedOne.has_value());
+  REQUIRE(decoded1000.has_value());
+  REQUIRE(decoded2000.has_value());
+  CHECK(*decodedOne == 1);
+  CHECK(*decoded1000 == 1000);
+  CHECK(*decoded2000 == 2000);
+  CHECK_FALSE(libredwgcivil::DecodeCogoPointNumber(pointOne, 16).has_value());
+}
+
+TEST_CASE("Resaved Rapides Civil 3D baseline contains point schedule tables",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d-pointtables.dwg");
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(source.c_str(), &drawing) < DWG_ERR_CRITICAL);
+
+  std::size_t pointScheduleTables = 0;
+  std::size_t nativeTables = 0;
+  std::size_t nativeTableStyles = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.fixedtype == DWG_TYPE_TABLE) ++nativeTables;
+    if (object.fixedtype == DWG_TYPE_TABLESTYLE) ++nativeTableStyles;
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= drawing.num_classes)
+      continue;
+    const char* name = drawing.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr || std::string_view(name) != "AECC_POINT_TABLE") continue;
+    ++pointScheduleTables;
+    CHECK(object.tio.entity->preview != nullptr);
+    CHECK(object.tio.entity->preview_size > 0);
+  }
+
+  CHECK(pointScheduleTables == 18);
+  CHECK(nativeTables == 0);  // Civil 3D point tables are custom entities, not AutoCAD TABLEs.
+  CHECK(nativeTableStyles == 3);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-node coordinates match COGO identities independently of proxy graphics",
+          "[dwg][libredwg][civil3d][req479]") {
+  for (const char* file : {"rapides-substation-civil3d.dwg", "rapides-substation-civil3d-pointtables.dwg"}) {
+    Dwg_Data drawing{};
+    REQUIRE(dwg_read_file(SamplePath(file).c_str(), &drawing) < DWG_ERR_CRITICAL);
+    std::map<int, CadPoint> coordinates;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const auto& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes) continue;
+      const char* name = drawing.dwg_class[object.type - 500].dxfname;
+      if (name == nullptr || std::string_view(name) != "AECC_POINT_NODE") continue;
+      const auto decoded = libredwgcivil::DecodePointNodeLocations(object.unknown_bits, object.num_unknown_bits);
+      REQUIRE(decoded.has_value());
+      REQUIRE(decoded->size() == 353);
+      for (const auto& point : *decoded)
+        REQUIRE(coordinates.emplace(point.number, point.location).second);
+      CHECK_FALSE(libredwgcivil::DecodePointNodeLocations(object.unknown_bits, 68).has_value());
+    }
+    REQUIRE(coordinates.size() == 353);
+    std::size_t compared = 0;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const auto& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes ||
+          object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr) continue;
+      const char* name = drawing.dwg_class[object.type - 500].dxfname;
+      if (name == nullptr || std::string_view(name) != "AECC_COGO_POINT") continue;
+      const auto number = libredwgcivil::DecodeCogoPointNumber(object.unknown_bits, object.num_unknown_bits);
+      const auto center = libredwgcivil::DecodeCogoPointProxyCenter(
+          object.tio.entity->preview, object.tio.entity->preview_size);
+      REQUIRE(number.has_value());
+      REQUIRE(center.has_value());
+      REQUIRE(coordinates.count(*number) == 1);
+      CHECK(coordinates.at(*number).x == Catch::Approx(center->x).margin(0.001));
+      CHECK(coordinates.at(*number).y == Catch::Approx(center->y).margin(0.001));
+      CHECK(coordinates.at(*number).z == Catch::Approx(center->z).margin(0.001));
+      ++compared;
+    }
+    CHECK(compared == 353);
+    dwg_free(&drawing);
+  }
+  CHECK_FALSE(libredwgcivil::DecodePointNodeLocations(nullptr, 100).has_value());
+}
+
+TEST_CASE("Civil point-style decoder matches all source API style values",
+          "[dwg][libredwg][civil3d][styles][req479]") {
+  std::ifstream referenceFile(SamplePath("rapides-point-style-reference.json"));
+  REQUIRE(referenceFile.good());
+  const auto reference = nlohmann::json::parse(referenceFile);
+  REQUIRE(reference.size() == 179);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) <
+          DWG_ERR_CRITICAL);
+  std::size_t checked = 0;
+  for (const auto& expected : reference) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    REQUIRE(object->has_strings);
+    const std::size_t trailer = object->stringstream_size >= 32768 ? 33 : 17;
+    const std::size_t prefix = object->common_size + object->bitsize_pos;
+    REQUIRE(object->bitsize >= prefix + trailer + object->stringstream_size);
+    const std::size_t start = object->bitsize - prefix - trailer - object->stringstream_size;
+    const auto style = libredwgcivil::DecodePointStyle(object->unknown_bits, object->num_unknown_bits,
+                                                     start, object->stringstream_size);
+    INFO(expected.at("name").get<std::string>());
+    REQUIRE(style.has_value());
+    CHECK(libredwgcad_detail::DecodeDwgString(style->name.c_str(), true) ==
+          expected.at("name").get<std::string>());
+    CHECK(style->components[0].visible == expected.at("markerVisible").get<bool>());
+    CHECK(style->components[1].visible == expected.at("labelVisible").get<bool>());
+    CHECK(style->customMarker == expected.at("CustomMarkerStyle").get<unsigned>());
+    CHECK(style->markerOverlay == expected.at("CustomMarkerSuperimposeStyle").get<unsigned>());
+    CHECK(style->markerType == expected.at("MarkerType").get<unsigned>());
+    CHECK(style->sizeType == expected.at("SizeType").get<unsigned>());
+    CHECK(style->orientation == expected.at("Orientation").get<unsigned>());
+    CHECK(style->display3dType == expected.at("Display3dType").get<unsigned>());
+    CHECK(style->size == Catch::Approx(expected.at("MarkerSize").get<double>()).margin(1.e-12));
+    CHECK(style->rotation == Catch::Approx(expected.at("MarkerRotationAngle").get<double>()).margin(1.e-12));
+    CHECK(style->elevation == Catch::Approx(expected.at("Elevation").get<double>()).margin(1.e-12));
+    CHECK(style->scaleFactor == Catch::Approx(expected.at("ScaleFactor").get<double>()).margin(1.e-12));
+    const std::string colorMethod = expected.at("colorMethod");
+    const unsigned method = colorMethod == "ByLayer" ? 0xc0u : colorMethod == "ByBlock" ? 0xc1u :
+                            colorMethod == "ByColor" ? 0xc2u : 0xc3u;
+    CHECK((style->components[0].color >> 24) == method);
+    if (method == 0xc3)
+      CHECK((style->components[0].color & 0xffffffu) == expected.at("colorIndex").get<unsigned>());
+    CHECK_FALSE(libredwgcivil::DecodePointStyle(object->unknown_bits, object->num_unknown_bits,
+                                               start + 1, object->stringstream_size).has_value());
+    ++checked;
+  }
+  CHECK(checked == 179);
+  CHECK_FALSE(libredwgcivil::DecodePointStyle(nullptr, 100, 50, 10).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-style collections import as drawing-owned named styles",
+          "[dwg][libredwg][civil3d][styles][req479]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.surveyPointStyles.size() == 179);
+  const auto* basic = FindSurveyPointStyle(state.surveyPointStyles, "Basic");
+  REQUIRE(basic != nullptr);
+  CHECK(basic->markerVisible);
+  CHECK(basic->color == "#FFFFFF");
+  CHECK(basic->displayComponents[0].layer == "V-NODE");
+  CHECK(basic->displayComponents[1].layer == "V-NODE-TEXT");
+  CHECK(basic->customMarker == 2);
+  const auto* hidden = FindSurveyPointStyle(state.surveyPointStyles, "no points");
+  REQUIRE(hidden != nullptr);
+  CHECK_FALSE(hidden->markerVisible);
+  CHECK_FALSE(hidden->labelVisible);
+  CHECK(hidden->customMarker == 3);
+  CHECK(state.surveyPoints.size() == 353);
+  for (const auto& point : state.surveyPoints)
+    CHECK(point.styleName == "Basic");
+}
+
+TEST_CASE("Civil 3D proxy graphics expose their 3D-polyline display primitives",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(source.c_str(), &drawing) < DWG_ERR_CRITICAL);
+
+  const Dwg_Object_Entity* surfaceEntity = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.supertype != DWG_SUPERTYPE_ENTITY || object.tio.entity == nullptr ||
+        object.type < 500 || object.type - 500 >= drawing.num_classes)
+      continue;
+    const char* className = drawing.dwg_class[object.type - 500].dxfname;
+    if (className != nullptr && std::string_view(className) == "AECC_TIN_SURFACE") {
+      surfaceEntity = object.tio.entity;
+      break;
+    }
+  }
+  REQUIRE(surfaceEntity != nullptr);
+  REQUIRE(surfaceEntity->preview != nullptr);
+  REQUIRE(surfaceEntity->preview_size > 0);
+
+  const auto decoded = libredwgcivil::DecodeProxyGraphicPolylines(
+      surfaceEntity->preview, static_cast<std::size_t>(surfaceEntity->preview_size));
+  REQUIRE(decoded.has_value());
+  REQUIRE(decoded->size() == 6);
+  std::size_t vertexCount = 0;
+  for (const auto& chain : *decoded) {
+    REQUIRE(chain.size() >= 2);
+    vertexCount += chain.size();
+    for (const CadPoint& point : chain) {
+      CHECK(std::isfinite(point.x));
+      CHECK(std::isfinite(point.y));
+      CHECK(std::isfinite(point.z));
+    }
+  }
+  CHECK(vertexCount == 18);
+
+  std::vector<unsigned char> malformed(16, 0);
+  malformed[0] = 16;
+  malformed[4] = 8;
+  malformed[8] = 4;  // Chunk sizes smaller than their 8-byte header are invalid.
+  malformed[12] = 6;
+  CHECK_FALSE(libredwgcivil::DecodeProxyGraphicPolylines(malformed.data(), malformed.size()).has_value());
+  dwg_free(&drawing);
+  // The TIN's preview outline is a fallback only: the surface test below checks that a decodable
+  // surface is imported as a real surface instead of these loose polylines.
+}
+
+namespace {
+// Civil API triangles of the supplied surface (world coordinates, rounded to 0.001 by the export).
+std::vector<std::array<std::array<double, 3>, 3>> CivilTinReferenceTriangles() {
+  std::ifstream file(SamplePath("rapides-tin-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  std::vector<std::array<std::array<double, 3>, 3>> triangles;
+  for (const auto& triangle : reference.at("triangles")) {
+    std::array<std::array<double, 3>, 3> value{};
+    for (std::size_t vertex = 0; vertex < 3; ++vertex)
+      for (std::size_t axis = 0; axis < 3; ++axis)
+        value[vertex][axis] = triangle.at(vertex).at(axis).get<double>();
+    triangles.push_back(value);
+  }
+  return triangles;
+}
+
+void CheckSurfaceMatchesCivilReference(const AppCommandState& state, const CadSurface& surface) {
+  const auto expected = CivilTinReferenceTriangles();
+  REQUIRE(surface.tin != nullptr);
+  REQUIRE(surface.tin->triangleCount() == static_cast<int>(expected.size()));
+  for (std::size_t t = 0; t < expected.size(); ++t)
+    for (std::size_t vertex = 0; vertex < 3; ++vertex) {
+      const std::size_t index = surface.tin->indices[t * 3 + vertex];
+      REQUIRE(index < static_cast<std::size_t>(surface.tin->vertexCount()));
+      CHECK(surface.tin->vertsXyz[index * 3 + 0] + state.worldDocumentOriginX ==
+            Catch::Approx(expected[t][vertex][0]).margin(0.0006));
+      CHECK(surface.tin->vertsXyz[index * 3 + 1] + state.worldDocumentOriginY ==
+            Catch::Approx(expected[t][vertex][1]).margin(0.0006));
+      CHECK(surface.tin->vertsXyz[index * 3 + 2] == Catch::Approx(expected[t][vertex][2]).margin(0.0006));
+    }
+}
+}  // namespace
+
+TEST_CASE("Civil 3D TIN surface imports as a GoSurvey surface with the source triangulation",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  REQUIRE(state.cadSurfaceAttrs.size() == 1);
+  const CadSurface& surface = state.cadSurfaces[0];
+  CHECK(surface.name == "Surface");
+  REQUIRE(surface.tin != nullptr);
+  // 222 stored vertices include the four-corner superstructure; the Civil API reports 218 used by
+  // 398 visible triangles (438 stored, 40 hidden by the superstructure and the boundaries).
+  CHECK(surface.tin->vertexCount() == 218);
+  CHECK(surface.tin->triangleCount() == 398);
+  CheckSurfaceMatchesCivilReference(state, surface);
+  for (std::size_t t = 0; t < surface.tin->indices.size(); t += 3) {
+    const auto vertex = [&](std::size_t i) { return &surface.tin->vertsXyz[surface.tin->indices[t + i] * 3]; };
+    const double twiceArea = (vertex(1)[0] - vertex(0)[0]) * (vertex(2)[1] - vertex(0)[1]) -
+                             (vertex(2)[0] - vertex(0)[0]) * (vertex(1)[1] - vertex(0)[1]);
+    CHECK(twiceArea > 0.0);  // counter-clockwise, as GoSurvey surfaces are
+  }
+  // The surface replaces its proxy outline rather than duplicating it as loose 3D polylines.
+  bool previewOutlineImported = false;
+  for (std::size_t offset = 0; offset + 2 < state.userPolylineVerts.size(); offset += 3)
+    previewOutlineImported |=
+        std::fabs(state.userPolylineVerts[offset] - (3254460.875 - state.worldDocumentOriginX)) < 0.001 &&
+        std::fabs(state.userPolylineVerts[offset + 1] - (313637.598 - state.worldDocumentOriginY)) < 0.001;
+  CHECK_FALSE(previewOutlineImported);
+}
+
+TEST_CASE("Civil 3D TIN surface survives GoSurvey DWG save and reopen",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  ScratchDir dir("civil-tin-roundtrip");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  AppCommandState source;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(source, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(source.cadSurfaces.size() == 1);
+  REQUIRE(ExportDwgFile(source, path.c_str(), log));
+  AppCommandState reopened;
+  REQUIRE(ImportDwgFile(reopened, path.c_str(), log));
+  REQUIRE(reopened.cadSurfaces.size() == 1);
+  CHECK(reopened.cadSurfaces[0].name == "Surface");
+  CheckSurfaceMatchesCivilReference(reopened, reopened.cadSurfaces[0]);
+}
+
+TEST_CASE("Civil TIN decoder refuses payloads it cannot verify without returning a partial surface",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const Dwg_Object* surface = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects && surface == nullptr; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.type >= 500 && object.type - 500 < drawing.num_classes &&
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) == "AECC_TIN_SURFACE")
+      surface = &object;
+  }
+  REQUIRE(surface != nullptr);
+  const std::size_t bits = surface->num_unknown_bits;
+  const auto decoded = libredwgcivil::DecodeTinSurface(surface->unknown_bits, bits);
+  REQUIRE(decoded.has_value());
+  CHECK(decoded->indices.size() == 398 * 3);
+  CHECK(decoded->hiddenTriangles == 40);
+
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(nullptr, bits).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(surface->unknown_bits, 35).has_value());
+  // Cut inside the triangle table.
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(surface->unknown_bits, 481000).has_value());
+
+  std::vector<unsigned char> copy(surface->unknown_bits, surface->unknown_bits + (bits + 7) / 8);
+  copy[0] ^= 0x01;  // signature mismatch
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(copy.data(), bits).has_value());
+  copy[0] ^= 0x01;
+  copy[2] ^= 0x10;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeTinSurface(copy.data(), bits).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil surface styles decode to the source API values",
+          "[dwg][libredwg][civil3d][req479][surface][styles]") {
+  std::ifstream file(SamplePath("rapides-surface-style-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const std::map<std::string, std::size_t> slot = {{"Points", 0}, {"Triangles", 1}, {"Boundary", 2},
+                                                   {"MajorContour", 3}, {"MinorContour", 4}};
+  REQUIRE(reference.at("styles").size() == 9);
+  for (const auto& expected : reference.at("styles")) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    INFO(expected.at("name").get<std::string>());
+    const std::size_t prefix = object->common_size + object->bitsize_pos;
+    const std::size_t trailer = object->stringstream_size >= 32768 ? 33 : 17;
+    REQUIRE(object->bitsize >= prefix + trailer + object->stringstream_size);
+    const std::size_t strings = object->bitsize - prefix - trailer - object->stringstream_size;
+    const auto style = libredwgcivil::DecodeSurfaceStyle(object->unknown_bits, object->num_unknown_bits,
+                                                         strings, object->stringstream_size);
+    REQUIRE(style.has_value());
+    const std::string name = expected.at("name").get<std::string>();
+    CHECK(std::u16string(style->name) == std::u16string(name.begin(), name.end()));
+    CHECK(style->minorInterval == Catch::Approx(expected.at("minorInterval").get<double>()));
+    CHECK(style->majorInterval == Catch::Approx(expected.at("majorInterval").get<double>()));
+    REQUIRE(style->smoothContours.has_value());
+    REQUIRE(style->smoothingFactor.has_value());
+    CHECK(*style->smoothContours == expected.at("smoothContours").get<bool>());
+    CHECK(*style->smoothingFactor == expected.at("smoothingFactor").get<unsigned>());
+    for (const auto& [component, index] : slot) {
+      const auto& want = expected.at("components").at(component);
+      CHECK(style->components[index].visible == want.at("visible").get<bool>());
+      const int aci = want.at("colorIndex").get<int>();
+      CHECK(style->components[index].color == (aci == 256 ? 0xc0000000u : (0xc3000000u | static_cast<unsigned>(aci))));
+    }
+  }
+  // Refuses anything that is not the verified revision, without returning a partial style.
+  const Dwg_Object* any = dwg_resolve_handle_silent(&drawing, 0x30f29);
+  REQUIRE(any != nullptr);
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceStyle(nullptr, 100, 50, 10).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceStyle(any->unknown_bits, 40, 20, 10).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil 3D TIN surface keeps its Civil surface style",
+          "[dwg][libredwg][civil3d][req479][surface][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  const std::string name = "Standard [Copy] [Copy] [Copy] [Copy]";
+  CHECK(state.cadSurfaces[0].styleName == name);
+  const SurfaceStyle* style = SurfaceStyles::Find(state.surfaceStyles, name);
+  REQUIRE(style != nullptr);
+  // The drawing shows this surface as a contour map: 0.5 ft minor and 1 ft major contours with a
+  // visible border, and no triangles.
+  CHECK(style->minorIntervalFt == Catch::Approx(0.5));
+  CHECK(style->majorIntervalFt == Catch::Approx(1.0));
+  // Smoothing is on with factor 7, so the contours are smoothed (three Chaikin passes).
+  CHECK(style->contourSmoothPasses == 3);
+  CHECK_FALSE(style->triangles.visible);
+  CHECK_FALSE(style->points.visible);
+  CHECK(style->border.visible);
+  CHECK(style->majorContour.visible);
+  CHECK(style->minorContour.visible);
+  // The built-in "Standard" is replaced by the drawing's own definition of that name.
+  const SurfaceStyle* standard = SurfaceStyles::Find(state.surfaceStyles, "Standard");
+  REQUIRE(standard != nullptr);
+  CHECK(standard->minorIntervalFt == Catch::Approx(1.0));
+  CHECK(standard->majorIntervalFt == Catch::Approx(2.0));
+  CHECK(standard->contourSmoothPasses == 0);
+}
+
+TEST_CASE("Rapides Civil 3D drawing imports dimension and multileader style tables",
+          "[dwg][libredwg][civil3d][req479][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  CHECK(state.activeDimensionStyle.name == "LEE-STANDARD");
+  CHECK(state.dimensionStyles.size() >= 8);
+  for (const char* name : {"Annotative", "LEE-STANDARD", "Proposed-ANNO", "PRO-TEXT", "ROMANS", "SlabSurvey",
+                           "Standard", "STANDARD_96_3"}) {
+    INFO(name);
+    CHECK(DimensionStyles::Find(state.dimensionStyles, name) != nullptr);
+  }
+  const DimensionStyle* lee = DimensionStyles::Find(state.dimensionStyles, "LEE-STANDARD");
+  REQUIRE(lee != nullptr);
+  CHECK((lee->unitFormat == DimUnitFormat::Architectural || lee->unitFormat == DimUnitFormat::Engineering ||
+         !lee->unitSuffix.empty()));
+  CHECK(state.multileaderStyles.size() >= 6);
+  for (const char* name :
+       {"l100s Straight", "l60s Sline", "l60s Straight", "l80s Sline", "l80s Straight", "Standard"}) {
+    INFO(name);
+    CHECK(MultileaderStyles::Find(state.multileaderStyles, name) != nullptr);
+  }
+  CHECK(state.surfaceStyles.size() >= 9);
+}
+
+TEST_CASE("Civil label font fallback uses romans.shx without a decoded style font",
+          "[dwg][libredwg][civil3d][req479][labels]") {
+  AppCommandState state;
+  TextStyles::EnsureStandard(state.textStyles);
+  for (TextStyle& style : state.textStyles) style.fontFamily.clear();
+  CHECK(libredwgcad_detail::CivilLabelFontFamily(state, nullptr) == TextStyles::kDefaultFontFamily);
+}
+
+TEST_CASE("Civil 3D surface elevation labels decode and import as marker plus elevation text",
+          "[dwg][libredwg][civil3d][req479][surface][labels]") {
+  std::ifstream file(SamplePath("rapides-elevation-label-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  const auto& labels = reference.at("labels");
+  REQUIRE(labels.size() == 11);
+
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    const auto decoded = libredwgcivil::DecodeSurfaceElevationLabel(
+        object->unknown_bits, static_cast<std::size_t>(object->num_unknown_bits));
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->location.x == Catch::Approx(expected.at("x").get<double>()).margin(1.e-6));
+    CHECK(decoded->location.y == Catch::Approx(expected.at("y").get<double>()).margin(1.e-6));
+    CHECK(decoded->location.z == Catch::Approx(expected.at("z").get<double>()).margin(1.e-9));
+  }
+  const auto collectorNameFromEntity = [&](const Dwg_Object& entity) -> std::string {
+    const std::size_t prefix = entity.common_size + entity.bitsize_pos;
+    if (entity.bitsize < prefix) return {};
+    const auto refs = libredwgcivil::DecodeHandleList(entity.unknown_bits, entity.num_unknown_bits,
+                                                      entity.bitsize - prefix, entity.handle.value);
+    for (uint64_t handle : refs) {
+      const Dwg_Object* collector = dwg_resolve_handle_silent(&drawing, handle);
+      if (collector == nullptr || collector->type < 500) continue;
+      const char* className = drawing.dwg_class[collector->type - 500].dxfname;
+      if (className == nullptr || std::strcmp(className, "AECC_LABEL_COLLECTOR_STYLE") != 0) continue;
+      const std::size_t collectorPrefix = collector->common_size + collector->bitsize_pos;
+      const std::size_t trailer = collector->stringstream_size >= 32768 ? 33 : 17;
+      if (!collector->has_strings ||
+          collector->bitsize < collectorPrefix + trailer + collector->stringstream_size)
+        continue;
+      const std::size_t strings =
+          collector->bitsize - collectorPrefix - trailer - collector->stringstream_size;
+      const auto decoded = libredwgcivil::DecodeLabelStyle(collector->unknown_bits,
+                                                           collector->num_unknown_bits, strings,
+                                                           collector->stringstream_size);
+      if (!decoded.has_value() || decoded->name.empty()) continue;
+      return libredwgcad_detail::DecodeDwgString(decoded->name.c_str(), true);
+    }
+    return {};
+  };
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    CHECK(collectorNameFromEntity(*object) == expected.at("style").get<std::string>());
+  }
+  const Dwg_Object* first = dwg_resolve_handle_silent(&drawing, 0x30f65);
+  REQUIRE(first != nullptr);
+  const std::size_t bits = first->num_unknown_bits;
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(nullptr, bits).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(first->unknown_bits, 800).has_value());
+  std::vector<unsigned char> copy(first->unknown_bits, first->unknown_bits + (bits + 7) / 8);
+  copy[1] ^= 0x01;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(copy.data(), bits).has_value());
+  copy[1] ^= 0x01;
+  copy[44] ^= 0xff;  // the raw (x, y) copy no longer agrees with the compact point
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceElevationLabel(copy.data(), bits).has_value());
+  dwg_free(&drawing);
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  const auto elevationOnlyStyle = std::find_if(state.surveyPointLabelStyles.begin(),
+                                                 state.surveyPointLabelStyles.end(),
+                                                 [](const SurveyPointLabelStyleDefinition& value) {
+                                                   return value.name == "Elevation Only";
+                                                 });
+  REQUIRE(elevationOnlyStyle != state.surveyPointLabelStyles.end());
+  CHECK(elevationOnlyStyle->fontFamily != "Arial");
+  for (const auto& expected : labels) {
+    const std::string text = expected.at("text").get<std::string>();
+    const double localX = expected.at("x").get<double>() - state.worldDocumentOriginX;
+    const double localY = expected.at("y").get<double>() - state.worldDocumentOriginY;
+    const auto annotation = std::find_if(state.cadAnnotations.begin(), state.cadAnnotations.end(),
+        [&](const CadAnnotation& value) {
+          return value.text == text && std::fabs(value.insX - (localX + 2.5)) < 0.01 &&
+                 std::fabs(value.insY - localY) < 0.01;
+        });
+    INFO(text);
+    REQUIRE(annotation != state.cadAnnotations.end());
+    CHECK(annotation->mtextAttach == 4);
+    CHECK(annotation->plottedHeightInches * state.modelUnitsPerPlottedInch ==
+          Catch::Approx(expected.at("textHeight").get<double>()).margin(1.e-4));
+    bool markerFound = false;
+    for (std::size_t i = 0; i + 3 < state.userCirclesCxCyZR.size(); i += 4)
+      markerFound |= std::fabs(state.userCirclesCxCyZR[i] - localX) < 1.e-3 &&
+                     std::fabs(state.userCirclesCxCyZR[i + 1] - localY) < 1.e-3 &&
+                     std::fabs(state.userCirclesCxCyZR[i + 3] - expected.at("markerRadius").get<double>()) < 1.e-9;
+    CHECK(markerFound);
+    CHECK_FALSE(annotation->fontFamily.empty());
+    CHECK(annotation->fontFamily == elevationOnlyStyle->fontFamily);
+  }
+}
+
+TEST_CASE("Civil 3D surface contour labels decode and import as elevation text",
+          "[dwg][libredwg][civil3d][req479][surface][labels]") {
+  std::ifstream file(SamplePath("rapides-contour-label-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  const auto& labels = reference.at("labels");
+  REQUIRE(labels.size() == 44);
+  REQUIRE(reference.at("emptyGroups").size() == 6);
+
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const auto decode = [&](const Dwg_Object* object) {
+    return libredwgcivil::DecodeSurfaceContourLabel(object->unknown_bits,
+        static_cast<std::size_t>(object->num_unknown_bits), object->tio.entity->preview,
+        static_cast<std::size_t>(object->tio.entity->preview_size));
+  };
+  for (const auto& expected : labels) {
+    const auto handle = std::stoull(expected.at("handle").get<std::string>(), nullptr, 16);
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, handle);
+    REQUIRE(object != nullptr);
+    const auto decoded = decode(object);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->x == Catch::Approx(expected.at("x").get<double>()).margin(1.e-6));
+    CHECK(decoded->y == Catch::Approx(expected.at("y").get<double>()).margin(1.e-6));
+    CHECK(decoded->z == Catch::Approx(expected.at("z").get<double>()).margin(1.e-9));
+  }
+  for (const auto& handleText : reference.at("emptyGroups")) {
+    const Dwg_Object* object = dwg_resolve_handle_silent(&drawing, std::stoull(handleText.get<std::string>(), nullptr, 16));
+    REQUIRE(object != nullptr);
+    CHECK_FALSE(decode(object).has_value());
+  }
+  const Dwg_Object* first = dwg_resolve_handle_silent(&drawing, 0x30fb1);
+  REQUIRE(first != nullptr);
+  const std::size_t bits = first->num_unknown_bits;
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(nullptr, bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(first->unknown_bits, bits, nullptr, 0).has_value());
+  std::vector<unsigned char> copy(first->unknown_bits, first->unknown_bits + (bits + 7) / 8);
+  copy[1] ^= 0x01;  // revision mismatch
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(copy.data(), bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  copy[1] ^= 0x01;
+  copy[100] ^= 0xff;  // stored x no longer agrees with the outline's centre
+  CHECK_FALSE(libredwgcivil::DecodeSurfaceContourLabel(copy.data(), bits, first->tio.entity->preview,
+      static_cast<std::size_t>(first->tio.entity->preview_size)).has_value());
+  dwg_free(&drawing);
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  const double pi = 3.14159265358979323846;
+  for (const auto& expected : labels) {
+    const std::string text = expected.at("text").get<std::string>();
+    const double localX = expected.at("x").get<double>() - state.worldDocumentOriginX;
+    const double localY = expected.at("y").get<double>() - state.worldDocumentOriginY;
+    const auto annotation = std::find_if(state.cadAnnotations.begin(), state.cadAnnotations.end(),
+        [&](const CadAnnotation& value) {
+          return value.text == text && std::fabs(value.insX - localX) < 0.01 && std::fabs(value.insY - localY) < 0.01;
+        });
+    INFO(expected.at("handle").get<std::string>() << " " << text);
+    REQUIRE(annotation != state.cadAnnotations.end());
+    CHECK(annotation->mtextAttach == 5);
+    CHECK(annotation->plottedHeightInches * state.modelUnitsPerPlottedInch ==
+          Catch::Approx(expected.at("textHeight").get<double>()).margin(1.e-4));
+    // Rotation follows the contour, derived from the surface: within 15 degrees of Civil's (text
+    // direction is equivalent modulo 180 degrees).
+    double difference = std::fmod(std::fabs(annotation->rotationRad - expected.at("rotation").get<double>()), pi);
+    difference = (std::min)(difference, pi - difference);
+    CHECK(difference < 15.0 * pi / 180.0);
+    CHECK_FALSE(annotation->fontFamily.empty());
+  }
+  // Groups without a label (and the 7,464 parcels) no longer leave their empty-label box at the
+  // world origin, three million feet from the site.
+  for (std::size_t i = 0; i + 2 < state.userPolylineVerts.size(); i += 3) {
+    const double worldX = state.userPolylineVerts[i] + state.worldDocumentOriginX;
+    const double worldY = state.userPolylineVerts[i + 1] + state.worldDocumentOriginY;
+    const bool atOrigin = worldY >= -1.e-6 && worldY <= 0.12 && worldX >= 0.0 && worldX <= 1.5;
+    CHECK_FALSE(atOrigin);
+  }
+}
+
+TEST_CASE("Civil 3D point descriptions and point groups import with the points",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  std::ifstream file(SamplePath("rapides-point-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log,
+                             /*asDxf=*/false));
+  REQUIRE(state.surveyPoints.size() == 353);
+
+  // Literal descriptions and Civil's predefined CP string token both match the source API.
+  std::size_t described = 0;
+  for (const auto& expected : reference.at("points")) {
+    const int number = expected.at("number").get<int>();
+    const auto point = std::find_if(state.surveyPoints.begin(), state.surveyPoints.end(),
+                                    [&](const SurveyPoint& value) { return value.id == number; });
+    REQUIRE(point != state.surveyPoints.end());
+    INFO("point " << number);
+    CHECK(point->rawDescription == expected.at("rawDescription").get<std::string>());
+    CHECK(point->description == point->rawDescription);
+    ++described;
+  }
+  CHECK(described == 353);
+
+  // Point groups: all 25 import by name with the stored membership. One group (WATER, which holds
+  // no points) has a layout whose list cannot be verified and is imported empty and reported.
+  REQUIRE(reference.at("groups").size() == 25);
+  CHECK(state.pointGroups.size() == 25);
+  // The Prospector lists groups in Civil's order, which the API reports as the reference order.
+  for (std::size_t i = 0; i < 25 && i < state.pointGroups.size(); ++i)
+    CHECK(state.pointGroups[i].name == reference.at("groups")[i].at("name").get<std::string>());
+  for (const auto& expected : reference.at("groups")) {
+    const std::string name = expected.at("name").get<std::string>();
+    const auto group = std::find_if(state.pointGroups.begin(), state.pointGroups.end(),
+                                    [&](const PointGroup& value) { return value.name == name; });
+    INFO(name);
+    REQUIRE(group != state.pointGroups.end());
+    std::vector<int> want = expected.at("members").get<std::vector<int>>();
+    std::vector<int> got = group->rule.explicitIds;
+    std::sort(want.begin(), want.end());
+    std::sort(got.begin(), got.end());
+    CHECK(got == want);
+  }
+  CHECK(std::any_of(log.begin(), log.end(), [](const std::string& line) {
+    return line.find("Civil point groups decoded: 25") != std::string::npos; }));
+}
+
+TEST_CASE("Civil point node and group decoders refuse layouts they cannot verify",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const Dwg_Object* node = nullptr;
+  for (BITCODE_BL i = 0; i < drawing.num_objects && node == nullptr; ++i) {
+    const Dwg_Object& object = drawing.object[i];
+    if (object.type >= 500 && object.type - 500 < drawing.num_classes &&
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) == "AECC_POINT_NODE")
+      node = &object;
+  }
+  REQUIRE(node != nullptr);
+  const std::size_t prefix = node->common_size + node->bitsize_pos;
+  const std::size_t trailer = node->stringstream_size >= 32768 ? 33 : 17;
+  const std::size_t strings = node->bitsize - prefix - trailer - node->stringstream_size;
+  const auto decoded = libredwgcivil::DecodePointNodeDescriptions(
+      node->unknown_bits, node->num_unknown_bits, strings, node->stringstream_size);
+  REQUIRE(decoded.has_value());
+  CHECK(decoded->size() == 353);
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(nullptr, 100, 50, 10).has_value());
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(node->unknown_bits, node->num_unknown_bits,
+                                                         strings, node->stringstream_size - 400).has_value());
+  CHECK_FALSE(libredwgcivil::DecodePointNodeDescriptions(node->unknown_bits, node->num_unknown_bits,
+                                                         strings - 64, node->stringstream_size).has_value());
+
+  const std::unordered_set<int> none;
+  CHECK_FALSE(libredwgcivil::DecodePointGroup(nullptr, 100, 50, 10, none).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point-group display priority supplies styles without replacing point overrides",
+          "[dwg][libredwg][civil3d][req479][points]") {
+  for (const bool explicitStyles : {false, true}) {
+    AppCommandState state;
+    std::vector<std::string> log;
+    REQUIRE(ImportLibreCadFile(state, SamplePath(explicitStyles
+        ? "rapides-substation-civil3d-pointtables.dwg" : "rapides-substation-civil3d.dwg").c_str(),
+        log, false));
+    REQUIRE(state.surveyPoints.size() == 353);
+    CHECK(state.modelUnitsPerPlottedInch == Catch::Approx(20.f));
+    for (const auto& point : state.surveyPoints) {
+      INFO("point " << point.id << ", explicit overrides " << explicitStyles);
+      CHECK(point.styleName == (explicitStyles ? "Basic" : "no points"));
+      CHECK(point.labelStyleName == "no points");
+      CHECK(SurveyPointMarkerVisible(point, state.surveyPointStyles) == explicitStyles);
+    }
+    CHECK(std::none_of(log.begin(), log.end(), [](const std::string& line) {
+      return line.find("member list could not be verified") != std::string::npos;
+    }));
+  }
+}
+
+TEST_CASE("Civil point label collections retain source visibility and component expressions",
+          "[dwg][libredwg][civil3d][req479][points][styles]") {
+  std::ifstream file(SamplePath("rapides-point-label-style-reference.json"));
+  REQUIRE(file.good());
+  const auto reference = nlohmann::json::parse(file);
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.surveyPointLabelStyles.size() == 10);
+  for (const auto& expected : reference.at("styles")) {
+    const auto style = std::find_if(state.surveyPointLabelStyles.begin(), state.surveyPointLabelStyles.end(),
+        [&](const SurveyPointLabelStyleDefinition& value) { return value.name == expected.at("name"); });
+    INFO(expected.at("name"));
+    REQUIRE(style != state.surveyPointLabelStyles.end());
+    CHECK(style->visible == expected.at("visible").get<bool>());
+    if (expected.at("components").size() > 0 && expected.at("components")[0].contains("height"))
+      CHECK(style->textHeightPlottedInches ==
+            Catch::Approx(expected.at("components")[0].at("height").get<double>() * 12.0));
+    CHECK_FALSE(style->fontFamily.empty());
+    REQUIRE(style->civilTextContents.size() == expected.at("components").size());
+    for (std::size_t i = 0; i < style->civilTextContents.size(); ++i) {
+      std::string content = style->civilTextContents[i];
+      // Independent API reference uses readable property names. DWG expressions use stable
+      // numeric property/modifier IDs and escape an MTEXT paragraph slash a second time.
+      for (const auto& [encoded, readable] : std::vector<std::pair<std::string, std::string>>{
+          {"16797697", "Point Number"}, {"33574914", "Point Elevation"},
+          {"67129348", "Full Description"}, {"33574917", "Northing"}, {"33574918", "Easting"},
+          {"2097", "Uft"}, {"2387", "P2"}, {"2388", "P3"}, {"2433", "RN"},
+          {"2593", "Sn"}, {"2609", "OF"}, {"2657", "AP"}, {"2449", "CP"}, {"\\\\P", "\\P"}}) {
+        for (std::size_t p = 0; (p = content.find(encoded, p)) != std::string::npos; p += readable.size())
+          content.replace(p, encoded.size(), readable);
+      }
+      CHECK(content == expected.at("components")[i].at("content").get<std::string>());
+    }
+  }
+  for (const auto& point : state.surveyPoints)
+    CHECK_FALSE(SurveyPointNamedLabelVisible(point, state.surveyPointLabelStyles));
+  CHECK(std::none_of(log.begin(), log.end(), [](const std::string& line) {
+    return line.find("point text content not decoded") != std::string::npos ||
+           line.find("point label visibility not decoded") != std::string::npos;
+  }));
+}
+
+TEST_CASE("Native DWG point markers retain custom geometry color and hidden labels",
+          "[dwg][libredwg][req479][points][styles]") {
+  ScratchDir dir("styled-point-export");
+  const auto path = (dir.path / "points.dwg").string();
+  AppCommandState state;
+  state.modelUnitsPerPlottedInch = 20.f;
+  SurveyPointStyleDefinition style;
+  style.name = "White Plus";
+  style.hasExplicitMarkerGeometry = true;
+  style.customMarker = 2;
+  style.crossSpanPlottedInches = .1f;
+  style.color = "ACI:7";
+  state.surveyPointStyles.push_back(style);
+  SurveyPointLabelStyleDefinition label;
+  label.name = "Hidden labels";
+  label.visible = false;
+  state.surveyPointLabelStyles.push_back(label);
+  SurveyPoint point;
+  point.id = 17;
+  point.easting = 3254400.123;
+  point.northing = 313800.456;
+  point.elevation = 83.2;
+  point.styleName = style.name;
+  point.labelStyleName = label.name;
+  point.description = "CONTROL";
+  state.surveyPoints.push_back(point);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, path.c_str(), log));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  int lines = 0, circles = 0, attributes = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.fixedtype == DWG_TYPE_LINE) {
+      ++lines;
+      const auto* line = object.tio.entity->tio.LINE;
+      CHECK(std::hypot(line->end.x - line->start.x, line->end.y - line->start.y) == Catch::Approx(2.0));
+    }
+    if (object.fixedtype == DWG_TYPE_CIRCLE) ++circles;
+    if (object.fixedtype == DWG_TYPE_ATTRIB) {
+      ++attributes;
+      CHECK((object.tio.entity->tio.ATTRIB->flags & 1u) != 0);
+      CHECK(object.tio.entity->tio.ATTRIB->mtext_type == 1);
+      CHECK(object.tio.entity->entmode == 0);
+      REQUIRE(object.tio.entity->ownerhandle != nullptr);
+      const auto* owner = dwg_resolve_handle_silent(&drawing, object.tio.entity->ownerhandle->absolute_ref);
+      REQUIRE(owner != nullptr);
+      CHECK(owner->fixedtype == DWG_TYPE_INSERT);
+    }
+    if (object.fixedtype == DWG_TYPE_ATTDEF) {
+      CHECK(object.tio.entity->tio.ATTDEF->width_factor == Catch::Approx(1.0));
+      CHECK(object.tio.entity->tio.ATTDEF->mtext_type == 1);
+    }
+    if (object.fixedtype == DWG_TYPE_INSERT) {
+      const auto* insert = object.tio.entity->tio.INSERT;
+      for (BITCODE_BL j = 0; j < insert->num_owned; ++j)
+        CHECK(insert->attribs[j]->handleref.code == 3);
+    }
+  }
+  CHECK(lines == 2);
+  CHECK(circles == 0);
+  CHECK(attributes == 2);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point table segments retain row offsets insertion and exact group reference",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  unsigned segments = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.type < 500 || object.type - 500 >= drawing.num_classes ||
+        std::string_view(drawing.dwg_class[object.type - 500].dxfname) != "AECC_POINT_TABLE") continue;
+    INFO("table handle " << object.handle.value);
+    const std::size_t prefix = object.common_size + object.bitsize_pos;
+    const std::size_t strings = object.bitsize - prefix - 17 - object.stringstream_size;
+    const auto decoded = libredwgcivil::DecodePointTable(object.unknown_bits, object.num_unknown_bits, strings);
+    REQUIRE(decoded.has_value());
+    CHECK(decoded->maximumRows == 20);
+    CHECK(decoded->firstRow == segments * 20);
+    const auto preview = libredwgcivil::DecodeProxyGraphicPolylines(object.tio.entity->preview,
+                                                                   object.tio.entity->preview_size);
+    REQUIRE(preview.has_value());
+    REQUIRE(preview->size() == 1);
+    REQUIRE(preview->front().size() == 5);
+    CHECK(decoded->transform[3] == Catch::Approx((*preview)[0][3].x));
+    CHECK(decoded->transform[7] == Catch::Approx((*preview)[0][3].y));
+    if (segments == 0) {
+      const auto handles = libredwgcivil::DecodeHandleList(object.unknown_bits, object.num_unknown_bits,
+                                                          object.bitsize - prefix, object.handle.value);
+      REQUIRE_FALSE(handles.empty());
+      const auto* group = dwg_resolve_handle_silent(&drawing, handles.back());
+      REQUIRE(group != nullptr);
+      REQUIRE(group->type >= 500);
+      CHECK(std::string_view(drawing.dwg_class[group->type - 500].dxfname) == "AECC_POINT_PG");
+    }
+    CHECK_FALSE(libredwgcivil::DecodePointTable(object.unknown_bits, strings - 1, strings).has_value());
+    ++segments;
+  }
+  CHECK(segments == 18);
+  CHECK_FALSE(libredwgcivil::DecodePointTable(nullptr, 4000, 3000).has_value());
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point table styles decode drawing columns expressions and text sizes",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), &drawing) < DWG_ERR_CRITICAL);
+  const std::array<uint64_t, 4> handles = {0x1973, 0x19a2, 0x1a6bd, 0x2f9b4};
+  const std::array<std::u16string, 4> names = {u"Latitude and Longitude", u"PNEZD format", u"Standard", u"NCRS N-E-LAT-LON"};
+  for (std::size_t i = 0; i < handles.size(); ++i) {
+    const auto* object = dwg_resolve_handle_silent(&drawing, handles[i]);
+    REQUIRE(object != nullptr);
+    const auto prefix = object->common_size + object->bitsize_pos;
+    const auto strings = object->bitsize - prefix - 17 - object->stringstream_size;
+    const auto style = libredwgcivil::DecodeTableStyle(object->unknown_bits, object->num_unknown_bits,
+                                                      strings, object->stringstream_size);
+    REQUIRE(style.has_value());
+    CHECK(style->name == names[i]);
+    CHECK(style->columns.size() == (i == 3 ? 6 : 5));
+    CHECK(style->columns.front().expression == u"<[16797697]>");
+    if (i != 2) CHECK(style->columns.back().expression == u"<[167792643(2449)]>");
+    else CHECK(style->columns[1].expression == u"<[167792643(2449)]>");
+    CHECK(style->dataTextHeight == Catch::Approx(i == 3 ? .006666666666666666 : .008333333333333333));
+    CHECK(style->headerTextHeight == Catch::Approx(style->dataTextHeight));
+    CHECK(style->titleTextHeight == Catch::Approx(i < 2 ? .0125 : style->dataTextHeight));
+    for (const auto& column : style->columns) CHECK(column.width == 0);
+    CHECK_FALSE(libredwgcivil::DecodeTableStyle(object->unknown_bits, strings - 1,
+                                               strings, object->stringstream_size).has_value());
+    if (handles[i] == 0x19a2) {
+      CHECK(style->displayComponents[0].color == 0xc0000000u);
+      CHECK(style->displayComponents[7].color == 0xc0000000u);
+      CHECK(style->displayComponents[10].color == 0xc0000000u);
+    }
+  }
+  dwg_free(&drawing);
+}
+
+TEST_CASE("Civil point tables import editable rows from their drawing-owned group and style",
+          "[dwg][libredwg][civil3d][req479][tables]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  REQUIRE(state.cadTables.size() == 18);
+  REQUIRE(state.cadTableAttrs.size() == 18);
+  const auto& first = state.cadTables.front();
+  CHECK(first.styleName == "PNEZD format");
+  CHECK(first.cols == 5);
+  REQUIRE(first.cells.size() == 110);
+  CHECK(first.cells[0] == "Point Table");
+  CHECK(first.cells[5] == "Point #");
+  CHECK(first.cells[6] == "Elevation");
+  CHECK(first.cells[10] == "65");
+  CHECK(first.cells[15] == "1");
+  CHECK(first.cells[19] == "CP");
+  CHECK(first.width == Catch::Approx(93.4285714286));
+  CHECK(first.height == Catch::Approx(135.6666666667));
+  CHECK(first.plottedHeightInches == Catch::Approx(.1));
+  CHECK(first.mergeTitleRow);
+  CHECK(first.surveyPointDataRows);
+  REQUIRE(first.columnWeights.size() == 5);
+  // Civil point-table styles keep oracle grid/border/data colors when components decode as ByLayer.
+  const auto pnezd = std::find_if(state.tableStyles.begin(), state.tableStyles.end(),
+                                     [](const CadTableStyle& style) {
+                                       return style.civilStyleName == "PNEZD format";
+                                     });
+  REQUIRE(pnezd != state.tableStyles.end());
+  CHECK(pnezd->gridLineColor == "1");
+  CHECK(pnezd->borderColor == "5");
+  CHECK((pnezd->dataTextColor == "150" || pnezd->dataTextColor == "#007FFF"));
+  REQUIRE(first.columnWeights.size() == 5);
+  CHECK(first.columnWeights[4] > first.columnWeights[0]);
+  CHECK(state.cadTableAttrs.front().layer == "V-NODE-TABL");
+  CHECK(state.cadTables.back().cells.size() == 75);
+  unsigned styles = 0;
+  for (const auto& style : state.tableStyles) if (!style.civilStyleName.empty()) ++styles;
+  CHECK(styles == 4);
+}
+
+TEST_CASE("AutoCAD-authored R2018 attributes keep their exact binary field boundary",
+          "[dwg][libredwg][attributes]") {
+  Dwg_Data drawing{};
+  const int error = dwg_read_file(SamplePath("autocad-r2018-point-attributes.dwg").c_str(), &drawing);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  auto checkBody = [](const Dwg_Data& data, std::size_t definitionBits) {
+    unsigned attributes = 0;
+    unsigned definitions = 0;
+    for (BITCODE_BL i = 0; i < data.num_objects; ++i) {
+      const auto& object = data.object[i];
+      if (object.fixedtype != DWG_TYPE_ATTRIB && object.fixedtype != DWG_TYPE_ATTDEF) continue;
+      const std::size_t body = object.bitsize - object.common_size - object.bitsize_pos -
+                               object.stringstream_size - 17;
+      if (object.fixedtype == DWG_TYPE_ATTRIB) {
+        CHECK(body == 229);
+        ++attributes;
+      } else {
+        CHECK(body == definitionBits);
+        ++definitions;
+      }
+    }
+    CHECK(attributes == 1);
+    CHECK(definitions == 1);
+  };
+  checkBody(drawing, 243);
+  ScratchDir dir("autocad-attribute-boundary");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), &drawing) == 0);
+  dwg_free(&drawing);
+  REQUIRE(dwg_read_file(path.c_str(), &drawing) < DWG_ERR_CRITICAL);
+  // The writer uses the one-bit default normal instead of the source's explicit
+  // seven-bit (0,0,1) normal. ATTDEF otherwise retains its eight-bit trailing field.
+  checkBody(drawing, 237);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("R2018 MTEXT constructors use the native embedded-object class defaults",
+          "[dwg][libredwg][mtext][req479]") {
+  Dwg_Data reference{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-block-mtext.dwg").c_str(), &reference) == 0);
+  const Dwg_Entity_MTEXT* native = nullptr;
+  for (BITCODE_BL i = 0; i < reference.num_objects; ++i)
+    if (reference.object[i].fixedtype == DWG_TYPE_MTEXT) native = reference.object[i].tio.entity->tio.MTEXT;
+  REQUIRE(native != nullptr);
+  Dwg_Data* drawing = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(drawing != nullptr);
+  const dwg_point_3d insertion{0, 0, 0};
+  auto* text = dwg_add_MTEXT(dwg_model_space_object(drawing)->tio.object->tio.BLOCK_HEADER,
+                            &insertion, 4, "FO");
+  REQUIRE(text != nullptr);
+  CHECK(text->is_not_annotative == native->is_not_annotative);
+  CHECK(text->class_version == native->class_version);
+  CHECK(text->default_flag == native->default_flag);
+  CHECK(text->ignore_attachment == native->ignore_attachment);
+  text->attachment = 5;
+  ScratchDir dir("mtext-embedded-attachment");
+  const auto path = (dir.path / "center.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), drawing) == 0);
+  Dwg_Data centered{};
+  REQUIRE(dwg_read_file(path.c_str(), &centered) == 0);
+  for (BITCODE_BL i = 0; i < centered.num_objects; ++i) {
+    if (centered.object[i].fixedtype != DWG_TYPE_MTEXT) continue;
+    const auto* value = centered.object[i].tio.entity->tio.MTEXT;
+    CHECK(value->attachment == 5);
+    CHECK(value->ignore_attachment == 5);
+  }
+  dwg_free(&centered);
+  dwg_free(drawing);
+  free(drawing);
+  dwg_free(&reference);
+}
+
+TEST_CASE("AutoCAD R2018 entity material flags precede shadow and plot-style flags",
+          "[dwg][libredwg][material][req479]") {
+  const bool noShadows = GENERATE(false, true);
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath(noShadows ? "autocad-r2018-material-shadow-flags.dwg" :
+      "autocad-r2018-mesh-material.dwg").c_str(), &drawing) == 0);
+  unsigned hosts = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    const auto& object = drawing.object[i];
+    if (object.fixedtype != DWG_TYPE_POLYLINE_PFACE) continue;
+    const auto* entity = object.tio.entity;
+    CHECK(entity->material_flags == 3);
+    CHECK(entity->shadow_flags == (noShadows ? 3 : 0));
+    CHECK(entity->plotstyle_flags == 0);
+    REQUIRE(entity->material != nullptr);
+    const auto* material = dwg_resolve_handle_silent(&drawing, entity->material->absolute_ref);
+    REQUIRE(material != nullptr);
+    CHECK(material->fixedtype == DWG_TYPE_MATERIAL);
+    ++hosts;
+  }
+  CHECK(hosts == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("AutoCAD R2018 multileader omits the legacy arrowhead array",
+          "[dwg][libredwg][multileader][req479]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-mleader.dwg").c_str(), &drawing) == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    if (drawing.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = drawing.object[i].tio.entity->tio.MULTILEADER;
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    CHECK(leader->ctx.num_leaders == 1);
+    CHECK(leader->ctx.has_content_txt == 1);
+    // Native storage keeps the head in the line and its tail in the leader cluster.
+    REQUIRE(leader->ctx.leaders[0].lines[0].num_points == 1);
+    CHECK(leader->ctx.leaders[0].lines[0].points[0].x == 0);
+    CHECK(leader->ctx.leaders[0].lines[0].points[0].y == 0);
+    CHECK(leader->ctx.leaders[0].lastleaderlinepoint.x == 3);
+    CHECK(leader->ctx.leaders[0].lastleaderlinepoint.y == 4);
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("AutoCAD R2018 multileader survives LibreDWG write and reread",
+          "[dwg][libredwg][multileader][req479][issue993]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-mleader.dwg").c_str(), &drawing) == 0);
+  ScratchDir dir("r2018-mleader-roundtrip");
+  const auto path = (dir.path / "roundtrip.dwg").string();
+  REQUIRE(dwg_write_file(path.c_str(), &drawing) == 0);
+  dwg_free(&drawing);
+  Dwg_Data again{};
+  const int error = dwg_read_file(path.c_str(), &again);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < again.num_objects; ++i) {
+    if (again.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = again.object[i].tio.entity->tio.MULTILEADER;
+    REQUIRE(leader != nullptr);
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->num_arrowheads == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&again);
+}
+
+TEST_CASE("Rapides multileaders export as decodable R2018 MULTILEADER entities",
+          "[dwg][libredwg][multileader][req479][issue993]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  REQUIRE(state.cadMultileaders.size() == 3);
+  state.dwgExportVersion = DwgSaveVersion::R2018;
+  ScratchDir dir("rapides-mleader-export");
+  const auto path = (dir.path / "export.dwg").string();
+  REQUIRE(ExportLibreCadFile(state, path.c_str(), log, false));
+  Dwg_Data exported{};
+  const int error = dwg_read_file(path.c_str(), &exported);
+  REQUIRE(error < DWG_ERR_CRITICAL);
+  CHECK(error == 0);
+  unsigned leaders = 0;
+  for (BITCODE_BL i = 0; i < exported.num_objects; ++i) {
+    if (exported.object[i].fixedtype != DWG_TYPE_MULTILEADER) continue;
+    const auto* leader = exported.object[i].tio.entity->tio.MULTILEADER;
+    REQUIRE(leader != nullptr);
+    CHECK(leader->num_blocklabels == 0);
+    CHECK(leader->num_arrowheads == 0);
+    CHECK(leader->scale_factor == Catch::Approx(1.0));
+    ++leaders;
+  }
+  CHECK(leaders == 3);
+  dwg_free(&exported);
+}
+
+TEST_CASE("Write multileader audit fixtures for accoreconsole", "[.][mleader-audit]") {
+  const char* root = std::getenv("GOSURVEY_ORACLE_DIR");
+  REQUIRE(root != nullptr);
+  const std::filesystem::path out(root);
+  std::filesystem::create_directories(out);
+  const auto nativeControl = SamplePath("autocad-r2018-mleader.dwg");
+  std::filesystem::copy_file(nativeControl, out / "control-mleader-native.dwg",
+                            std::filesystem::copy_options::overwrite_existing);
+  AppCommandState leadersOnly;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(leadersOnly, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  REQUIRE(leadersOnly.cadMultileaders.size() == 3);
+  leadersOnly.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto leadersOut = (out / "rapides-three-mleaders.dwg").string();
+  REQUIRE(ExportLibreCadFile(leadersOnly, leadersOut.c_str(), log, false));
+  AppCommandState mapped;
+  log.clear();
+  REQUIRE(ImportLibreCadFile(mapped, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  mapped.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto mappedOut = (out / "rapides-full-mapped.dwg").string();
+  REQUIRE(ExportLibreCadFile(mapped, mappedOut.c_str(), log, false));
+}
+
+TEST_CASE("Write full Rapides mapped export for accoreconsole AUDIT", "[req479][full-baseline-audit]") {
+  const char* root = std::getenv("GOSURVEY_ORACLE_DIR");
+  REQUIRE(root != nullptr);
+  const std::filesystem::path out(root);
+  std::filesystem::create_directories(out);
+  AppCommandState mapped;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(mapped, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, false));
+  mapped.dwgExportVersion = DwgSaveVersion::R2018;
+  const auto mappedOut = (out / "rapides-full-mapped.dwg").string();
+  REQUIRE(ExportLibreCadFile(mapped, mappedOut.c_str(), log, false));
+}
+
+TEST_CASE("Native annotative multileader scale records contain their complete context",
+          "[dwg][libredwg][multileader][req384][req479]") {
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(SamplePath("autocad-r2018-annotative-mleader.dwg").c_str(), &drawing) == 0);
+  unsigned count = 0;
+  for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+    if (drawing.object[i].fixedtype != DWG_TYPE_MLEADEROBJECTCONTEXTDATA) continue;
+    const auto* record = drawing.object[i].tio.object->tio.MLEADEROBJECTCONTEXTDATA;
+    CHECK(record->class_version == 4);
+    CHECK(record->is_default == 1);
+    REQUIRE(record->ctx.num_leaders == 1);
+    CHECK(record->ctx.text_height == Catch::Approx(1));
+    CHECK(record->ctx.has_content_txt == 1);
+    CHECK(libredwgcad_detail::DecodeDwgString(record->ctx.content.txt.default_text, true) == "Control");
+    CHECK(record->ctx.leaders[0].lastleaderlinepoint.x == 3);
+    ++count;
+  }
+  CHECK(count == 1);
+  dwg_free(&drawing);
+}
+
+TEST_CASE("LibreDWG retains Civil 3D class names in same-version raw rewrite",
+          "[dwg][libredwg][civil3d][raw-roundtrip]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  ScratchDir dir("civil3d-raw-roundtrip");
+  const auto output = (dir.path / "roundtrip.dwg").string();
+  Dwg_Data sourceDwg{};
+  REQUIRE(dwg_read_file(source.c_str(), &sourceDwg) < DWG_ERR_CRITICAL);
+  REQUIRE(sourceDwg.num_classes == 721);
+  REQUIRE(dwg_write_file(output.c_str(), &sourceDwg) == 0);
+  dwg_free(&sourceDwg);
+
+  Dwg_Data result{};
+  REQUIRE(dwg_read_file(output.c_str(), &result) < DWG_ERR_CRITICAL);
+  size_t cogo = 0, surfaces = 0, parcels = 0;
+  REQUIRE(result.num_classes == 721);
+  bool hasCogoClass = false, hasSurfaceClass = false, hasParcelClass = false;
+  for (BITCODE_BL i = 0; i < result.num_classes; ++i)
+    {
+      const char* name = result.dwg_class[i].dxfname;
+      hasCogoClass |= name && std::string_view(name) == "AECC_COGO_POINT";
+      hasSurfaceClass |= name && std::string_view(name) == "AECC_TIN_SURFACE";
+      hasParcelClass |= name && std::string_view(name) == "AECC_PARCEL";
+    }
+  CHECK(hasCogoClass);
+  CHECK(hasSurfaceClass);
+  CHECK(hasParcelClass);
+  for (BITCODE_BL i = 0; i < result.num_objects; ++i) {
+    const Dwg_Object& object = result.object[i];
+    if (object.type < 500 || object.type - 500 >= result.num_classes)
+      continue;
+    const char* name = result.dwg_class[object.type - 500].dxfname;
+    if (name == nullptr) continue;
+    if (std::string_view(name) == "AECC_COGO_POINT") ++cogo;
+    if (std::string_view(name) == "AECC_TIN_SURFACE") ++surfaces;
+    if (std::string_view(name) == "AECC_PARCEL") ++parcels;
+  }
+  CHECK(cogo == 353);
+  CHECK(surfaces == 1);
+  CHECK(parcels == 7464);
+
+  // Class counts alone can hide payload loss. Compare every AECC record by stable DWG handle,
+  // including its uninterpreted custom bits and, for entities, proxy graphics. This exercises the
+  // in-process pass-through layer independently of the GoSurvey domain importer/exporter.
+  struct RawRecord {
+    std::string className;
+    std::uint32_t bitCount = 0;
+    std::string bits;
+    std::string preview;
+    bool operator==(const RawRecord& other) const {
+      return className == other.className && bitCount == other.bitCount && bits == other.bits &&
+             preview == other.preview;
+    }
+  };
+  auto collectCivilRecords = [](const Dwg_Data& drawing) {
+    std::map<std::uint64_t, RawRecord> records;
+    for (BITCODE_BL i = 0; i < drawing.num_objects; ++i) {
+      const Dwg_Object& object = drawing.object[i];
+      if (object.type < 500 || object.type - 500 >= drawing.num_classes)
+        continue;
+      const char* className = drawing.dwg_class[object.type - 500].dxfname;
+      if (className == nullptr || std::string_view(className).rfind("AECC_", 0) != 0)
+        continue;
+      RawRecord record;
+      record.className = className;
+      record.bitCount = object.num_unknown_bits;
+      const size_t bitBytes = (static_cast<size_t>(object.num_unknown_bits) + 7) / 8;
+      if (object.unknown_bits != nullptr && bitBytes != 0)
+        record.bits.assign(reinterpret_cast<const char*>(object.unknown_bits), bitBytes);
+      if (object.supertype == DWG_SUPERTYPE_ENTITY && object.tio.entity != nullptr &&
+          object.tio.entity->preview != nullptr && object.tio.entity->preview_size > 0) {
+        record.preview.assign(reinterpret_cast<const char*>(object.tio.entity->preview),
+                              static_cast<size_t>(object.tio.entity->preview_size));
+      }
+      records.emplace(object.handle.value, std::move(record));
+    }
+    return records;
+  };
+  Dwg_Data original{};
+  REQUIRE(dwg_read_file(source.c_str(), &original) < DWG_ERR_CRITICAL);
+  const auto originalCivilRecords = collectCivilRecords(original);
+  dwg_free(&original);
+  const auto rewrittenCivilRecords = collectCivilRecords(result);
+  REQUIRE(originalCivilRecords.size() >= 8000);
+  CHECK(rewrittenCivilRecords == originalCivilRecords);
+  dwg_free(&result);
+}
+
+TEST_CASE("GoSurvey exports mapped Civil 3D data as editable ordinary DWG entities",
+          "[dwg][libredwg][civil3d][req479]") {
+  const std::string source = SamplePath("rapides-substation-civil3d.dwg");
+  ScratchDir dir("civil3d-app-preservation");
+  const auto outputPath = (dir.path / "mapped.dwg").string();
+  auto readBytes = [](const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+  };
+
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportDwgFile(state, source.c_str(), log));
+  REQUIRE_FALSE(state.surveyPoints.empty());
+  state.surveyPoints.front().rawDescription = "EDITED";
+  state.surveyPoints.front().description = "EDITED";
+  REQUIRE(ExportDwgFile(state, outputPath.c_str(), log));
+
+  const std::string outputBytes = readBytes(outputPath);
+  std::string trailer;
+  REQUIRE(TryGoSurveyDwgPayloadFromBytes(outputBytes, trailer));
+  CHECK(trailer.find("EDITED") != std::string::npos);
+  Dwg_Data output{};
+  REQUIRE(dwg_read_file(outputPath.c_str(), &output) < DWG_ERR_CRITICAL);
+  CHECK(output.num_objects > 0);
+  dwg_free(&output);
 }
 
 // GitHub issue #391 / REQ-312 — the DWG ARC writer never set `extrusion`, so a tilted arc
@@ -5014,6 +6488,19 @@ TEST_CASE("R2018 mesh MATERIAL round-trip; solid material listed in export loss 
   meshExport.dwgExportVersion = DwgSaveVersion::R2018;
   std::vector<std::string> log;
   REQUIRE(ExportLibreCadFile(meshExport, p.c_str(), log, /*asDxf=*/false));
+  Dwg_Data native{};
+  REQUIRE(dwg_read_file(p.c_str(), &native) == 0);
+  for (BITCODE_BL i = 0; i < native.num_objects; ++i) {
+    if (native.object[i].fixedtype != DWG_TYPE_MATERIAL) continue;
+    const auto* material = native.object[i].tio.object->tio.MATERIAL;
+    REQUIRE(material != nullptr);
+    for (const auto* map : {&material->diffusemap, &material->specularmap, &material->reflectionmap,
+                            &material->opacitymap, &material->bumpmap, &material->refractionmap}) {
+      REQUIRE(map->transmatrix != nullptr);
+      for (std::size_t j = 0; j < 16; ++j) CHECK(map->transmatrix[j] == (j % 5 == 0 ? 1.0 : 0.0));
+    }
+  }
+  dwg_free(&native);
   AppCommandState in;
   REQUIRE(ImportDwgFile(in, p.c_str(), log));
   REQUIRE(in.cadMeshes.size() == 1);
@@ -5329,8 +6816,17 @@ TEST_CASE("Annotative MULTILEADER and HATCH export annotation context (REQ-384 i
   int mleaderCtx = 0;
   int hatchScaleCtx = 0;
   for (unsigned i = 0; i < dwg.num_objects; ++i) {
-    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA)
+    if (dwg.object[i].fixedtype == DWG_TYPE_MLEADEROBJECTCONTEXTDATA) {
       ++mleaderCtx;
+      const auto* context = dwg.object[i].tio.object->tio.MLEADEROBJECTCONTEXTDATA;
+      REQUIRE(context->ctx.num_leaders == 1);
+      CHECK(context->ctx.has_content_txt == 1);
+      CHECK(libredwgcad_detail::DecodeDwgString(context->ctx.content.txt.default_text, true) == "Callout");
+      REQUIRE(dwg.object[i].tio.object->ownerhandle != nullptr);
+      const auto* owner = dwg_resolve_handle_silent(&dwg, dwg.object[i].tio.object->ownerhandle->absolute_ref);
+      REQUIRE(owner != nullptr);
+      CHECK(owner->fixedtype == DWG_TYPE_DICTIONARY);
+    }
     if (dwg.object[i].fixedtype == DWG_TYPE_ANNOTSCALEOBJECTCONTEXTDATA)
       ++hatchScaleCtx;
   }

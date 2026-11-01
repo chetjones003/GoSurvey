@@ -25912,12 +25912,17 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
                   Dwg_Entity_INSERT *restrict insert,
                   Dwg_Object *restrict insobj, Dwg_Object *restrict attobj)
 {
+  const BITCODE_BL insert_index = insobj->index;
+  const BITCODE_BL attribute_index = attobj->index;
   Dwg_Object *seqend = dwg_ref_object (insobj->parent, insert->seqend);
   // prev attrib
   Dwg_Object *lastobj = dwg_ref_object (insobj->parent, insert->last_attrib);
   if (!insert->has_attribs || !seqend || !lastobj) // no ATTRIB and SEQEND yet
     {
       API_ADD_ENTITY (SEQEND);
+      // Adding the SEQEND can relocate dwg->object, invalidating both cached object pointers.
+      insobj = &dwg->object[insert_index];
+      attobj = &dwg->object[attribute_index];
       if (dwg->header.version <= R_12)
         obj->type = DWG_TYPE_SEQEND_r11;
       insert->has_attribs = 1;
@@ -25931,7 +25936,10 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       insert->last_attrib = insert->first_attrib;
       insert->seqend = dwg_add_handleref (dwg, 3, obj->handle.value, insobj);
       insert->attribs = (BITCODE_H *)malloc (sizeof (BITCODE_H));
-      insert->attribs[0] = insert->last_attrib;
+      // R2004+ ATTRIB vectors are hard-owner references (3). Soft-pointer/relative links do
+      // not own their attributes: AutoCAD erases those orphaned records while opening.
+      insert->attribs[0]
+          = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
       IN_POSTPROCESS_SEQEND (obj, insert->num_owned, insert->attribs);
     }
   else
@@ -25939,13 +25947,15 @@ add_attrib_links (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       Dwg_Data *dwg = insobj->parent;
       insert->last_attrib
           = dwg_add_handleref (dwg, 4, attobj->handle.value, insobj);
-      attobj->tio.entity->prev_entity = insert->last_attrib;
+      attobj->tio.entity->prev_entity
+          = dwg_add_handleref (dwg, 4, lastobj->handle.value, attobj);
       insert->num_owned++;
       insert->attribs = (BITCODE_H *)realloc (
           insert->attribs, insert->num_owned * sizeof (BITCODE_H));
       lastobj->tio.entity->next_entity
           = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
-      insert->attribs[insert->num_owned - 1] = insert->last_attrib;
+      insert->attribs[insert->num_owned - 1]
+          = dwg_add_handleref (dwg, 3, attobj->handle.value, insobj);
       seqend = dwg_ref_object (dwg, insert->seqend);
       IN_POSTPROCESS_SEQEND (seqend, insert->num_owned, insert->attribs);
     }
@@ -26045,14 +26055,21 @@ dwg_add_ATTRIB (Dwg_Entity_INSERT *restrict insert, const double height,
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
   _obj->height = height;
+  _obj->width_factor = 1.0;
+  _obj->flags = (BITCODE_RC)flags;
+  _obj->mtext_type = 1; // R2018 single-line attribute; zero is not a valid content type.
+  // ATTRIB is an INSERT subentity, never a standalone entity in the containing model/block
+  // space. AutoCAD purges attributes with entmode=2 and then rejects their broken INSERT.
+  obj->tio.entity->entmode = 0;
+  obj->tio.entity->ownerhandle
+      = dwg_add_handleref (dwg, 4, insobj->handle.value, obj);
   // block handles
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
         dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
   insert->has_attribs = 1;
   // TODO: if !blkhdr->hasattrs: error no ATTDEF
-  insert->block_header
-      = dwg_add_handleref (dwg, 3, blkobj->handle.value, insobj);
+  // Keep the INSERT's referenced block; blkobj is its containing space, not that block.
   if (dwg->header.version <= R_12)
     {
       obj->type = DWG_TYPE_ATTRIB_r11;
@@ -26093,6 +26110,9 @@ dwg_add_ATTDEF (Dwg_Object_BLOCK_HEADER *restrict blkhdr, const double height,
   _obj->ins_pt.y = ins_pt->y;
   _obj->elevation = ins_pt->z;
   _obj->height = height;
+  _obj->width_factor = 1.0;
+  _obj->flags = (BITCODE_RC)flags;
+  _obj->mtext_type = 1; // Single-line definition, matching AutoCAD-authored ATTDEF records.
   // block handles
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
@@ -26552,6 +26572,10 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       vtx = dwg_obj_generic_to_object (_vtx, &error);
       if (!vtx || !vtx->tio.entity || vtx->supertype != DWG_SUPERTYPE_ENTITY)
         goto vtx_pface_err;
+      // Adding the vertex may have reallocated dwg->object; `pl` pointed into it (GoSurvey).
+      pl = dwg_obj_generic_to_object (_pl, &error);
+      if (!pl)
+        goto vtx_pface_err;
       _pl->vertex[i] = dwg_add_handleref (dwg, 3, vtx->handle.value, pl);
       if (i == 0)
         _pl->first_vertex
@@ -26568,6 +26592,9 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
         }
       vtx = dwg_obj_generic_to_object (_vtxf, &error);
       if (!vtx || !vtx->tio.entity || vtx->supertype != DWG_SUPERTYPE_ENTITY)
+        goto vtx_pface_face_err;
+      pl = dwg_obj_generic_to_object (_pl, &error);
+      if (!pl)
         goto vtx_pface_face_err;
       vtx->tio.entity->next_entity = NULL;
       _pl->vertex[numverts + j]
@@ -26595,12 +26622,15 @@ dwg_add_POLYLINE_PFACE (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
       return NULL;
     }
   seq = dwg_obj_generic_to_object (_seq, &error);
+  pl = dwg_obj_generic_to_object (_pl, &error);
+  if (!seq || !pl)
+    return NULL;
   _pl->seqend
       = dwg_add_handleref (dwg, 3, dwg_obj_generic_handlevalue (_seq), pl);
   IN_POSTPROCESS_SEQEND (seq, _pl->num_owned, _pl->vertex);
   pl->tio.entity->next_entity = NULL; // fixup
   if (dwg->header.version <= R_12)
-    obj->type = DWG_TYPE_POLYLINE_r11;
+    pl->type = DWG_TYPE_POLYLINE_r11;
   return _pl;
 }
 
@@ -27717,6 +27747,12 @@ dwg_add_MTEXT (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->extents_width = _obj->rect_width;
   _obj->attachment = 1;
   _obj->flow_dir = 1;
+  // Native R2018 non-annotative MTEXT carries an embedded-object header. Version zero is
+  // not a valid authored header: AutoCAD rejects a block containing it with eFilerError.
+  _obj->is_not_annotative = 1;
+  _obj->class_version = 4;
+  _obj->default_flag = 1;
+  _obj->ignore_attachment = _obj->attachment;
   if (dwg->header_vars.TEXTSTYLE)
     _obj->style = dwg_add_handleref (
         dwg, 5, dwg->header_vars.TEXTSTYLE->absolute_ref, NULL);
@@ -28280,6 +28316,10 @@ dwg_add_MULTILEADER_branches (Dwg_Object_BLOCK_HEADER *restrict blkhdr,
   _obj->block_scale.x = _obj->block_scale.y = _obj->block_scale.z = 1.0;
   _obj->style_attachment = 0;
   _obj->is_annotative = 0;
+  _obj->num_arrowheads = 0;
+  _obj->num_blocklabels = 0;
+  _obj->arrowheads = NULL;
+  _obj->blocklabels = NULL;
   /* Values AutoCAD writes for a new mtext multileader (issue #1010). */
   _obj->is_neg_textdir = 0;
   _obj->ipe_alignment = 0;

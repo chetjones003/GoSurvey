@@ -927,6 +927,24 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   for everything else: Plant's parametric engine data is not interpreted, and a part with neither a
   stored solid nor a straight-pipe centreline (a structural member) is refused by name.
 
+### ADR-074 — Decode supported Civil 3D data into GoSurvey objects in-process   (2026-10-31, amended)
+- Context: GoSurvey must open Civil 3D drawings without a CAD runtime and convert supported point, surface,
+  alignment, label, and style data into editable GoSurvey objects (D-2026-10-31-a/b). The earlier bridge used
+  Civil 3D's API and could not meet the standalone requirement. The user clarified that native Civil 3D object
+  authoring and identity preservation are not required; valid AutoCAD DWG output is.
+- Decision: GoSurvey decodes supported Civil 3D records in its existing LibreDWG IO path and maps their
+  semantics into GoSurvey domain objects. It exports ordinary AutoCAD entities and supported AutoCAD style
+  records that open without Recover; it does not author Civil 3D custom objects. No CAD runtime, Object Enabler,
+  external bridge, or ODA Civil extension is shipped or required. REA may be used for investigation only.
+- Alternatives: a runtime bridge (fails standalone use); ODA Civil SDK (excluded by the in-house parser
+  requirement); treating proxy graphics as semantic surface/point data (proxies are display fallback only).
+- Consequences: DWG IO owns binary decoding and ordinary-entity export; Domain owns mapped GoSurvey values.
+  Each supported class needs fixture assertions for semantic fields and DWG export/re-import. Unsupported
+  classes and unmapped fields are named in the log; they are not claimed as preserved semantic data. Plant 3D
+  custom objects remain excluded by ADR-026.
+- Amendment to ADR-026: Civil 3D semantic decoding/mapping is allowed under REQ-478/479 and this ADR; native
+  Civil 3D custom-object creation is not required. Plant 3D custom-object boundaries remain unchanged.
+
 ### ADR-027 — Stable entity identity   (2026-08-12, accepted)
 - Context:  Raised as a **blocking Verification finding against REQ-069**, before any code was
   written. A dynamic surface must reference the polylines used as its breaklines and boundaries.

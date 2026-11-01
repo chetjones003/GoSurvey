@@ -5824,6 +5824,39 @@ inline bool CadViewIsPlan(const AppCommandState& st) {
   return std::fabs(st.viewportElevationDeg - 90.f) < 1e-4f && std::fabs(st.viewportAzimuthDeg) < 1e-4f;
 }
 
+/// True when model-space Qt overlay and linework should show geometry on \p layerName.
+inline bool CadLayerAllowsViewportDisplay(const AppCommandState& st, const std::string& layerName) {
+  const CadLayerRow* row = FindDrawingLayerRowCi(st, layerName);
+  if (!row)
+    return true;
+  return row->on && !row->frozen;
+}
+
+/// Prefer \p preferred, but fall back to layer \c 0 or the first on/thawed layer so new entities are visible.
+inline std::string CadVisibleLayerForNewEntity(const AppCommandState& st, const std::string& preferred) {
+  const std::string layer = preferred.empty() ? std::string("0") : preferred;
+  if (CadLayerAllowsViewportDisplay(st, layer))
+    return layer;
+  if (CadLayerAllowsViewportDisplay(st, "0"))
+    return "0";
+  for (const CadLayerRow& row : st.drawingLayerTable) {
+    if (CadLayerAllowsViewportDisplay(st, row.name))
+      return row.name;
+  }
+  return layer;
+}
+
+inline const DimensionStyle& CadDimensionStyleForAnnotation(const AppCommandState& st,
+                                                              const CadAnnotation& ann) {
+  if (!ann.dimensionStyleName.empty()) {
+    for (const DimensionStyle& style : st.dimensionStyles) {
+      if (style.name == ann.dimensionStyleName)
+        return style;
+    }
+  }
+  return st.activeDimensionStyle;
+}
+
 /// Duration of a ViewCube orientation change, in seconds. Short enough not to feel sluggish, long
 /// enough to read the rotation — REQ-059 requires the view to settle within 0.5 s.
 inline constexpr float kViewAnimSeconds = 0.28f;
