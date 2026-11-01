@@ -57,8 +57,7 @@ unopened until access is available and the update is made.
 
 When the repository admin explicitly directs an emergency action on `beta` or `master`, the admin
 may use GitHub's existing branch-protection bypass to push or merge directly, including bypassing
-required reviews and checks. Follow [the emergency admin bypass procedure](docs/emergency-admin-bypass.md)
-to record the action. This is an explicit exception to the normal branch workflow; agents must not
+required reviews and checks. Record the emergency action in the task log. This is an explicit exception to the normal branch workflow; agents must not
 infer emergency authorization from urgency alone.
 
 ### Issues and pull request labels
@@ -118,7 +117,7 @@ the main checkout. Do not close a GoSurvey window running from another worktree
 to unblock a build; that process uses a different executable path. If a build
 is blocked, first confirm the process path belongs to the current worktree.
 
-`build-qt.bat` forwards to `build.bat`. For direct CMake builds, use
+For direct CMake builds, use
 `cmake --build --preset ninja-release` (or `ninja-debug`) from an MSVC developer shell;
 the actual CMake trees are under `build/.cmake/`. Tests run with the matching CTest preset.
 In WSL/Git Bash, invoke the Windows batch scripts through `cmd.exe /c` and use the Windows

@@ -4,8 +4,7 @@
 .DESCRIPTION
   Run from an administrator PowerShell window. Uses WinGet's package verification,
   and installs Qt through an isolated aQt environment. No GitHub credential is
-  requested and no runner is registered. Launch the runner as a normal user after
-  following docs/windows-self-hosted-runner.md.
+  requested and no runner is registered. Launch the runner as a normal user.
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\setup-windows-build-runner.ps1 -PlanOnly
 .EXAMPLE
