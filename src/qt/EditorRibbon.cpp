@@ -104,10 +104,6 @@ static QPixmap NewStylePreviewPixmap() {
   return pixmap;
 }
 
-static QColor RibbonPreviewAccent() {
-  return QColor(QStringLiteral("#e8a61a"));
-}
-
 // A style's own colour as the drawing would show it: ByLayer / ByBlock fall back to the default
 // ink (layer "White"), anything else resolves through the same CAD colour table the viewport uses.
 static QColor RibbonStyleInk(const std::string& storage) {
