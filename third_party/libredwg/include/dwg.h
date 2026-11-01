@@ -4916,6 +4916,7 @@ typedef struct _dwg_entity_TABLE
 typedef struct _dwg_TABLESTYLE_CellStyle
 {
   struct _dwg_object_TABLESTYLE *parent;
+  BITCODE_BL record_id; /* TABLESTYLE cell-style map key, not present in CELLSTYLEMAP */
   BITCODE_BL id;   /* 1=title, 2=header, 3=data, 4=table.
                       ref TABLESTYLE. custom IDs > 100 */
   BITCODE_BL type; /* 1=data, 2=label */
@@ -4973,6 +4974,7 @@ typedef struct _dwg_object_TABLESTYLE
   BITCODE_BL numoverrides;      // ??
   BITCODE_BL unknown_bl3;
   Dwg_TABLESTYLE_CellStyle ovr;  // ??
+  Dwg_TABLESTYLE_CellStyle *overrides; /* numoverrides drawing-owned cell styles, r2010+ */
 
   // 0: data, 1: title, 2: header
   BITCODE_BL num_rowstyles; // always 3

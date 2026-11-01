@@ -6429,7 +6429,7 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
 }
 
 void CadDimRefreshMeasurementText(CadAnnotation* ann, const DimensionStyle& style, const AngleDisplaySettings& angle) {
-  if (!ann)
+  if (!ann || !ann->dimensionTextOverride.empty())
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
@@ -7122,6 +7122,7 @@ const CmdEntry kRegistry[] = {
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
     {"dimsty", "dimstyle, dsty", "Dimension style editor"},
+    {"tablestyle", "tsty", "Drawing table style manager"},
     {"msty", "mleaderstyle, mlsty", "Multileader style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
@@ -7701,6 +7702,11 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "msty" || primary == "mleaderstyle" || primary == "mlsty") {
     StartMleaderStyleCommand(st, log);
+    return true;
+  }
+  if (primary == "tablestyle" || primary == "tsty") {
+    st.showTableStyleDialog = true;
+    log.push_back("TABLESTYLE — table style manager opened.");
     return true;
   }
   if (primary == "id") {

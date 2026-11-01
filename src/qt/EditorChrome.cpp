@@ -127,6 +127,18 @@ bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* r
   if (msg->message == WM_NCCALCSIZE) {
     // Keep the custom Qt title bar inside the full client area while retaining the
     // native sizing/caption styles that Windows uses for resize and Snap Assist.
+    // A maximized frame window overhangs the monitor by its sizing border on every side; pull the
+    // client area back in so the edges of the app are not cut off by the screen.
+    if (msg->wParam && IsZoomed(msg->hwnd)) {
+      auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam); // NOLINT(performance-no-int-to-ptr): Win32 encodes NCCALCSIZE_PARAMS* in LPARAM.
+      const UINT dpi = GetDpiForWindow(msg->hwnd);
+      const int borderX = GetSystemMetricsForDpi(SM_CXFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+      const int borderY = GetSystemMetricsForDpi(SM_CYFRAME, dpi) + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+      params->rgrc[0].left += borderX;
+      params->rgrc[0].right -= borderX;
+      params->rgrc[0].top += borderY;
+      params->rgrc[0].bottom -= borderY;
+    }
     *result = 0;
     return true;
   }

@@ -125,3 +125,15 @@ TEST_CASE("Re-bake ignores non-text annotations even if they carry a matching na
   REQUIRE(anns[0].fontFamily == "dimfont.shx");     // dimensions are not styleable text
   REQUIRE(anns[0].plottedHeightInches == 0.085f);
 }
+
+TEST_CASE("Variable-height native text styles preserve each entity height", "[styles][req478]") {
+  TextStyle style;
+  style.name = "Variable";
+  style.heightInches = 0;
+  style.fontFamily = "romans.shx";
+  CadAnnotation annotation;
+  annotation.plottedHeightInches = .2f;
+  TextStyles::Assign(annotation, style);
+  CHECK(annotation.plottedHeightInches == .2f);
+  CHECK(annotation.styleName == "Variable");
+}

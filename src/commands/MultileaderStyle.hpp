@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -15,11 +16,13 @@ struct MultileaderStyle {
   float arrowSizeInches = 0.10f;
   float landingGapInches = 0.05f;
   bool annotativeDefault = false;
+  /// Leader format / structure / content settings of the Modify Multileader Style window, keyed by name.
+  std::map<std::string, std::string> props;
 
   bool operator==(const MultileaderStyle& o) const {
     return name == o.name && textSizeInches == o.textSizeInches && textFont == o.textFont &&
            arrowSizeInches == o.arrowSizeInches && landingGapInches == o.landingGapInches &&
-           annotativeDefault == o.annotativeDefault;
+           annotativeDefault == o.annotativeDefault && props == o.props;
   }
   bool operator!=(const MultileaderStyle& o) const { return !(*this == o); }
 };

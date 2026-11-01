@@ -1000,18 +1000,27 @@ DWG_OBJECT (TABLESTYLE)
         _obj->sty.cellstyle.property_override_flags & 0x10000;
     }
     FIELD_BL (numoverrides, 0);
-    // FIXME style overrides for 0-6
-    if (FIELD_VALUE (numoverrides))
-      {
-        FIELD_BL (unknown_bl3, 0);
-        CellStyle_fields (ovr.cellstyle); // lgtm[cpp/use-after-free] codeql[cpp/use-after-free]
+    VALUEOUTOFBOUNDS (numoverrides, 4096);
+    REPEAT (numoverrides, overrides, Dwg_TABLESTYLE_CellStyle)
+    REPEAT_BLOCK
+        SUB_FIELD_BL (overrides[rcount1],record_id, 0);
+        CellStyle_fields (overrides[rcount1].cellstyle);
         DXF { VALUE_TFF ("CELLSTYLE_BEGIN", 1) }
-        FIELD_BL0 (ovr.id, 90);
-        FIELD_BL0 (ovr.type, 91);
-        FIELD_T0 (ovr.name, 300);
+        SUB_FIELD_BL (overrides[rcount1],id, 90);
+        SUB_FIELD_BL (overrides[rcount1],type, 91);
+        SUB_FIELD_T (overrides[rcount1],name, 300);
         DXF { VALUE_TFF ("CELLSTYLE_END", 309) }
-        LOG_WARN ("TODO TABLESTYLE r2010+ missing fields");
-      }
+        SET_PARENT (overrides[rcount1], (Dwg_Object_TABLESTYLE*)_obj);
+    END_REPEAT_BLOCK
+    END_REPEAT (overrides)
+    DECODER {
+      /* Retain the historical first-record view for older callers/downconversion. */
+      if (_obj->numoverrides && _obj->overrides)
+        {
+          _obj->unknown_bl3 = _obj->overrides[0].record_id;
+          _obj->ovr = _obj->overrides[0];
+        }
+    }
   }
 
   UNTIL (R_2007) {
@@ -1461,8 +1470,16 @@ DWG_OBJECT (MLEADERSTYLE)
   FIELD_B (use_block_rotation, 294);
   FIELD_BS (block_connection, 177);
   FIELD_BD (scale, 142);
-  FIELD_B (is_changed, 295);
-  FIELD_B (is_annotative, 296);
+  /* AutoCAD-authored DWG stores the annotative bit before the overwrite bit.
+     DXF orders them by group code instead. Controlled True/False MLeaderStyle
+     records (and their Autodesk DXF export) distinguish these adjacent bits. */
+  DXF {
+    FIELD_B (is_changed, 295);
+    FIELD_B (is_annotative, 296);
+  } else {
+    FIELD_B (is_annotative, 296);
+    FIELD_B (is_changed, 295);
+  }
   FIELD_BD (break_size, 143);
 
   SINCE (R_2010b)

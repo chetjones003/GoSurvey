@@ -406,3 +406,20 @@ None. The file version and class inventory will be read from the supplied baseli
 - Point label style TEXT templates (<[Point Number(Sn)]> etc.) are not stored as text in the label
   collector/text-style objects; not decoded. Names exist (AECC_LABEL_COLLECTOR_STYLE).
 - Release CTest 194/194 with the concurrent point-table work included.
+
+## Annotate / style-manager UI round (2026-11-01)
+
+- Ribbon: Annotate style galleries (Text, Dimension, Multileader, Table) with theme-coloured hi-DPI thumbnails; shared Layers panel
+  (layer list with on/frozen/locked/colour icons) aligned to the ribbon pane; drawing tabs and Model/Layout tabs share one tab bar
+  (`DrawingDocumentTabBar`, `Kind::Space`); status-bar scale boxes show a value; maximized frame no longer overhangs the screen.
+- Toolspace: Settings tab restructured to Civil's General / Point / Surface folders; point groups use the group icon.
+- Style managers (`RunStyleManager` in `EditorDialogs.cpp`) for dimension, multileader, text and table styles, each with a large preview
+  and description; Modify/New windows in `src/qt/StyleEditors.cpp` follow the AutoCAD tab layouts. Settings beyond the typed fields are kept
+  in per-style `props` maps.
+- Verification: Release build clean; full `ctest --preset ninja-release` 194/194. Hidden-desktop captures of every Modify tab are under
+  `build/artifacts/Release/qt-style-*.png` (not committed).
+- Not done: the CLAUDE.md three-reviewer Civil 3D screenshot comparison panel (inconclusive/pending); table preview data-row text overlaps the
+  row line at small sizes.
+- Product documentation review (REQ-453): `README.md` — no change needed; `PRIVACY.md` — no change needed (no data handling change);
+  `resources/wiki/Annotation.md` — already documents the style galleries, Manage Text Styles and DIMSTY; the new Modify windows extend
+  those dialogs and should be re-screenshotted for the wiki before release (follow-up); GitHub wiki — not updated in this push (follow-up).

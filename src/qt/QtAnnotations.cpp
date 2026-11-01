@@ -5,10 +5,12 @@
 #include "CadField.hpp"
 #include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "TextStyle.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
 #include <QPainter>
+#include <QPainterPath>
 #include <QPolygonF>
 #include <QRegion>
 #include <QFontMetricsF>
@@ -20,6 +22,23 @@
 #include <cmath>
 
 namespace {
+QPen AnnotationStylePen(const std::string& color, const std::string& linetype, const std::string& weight,
+                         const CadLayerRow* layer, QColor inherited, bool selected) {
+  float rgb[3] = {inherited.redF(), inherited.greenF(), inherited.blueF()};
+  if (!color.empty() && color != "ByBlock")
+    CadColorResolveRgb(CadColorEffectiveStorage(color, layer ? layer->color : "White"), rgb[0], rgb[1], rgb[2], rgb);
+  QPen pen(selected ? QColor("#62aaff") : QColor::fromRgbF(rgb[0], rgb[1], rgb[2]), 1.2);
+  pen.setCosmetic(true);
+  const double mm = weight == "ByLayer" ? (layer ? layer->lineweightMm : -1) :
+      weight.empty() || weight == "ByBlock" || weight == "Default" ? -1 : std::strtod(weight.c_str(), nullptr);
+  if (mm >= 0) pen.setWidthF(std::max(.7, mm * 96 / 25.4));
+  const auto type = linetype == "ByLayer" && layer ? layer->linetype : linetype;
+  if (type == "Dashed" || type == "Hidden" || type == "DASHED" || type == "HIDDEN") pen.setStyle(Qt::DashLine);
+  else if (type == "Center" || type == "DashDot" || type == "CENTER") pen.setStyle(Qt::DashDotLine);
+  else if (type == "Phantom" || type == "PHANTOM") pen.setStyle(Qt::DashDotDotLine);
+  return pen;
+}
+
 void DrawQtLeaderPath(QPainter& painter, const CadMultileader& ml, const std::vector<float>& path,
                       const Camera& camera, float width, float height, float arrowSize) {
   assert(width > 0.f);
@@ -29,7 +48,15 @@ void DrawQtLeaderPath(QPainter& painter, const CadMultileader& ml, const std::ve
     camera.WorldToScreen(x, y, z, width, height, &sx, &sy);
     return QPointF(sx, sy);
   };
-  for (size_t i = 0; i + 5 < path.size(); i += 3)
+  if (ml.splinePath && path.size() >= 9) {
+    QPainterPath curve(project(path[0], path[1], path[2]));
+    for (std::size_t i = 3; i + 5 < path.size(); i += 3) {
+      const auto control = project(path[i], path[i + 1], path[i + 2]);
+      const auto next = project(path[i + 3], path[i + 4], path[i + 5]);
+      curve.quadTo(control, i + 6 == path.size() ? next : (control + next) * .5);
+    }
+    painter.drawPath(curve);
+  } else for (size_t i = 0; i + 5 < path.size(); i += 3)
     painter.drawLine(project(path[i], path[i + 1], path[i + 2]),
                      project(path[i + 3], path[i + 4], path[i + 5]));
   const CadLeaderArrowHead arrow = CadMultileaderArrow(ml, path, arrowSize);
@@ -239,7 +266,22 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
   painter.save();
   painter.setRenderHint(QPainter::Antialiasing);
   for (std::size_t i = 0; i < state.cadAnnotations.size(); ++i) {
-    const auto& annotation = state.cadAnnotations[i];
+    CadAnnotation annotation = state.cadAnnotations[i];
+    if (CadAnnotationIsDimension(annotation)) {
+      const auto& style = CadDimensionStyleForAnnotation(state, annotation);
+      if (!annotation.ovHeight) annotation.plottedHeightInches = style.textSizeInches;
+      if (!StyleFlag(style.props, "annotative"))
+        annotation.plottedHeightInches *= static_cast<float>(StyleNumber(style.props, "overallScale", 1));
+      if (!annotation.ovFont) {
+        const auto* textStyle = TextStyles::Find(state.textStyles, style.textFont);
+        annotation.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
+      }
+    } else if (const auto* style = TextStyles::Find(state.textStyles, annotation.styleName)) {
+      // Native zero-height styles leave each entity's chosen height intact.
+      const float height = annotation.plottedHeightInches;
+      TextStyles::RebakeAnnotation(annotation, *style);
+      if (style->heightInches == 0) annotation.plottedHeightInches = height;
+    }
     const auto* attrs = i < state.cadAnnotationAttrs.size() ? &state.cadAnnotationAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
     if (annotation.annotative && !annotation.annotativeVisibleScaleNames.empty() && !activeScaleName.empty() &&
@@ -262,8 +304,10 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
         textColor = QColor::fromRgbF(trgb[0], trgb[1], trgb[2]);
       }
     }
-    for (const auto& selected : state.selection)
-      if (selected.type == SelectedEntity::Type::Annotation && selected.index == static_cast<int>(i)) color = QColor("#62aaff");
+    const bool selected = std::any_of(state.selection.begin(), state.selection.end(), [&](const auto& value) {
+      return value.type == SelectedEntity::Type::Annotation && value.index == static_cast<int>(i);
+    });
+    if (selected) color = textColor = QColor("#62aaff");
     QPen pen(color, 1.2); pen.setCosmetic(true);
     painter.setPen(pen); painter.setBrush(Qt::NoBrush);
     double x = annotation.insX, y = annotation.insY, rotation = annotation.rotationRad;
@@ -275,15 +319,24 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       parameters.arrowSizeInches = dimStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = dimStyle.arrowType;
+      parameters.style = &dimStyle;
       CadDimWorldStrokes strokes;
       if (!CadDimBuildWorldStrokes(annotation, parameters, &strokes)) continue;
-      for (const auto& segment : strokes.segs)
+      for (const auto& segment : strokes.segs) {
+        const bool extension = segment.kind == CadDimWorldSeg::Kind::Extension;
+        painter.setPen(AnnotationStylePen(extension ? dimStyle.extLineColor :
+            segment.kind == CadDimWorldSeg::Kind::Arrow ? dimStyle.arrowColor : dimStyle.dimLineColor,
+            extension ? dimStyle.extLineType : dimStyle.dimLineType,
+            StyleProperty(dimStyle.props, extension ? "extLineWeight" : "dimLineWeight"), layer, color, selected));
         painter.drawLine(project(segment.x0, segment.y0, annotation.insZ), project(segment.x1, segment.y1, annotation.insZ));
-      painter.setBrush(color);
+      }
+      painter.setPen(AnnotationStylePen(dimStyle.arrowColor, "Continuous", "", layer, color, selected));
+      painter.setBrush(painter.pen().color());
       for (const auto& arrow : strokes.arrows) painter.drawPolygon(QPolygonF{
           project(arrow.x0, arrow.y0, annotation.insZ), project(arrow.x1, arrow.y1, annotation.insZ),
           project(arrow.x2, arrow.y2, annotation.insZ)});
       painter.setBrush(Qt::NoBrush);
+      painter.setPen(textColor);
       x = strokes.labelX; y = strokes.labelY; rotation = strokes.labelRotRad;
     } else if (annotation.kind != CadAnnotation::Kind::Text && annotation.kind != CadAnnotation::Kind::Mtext) continue;
     const float annotationMup = AnnotativeModelUnitsPerPlottedInch(annotation, nullptr,
@@ -360,6 +413,27 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     if (std::hypot(right.x(), right.y()) * fontPixels < 1) continue;
     painter.save();
     painter.setWorldTransform(QTransform(right.x(), right.y(), down.x(), down.y(), origin.x(), origin.y()));
+    if (const auto* style = TextStyles::Find(state.textStyles, annotation.styleName))
+      painter.scale(style->widthFactor * (StyleFlag(style->props, "backwards") ? -1 : 1),
+                    StyleFlag(style->props, "upsideDown") ? -1 : 1);
+    const auto drawDimensionTextBox = [&](const QRectF& rect) {
+      if (!dimension) return;
+      const auto& style = CadDimensionStyleForAnnotation(state, annotation);
+      const QRectF frame = rect.adjusted(-fontPixels * .15, -fontPixels * .1, fontPixels * .15, fontPixels * .1);
+      const auto fill = StyleProperty(style.props, "textFill", "None");
+      if (fill != "None") painter.fillRect(frame, AnnotationStylePen(fill, "", "", layer, color, false).color());
+      if (StyleFlag(style.props, "drawFrame") || StyleProperty(style.props, "tolMethod") == "Basic") painter.drawRect(frame);
+    };
+    if (dimension && cadfont::PreferShxStrokes(annotation.fontFamily, text)) {
+      if (auto* font = Shx::Resolve(annotation.fontFamily); font && font->valid()) {
+        const float labelWidth = Shx::MeasureWidthPx(*font, MtextRichFlattenToPlain(text), fontPixels);
+        const float labelHeight = fontPixels * (1 + 1.4f * static_cast<float>(std::count(text.begin(), text.end(), '\n')));
+        drawDimensionTextBox(QRectF(-labelWidth * .5, -labelHeight * .5, labelWidth, labelHeight));
+        painter.translate(-labelWidth * .5, -labelHeight * .5);
+        DrawStrokeText(painter, annotation, fontPixels, text, false);
+        painter.restore(); continue;
+      }
+    }
     if (DrawStrokeText(painter, annotation, fontPixels, text, annotation.kind == CadAnnotation::Kind::Text)) {
       painter.restore(); continue;
     }
@@ -378,7 +452,11 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       painter.translate(0, offset);
     } else {
       document.adjustSize();
-      if (dimension) painter.translate(-document.idealWidth() * 0.5, -document.size().height() * 0.5);
+      if (dimension) {
+        drawDimensionTextBox(QRectF(-document.idealWidth() * .5, -document.size().height() * .5,
+                                   document.idealWidth(), document.size().height()));
+        painter.translate(-document.idealWidth() * 0.5, -document.size().height() * 0.5);
+      }
       else painter.translate(0, -QFontMetricsF(document.defaultFont()).ascent());
     }
     document.drawContents(&painter);
@@ -426,6 +504,7 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       parameters.arrowSizeInches = state.activeDimensionStyle.arrowSizeInches;
       parameters.arrowScale = state.viewportDimArrowScale;
       parameters.arrowType = state.activeDimensionStyle.arrowType;
+      parameters.style = &state.activeDimensionStyle;
       CadDimWorldStrokes strokes;
       if (CadDimBuildWorldStrokes(draft, parameters, &strokes)) {
         painter.save();
@@ -450,10 +529,13 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       }
     }
   }
-  const float leaderArrow = std::max(state.activeMultileaderStyle.arrowSizeInches, 0.01f) *
-                            std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
   for (std::size_t i = 0; i < state.cadMultileaders.size(); ++i) {
-    const CadMultileader& ml = state.cadMultileaders[i];
+    CadMultileader ml = state.cadMultileaders[i];
+    const auto* namedStyle = MultileaderStyles::Find(state.multileaderStyles, ml.styleName);
+    const MultileaderStyle& style = namedStyle ? *namedStyle : state.activeMultileaderStyle;
+    const float leaderArrow = std::max(style.arrowSizeInches, .001f) * std::max(state.modelUnitsPerPlottedInch, 1.e-6f);
+    if (style.props.count("leaderType")) ml.splinePath = StyleProperty(style.props, "leaderType") == "Spline";
+    if (StyleProperty(style.props, "arrowSymbol") == "None") ml.showArrow = false;
     const EntityAttributes* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
     if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
     const CadLayerRow* layer = nullptr;
@@ -465,14 +547,44 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     for (const auto& selected : state.selection)
       if (selected.type == SelectedEntity::Type::Multileader && selected.index == static_cast<int>(i))
         color = QColor("#62aaff");
+    if (!StyleProperty(style.props, "leaderColor").empty()) {
+      float rgbStyle[3] = {color.redF(), color.greenF(), color.blueF()};
+      CadColorResolveRgb(CadColorEffectiveStorage(StyleProperty(style.props, "leaderColor"), layer ? layer->color : "White"), rgbStyle[0], rgbStyle[1], rgbStyle[2], rgbStyle);
+      color = QColor::fromRgbF(rgbStyle[0], rgbStyle[1], rgbStyle[2]);
+    }
     QPen pen(color, 1.2); pen.setCosmetic(true);
     painter.setPen(pen); painter.setBrush(Qt::NoBrush);
-    DrawQtLeaderPath(painter, ml, ml.pathXyz, camera, width, height, leaderArrow);
+    if (StyleProperty(style.props, "leaderType") != "None") DrawQtLeaderPath(painter, ml, ml.pathXyz, camera, width, height, leaderArrow);
     for (const auto& branch : ml.extraLeaderPaths)
       DrawQtLeaderPath(painter, ml, branch, camera, width, height, leaderArrow);
-    if (!ml.label.text.empty())
-      painter.drawText(project(ml.label.insX, ml.label.insY, ml.label.insZ),
-                       QString::fromUtf8(ml.label.text.c_str()));
+    if (!ml.label.text.empty() && StyleProperty(style.props, "contentType", "Mtext") == "Mtext") {
+      CadAnnotation label = ml.label;
+      if (!label.ovHeight) label.plottedHeightInches = style.textSizeInches;
+      if (!label.ovFont) {
+        const auto* textStyle = TextStyles::Find(state.textStyles, style.textFont);
+        label.fontFamily = textStyle ? textStyle->fontFamily : style.textFont;
+      }
+      const double textWorld = std::max(label.plottedHeightInches * state.modelUnitsPerPlottedInch, 1.e-6f);
+      const QPointF anchor = project(label.insX, label.insY, label.insZ);
+      const QPointF cap = project(label.insX, label.insY + textWorld, label.insZ);
+      const float pixels = static_cast<float>(std::hypot(cap.x() - anchor.x(), cap.y() - anchor.y()));
+      if (pixels >= .5f) {
+        painter.save(); painter.translate(anchor);
+        if (!StyleProperty(style.props, "textColor").empty()) {
+          float rgbText[3]{1, 1, 1};
+          CadColorResolveRgb(CadColorEffectiveStorage(StyleProperty(style.props, "textColor"), layer ? layer->color : "White"), 1, 1, 1, rgbText);
+          painter.setPen(QColor::fromRgbF(rgbText[0], rgbText[1], rgbText[2]));
+        }
+        QFont font(QString::fromUtf8(label.fontFamily.c_str())); font.setPixelSize(std::clamp(qRound(pixels), 1, 4096));
+        painter.setFont(font);
+        if (!DrawStrokeText(painter, label, pixels, label.text, true)) painter.drawText(QPointF(0, 0), QString::fromUtf8(label.text.c_str()));
+        if (StyleFlag(style.props, "textFrame")) {
+          const auto bounds = QFontMetricsF(font).boundingRect(QString::fromUtf8(label.text.c_str())).adjusted(-3, -3, 3, 3);
+          painter.drawRect(bounds);
+        }
+        painter.restore();
+      }
+    }
   }
   const float markerRadius = PositionMarkerRadiusWorld(state);
   for (std::size_t i = 0; i < state.cadPositionMarkers.size(); ++i) {
@@ -519,6 +631,12 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       return e.type == SelectedEntity::Type::Table && e.index == static_cast<int>(ti);
     });
     const CadTableStyle* tableStyle = CadTableFindStyle(state.tableStyles, table.styleName);
+    const std::map<std::string, std::string> noProperties;
+    const auto& properties = tableStyle ? tableStyle->props : noProperties;
+    const auto cellKind = [&](std::size_t ci) -> std::string {
+      const auto row = ci / static_cast<std::size_t>(table.cols);
+      return row == 0 && table.mergeTitleRow ? "Title" : row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? "Header" : "Data";
+    };
     const CadLayerRow* layerForColor = layer;
     auto resolveTableColor = [&](const std::string& storage, float fallbackR, float fallbackG, float fallbackB) {
       float rgb[3] = {fallbackR, fallbackG, fallbackB};
@@ -546,7 +664,15 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
       const auto cell = CadTableLocalCellRect(table, static_cast<int>(ci));
       if (cell.x1 <= cell.x0 || cell.y1 <= cell.y0) continue;
       const auto tl = cellProject(cell.x0, cell.y0), tr = cellProject(cell.x1, cell.y0);
+      const std::string kind = cellKind(ci);
+      const auto fill = StyleProperty(properties, kind + ".fillColor", "None");
+      painter.save();
+      if (fill != "None") painter.setBrush(resolveTableColor(fill, 1, 1, 1));
+      else painter.setBrush(Qt::NoBrush);
+      if (!StyleFlag(properties, kind + ".bordersVisible", true) && !selected) painter.setPen(Qt::NoPen);
+      else painter.setPen(QPen(resolveTableColor(StyleProperty(properties, kind + ".borderColor"), 1, 1, 1), gridPen.widthF()));
       painter.drawPolygon(QPolygonF{tl, tr, cellProject(cell.x1, cell.y1), cellProject(cell.x0, cell.y1)});
+      painter.restore();
     }
     for (std::size_t ci = 0; ci < cells.size(); ++ci) {
       const auto cell = CadTableLocalCellRect(table, static_cast<int>(ci));
@@ -559,34 +685,46 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? tableStyle->headerTextColor :
                                                                              tableStyle->dataTextColor;
       const QColor textColor = resolveTableColor(textColorStorage, 1.f, 1.f, 1.f);
-      const float textHeight = row < table.rowTextHeightsInches.size() ? table.rowTextHeightsInches[row] : table.plottedHeightInches;
+      const auto kind = cellKind(ci);
+      const float priorHeight = row < table.rowTextHeightsInches.size() ? table.rowTextHeightsInches[row] : table.plottedHeightInches;
+      const float textHeight = static_cast<float>(StyleNumber(properties, kind + ".textHeight", priorHeight));
+      std::string family = table.fontFamily;
+      const std::string styleName = StyleProperty(properties, kind + ".textStyle");
+      if (const auto* style = TextStyles::Find(state.textStyles, styleName)) family = style->fontFamily;
       const float textWorld = std::max(textHeight * state.modelUnitsPerPlottedInch, 1.e-5f);
       const auto cap = cellProject(cell.x0, cell.y0 + textWorld);
       const float fontPx = static_cast<float>(std::hypot(cap.x() - tl.x(), cap.y() - tl.y()));
       if (fontPx < .5f) continue;
-      QFont font(QString::fromUtf8(table.fontFamily.c_str()));
+      QFont font(QString::fromUtf8(family.c_str()));
       font.setPixelSize(std::clamp(qRound(fontPx), 1, 4096));
       painter.save();
       painter.setFont(font);
       painter.setPen(textColor);
-      const bool centerInCell = table.mergeTitleRow && row == 0;
+      const auto alignment = StyleProperty(properties, kind + ".alignment", table.mergeTitleRow && row == 0 ? "Middle Center" : "Top Left");
+      const bool centerInCell = alignment.find("Center") != std::string::npos;
       const float boxWidth = static_cast<float>(std::hypot(tr.x() - tl.x(), tr.y() - tl.y()));
-      const float pad = std::min(3.f, boxWidth * 0.05f);
+      const float pad = std::max(0.f, static_cast<float>(StyleNumber(properties, kind + ".horizontalMargin", 0)) * fontPx / textHeight);
+      const float verticalPad = std::max(0.f, static_cast<float>(StyleNumber(properties, kind + ".verticalMargin", 0)) * fontPx / textHeight);
+      const auto bottom = cellProject(cell.x0, cell.y1);
+      const float boxHeight = static_cast<float>(std::hypot(bottom.x() - tl.x(), bottom.y() - tl.y()));
       const QPolygonF cellPoly{tl, tr, cellProject(cell.x1, cell.y1), cellProject(cell.x0, cell.y1)};
       painter.setClipRegion(QRegion(cellPoly.toPolygon()), Qt::IntersectClip);
-      painter.translate(centerInCell ? cellProject((cell.x0 + cell.x1) * .5f, (cell.y0 + cell.y1) * .5f)
-                                     : cellProject(cell.x0, cell.y0 + textWorld * .5f));
+      painter.translate(tl);
       painter.rotate(std::atan2(tr.y() - tl.y(), tr.x() - tl.x()) * 180.0 / 3.14159265358979323846);
       const auto plain = MtextRichFlattenToPlain(table.cells[ci]);
       float textWidth = static_cast<float>(QFontMetricsF(font).horizontalAdvance(QString::fromUtf8(plain.c_str())));
-      if (auto* shx = Shx::Resolve(table.fontFamily); shx && shx->valid())
+      if (auto* shx = Shx::Resolve(family); shx && shx->valid())
         textWidth = Shx::MeasureWidthPx(*shx, plain, fontPx);
       QString drawn = QString::fromUtf8(plain.c_str());
       if (textWidth > boxWidth - pad * 2.f)
         drawn = QFontMetricsF(font).elidedText(drawn, Qt::ElideRight, std::max(boxWidth - pad * 2.f, 1.f));
-      painter.translate(centerInCell ? -textWidth * .5f : pad, fontPx * .5f);
+      const float left = centerInCell ? (boxWidth - textWidth) * .5f : alignment.find("Right") != std::string::npos ? boxWidth - pad - textWidth : pad;
+      const float baseline = alignment.find("Middle") != std::string::npos ? (boxHeight + fontPx) * .5f :
+          alignment.find("Bottom") != std::string::npos ? boxHeight - verticalPad : verticalPad + fontPx;
+      painter.translate(left, baseline);
+      painter.rotate(-StyleNumber(properties, kind + ".textAngle", 0));
       CadAnnotation annotation;
-      annotation.fontFamily = table.fontFamily;
+      annotation.fontFamily = family;
       if (!DrawStrokeText(painter, annotation, fontPx, drawn.toUtf8().constData(), true))
         painter.drawText(QPointF(0, 0), drawn);
       painter.restore();

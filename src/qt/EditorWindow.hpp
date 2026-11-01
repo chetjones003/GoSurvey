@@ -57,6 +57,9 @@ public:
   bool CommitPdfCoordinate(const pdfview::CoordCandidate& candidate);
   std::size_t CommitPdfCoordinates(const std::vector<pdfview::CoordCandidate>& candidates); ///< one redraw for the lot; returns how many were created
   bool RunSmokeChecks(QString& error);
+  void PickRibbonAnnotStyle(const QString& galleryObjectName, const QString& styleName);
+  void OpenRibbonStyleManager(const QString& galleryObjectName);
+  void ShowTableStyles();
 protected:
   void closeEvent(QCloseEvent* event) override;
   void changeEvent(QEvent* event) override;

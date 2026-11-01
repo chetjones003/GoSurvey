@@ -14,6 +14,8 @@
 #include "LibreDwgVisualStyle.hpp"
 #include "util/cadpiperun.hpp"
 #include "util/cadtablestyle.hpp"
+#include "util/styleproperty.hpp"
+#include "font/ShxFont.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "ViewportZoomScale.hpp"
 #include "CadDimGeom.hpp"
@@ -1507,14 +1509,29 @@ void ImportAnnotativeVisibilityFromEntityEed(const Dwg_Object_Entity* ent, std::
       continue;
     if (s != kAcadAnnotativeDataEed)
       continue;
-    if (acadAppRef == 0 || ent->eed[i].handle.value == acadAppRef)
-      return true;
+    if (acadAppRef == 0 || ent->eed[i].handle.value == acadAppRef) {
+      unsigned flags = 0;
+      for (BITCODE_BL j = i + 1; j < ent->num_eed; ++j) {
+        const auto* value = ent->eed[j].data;
+        if (!value) continue;
+        if (value->code == 0) break;
+        if (value->code == 70 && ++flags == 2) return value->u.eed_70.rs != 0;
+      }
+    }
   }
   return false;
 }
 
 [[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   return GosurveyEedMarksAnnotative(ent) || AcadAnnotativeEedMarksAnnotative(dwg, ent);
+}
+
+bool ObjectStyleIsAnnotative(const Dwg_Data* dwg, const Dwg_Object_Object* object) {
+  if (!object) return false;
+  Dwg_Object_Entity view{};
+  view.num_eed = object->num_eed;
+  view.eed = object->eed;
+  return AcadAnnotativeEedMarksAnnotative(dwg, &view);
 }
 
 [[nodiscard]] bool GosurveyEedMarksAnnotativeBlockInsert(const Dwg_Object_Entity* ent) {
@@ -1850,6 +1867,7 @@ bool ImportSupportedDimension(AppCommandState& st, Dwg_Data* dwg, const Xf2& xf,
   // above, matching what AutoCAD itself shows for the entity.
   if (common->user_text != nullptr) {
     const std::string userText = FromT(dwg, common->user_text);
+    if (!userText.empty() && userText != "<>") a.dimensionTextOverride = userText;
     if (!userText.empty() && userText != "<>")  // AutoCAD's "use the measured value" placeholder
       a.text = userText;
   }
@@ -2439,7 +2457,8 @@ void ImportCivilPointTableStyles(AppCommandState& st, Dwg_Data* dwg, std::vector
   if (count) log.push_back("Civil point table styles decoded: " + std::to_string(count));
 }
 
-bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object& object) {
+bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object& object,
+                          std::unordered_map<std::string, int>* skipHist) {
   const auto strings = CivilStringStart(object);
   if (!strings || !object.tio.entity) return false;
   const auto segment = libredwgcivil::DecodePointTable(object.unknown_bits, object.num_unknown_bits, *strings);
@@ -2539,15 +2558,28 @@ bool ImportCivilPointTable(AppCommandState& st, Dwg_Data* dwg, const Dwg_Object&
         table.columnWeights.push_back(static_cast<float>(column.width));
     }
   }
-  CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
-  for (int column = 0; column < table.cols; ++column) {
-    const std::size_t headerIndex = static_cast<std::size_t>(table.cols + column);
-    if (headerIndex >= table.cells.size() || table.columnWeights.size() != static_cast<size_t>(table.cols))
-      break;
-    if (table.cells[headerIndex] == "Description")
-      table.columnWeights[static_cast<size_t>(column)] *= 2.0f;
+  if (auto* font = Shx::Resolve(table.fontFamily); font && font->valid()) {
+    table.columnWeights.assign(static_cast<std::size_t>(table.cols), 0.f);
+    const int rows = CadTableRowCount(table);
+    for (int row = 0; row < rows; ++row) {
+      const float cap = table.rowTextHeightsInches[static_cast<std::size_t>(row)] * st.modelUnitsPerPlottedInch;
+      float rowHeight = cap * 3.f;
+      for (int column = 0; column < table.cols; ++column) {
+        const auto& text = table.cells[static_cast<std::size_t>(row * table.cols + column)];
+        const auto ink = Shx::MeasureInkExtent(*font, text, cap);
+        rowHeight = std::max(rowHeight, ink.y + 2.f * cap);
+        if (row != 0) table.columnWeights[static_cast<std::size_t>(column)] =
+            std::max(table.columnWeights[static_cast<std::size_t>(column)], ink.x + 2.f * cap);
+      }
+      table.rowWeights[static_cast<std::size_t>(row)] = rowHeight;
+    }
+  } else {
+    // Missing fonts may change the distribution, but never the source insertion/frame bounds.
+    // Retain the original bounds and make the metric substitution visible in the loss report.
+    const std::string reason = "AECC_POINT_TABLE(font unavailable: " + table.fontFamily + "; column proportions estimated, source frame retained)";
+    NoteSkip(skipHist, reason.c_str());
+    CadTableFitColumnWeightsFromContent(&table, st.modelUnitsPerPlottedInch);
   }
-  CadTableExpandWidthForColumnWeights(&table);
   st.cadTables.push_back(std::move(table));
   st.cadTableAttrs.push_back(AttrFromEnt(dwg, object.tio.entity));
   return true;
@@ -3001,7 +3033,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
           return;
       }
       if (depth == 0 && std::strcmp(className, "AECC_POINT_TABLE") == 0 &&
-          ImportCivilPointTable(st, dwg, *obj)) return;
+          ImportCivilPointTable(st, dwg, *obj, skipHist)) return;
       if (depth == 0 && std::strcmp(className, "AECC_SURFACE_ELEVATION_LABEL") == 0) {
         if (const auto label = libredwgcivil::DecodeSurfaceElevationLabel(
                 obj->unknown_bits, static_cast<std::size_t>(obj->num_unknown_bits))) {
@@ -3133,6 +3165,45 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     log.push_back("  skipped " + std::to_string(undecoded) + " layer(s) whose name could not be decoded");
 }
 
+// AutoCAD's native style enums and text values are translated at the IO boundary.
+std::string StyleOption(std::initializer_list<const char*> options, int index) {
+  if (index < 0 || index >= static_cast<int>(options.size())) index = 0;
+  return *(options.begin() + index);
+}
+int StyleOptionIndex(std::initializer_list<const char*> options, const std::string& value) {
+  int index = 0; for (const char* option : options) { if (value == option) return index; ++index; }
+  return 0;
+}
+std::string StyleDecimalPrecision(int precision) { return precision <= 0 ? "0" : "0." + std::string(std::clamp(precision, 0, 8), '0'); }
+int StylePrecision(const std::string& text) {
+  const auto point = text.find('.');
+  if (point == std::string::npos) return 0;
+  int count = 0;
+  for (std::size_t i = point + 1; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) ++count;
+  return std::clamp(count, 0, 8);
+}
+std::string StyleAngularPrecision(int format, int precision) {
+  if (format != 1 && format != 4) return StyleDecimalPrecision(precision);
+  return precision <= 0 ? "0d" : precision <= 2 ? "0d00'" :
+      precision <= 4 ? "0d00'00\"" : "0d00'00." + std::string(std::min(precision - 4, 4), '0') + "\"";
+}
+int StyleAngularPrecisionValue(const std::string& text) {
+  return text.find('"') != std::string::npos ? 4 + StylePrecision(text) :
+      text.find('\'') != std::string::npos ? 2 : StylePrecision(text);
+}
+int StyleWeight(const std::string& text) {
+  if (text == "ByLayer") return -1;
+  if (text == "ByBlock") return -2;
+  if (text == "Default") return -3;
+  return static_cast<int>(std::lround(std::strtod(text.c_str(), nullptr) * 100));
+}
+std::string StyleWeightName(int weight) {
+  if (weight == -1) return "ByLayer";
+  if (weight == -2) return "ByBlock";
+  if (weight == -3) return "Default";
+  char text[32]; std::snprintf(text, sizeof(text), "%.2f mm", weight / 100.0); return text;
+}
+
 void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
   st.textStyles.clear();
   TextStyles::EnsureStandard(st.textStyles);
@@ -3156,11 +3227,19 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
       existing = &st.textStyles.back();
     }
     TextStyle& ts = *existing;
+    const bool annotative = ObjectStyleIsAnnotative(dwg, o->tio.object);
+    ts.props["annotative"] = annotative ? "1" : "0";
+    const double sizeScale = annotative ? 1.0 : std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6);
     ts.name = name;
     ts.fontFamily = FromT(dwg, s->font_file);
-    ts.heightInches = static_cast<float>(std::max(0.001, s->text_size / std::max<double>(st.modelUnitsPerPlottedInch, 1.e-6)));
+    ts.heightInches = static_cast<float>(std::max(0.0, s->text_size / sizeScale));
     ts.widthFactor = static_cast<float>(std::clamp(s->width_factor, 0.01, 100.0));
     ts.obliqueDeg = static_cast<float>(s->oblique_angle * 180.0 / kPi);
+    ts.props["backwards"] = (s->generation & 2) ? "1" : "0";
+    ts.props["upsideDown"] = (s->generation & 4) ? "1" : "0";
+    ts.props["vertical"] = s->is_vertical ? "1" : "0";
+    ts.props["bigFont"] = FromT(dwg, s->bigfont_file);
+    ts.props["useBigFont"] = ts.props["bigFont"].empty() ? "0" : "1";
     ts.bold = false;  // STYLE has no portable bold/italic flags; TrueType face details are font-owned.
     ts.italic = false;
   }
@@ -3190,13 +3269,92 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
       continue;
     const Dwg_Object_DIMSTYLE* ds = o->tio.object->tio.DIMSTYLE;
     DimensionStyle style = DimensionStyles::Default();
+    const bool annotative = ObjectStyleIsAnnotative(dwg, o->tio.object);
+    const double sizeScale = annotative ? 1.0 : mup;
+    style.props["annotative"] = annotative ? "1" : "0";
     style.name = FromT(dwg, ds->name);
     if (style.name.empty()) continue;
-    style.textSizeInches = static_cast<float>(std::max(0.001, ds->DIMTXT / mup));
-    style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / mup));
+    style.textSizeInches = static_cast<float>(std::max(0.001, ds->DIMTXT / sizeScale));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, ds->DIMASZ / sizeScale));
     style.unitPrecision = std::clamp<int>(ds->DIMDEC, 0, 8);
     style.unitScale = ds->DIMLFAC == 0.0 ? 1.0 : ds->DIMLFAC;
     style.unitSuffix = FromT(dwg, ds->DIMPOST);
+    if (const auto at = style.unitSuffix.find("<>"); at != std::string::npos) {
+      style.props["prefix"] = style.unitSuffix.substr(0, at);
+      style.unitSuffix.erase(0, at + 2);
+    }
+    style.props["extendBeyondTicks"] = std::to_string(ds->DIMDLE / sizeScale);
+    style.props["baselineSpacing"] = std::to_string(ds->DIMDLI / sizeScale);
+    style.props["extendBeyondDimLines"] = std::to_string(ds->DIMEXE / sizeScale);
+    style.props["offsetFromOrigin"] = std::to_string(ds->DIMEXO / sizeScale);
+    style.props["fixedLengthExtValue"] = std::to_string(ds->DIMFXL / sizeScale);
+    style.props["textOffset"] = std::to_string(std::abs(ds->DIMGAP) / sizeScale);
+    style.props["drawFrame"] = ds->DIMGAP < 0 ? "1" : "0";
+    style.props["textFill"] = ds->DIMTFILL == 0 ? "None" : libredwgcad_detail::ColorToStorage(ds->DIMTFILLCLR.index, ds->DIMTFILLCLR.method, ds->DIMTFILLCLR.rgb);
+    style.props["roundOff"] = std::to_string(ds->DIMRND);
+    style.props["fractionHeightScale"] = std::to_string(ds->DIMTFAC);
+    style.props["overallScale"] = std::to_string(ds->DIMSCALE);
+    style.props["altMultiplier"] = std::to_string(ds->DIMALTF);
+    style.props["altRound"] = std::to_string(ds->DIMALTRND);
+    style.props["tolUpper"] = std::to_string(ds->DIMTP);
+    style.props["tolLower"] = std::to_string(ds->DIMTM);
+    style.props["tolScaling"] = std::to_string(ds->DIMTFAC);
+    style.props["subUnitsFactor"] = std::to_string(ds->DIMMZF);
+    style.props["altSubUnitsFactor"] = std::to_string(ds->DIMALTMZF);
+    style.props["suppressExt1"] = ds->DIMSE1 ? "1" : "0";
+    style.props["suppressExt2"] = ds->DIMSE2 ? "1" : "0";
+    style.props["suppressDim1"] = ds->DIMSD1 ? "1" : "0";
+    style.props["suppressDim2"] = ds->DIMSD2 ? "1" : "0";
+    style.props["fixedLengthExt"] = ds->DIMFXLON ? "1" : "0";
+    style.props["suppressArrowsNoFit"] = ds->DIMSOXD ? "1" : "0";
+    style.props["placeTextManually"] = ds->DIMUPT ? "1" : "0";
+    style.props["drawDimLineBetween"] = ds->DIMTOFL ? "1" : "0";
+    style.props["altEnabled"] = ds->DIMALT ? "1" : "0";
+    style.props["textHorizontal"] = StyleOption({"Centered", "At Ext Line 1", "At Ext Line 2", "Over Ext Line 1", "Over Ext Line 2"}, ds->DIMJUST);
+    style.props["fractionFormat"] = StyleOption({"Horizontal", "Diagonal", "Not stacked"}, ds->DIMFRAC);
+    style.props["arcSymbol"] = StyleOption({"Preceding dimension text", "Above dimension text", "None"}, ds->DIMARCSYM);
+    style.props["angularFormat"] = StyleOption({"Decimal Degrees", "Degrees Minutes Seconds", "Gradians", "Radians", "Surveyor's Units"}, ds->DIMAUNIT);
+    style.props["angularPrecision"] = StyleAngularPrecision(ds->DIMAUNIT, ds->DIMADEC < 0 ? ds->DIMDEC : ds->DIMADEC);
+    style.props["angZeroLeading"] = (ds->DIMAZIN & 1) ? "1" : "0";
+    style.props["angZeroTrailing"] = (ds->DIMAZIN & 2) ? "1" : "0";
+    style.props["textPlacementFit"] = StyleOption({"Beside the dimension line", "Over dimension line, with leader", "Over dimension line, without leader"}, ds->DIMTMOVE);
+    style.props["tolVertical"] = StyleOption({"Bottom", "Middle", "Top"}, ds->DIMTOLJ);
+    style.props["viewDirection"] = ds->DIMTXTDIRECTION ? "Right-to-Left" : "Left-to-Right";
+    style.props["textAlignment"] = ds->DIMTIH ? "Horizontal" : ds->DIMTOH ? "ISO standard" : "Aligned with dimension line";
+    style.props["fitOption"] = ds->DIMTIX ? "Always keep text between ext lines" : StyleOption({"Both text and arrows", "Arrows", "Text", "Either text or arrows (best fit)"}, ds->DIMATFIT);
+    style.props["tolMethod"] = ds->DIMLIM ? "Limits" : !ds->DIMTOL ? "None" : ds->DIMTP == ds->DIMTM ? "Symmetrical" : "Deviation";
+    style.props["tolPrecision"] = StyleDecimalPrecision(ds->DIMTDEC);
+    style.props["altPrecision"] = StyleDecimalPrecision(ds->DIMALTD);
+    style.props["altTolPrecision"] = StyleDecimalPrecision(ds->DIMALTTD);
+    style.props["altFormat"] = ds->DIMALTU == 3 ? "Engineering" : ds->DIMALTU == 4 || ds->DIMALTU == 6 ? "Architectural" :
+        ds->DIMALTU == 5 || ds->DIMALTU == 7 ? "Fractional" : "Decimal";
+    const std::string alternatePost = FromT(dwg, ds->DIMAPOST);
+    if (const auto at = alternatePost.find("[]"); at != std::string::npos) {
+      style.props["altPrefix"] = alternatePost.substr(0, at); style.props["altSuffix"] = alternatePost.substr(at + 2);
+    } else style.props["altSuffix"] = alternatePost;
+    style.props["subUnitSuffix"] = FromT(dwg, ds->DIMMZS);
+    style.props["altSubUnitSuffix"] = FromT(dwg, ds->DIMALTMZS);
+    const auto importFeetZeros = [&](const char* key, int value) {
+      style.props[std::string(key) + "Feet"] = (value & 3) == 0 || (value & 3) == 3 ? "1" : "0";
+      style.props[std::string(key) + "Inches"] = (value & 3) == 0 || (value & 3) == 2 ? "1" : "0";
+    };
+    importFeetZeros("zero", ds->DIMZIN); importFeetZeros("altZero", ds->DIMALTZ);
+    importFeetZeros("tolZero", ds->DIMTZIN); importFeetZeros("altTolZero", ds->DIMALTTZ);
+    style.props["dimLineWeight"] = StyleWeightName(ds->DIMLWD);
+    style.props["extLineWeight"] = StyleWeightName(ds->DIMLWE);
+    style.props["extLineType2"] = linetypeName(ds->DIMLTEX2);
+    style.props["centerMark"] = ds->DIMCEN == 0 ? "None" : ds->DIMCEN < 0 ? "Line" : "Mark";
+    style.props["centerMarkSize"] = std::to_string(std::abs(ds->DIMCEN) / sizeScale);
+    style.props["decimalSeparator"] = ds->DIMDSEP == ',' ? "',' (Comma)" : ds->DIMDSEP == ' ' ? "' ' (Space)" : "'.' (Period)";
+    style.props["zeroLeading"] = (ds->DIMZIN & 4) ? "1" : "0";
+    style.props["zeroTrailing"] = (ds->DIMZIN & 8) ? "1" : "0";
+    style.props["altZeroLeading"] = (ds->DIMALTZ & 4) ? "1" : "0";
+    style.props["altZeroTrailing"] = (ds->DIMALTZ & 8) ? "1" : "0";
+    style.props["tolZeroLeading"] = (ds->DIMTZIN & 4) ? "1" : "0";
+    style.props["tolZeroTrailing"] = (ds->DIMTZIN & 8) ? "1" : "0";
+    style.props["altTolZeroLeading"] = (ds->DIMALTTZ & 4) ? "1" : "0";
+    style.props["altTolZeroTrailing"] = (ds->DIMALTTZ & 8) ? "1" : "0";
+
     style.textColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRT.index, ds->DIMCLRT.method, ds->DIMCLRT.rgb);
     style.dimLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRD.index, ds->DIMCLRD.method, ds->DIMCLRD.rgb);
     style.extLineColor = libredwgcad_detail::ColorToStorage(ds->DIMCLRE.index, ds->DIMCLRE.method, ds->DIMCLRE.rgb);
@@ -3208,7 +3366,7 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
       Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, ds->DIMTXSTY->absolute_ref);
       if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
           textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
-        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->name);
     }
     switch (ds->DIMLUNIT) {
       case 3: style.unitFormat = DimUnitFormat::Engineering; break;
@@ -3249,20 +3407,49 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
       continue;
     const Dwg_Object_MLEADERSTYLE* record = o->tio.object->tio.MLEADERSTYLE;
     MultileaderStyle style = MultileaderStyles::Default();
+    const bool annotative = record->is_annotative != 0 || ObjectStyleIsAnnotative(dwg, o->tio.object);
+    const double sizeScale = annotative ? 1.0 : mup;
     style.name = MleaderStyleNameFromRecord(dwg, o, record);
     if (style.name.empty()) continue;
     mleaderStyleNamesByHandle[o->handle.value] = style.name;
     if (MultileaderStyles::Find(st.multileaderStyles, style.name) != nullptr) continue;
-    style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / mup));
-    style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / mup));
-    style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / mup));
-    style.annotativeDefault = record->is_annotative != 0;
+    style.textSizeInches = static_cast<float>(std::max(0.001, record->text_height / sizeScale));
+    style.arrowSizeInches = static_cast<float>(std::max(0.001, record->arrow_head_size / sizeScale));
+    style.landingGapInches = static_cast<float>(std::max(0.0, record->landing_gap / sizeScale));
+    style.annotativeDefault = annotative;
+    style.props["landingLength"] = std::to_string(record->landing_dist / sizeScale);
+    style.props["breakSize"] = std::to_string(record->break_size / sizeScale);
+    style.props["maxPoints"] = std::to_string(record->max_points);
+    style.props["maxPointsEnabled"] = record->max_points ? "1" : "0";
+    style.props["firstAngle"] = record->first_seg_angle == 12 ? "Horizontal" : record->first_seg_angle == 0 ? "Any angle" : std::to_string(static_cast<int>(record->first_seg_angle * 15));
+    style.props["secondAngle"] = record->second_seg_angle == 12 ? "Horizontal" : record->second_seg_angle == 0 ? "Any angle" : std::to_string(static_cast<int>(record->second_seg_angle * 15));
+    style.props["overallScale"] = std::to_string(record->scale);
+    style.props["blockScale"] = std::to_string(record->block_scale.x);
+    style.props["landingEnabled"] = record->has_landing ? "1" : "0";
+    style.props["doglegEnabled"] = record->has_dogleg ? "1" : "0";
+    style.props["alwaysLeft"] = record->text_always_left ? "1" : "0";
+    style.props["textFrame"] = record->has_text_frame ? "1" : "0";
+    style.props["extendToText"] = record->text_extended ? "1" : "0";
+    style.props["leaderType"] = StyleOption({"None", "Straight", "Spline"}, record->type);
+    style.props["contentType"] = StyleOption({"None", "Block", "Mtext"}, record->content_type);
+    style.props["textAngle"] = StyleOption({"As inserted", "Keep horizontal", "Always right reading"}, record->text_angle_type);
+    style.props["attachmentDirection"] = StyleOption({"Horizontal", "Vertical"}, record->attach_dir);
+    style.props["blockAttachment"] = StyleOption({"Center extents", "Insertion point"}, record->block_connection);
+    style.props["leftAttachment"] = StyleOption({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, record->attach_left);
+    style.props["rightAttachment"] = StyleOption({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, record->attach_right);
+    style.props["leaderColor"] = libredwgcad_detail::ColorToStorage(record->line_color.index, record->line_color.method, record->line_color.rgb);
+    style.props["textColor"] = libredwgcad_detail::ColorToStorage(record->text_color.index, record->text_color.method, record->text_color.rgb);
+    style.props["blockColor"] = libredwgcad_detail::ColorToStorage(record->block_color.index, record->block_color.method, record->block_color.rgb);
+    style.props["defaultText"] = FromT(dwg, record->text_default);
+    style.props["leaderLineweight"] = StyleWeightName(record->linewt);
+    style.props["leaderLinetype"] = linetypeName(record->line_type);
+
     style.textFont.clear();
     if (record->text_style != nullptr) {
       Dwg_Object* textStyleObject = dwg_resolve_handle_silent(dwg, record->text_style->absolute_ref);
       if (textStyleObject != nullptr && textStyleObject->fixedtype == DWG_TYPE_STYLE &&
           textStyleObject->tio.object != nullptr && textStyleObject->tio.object->tio.STYLE != nullptr)
-        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->font_file);
+        style.textFont = FromT(dwg, textStyleObject->tio.object->tio.STYLE->name);
     }
     st.multileaderStyles.push_back(std::move(style));
   }
@@ -3275,31 +3462,83 @@ void ImportStyles(AppCommandState& st, Dwg_Data* dwg) {
   else
     st.activeMultileaderStyle = st.multileaderStyles.front();
 
-  // AutoCAD TABLESTYLE objects are ordinary drawing-owned styles. GoSurvey can currently map the
-  // style name, row suppression, and data-row text presentation; unsupported per-cell borders,
-  // fills, column widths, and formula formats remain in the import loss report.
+  // Native TABLESTYLE owns separate title/header/data records. The owner dictionary's
+  // key is authoritative: imported records can carry an empty or stale internal name.
   for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
-    Dwg_Object* o = &dwg->object[i];
-    if (o->fixedtype != DWG_TYPE_TABLESTYLE || o->tio.object == nullptr ||
-        o->tio.object->tio.TABLESTYLE == nullptr)
-      continue;
-    const Dwg_Object_TABLESTYLE* source = o->tio.object->tio.TABLESTYLE;
+    const Dwg_Object* object = &dwg->object[i];
+    if (object->fixedtype != DWG_TYPE_TABLESTYLE || !object->tio.object || !object->tio.object->tio.TABLESTYLE) continue;
+    const auto* source = object->tio.object->tio.TABLESTYLE;
     CadTableStyle style;
     style.name = FromT(dwg, source->name);
-    if (style.name.empty()) continue;
-    style.headerRow = source->is_header_suppressed == 0;
-    if (source->rowstyles != nullptr && source->num_rowstyles > 0) {
-      const Dwg_TABLESTYLE_rowstyles& data = source->rowstyles[0];
-      style.textHeightInches = static_cast<float>(std::max(0.001, data.text_height / mup));
-      style.rowHeightInches = std::max(style.textHeightInches * 1.6f,
-                                       static_cast<float>((source->vert_cell_margin * 2.0 / mup) +
-                                                          data.text_height / mup));
+    if (object->tio.object->ownerhandle) {
+      const auto* owner = dwg_resolve_handle_silent(dwg, object->tio.object->ownerhandle->absolute_ref);
+      if (owner && owner->fixedtype == DWG_TYPE_DICTIONARY && owner->tio.object) {
+        const auto* dictionary = owner->tio.object->tio.DICTIONARY;
+        if (dictionary) for (BITCODE_BL n = 0; n < dictionary->numitems; ++n)
+          if (dictionary->itemhandles[n] && dictionary->itemhandles[n]->absolute_ref == object->handle.value)
+            style.name = FromT(dwg, dictionary->texts[n]);
+      }
     }
-    const auto exists = std::find_if(st.tableStyles.begin(), st.tableStyles.end(), [&](const CadTableStyle& old) {
-      return CadTableNameEquals(old.name, style.name);
-    });
-    if (exists != st.tableStyles.end()) *exists = std::move(style);
-    else st.tableStyles.push_back(std::move(style));
+    if (style.name.empty()) continue;
+    style.headerRow = !source->is_header_suppressed;
+    style.props["direction"] = source->flow_direction ? "Up" : "Down";
+    const auto color = [](const Dwg_Color& value) {
+      return libredwgcad_detail::ColorToStorage(value.index, value.method, value.rgb);
+    };
+    if (source->overrides && source->numoverrides) {
+      for (BITCODE_BL n = 0; n < source->numoverrides; ++n) {
+        const auto& record = source->overrides[n];
+        const std::string kind = record.id == 1 ? "Title" : record.id == 2 ? "Header" : record.id == 3 ? "Data" : FromT(dwg, record.name);
+        const auto& cell = record.cellstyle;
+        const auto& format = cell.content_format;
+        const float height = static_cast<float>(format.text_height / mup);
+        if (kind == "Title") style.titleTextHeightInches = height;
+        else if (kind == "Header") style.headerTextHeightInches = height;
+        else if (kind == "Data") style.textHeightInches = height;
+        std::string textStyleName;
+        if (format.text_style) {
+          const auto* font = dwg_resolve_handle_silent(dwg, format.text_style->absolute_ref);
+          if (font && font->fixedtype == DWG_TYPE_STYLE && font->tio.object)
+            textStyleName = FromT(dwg, font->tio.object->tio.STYLE->name);
+        }
+        const std::string textColor = color(format.content_color);
+        if (kind == "Title") { style.titleTextStyleName = textStyleName; style.titleTextColor = textColor; }
+        else if (kind == "Header") { style.headerTextStyleName = textStyleName; style.headerTextColor = textColor; }
+        else if (kind == "Data") { style.textStyleName = textStyleName; style.dataTextColor = textColor; }
+        style.props[kind + ".textStyle"] = textStyleName;
+        style.props[kind + ".textHeight"] = std::to_string(height);
+        style.props[kind + ".textColor"] = textColor;
+        style.props[kind + ".textAngle"] = std::to_string(format.rotation * 180 / kPi);
+        style.props[kind + ".alignment"] = StyleOption({"Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"}, static_cast<int>(format.cell_alignment) - 1);
+        const auto& margins = cell.margin_override_flags ? cell : source->sty.cellstyle;
+        style.props[kind + ".horizontalMargin"] = std::to_string(margins.horiz_margin / mup);
+        style.props[kind + ".verticalMargin"] = std::to_string(margins.vert_margin / mup);
+        style.props[kind + ".fillColor"] = cell.bg_color.method == 0xc8 || (cell.bg_color.rgb >> 24) == 0xc8 ? "None" : color(cell.bg_color);
+        style.props[kind + ".merge"] = cell.merge_flags & 0x8000 ? "1" : "0";
+        style.props[kind + ".nativeDataType"] = std::to_string(format.value_data_type);
+        style.props[kind + ".nativeUnitType"] = std::to_string(format.value_unit_type);
+        style.props[kind + ".nativeFormat"] = FromT(dwg, format.value_format_string);
+        if (cell.num_borders && cell.borders) {
+          const auto& border = cell.borders[0];
+          style.props[kind + ".borderColor"] = color(border.color);
+          style.props[kind + ".borderWeight"] = StyleWeightName(border.linewt);
+          style.props[kind + ".borderType"] = linetypeName(border.ltype);
+          style.props[kind + ".bordersVisible"] = border.visible ? "0" : "1";
+          style.props[kind + ".doubleLine"] = border.border_type == 2 ? "1" : "0";
+          style.props[kind + ".doubleSpacing"] = std::to_string(border.double_line_spacing / mup);
+          if (kind == "Data") style.gridLineColor = color(border.color);
+          if (kind == "Title") style.borderColor = color(border.color);
+        }
+      }
+    } else if (source->rowstyles && source->num_rowstyles) {
+      const auto& data = source->rowstyles[0];
+      style.textHeightInches = static_cast<float>(data.text_height / mup);
+      style.rowHeightInches = std::max(style.textHeightInches * 1.6f,
+          static_cast<float>((source->vert_cell_margin * 2.0 + data.text_height) / mup));
+    }
+    auto existing = std::find_if(st.tableStyles.begin(), st.tableStyles.end(), [&](const auto& old) { return CadTableNameEquals(old.name, style.name); });
+    if (existing == st.tableStyles.end()) st.tableStyles.push_back(std::move(style));
+    else *existing = std::move(style);
   }
 }
 
@@ -3584,6 +3823,8 @@ const char* DimArrowBlockName(DimArrowType t);
 Dwg_Object_DIMSTYLE* EnsureDimStyleNamed(Dwg_Data* dwg, const std::string& wantedName);
 void DimStyleSetCmc(BITCODE_CMC* out, const std::string& storage, bool useTrueColor);
 
+void WriteAnnotativeStyleEed(Dwg_Data* dwg, Dwg_Object_Object* object);
+
 struct TableWriter {
   Dwg_Data* dwg = nullptr;
   bool useTrueColor = false;  // R2004+ entity ENC features (#615, #620)
@@ -3686,7 +3927,12 @@ struct TableWriter {
       }
       if (sy == nullptr) sy = dwg_add_STYLE(dwg, ts.name.c_str());
       if (sy == nullptr || sy->parent == nullptr) continue;
-      sy->text_size = static_cast<double>(ts.heightInches * std::max(modelUnitsPerPlottedInch, 1.e-6f));
+      const bool annotative = StyleFlag(ts.props, "annotative");
+      sy->text_size = static_cast<double>(ts.heightInches) * (annotative ? 1.0 : std::max(modelUnitsPerPlottedInch, 1.e-6f));
+      if (annotative) WriteAnnotativeStyleEed(dwg, sy->parent);
+      sy->generation = static_cast<BITCODE_RC>((StyleFlag(ts.props, "backwards") ? 2 : 0) | (StyleFlag(ts.props, "upsideDown") ? 4 : 0));
+      sy->is_vertical = StyleFlag(ts.props, "vertical");
+      if (StyleFlag(ts.props, "useBigFont")) sy->bigfont_file = dwg_add_u8_input(dwg, StyleProperty(ts.props, "bigFont").c_str());
       sy->width_factor = std::clamp(static_cast<double>(ts.widthFactor), 0.01, 100.0);
       sy->oblique_angle = static_cast<double>(ts.obliqueDeg) * (kPi / 180.0);
       // fontFamily empty = app default (romans.shx), same convention TextStyle.hpp documents.
@@ -3703,7 +3949,9 @@ struct TableWriter {
       if (style.name.empty()) continue;
       Dwg_Object_DIMSTYLE* ds = EnsureDimStyleNamed(dwg, style.name);
       if (!ds) continue;
-      const double mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
+      const bool annotative = StyleFlag(style.props, "annotative");
+      const double mup = annotative ? 1.0 : std::max(modelUnitsPerPlottedInch, 1.e-6f);
+      if (annotative) WriteAnnotativeStyleEed(dwg, ds->parent);
       ds->DIMTXT = static_cast<double>(style.textSizeInches) * mup;
       ds->DIMASZ = static_cast<double>(style.arrowSizeInches) * mup;
       ds->DIMDEC = std::clamp(style.unitPrecision, 0, 8);
@@ -3726,6 +3974,104 @@ struct TableWriter {
         ds->DIMLTEX1 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
         ds->DIMLTEX2 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
       }
+      if (style.props.count("extendBeyondTicks")) ds->DIMDLE = StyleNumber(style.props, "extendBeyondTicks", ds->DIMDLE / mup) * mup;
+      if (style.props.count("baselineSpacing")) ds->DIMDLI = StyleNumber(style.props, "baselineSpacing", ds->DIMDLI / mup) * mup;
+      if (style.props.count("extendBeyondDimLines")) ds->DIMEXE = StyleNumber(style.props, "extendBeyondDimLines", ds->DIMEXE / mup) * mup;
+      if (style.props.count("offsetFromOrigin")) ds->DIMEXO = StyleNumber(style.props, "offsetFromOrigin", ds->DIMEXO / mup) * mup;
+      if (style.props.count("fixedLengthExtValue")) ds->DIMFXL = StyleNumber(style.props, "fixedLengthExtValue", ds->DIMFXL / mup) * mup;
+      if (style.props.count("textOffset")) ds->DIMGAP = StyleNumber(style.props, "textOffset", ds->DIMGAP / mup) * mup;
+      if (style.props.count("roundOff")) ds->DIMRND = StyleNumber(style.props, "roundOff", ds->DIMRND);
+      if (style.props.count("fractionHeightScale")) ds->DIMTFAC = StyleNumber(style.props, "fractionHeightScale", ds->DIMTFAC);
+      if (style.props.count("overallScale")) ds->DIMSCALE = StyleNumber(style.props, "overallScale", ds->DIMSCALE);
+      if (style.props.count("altMultiplier")) ds->DIMALTF = StyleNumber(style.props, "altMultiplier", ds->DIMALTF);
+      if (style.props.count("altRound")) ds->DIMALTRND = StyleNumber(style.props, "altRound", ds->DIMALTRND);
+      if (style.props.count("tolUpper")) ds->DIMTP = StyleNumber(style.props, "tolUpper", ds->DIMTP);
+      if (style.props.count("tolLower")) ds->DIMTM = StyleNumber(style.props, "tolLower", ds->DIMTM);
+      if (style.props.count("tolScaling")) ds->DIMTFAC = StyleNumber(style.props, "tolScaling", ds->DIMTFAC);
+      if (style.props.count("subUnitsFactor")) ds->DIMMZF = StyleNumber(style.props, "subUnitsFactor", ds->DIMMZF);
+      if (style.props.count("altSubUnitsFactor")) ds->DIMALTMZF = StyleNumber(style.props, "altSubUnitsFactor", ds->DIMALTMZF);
+      if (style.props.count("suppressExt1")) ds->DIMSE1 = StyleFlag(style.props, "suppressExt1");
+      if (style.props.count("suppressExt2")) ds->DIMSE2 = StyleFlag(style.props, "suppressExt2");
+      if (style.props.count("suppressDim1")) ds->DIMSD1 = StyleFlag(style.props, "suppressDim1");
+      if (style.props.count("suppressDim2")) ds->DIMSD2 = StyleFlag(style.props, "suppressDim2");
+      if (style.props.count("fixedLengthExt")) ds->DIMFXLON = StyleFlag(style.props, "fixedLengthExt");
+      if (style.props.count("suppressArrowsNoFit")) ds->DIMSOXD = StyleFlag(style.props, "suppressArrowsNoFit");
+      if (style.props.count("placeTextManually")) ds->DIMUPT = StyleFlag(style.props, "placeTextManually");
+      if (style.props.count("drawDimLineBetween")) ds->DIMTOFL = StyleFlag(style.props, "drawDimLineBetween");
+      if (style.props.count("altEnabled")) ds->DIMALT = StyleFlag(style.props, "altEnabled");
+      if (style.props.count("textHorizontal")) ds->DIMJUST = static_cast<BITCODE_BS>(StyleOptionIndex({"Centered", "At Ext Line 1", "At Ext Line 2", "Over Ext Line 1", "Over Ext Line 2"}, StyleProperty(style.props, "textHorizontal")));
+      if (style.props.count("fractionFormat")) ds->DIMFRAC = static_cast<BITCODE_BS>(StyleOptionIndex({"Horizontal", "Diagonal", "Not stacked"}, StyleProperty(style.props, "fractionFormat")));
+      if (style.props.count("arcSymbol")) ds->DIMARCSYM = static_cast<BITCODE_BS>(StyleOptionIndex({"Preceding dimension text", "Above dimension text", "None"}, StyleProperty(style.props, "arcSymbol")));
+      if (style.props.count("angularFormat")) ds->DIMAUNIT = static_cast<BITCODE_BS>(StyleOptionIndex({"Decimal Degrees", "Degrees Minutes Seconds", "Gradians", "Radians", "Surveyor's Units"}, StyleProperty(style.props, "angularFormat")));
+      if (style.props.count("angularPrecision")) ds->DIMADEC = StyleAngularPrecisionValue(StyleProperty(style.props, "angularPrecision"));
+      if (style.props.count("angZeroLeading")) ds->DIMAZIN = static_cast<BITCODE_BS>((ds->DIMAZIN & ~1) | (StyleFlag(style.props, "angZeroLeading") ? 1 : 0));
+      if (style.props.count("angZeroTrailing")) ds->DIMAZIN = static_cast<BITCODE_BS>((ds->DIMAZIN & ~2) | (StyleFlag(style.props, "angZeroTrailing") ? 2 : 0));
+      if (style.props.count("textPlacementFit")) ds->DIMTMOVE = static_cast<BITCODE_BS>(StyleOptionIndex({"Beside the dimension line", "Over dimension line, with leader", "Over dimension line, without leader"}, StyleProperty(style.props, "textPlacementFit")));
+      if (style.props.count("tolVertical")) ds->DIMTOLJ = static_cast<BITCODE_BS>(StyleOptionIndex({"Bottom", "Middle", "Top"}, StyleProperty(style.props, "tolVertical")));
+      if (StyleFlag(style.props, "drawFrame")) ds->DIMGAP = -std::abs(ds->DIMGAP);
+      if (style.props.count("textFill")) {
+        const auto fill = StyleProperty(style.props, "textFill");
+        ds->DIMTFILL = fill == "None" ? 0 : 2;
+        if (ds->DIMTFILL) DimStyleSetCmc(&ds->DIMTFILLCLR, fill, useTrueColor);
+      }
+      ds->DIMTAD = style.textAlign == DimTextAlign::Above ? 1 : style.textAlign == DimTextAlign::Beside ? 2 : 0;
+      if (style.props.count("viewDirection")) ds->DIMTXTDIRECTION = StyleProperty(style.props, "viewDirection") == "Right-to-Left";
+      if (style.props.count("textAlignment")) {
+        ds->DIMTIH = StyleProperty(style.props, "textAlignment") == "Horizontal";
+        ds->DIMTOH = StyleProperty(style.props, "textAlignment") != "Aligned with dimension line";
+      }
+      if (style.props.count("fitOption")) {
+        const auto option = StyleProperty(style.props, "fitOption");
+        ds->DIMTIX = option == "Always keep text between ext lines";
+        ds->DIMATFIT = static_cast<BITCODE_BS>(StyleOptionIndex({"Both text and arrows", "Arrows", "Text", "Either text or arrows (best fit)"}, option));
+      }
+      if (style.props.count("tolMethod")) {
+        const auto method = StyleProperty(style.props, "tolMethod");
+        ds->DIMTOL = method == "Symmetrical" || method == "Deviation";
+        ds->DIMLIM = method == "Limits";
+        if (method == "Symmetrical") ds->DIMTM = ds->DIMTP;
+      }
+      if (style.props.count("tolPrecision")) ds->DIMTDEC = StylePrecision(StyleProperty(style.props, "tolPrecision"));
+      if (style.props.count("altPrecision")) ds->DIMALTD = StylePrecision(StyleProperty(style.props, "altPrecision"));
+      if (style.props.count("altTolPrecision")) ds->DIMALTTD = StylePrecision(StyleProperty(style.props, "altTolPrecision"));
+      if (style.props.count("altFormat")) {
+        const auto format = StyleProperty(style.props, "altFormat");
+        ds->DIMALTU = format == "Engineering" ? 3 : format == "Architectural" ? 4 : format == "Fractional" ? 5 : 2;
+      }
+      if (style.props.count("altPrefix") || style.props.count("altSuffix")) {
+        const auto post = StyleProperty(style.props, "altPrefix") + "[]" + StyleProperty(style.props, "altSuffix");
+        ds->DIMAPOST = dwg_add_u8_input(dwg, post.c_str());
+      }
+      if (style.props.count("subUnitSuffix")) ds->DIMMZS = dwg_add_u8_input(dwg, StyleProperty(style.props, "subUnitSuffix").c_str());
+      if (style.props.count("altSubUnitSuffix")) ds->DIMALTMZS = dwg_add_u8_input(dwg, StyleProperty(style.props, "altSubUnitSuffix").c_str());
+      if (style.props.count("dimLineWeight")) ds->DIMLWD = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, "dimLineWeight")));
+      if (style.props.count("extLineWeight")) ds->DIMLWE = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, "extLineWeight")));
+      if (style.props.count("centerMark")) ds->DIMCEN = StyleProperty(style.props, "centerMark") == "None" ? 0 :
+          StyleNumber(style.props, "centerMarkSize", .09) * mup * (StyleProperty(style.props, "centerMark") == "Line" ? -1 : 1);
+      if (style.props.count("decimalSeparator")) ds->DIMDSEP = StyleProperty(style.props, "decimalSeparator").find("Comma") != std::string::npos ? ',' :
+          StyleProperty(style.props, "decimalSeparator").find("Space") != std::string::npos ? ' ' : '.';
+      const std::string prefix = StyleProperty(style.props, "prefix");
+      if (!prefix.empty() || !style.unitSuffix.empty()) {
+        const std::string post = style.unitSuffix.find("<>") != std::string::npos ? style.unitSuffix : prefix + "<>" + style.unitSuffix;
+        ds->DIMPOST = dwg_add_u8_input(dwg, post.c_str());
+      }
+      if (style.props.count("extLineType2")) if (Dwg_Object* lt = EnsureLtype(StyleProperty(style.props, "extLineType2")))
+        ds->DIMLTEX2 = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (style.props.count("zeroLeading")) ds->DIMZIN = static_cast<BITCODE_BS>((ds->DIMZIN & ~4) | (StyleFlag(style.props, "zeroLeading") ? 4 : 0));
+      if (style.props.count("zeroTrailing")) ds->DIMZIN = static_cast<BITCODE_BS>((ds->DIMZIN & ~8) | (StyleFlag(style.props, "zeroTrailing") ? 8 : 0));
+      if (style.props.count("altZeroLeading")) ds->DIMALTZ = static_cast<BITCODE_BS>((ds->DIMALTZ & ~4) | (StyleFlag(style.props, "altZeroLeading") ? 4 : 0));
+      if (style.props.count("altZeroTrailing")) ds->DIMALTZ = static_cast<BITCODE_BS>((ds->DIMALTZ & ~8) | (StyleFlag(style.props, "altZeroTrailing") ? 8 : 0));
+      if (style.props.count("tolZeroLeading")) ds->DIMTZIN = static_cast<BITCODE_BS>((ds->DIMTZIN & ~4) | (StyleFlag(style.props, "tolZeroLeading") ? 4 : 0));
+      if (style.props.count("tolZeroTrailing")) ds->DIMTZIN = static_cast<BITCODE_BS>((ds->DIMTZIN & ~8) | (StyleFlag(style.props, "tolZeroTrailing") ? 8 : 0));
+      if (style.props.count("altTolZeroLeading")) ds->DIMALTTZ = static_cast<BITCODE_BS>((ds->DIMALTTZ & ~4) | (StyleFlag(style.props, "altTolZeroLeading") ? 4 : 0));
+      if (style.props.count("altTolZeroTrailing")) ds->DIMALTTZ = static_cast<BITCODE_BS>((ds->DIMALTTZ & ~8) | (StyleFlag(style.props, "altTolZeroTrailing") ? 8 : 0));
+      const auto exportFeetZeros = [&](const char* key, BITCODE_BS& value) {
+        if (!style.props.count(std::string(key) + "Feet") && !style.props.count(std::string(key) + "Inches")) return;
+        const bool feet = StyleFlag(style.props, std::string(key) + "Feet"), inches = StyleFlag(style.props, std::string(key) + "Inches");
+        value = static_cast<BITCODE_BS>((value & ~3) | (feet ? (inches ? 0 : 3) : (inches ? 2 : 1)));
+      };
+      exportFeetZeros("zero", ds->DIMZIN); exportFeetZeros("altZero", ds->DIMALTZ);
+      exportFeetZeros("tolZero", ds->DIMTZIN); exportFeetZeros("altTolZero", ds->DIMALTTZ);
       if (style.name == st.activeDimensionStyle.name && ds->parent != nullptr)
         dwg->header_vars.DIMSTYLE = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(ds), nullptr);
     }
@@ -3733,9 +4079,9 @@ struct TableWriter {
 
   void BuildMleaderStyleTable(const AppCommandState& st, float modelUnitsPerPlottedInch) {
     const auto& named = st.multileaderStyles.empty() ? MultileaderStyles::DefaultStyles() : st.multileaderStyles;
-    const double mup = std::max<double>(modelUnitsPerPlottedInch, 1.e-6);
     for (const MultileaderStyle& style : named) {
       if (style.name.empty()) continue;
+      const double mup = style.annotativeDefault ? 1.0 : std::max<double>(modelUnitsPerPlottedInch, 1.e-6);
       Dwg_Object_MLEADERSTYLE* record = nullptr;
       BITCODE_H existing = dwg_find_tablehandle(dwg, style.name.c_str(), "MLEADERSTYLE");
       if (existing != nullptr) {
@@ -3749,11 +4095,113 @@ struct TableWriter {
       record->landing_gap = static_cast<double>(style.landingGapInches) * mup;
       record->text_height = static_cast<double>(style.textSizeInches) * mup;
       record->is_annotative = style.annotativeDefault ? 1 : 0;
+      if (style.props.count("landingLength")) record->landing_dist = StyleNumber(style.props, "landingLength", record->landing_dist / mup) * mup;
+      if (style.props.count("breakSize")) record->break_size = StyleNumber(style.props, "breakSize", record->break_size / mup) * mup;
+      const auto angleConstraint = [&](const char* key) {
+        const std::string value = StyleProperty(style.props, key);
+        return value == "Horizontal" ? 12.0 : value == "Any angle" ? 0.0 : std::strtod(value.c_str(), nullptr) / 15.0;
+      };
+      if (style.props.count("firstAngle")) record->first_seg_angle = angleConstraint("firstAngle");
+      if (style.props.count("secondAngle")) record->second_seg_angle = angleConstraint("secondAngle");
+      if (style.props.count("maxPoints")) record->max_points = static_cast<BITCODE_BL>(StyleNumber(style.props, "maxPoints", record->max_points));
+      if (style.props.count("overallScale")) record->scale = (StyleNumber(style.props, "overallScale", record->scale));
+      if (style.props.count("blockScale")) record->block_scale.x = (StyleNumber(style.props, "blockScale", record->block_scale.x));
+      if (style.props.count("landingEnabled")) record->has_landing = StyleFlag(style.props, "landingEnabled");
+      if (style.props.count("doglegEnabled")) record->has_dogleg = StyleFlag(style.props, "doglegEnabled");
+      if (style.props.count("alwaysLeft")) record->text_always_left = StyleFlag(style.props, "alwaysLeft");
+      if (style.props.count("textFrame")) record->has_text_frame = StyleFlag(style.props, "textFrame");
+      if (style.props.count("extendToText")) record->text_extended = StyleFlag(style.props, "extendToText");
+      if (style.props.count("leaderType")) record->type = static_cast<BITCODE_BS>(StyleOptionIndex({"None", "Straight", "Spline"}, StyleProperty(style.props, "leaderType")));
+      if (style.props.count("contentType")) record->content_type = static_cast<BITCODE_BS>(StyleOptionIndex({"None", "Block", "Mtext"}, StyleProperty(style.props, "contentType")));
+      if (style.props.count("textAngle")) record->text_angle_type = static_cast<BITCODE_BS>(StyleOptionIndex({"As inserted", "Keep horizontal", "Always right reading"}, StyleProperty(style.props, "textAngle")));
+      if (style.props.count("attachmentDirection")) record->attach_dir = static_cast<BITCODE_BS>(StyleOptionIndex({"Horizontal", "Vertical"}, StyleProperty(style.props, "attachmentDirection")));
+      if (style.props.count("blockAttachment")) record->block_connection = static_cast<BITCODE_BS>(StyleOptionIndex({"Center extents", "Insertion point"}, StyleProperty(style.props, "blockAttachment")));
+      if (style.props.count("leftAttachment")) record->attach_left = static_cast<BITCODE_BS>(StyleOptionIndex({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, StyleProperty(style.props, "leftAttachment")));
+      if (style.props.count("rightAttachment")) record->attach_right = static_cast<BITCODE_BS>(StyleOptionIndex({"Top of top line", "Middle of top line", "Middle of text", "Middle of bottom line", "Bottom of bottom line", "Underline bottom line", "Underline top line", "Bottom of top line", "Underline all lines", "Center", "Lined center"}, StyleProperty(style.props, "rightAttachment")));
+      if (style.props.count("leaderColor")) DimStyleSetCmc(&record->line_color, StyleProperty(style.props, "leaderColor"), useTrueColor);
+      if (style.props.count("textColor")) DimStyleSetCmc(&record->text_color, StyleProperty(style.props, "textColor"), useTrueColor);
+      if (style.props.count("blockColor")) DimStyleSetCmc(&record->block_color, StyleProperty(style.props, "blockColor"), useTrueColor);
+      if (style.props.count("blockScale")) { record->block_scale.y = record->block_scale.z = record->block_scale.x; record->use_block_scale = 1; }
+      if (style.props.count("defaultText")) record->text_default = dwg_add_u8_input(dwg, StyleProperty(style.props, "defaultText").c_str());
+      if (style.props.count("leaderLineweight")) record->linewt = StyleWeight(StyleProperty(style.props, "leaderLineweight"));
+      if (style.props.count("leaderLinetype")) if (Dwg_Object* lt = EnsureLtype(StyleProperty(style.props, "leaderLinetype")))
+        record->line_type = dwg_add_handleref(dwg, 5, dwg_obj_generic_handlevalue(lt), nullptr);
+      if (style.props.count("blockName")) if (BITCODE_H block = dwg_find_tablehandle(dwg, StyleProperty(style.props, "blockName").c_str(), "BLOCK"))
+        record->block = dwg_add_handleref(dwg, 5, block->absolute_ref, nullptr);
+
       if (!style.textFont.empty()) {
         if (BITCODE_H textStyle = dwg_find_tablehandle(dwg, style.textFont.c_str(), "STYLE"))
           record->text_style = dwg_add_handleref(dwg, 5, textStyle->absolute_ref, nullptr);
       }
       mleaderStyles[LowerAscii(style.name)] = record->parent->objid;
+    }
+  }
+
+  void BuildTableStyleTable(const AppCommandState& state, float unitsPerInch) {
+    if (dwg->header.version < R_2004) return;
+    const double mup = std::max<double>(unitsPerInch, 1.e-6);
+    const std::initializer_list<const char*> alignments = {"Top Left", "Top Center", "Top Right", "Middle Left", "Middle Center", "Middle Right", "Bottom Left", "Bottom Center", "Bottom Right"};
+    for (const auto& style : state.tableStyles) {
+      if (style.name.empty()) continue;
+      auto* record = dwg_add_TABLESTYLE(dwg, style.name.c_str());
+      if (!record) continue;
+      record->flow_direction = StyleProperty(style.props, "direction", "Down") == "Up" ? 1 : 0;
+      record->horiz_cell_margin = StyleNumber(style.props, "Data.horizontalMargin", .06) * mup;
+      record->vert_cell_margin = StyleNumber(style.props, "Data.verticalMargin", .06) * mup;
+      record->is_header_suppressed = !style.headerRow;
+      if (dwg->header.version >= R_2010) {
+        auto& base = record->sty.cellstyle;
+        base.property_override_flags = record->flow_direction ? 0x10000 : 0;
+        base.horiz_margin = base.right_margin = record->horiz_cell_margin;
+        base.vert_margin = base.bottom_margin = record->vert_cell_margin;
+        for (unsigned i = 0; i < record->numoverrides; ++i) {
+          auto& cell = record->overrides[i].cellstyle;
+          const std::string kind = i == 0 ? "Title" : i == 1 ? "Header" : "Data";
+          const double height = i == 0 ? style.titleTextHeightInches : i == 1 ? style.headerTextHeightInches : style.textHeightInches;
+          const auto& font = i == 0 ? style.titleTextStyleName : i == 1 ? style.headerTextStyleName : style.textStyleName;
+          const auto& color = i == 0 ? style.titleTextColor : i == 1 ? style.headerTextColor : style.dataTextColor;
+          auto& format = cell.content_format;
+          format.text_height = StyleNumber(style.props, kind + ".textHeight", height) * mup;
+          format.cell_alignment = StyleOptionIndex(alignments, StyleProperty(style.props, kind + ".alignment", "Middle Center")) + 1;
+          format.rotation = StyleNumber(style.props, kind + ".textAngle", 0) * kPi / 180.0;
+          if (auto reference = dwg_find_tablehandle(dwg, font.empty() ? "Standard" : font.c_str(), "STYLE"))
+            format.text_style = dwg_add_handleref(dwg, 3, reference->absolute_ref, nullptr);
+          DimStyleSetCmc(&format.content_color, StyleProperty(style.props, kind + ".textColor", color.empty() ? "ByLayer" : color), useTrueColor);
+          cell.margin_override_flags = 1;
+          cell.horiz_margin = cell.right_margin = StyleNumber(style.props, kind + ".horizontalMargin", .06) * mup;
+          cell.vert_margin = cell.bottom_margin = StyleNumber(style.props, kind + ".verticalMargin", .06) * mup;
+          cell.merge_flags = StyleFlag(style.props, kind + ".merge", i == 0) ? 0x8000 : 0;
+          const auto fill = StyleProperty(style.props, kind + ".fillColor", "None");
+          if (fill == "None") { cell.bg_color.method = DWG_COLOR_METHOD_NONE; cell.bg_color.rgb = 0xc8000000; }
+          else DimStyleSetCmc(&cell.bg_color, fill, useTrueColor);
+          for (unsigned b = 0; b < cell.num_borders; ++b) {
+            auto& border = cell.borders[b];
+            border.linewt = StyleWeight(StyleProperty(style.props, kind + ".borderWeight", "ByLayer"));
+            border.visible = StyleFlag(style.props, kind + ".bordersVisible", true) ? 0 : 1;
+            border.border_type = StyleFlag(style.props, kind + ".doubleLine") ? 2 : 1;
+            border.double_line_spacing = StyleNumber(style.props, kind + ".doubleSpacing", .06) * mup;
+            DimStyleSetCmc(&border.color, StyleProperty(style.props, kind + ".borderColor", style.gridLineColor.empty() ? "ByLayer" : style.gridLineColor), useTrueColor);
+            if (auto* linetype = EnsureLtype(StyleProperty(style.props, kind + ".borderType", "ByLayer")))
+              border.ltype = dwg_add_handleref(dwg, 3, dwg_obj_generic_handlevalue(linetype), nullptr);
+          }
+        }
+      } else if (record->rowstyles) {
+        for (unsigned i = 0; i < 3; ++i) {
+          auto& row = record->rowstyles[i];
+          const std::string kind = i == 0 ? "Data" : i == 1 ? "Title" : "Header";
+          row.text_height = StyleNumber(style.props, kind + ".textHeight", i == 0 ? style.textHeightInches : i == 1 ? style.titleTextHeightInches : style.headerTextHeightInches) * mup;
+          row.text_alignment = static_cast<BITCODE_BS>(StyleOptionIndex(alignments, StyleProperty(style.props, kind + ".alignment", "Middle Center")) + 1);
+          DimStyleSetCmc(&row.text_color, StyleProperty(style.props, kind + ".textColor", "ByLayer"), useTrueColor);
+          const auto fill = StyleProperty(style.props, kind + ".fillColor", "None");
+          row.has_bgcolor = fill != "None";
+          if (row.has_bgcolor) DimStyleSetCmc(&row.fill_color, fill, useTrueColor);
+          for (unsigned b = 0; b < row.num_borders; ++b) {
+            row.borders[b].linewt = static_cast<BITCODE_BSd>(StyleWeight(StyleProperty(style.props, kind + ".borderWeight", "ByLayer")));
+            row.borders[b].visible = StyleFlag(style.props, kind + ".bordersVisible", true);
+            DimStyleSetCmc(&row.borders[b].color, StyleProperty(style.props, kind + ".borderColor", "ByLayer"), useTrueColor);
+          }
+        }
+      }
     }
   }
 
@@ -4449,6 +4897,16 @@ bool AppendAcadAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent) {
   return true;
 }
 
+void WriteAnnotativeStyleEed(Dwg_Data* dwg, Dwg_Object_Object* object) {
+  if (!object) return;
+  Dwg_Object_Entity view{};
+  view.num_eed = object->num_eed;
+  view.eed = object->eed;
+  AppendAcadAnnotativeEntityEed(dwg, &view);
+  object->num_eed = view.num_eed;
+  object->eed = view.eed;
+}
+
 void WriteAnnotativeEntityEed(Dwg_Data* dwg, Dwg_Object_Entity* ent,
                               const std::vector<std::string>* visibleScaleNames) {
   if (dwg == nullptr || ent == nullptr)
@@ -4667,6 +5125,12 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
   const float w = std::max(table.width, 1.e-3f);
   const float h = std::max(table.height, 1.e-3f);
   const double z = static_cast<double>(table.insZ);
+  const auto* tableStyle = CadTableFindStyle(st.tableStyles, table.styleName);
+  const std::map<std::string, std::string> emptyProperties;
+  const auto& properties = tableStyle ? tableStyle->props : emptyProperties;
+  const auto rowKind = [&](std::size_t row) -> std::string {
+    return row == 0 && table.mergeTitleRow ? "Title" : row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? "Header" : "Data";
+  };
   auto worldLocal = [&](float lx, float ly, dwg_point_3d* p) {
     float wx = 0.f, wy = 0.f;
     CadTableLocalToWorld(table, lx, ly, &wx, &wy);
@@ -4699,12 +5163,17 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
     const auto local = CadTableLocalCellRect(table, static_cast<int>(ci));
     if (local.x1 <= local.x0 || local.y1 <= local.y0) continue;
     const auto row = ci / static_cast<std::size_t>(table.cols);
-    const double textH = std::max(1.e-3, static_cast<double>(row < table.rowTextHeightsInches.size() ?
-        table.rowTextHeightsInches[row] : table.plottedHeightInches) * modelUnitsPerPlottedInch);
-    const bool centerInCell = table.mergeTitleRow && row == 0;
+    const auto kind = rowKind(row);
+    const double height = row < table.rowTextHeightsInches.size() ? table.rowTextHeightsInches[row] : table.plottedHeightInches;
+    const double textH = std::max(1.e-3, StyleNumber(properties, kind + ".textHeight", height) * modelUnitsPerPlottedInch);
+    const std::string alignment = StyleProperty(properties, kind + ".alignment", table.mergeTitleRow && row == 0 ? "Middle Center" : "Top Left");
+    const int horizontal = alignment.find("Center") != std::string::npos ? 1 : alignment.find("Right") != std::string::npos ? 2 : 0;
+    const int vertical = alignment.find("Middle") != std::string::npos ? 1 : alignment.find("Bottom") != std::string::npos ? 2 : 0;
+    const float marginX = static_cast<float>(StyleNumber(properties, kind + ".horizontalMargin", 0) * modelUnitsPerPlottedInch);
+    const float marginY = static_cast<float>(StyleNumber(properties, kind + ".verticalMargin", 0) * modelUnitsPerPlottedInch);
     dwg_point_3d p{};
-    worldLocal(centerInCell ? (local.x0 + local.x1) * .5f : local.x0,
-               centerInCell ? (local.y0 + local.y1) * .5f : local.y0 + static_cast<float>(textH), &p);
+    worldLocal(horizontal == 1 ? (local.x0 + local.x1) * .5f : horizontal == 2 ? local.x1 - marginX : local.x0 + marginX,
+               vertical == 1 ? (local.y0 + local.y1) * .5f : vertical == 2 ? local.y1 - marginY : local.y0 + marginY, &p);
     const CadFieldContext fctx = CadFieldContextFromState(st);
     std::string wire = SanitizeDwgTextSymbols(table.cells[ci]);
     if (wire.empty())
@@ -4718,18 +5187,22 @@ bool WriteCadTable(const AppCommandState& st, const CadTable& table, Dwg_Object_
     }
     if (Dwg_Entity_MTEXT* mt = dwg_add_MTEXT(hdr, &p, std::max<double>(local.x1 - local.x0, 1.e-3), flat.c_str())) {
       mt->text_height = textH;
-      mt->attachment = centerInCell ? 5 : 1;
+      mt->attachment = static_cast<BITCODE_BS>(vertical * 3 + horizontal + 1);
       if (const auto* style = CadTableFindStyle(st.tableStyles, table.styleName)) {
         const auto& name = row == 0 && table.mergeTitleRow ? style->titleTextStyleName :
             row == static_cast<std::size_t>(table.mergeTitleRow ? 1 : 0) ? style->headerTextStyleName : style->textStyleName;
         if (const auto reference = dwg_find_tablehandle(tw.dwg, name.c_str(), "STYLE"))
           mt->style = dwg_add_handleref(tw.dwg, 5, reference->absolute_ref, nullptr);
       }
-      mt->x_axis_dir.x = std::cos(rotRad);
-      mt->x_axis_dir.y = std::sin(rotRad);
+      const double textAngle = rotRad + StyleNumber(properties, kind + ".textAngle", 0) * kPi / 180.0;
+      mt->x_axis_dir.x = std::cos(textAngle);
+      mt->x_axis_dir.y = std::sin(textAngle);
       mt->x_axis_dir.z = 0.0;
-      if (attr != nullptr)
-        tw.Apply(mt->parent, *attr);
+      EntityAttributes textAttributes = attr ? *attr : EntityAttributes{};
+      const std::string color = StyleProperty(properties, kind + ".textColor");
+      if (!color.empty()) textAttributes.color = color;
+      else if (tableStyle) textAttributes.color = kind == "Title" ? tableStyle->titleTextColor : kind == "Header" ? tableStyle->headerTextColor : tableStyle->dataTextColor;
+      tw.Apply(mt->parent, textAttributes);
       if (fldCtx != nullptr && fldCtx->enabled && mt->parent != nullptr &&
           CadTextContainsFieldCodes(table.cells[ci])) {
         const std::string nativeWire = DwgExportPrepareAnnotationFieldText(
@@ -5580,32 +6053,21 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
     if (a != nullptr)
       tw.Apply(ent, *a);
   };
-  if (ds.dimStyle == nullptr) {
-    ds.dimStyle = EnsureDimStyleNamed(dwg, st.activeDimensionStyle.name);
-    if (ds.dimStyle != nullptr) {
-      const DimensionStyle& sty = st.activeDimensionStyle;
-      const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
-      ds.dimStyle->DIMTXT = static_cast<double>(sty.textSizeInches) * mup;
-      ds.dimStyle->DIMASZ = static_cast<double>(sty.arrowSizeInches) * mup;
-      ds.dimStyle->DIMDEC = std::clamp(sty.unitPrecision, 0, 8);
-      ds.dimStyle->DIMBLK_T = dwg_add_u8_input(dwg, DimArrowBlockName(sty.arrowType));
-      DimStyleSetCmc(&ds.dimStyle->DIMCLRD, sty.dimLineColor, tw.useTrueColor);
-      DimStyleSetCmc(&ds.dimStyle->DIMCLRE, sty.extLineColor, tw.useTrueColor);
-      DimStyleSetCmc(&ds.dimStyle->DIMCLRT, sty.textColor, tw.useTrueColor);
-    }
-  }
+  const DimensionStyle& style = CadDimensionStyleForAnnotation(st, an);
   CadDimStrokeParams sp;
   sp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
-  sp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
-  sp.arrowType = st.activeDimensionStyle.arrowType;
+  sp.arrowSizeInches = style.arrowSizeInches;
+  sp.arrowType = style.arrowType;
+  sp.style = &style;
   CadDimWorldStrokes strokes;
   CadDimBuildWorldStrokes(an, sp, &strokes);
-  const double labelH = std::max(static_cast<double>(an.plottedHeightInches) *
-                                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6),
+  const double labelH = std::max(static_cast<double>(an.ovHeight ? an.plottedHeightInches : style.textSizeInches) *
+                                     std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6) *
+                                     (StyleFlag(style.props, "annotative") ? 1.0 : StyleNumber(style.props, "overallScale", 1)),
                                  1e-3);
   Dwg_Object_BLOCK_HEADER* anonBlk = WriteDimAnonymousBlock(
       dwg, &ds.anonCounter, strokes, static_cast<double>(an.insZ), st.worldDocumentOriginX,
-      st.worldDocumentOriginY, an.text, labelH);
+      st.worldDocumentOriginY, CadAnnotationResolvedText(st, an), labelH);
   dwg_point_3d textMid{};
   world(an.insX, an.insY, an.insZ, &textMid);
   Dwg_Entity_DIMENSION_ALIGNED* dimA = nullptr;
@@ -5670,7 +6132,7 @@ static void WriteDimensionAnnotation(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr
     const std::string dimStyleName = an.dimensionStyleName.empty() ? st.activeDimensionStyle.name : an.dimensionStyleName;
     if (BITCODE_H styleRef = dwg_find_tablehandle(dwg, dimStyleName.c_str(), "DIMSTYLE"))
       common->dimstyle = dwg_add_handleref(dwg, 5, styleRef->absolute_ref, nullptr);
-    common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.text).c_str());
+    common->user_text = dwg_add_u8_input(dwg, SanitizeDwgTextSymbols(an.dimensionTextOverride).c_str());
     common->text_rotation = static_cast<double>(an.rotationRad);
     common->elevation = static_cast<double>(an.insZ);
     if (anonBlk != nullptr) {
@@ -6424,6 +6886,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
   tw.BuildStyleTable(st, st.modelUnitsPerPlottedInch);
   tw.BuildDimensionStyleTable(st, st.modelUnitsPerPlottedInch);
   tw.BuildMleaderStyleTable(st, st.modelUnitsPerPlottedInch);
+  tw.BuildTableStyleTable(st, st.modelUnitsPerPlottedInch);
   WriteAnnotationScalesFromState(st, dwg, log, &annotCtx, outputVersion);
   WriteViewportZoomScalesFromState(st, dwg, log, outputVersion);
   // Register every linetype the entities reference up front, so no LTYPE table object is created

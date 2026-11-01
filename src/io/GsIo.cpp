@@ -1193,6 +1193,7 @@ json BuildRoot(const AppCommandState& st) {
       o["name"] = s.name;
       if (!s.fontFamily.empty()) o["fontFamily"] = s.fontFamily;
       o["heightInches"] = s.heightInches;
+      if (!s.props.empty()) o["props"] = s.props;
       o["widthFactor"] = s.widthFactor;
       if (s.obliqueDeg != 0.f) o["obliqueDeg"] = s.obliqueDeg;
       if (s.bold)   o["bold"] = true;
@@ -1288,6 +1289,7 @@ json BuildRoot(const AppCommandState& st) {
       o["unitPrecision"] = ds.unitPrecision;
       o["unitScale"] = ds.unitScale;
       if (!ds.unitSuffix.empty()) o["unitSuffix"] = ds.unitSuffix;
+      if (!ds.props.empty()) o["props"] = ds.props;
       doc["dimensionStyle"] = std::move(o);
     }
     json all = json::array();
@@ -1318,6 +1320,7 @@ json BuildRoot(const AppCommandState& st) {
       o["unitPrecision"] = style.unitPrecision;
       o["unitScale"] = style.unitScale;
       if (!style.unitSuffix.empty()) o["unitSuffix"] = style.unitSuffix;
+      if (!style.props.empty()) o["props"] = style.props;
       all.push_back(std::move(o));
     }
     doc["dimensionStyles"] = std::move(all);
@@ -1336,6 +1339,7 @@ json BuildRoot(const AppCommandState& st) {
         o["textFont"] = ms.textFont;
       o["arrowSizeInches"] = ms.arrowSizeInches;
       o["landingGapInches"] = ms.landingGapInches;
+      if (!ms.props.empty()) o["props"] = ms.props;
       doc["multileaderStyle"] = std::move(o);
     }
     json all = json::array();
@@ -1356,6 +1360,7 @@ json BuildRoot(const AppCommandState& st) {
       item["arrowSizeInches"] = style.arrowSizeInches;
       item["landingGapInches"] = style.landingGapInches;
       item["annotativeDefault"] = style.annotativeDefault;
+      if (!style.props.empty()) item["props"] = style.props;
       all.push_back(std::move(item));
     }
     doc["multileaderStyles"] = std::move(all);
@@ -1373,6 +1378,7 @@ json BuildRoot(const AppCommandState& st) {
       o["columnHeaders"] = style.columnHeaders;
       o["columnExpressions"] = style.columnExpressions;
       o["columnWidths"] = style.columnWidths;
+      if (!style.props.empty()) o["props"] = style.props;
       o["title"] = style.title;
       o["civilStyleName"] = style.civilStyleName;
       o["textStyleName"] = style.textStyleName;
@@ -3154,6 +3160,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.heightInches = o.value("heightInches", 0.125f);
       s.widthFactor  = o.value("widthFactor", 1.f);
       s.obliqueDeg   = o.value("obliqueDeg", 0.f);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) s.props[property.key()] = property.value().get<std::string>();
+      }
       s.bold         = o.value("bold", false);
       s.italic       = o.value("italic", false);
       if (!s.name.empty()) st.textStyles.push_back(std::move(s));
@@ -3271,6 +3281,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ds.unitPrecision = o.value("unitPrecision", ds.unitPrecision);
       ds.unitScale = o.value("unitScale", ds.unitScale);
       ds.unitSuffix = o.value("unitSuffix", ds.unitSuffix);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) ds.props[property.key()] = property.value().get<std::string>();
+      }
     }
     st.dimensionStyles.clear();
     if (doc.contains("dimensionStyles") && doc["dimensionStyles"].is_array()) {
@@ -3293,6 +3307,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         style.unitPrecision = o.value("unitPrecision", style.unitPrecision);
         style.unitScale = o.value("unitScale", style.unitScale);
         style.unitSuffix = o.value("unitSuffix", style.unitSuffix);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
         if (std::none_of(st.dimensionStyles.begin(), st.dimensionStyles.end(), [&](const DimensionStyle& existing) {
               return existing.name == style.name;
             })) st.dimensionStyles.push_back(std::move(style));
@@ -3314,6 +3332,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       ms.arrowSizeInches = o.value("arrowSizeInches", ms.arrowSizeInches);
       ms.landingGapInches = o.value("landingGapInches", ms.landingGapInches);
       ms.annotativeDefault = o.value("annotativeDefault", false);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) ms.props[property.key()] = property.value().get<std::string>();
+      }
     }
     st.activeMultileaderStyle = ms;
     st.mleaderStyleDraft = ms;
@@ -3329,6 +3351,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         style.arrowSizeInches = o.value("arrowSizeInches", style.arrowSizeInches);
         style.landingGapInches = o.value("landingGapInches", style.landingGapInches);
         style.annotativeDefault = o.value("annotativeDefault", style.annotativeDefault);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
         if (MultileaderStyles::Find(st.multileaderStyles, style.name) == nullptr)
           st.multileaderStyles.push_back(std::move(style));
       }
@@ -3356,6 +3382,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       style.columnHeaders = o.value("columnHeaders", style.columnHeaders);
       style.columnExpressions = o.value("columnExpressions", style.columnExpressions);
       style.columnWidths = o.value("columnWidths", style.columnWidths);
+      if (o.contains("props") && o["props"].is_object()) {
+        for (const auto& property : o["props"].items())
+          if (property.value().is_string()) style.props[property.key()] = property.value().get<std::string>();
+      }
       style.title = o.value("title", style.title);
       style.civilStyleName = o.value("civilStyleName", style.civilStyleName);
       style.textStyleName = o.value("textStyleName", style.textStyleName);

@@ -79,3 +79,63 @@ Style collections affect drawing domain state, undo, serialization, and DWG tran
 - `build.bat debug` and `[civil3d]` pass (503 assertions in 6 cases) with the updated fixture present.
   Point tables and Civil 3D style definitions are still not mapped into editable GoSurvey objects;
   REQ-478/479 remain incomplete.
+
+### Style modification follow-up (2026-11-01)
+
+Authority: REQ-478 statements 2, 5, 7; user explicitly requests the supplied Text, Dimension,
+Multileader and Table Modify dialogs and completion of their editable settings.
+
+Diagnosis: EditorDialogs still constructs the old sparse forms. The interrupted StyleEditors.cpp
+is not a CMake source and implements only dimensions. Newly added property maps have no serializer,
+so accepting additional controls without wiring IO would silently discard settings.
+
+Plan: finish the four copy-on-accept editors, preserve cancel semantics, replace the old forms,
+serialize additional properties in the drawing payload, map equivalent native fields, and apply
+supported appearance properties to regeneration. Reuse existing drawing-owned styles and undo flow;
+no new dependency or Autodesk runtime requirement. Verify with modal dialog interaction tests,
+style-payload/native-DWG regressions, Release build and suite, and paired UI captures/panel.
+
+Plan self-review: APPROVE within existing REQ-478 architecture. Saving properties alone does not
+establish rendering/native interoperability; these paths require separate evidence before completion.
+
+#### Follow-up verification evidence (2026-11-01)
+
+- First Release builds of the four editors succeeded. Modal accept/cancel and all seven DIMSTY tabs
+  passed (`style-latest-qt.log`, 4 Qt cases); domain/native style tests passed 4,619 assertions in 30 cases.
+- Native DIMSTYLE checks cover suppression, offsets, alternate units, tolerance values and gaps;
+  native STYLE checks cover zero height, generation flags and vertical text. MLEADERSTYLE checks
+  cover spline type, landing length, frame and max points. Additional properties persist in DWG JSON.
+- AutoCAD opened `build/artifacts/style-baseline-roundtrip.dwg` directly; AUDIT reported zero errors
+  and zero fixes (`style-autocad-audit.out`). This validates native-file acceptance, not every style field.
+- The full CTest run exposed two pre-existing failing assertions: Civil table import widened the saved
+  frame from 93.42857 to 114.54 using a generic character-count heuristic and doubled description
+  width; a normal test required GOSURVEY_ORACLE_DIR despite having an artifact-directory default available.
+  Fix: preserve the source frame, derive table auto-fit bands from actual SHX ink bounds/cap heights
+  when available, and report missing-font metric estimates. The audit test gets a checkout-local default.
+  Full verification must be rerun after these corrections; the initial failing run is retained.
+- No completion claim: TABLESTYLE native encoding, wider modifier coverage, paired Civil 3D UI review,
+  final full-suite verification, docs updates and PR publication remain under active work.
+
+#### Native TABLESTYLE decoder root cause (2026-11-01)
+
+The resaved baseline's native Standard TABLESTYLE reports numoverrides=3, but LibreDWG's schema
+consumes only one `ovr` record and prints TODO. A raw decoder probe shows the first is `_TITLE`
+(id 1), followed by two unconsumed cell-style records. This prevents complete data/header/title
+style mapping and produces a value-out-of-bounds read result. The codec now repeats the native
+per-cell version + CellStyle + id/type/name record numoverrides times, with a bounded count.
+Native baseline decoding, a controlled style fixture, native export and AutoCAD AUDIT are required
+before this decoder/export path can be marked verified.
+
+#### Native TABLESTYLE encoding evidence
+
+- Added a native constructor and encoded title/header/data style arrays for R2010+ and legacy rows for
+  R2004/R2007. GoSurvey exports drawing table styles into ACAD_TABLESTYLE, with native ownership/reactors.
+- `native-table-styles-audit.out`: AutoCAD opened the Rapides export with these records and AUDIT found
+  zero errors/zero fixes. The source dictionary restores the formerly lost Legend and Proposed names.
+- `civil-decoder/table-api-generated-reference.txt` and `table-api-methods.txt`: AutoCAD's managed API
+  reads the generated Survey Schedule style as distinct title/header/data heights, a yellow title fill,
+  BottomRight header alignment, and hidden Data top/bottom borders. Query individual GridLineType values;
+  AutoCAD's getter with AllGridLines returns True even when individual borders are hidden.
+- A codec ownership regression appeared immediately when the legacy first-record alias was freed as an
+  owner as well as the new array. The legacy free path now skips that borrowed alias. Focused native/style
+  tests pass after the correction. Retain this case in regression coverage; run the complete suite again.

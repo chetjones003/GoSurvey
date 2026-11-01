@@ -271,6 +271,102 @@ int CountDwgMultileaders(const char* pathUtf8) {
   return CountDwgFixedType(pathUtf8, DWG_TYPE_MULTILEADER);
 }
 
+TEST_CASE("Modified dimension and text settings are native DWG fields", "[dwg][libredwg][req478][styles]") {
+  ScratchDir dir("dwg-style-settings");
+  const auto file = (dir.path / "styles.dwg").string();
+  AppCommandState state;
+  DimensionStyle dimension;
+  dimension.name = "Modified";
+  dimension.props = {{"suppressExt1", "1"}, {"suppressDim2", "1"}, {"offsetFromOrigin", "0.2"},
+      {"extendBeyondDimLines", "0.3"}, {"altEnabled", "1"}, {"altMultiplier", "12"},
+      {"tolMethod", "Deviation"}, {"tolUpper", "0.15"}, {"tolLower", "0.05"}, {"textOffset", "0.12"}};
+  state.dimensionStyles = {dimension}; state.activeDimensionStyle = dimension;
+  TextStyle text; text.name = "Mirrored"; text.fontFamily = "romans.shx"; text.heightInches = 0;
+  text.props = {{"backwards", "1"}, {"upsideDown", "1"}, {"vertical", "1"},
+      {"useBigFont", "1"}, {"bigFont", "bigfont.shx"}};
+  state.textStyles.push_back(text);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, file.c_str(), log));
+  Dwg_Data dwg{}; REQUIRE(dwg_read_file(file.c_str(), &dwg) == 0);
+  auto dimHandle = dwg_find_tablehandle(&dwg, "Modified", "DIMSTYLE"); REQUIRE(dimHandle);
+  const auto* dim = dwg_resolve_handle_silent(&dwg, dimHandle->absolute_ref)->tio.object->tio.DIMSTYLE;
+  REQUIRE(dim);
+  CHECK(dim->DIMSE1 == 1); CHECK(dim->DIMSD2 == 1);
+  CHECK(dim->DIMEXO == Catch::Approx(10)); CHECK(dim->DIMEXE == Catch::Approx(15));
+  CHECK(dim->DIMALT == 1); CHECK(dim->DIMALTF == Catch::Approx(12));
+  CHECK(dim->DIMTOL == 1); CHECK(dim->DIMTP == Catch::Approx(.15)); CHECK(dim->DIMTM == Catch::Approx(.05));
+  CHECK(dim->DIMGAP == Catch::Approx(6));
+  auto textHandle = dwg_find_tablehandle(&dwg, "Mirrored", "STYLE"); REQUIRE(textHandle);
+  const auto* native = dwg_resolve_handle_silent(&dwg, textHandle->absolute_ref)->tio.object->tio.STYLE;
+  REQUIRE(native); CHECK(native->generation == 6); CHECK(native->is_vertical == 1);
+  CHECK(native->text_size == Catch::Approx(0));
+  dwg_free(&dwg);
+}
+
+TEST_CASE("Imported annotative styles retain paper heights independently of drawing scale", "[dwg][libredwg][req478][styles]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, (std::string(GOSURVEY_SAMPLES_DIR) + "/rapides-substation-civil3d-pointtables.dwg").c_str(), log, false));
+  const auto* dimension = DimensionStyles::Find(state.dimensionStyles, "LEE-STANDARD");
+  REQUIRE(dimension);
+  CHECK(dimension->props.at("annotative") == "1");
+  CHECK(dimension->textSizeInches == Catch::Approx(.08));
+  CHECK(dimension->arrowSizeInches == Catch::Approx(.08));
+  CHECK(dimension->props.at("dimLineWeight") == "ByLayer");
+  CHECK(dimension->props.at("extLineWeight") == "ByBlock");
+  const auto* text = TextStyles::Find(state.textStyles, "pnts"); REQUIRE(text);
+  CHECK(text->props.at("annotative") == "1");
+  CHECK(text->heightInches == Catch::Approx(.06));
+  const auto* leader = MultileaderStyles::Find(state.multileaderStyles, "l60s Sline"); REQUIRE(leader);
+  CHECK(leader->annotativeDefault);
+  CHECK(leader->textSizeInches == Catch::Approx(.06));
+}
+
+TEST_CASE("Native TABLESTYLE carries all three independently editable cell styles", "[dwg][libredwg][req478][styles][table-style]") {
+  ScratchDir dir("dwg-table-styles");
+  const auto file = (dir.path / "table-styles.dwg").string();
+  AppCommandState state;
+  state.dwgExportVersion = DwgSaveVersion::R2018;
+  CadTableStyle style;
+  style.name = "Survey Schedule";
+  style.textHeightInches = .14f;
+  style.headerTextHeightInches = .18f;
+  style.titleTextHeightInches = .24f;
+  style.props = {{"Data.horizontalMargin", "0.2"}, {"Data.bordersVisible", "0"},
+      {"Title.fillColor", "Yellow"}, {"Header.alignment", "Bottom Right"}};
+  state.tableStyles.push_back(style);
+  std::vector<std::string> log;
+  REQUIRE(ExportDwgFile(state, file.c_str(), log));
+  Dwg_Data drawing{};
+  REQUIRE(dwg_read_file(file.c_str(), &drawing) == 0);
+  const auto reference = dwg_find_tablehandle(&drawing, "Survey Schedule", "TABLESTYLE");
+  REQUIRE(reference);
+  const auto* object = dwg_resolve_handle_silent(&drawing, reference->absolute_ref);
+  REQUIRE(object);
+  const auto* record = object->tio.object->tio.TABLESTYLE;
+  REQUIRE(record); REQUIRE(record->overrides); REQUIRE(record->numoverrides == 3);
+  CHECK(record->overrides[0].id == 1);
+  CHECK(record->overrides[1].id == 2);
+  CHECK(record->overrides[2].id == 3);
+  CHECK(record->overrides[0].cellstyle.content_format.text_height == Catch::Approx(12));
+  CHECK(record->overrides[1].cellstyle.content_format.text_height == Catch::Approx(9));
+  CHECK(record->overrides[2].cellstyle.content_format.text_height == Catch::Approx(7));
+  CHECK(record->overrides[1].cellstyle.content_format.cell_alignment == 9);
+  CHECK(record->overrides[2].cellstyle.horiz_margin == Catch::Approx(10));
+  REQUIRE(record->overrides[2].cellstyle.borders);
+  CHECK(record->overrides[2].cellstyle.borders[0].visible == 1);
+  dwg_free(&drawing);
+  AppCommandState imported;
+  REQUIRE(ImportLibreCadFile(imported, file.c_str(), log, false));
+  const auto* loaded = CadTableFindStyle(imported.tableStyles, style.name);
+  REQUIRE(loaded);
+  CHECK(loaded->textHeightInches == Catch::Approx(.14));
+  CHECK(loaded->headerTextHeightInches == Catch::Approx(.18));
+  CHECK(loaded->titleTextHeightInches == Catch::Approx(.24));
+  CHECK(loaded->props.at("Data.bordersVisible") == "0");
+  CHECK(loaded->props.at("Header.alignment") == "Bottom Right");
+}
+
 TEST_CASE("DWG multileaders reference named MLEADERSTYLE records", "[dwg][libredwg][req478][mleader-style]") {
   ScratchDir dir("dwg-mleader-style");
   const auto p = (dir.path / "mleader-style.dwg").string();
@@ -280,6 +376,8 @@ TEST_CASE("DWG multileaders reference named MLEADERSTYLE records", "[dwg][libred
   style.textSizeInches = 0.16f;
   style.arrowSizeInches = 0.18f;
   style.landingGapInches = 0.07f;
+  style.props = {{"leaderType", "Spline"}, {"landingLength", "0.75"},
+                 {"defaultText", "Survey note"}, {"textFrame", "1"}, {"maxPoints", "4"}};
   st.multileaderStyles = {MultileaderStyles::Default(), style};
   st.activeMultileaderStyle = style;
   CadMultileader ml;
@@ -312,6 +410,10 @@ TEST_CASE("DWG multileaders reference named MLEADERSTYLE records", "[dwg][libred
   CHECK(nativeStyle->text_height == Catch::Approx(8.0));
   CHECK(nativeStyle->arrow_head_size == Catch::Approx(9.0));
   CHECK(nativeStyle->landing_gap == Catch::Approx(3.5));
+  CHECK(nativeStyle->type == 2);
+  CHECK(nativeStyle->landing_dist == Catch::Approx(37.5));
+  CHECK(nativeStyle->has_text_frame == 1);
+  CHECK(nativeStyle->max_points == 4);
   int referenced = 0;
   for (BITCODE_BL i = 0; i < dwg.num_objects; ++i) {
     Dwg_Object* object = &dwg.object[i];
@@ -4024,8 +4126,8 @@ TEST_CASE("Write multileader audit fixtures for accoreconsole", "[.][mleader-aud
 
 TEST_CASE("Write full Rapides mapped export for accoreconsole AUDIT", "[req479][full-baseline-audit]") {
   const char* root = std::getenv("GOSURVEY_ORACLE_DIR");
-  REQUIRE(root != nullptr);
-  const std::filesystem::path out(root);
+  const std::filesystem::path out = root ? std::filesystem::path(root) :
+      std::filesystem::path(GOSURVEY_SAMPLES_DIR).parent_path() / "build" / "artifacts" / "full-baseline-audit";
   std::filesystem::create_directories(out);
   AppCommandState mapped;
   std::vector<std::string> log;

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -214,6 +215,8 @@ struct TextStyle {
   float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
   bool bold = false;
   bool italic = false;
+  /// Remaining Text Style settings (annotative, upside down, backwards, vertical, big font, ...), keyed by name.
+  std::map<std::string, std::string> props;
 };
 
 /// One drawable component of a surface style (REQ-070 / ADR-036 (d) (i)): the triangle edges, the
@@ -445,6 +448,8 @@ struct CadAnnotation {
   std::string styleName;
   /// DIMSTYLE used by native dimensions. Kept separate from STYLE for dimension label text.
   std::string dimensionStyleName;
+  /// Native DIMENSION user text; empty means regenerate the measured value from DIMSTYLE.
+  std::string dimensionTextOverride;
   /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
   /// shear faithfully; TTF approximates (the UI font renderer has no glyph shear).
   float obliqueDeg = 0.f;

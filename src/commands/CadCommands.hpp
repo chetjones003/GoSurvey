@@ -4899,6 +4899,7 @@ struct AppCommandState {
   MultileaderStyle activeMultileaderStyle = MultileaderStyles::Default();
   MultileaderStyle mleaderStyleDraft = MultileaderStyles::Default();
   bool showMleaderStyleDialog = false;
+  bool showTableStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;

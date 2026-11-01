@@ -27923,6 +27923,119 @@ dwg_fill_MLEADERSTYLE_defaults (Dwg_Data *restrict dwg,
   sty->text_extended = 0;
 }
 
+/* GoSurvey REQ-478: drawing-owned native table styles. Defaults are taken from the
+   supplied AutoCAD R2018 Standard style; each modern cell-style record has its own map key. */
+EXPORT Dwg_Object_TABLESTYLE *
+dwg_add_TABLESTYLE (Dwg_Data *restrict dwg, const char *restrict name)
+{
+  if (!dwg || !name || dwg->header.version < R_2004)
+    return NULL;
+  REQUIRE_CLASS ("TABLESTYLE");
+  {
+    API_ADD_OBJECT (TABLESTYLE);
+    const BITCODE_BL object_index = obj->index;
+    BITCODE_H dictref = dwg_find_dictionary (dwg, "ACAD_TABLESTYLE");
+    Dwg_Object_DICTIONARY *dict = NULL;
+    if (!dictref)
+      {
+        dict = dwg_add_DICTIONARY (dwg, "ACAD_TABLESTYLE", NULL, 0);
+        dictref = dwg_find_dictionary (dwg, "ACAD_TABLESTYLE");
+      }
+    obj = &dwg->object[object_index];
+    if (dictref)
+      {
+        Dwg_Object *dictionary = dwg_ref_object (dwg, dictref);
+        if (dictionary && dictionary->tio.object)
+          {
+            dict = dictionary->tio.object->tio.DICTIONARY;
+            dwg_add_DICTIONARY_item (dict, name, obj->handle.value);
+            obj->tio.object->ownerhandle = dwg_add_handleref (dwg, 4, dictionary->handle.value, obj);
+            add_obj_reactor (obj->tio.object, dictionary->handle.value);
+          }
+      }
+    _obj->name = dwg_add_u8_input (dwg, name);
+    _obj->horiz_cell_margin = _obj->vert_cell_margin = 0.06;
+    if (dwg->header.version >= R_2010)
+      {
+        Dwg_CellStyle *base = &_obj->sty.cellstyle;
+        _obj->unknown_bl2 = 101;
+        _obj->sty.id = 4;
+        _obj->sty.type = 2;
+        _obj->sty.name = dwg_add_u8_input (dwg, "Table");
+        base->type = 5;
+        base->data_flags = 1;
+        base->bg_color.method = 0xc8;
+        base->bg_color.rgb = 0xc8000000;
+        base->content_layout = 1;
+        base->margin_override_flags = 1;
+        base->vert_margin = base->horiz_margin = base->bottom_margin = base->right_margin = 0.06;
+        base->content_format.value_data_type = 0x200;
+        base->content_format.block_scale = 1.0;
+        base->content_format.cell_alignment = 1;
+        base->content_format.content_color.method = 0xc1;
+        base->content_format.content_color.rgb = 0xc1000000;
+        base->content_format.text_height = 0.18;
+        _obj->numoverrides = 3;
+        _obj->overrides = calloc (3, sizeof (Dwg_TABLESTYLE_CellStyle));
+        if (!_obj->overrides) return NULL;
+        for (unsigned i = 0; i < 3; ++i)
+          {
+            Dwg_TABLESTYLE_CellStyle *row = &_obj->overrides[i];
+            row->parent = _obj;
+            row->record_id = row->id = i + 1;
+            row->type = i == 2 ? 2 : 1;
+            row->name = dwg_add_u8_input (dwg, i == 0 ? "_TITLE" : i == 1 ? "_HEADER" : "_DATA");
+            row->cellstyle = *base;
+            row->cellstyle.margin_override_flags = 0;
+            row->cellstyle.merge_flags = i == 0 ? 0x8000 : 0;
+            row->cellstyle.content_format.text_height = i == 0 ? 0.25 : 0.18;
+            row->cellstyle.content_format.cell_alignment = i == 2 ? 2 : 5;
+            row->cellstyle.content_format.text_style = dwg_find_tablehandle (dwg, "Standard", "STYLE");
+            row->cellstyle.num_borders = 6;
+            row->cellstyle.borders = calloc (6, sizeof (Dwg_GridFormat));
+            if (!row->cellstyle.borders) return NULL;
+            for (unsigned j = 0; j < 6; ++j)
+              {
+                Dwg_GridFormat *border = &row->cellstyle.borders[j];
+                border->index_mask = 1u << j;
+                border->border_type = 1;
+                border->linewt = -2;
+                border->color.method = 0xc1;
+                border->color.rgb = 0xc1000000;
+                border->double_line_spacing = 0.045;
+              }
+          }
+      }
+    else
+      {
+        _obj->num_rowstyles = 3;
+        _obj->rowstyles = calloc (3, sizeof (Dwg_TABLESTYLE_rowstyles));
+        if (!_obj->rowstyles) return NULL;
+        for (unsigned i = 0; i < 3; ++i)
+          {
+            Dwg_TABLESTYLE_rowstyles *row = &_obj->rowstyles[i];
+            row->parent = _obj;
+            row->text_style = dwg_find_tablehandle (dwg, "Standard", "STYLE");
+            row->text_height = i == 1 ? 0.25 : 0.18;
+            row->text_alignment = i == 0 ? 2 : 5;
+            row->text_color.method = row->fill_color.method = 0xc1;
+            row->text_color.rgb = row->fill_color.rgb = 0xc1000000;
+            row->num_borders = 6;
+            row->borders = calloc (6, sizeof (Dwg_TABLESTYLE_border));
+            if (!row->borders) return NULL;
+            for (unsigned j = 0; j < 6; ++j)
+              {
+                row->borders[j].linewt = -2;
+                row->borders[j].visible = 1;
+                row->borders[j].color.method = 0xc1;
+                row->borders[j].color.rgb = 0xc1000000;
+              }
+          }
+      }
+    return _obj;
+  }
+}
+
 EXPORT Dwg_Object_MLEADERSTYLE *
 dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg, const char *restrict name)
 {

@@ -1,6 +1,7 @@
 #include "CadField.hpp"
 
 #include "CadCommands.hpp"
+#include "CadDimGeom.hpp"
 #include "geom2d.hpp"
 
 #include <cassert>
@@ -477,5 +478,16 @@ CadFieldContext CadFieldContextFromState(const AppCommandState& st) {
 }
 
 std::string CadAnnotationResolvedText(const AppCommandState& st, const CadAnnotation& ann) {
+  if ((ann.kind == CadAnnotation::Kind::DimLinear || ann.kind == CadAnnotation::Kind::DimAligned) && !ann.dimensionStyleName.empty()) {
+    float x1=0, y1=0, x2=0, y2=0, tx=0, ty=0, nx=0, ny=0, measured=0;
+    if (CadDimAnyGeometry(ann, &x1, &y1, &x2, &y2, &tx, &ty, &nx, &ny, &measured))
+      {
+        const std::string number = DimensionStyles::FormatLinearDim(measured, CadDimensionStyleForAnnotation(st, ann));
+        if (ann.dimensionTextOverride.empty()) return number;
+        std::string text = ann.dimensionTextOverride;
+        if (const auto placeholder = text.find("<>"); placeholder != std::string::npos) text.replace(placeholder, 2, number);
+        return text;
+      }
+  }
   return CadFieldEvaluateWire(st, ann.text, CadFieldContextFromState(st));
 }

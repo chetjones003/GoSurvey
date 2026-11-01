@@ -1,4 +1,5 @@
 #include "EditorPointTableDialog.hpp"
+#include "StyleEditors.hpp"
 
 #include "CadCommands.hpp"
 #include "SurveyPoints.hpp"
@@ -180,29 +181,14 @@ void ShowAddPointTableDialog(QWidget* parent, AppCommandState& state, std::vecto
       return style.name == styleCombo->currentText().toUtf8().toStdString();
     });
     if (it == state.tableStyles.end()) return;
-    QDialog editor(&dialog);
-    editor.setWindowTitle("Modify Table Style: " + QString::fromUtf8(it->name.c_str()));
-    editor.setStyleSheet("QDialog { background: #f0f0f0; color: #202020; } QLabel { color: #202020; }");
-    auto* form = new QFormLayout(&editor);
-    auto* textHeight = new QDoubleSpinBox(&editor);
-    textHeight->setRange(0.001, 100000.0); textHeight->setDecimals(4); textHeight->setValue(it->textHeightInches);
-    auto* columnWidth = new QDoubleSpinBox(&editor);
-    columnWidth->setRange(0.001, 100000.0); columnWidth->setDecimals(4); columnWidth->setValue(it->columnWidthInches);
-    auto* rowHeight = new QDoubleSpinBox(&editor);
-    rowHeight->setRange(0.001, 100000.0); rowHeight->setDecimals(4); rowHeight->setValue(it->rowHeightInches);
-    form->addRow("Text height:", textHeight);
-    form->addRow("Column width:", columnWidth);
-    form->addRow("Row height:", rowHeight);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &editor);
-    form->addRow(buttons);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &editor, &QDialog::accept);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &editor, &QDialog::reject);
-    if (editor.exec() == QDialog::Accepted) {
-      PushUndoSnapshot(state, "ADDPOINTTABLE table style");
-      it->textHeightInches = static_cast<float>(textHeight->value());
-      it->columnWidthInches = static_cast<float>(columnWidth->value());
-      it->rowHeightInches = static_cast<float>(rowHeight->value());
-    }
+    const std::string name = it->name;
+    CadTableStyle edited = *it;
+    QStringList names;
+    for (const auto& text : state.textStyles) names << FromUtf8(text.name);
+    if (!EditTableStyleDialog(&dialog, &edited, false, names)) return;
+    PushUndoSnapshot(state, "ADDPOINTTABLE table style");
+    it = std::find_if(state.tableStyles.begin(), state.tableStyles.end(), [&](const CadTableStyle& style) { return style.name == name; });
+    if (it != state.tableStyles.end()) *it = std::move(edited);
   });
 
   // A point group checks exactly its members (REQ-474 clause 2). "(none)" leaves the check boxes as they are.

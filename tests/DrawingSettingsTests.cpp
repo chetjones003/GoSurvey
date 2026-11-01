@@ -244,6 +244,7 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   dim.name = "Project Survey";
   dim.textSizeInches = 0.18f;
   dim.unitPrecision = 4;
+  dim.props = {{"suppressExt1", "1"}, {"altMultiplier", "25.4"}, {"tolUpper", "0.125"}};
   original.dimensionStyles.push_back(dim);
   original.activeDimensionStyle = dim;
   CadTableStyle table;
@@ -254,10 +255,12 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   table.gridLineColor = "1";
   table.borderColor = "5";
   table.dataTextColor = "150";
+  table.props = {{"Data.horizontalMargin", "0.2"}, {"Title.fillColor", "Yellow"}};
   original.tableStyles.push_back(table);
   MultileaderStyle mleader = MultileaderStyles::Default();
   mleader.name = "Site Callout";
   mleader.textSizeInches = 0.16f;
+  mleader.props = {{"leaderType", "Spline"}, {"defaultText", "Survey note"}};
   original.multileaderStyles.push_back(mleader);
   original.activeMultileaderStyle = mleader;
   TextStyle textStyle;
@@ -266,6 +269,7 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   textStyle.heightInches = 0.18f;
   textStyle.widthFactor = 0.82f;
   textStyle.obliqueDeg = 7.f;
+  textStyle.props = {{"backwards", "1"}, {"bigFont", "bigfont.shx"}};
   original.textStyles.push_back(textStyle);
   SurveyPointStyleDefinition pointStyle;
   pointStyle.name = "Construction Point";
@@ -294,6 +298,8 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   const DimensionStyle* loadedDim = DimensionStyles::Find(loaded.dimensionStyles, "Project Survey");
   REQUIRE(loadedDim != nullptr);
   CHECK(loadedDim->unitPrecision == 4);
+  CHECK(loadedDim->props == dim.props);
+  CHECK(loaded.activeDimensionStyle.props == dim.props);
   CHECK(loadedDim->textSizeInches == Catch::Approx(0.18f));
   CHECK(loaded.activeDimensionStyle.name == "Project Survey");
   const CadTableStyle* loadedTable = CadTableFindStyle(loaded.tableStyles, "Field Notes");
@@ -303,12 +309,15 @@ TEST_CASE("Drawing payload round-trips named dimension and table style collectio
   CHECK(loadedTable->gridLineColor == "1");
   CHECK(loadedTable->borderColor == "5");
   CHECK(loadedTable->dataTextColor == "150");
+  CHECK(loadedTable->props == table.props);
   CHECK(MultileaderStyles::Find(loaded.multileaderStyles, "Site Callout") != nullptr);
   CHECK(loaded.activeMultileaderStyle.name == "Site Callout");
+  CHECK(loaded.activeMultileaderStyle.props == mleader.props);
   const TextStyle* loadedTextStyle = TextStyles::Find(loaded.textStyles, "Wide Survey");
   REQUIRE(loadedTextStyle != nullptr);
   CHECK(loadedTextStyle->widthFactor == Catch::Approx(0.82f));
   CHECK(loadedTextStyle->obliqueDeg == Catch::Approx(7.f));
+  CHECK(loadedTextStyle->props == textStyle.props);
   REQUIRE(loaded.surveyPointStyles.size() == 2);
   CHECK(loaded.surveyPointStyles.back().name == "Construction Point");
   CHECK(loaded.surveyPointStyles.back().crossSpanPlottedInches == Catch::Approx(0.22f));

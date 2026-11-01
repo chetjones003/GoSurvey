@@ -3411,6 +3411,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       ++entityHandleCount;
     else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
+      const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
+      dxfDimParams.style = &dimensionStyle;
+      dxfDimParams.arrowType = dimensionStyle.arrowType;
+      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
       if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
       entityHandleCount += dxfDimEntityCount(strokes);
@@ -5308,6 +5312,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       }
     } else if (CadAnnotationIsDimension(an)) {
       CadDimWorldStrokes strokes;
+      const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, an);
+      dxfDimParams.style = &dimensionStyle;
+      dxfDimParams.arrowType = dimensionStyle.arrowType;
+      dxfDimParams.arrowSizeInches = dimensionStyle.arrowSizeInches;
       if (!CadDimBuildWorldStrokes(an, dxfDimParams, &strokes))
         continue;
       auto emitLine = [&](float x0, float y0, float x1, float y1) {

@@ -5,6 +5,7 @@
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,9 @@ struct CadTableStyle {
   std::string titleTextColor;
   std::string gridLineColor;
   std::string borderColor;
+  /// Cell-style settings of the Modify Table Style window (fill, alignment, margins, borders, ...), keyed by
+  /// "<Cell style>.<setting>", plus table-wide settings such as "direction".
+  std::map<std::string, std::string> props;
 };
 
 /// The styles every drawing has (REQ-475 clause 2). The point column lists follow the NRCS point file layout

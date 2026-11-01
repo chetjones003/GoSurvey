@@ -6,6 +6,7 @@
 #include "Version.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointTableDialog.hpp"
+#include "StyleEditors.hpp"
 #include "ViewportZoomScale.hpp"
 #include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
@@ -13136,6 +13137,79 @@ private Q_SLOTS:
     gallery.Refresh();
     QTest::qWait(150);
     QVERIFY(gallery.grab().save(Issue886Shot("qt-479-imported-marker-gallery.png")));
+  }
+
+  void issue804StyleEditorsAcceptCancelAndCapture() {
+    QWidget parent;
+    DimensionStyle dimension;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>();
+      QVERIFY(tabs); QCOMPARE(tabs->count(), 7);
+      auto* suppress = dialog->findChild<QCheckBox*>("suppressExt1");
+      QVERIFY(suppress); suppress->setChecked(true);
+      auto* upper = dialog->findChild<QDoubleSpinBox*>("tolUpper");
+      QVERIFY(upper); upper->setValue(.125);
+      for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-dimension-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditDimensionStyleDialog(&parent, &dimension, false, {"Standard", "ROMANS"}));
+    QCOMPARE(dimension.props.at("suppressExt1"), std::string("1"));
+    QCOMPARE(dimension.props.at("tolUpper"), std::string("0.125"));
+    const DimensionStyle saved = dimension;
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialog->findChild<QDoubleSpinBox*>("textHeight")->setValue(42);
+      dialog->reject();
+    });
+    QVERIFY(!EditDimensionStyleDialog(&parent, &dimension, false, {"Standard"}));
+    QVERIFY(dimension == saved);
+    TextStyle text;
+    text.name = "Standard";
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      QVERIFY(!dialog->findChild<QTabWidget*>());
+      dialog->findChild<QCheckBox*>("backwards")->setChecked(true);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-style-text.png")));
+      dialog->accept();
+    });
+    QVERIFY(EditTextStyleDialog(&parent, &text, false));
+    QCOMPARE(text.props.at("backwards"), std::string("1"));
+    MultileaderStyle leader;
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>(); QVERIFY(tabs); QCOMPARE(tabs->count(), 3);
+      dialog->findChild<QLineEdit*>("defaultText")->setText("Survey note");
+      dialog->findChild<QDoubleSpinBox*>("landingLength")->setValue(.75);
+      for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-mleader-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditMultileaderStyleDialog(&parent, &leader, false, {"Standard"}));
+    QCOMPARE(leader.props.at("defaultText"), std::string("Survey note"));
+    QCOMPARE(leader.props.at("landingLength"), std::string("0.75"));
+    CadTableStyle table = CadTableBuiltinStyles().front();
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      dialog->findChild<QDoubleSpinBox*>("Data.horizontalMargin")->setValue(.2);
+      dialog->findChild<QDoubleSpinBox*>("Title.textHeight")->setValue(.4);
+      auto* cell = dialog->findChild<QComboBox*>("tableCellStyle"); QVERIFY(cell);
+      for (int i = 0; i < cell->count(); ++i) {
+        cell->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-table-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditTableStyleDialog(&parent, &table, false, {"Standard"}));
+    QCOMPARE(table.props.at("Data.horizontalMargin"), std::string("0.2"));
+    QVERIFY(std::abs(table.titleTextHeightInches - .4f) < 1.e-6f);
   }
 
   void issue804AnnotateDialogsAndTablePreviewScreenshots() {
