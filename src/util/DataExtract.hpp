@@ -39,9 +39,10 @@ inline std::string ExtractUpper(std::string s) {
   return s;
 }
 
-// Parses the typed column list: empty or ALL selects every column; otherwise a comma-separated list of
-// TYPE, LAYER, TEXT, X, Y, Z in any case. Output order follows the typed order. Returns false with a
-// reason for an unknown or repeated name.
+/// Parses a comma-separated list of TYPE, LAYER, TEXT, X, Y, Z in any case. Empty or ALL
+/// selects every column; otherwise output follows the typed order. out must be non-null.
+/// Returns false for an unknown or repeated name, setting err if non-null. On failure, out
+/// retains any columns parsed before the error.
 inline bool ParseExtractColumns(const std::string& typed, std::vector<ExtractColumn>* out, std::string* err) {
   out->clear();
   std::string t = typed;
@@ -90,7 +91,8 @@ inline bool ParseExtractColumns(const std::string& typed, std::vector<ExtractCol
   return true;
 }
 
-// Builds a header row and one data row per record, in the order of \p cols.
+/// Builds a header row and one data row per record, in the order of \p cols. Text or
+/// coordinates without a corresponding hasText or hasPoint flag produce empty cells.
 inline SheetGrid::Grid BuildExtractGrid(const std::vector<ExtractColumn>& cols, const std::vector<ExtractRecord>& recs) {
   SheetGrid::Grid grid;
   SheetGrid::Row header;

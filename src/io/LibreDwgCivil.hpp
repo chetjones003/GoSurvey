@@ -100,7 +100,7 @@ struct PointStyleRecord {
     std::size_t stringBitCount);
 
 /// Decodes count handles starting at the bit offset start, resolving relative handles against
-/// objectHandle. Returns no value for invalid, truncated, or overflowing handle records.
+/// objectHandle. Returns no value for unsupported codes, invalid or truncated data, or overflow.
 [[nodiscard]] std::optional<std::vector<uint64_t>> DecodeHandles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t start,
     std::size_t count, uint64_t objectHandle);
@@ -111,8 +111,8 @@ struct PointStyleRecord {
     const unsigned char* bytes, std::size_t bitCount);
 
 /// Returns point-number and marker-style-handle pairs from a supported point node. handleStart is
-/// a bit offset; commonHandles is the number of leading handles to skip. Returns no value if the
-/// point records, references, or handles are invalid or truncated.
+/// a bit offset; commonHandles is the number of leading handles preceding style handles. Returns no
+/// value if point records, references, or handle data are invalid or truncated.
 [[nodiscard]] std::optional<std::vector<std::pair<int, uint64_t>>> DecodePointNodeMarkerStyles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t handleStart,
     std::size_t commonHandles, uint64_t objectHandle);
@@ -173,8 +173,8 @@ struct SurfaceStyleRecord {
 };
 
 /// Civil revision 1214 surface styles: name, the five plan display components and the contour
-/// intervals, with smoothing flag and factor when their tagged values match the supported layout.
-/// Label, slope and analysis settings are not decoded. The contour intervals
+/// intervals, plus the smoothing flag and factor when their tagged values match the supported layout.
+/// Smoothing type, label, slope and analysis settings are not decoded. The contour intervals
 /// sit in a fixed sequence of ten tagged values inside the record; the record is refused unless that
 /// sequence and the full set of component headers are present and valid.
 [[nodiscard]] std::optional<SurfaceStyleRecord> DecodeSurfaceStyle(
