@@ -4272,7 +4272,7 @@ static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::
 // points, breaklines, contours, boundaries or corridor). Point edits would be rebuilt from the edits alone and
 // replace the imported triangulation, so they are refused rather than silently losing it.
 static bool SurfaceIsImportedFixedTin(const CadSurface& s) {
-  return s.tin && !s.isVolumeSurface() && s.sourcePointGroups.empty() && s.sourcePointFiles.empty() &&
+  return s.importedFixedTin && s.tin && !s.isVolumeSurface() && s.sourcePointGroups.empty() && s.sourcePointFiles.empty() &&
          s.addedPointXyz.empty() && s.breaklines.empty() && s.contourSources.empty() && s.boundaries.empty() &&
          s.movedPoints.empty() && s.corridorFeatureLines.empty();
 }

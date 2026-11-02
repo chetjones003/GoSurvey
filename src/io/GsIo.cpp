@@ -2298,6 +2298,7 @@ json BuildRoot(const AppCommandState& st) {
         o["volumeBaseName"] = s.volumeBaseName;
       if (!s.volumeComparisonName.empty())
         o["volumeComparisonName"] = s.volumeComparisonName;
+      if (s.importedFixedTin) o["importedFixedTin"] = true;
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -4080,6 +4081,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         else
           log.push_back("Surface \"" + s.name + "\": stored triangulation is inconsistent — dropped.");
       }
+      s.importedFixedTin = s.tin && el.value("importedFixedTin", false);
       st.cadSurfaces.push_back(std::move(s));
     }
   }

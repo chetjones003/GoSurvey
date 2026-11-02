@@ -3064,6 +3064,7 @@ void ImportObject(AppCommandState& st, Dwg_Data* dwg, Dwg_Object* obj, const Xf2
           }
           tin->indices = std::move(record->indices);
           surface.tin = std::move(tin);
+          surface.importedFixedTin = true;
           if (const Dwg_Object* styleObject = ResolveTinSurfaceStyle(dwg, *obj))
             if (const auto style = DecodeCivilSurfaceStyleObject(*styleObject))
               surface.styleName = libredwgcad_detail::DecodeDwgString(style->name.c_str(), true);

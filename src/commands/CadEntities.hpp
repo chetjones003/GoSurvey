@@ -1393,6 +1393,9 @@ struct CadSurface {
 
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;
+  /// True for a triangulation imported from a Civil 3D DWG that has no definition to rebuild from. Tracked
+  /// explicitly (and saved) so a locally built surface that lost its last source is never mistaken for one.
+  bool importedFixedTin = false;
 
   /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
   /// re-reports on the next build.
