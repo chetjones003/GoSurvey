@@ -6,7 +6,10 @@
 
 class DrawingDocumentTabBar final : public QTabBar {
  public:
-  explicit DrawingDocumentTabBar(QWidget* parent = nullptr);
+  /// Document: the drawing tabs above the viewport (closable, tabs hang up from the bar's bottom edge).
+  /// Space: the Model/Layout tabs below the viewport (no close buttons, mirrored so they hang from the top).
+  enum class Kind { Document, Space };
+  explicit DrawingDocumentTabBar(QWidget* parent = nullptr, Kind kind = Kind::Document);
 
  protected:
   void paintEvent(QPaintEvent* event) override;
@@ -17,5 +20,6 @@ class DrawingDocumentTabBar final : public QTabBar {
   void leaveEvent(QEvent* event) override;
 
  private:
+  Kind m_Kind;
   int m_HoverTab = -1;
 };

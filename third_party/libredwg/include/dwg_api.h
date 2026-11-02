@@ -10017,6 +10017,9 @@ extern "C"
                       const char *restrict name) __nonnull_all;
 
   /* GoSurvey (issue #619): R2010+ multileader export. */
+  EXPORT Dwg_Object_TABLESTYLE *
+  dwg_add_TABLESTYLE (Dwg_Data *restrict dwg, const char *restrict name) __nonnull_all;
+
   EXPORT Dwg_Object_MLEADERSTYLE *
   dwg_add_MLEADERSTYLE (Dwg_Data *restrict dwg,
                         const char *restrict name) __nonnull_all;

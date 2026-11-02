@@ -5,6 +5,8 @@
 #include "io/DxfIo.hpp"
 #include "Version.hpp"
 #include "EditorViewport.hpp"
+#include "EditorPointTableDialog.hpp"
+#include "StyleEditors.hpp"
 #include "ViewportZoomScale.hpp"
 #include "ViewportRenderer.hpp"
 #include "TransformPreview.hpp"
@@ -6240,6 +6242,26 @@ private Q_SLOTS:
     state.activeMultileaderStyle.name = "Field Leaders";
     state.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
     state.surfaceStyles.front().name = "Field Surface";
+    SurveyPointStyleDefinition markerStyle;
+    markerStyle.name = "Field Marker";
+    markerStyle.markerType = 2;
+    markerStyle.markerBlockName = "FieldMarkerBlock";
+    state.surveyPointStyles.push_back(markerStyle);
+    SurveyPointLabelStyleDefinition pointLabelStyle;
+    pointLabelStyle.name = "Field Point Labels";
+    pointLabelStyle.templates.numberOnly = "CP {id}";
+    state.surveyPointLabelStyles.push_back(pointLabelStyle);
+    state.tableStyles = CadTableBuiltinStyles();
+    CadTableStyle customTableStyle;
+    customTableStyle.name = "Field Tables";
+    customTableStyle.title = "Field Data";
+    state.tableStyles.push_back(customTableStyle);
+    CadBlockDefinition markerBlock;
+    markerBlock.name = "FieldMarkerBlock";
+    state.blockDefs.push_back(markerBlock);
+    CadBlockDefinition unrelatedBlock;
+    unrelatedBlock.name = "UnrelatedBlock";
+    state.blockDefs.push_back(unrelatedBlock);
     state.userLinesFlat = {0.0, 0.0, 0.0, 100.0, 0.0, 0.0};
     state.userLineAttrs = {EntityAttributes{}};
     state.surveyPoints.push_back(SurveyPoint{17, 100.0, 200.0, 3.0, "Control", "CTRL", "Field"});
@@ -6250,6 +6272,12 @@ private Q_SLOTS:
     if (state.paperLayouts.empty()) state.paperLayouts.emplace_back();
     state.paperLayouts[0].name = "Plan Set";
     state.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+    CadBlockDefinition borderBlock;
+    borderBlock.name = "LayoutBorder";
+    state.blockDefs.push_back(borderBlock);
+    CadBlockRef borderRef;
+    borderRef.defName = "LayoutBorder";
+    state.paperLayouts[0].paperBlockRefs.push_back(borderRef);
     SaveDocumentToSnapshot(state, state.activeDrawingIdx);
 
     auto* action = window.findChild<QAction*>("command_SAVETEMPLATE");
@@ -6316,12 +6344,60 @@ private Q_SLOTS:
     QCOMPARE(loaded.activeMultileaderStyle.name, std::string("Field Leaders"));
     QVERIFY(std::any_of(loaded.surfaceStyles.begin(), loaded.surfaceStyles.end(),
                         [](const SurfaceStyle& style) { return style.name == "Field Surface"; }));
+    QVERIFY(std::any_of(loaded.surveyPointStyles.begin(), loaded.surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) {
+                          return style.name == "Field Marker" && style.markerBlockName == "FieldMarkerBlock";
+                        }));
+    QVERIFY(std::any_of(loaded.surveyPointLabelStyles.begin(), loaded.surveyPointLabelStyles.end(),
+                        [](const SurveyPointLabelStyleDefinition& style) {
+                          return style.name == "Field Point Labels" && style.templates.numberOnly == "CP {id}";
+                        }));
+    QVERIFY(std::any_of(loaded.tableStyles.begin(), loaded.tableStyles.end(),
+                        [](const CadTableStyle& style) { return style.name == "Field Tables"; }));
+    QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return block.name == "FieldMarkerBlock"; }));
+    QVERIFY(std::none_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                         [](const CadBlockDefinition& block) { return block.name == "UnrelatedBlock"; }));
     QCOMPARE(loaded.drawingInsUnits, 2);
     QCOMPARE(loaded.modelUnitsPerPlottedInch, 50.0);
     QVERIFY(loaded.objectSnapEnabled);
     QCOMPARE(loaded.paperLayouts.size(), state.paperLayouts.size());
     QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
     QCOMPARE(loaded.paperLayouts[0].paperLines.size(), size_t(6));
+    QCOMPARE(loaded.paperLayouts[0].paperBlockRefs.size(), size_t(1));
+    QCOMPARE(loaded.paperLayouts[0].paperBlockRefs.front().defName, std::string("LayoutBorder"));
+    QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return block.name == "LayoutBorder"; }));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      int row = -1;
+      for (int i = 0; i < list->count(); ++i)
+        if (list->item(i)->text() == "Field Template — Personal") row = i;
+      QVERIFY(row >= 0); list->setCurrentRow(row);
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
+    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
+    QCOMPARE(window.State().pointGroups.front().name, std::string("Control Points"));
+    QVERIFY(std::any_of(window.State().surveyPointStyles.begin(), window.State().surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) { return style.name == "Field Marker"; }));
+    QCOMPARE(window.State().paperLayouts.front().paperLines.size(), size_t(6));
+    QCOMPARE(window.State().paperLayouts.front().paperBlockRefs.front().defName, std::string("LayoutBorder"));
+    const QString reopenedPath = QDir::temp().filePath("issue1134-template-open.dwg");
+    const QByteArray reopenedPathUtf8 = reopenedPath.toUtf8();
+    std::vector<std::string> reopenLog;
+    QVERIFY(SaveDrawingDocument(window.State(), reopenedPathUtf8.constData(), reopenLog));
+    AppCommandState reopened;
+    QVERIFY(OpenDrawingDocument(reopened, reopenedPathUtf8.constData(), reopenLog));
+    QCOMPARE(reopened.userLinesFlat, window.State().userLinesFlat);
+    QCOMPARE(reopened.pointGroups.front().name, std::string("Control Points"));
+    QVERIFY(std::any_of(reopened.surveyPointStyles.begin(), reopened.surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) {
+                          return style.name == "Field Marker" && style.markerBlockName == "FieldMarkerBlock";
+                        }));
+    QCOMPARE(reopened.paperLayouts.front().paperBlockRefs.front().defName, std::string("LayoutBorder"));
   }
 
   void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {
@@ -13193,6 +13269,227 @@ private Q_SLOTS:
       EditorWindow darkStart;
       QVERIFY(darkStart.grab().save(Issue886Shot("qt-1031-dark-start.png")));
     }
+  }
+
+  void issue479CivilPointStyleScreenshots() {
+    EditorWindow window;
+    window.resize(1440, 900);
+    window.show();
+    window.OpenDrawing(QString::fromUtf8(GOSURVEY_SOURCE_DIR) +
+                       "/samples/rapides-substation-civil3d-pointtables.dwg");
+    QCOMPARE(window.State().surveyPoints.size(), std::size_t(353));
+    QCOMPARE(window.State().surveyPointStyles.size(), std::size_t(179));
+    for (const auto& point : window.State().surveyPoints) QCOMPARE(point.styleName, std::string("Basic"));
+    window.Refresh();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue886Shot("qt-479-resaved-point-styles.png")));
+    QCOMPARE(window.State().cadTables.size(), std::size_t(18));
+    {
+      auto& state = window.State();
+      const auto& table = state.cadTables.front();
+      state.viewportPanX = table.insX + table.width * .5;
+      state.viewportPanY = table.insY - table.height * .5;
+      state.viewportZoom = 50.f / (table.height * .65f);
+      state.selection = {{SelectedEntity::Type::Table, 0}};
+      window.Refresh();
+      QTest::qWait(150);
+      QVERIFY(window.grab().save(Issue886Shot("qt-479-imported-point-table-selected.png")));
+    }
+
+    EditorWindow gallery;
+    gallery.CreateDrawingFromTemplate();
+    gallery.resize(1440, 900);
+    auto& state = gallery.State();
+    state.drawingInsUnits = 2;
+    state.modelUnitsPerPlottedInch = 20.f;
+    state.surveyPointStyles = window.State().surveyPointStyles;
+    state.drawingLayerTable = window.State().drawingLayerTable;
+    state.blockDefs = window.State().blockDefs;
+    const std::array<std::string, 3> names = {"Basic", "no points", "PUBLISHED MONUMENT"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      SurveyPoint point;
+      point.id = static_cast<int>(i + 1);
+      point.easting = static_cast<double>(i) * 10;
+      point.styleName = names[i];
+      point.layer = "0";
+      point.labelStyle = SurveyPointLabelStyle::None;
+      state.surveyPoints.push_back(point);
+    }
+    gallery.show();
+    gallery.Submit("ZOOM");
+    gallery.Submit("E");
+    gallery.Refresh();
+    QTest::qWait(150);
+    QVERIFY(gallery.grab().save(Issue886Shot("qt-479-imported-marker-gallery.png")));
+  }
+
+  void issue804StyleEditorsAcceptCancelAndCapture() {
+    QWidget parent;
+    DimensionStyle dimension;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>();
+      QVERIFY(tabs); QCOMPARE(tabs->count(), 7);
+      auto* suppress = dialog->findChild<QCheckBox*>("suppressExt1");
+      QVERIFY(suppress); suppress->setChecked(true);
+      auto* upper = dialog->findChild<QDoubleSpinBox*>("tolUpper");
+      QVERIFY(upper); upper->setValue(.125);
+      for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-dimension-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditDimensionStyleDialog(&parent, &dimension, false, {"Standard", "ROMANS"}));
+    QCOMPARE(dimension.props.at("suppressExt1"), std::string("1"));
+    QCOMPARE(dimension.props.at("tolUpper"), std::string("0.125"));
+    const DimensionStyle saved = dimension;
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      dialog->findChild<QDoubleSpinBox*>("textHeight")->setValue(42);
+      dialog->reject();
+    });
+    QVERIFY(!EditDimensionStyleDialog(&parent, &dimension, false, {"Standard"}));
+    QVERIFY(dimension == saved);
+    TextStyle text;
+    text.name = "Standard";
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      QVERIFY(!dialog->findChild<QTabWidget*>());
+      dialog->findChild<QCheckBox*>("backwards")->setChecked(true);
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-style-text.png")));
+      dialog->accept();
+    });
+    QVERIFY(EditTextStyleDialog(&parent, &text, false));
+    QCOMPARE(text.props.at("backwards"), std::string("1"));
+    MultileaderStyle leader;
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      auto* tabs = dialog->findChild<QTabWidget*>(); QVERIFY(tabs); QCOMPARE(tabs->count(), 3);
+      dialog->findChild<QLineEdit*>("defaultText")->setText("Survey note");
+      dialog->findChild<QDoubleSpinBox*>("landingLength")->setValue(.75);
+      for (int i = 0; i < tabs->count(); ++i) {
+        tabs->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-mleader-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditMultileaderStyleDialog(&parent, &leader, false, {"Standard"}));
+    QCOMPARE(leader.props.at("defaultText"), std::string("Survey note"));
+    QCOMPARE(leader.props.at("landingLength"), std::string("0.75"));
+    CadTableStyle table = CadTableBuiltinStyles().front();
+    QTimer::singleShot(0, [] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      dialog->findChild<QDoubleSpinBox*>("Data.horizontalMargin")->setValue(.2);
+      dialog->findChild<QDoubleSpinBox*>("Title.textHeight")->setValue(.4);
+      auto* cell = dialog->findChild<QComboBox*>("tableCellStyle"); QVERIFY(cell);
+      for (int i = 0; i < cell->count(); ++i) {
+        cell->setCurrentIndex(i); QCoreApplication::processEvents();
+        QVERIFY(dialog->grab().save(Issue886Shot(QString("qt-style-table-%1.png").arg(i).toUtf8().constData())));
+      }
+      dialog->accept();
+    });
+    QVERIFY(EditTableStyleDialog(&parent, &table, false, {"Standard"}));
+    QCOMPARE(table.props.at("Data.horizontalMargin"), std::string("0.2"));
+    QVERIFY(std::abs(table.titleTextHeightInches - .4f) < 1.e-6f);
+  }
+
+  void issue804AnnotateDialogsAndTablePreviewScreenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto& commandState = window.State();
+    commandState.active = AppCommandState::Kind::DimLinear;
+    commandState.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+    commandState.dimE1x = 0.0f; commandState.dimE1y = 0.0f;
+    commandState.dimE2x = 30.0f; commandState.dimE2y = 10.0f;
+    commandState.uiCursorWorldX = 15.0f; commandState.uiCursorWorldY = 25.0f;
+    commandState.dimLinearDraftVertical = false;
+    window.Refresh();
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(Issue886Shot("qt-804-dimlinear-live-preview.png")));
+    commandState.active = AppCommandState::Kind::None;
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QVERIFY(dialog->objectName() == "dimensionStyleManager");
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-dimstyle-manager.png")));
+      dialog->accept();
+    });
+    window.Submit("DIMSTY");
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QCOMPARE(dialog->objectName(), QString("mleaderStyleDialog"));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-mleader-style.png")));
+      dialog->accept();
+    });
+    window.Submit("MSTY");
+
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QCOMPARE(dialog->objectName(), QString("insertTableDialog"));
+      auto* tablePreview = dialog->findChild<QTableWidget*>("insertTablePreview");
+      QVERIFY(tablePreview);
+      QCOMPARE(tablePreview->rowCount(), 3);  // title, header, one data row
+      QCOMPARE(tablePreview->columnCount(), 3);
+      QVERIFY(tablePreview->item(0, 0));
+      QVERIFY(tablePreview->item(1, 0));
+      QVERIFY(tablePreview->item(2, 0));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-insert-table-dialog.png")));
+      dialog->reject();
+    });
+    window.Submit("TABLE");
+
+    window.State().surveyPoints = {{1, 10.0, 20.0, 3.0, "Control"}};
+    std::vector<std::string> log;
+    WhenDialogShows(window, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
+      QVERIFY(dialog);
+      QVERIFY(dialog->objectName() == "addPointTableDialog");
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-804-add-point-table.png")));
+      dialog->reject();
+    });
+    ShowAddPointTableDialog(&window, window.State(), log);
+
+    window.State().active = AppCommandState::Kind::Table;
+    window.State().tableStage = 3;
+    window.State().tablePendingStyle = "Standard";
+    window.State().tablePendingCols = 3;
+    window.State().tablePendingRows = 3;
+    window.State().uiCursorWorldX = 10.0f;
+    window.State().uiCursorWorldY = 15.0f;
+    window.State().viewportPanX = 10.0;
+    window.State().viewportPanY = 15.0;
+    window.State().viewportZoom = 0.3f;
+    window.Refresh();
+    QTest::qWait(100);
+    QVERIFY(window.State().active == AppCommandState::Kind::Table);
+    QImage tablePreview(1200, 700, QImage::Format_ARGB32_Premultiplied);
+    tablePreview.fill(QColor("#20262b"));
+    {
+      QPainter painter(&tablePreview);
+      DrawQtModelAnnotations(painter, window.State(), static_cast<float>(tablePreview.width()),
+                             static_cast<float>(tablePreview.height()));
+    }
+    int visibleTablePixels = 0;
+    for (int y = 0; y < tablePreview.height(); ++y) {
+      for (int x = 0; x < tablePreview.width(); ++x) {
+        const QColor pixel = tablePreview.pixelColor(x, y);
+        if (pixel.red() > 180 && pixel.green() > 130 && pixel.blue() < 150)
+          ++visibleTablePixels;
+      }
+    }
+    QVERIFY2(visibleTablePixels > 100, "TABLE placement preview must paint visible table geometry and cell text");
+    QVERIFY(tablePreview.save(Issue886Shot("qt-804-table-placement-preview.png")));
   }
 };
 

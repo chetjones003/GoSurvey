@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -210,9 +211,12 @@ struct TextStyle {
   std::string name;            ///< Unique within the drawing; "Standard" always exists and is not deletable.
   std::string fontFamily;  ///< "" = app default (`romans.shx`); TrueType family or SHX file name.
   float heightInches = 0.125f; ///< Plotted text height in inches (model height = this × drawing scale).
+  float widthFactor = 1.f;     ///< STYLE width factor (1 = normal); retained in drawing data embedded in DWG.
   float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
   bool bold = false;
   bool italic = false;
+  /// Remaining Text Style settings (annotative, upside down, backwards, vertical, big font, ...), keyed by name.
+  std::map<std::string, std::string> props;
 };
 
 /// One drawable component of a surface style (REQ-070 / ADR-036 (d) (i)): the triangle edges, the
@@ -442,6 +446,10 @@ struct CadAnnotation {
   /// text, so older drawings render unchanged). Resolution is bake-on-write (see TextStyle.hpp): the
   /// fields above always hold the effective values, so renderers read them directly.
   std::string styleName;
+  /// DIMSTYLE used by native dimensions. Kept separate from STYLE for dimension label text.
+  std::string dimensionStyleName;
+  /// Native DIMENSION user text; empty means regenerate the measured value from DIMSTYLE.
+  std::string dimensionTextOverride;
   /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
   /// shear faithfully; TTF approximates (the UI font renderer has no glyph shear).
   float obliqueDeg = 0.f;
@@ -491,6 +499,8 @@ struct CadMultileader {
   /// REQ-456 LEADER Format: spline-fit path vs straight segments; Arrow vs None arrowhead.
   bool splinePath = false;
   bool showArrow = true;
+  /// Drawing-owned MLEADERSTYLE referenced by this object (empty/legacy resolves to Standard).
+  std::string styleName = "Standard";
   CadAnnotation label;        ///< Kind::Mtext at the text side of the landing.
 };
 
@@ -1383,6 +1393,9 @@ struct CadSurface {
 
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;
+  /// True for a triangulation imported from a Civil 3D DWG that has no definition to rebuild from. Tracked
+  /// explicitly (and saved) so a locally built surface that lost its last source is never mistaken for one.
+  bool importedFixedTin = false;
 
   /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
   /// re-reports on the next build.

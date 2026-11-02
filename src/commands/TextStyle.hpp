@@ -68,7 +68,8 @@ inline bool IsStyleableText(const CadAnnotation& a) {
 /// Copy the style's non-overridden properties into the annotation's effective fields (bake-on-write).
 inline void RebakeAnnotation(CadAnnotation& a, const TextStyle& s) {
   if (!a.ovFont)    a.fontFamily = s.fontFamily;
-  if (!a.ovHeight)  a.plottedHeightInches = s.heightInches;
+  // Native STYLE height zero means variable height, chosen on each entity.
+  if (!a.ovHeight && s.heightInches > 0.f) a.plottedHeightInches = s.heightInches;
   if (!a.ovOblique) a.obliqueDeg = s.obliqueDeg;
   if (!a.ovBold)    a.bold = s.bold;
   if (!a.ovItalic)  a.italic = s.italic;

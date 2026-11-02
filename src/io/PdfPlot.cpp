@@ -9,6 +9,7 @@
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "PlotStroke.hpp"        // pure lineweight/dash-unit helpers for the plot strokes (REQ-446)
+#include "PlotSheetTransform.hpp"  // pure sheet placement: fit, centre, offset and plot ratio (REQ-445)
 #include "CadFontName.hpp"
 #include "CadLinetype.hpp"       // dash tessellation shared with the on-screen viewport (REQ-446)
 #include "CadDimStroke.hpp"
@@ -37,6 +38,180 @@ namespace fs = std::filesystem;
 namespace {
 
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
+
+// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, lines, circles, arcs,
+// ellipses, filled regions, block references, polylines (with their bulge arcs), splines, points, multileaders, text
+// and tables. Only entities the draw loop plots count, so an entity on a non-plottable layer is skipped as it is when
+// drawn.
+template <class Plottable>
+plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayout& L, Plottable plottable) {
+  // Same rule as the draw loop's sheetAttr checks: an index with no attributes is plotted.
+  auto onPlottableLayer = [&](const std::vector<EntityAttributes>& attrs, size_t i) {
+    return i >= attrs.size() || plottable(attrs[i].layer);
+  };
+  plotsheet::Extent e;
+  for (const Viewport& vp : L.viewports) {
+    e.Add(vp.paperXIn, vp.paperYIn);
+    e.Add(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
+  }
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    if (!onPlottableLayer(L.paperLineAttrs, i / 6))
+      continue;
+    e.Add(L.paperLines[i], L.paperLines[i + 1]);
+    e.Add(L.paperLines[i + 3], L.paperLines[i + 4]);
+  }
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    if (!onPlottableLayer(L.paperCircleAttrs, i / 3))
+      continue;
+    const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
+    e.Add(cx - r, cy - r);
+    e.Add(cx + r, cy + r);
+  }
+  const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
+  for (int pi = 0; pi < nPoly; ++pi) {
+    if (!onPlottableLayer(L.paperPolyAttrs, static_cast<size_t>(pi)))
+      continue;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    for (int v = v0; v < v1; ++v)
+      e.Add(L.paperPolyVerts[static_cast<size_t>(v) * 3], L.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
+    // A bulged segment bows past its end points, so measure the same bulge chords the draw loop strokes.
+    const int nVert = v1 - v0;
+    const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+    const int nSeg = closed ? nVert : nVert - 1;
+    for (int s = 0; s < nSeg; ++s) {
+      const int ia = v0 + s;
+      const int ib = v0 + ((s + 1) % nVert);
+      const size_t a = static_cast<size_t>(ia) * 3;
+      const size_t b = static_cast<size_t>(ib) * 3;
+      const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)]
+                                                                                : 0.f;
+      ForEachBulgeChord(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1], bulge,
+                        16, [&](double ax, double ay, double bx, double by) {
+                          e.Add(static_cast<float>(ax), static_cast<float>(ay));
+                          e.Add(static_cast<float>(bx), static_cast<float>(by));
+                        });
+    }
+  }
+  // Arcs and ellipses measure the same samples the draw loop strokes.
+  for (size_t ai = 0; ai < L.paperArcs.size(); ++ai) {
+    if (!onPlottableLayer(L.paperArcAttrs, ai))
+      continue;
+    const CadArc& arc = L.paperArcs[ai];
+    const int kSeg = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.1f) + 2, 2, 256);
+    for (int k = 0; k <= kSeg; ++k) {
+      const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(kSeg));
+      e.Add(static_cast<float>(arc.cx + arc.r * std::cos(t)), static_cast<float>(arc.cy + arc.r * std::sin(t)));
+    }
+  }
+  for (size_t ei = 0; ei < L.paperEllipses.size(); ++ei) {
+    if (!onPlottableLayer(L.paperEllAttrs, ei))
+      continue;
+    const CadEllipse& el = L.paperEllipses[ei];
+    const float mnx = -el.majVy * el.ratio, mny = el.majVx * el.ratio;  // minor axis = perp(major) x ratio
+    constexpr int kSeg = 64;
+    for (int k = 0; k <= kSeg; ++k) {
+      const float t = 6.2831853f * (static_cast<float>(k) / static_cast<float>(kSeg));
+      const float ct = std::cos(t), stt = std::sin(t);
+      e.Add(static_cast<float>(el.cx + el.majVx * ct + mnx * stt), static_cast<float>(el.cy + el.majVy * ct + mny * stt));
+    }
+  }
+  // Filled regions measure their loop vertices, as the fill path does.
+  for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
+    if (!onPlottableLayer(L.paperFilledRegionAttrs, fi))
+      continue;
+    const CadFilledRegion& fr = L.paperFilledRegions[fi];
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+      continue;
+    for (size_t lp = 0; lp < fr.loopStart.size(); ++lp) {
+      const int cnt = fr.loopCount(lp);
+      if (cnt < 3)
+        continue;
+      const int begin = fr.loopStart[lp];
+      for (int k = 0; k < cnt; ++k) {
+        const size_t vi = static_cast<size_t>(begin + k);
+        e.Add(fr.vertsXyz[vi * 3], fr.vertsXyz[vi * 3 + 1]);
+      }
+    }
+  }
+  // Block references measure the world segments the draw loop strokes for them.
+  for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+    if (!onPlottableLayer(L.paperBlockRefAttrs, bi))
+      continue;
+    const EntityAttributes attr = bi < L.paperBlockRefAttrs.size() ? L.paperBlockRefAttrs[bi] : EntityAttributes{};
+    std::vector<CadBlockWorldSeg> segs;
+    CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], attr, &segs);
+    for (const CadBlockWorldSeg& s : segs) {
+      e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
+      e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
+    }
+  }
+  for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+    if (!onPlottableLayer(L.paperSplineAttrs, si))
+      continue;
+    std::vector<ray3d::Vec3> pts;
+    spline::Tessellate(L.paperSplines[si], kSplineSampleTolerance, &pts);
+    for (const ray3d::Vec3& p : pts)
+      e.Add(static_cast<float>(p.x), static_cast<float>(p.y));
+  }
+  // Point markers are sized from the sheet height, as the draw loop sizes them.
+  const double pointHalfSize = CadPointMarkerSize(st.pdSize, std::max(1.0, static_cast<double>(L.sheetHeightIn())));
+  for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+    if (!onPlottableLayer(L.paperPointAttrs, pi))
+      continue;
+    std::vector<CadPointStroke> strokes;
+    CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, pointHalfSize, &strokes);
+    for (const CadPointStroke& s : strokes) {
+      e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
+      e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
+    }
+  }
+  // Multileader leader paths and arrowheads, then their labels (labels plot with the sheet text).
+  const float arrowSize = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+  for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
+    if (!onPlottableLayer(L.paperMultileaderAttrs, mi))
+      continue;
+    const CadMultileader& ml = L.paperMultileaders[mi];
+    auto addPath = [&](const std::vector<float>& pts) {
+      for (size_t k = 0; k + 2 < pts.size(); k += 3)
+        e.Add(pts[k], pts[k + 1]);
+      const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, arrowSize);
+      if (a.valid) {
+        e.Add(a.tipX, a.tipY);
+        e.Add(a.b1x, a.b1y);
+        e.Add(a.b2x, a.b2y);
+      }
+    };
+    addPath(ml.pathXyz);
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      addPath(branch);
+    if (!ml.label.text.empty()) {
+      float x0, y0, x1, y1;
+      PaperTextBoundsIn(ml.label, &x0, &y0, &x1, &y1);
+      e.Add(x0, y0);
+      e.Add(x1, y1);
+    }
+  }
+  // Text and tables count their drawn extent, not just the insertion point, so a text-only or table-only sheet
+  // is fitted to what it prints.
+  for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
+    if (L.paperTexts[ti].text.empty() || !onPlottableLayer(L.paperTextAttrs, ti))
+      continue;
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(L.paperTexts[ti], &x0, &y0, &x1, &y1);
+    e.Add(x0, y0);
+    e.Add(x1, y1);
+  }
+  for (size_t tbi = 0; tbi < L.paperTables.size(); ++tbi) {
+    if (!onPlottableLayer(L.paperTableAttrs, tbi))
+      continue;
+    float x0, y0, x1, y1;
+    CadTableWorldAabb(L.paperTables[tbi], &x0, &y0, &x1, &y1);
+    e.Add(x0, y0);
+    e.Add(x1, y1);
+  }
+  return e;
+}
 
 // Paper-inch rectangle a model-space stroke is clipped to (a viewport's paper rect).
 struct PlotRect {
@@ -192,6 +367,13 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     const PaperLayout& L = st.paperLayouts[static_cast<size_t>(li)];
     const double wPts = static_cast<double>(L.sheetWidthIn()) * kPtPerIn;
     const double hPts = static_cast<double>(L.sheetHeightIn()) * kPtPerIn;
+    // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
+    // Only fit and centre read the content extent, so the other options skip walking the sheet for it.
+    const plotsheet::Extent content =
+        L.fitToPaper || L.centerPlot ? SheetContentExtent(st, L, plottable) : plotsheet::Extent{};
+    const plotsheet::Transform tr = plotsheet::Compute(
+        {L.fitToPaper, L.scaleModelPerPaperIn, L.offsetXIn, L.offsetYIn, L.centerPlot}, L.sheetWidthIn(),
+        L.sheetHeightIn(), content);
     FPDF_PAGE page = FPDFPage_New(doc, pages, wPts, hPts);
     if (!page)
       continue;
@@ -518,6 +700,10 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           continue;
         curColor = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
         setLineStyle(aa, layer);
+        const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, ann);
+        dsp.style = &dimensionStyle;
+        dsp.arrowType = dimensionStyle.arrowType;
+        dsp.arrowSizeInches = dimensionStyle.arrowSizeInches;
         CadDimWorldStrokes strokes;
         if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
           continue;
@@ -735,7 +921,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           for (int k = 0; k < cnt; ++k) {
             const size_t vi = static_cast<size_t>(begin + k);
             // Paper fills are 2D (ADR-025 (g)) — Z is ignored here, the sheet has no depth.
-            const float vx = fr.vertsXyz[vi * 3] * kPtPerIn, vy = fr.vertsXyz[vi * 3 + 1] * kPtPerIn;
+            const float vx = tr.X(fr.vertsXyz[vi * 3]) * kPtPerIn, vy = tr.Y(fr.vertsXyz[vi * 3 + 1]) * kPtPerIn;
             if (!fillObj) {
               fillObj = FPDFPageObj_CreateNewPath(vx, vy);  // first subpath starts here (implicit MoveTo)
               if (!fillObj) break;
@@ -979,14 +1165,14 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                              float rot, uint32_t rgb) {
         if (!font || s.empty())
           return;
-        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, Hin * kPtPerIn / kCapEmRatio);
+        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, tr.k * Hin * kPtPerIn / kCapEmRatio);
         if (!to)
           return;
         std::vector<unsigned short> u16 = plotfont::Utf8ToUtf16(s);
         FPDFText_SetText(to, u16.data());
         FPDFPageObj_SetFillColor(to, (rgb >> 16) & 0xffu, (rgb >> 8) & 0xffu, rgb & 0xffu, 255u);
         const float cr = std::cos(rot), sr = std::sin(rot);
-        FS_MATRIX m{cr, sr, -sr, cr, baseXin * kPtPerIn, baseYin * kPtPerIn};
+        FS_MATRIX m{cr, sr, -sr, cr, tr.X(baseXin) * kPtPerIn, tr.Y(baseYin) * kPtPerIn};
         FPDFPageObj_SetMatrix(to, &m);
         FPDFPage_InsertObject(page, to);
       };
@@ -1121,11 +1307,13 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       if (segs.empty())
         continue;
       const uint32_t color = style.first;
-      FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(segs[0][0] * kPtPerIn, segs[0][1] * kPtPerIn);
-      FPDFPath_LineTo(path, segs[0][2] * kPtPerIn, segs[0][3] * kPtPerIn);
+      auto ptX = [&](float x) { return tr.X(x) * kPtPerIn; };
+      auto ptY = [&](float y) { return tr.Y(y) * kPtPerIn; };
+      FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(ptX(segs[0][0]), ptY(segs[0][1]));
+      FPDFPath_LineTo(path, ptX(segs[0][2]), ptY(segs[0][3]));
       for (size_t i = 1; i < segs.size(); ++i) {
-        FPDFPath_MoveTo(path, segs[i][0] * kPtPerIn, segs[i][1] * kPtPerIn);
-        FPDFPath_LineTo(path, segs[i][2] * kPtPerIn, segs[i][3] * kPtPerIn);
+        FPDFPath_MoveTo(path, ptX(segs[i][0]), ptY(segs[i][1]));
+        FPDFPath_LineTo(path, ptX(segs[i][2]), ptY(segs[i][3]));
       }
       FPDFPageObj_SetStrokeColor(path, static_cast<int>((color >> 16) & 0xff), static_cast<int>((color >> 8) & 0xff),
                                  static_cast<int>(color & 0xff), 255);
