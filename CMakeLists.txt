@@ -10,7 +10,14 @@ if(POLICY CMP0141)
   endif()
 endif()
 
-project(GoSurvey VERSION 0.7.8 LANGUAGES CXX C RC)
+# Stable releases use the checked-in version below. CI supplies a separately resolved plain
+# patch version for beta builds so beta numbering does not require a version-only source commit.
+set(GOSURVEY_STABLE_VERSION "0.7.8")
+set(_gosurvey_project_version "${GOSURVEY_STABLE_VERSION}")
+if(DEFINED GOSURVEY_BETA_VERSION AND NOT GOSURVEY_BETA_VERSION STREQUAL "")
+  set(_gosurvey_project_version "${GOSURVEY_BETA_VERSION}")
+endif()
+project(GoSurvey VERSION "${_gosurvey_project_version}" LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
@@ -77,19 +84,20 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
-# Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
+# Version (ADR-029 (a), amended by ADR-074) — `project(VERSION)` above holds the stable source;
+# CI may override its input for a rolling beta build.
 #
-# It names the release being worked toward, so it is bumped just after a stable
-# release ships. CI passes GOSURVEY_VERSION_SUFFIX ("-beta.7") and
-# GOSURVEY_VERSION_BUILD (7) for a prerelease; a stable build and a developer
-# build leave both at their defaults.
+# The stable value above names the release being worked toward, so it is bumped
+# just after a stable release ships. CI passes GOSURVEY_BETA_VERSION for a beta
+# release and GOSURVEY_VERSION_BUILD for Windows file metadata; stable and local
+# builds leave those values at their defaults.
 #
 # Both generated files land in the build tree, never the source tree (REQ-200).
 # ---------------------------------------------------------------------------
 set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
-    "Prerelease suffix appended to the version, e.g. -beta.7 (empty for a stable build)")
+    "Prerelease suffix appended to the version (empty for stable and rolling beta builds)")
 set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
-    "Fourth field of the Windows VERSIONINFO quad; the beta number, or 0 for a stable build")
+    "Fourth field of the Windows VERSIONINFO quad (default: 0)")
 
 set(GOSURVEY_GIT_COMMIT "" CACHE STRING
     "Short git commit recorded in crash reports (empty: read from git at configure time)")
