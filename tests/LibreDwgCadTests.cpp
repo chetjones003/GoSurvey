@@ -3264,6 +3264,31 @@ TEST_CASE("Civil 3D TIN surface imports as a GoSurvey surface with the source tr
   CHECK_FALSE(previewOutlineImported);
 }
 
+TEST_CASE("Point edits are refused on an imported fixed TIN instead of replacing its triangulation",
+          "[dwg][libredwg][civil3d][req479][surface]") {
+  AppCommandState state;
+  std::vector<std::string> log;
+  REQUIRE(ImportLibreCadFile(state, SamplePath("rapides-substation-civil3d.dwg").c_str(), log, /*asDxf=*/false));
+  REQUIRE(state.cadSurfaces.size() == 1);
+  const auto before = state.cadSurfaces[0].tin;
+  REQUIRE(before != nullptr);
+  for (const char* command : {"SURFACEADDPOINT Surface, 0, 0, 100", "SURFACEMOVEPOINT Surface, 0, 0, 1, 1, 100",
+                              "SURFACEDELPOINT Surface, 0, 0"}) {
+    log.clear();
+    std::string line = command;
+    line.resize(256);
+    ProcessCommandLineSubmit(line.data(), static_cast<int>(line.size()), state, log);
+    bool refused = false;
+    for (const std::string& message : log) refused |= message.find("imported fixed triangulation") != std::string::npos;
+    CHECK(refused);
+  }
+  const CadSurface& surface = state.cadSurfaces[0];
+  CHECK(surface.addedPointXyz.empty());
+  CHECK(surface.movedPoints.empty());
+  CHECK(surface.deletedPointPicks.empty());
+  CHECK(surface.tin == before);
+}
+
 TEST_CASE("Civil 3D TIN surface survives GoSurvey DWG save and reopen",
           "[dwg][libredwg][civil3d][req479][surface]") {
   ScratchDir dir("civil-tin-roundtrip");

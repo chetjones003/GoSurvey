@@ -4268,9 +4268,28 @@ static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::
   return true;
 }
 
+// A TIN imported from a Civil 3D DWG is a fixed triangulation with no definition (no point groups, files, added
+// points, breaklines, contours, boundaries or corridor). Point edits would be rebuilt from the edits alone and
+// replace the imported triangulation, so they are refused rather than silently losing it.
+static bool SurfaceIsImportedFixedTin(const CadSurface& s) {
+  return s.tin && !s.isVolumeSurface() && s.sourcePointGroups.empty() && s.sourcePointFiles.empty() &&
+         s.addedPointXyz.empty() && s.breaklines.empty() && s.contourSources.empty() && s.boundaries.empty() &&
+         s.movedPoints.empty() && s.corridorFeatureLines.empty();
+}
+
+static bool RefusesImportedTinPointEdit(const CadSurface& s, const char* command, std::vector<std::string>& log) {
+  if (!SurfaceIsImportedFixedTin(s)) return false;
+  log.push_back(std::string(command) + " — \"" + s.name + "\" is an imported fixed triangulation with no definition; "
+                "point edits would rebuild it from the edits alone and discard the imported surface. Edit the surface in "
+                "Civil 3D, or build a new surface from points.");
+  return true;
+}
+
 static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, double z,
                                     std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEADDPOINT", log))
     return;
   if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
     log.push_back("SURFACEADDPOINT — x, y, and z must be finite numbers.");
@@ -4287,6 +4306,8 @@ static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x
 static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x, double y,
                                     std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEDELPOINT", log))
     return;
   if (!std::isfinite(x) || !std::isfinite(y)) {
     log.push_back("SURFACEDELPOINT — x and y must be finite numbers.");
@@ -4306,6 +4327,8 @@ static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x
 static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double x1, double y1, double x2, double y2,
                                      double z2, std::vector<std::string>& log) {
   if (SurfaceRefusesPointEdits(s, "SURFACEMOVEPOINT", log))
+    return;
+  if (RefusesImportedTinPointEdit(s, "SURFACEMOVEPOINT", log))
     return;
   if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
     log.push_back("SURFACEMOVEPOINT — coordinates must be finite numbers.");
