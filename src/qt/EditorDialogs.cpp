@@ -442,15 +442,8 @@ void EditorWindow::ShowSettings() {
     if (!path.isEmpty()) templatePath->setText(path);
   });
   connect(useBundledTemplate, &QPushButton::clicked, dialog, [templatePath] { templatePath->clear(); });
-  auto templatePathError = std::make_shared<QString>();
-  commits->push_back([this, templatePath, templatePathError] {
+  commits->push_back([this, templatePath] {
     const QByteArray path = templatePath->text().toUtf8();
-    if (path.size() > static_cast<int>(sizeof(m_State.defaultDrawingTemplatePathUtf8) - 1)) {
-      *templatePathError = "The default drawing-template path is too long. Choose a shorter path; "
-                           "the current setting was kept.";
-      return;
-    }
-    templatePathError->clear();
     CopyUtf8PathCapped(m_State.defaultDrawingTemplatePathUtf8,
                        sizeof(m_State.defaultDrawingTemplatePathUtf8), path.constData());
   });
@@ -648,12 +641,14 @@ void EditorWindow::ShowSettings() {
   buttons->button(QDialogButtonBox::Cancel)->setObjectName("settingsCancel");
   outer->addWidget(buttons);
   // REQ-201: a failed write is shown and keeps the window open, never a silent "saved".
-  auto applyAll = [this, commits, saveStatus, templatePathError] {
-    for (const auto &commit : *commits) commit();
-    if (!templatePathError->isEmpty()) {
-      saveStatus->setText(*templatePathError);
+  auto applyAll = [this, commits, saveStatus, templatePath] {
+    const auto path = templatePath->text().toUtf8();
+    if (path.size() > static_cast<int>(sizeof(m_State.defaultDrawingTemplatePathUtf8) - 1)) {
+      saveStatus->setText("The default drawing-template path is too long. Choose a shorter path; "
+                          "the current setting was kept.");
       return false;
     }
+    for (const auto &commit : *commits) commit();
     BumpCadGpuCache(m_State);
     Refresh();
     if (!SaveUserStartupPrefs(m_State)) {

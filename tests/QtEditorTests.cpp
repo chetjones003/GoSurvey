@@ -3624,6 +3624,11 @@ private Q_SLOTS:
     // Qt startup uses this loader; an overlong UTF-8 path must be rejected before it is copied or saved.
     QString longPath = templateDir.path() + "/" + QString(300, QChar(0x4e2d)) + ".gst";
     QVERIFY(longPath.toUtf8().size() > static_cast<int>(sizeof(window.State().defaultDrawingTemplatePathUtf8) - 1));
+    auto* cursorSize = dialog->findChild<QSlider*>("settingsCrosshairSize");
+    QVERIFY(cursorSize);
+    const int previousCursorSize = window.State().displayCrosshairSizePct;
+    cursorSize->setValue(previousCursorSize == 100 ? 99 : previousCursorSize + 1);
+    QVERIFY(window.State().displayCrosshairSizePct != previousCursorSize);
     pathField->setText(longPath);
     dialog->findChild<QPushButton*>("settingsApply")->click();
     QVERIFY(!dialog->findChild<QLabel*>("settingsSaveStatus")->text().isEmpty());
@@ -3631,6 +3636,17 @@ private Q_SLOTS:
     AppCommandState rejected;
     LoadUserStartupPrefs(rejected);
     QCOMPARE(QString::fromUtf8(rejected.defaultDrawingTemplatePathUtf8), templatePath);
+    QCOMPARE(rejected.displayCrosshairSizePct, previousCursorSize);
+    dialog->findChild<QPushButton*>("settingsCancel")->click();
+    QCOMPARE(window.State().displayCrosshairSizePct, previousCursorSize);
+    QTRY_VERIFY(!window.findChild<QDialog*>("applicationSettings"));
+
+    window.ShowSettings();
+    dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    pathField = dialog->findChild<QLineEdit*>("defaultDrawingTemplatePath");
+    QVERIFY(pathField);
+    QCOMPARE(pathField->text(), templatePath);
 
     auto* useBundled = dialog->findChild<QPushButton*>("useBundledDrawingTemplate");
     QVERIFY(useBundled);
