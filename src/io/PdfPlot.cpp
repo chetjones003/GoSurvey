@@ -578,6 +578,10 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           continue;
         curColor = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
         setLineStyle(aa, layer);
+        const auto& dimensionStyle = CadDimensionStyleForAnnotation(st, ann);
+        dsp.style = &dimensionStyle;
+        dsp.arrowType = dimensionStyle.arrowType;
+        dsp.arrowSizeInches = dimensionStyle.arrowSizeInches;
         CadDimWorldStrokes strokes;
         if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
           continue;

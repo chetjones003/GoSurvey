@@ -69,6 +69,9 @@ inline void CadAnnotationToJson(const CadAnnotation& a, nlohmann::json& o) {
     o["underline"] = true;
   if (!a.styleName.empty())
     o["styleName"] = a.styleName;
+  if (!a.dimensionStyleName.empty())
+    o["dimensionStyleName"] = a.dimensionStyleName;
+  if (!a.dimensionTextOverride.empty()) o["dimensionTextOverride"] = a.dimensionTextOverride;
   if (a.obliqueDeg != 0.f)
     o["obliqueDeg"] = a.obliqueDeg;
   if (a.ovFont)
@@ -126,6 +129,8 @@ inline CadAnnotation CadAnnotationFromJson(const nlohmann::json& o) {
   a.italic = o.value("italic", a.italic);
   a.underline = o.value("underline", a.underline);
   a.styleName = o.value("styleName", a.styleName);
+  a.dimensionStyleName = o.value("dimensionStyleName", a.dimensionStyleName);
+  a.dimensionTextOverride = o.value("dimensionTextOverride", a.dimensionTextOverride);
   a.obliqueDeg = o.value("obliqueDeg", a.obliqueDeg);
   a.ovFont = o.value("ovFont", a.ovFont);
   a.ovHeight = o.value("ovHeight", a.ovHeight);
@@ -171,6 +176,14 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   o["plottedHeightInches"] = t.plottedHeightInches;
   if (!t.fontFamily.empty())
     o["fontFamily"] = t.fontFamily;
+  if (!t.styleName.empty())
+    o["styleName"] = t.styleName;
+  if (!t.columnWeights.empty()) o["columnWeights"] = t.columnWeights;
+  if (!t.rowWeights.empty()) o["rowWeights"] = t.rowWeights;
+  if (!t.rowTextHeightsInches.empty()) o["rowTextHeightsInches"] = t.rowTextHeightsInches;
+  if (t.mergeTitleRow) o["mergeTitleRow"] = true;
+  if (t.centerText) o["centerText"] = true;
+  if (t.surveyPointDataRows) o["surveyPointDataRows"] = true;
 }
 
 [[nodiscard]] inline CadTable CadTableFromJson(const nlohmann::json& o) {
@@ -187,5 +200,12 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
     t.cells = o["cells"].get<std::vector<std::string>>();
   t.plottedHeightInches = o.value("plottedHeightInches", t.plottedHeightInches);
   t.fontFamily = o.value("fontFamily", t.fontFamily);
+  t.styleName = o.value("styleName", t.styleName);
+  t.columnWeights = o.value("columnWeights", t.columnWeights);
+  t.rowWeights = o.value("rowWeights", t.rowWeights);
+  t.rowTextHeightsInches = o.value("rowTextHeightsInches", t.rowTextHeightsInches);
+  t.mergeTitleRow = o.value("mergeTitleRow", t.mergeTitleRow);
+  t.centerText = o.value("centerText", t.centerText);
+  t.surveyPointDataRows = o.value("surveyPointDataRows", t.surveyPointDataRows);
   return t;
 }

@@ -1,0 +1,285 @@
+{
+ "source": "rapides-substation-civil3d.dwg",
+ "api": "Autodesk.Civil.DatabaseServices.Styles.SurfaceStyle (Civil 3D 2026)",
+ "styles": [
+  {
+   "handle": "19d7",
+   "name": "Design",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 5.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 6
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 132
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "19d4",
+   "name": "Existing",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 5.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 256
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 256
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "30f29",
+   "name": "Standard [Copy] [Copy] [Copy] [Copy]",
+   "usedBySurface": true,
+   "minorInterval": 0.5,
+   "majorInterval": 1.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 1
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 4
+    },
+    "Boundary": {
+     "visible": true,
+     "colorIndex": 2
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 3
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 42
+    }
+   },
+   "smoothContours": true,
+   "smoothingFactor": 7
+  },
+  {
+   "handle": "30499",
+   "name": "Standard [Copy]",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 2.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 1
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 4
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 2
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 3
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 42
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "19d6",
+   "name": "_No Display",
+   "usedBySurface": false,
+   "minorInterval": 2.0,
+   "majorInterval": 10.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "MajorContour": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "MinorContour": {
+     "visible": false,
+     "colorIndex": 256
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "19dd",
+   "name": "Contours and Triangles",
+   "usedBySurface": false,
+   "minorInterval": 2.0,
+   "majorInterval": 10.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "Triangles": {
+     "visible": true,
+     "colorIndex": 256
+    },
+    "Boundary": {
+     "visible": true,
+     "colorIndex": 256
+    },
+    "MajorContour": {
+     "visible": false,
+     "colorIndex": 256
+    },
+    "MinorContour": {
+     "visible": false,
+     "colorIndex": 256
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "30f11",
+   "name": "Standard [Copy] [Copy]",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 2.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 1
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 4
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 2
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 3
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 42
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "1a6ce",
+   "name": "Standard",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 2.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 1
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 4
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 2
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 3
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 42
+    }
+   },
+   "smoothContours": false,
+   "smoothingFactor": 4
+  },
+  {
+   "handle": "30f14",
+   "name": "Standard [Copy] [Copy] [Copy]",
+   "usedBySurface": false,
+   "minorInterval": 1.0,
+   "majorInterval": 2.0,
+   "components": {
+    "Points": {
+     "visible": false,
+     "colorIndex": 1
+    },
+    "Triangles": {
+     "visible": false,
+     "colorIndex": 4
+    },
+    "Boundary": {
+     "visible": false,
+     "colorIndex": 2
+    },
+    "MajorContour": {
+     "visible": true,
+     "colorIndex": 3
+    },
+    "MinorContour": {
+     "visible": true,
+     "colorIndex": 42
+    }
+   },
+   "smoothContours": true,
+   "smoothingFactor": 7
+  }
+ ]
+}

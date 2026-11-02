@@ -2,7 +2,10 @@
 #include <catch2/catch_approx.hpp>
 
 #include "commands/CadDimStroke.hpp"
+#include "commands/CadCoordinateFrame.hpp"
+#include "commands/CadCommands.hpp"
 #include "commands/PaperSpace.hpp"
+#include "commands/CadField.hpp"
 
 #include <cmath>
 
@@ -20,6 +23,79 @@ static CadAnnotation MakeAlignedDim() {
   a.plottedHeightInches = 0.10f;
   a.text = "100.00";
   return a;
+}
+
+TEST_CASE("Dimension style settings change strokes and resolved labels", "[dim][styles][issue804]") {
+  CadAnnotation annotation = MakeAlignedDim();
+  DimensionStyle style;
+  style.name = "Survey";
+  style.props = {{"suppressExt1", "1"}, {"suppressDim2", "1"}, {"offsetFromOrigin", "0.2"},
+                 {"extendBeyondDimLines", "0.1"}, {"prefix", "L="}, {"zeroTrailing", "1"}};
+  CadDimStrokeParams parameters;
+  parameters.modelUnitsPerPlottedInch = 10;
+  parameters.style = &style;
+  CadDimWorldStrokes strokes;
+  REQUIRE(CadDimBuildWorldStrokes(annotation, parameters, &strokes));
+  int extensions = 0;
+  for (const auto& segment : strokes.segs) if (segment.kind == CadDimWorldSeg::Kind::Extension) {
+    ++extensions;
+    CHECK(segment.x0 == Catch::Approx(100));
+    CHECK(segment.y0 == Catch::Approx(2));
+    CHECK(segment.y1 == Catch::Approx(21));
+  }
+  CHECK(extensions == 1);
+  AppCommandState state;
+  state.dimensionStyles = {style};
+  annotation.dimensionStyleName = "Survey";
+  CHECK(CadAnnotationResolvedText(state, annotation) == "L=100");
+  annotation.dimensionTextOverride = "CHECK <>";
+  CHECK(CadAnnotationResolvedText(state, annotation) == "CHECK L=100");
+  annotation.dimensionTextOverride = "FIELD VERIFY";
+  CHECK(CadAnnotationResolvedText(state, annotation) == "FIELD VERIFY");
+}
+
+TEST_CASE("Dimension alternate units rounding and tolerances are formatted", "[dim][styles][issue804]") {
+  DimensionStyle style;
+  style.props = {{"roundOff", "0.25"}, {"altEnabled", "1"}, {"altMultiplier", "12"},
+                 {"altPrecision", "0.0"}, {"tolMethod", "Symmetrical"}, {"tolUpper", "0.1"}};
+  CHECK(DimensionStyles::FormatLinearDim(1.13, style) == "1.25 [15.0] \xc2\xb1" "0.1");
+  style.props["roundOff"] = "invalid";
+  style.props["altEnabled"] = "0";
+  style.props["tolMethod"] = "None";
+  CHECK(DimensionStyles::FormatLinearDim(1.13, style) == "1.13");
+}
+
+TEST_CASE("Dimension style text placement and angular suppression regenerate", "[dim][styles][req478]") {
+  CadAnnotation annotation = MakeAlignedDim();
+  DimensionStyle style;
+  style.textSizeInches = .1f;
+  style.props = {{"textVertical", "Above"}, {"textOffset", ".2"}, {"textAlignment", "Horizontal"}};
+  CadDimStrokeParams parameters; parameters.modelUnitsPerPlottedInch = 10; parameters.style = &style;
+  CadDimWorldStrokes strokes;
+  REQUIRE(CadDimBuildWorldStrokes(annotation, parameters, &strokes));
+  CHECK(strokes.labelX == Catch::Approx(50));
+  CHECK(strokes.labelY == Catch::Approx(22.5));
+  CHECK(strokes.labelRotRad == Catch::Approx(0));
+  annotation.kind = CadAnnotation::Kind::DimAngular;
+  annotation.dimAngVertexX = 0; annotation.dimAngVertexY = 0;
+  annotation.dimExt1X = 10; annotation.dimExt1Y = 0;
+  annotation.dimExt2X = 0; annotation.dimExt2Y = 10;
+  annotation.dimSignedOffset = 5;
+  style.props["suppressExt1"] = "1"; style.props["suppressDim2"] = "1";
+  REQUIRE(CadDimBuildWorldStrokes(annotation, parameters, &strokes));
+  CHECK(std::count_if(strokes.segs.begin(), strokes.segs.end(), [](const auto& segment) {
+    return segment.kind == CadDimWorldSeg::Kind::Extension;
+  }) == 1);
+  CHECK(strokes.arrows.size() == 1);
+}
+
+TEST_CASE("Open and blank dimension arrowheads have no filled triangle", "[dim][styles][req478]") {
+  CadDimWorldStrokes strokes;
+  CadDimPushArrow(&strokes, DimArrowType::ClosedBlank, 0, 0, 1, 0, 1, .5f);
+  REQUIRE(strokes.arrows.empty()); CHECK(strokes.segs.size() == 3);
+  strokes.segs.clear();
+  CadDimPushArrow(&strokes, DimArrowType::Open, 0, 0, 1, 0, 1, .5f);
+  REQUIRE(strokes.arrows.empty()); CHECK(strokes.segs.size() == 2);
 }
 
 static CadAnnotation MakeLinearDim() {
@@ -189,4 +265,62 @@ TEST_CASE("TEXT annotations are not dimension strokes", "[dim-viewport]") {
   t.text = "A";
   CadDimWorldStrokes s;
   REQUIRE_FALSE(CadDimBuildWorldStrokes(t, CadDimStrokeParams{}, &s));
+}
+
+TEST_CASE("DIMALIGNED Enter on offset step commits at crosshair", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  st.uiCursorWorldX = 5.f;
+  st.uiCursorWorldY = 3.f;
+  std::vector<std::string> log;
+  char buf[8] = "";
+  ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), st, log);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotations[0].kind == CadAnnotation::Kind::DimAligned);
+  REQUIRE(st.cadAnnotations[0].dimSignedOffset == Catch::Approx(3.f));
+}
+
+TEST_CASE("DIMALIGNED offset pick commits through SubmitViewportPick", "[dim][issue804]") {
+  AppCommandState st;
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitExt1;
+  std::vector<std::string> log;
+  SubmitViewportPick(st, 0.0, 0.0, log, false, false);
+  SubmitViewportPick(st, 10.0, 0.0, log, false, false);
+  SubmitViewportPick(st, 5.0, 4.0, log, false, false);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotations[0].dimSignedOffset == Catch::Approx(4.f));
+  REQUIRE(st.selection.size() == 1);
+  REQUIRE(st.selection[0].type == SelectedEntity::Type::Annotation);
+  REQUIRE(st.selection[0].index == 0);
+}
+
+TEST_CASE("DIMALIGNED on off layer commits to a visible layer", "[dim][issue804]") {
+  AppCommandState st;
+  st.currentLayer = "Hidden";
+  CadLayerRow layer0;
+  layer0.name = "0";
+  layer0.on = true;
+  layer0.frozen = false;
+  st.drawingLayerTable.push_back(layer0);
+  CadLayerRow hidden;
+  hidden.name = "Hidden";
+  hidden.on = false;
+  st.drawingLayerTable.push_back(hidden);
+  st.active = AppCommandState::Kind::DimAligned;
+  st.dimPhase = AppCommandState::DimPhase::WaitDimLinePt;
+  st.dimE1x = 0.f;
+  st.dimE1y = 0.f;
+  st.dimE2x = 10.f;
+  st.dimE2y = 0.f;
+  std::vector<std::string> log;
+  SubmitViewportPick(st, 5.f, 3.f, log, false, false);
+  REQUIRE(st.cadAnnotations.size() == 1);
+  REQUIRE(st.cadAnnotationAttrs.size() == 1);
+  REQUIRE(st.cadAnnotationAttrs[0].layer == "0");
 }

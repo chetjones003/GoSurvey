@@ -44,6 +44,8 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #ribbon QToolButton { padding:2px 5px; }
     #ribbonTabMenu { border:1px solid #b0b5bd; padding:2px 8px; }
     #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #b9bec5; }
+    #ribbonSharedLayers { background:#e9ebee; border:1px solid #afb4bc; border-radius:5px; }
+    #ribbonSharedLayers QWidget[ribbonPanel="true"] { background:transparent; border:0; }
     #ribbonPanelLabel { color:#555e69; font-size:10px; border-top:1px solid #d2d5da; padding-top:1px; }
     #ribbon QTabBar::tab { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #f1f3f5,stop:1 #dce0e5); color:#30353b; border:1px solid #b0b5bd; border-radius:5px 5px 0 0; padding:3px 12px; margin:2px 2px 0 0; }
     #ribbon QTabBar::tab:selected { background:#f6f7f8; border-bottom:2px solid @strong@; margin-top:0; }
@@ -128,6 +130,8 @@ void ApplyQtAppearance(QApplication& app, bool light) {
     #ribbon QToolButton:hover { background:#343c41; border-color:@edge@; }
     #ribbon QToolButton:pressed, #ribbon QToolButton:checked { background:@tint@; border-color:@strong@; }
     #ribbon QWidget[ribbonPanel="true"] { border-right:1px solid #3a4247; }
+    #ribbonSharedLayers { background:#202529; border:1px solid #363e43; border-radius:5px; }
+    #ribbonSharedLayers QWidget[ribbonPanel="true"] { background:transparent; border:0; }
     #ribbonPanelLabel { color:#b5c0c5; font-size:10px; border-top:1px solid #3a4247; padding-top:2px; }
     QTabWidget::pane { border:1px solid #3a4247; background:#22272b; }
     #ribbon QTabBar::tab { background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #30373c,stop:1 #1b2023); color:#dce2e5; border:1px solid #41494e; border-radius:5px 5px 0 0; padding:6px 14px; margin:2px 2px 0 0; }

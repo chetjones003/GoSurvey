@@ -11,7 +11,6 @@
 #include "PdfPlot.hpp"
 #include "cadpiperun.hpp"
 #include "HatchPat.hpp"
-#include <QFile>
 #include <QColorDialog>
 #include <QAction>
 #include <QApplication>
@@ -22,6 +21,7 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFrame>
@@ -37,6 +37,8 @@
 #include <QSet>
 #include <QSlider>
 #include <QSpinBox>
+#include <QPainter>
+#include <QPixmap>
 #include <QStyle>
 #include <QTabWidget>
 #include <QTimer>
@@ -44,15 +46,24 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWidgetAction>
+#include <QScrollArea>
+#include <QScrollBar>
+#include "DimensionStyle.hpp"
+#include "MultileaderStyle.hpp"
+#include "cadtablestyle.hpp"
+#include "StylePreview.hpp"
+#include "CadColor.hpp"
+#include "font/ShxFont.hpp"
 #include <algorithm>
 #include <numeric>
 #include <vector>
+#include <functional>
+#include <QPainterPath>
 
 namespace {
 QString Text(const char* text) { return QString::fromUtf8(text); }
 bool NeedsNativeDialog(const QString& command) {
-  static const QSet<QString> pending = {"@textStyles", "@dimStyles", "@leaderStyles",
-      "@editElevations", "@pointGroups", "@volumes",
+  static const QSet<QString> pending = {"@editElevations", "@pointGroups", "@volumes",
       "@connectionModes", "@blockPalettes", "@createBlock", "@batchPlot", "@pageSetup", "BEDIT", "INSERT"};
   return pending.contains(command);
 }
@@ -62,6 +73,510 @@ int SelectedSurface(const AppCommandState& state) {
   return -1;
 }
 
+struct RibbonStyleGalleryModel {
+  QStringList entries;
+  QString current;
+  QString previewSample;
+  QString manageLabel;
+  QIcon tileIcon;
+  int columns = 2;
+  std::function<QFont(const QString& entry)> previewFont;
+  std::function<QColor(const QString& entry)> previewColor;
+  std::function<QIcon(const QString& entry)> previewIcon;
+};
+
+constexpr int kStylePreviewPixmapWidth = 96;
+constexpr int kStylePreviewPixmapHeight = 52;
+constexpr int kStyleGalleryTileWidth = 112;
+constexpr int kStyleGalleryTileHeight = 98;
+constexpr int kRibbonStyleGalleryWidth = 128;
+
+static bool RibbonUsesLightChrome() {
+  return qApp->property("cadLightTheme").toBool();
+}
+
+// Thumbnails are painted in logical 96x52 units onto a pixmap with extra device pixels so they stay
+// crisp on scaled displays; the icon engine then draws it 1:1.
+static QPixmap NewStylePreviewPixmap() {
+  const qreal scale = std::max<qreal>(2.0, std::ceil(qApp->devicePixelRatio()));
+  QPixmap pixmap(QSize(kStylePreviewPixmapWidth, kStylePreviewPixmapHeight) * scale);
+  pixmap.setDevicePixelRatio(scale);
+  return pixmap;
+}
+
+// A style's own colour as the drawing would show it: ByLayer / ByBlock fall back to the default
+// ink (layer "White"), anything else resolves through the same CAD colour table the viewport uses.
+static QColor RibbonStyleInk(const std::string& storage) {
+  float rgb[3] = {1.f, 1.f, 1.f};
+  CadColorResolveRgb(CadColorEffectiveStorage(storage.empty() ? std::string("ByLayer") : storage, "White"),
+                     1.f, 1.f, 1.f, rgb);
+  return QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+}
+
+// One layer row as the ribbon list shows it: on/off bulb, thaw/freeze sun or snowflake, lock, colour swatch.
+static QIcon RibbonLayerRowIcon(const CadLayerRow& row) {
+  constexpr int kGlyph = 16;
+  constexpr int kGap = 3;
+  constexpr int kWidth = kGlyph * 4 + kGap * 3;
+  const qreal scale = std::max<qreal>(2.0, std::ceil(qApp->devicePixelRatio()));
+  QPixmap pixmap(QSize(kWidth, kGlyph) * scale);
+  pixmap.setDevicePixelRatio(scale);
+  pixmap.fill(Qt::transparent);
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  const QColor lit(QStringLiteral("#f2c14e")), dim(QStringLiteral("#6c757c")), ice(QStringLiteral("#7cc4ff"));
+  const auto cell = [&](int index) { return QRectF(index * (kGlyph + kGap), 0, kGlyph, kGlyph); };
+
+  // Bulb: on = lit glass, off = grey outline.
+  {
+    const QRectF r = cell(0);
+    const QColor c = row.on ? lit : dim;
+    painter.setPen(QPen(c, 1.2));
+    painter.setBrush(row.on ? QBrush(c) : Qt::NoBrush);
+    painter.drawEllipse(QRectF(r.left() + 3.5, r.top() + 1.5, 9, 9));
+    painter.setPen(QPen(c, 1.4));
+    painter.drawLine(QPointF(r.left() + 6, r.top() + 12.5), QPointF(r.left() + 10, r.top() + 12.5));
+    painter.drawLine(QPointF(r.left() + 6.5, r.top() + 14.5), QPointF(r.left() + 9.5, r.top() + 14.5));
+  }
+  // Thawed = sun, frozen = snowflake.
+  {
+    const QRectF r = cell(1);
+    const QPointF c = r.center();
+    if (row.frozen) {
+      painter.setPen(QPen(ice, 1.3));
+      for (int i = 0; i < 3; ++i) {
+        const qreal a = i * 3.14159265358979323846 / 3.0;
+        painter.drawLine(QPointF(c.x() - 6 * std::cos(a), c.y() - 6 * std::sin(a)),
+                         QPointF(c.x() + 6 * std::cos(a), c.y() + 6 * std::sin(a)));
+      }
+    } else {
+      painter.setPen(QPen(lit, 1.3));
+      painter.setBrush(lit);
+      painter.drawEllipse(c, 3.2, 3.2);
+      for (int i = 0; i < 8; ++i) {
+        const qreal a = i * 3.14159265358979323846 / 4.0;
+        painter.drawLine(QPointF(c.x() + 5 * std::cos(a), c.y() + 5 * std::sin(a)),
+                         QPointF(c.x() + 7.2 * std::cos(a), c.y() + 7.2 * std::sin(a)));
+      }
+    }
+  }
+  // Padlock: closed shackle when locked, open when not.
+  {
+    const QRectF r = cell(2);
+    const QColor c = row.locked ? lit : QColor(QStringLiteral("#d9a93c"));
+    painter.setPen(QPen(c, 1.5));
+    painter.setBrush(Qt::NoBrush);
+    QPainterPath shackle;
+    if (row.locked) {
+      shackle.moveTo(r.left() + 5, r.top() + 7);
+      shackle.lineTo(r.left() + 5, r.top() + 5);
+      shackle.arcTo(QRectF(r.left() + 5, r.top() + 1.5, 6, 7), 180, -180);
+      shackle.lineTo(r.left() + 11, r.top() + 7);
+    } else {
+      shackle.moveTo(r.left() + 5, r.top() + 7);
+      shackle.lineTo(r.left() + 5, r.top() + 5);
+      shackle.arcTo(QRectF(r.left() + 5, r.top() + 1.5, 6, 7), 180, -180);
+      shackle.lineTo(r.left() + 11, r.top() + 3.5);
+    }
+    painter.drawPath(shackle);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(c);
+    painter.drawRoundedRect(QRectF(r.left() + 3, r.top() + 7, 10, 7.5), 1.5, 1.5);
+  }
+  // Layer colour swatch.
+  {
+    const QRectF r = cell(3);
+    painter.setPen(QPen(QColor(255, 255, 255, 70), 1.0));
+    painter.setBrush(RibbonStyleInk(row.color));
+    painter.drawRect(QRectF(r.left() + 2, r.top() + 2, 12, 12));
+  }
+  painter.end();
+  return QIcon(pixmap);
+}
+
+// Fill a layer combo with one icon per row; the list and the combo's closed face use the same icon.
+static void RibbonFillLayerCombo(QComboBox* combo, const std::vector<CadLayerRow>& layers, const QString& selected) {
+  const QSignalBlocker block(combo);
+  combo->clear();
+  combo->setIconSize(QSize(16 * 4 + 3 * 3, 16));
+  for (const auto& row : layers)
+    combo->addItem(RibbonLayerRowIcon(row), Text(row.name.c_str()));
+  if (layers.empty()) {  // a drawing with no layer table still has layer "0"
+    CadLayerRow zero;
+    zero.name = "0";
+    combo->addItem(RibbonLayerRowIcon(zero), QStringLiteral("0"));
+  }
+  combo->setCurrentText(selected);
+}
+
+static void DrawDimArrowHead(QPainter& painter, const QPointF& tip, const QPointF& along, DimArrowType type,
+                             const QColor& ink) {
+  const qreal u = (painter.transform().m11() > 1.5 ? 1.6 : 1.0) / painter.transform().m11();
+  const QPointF dir = along - tip;
+  const qreal len = std::hypot(dir.x(), dir.y());
+  if (len < 1.e-3)
+    return;
+  const QPointF unit(dir.x() / len, dir.y() / len);
+  const QPointF normal(-unit.y(), unit.x());
+  switch (type) {
+  case DimArrowType::Tick: {
+    painter.setPen(QPen(ink, 1.5 * u));
+    painter.drawLine(tip + normal * 4.0, tip - normal * 4.0);
+    break;
+  }
+  case DimArrowType::Dot: {
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(ink);
+    painter.drawEllipse(tip, 2.2, 2.2);
+    break;
+  }
+  case DimArrowType::Open: {
+    painter.setPen(QPen(ink, 1.2 * u));
+    painter.drawLine(tip, tip + unit * 7.0 + normal * 3.0);
+    painter.drawLine(tip, tip + unit * 7.0 - normal * 3.0);
+    break;
+  }
+  case DimArrowType::ClosedBlank: {
+    painter.setPen(QPen(ink, 1.0 * u));
+    painter.setBrush(Qt::NoBrush);
+    QPolygonF head;
+    head << tip << tip + unit * 8.0 + normal * 3.0 << tip + unit * 8.0 - normal * 3.0;
+    painter.drawPolygon(head);
+    break;
+  }
+  case DimArrowType::None:
+    break;
+  case DimArrowType::ClosedFilled:
+  default: {
+    painter.setPen(QPen(ink, 1.0 * u));
+    painter.setBrush(ink);
+    QPolygonF head;
+    head << tip << tip + unit * 8.0 + normal * 3.0 << tip + unit * 8.0 - normal * 3.0;
+    painter.drawPolygon(head);
+    break;
+  }
+  }
+}
+
+static void PaintDimStylePreview(QPainter& painter, const DimensionStyle& sty) {
+  const qreal u = (painter.transform().m11() > 1.5 ? 1.6 : 1.0) / painter.transform().m11();  // constant on-screen stroke
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  const QColor extInk = RibbonStyleInk(sty.extLineColor);
+  const QColor dimInk = RibbonStyleInk(sty.dimLineColor);
+  const QColor arrowInk = RibbonStyleInk(sty.arrowColor);
+  const QColor textInk = RibbonStyleInk(sty.textColor);
+  const int xLeft = 10;
+  const int xRight = kStylePreviewPixmapWidth - 10;
+  const int yObjectTop = 30;
+  const int yObjectBottom = 44;
+  const int yDim = 18;
+  painter.setPen(QPen(extInk, 1.0 * u));
+  painter.drawLine(xLeft, yObjectTop, xLeft, yObjectBottom);
+  painter.drawLine(xRight, yObjectTop, xRight, yObjectBottom);
+  painter.setPen(QPen(dimInk, 1.0 * u));
+  painter.drawLine(xLeft, yDim, xRight, yDim);
+  DrawDimArrowHead(painter, QPointF(xLeft, yDim), QPointF(xLeft + 1, yDim), sty.arrowType, arrowInk);
+  DrawDimArrowHead(painter, QPointF(xRight, yDim), QPointF(xRight - 1, yDim), sty.arrowType, arrowInk);
+  const std::string sample = DimensionStyles::FormatLinearDim(1.0159, sty);
+  QFont font(QStringLiteral("Segoe UI"), 7);
+  if (!sty.textFont.empty())
+    font.setFamily(Text(sty.textFont.c_str()));
+  painter.setPen(textInk);
+  painter.setFont(font);
+  painter.drawText(QRect(4, 2, kStylePreviewPixmapWidth - 8, 14), Qt::AlignCenter, Text(sample.c_str()));
+}
+
+static QIcon RibbonDimStylePreviewIcon(const DimensionStyle& sty) {
+  QPixmap pixmap = NewStylePreviewPixmap();
+  pixmap.fill(QColor(QStringLiteral("#1e2630")));
+  QPainter painter(&pixmap);
+  PaintDimStylePreview(painter, sty);
+  painter.end();
+  return QIcon(pixmap);
+}
+
+static void PaintMleaderStylePreview(QPainter& painter, const MultileaderStyle& sty, const QString& styleLabel) {
+  const qreal u = (painter.transform().m11() > 1.5 ? 1.6 : 1.0) / painter.transform().m11();  // constant on-screen stroke
+  painter.setRenderHint(QPainter::Antialiasing, true);
+  painter.setRenderHint(QPainter::TextAntialiasing, true);
+  const QColor ink = RibbonStyleInk(std::string());  // the style stores no colour: ByLayer
+  const bool spline = styleLabel.contains(QStringLiteral("Sline"), Qt::CaseInsensitive) ||
+                      styleLabel.contains(QStringLiteral("Spline"), Qt::CaseInsensitive);
+  const QPointF tip(12, 44);
+  const QPointF knee(40, 28);
+  const QPointF landingEnd(88, 28);
+  painter.setPen(QPen(ink, 1.2 * u));
+  painter.setBrush(Qt::NoBrush);
+  if (spline) {
+    QPainterPath leader;
+    leader.moveTo(tip);
+    leader.cubicTo(QPointF(20, 28), QPointF(28, 40), knee);
+    painter.drawPath(leader);
+  } else {
+    painter.drawLine(tip, knee);
+  }
+  painter.drawLine(knee, landingEnd);
+  const QPointF away = knee - tip;
+  const qreal awayLen = std::max<qreal>(std::hypot(away.x(), away.y()), 1.0);
+  const QPointF unit(away.x() / awayLen, away.y() / awayLen);
+  const QPointF normal(-unit.y(), unit.x());
+  const qreal arrowLen = std::clamp<qreal>(sty.arrowSizeInches * 70.0, 5.0, 11.0);
+  QPolygonF arrow;
+  arrow << tip << tip + unit * arrowLen + normal * (arrowLen * 0.32) << tip + unit * arrowLen - normal * (arrowLen * 0.32);
+  painter.setPen(QPen(ink, 1.0 * u));
+  painter.setBrush(ink);
+  painter.drawPolygon(arrow);
+  QFont font(QStringLiteral("Segoe UI"), 8);
+  if (!sty.textFont.empty())
+    font.setFamily(Text(sty.textFont.c_str()));
+  painter.setPen(ink);
+  painter.setFont(font);
+  painter.drawText(QRect(44, 8, 46, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("Text"));
+}
+
+static QIcon RibbonMleaderStylePreviewIcon(const MultileaderStyle& sty, const QString& styleLabel) {
+  QPixmap pixmap = NewStylePreviewPixmap();
+  pixmap.fill(QColor(QStringLiteral("#1e2630")));
+  QPainter painter(&pixmap);
+  PaintMleaderStylePreview(painter, sty, styleLabel);
+  painter.end();
+  return QIcon(pixmap);
+}
+
+// Table style thumbnail: the style's own colours, column set and a few rows of made-up cell data.
+static QIcon RibbonTableStylePreviewIcon(const CadTableStyle& sty) {
+  QPixmap pixmap = NewStylePreviewPixmap();
+  pixmap.fill(QColor(QStringLiteral("#1e2630")));
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::Antialiasing, false);
+  painter.setRenderHint(QPainter::TextAntialiasing, true);
+  const QColor grid = RibbonStyleInk(sty.gridLineColor);
+  const QColor border = RibbonStyleInk(sty.borderColor);
+  const QColor titleInk = RibbonStyleInk(sty.titleTextColor);
+  const QColor headerInk = RibbonStyleInk(sty.headerTextColor);
+  const QColor dataInk = RibbonStyleInk(sty.dataTextColor);
+
+  QStringList headers;
+  QStringList sampleRow;
+  if (!sty.columnHeaders.empty()) {
+    for (const auto& header : sty.columnHeaders)
+      headers << Text(header.c_str());
+  } else if (sty.point && !sty.pointColumns.empty()) {
+    for (const auto column : sty.pointColumns)
+      headers << Text(CadPointTableColumnTitle(column));
+  } else {
+    headers << QStringLiteral("Item") << QStringLiteral("Qty") << QStringLiteral("Note");
+  }
+  if (headers.size() > 5)
+    headers = headers.mid(0, 5);
+  static const char* const kSamples[] = {"101", "5201.4", "3120.7", "84.62", "TOP"};
+  for (int i = 0; i < headers.size(); ++i)
+    sampleRow << QString::fromLatin1(kSamples[i % 5]);
+
+  const bool hasTitle = !sty.title.empty();
+  const QRect frame(5, 4, kStylePreviewPixmapWidth - 10, kStylePreviewPixmapHeight - 8);
+  const int rows = (hasTitle ? 1 : 0) + (sty.headerRow ? 1 : 0) + 3;
+  const int rowHeight = std::max(6, frame.height() / rows);
+  const int cols = std::max<int>(1, static_cast<int>(headers.size()));
+  const int colWidth = frame.width() / cols;
+  QFont font(QStringLiteral("Segoe UI"));
+  font.setPixelSize(std::max(5, rowHeight - 2));
+
+  painter.setFont(font);
+  int y = frame.top();
+  const auto drawText = [&](const QRect& cell, const QString& text, const QColor& ink, int flags) {
+    painter.setPen(ink);
+    painter.drawText(cell.adjusted(2, 0, -1, 0), flags | Qt::AlignVCenter,
+                     painter.fontMetrics().elidedText(text, Qt::ElideRight, cell.width() - 3));
+  };
+  if (hasTitle) {
+    drawText(QRect(frame.left(), y, frame.width(), rowHeight), Text(sty.title.c_str()), titleInk, Qt::AlignHCenter);
+    y += rowHeight;
+    painter.setPen(QPen(grid, 1.0));
+    painter.drawLine(frame.left(), y, frame.right(), y);
+  }
+  if (sty.headerRow) {
+    for (int c = 0; c < cols; ++c)
+      drawText(QRect(frame.left() + c * colWidth, y, colWidth, rowHeight), headers.value(c), headerInk, Qt::AlignLeft);
+    y += rowHeight;
+    painter.setPen(QPen(grid, 1.0));
+    painter.drawLine(frame.left(), y, frame.right(), y);
+  }
+  for (int r = 0; r < 3; ++r) {
+    for (int c = 0; c < cols; ++c)
+      drawText(QRect(frame.left() + c * colWidth, y, colWidth, rowHeight), sampleRow.value(c), dataInk, Qt::AlignLeft);
+    y += rowHeight;
+    if (r < 2) {
+      painter.setPen(QPen(grid, 1.0));
+      painter.drawLine(frame.left(), y, frame.right(), y);
+    }
+  }
+  const int bottom = std::min(y, frame.bottom());
+  painter.setPen(QPen(grid, 1.0));
+  for (int c = 1; c < cols; ++c)
+    painter.drawLine(frame.left() + c * colWidth, hasTitle ? frame.top() + rowHeight : frame.top(),
+                     frame.left() + c * colWidth, bottom);
+  painter.setPen(QPen(border, 1.0));
+  painter.setBrush(Qt::NoBrush);
+  painter.drawRect(QRect(frame.left(), frame.top(), frame.width(), bottom - frame.top()));
+  painter.end();
+  return QIcon(pixmap);
+}
+
+static QIcon RibbonStylePreviewIcon(const RibbonStyleGalleryModel& data, const QString& entry) {
+  if (data.previewIcon)
+    return data.previewIcon(entry);
+  QFont font(QStringLiteral("Segoe UI"), 11);
+  if (data.previewFont)
+    font = data.previewFont(entry);
+  const QColor ink = data.previewColor ? data.previewColor(entry) : RibbonStyleInk(std::string());
+  QPixmap pixmap = NewStylePreviewPixmap();
+  pixmap.fill(QColor(QStringLiteral("#1e2630")));
+  QPainter painter(&pixmap);
+  painter.setRenderHint(QPainter::TextAntialiasing, true);
+  painter.setPen(ink);
+  painter.setFont(font);
+  painter.drawText(QRect(2, 2, kStylePreviewPixmapWidth - 4, kStylePreviewPixmapHeight - 4), Qt::AlignCenter, data.previewSample);
+  painter.end();
+  return QIcon(pixmap);
+}
+
+static void ApplyRibbonStyleGalleryButtonChrome(QToolButton* button) {
+  const bool light = RibbonUsesLightChrome();
+  button->setProperty("ribbonStyleGallery", true);
+  if (light) {
+    button->setStyleSheet(
+        "QToolButton[ribbonStyleGallery=\"true\"]{padding:1px 22px 1px 6px;border:1px solid #8d9295;"
+        "background:#f8f8f8;color:#202020;}"
+        "QToolButton[ribbonStyleGallery=\"true\"]::menu-indicator{subcontrol-origin:padding;"
+        "subcontrol-position:center right;width:16px;margin-right:2px;}");
+  } else {
+    button->setStyleSheet(
+        "QToolButton[ribbonStyleGallery=\"true\"]{padding:1px 22px 1px 6px;border:1px solid #424b51;"
+        "background:#15191c;color:#edf1f3;}"
+        "QToolButton[ribbonStyleGallery=\"true\"]::menu-indicator{subcontrol-origin:padding;"
+        "subcontrol-position:center right;width:16px;margin-right:2px;}");
+  }
+}
+
+static void ApplyRibbonStyleGalleryPopupChrome(QMenu* menu, QWidget* host, QScrollArea* scroll, QWidget* gridHost) {
+  menu->setStyleSheet(QString());
+  const QString surface =
+      RibbonUsesLightChrome() ? QStringLiteral("background:#ececec;color:#202020;")
+                              : QStringLiteral("background:#252b2f;color:#edf1f3;");
+  host->setStyleSheet(surface);
+  scroll->setStyleSheet(surface);
+  gridHost->setStyleSheet(surface);
+}
+
+static QString RibbonStyleTileStyleSheet(bool selected, bool light) {
+  if (light) {
+    return selected ? QStringLiteral("QToolButton{border:2px solid #e8922a;background:#fff8ef;color:#202020;}")
+                    : QStringLiteral("QToolButton{border:1px solid #8d9295;background:#ffffff;color:#202020;}"
+                                     "QToolButton:hover{border-color:#e8922a;}");
+  }
+  return selected ? QStringLiteral("QToolButton{border:2px solid #e8922a;background:#2a3035;color:#edf1f3;}")
+                  : QStringLiteral("QToolButton{border:1px solid #424b51;background:#1c2024;color:#edf1f3;}"
+                                   "QToolButton:hover{border-color:#e8922a;}");
+}
+
+static void SyncRibbonStyleGalleryButton(QToolButton* button, const QString& current) {
+  if (button == nullptr)
+    return;
+  if (button->menu() != nullptr && button->menu()->isVisible())
+    return;
+  const QString label = current.isEmpty() ? QStringLiteral("Standard") : current;
+  const QFontMetrics metrics(button->font());
+  button->setText(metrics.elidedText(label, Qt::ElideMiddle, kRibbonStyleGalleryWidth - 30));
+  button->setToolTip(label);
+}
+
+static QToolButton* CreateRibbonStyleGallery(QWidget* panel, const QString& objectName,
+                                             EditorWindow* window,
+                                             const std::function<RibbonStyleGalleryModel()>& model) {
+  auto* button = new QToolButton(panel);
+  button->setObjectName(objectName);
+  if (objectName == QStringLiteral("ribbonTextStyleGallery"))
+    button->setAccessibleName(QStringLiteral("Text style"));
+  else if (objectName == QStringLiteral("ribbonDimStyleGallery"))
+    button->setAccessibleName(QStringLiteral("Dimension style"));
+  else if (objectName == QStringLiteral("ribbonMleaderStyleGallery"))
+    button->setAccessibleName(QStringLiteral("Multileader style"));
+  else if (objectName == QStringLiteral("ribbonTableStyleGallery"))
+    button->setAccessibleName(QStringLiteral("Table style"));
+  else
+    button->setAccessibleName(objectName.mid(6));
+  button->setPopupMode(QToolButton::InstantPopup);
+  button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+  button->setArrowType(Qt::DownArrow);
+  button->setAutoRaise(true);
+  button->setFixedHeight(24);
+  button->setFixedWidth(kRibbonStyleGalleryWidth);
+  button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+  auto* menu = new QMenu(button);
+  button->setMenu(menu);
+  QObject::connect(menu, &QMenu::aboutToShow, button, [button, window, model, objectName, menu]() {
+    const RibbonStyleGalleryModel data = model();
+    const bool light = RibbonUsesLightChrome();
+    SyncRibbonStyleGalleryButton(button, data.current);
+    button->setProperty("ribbonStyleEntries", data.entries);
+    menu->clear();
+    auto* host = new QWidget(menu);
+    host->setObjectName(objectName + QStringLiteral("_popup"));
+    auto* hostLayout = new QVBoxLayout(host);
+    hostLayout->setContentsMargins(6, 6, 6, 4);
+    hostLayout->setSpacing(4);
+    auto* scroll = new QScrollArea(host);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setMaximumHeight(420);
+    auto* gridHost = new QWidget(scroll);
+    auto* grid = new QGridLayout(gridHost);
+    grid->setContentsMargins(0, 0, 0, 0);
+    grid->setHorizontalSpacing(8);
+    grid->setVerticalSpacing(8);
+    ApplyRibbonStyleGalleryPopupChrome(menu, host, scroll, gridHost);
+    const int columns = std::max(1, data.columns);
+    // Reserve the tile columns plus the vertical scroll bar so the last column is never clipped.
+    const int gridWidth = columns * kStyleGalleryTileWidth + (columns - 1) * grid->horizontalSpacing();
+    scroll->setFixedWidth(gridWidth + scroll->verticalScrollBar()->sizeHint().width() + 4);
+    int tileIndex = 0;
+    const QFontMetrics tileMetrics(QFont(QStringLiteral("Segoe UI"), 8));
+    for (const QString& entry : data.entries) {
+      auto* tile = new QToolButton(gridHost);
+      tile->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+      tile->setAutoRaise(true);
+      tile->setFixedSize(kStyleGalleryTileWidth, kStyleGalleryTileHeight);
+      tile->setIconSize(QSize(kStylePreviewPixmapWidth, kStylePreviewPixmapHeight));
+      tile->setIcon(RibbonStylePreviewIcon(data, entry));
+      tile->setToolTip(entry);
+      tile->setText(tileMetrics.elidedText(entry, Qt::ElideMiddle, kStyleGalleryTileWidth - 8));
+      const bool selected = entry == data.current;
+      tile->setStyleSheet(RibbonStyleTileStyleSheet(selected, light));
+      const int row = tileIndex / columns;
+      const int col = tileIndex % columns;
+      grid->addWidget(tile, row, col);
+      ++tileIndex;
+      QObject::connect(tile, &QToolButton::clicked, menu, [window, objectName, entry, menu]() {
+        window->PickRibbonAnnotStyle(objectName, entry);
+        menu->close();
+      });
+    }
+    scroll->setWidget(gridHost);
+    hostLayout->addWidget(scroll);
+    auto* popupAction = new QWidgetAction(menu);
+    popupAction->setDefaultWidget(host);
+    menu->addAction(popupAction);
+    menu->addSeparator();
+    auto* manage = menu->addAction(data.manageLabel);
+    QObject::connect(manage, &QAction::triggered, window, [window, objectName]() { window->OpenRibbonStyleManager(objectName); });
+  });
+  ApplyRibbonStyleGalleryButtonChrome(button);
+  SyncRibbonStyleGalleryButton(button, model().current);
+  return button;
+}
+
 // Expanded panels use three short rows. At smaller widths whole panels become native
 // menus containing the very same actions, so resizing never clips or loses a command.
 constexpr int kRibbonPanelHeight = 98;
@@ -69,6 +584,28 @@ constexpr int kRibbonPageHeight = 102;
 constexpr int kRibbonHeight = 130;
 constexpr int kRibbonCompactHeaderHeight = 26;
 constexpr int kRibbonCaptionBottomSpace = 4;
+
+static bool PanelHasStyleGallery(QWidget* panel) {
+  for (auto* button : panel->findChildren<QToolButton*>()) {
+    if (button->objectName().endsWith(QStringLiteral("StyleGallery")))
+      return true;
+  }
+  return false;
+}
+
+static void FinalizeAnnotateStylePanel(QWidget* panel, int galleryColumn) {
+  Q_UNUSED(galleryColumn);
+  // Size from the real layout (button text widths vary), never from a guessed per-column width.
+  panel->ensurePolished();
+  for (auto* child : panel->findChildren<QWidget*>())
+    child->ensurePolished();
+  panel->layout()->invalidate();
+  panel->layout()->activate();
+  const int width = std::max(panel->layout()->sizeHint().width(), panel->layout()->minimumSize().width()) + 2;
+  panel->setMinimumWidth(width);
+  panel->setFixedSize(width, kRibbonPanelHeight);
+}
+
 class RibbonPage final : public QWidget {
   struct Panel { QWidget* expanded; QToolButton* collapsed; QMenu* menu; int priority; };
   std::vector<Panel> m_Panels;
@@ -89,7 +626,10 @@ public:
   }
   void AddPanel(QWidget* panel, const QString& title, const QList<QAction*>& actions, int priority) {
     panel->setParent(this); panel->setProperty("ribbonPanel", true);
-    panel->setFixedSize(panel->sizeHint().width(), kRibbonPanelHeight);
+    if (panel->minimumWidth() <= 0)
+      panel->setFixedSize(panel->sizeHint().width() + 8, kRibbonPanelHeight);
+    else
+      panel->setFixedSize(panel->minimumWidth(), kRibbonPanelHeight);
     auto* collapsed = new QToolButton(this); collapsed->setObjectName("collapsed_" + panel->objectName());
     collapsed->setText(title); collapsed->setToolTip(title); collapsed->setAutoRaise(true);
     collapsed->setFixedSize(std::clamp(fontMetrics().horizontalAdvance(title) + 22, 66, 155), 92);
@@ -117,6 +657,16 @@ public:
         source->setCurrentIndex(index);
         QMetaObject::invokeMethod(source, "activated", Qt::DirectConnection, Q_ARG(int, index));
         QMetaObject::invokeMethod(source, "textActivated", Qt::DirectConnection, Q_ARG(QString, source->currentText()));
+      });
+    }
+    for (auto* source : panel->findChildren<QToolButton*>()) {
+      if (!source->objectName().endsWith(QStringLiteral("StyleGallery")))
+        continue;
+      auto* openGallery = menu->addAction(source->accessibleName() + QStringLiteral("..."));
+      openGallery->setToolTip(source->toolTip());
+      connect(openGallery, &QAction::triggered, source, [source]() {
+        if (source->menu() != nullptr)
+          source->showMenu();
       });
     }
     for (auto* source : panel->findChildren<QDoubleSpinBox*>()) {
@@ -151,15 +701,37 @@ public:
   }
   void Fit() {
     if (m_Panels.empty()) return;
-    int used = 6;
-    for (const auto& p : m_Panels) used += p.collapsed->width() + 2;
-    std::vector<bool> shown(m_Panels.size(), true);
-    if (used > width()) {
-      std::fill(shown.begin(), shown.end(), false); used = 6 + m_More->width() + 2;
-      for (const int i : m_PriorityOrder) if (used + m_Panels[i].collapsed->width() + 2 <= width()) {
-        shown[i] = true; used += m_Panels[i].collapsed->width() + 2;
+    // Style-gallery panels claim their full width first (by priority); the rest collapse or overflow.
+    // "More" only costs space when something actually overflows, so try without it first.
+    const int panelCount = static_cast<int>(m_Panels.size());
+    std::vector<bool> shown, expanded;
+    int used = 0;
+    const auto place = [&](int reserve) {
+      used = 6 + reserve;
+      shown.assign(panelCount, false);
+      expanded.assign(panelCount, false);
+      for (const int i : m_PriorityOrder) {
+        if (!PanelHasStyleGallery(m_Panels[i].expanded))
+          continue;
+        const int cost = m_Panels[i].expanded->width() + 2;
+        if (used + cost <= width()) {
+          shown[i] = expanded[i] = true;
+          used += cost;
+        }
       }
-    }
+      for (const int i : m_PriorityOrder) {
+        if (shown[i])
+          continue;
+        const int cost = m_Panels[i].collapsed->width() + 2;
+        if (used + cost <= width()) {
+          shown[i] = true;
+          used += cost;
+        }
+      }
+    };
+    place(0);
+    if (std::find(shown.begin(), shown.end(), false) != shown.end())
+      place(m_More->width() + 2);
     std::vector<int> overflowPanels;
     for (int i = 0; i < static_cast<int>(m_Panels.size()); ++i) {
       if (!shown[i]) overflowPanels.push_back(i);
@@ -171,12 +743,18 @@ public:
     }
     if (m_More->isHidden() == !m_OverflowPanelIndices.empty())
       m_More->setVisible(!m_OverflowPanelIndices.empty());
-    std::vector<bool> expanded(m_Panels.size(), false);
-    for (const int i : m_PriorityOrder) {
-      if (!shown[i]) continue;
-      auto& p = m_Panels[i]; const int extra = p.expanded->width() - p.collapsed->width();
-      if (used + extra <= width()) { expanded[i] = true; used += extra; }
-    }
+    const auto tryExpand = [&](int i) {
+      if (!shown[i] || expanded[i])
+        return;
+      auto& p = m_Panels[i];
+      const int extra = p.expanded->width() - p.collapsed->width();
+      if (used + extra <= width()) {
+        expanded[i] = true;
+        used += extra;
+      }
+    };
+    for (const int i : m_PriorityOrder)
+      tryExpand(i);
     for (int i = 0; i < static_cast<int>(m_Panels.size()); ++i) {
       auto& p = m_Panels[i];
       if (p.expanded->isHidden() == expanded[i]) p.expanded->setVisible(expanded[i]);
@@ -247,6 +825,15 @@ void FitRibbonChrome(QWidget* wrapper) {
   const int gap = 2;
   const bool sharedFits = wrapper->width() >= needed + sharedWidth + gap;
   const bool compact = !sharedFits;
+  // Line the shared Layers panel up with the ribbon pane beside it: same top edge, same height.
+  if (auto* current = ribbon->currentWidget(); current && shared->layout()) {
+    const int top = std::max(0, current->mapTo(wrapper, QPoint(0, 0)).y() - 1);
+    const int height = std::max(1, ribbon->mapTo(wrapper, QPoint(0, ribbon->height())).y() - top);
+    if (shared->layout()->contentsMargins().top() != top)
+      shared->layout()->setContentsMargins(0, top, 0, 0);
+    if (auto* layers = shared->findChild<QWidget*>("ribbonSharedLayers"); layers && layers->height() != height)
+      layers->setFixedHeight(height);
+  }
   if (shared->isHidden() == sharedFits) shared->setVisible(sharedFits);
   if (header->isHidden() == compact) header->setVisible(compact);
   if (compactLayers->isHidden() == compact) compactLayers->setVisible(compact);
@@ -278,6 +865,115 @@ protected:
 };
 }
 
+// Large previews for the style managers: the same 96x52 drawing, scaled to any size.
+namespace {
+QPixmap ScaledStylePreview(QSize size, qreal dpr, const std::function<void(QPainter&)>& paint) {
+  QPixmap pixmap(size * dpr);
+  pixmap.setDevicePixelRatio(dpr);
+  pixmap.fill(QColor(QStringLiteral("#1e2630")));
+  QPainter painter(&pixmap);
+  painter.scale(size.width() / static_cast<qreal>(kStylePreviewPixmapWidth),
+                size.height() / static_cast<qreal>(kStylePreviewPixmapHeight));
+  paint(painter);
+  return pixmap;
+}
+}  // namespace
+
+// A drop-down list that opens as a normal, scrolling popup in the application's colours (ribbon and status-bar combos).
+QString PopupComboStyleSheet() {
+  const bool light = qApp->property("cadLightTheme").toBool();
+  return QStringLiteral("QComboBox { combobox-popup: 0; }"
+      "QComboBox QAbstractItemView { background:%1; color:%2; border:1px solid %3; outline:0; padding:2px; "
+      "selection-background-color:%4; selection-color:%2; }"
+      "QComboBox QAbstractItemView::item { min-height:26px; padding:2px 8px; border-radius:3px; }"
+      "QComboBox QAbstractItemView::item:hover { background:%5; }"
+      "QComboBox QAbstractItemView QScrollBar:vertical { background:transparent; width:10px; margin:2px; }"
+      "QComboBox QAbstractItemView QScrollBar::handle:vertical { background:%3; border-radius:3px; min-height:24px; }"
+      "QComboBox QAbstractItemView QScrollBar::add-line:vertical, QComboBox QAbstractItemView QScrollBar::sub-line:vertical { height:0; }")
+      .arg(light ? "#ffffff" : "#20262a", light ? "#202020" : "#edf1f3", light ? "#b6bcc1" : "#4a555c",
+           light ? "#dfe7ee" : "#35424b", light ? "#eef2f5" : "#2a343b");
+}
+
+QPixmap DimStylePreviewPixmap(const DimensionStyle& style, QSize size, qreal dpr) {
+  if (size.width() < 200)
+    return ScaledStylePreview(size, dpr, [&](QPainter& p) { PaintDimStylePreview(p, style); });
+  QPixmap pixmap(size * dpr);
+  pixmap.setDevicePixelRatio(dpr);
+  pixmap.fill(QColor("#202830"));
+  QPainter p(&pixmap);
+  p.setRenderHint(QPainter::Antialiasing);
+  p.scale(size.width() / 380.0, size.height() / 250.0);
+  p.setPen(QPen(QColor("#a8a53b"), .6));
+  p.drawPolyline(QPolygonF{QPointF(65, 65), QPointF(150, 65), QPointF(150, 85),
+      QPointF(220, 85), QPointF(295, 220), QPointF(115, 220), QPointF(65, 175), QPointF(65, 65)});
+  p.drawEllipse(QPointF(125, 160), 35, 35);
+  const QColor lineInk = RibbonStyleInk(style.dimLineColor);
+  const QColor textInk = RibbonStyleInk(style.textColor);
+  const QColor extInk = RibbonStyleInk(style.extLineColor);
+  auto dimension = [&](QPointF a, QPointF b, QPointF da, QPointF db, const QString& label) {
+    p.setPen(QPen(extInk, .8));
+    if (!StyleFlag(style.props, "suppressExt1")) p.drawLine(a, da);
+    if (!StyleFlag(style.props, "suppressExt2")) p.drawLine(b, db);
+    const QPointF mid = (da + db) * .5;
+    p.setPen(QPen(lineInk, .8));
+    if (!StyleFlag(style.props, "suppressDim1")) p.drawLine(da, mid);
+    if (!StyleFlag(style.props, "suppressDim2")) p.drawLine(mid, db);
+    DrawDimArrowHead(p, da, db, style.arrowType, lineInk);
+    DrawDimArrowHead(p, db, da, style.arrowType, lineInk);
+    p.save(); p.translate(mid);
+    p.rotate(std::atan2(db.y() - da.y(), db.x() - da.x()) * 180.0 / 3.14159265358979323846);
+    QFont font("Segoe UI"); font.setPixelSize(13); p.setFont(font); p.setPen(textInk);
+    p.drawText(QRectF(-85, -23, 170, 21), Qt::AlignCenter, label); p.restore();
+  };
+  dimension({65, 65}, {150, 65}, {65, 29}, {150, 29},
+      QString::fromUtf8(DimensionStyles::FormatLinearDim(.5, style).c_str()));
+  dimension({65, 65}, {65, 175}, {28, 175}, {28, 65},
+      QString::fromUtf8(DimensionStyles::FormatLinearDim(.8, style).c_str()));
+  dimension({220, 85}, {295, 220}, {260, 63}, {335, 198}, QStringLiteral("59°50′57″"));
+  p.setPen(QPen(lineInk, .8)); p.drawLine(75, 205, 42, 235);
+  DrawDimArrowHead(p, {75, 205}, {42, 235}, style.arrowType, lineInk);
+  p.setPen(textInk); p.drawText(QPointF(10, 246), QStringLiteral("R0.4"));
+  if (StyleProperty(style.props, "centerMark", "Mark") != "None") {
+    p.setPen(QPen(lineInk, .8)); p.drawLine(110, 160, 140, 160); p.drawLine(125, 145, 125, 175);
+  }
+  return pixmap;
+}
+
+QPixmap MleaderStylePreviewPixmap(const MultileaderStyle& style, const QString& label, QSize size, qreal dpr) {
+  return ScaledStylePreview(size, dpr, [&](QPainter& p) { PaintMleaderStylePreview(p, style, label); });
+}
+
+QPixmap TextStylePreviewPixmap(const TextStyle& style, QSize size, qreal dpr) {
+  QPixmap pixmap(size * dpr); pixmap.setDevicePixelRatio(dpr); pixmap.fill(QColor("#202830"));
+  QPainter p(&pixmap); p.setRenderHint(QPainter::Antialiasing);
+  const std::string sample = "AaBbYyZz 0123456789";
+  const float capHeight = std::min<float>(size.height() * .45f, size.width() / 18.f);
+  p.translate(12, size.height() * .7);
+  if (StyleFlag(style.props, "backwards")) { p.translate(size.width() - 24, 0); p.scale(-1, 1); }
+  if (StyleFlag(style.props, "upsideDown")) p.scale(1, -1);
+  p.scale(style.widthFactor, 1);
+  p.shear(-std::tan(style.obliqueDeg * 3.14159265358979323846 / 180.0), 0);
+  p.setPen(QPen(RibbonStyleInk(std::string()), style.bold ? 1.8 : 1.0));
+  if (auto* font = Shx::Resolve(style.fontFamily.empty() ? "romans.shx" : style.fontFamily); font && font->valid()) {
+    const float scale = capHeight / font->capHeight();
+    float x = 0;
+    for (const unsigned char character : sample) {
+      const auto* glyph = font->glyph(character); if (!glyph) continue;
+      for (const auto& stroke : glyph->strokes) {
+        QPolygonF path;
+        for (const auto& point : stroke) path << QPointF(x + point.x * scale, -point.y * scale);
+        p.drawPolyline(path);
+      }
+      x += glyph->advance * scale;
+    }
+  } else {
+    QFont qtFont(Text(style.fontFamily.c_str())); qtFont.setPixelSize(std::max(1, qRound(capHeight)));
+    qtFont.setBold(style.bold); qtFont.setItalic(style.italic); p.setFont(qtFont);
+    p.drawText(QPointF(0, 0), Text(sample.c_str()));
+  }
+  return pixmap;
+}
+
 void EditorWindow::BuildRibbonPages() {
   auto* toolbar = addToolBar("Ribbon"); toolbar->setObjectName("ribbonBar");
   toolbar->setMovable(false); toolbar->setFloatable(false); toolbar->setContentsMargins(0, 0, 0, 0);
@@ -295,7 +991,7 @@ void EditorWindow::BuildRibbonPages() {
   ribbon->tabBar()->setMouseTracking(true);
   ribbon->tabBar()->setAttribute(Qt::WA_Hover, true);
   strip->addWidget(ribbonColumn, 1);
-  auto* shared = new QWidget(wrapper); shared->setObjectName("ribbonSharedArea"); shared->setFixedWidth(228);
+  auto* shared = new QWidget(wrapper); shared->setObjectName("ribbonSharedArea"); shared->setFixedWidth(262);
   auto* sharedColumn = new QVBoxLayout(shared); sharedColumn->setContentsMargins(0, 26, 0, 0); sharedColumn->setSpacing(0);
   auto* layerPage = new RibbonPage(shared); layerPage->setObjectName("ribbonSharedLayers"); sharedColumn->addWidget(layerPage);
   strip->addWidget(shared);
@@ -320,6 +1016,7 @@ void EditorWindow::BuildRibbonPages() {
     if (name == "PdfCtx") panels = {"Adjust", "Clipping", "Options", "Import"};
     for (const auto& panelName : panels) {
       auto* panel = new QWidget(page); panel->setObjectName("ribbonPanel_" + name + "_" + panelName);
+      panel->setAutoFillBackground(true);
       auto* column = new QVBoxLayout(panel); column->setContentsMargins(5, 0, 5, kRibbonCaptionBottomSpace); column->setSpacing(1);
       auto* grid = new QGridLayout; grid->setContentsMargins(0, 0, 0, 0); grid->setHorizontalSpacing(2); grid->setVerticalSpacing(0);
       column->addLayout(grid, 1); int col = 0, row = 0; QList<QAction*> actions;
@@ -384,10 +1081,13 @@ void EditorWindow::BuildRibbonPages() {
       auto combo = [&](const QString& object, const QStringList& values) {
         auto* result = new QComboBox(panel); result->setObjectName(object); result->addItems(values); result->setMinimumWidth(135); result->setMaximumWidth(170);
         result->setAccessibleName(object.mid(6)); result->setToolTip(object.mid(6));
+        // A normal drop-down list (scrolls after a few rows) rather than a full-height popup.
+        result->setMaxVisibleItems(14);
+        result->setStyleSheet(PopupComboStyleSheet());
         grid->addWidget(result, 0, col++, 1, 1); return result;
       };
       if (name == "Home" && panelName == "Layers") {
-        auto* layer = combo("ribbonLayer", {}); layer->setEditable(true);
+        auto* layer = combo("ribbonLayer", {}); layer->view()->setMinimumWidth(340);
         connect(layer, &QComboBox::textActivated, this, [this](const QString& value) { CadRibbonPickLayer(m_State, value.toUtf8().toStdString(), m_Log); Refresh(); });
         auto* color = combo("ribbonColor", {"ByLayer", "ByBlock", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"});
         color->setEditable(true); color->lineEdit()->setReadOnly(true);
@@ -416,8 +1116,98 @@ void EditorWindow::BuildRibbonPages() {
         });
       }
       if (name == "Annotate" && panelName == "Text") {
-        auto* styles = combo("ribbonTextStyle", {});
-        connect(styles, &QComboBox::textActivated, this, [this](const QString& value) { SetActiveTextStyle(m_State, value.toUtf8().toStdString()); Refresh(); });
+        const int styleCol = col;
+        auto* picker = CreateRibbonStyleGallery(panel, QStringLiteral("ribbonTextStyleGallery"), this, [this]() {
+          RibbonStyleGalleryModel model;
+          model.previewSample = QStringLiteral("AaBbYyZz");
+          model.manageLabel = QStringLiteral("Manage Text Styles...");
+          model.columns = 3;
+          model.tileIcon = CadCommandIcon(QStringLiteral("text.png"));
+          TextStyles::EnsureStandard(m_State.textStyles);
+          for (const auto& style : m_State.textStyles)
+            model.entries.append(Text(style.name.c_str()));
+          model.current = Text(m_State.activeTextStyleName.c_str());
+          model.previewFont = [this](const QString& entry) {
+            QFont font(QStringLiteral("Segoe UI"), 12);
+            if (const TextStyle* style = TextStyles::Find(m_State.textStyles, entry.toUtf8().toStdString()))
+              if (!style->fontFamily.empty())
+                font.setFamily(Text(style->fontFamily.c_str()));
+            return font;
+          };
+          return model;
+        });
+        grid->setColumnMinimumWidth(styleCol, kRibbonStyleGalleryWidth);
+        grid->addWidget(picker, 0, styleCol, 3, 1, Qt::AlignTop);
+        FinalizeAnnotateStylePanel(panel, styleCol);
+      }
+      if (name == "Annotate" && panelName == "Dimensions") {
+        const int styleCol = col;
+        auto* picker = CreateRibbonStyleGallery(panel, QStringLiteral("ribbonDimStyleGallery"), this, [this]() {
+          RibbonStyleGalleryModel model;
+          model.previewSample = QStringLiteral("25.40'");
+          model.manageLabel = QStringLiteral("Manage Dimension Styles...");
+          model.columns = 2;
+          model.tileIcon = CadCommandIcon(QStringLiteral("dimstyle.png"));
+          for (const auto& style : m_State.dimensionStyles)
+            model.entries.append(Text(style.name.c_str()));
+          model.current = Text(m_State.activeDimensionStyle.name.c_str());
+          model.previewIcon = [this](const QString& entry) {
+            const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, entry.toUtf8().toStdString());
+            if (style == nullptr)
+              return QIcon();
+            return RibbonDimStylePreviewIcon(*style);
+          };
+          return model;
+        });
+        grid->setColumnMinimumWidth(styleCol, kRibbonStyleGalleryWidth);
+        grid->addWidget(picker, 0, styleCol, 3, 1, Qt::AlignTop);
+        FinalizeAnnotateStylePanel(panel, styleCol);
+      }
+      if (name == "Annotate" && panelName == "Leaders") {
+        const int styleCol = col;
+        auto* picker = CreateRibbonStyleGallery(panel, QStringLiteral("ribbonMleaderStyleGallery"), this, [this]() {
+          RibbonStyleGalleryModel model;
+          model.previewSample = QStringLiteral("Default Text");
+          model.manageLabel = QStringLiteral("Manage Multileader Styles...");
+          model.columns = 2;
+          model.tileIcon = CadCommandIcon(QStringLiteral("Multileader.png"));
+          for (const auto& style : m_State.multileaderStyles)
+            model.entries.append(Text(style.name.c_str()));
+          model.current = Text(m_State.activeMultileaderStyle.name.c_str());
+          model.previewIcon = [this](const QString& entry) {
+            const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, entry.toUtf8().toStdString());
+            if (style == nullptr)
+              return QIcon();
+            return RibbonMleaderStylePreviewIcon(*style, entry);
+          };
+          return model;
+        });
+        grid->setColumnMinimumWidth(styleCol, kRibbonStyleGalleryWidth);
+        grid->addWidget(picker, 0, styleCol, 3, 1, Qt::AlignTop);
+        FinalizeAnnotateStylePanel(panel, styleCol);
+      }
+      if (name == "Annotate" && panelName == "Tables") {
+        const int styleCol = col;
+        auto* picker = CreateRibbonStyleGallery(panel, QStringLiteral("ribbonTableStyleGallery"), this, [this]() {
+          RibbonStyleGalleryModel model;
+          model.manageLabel = QStringLiteral("Manage Table Styles...");
+          model.columns = 2;
+          model.tileIcon = CadCommandIcon(QStringLiteral("Table.png"));
+          for (const auto& style : m_State.tableStyles)
+            model.entries.append(Text(style.name.c_str()));
+          const std::string active = m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle;
+          model.current = Text(active.c_str());
+          model.previewIcon = [this](const QString& entry) {
+            const CadTableStyle* style = CadTableFindStyle(m_State.tableStyles, entry.toUtf8().toStdString());
+            if (style == nullptr)
+              return QIcon();
+            return RibbonTableStylePreviewIcon(*style);
+          };
+          return model;
+        });
+        grid->setColumnMinimumWidth(styleCol, kRibbonStyleGalleryWidth);
+        grid->addWidget(picker, 0, styleCol, 3, 1, Qt::AlignTop);
+        FinalizeAnnotateStylePanel(panel, styleCol);
       }
       if (name == "View" && panelName == "Coordinates") {
         QStringList frames{"WCS"}; for (const auto& preset : ucs::OrthographicPresets()) frames.append(Text(preset.name));
@@ -529,7 +1319,12 @@ void EditorWindow::BuildRibbonPages() {
         connect(scheme, &QComboBox::activated, this, [this](int index) { m_State.pointCloudDisplay.colorScheme = static_cast<PointCloudColorScheme>(index); m_Viewport->update(); });
       }
       const bool important = panelName == "Draw" || panelName == "Modify" || panelName == "Clipboard" || panelName == "Layers";
-      const int priority = important ? 10 : std::any_of(actions.begin(), actions.end(), [](auto* a) { return a->isEnabled(); }) ? 5 : 0;
+      int priority = important ? 10 : std::any_of(actions.begin(), actions.end(), [](auto* a) { return a->isEnabled(); }) ? 5 : 0;
+      if (name == "Annotate" &&
+          (panelName == "Text" || panelName == "Dimensions" || panelName == "Leaders" || panelName == "Tables"))
+        priority = 50;
+      else if (name == "Annotate")
+        priority = 1;
       if (name == "Home" && panelName == "Layers") layerPage->AddPanel(panel, panelName, actions, priority);
       else page->AddPanel(panel, panelName, actions, priority);
     }
@@ -558,6 +1353,63 @@ void EditorWindow::BuildRibbonPages() {
   QObject::connect(tabMenuItems, &QMenu::aboutToShow, wrapper, [wrapper] { UpdateRibbonTabMenu(wrapper); });
   auto* resizeFilter = new RibbonResizeFilter(wrapper); wrapper->installEventFilter(resizeFilter); resizeFilter->Schedule();
   toolbar->addWidget(wrapper);
+}
+
+void EditorWindow::PickRibbonAnnotStyle(const QString& galleryObjectName, const QString& styleName) {
+  const std::string name = styleName.toUtf8().toStdString();
+  if (galleryObjectName == QStringLiteral("ribbonTextStyleGallery")) {
+    if (TextStyles::Find(m_State.textStyles, name) == nullptr)
+      return;
+    SetActiveTextStyle(m_State, name);
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonDimStyleGallery")) {
+    const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name);
+    if (style == nullptr)
+      return;
+    PushUndoSnapshot(m_State, "DIMSTY current");
+    m_State.activeDimensionStyle = *style;
+    m_State.dimStyleDraft = *style;
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonMleaderStyleGallery")) {
+    const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name);
+    if (style == nullptr)
+      return;
+    PushUndoSnapshot(m_State, "MLEADERSTYLE current");
+    m_State.activeMultileaderStyle = *style;
+    m_State.mleaderStyleDraft = *style;
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonTableStyleGallery")) {
+    if (CadTableFindStyle(m_State.tableStyles, name) == nullptr)
+      return;
+    m_State.tablePendingStyle = name;
+    Refresh();
+  }
+}
+
+void EditorWindow::OpenRibbonStyleManager(const QString& galleryObjectName) {
+  if (galleryObjectName == QStringLiteral("ribbonTextStyleGallery")) {
+    m_State.showTextStyleManagerWindow = true;
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonDimStyleGallery")) {
+    StartDimStyleCommand(m_State, m_Log);
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonMleaderStyleGallery")) {
+    StartMleaderStyleCommand(m_State, m_Log);
+    Refresh();
+    return;
+  }
+  if (galleryObjectName == QStringLiteral("ribbonTableStyleGallery"))
+    ShowTableStyles();
 }
 
 void EditorWindow::RefreshRibbon() {
@@ -630,17 +1482,46 @@ void EditorWindow::RefreshRibbon() {
   };
   QStringList layers; for (const auto& layer : m_State.drawingLayerTable) layers.append(Text(layer.name.c_str()));
   const auto selectedLayer = CadSelectionLayer(m_State);
-  syncCombo("ribbonLayer", layers, Text((selectedLayer.empty() ? m_State.currentLayer : selectedLayer).c_str()));
+  if (auto* combo = findChild<QComboBox*>("ribbonLayer"); combo && !combo->hasFocus() && !combo->view()->isVisible())
+    RibbonFillLayerCombo(combo, m_State.drawingLayerTable, Text((selectedLayer.empty() ? m_State.currentLayer : selectedLayer).c_str()));
   const auto* region = hatch >= 0 ? &m_State.cadFilledRegions[hatch] : nullptr;
   const auto* attrs = hatch >= 0 && hatch < static_cast<int>(m_State.cadFilledRegionAttrs.size()) ? &m_State.cadFilledRegionAttrs[hatch] : nullptr;
-  syncCombo("ribbonHatchLayer", layers, Text((attrs ? attrs->layer : m_State.hatchLayer.empty() ? m_State.currentLayer : m_State.hatchLayer).c_str()));
+  if (auto* combo = findChild<QComboBox*>("ribbonHatchLayer"); combo && !combo->hasFocus() && !combo->view()->isVisible())
+    RibbonFillLayerCombo(combo, m_State.drawingLayerTable, Text((attrs ? attrs->layer : m_State.hatchLayer.empty() ? m_State.currentLayer : m_State.hatchLayer).c_str()));
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonHatchPattern")) { const QSignalBlocker block(combo); const auto& pattern = region ? region->patternName : m_State.hatchPatternName; combo->setCurrentText(pattern.empty() ? "SOLID" : Text(pattern.c_str())); }
   if (auto* angle = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchAngle")) { const QSignalBlocker block(angle); angle->setValue(region ? region->patternAngleDeg : m_State.hatchAngleDeg); }
   if (auto* scale = ribbon->findChild<QDoubleSpinBox*>("ribbonHatchScale")) { const QSignalBlocker block(scale); scale->setValue(region ? region->patternScale : m_State.hatchScale); }
   if (auto* transparency = ribbon->findChild<QSpinBox*>("ribbonHatchTransparency")) { const QSignalBlocker block(transparency); transparency->setValue(qRound((attrs ? std::max(0.f, attrs->transparency) : m_State.hatchTransparency01) * 100)); }
   if (auto* combo = findChild<QComboBox*>("ribbonColor")) { const QSignalBlocker block(combo); const auto selected = CadSelectionColor(m_State); combo->setCurrentText(Text((selected.empty() ? m_State.currentColor : selected).c_str())); }
-  QStringList styles; for (const auto& style : m_State.textStyles) styles.append(Text(style.name.c_str()));
-  syncCombo("ribbonTextStyle", styles, Text(m_State.activeTextStyleName.c_str()));
+  if (auto* textGallery = findChild<QToolButton*>(QStringLiteral("ribbonTextStyleGallery"))) {
+    SyncRibbonStyleGalleryButton(textGallery, Text(m_State.activeTextStyleName.c_str()));
+    QStringList entries;
+    for (const auto& style : m_State.textStyles)
+      entries.append(Text(style.name.c_str()));
+    textGallery->setProperty("ribbonStyleEntries", entries);
+  }
+  if (auto* dimGallery = findChild<QToolButton*>(QStringLiteral("ribbonDimStyleGallery"))) {
+    SyncRibbonStyleGalleryButton(dimGallery, Text(m_State.activeDimensionStyle.name.c_str()));
+    QStringList entries;
+    for (const auto& style : m_State.dimensionStyles)
+      entries.append(Text(style.name.c_str()));
+    dimGallery->setProperty("ribbonStyleEntries", entries);
+  }
+  if (auto* mleaderGallery = findChild<QToolButton*>(QStringLiteral("ribbonMleaderStyleGallery"))) {
+    SyncRibbonStyleGalleryButton(mleaderGallery, Text(m_State.activeMultileaderStyle.name.c_str()));
+    QStringList entries;
+    for (const auto& style : m_State.multileaderStyles)
+      entries.append(Text(style.name.c_str()));
+    mleaderGallery->setProperty("ribbonStyleEntries", entries);
+  }
+  if (auto* tableGallery = findChild<QToolButton*>(QStringLiteral("ribbonTableStyleGallery"))) {
+    const std::string activeTable = m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle;
+    SyncRibbonStyleGalleryButton(tableGallery, Text(activeTable.c_str()));
+    QStringList entries;
+    for (const auto& style : m_State.tableStyles)
+      entries.append(Text(style.name.c_str()));
+    tableGallery->setProperty("ribbonStyleEntries", entries);
+  }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonVisualStyle")) { const QSignalBlocker block(combo); auto* vp = CurrentViewport(m_State); combo->setCurrentIndex(static_cast<int>(vp ? vp->visualStyle : m_State.viewportVisualStyle)); }
   if (auto* combo = ribbon->findChild<QComboBox*>("ribbonProjection")) { const QSignalBlocker block(combo); combo->setCurrentIndex(m_State.viewportProjection == Camera::Projection::Perspective ? 1 : 0); }
   if (auto* fov = ribbon->findChild<QSpinBox*>("ribbonFov")) { const QSignalBlocker block(fov); fov->setValue(qRound(m_State.viewportFovDeg)); fov->setEnabled(m_State.viewportProjection == Camera::Projection::Perspective); }
@@ -793,7 +1674,7 @@ void EditorWindow::RunRibbonAction(const QString& id) {
   } else if (command == "@viewManager") m_State.showViewManagerWindow = true;
   else if (command == "@textStyles") m_State.showTextStyleManagerWindow = true;
   else if (command == "@dimStyles") StartDimStyleCommand(m_State, m_Log);
-  else if (command == "@leaderStyles") m_State.showMleaderStyleDialog = true;
+  else if (command == "@leaderStyles") StartMleaderStyleCommand(m_State, m_Log);
   else if (command == "@addLeader") StartMleaderAddLeaderCommand(m_State, m_Log);
   else if (command == "@removeLeader") RemoveLeaderFromSelectedMultileader(m_State, m_Log);
   else if (command == "@editElevations") m_State.showFeatureLineElevWindow = true;
