@@ -1,5 +1,5 @@
 // Issue #486 — a CadPipeRun (path, name, nominal size, pressure class) must survive
-// SaveGoSurveyTemplateFile / LoadGoSurveyTemplateFile (the SAVEAS/OPEN path).
+// document-payload serialization and loading.
 // Linked here (GoSurveySnapTests) because GoSurveyTests cannot link GsIo.cpp.
 
 #include <catch2/catch_approx.hpp>
@@ -14,6 +14,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "GsIoTestSupport.hpp"
 
 namespace {
 
@@ -26,7 +27,7 @@ std::filesystem::path UniqueGsPath(const char* stem) {
 
 } // namespace
 
-TEST_CASE("A named CadPipeRun survives SaveGoSurveyTemplateFile then LoadGoSurveyTemplateFile",
+TEST_CASE("A named CadPipeRun survives document-payload serialization and loading",
           "[payload][piperun][issue486]") {
   AppCommandState st;
   CadPipeRun run;
@@ -39,10 +40,10 @@ TEST_CASE("A named CadPipeRun survives SaveGoSurveyTemplateFile then LoadGoSurve
 
   const std::filesystem::path path = UniqueGsPath("piperun");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadPipeRuns.size() == 1);
   const CadPipeRun& r = loaded.cadPipeRuns[0];
   CHECK(r.name == "Cooling Loop A");
@@ -74,7 +75,7 @@ TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing 
 
   const std::filesystem::path path = UniqueGsPath("piperun-wall");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   // The key is written for the stated run only.
   {
@@ -90,7 +91,7 @@ TEST_CASE("A pipe run's wall thickness survives save/load, and an older drawing 
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadPipeRuns.size() == 2);
   CHECK(loaded.cadPipeRuns[0].wallThicknessIn == Catch::Approx(0.5));
   CHECK(loaded.cadPipeRuns[1].wallThicknessIn == 0.0);
@@ -103,10 +104,10 @@ TEST_CASE("A drawing with no pipe runs omits the pipeRuns key and still loads cl
   AppCommandState st;  // no pipe runs — ADR-020 (d) additive/omitted-when-empty
   const std::filesystem::path path = UniqueGsPath("no-piperun");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   CHECK(loaded.cadPipeRuns.empty());
 
   std::filesystem::remove(path);
@@ -128,10 +129,10 @@ TEST_CASE("A named piping network with runs survives save/load with indices inta
 
   const std::filesystem::path path = UniqueGsPath("pipesys");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadPipingSystems.size() == 1);
   CHECK(loaded.cadPipingSystems[0].name == "Cooling Loop 1");
   CHECK(loaded.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0, 1}));
@@ -144,10 +145,10 @@ TEST_CASE("A drawing with no piping networks omits the pipingSystems key and loa
   AppCommandState st;
   const std::filesystem::path path = UniqueGsPath("no-pipesys");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   CHECK(loaded.cadPipingSystems.empty());
 
   std::filesystem::remove(path);
@@ -169,7 +170,7 @@ TEST_CASE("An out-of-range pipeRunIndices entry is dropped rather than trusted",
 
   const std::filesystem::path path = UniqueGsPath("pipesys-corrupt");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.u8string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   // Hand-corrupt the saved JSON to add an out-of-range index.
   {
@@ -185,7 +186,7 @@ TEST_CASE("An out-of-range pipeRunIndices entry is dropped rather than trusted",
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.u8string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.cadPipingSystems.size() == 1);
   CHECK(loaded.cadPipingSystems[0].pipeRunIndices == std::vector<int>({0}));  // 99 dropped
 

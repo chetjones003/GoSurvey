@@ -410,6 +410,44 @@ void EditorWindow::ShowSettings() {
 
   layout->addStretch();
 
+  // REQ-424: standalone new drawings use this path; an empty path means the bundled default.
+  layout = newPage("Files", "settingsPageFiles");
+  auto *newDrawingHeading = new QLabel("New drawings", dialog);
+  newDrawingHeading->setObjectName("newDrawingSettingsHeading");
+  newDrawingHeading->setStyleSheet("font-size:16px; font-weight:600;");
+  layout->addWidget(newDrawingHeading);
+  auto *templateForm = new QFormLayout();
+  layout->addLayout(templateForm);
+  auto *templatePath = new QLineEdit(QString::fromUtf8(m_State.defaultDrawingTemplatePathUtf8), dialog);
+  templatePath->setObjectName("defaultDrawingTemplatePath");
+  templatePath->setReadOnly(true);
+  auto *templatePathRow = new QWidget(dialog);
+  auto *templatePathLayout = new QHBoxLayout(templatePathRow);
+  templatePathLayout->setContentsMargins(0, 0, 0, 0);
+  auto *browseTemplate = new QPushButton("Browse…", templatePathRow);
+  browseTemplate->setObjectName("browseDefaultDrawingTemplate");
+  auto *useBundledTemplate = new QPushButton("Use GoSurvey default", templatePathRow);
+  useBundledTemplate->setObjectName("useBundledDrawingTemplate");
+  templatePathLayout->addWidget(templatePath, 1);
+  templatePathLayout->addWidget(browseTemplate);
+  templatePathLayout->addWidget(useBundledTemplate);
+  templateForm->addRow("Default drawing template", templatePathRow);
+  auto *templateNote = new QLabel("New standalone drawings use this template. Clear the selection to use GoSurvey’s bundled default.", dialog);
+  templateNote->setWordWrap(true);
+  layout->addWidget(templateNote);
+  connect(browseTemplate, &QPushButton::clicked, dialog, [dialog, templatePath] {
+    const QString path = QFileDialog::getOpenFileName(dialog, "Choose default drawing template",
+        templatePath->text(), "GoSurvey templates (*.gst)");
+    if (!path.isEmpty()) templatePath->setText(path);
+  });
+  connect(useBundledTemplate, &QPushButton::clicked, dialog, [templatePath] { templatePath->clear(); });
+  commits->push_back([this, templatePath] {
+    const QByteArray path = templatePath->text().toUtf8();
+    CopyUtf8PathCapped(m_State.defaultDrawingTemplatePathUtf8,
+                       sizeof(m_State.defaultDrawingTemplatePathUtf8), path.constData());
+  });
+  layout->addStretch();
+
   // ---- Display page (REQ-449) ------------------------------------------------------------
   layout = newPage("Display", "settingsPageDisplay");
   auto addHeading = [&](QVBoxLayout *into, const QString &text, const char *name) {
@@ -602,7 +640,13 @@ void EditorWindow::ShowSettings() {
   buttons->button(QDialogButtonBox::Cancel)->setObjectName("settingsCancel");
   outer->addWidget(buttons);
   // REQ-201: a failed write is shown and keeps the window open, never a silent "saved".
-  auto applyAll = [this, commits, saveStatus] {
+  auto applyAll = [this, commits, saveStatus, templatePath] {
+    const auto path = templatePath->text().toUtf8();
+    if (path.size() > static_cast<int>(sizeof(m_State.defaultDrawingTemplatePathUtf8) - 1)) {
+      saveStatus->setText("The default drawing-template path is too long. Choose a shorter path; "
+                          "the current setting was kept.");
+      return false;
+    }
     for (const auto &commit : *commits) commit();
     BumpCadGpuCache(m_State);
     Refresh();

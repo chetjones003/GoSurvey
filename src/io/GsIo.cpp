@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -4596,12 +4597,98 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     return false;
   }
   try {
+    json root = BuildRoot(st);
+    json& doc = root["document"];
+    // A .gst carries reusable standards, setup, and vector linework. Keep this list in sync with
+    // BuildRoot whenever a new entity store is added; only non-linework drawing content is removed.
+    for (const char* key : {
+             "annotations",
+             "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
+             "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
+             "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
+             "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
+      doc[key] = json::array();
+
+    // Captured map tiles are source-drawing imagery, not reusable template settings.
+    if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+      doc["drawingSettings"].erase("capturedAreas");
+
+    // Keep named views and named UCS definitions as reusable drawing standards, but do not carry
+    // over the source drawing's current camera, projection, active view, or current UCS.
+    if (doc.contains("view") && doc["view"].is_object()) {
+      json reusableViews = json::object();
+      if (doc["view"].contains("namedViews")) reusableViews["namedViews"] = doc["view"]["namedViews"];
+      if (doc["view"].contains("namedUcs")) reusableViews["namedUcs"] = doc["view"]["namedUcs"];
+      doc["view"] = std::move(reusableViews);
+    } else {
+      doc.erase("view");
+    }
+
+    // Keep reusable view/settings state and entity ID counters with the retained linework.
+    // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
+    std::set<std::string> neededBlocks;
+    auto collectBlock = [&](const json& value, const char* field) {
+      if (value.is_object() && value.contains(field) && value[field].is_string())
+        neededBlocks.insert(value[field].get<std::string>());
+    };
+    if (doc.contains("surveyPointStyles") && doc["surveyPointStyles"].is_array())
+      for (const auto& style : doc["surveyPointStyles"]) collectBlock(style, "markerBlockName");
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array())
+      for (const auto& layout : doc["paperLayouts"])
+        if (layout.contains("paperBlockRefs") && layout["paperBlockRefs"].is_array())
+          for (const auto& ref : layout["paperBlockRefs"]) collectBlock(ref, "defName");
+    if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
+      json defs = doc["blockDefs"];
+      json kept = json::array();
+      const auto isNeededBlock = [&](const std::string& candidate) {
+        return std::any_of(neededBlocks.begin(), neededBlocks.end(), [&](const std::string& needed) {
+          return CadBlockEqCi(candidate, needed);
+        });
+      };
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (const auto& def : defs) {
+          if (!def.is_object() || !def.contains("name") || !def["name"].is_string()) continue;
+          const std::string name = def["name"].get<std::string>();
+          if (!isNeededBlock(name)) continue;
+          bool already = false;
+          for (const auto& prior : kept)
+            if (prior.is_object() && CadBlockEqCi(prior.value("name", std::string{}), name)) {
+              already = true;
+              break;
+            }
+          if (already) continue;
+          kept.push_back(def);
+          changed = true;
+          if (def.contains("content") && def["content"].is_object() &&
+              def["content"].contains("nested") && def["content"]["nested"].is_array())
+            for (const auto& nested : def["content"]["nested"]) collectBlock(nested, "defName");
+        }
+      }
+      doc["blockDefs"] = std::move(kept);
+    }
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
+      for (json& layout : doc["paperLayouts"]) {
+        for (const char* key : {
+                 "paperTexts", "paperTextAttrs", "paperImages", "paperImageAttrs", "paperFilledRegions",
+                 "paperFilledRegionAttrs", "paperPoints", "paperPointAttrs", "paperMultileaders",
+                 "paperMultileaderAttrs", "paperTables", "paperTableAttrs"})
+          layout[key] = json::array();
+      }
+    }
+
     std::ofstream f(std::filesystem::path(pathUtf8), std::ios::binary);
     if (!f) {
       log.push_back(std::string("Could not open for write: ") + pathUtf8);
       return false;
     }
-    f << SerializeGoSurveyJson(st);
+    f << root.dump(2);
+    if (!f) {
+      log.push_back(std::string("Could not finish writing template: ") + pathUtf8);
+      return false;
+    }
     log.push_back(std::string("Saved GoSurvey template (.gst): ") + pathUtf8);
     return true;
   } catch (const std::exception& e) {
