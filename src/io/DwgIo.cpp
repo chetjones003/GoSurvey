@@ -1,5 +1,6 @@
 #include "DwgIo.hpp"
 
+#include "CadCommands.hpp"
 #include "GsIo.hpp"
 #include "LibreDwgCad.hpp"
 #include "util/SaveTrace.hpp"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -173,9 +175,13 @@ bool ImportDwgFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
   std::string json;
   if (TryGoSurveyDwgPayloadFromBytes(bytes, json)) {
     log.push_back(std::string("DWG open — GoSurvey document in ") + pathUtf8);
-    return LoadGoSurveyFromJsonUtf8(st, json, log);
+    if (!LoadGoSurveyFromJsonUtf8(st, json, log))
+      return false;
+    return true;
   }
-  return ImportLibreCadFile(st, pathUtf8, log, /*asDxf=*/false);
+  if (!ImportLibreCadFile(st, pathUtf8, log, /*asDxf=*/false))
+    return false;
+  return true;
 }
 
 bool ExportDwgFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {

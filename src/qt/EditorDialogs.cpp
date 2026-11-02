@@ -2,6 +2,7 @@
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
+#include "EditorPointTableDialog.hpp"
 #include "EditorLayerManager.hpp"
 #include "CadCommands.hpp"
 #include "CadColor.hpp"
@@ -12,6 +13,8 @@
 #include "UserPrefs.hpp"
 #include "geo/CoordinateSystems.hpp"
 #include "util/PlotScales.hpp"
+#include "StylePreview.hpp"
+#include "StyleEditors.hpp"
 #include <QDialog>
 #include <QApplication>
 #include <QDialogButtonBox>
@@ -44,12 +47,14 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTabWidget>
+#include <QPainter>
 #include <functional>
 #include <QStackedWidget>
 #include <QCloseEvent>
 #include <QKeyEvent>
 #include <QFrame>
 #include <QGroupBox>
+#include <QRadioButton>
 #include <QScreen>
 #include <QStyle>
 #include <algorithm>
@@ -64,6 +69,192 @@
 #include <vector>
 
 namespace {
+// One manager for every annotation style kind (dimension, multileader, text): the style list on the left, a
+// large drawing of the selected style in the middle, its settings in words below, and the actions on the right.
+// It follows the application theme; nothing here hard-codes light colours.
+struct StyleManagerSpec {
+  QString objectName, title, currentCaption, listObjectName, previewObjectName, buttonPrefix;
+  std::function<QStringList()> names;
+  std::function<QString()> current;
+  std::function<QPixmap(const QString&, QSize, qreal)> preview;
+  std::function<QString(const QString&)> describe;
+  std::function<void(const QString&)> setCurrent;
+  std::function<bool()> create;  ///< prompts for and adds a style; true when the list changed
+  std::function<bool(const QString&)> modify;
+  std::function<bool(const QString&)> overrideStyle, copy, rename, remove;
+  std::function<QMap<QString, QString>(const QString&)> properties;
+  std::function<void()> afterChange;
+};
+
+void RunStyleManager(QWidget* parent, const StyleManagerSpec& spec) {
+  QDialog manager(parent);
+  manager.setObjectName(spec.objectName);
+  manager.setWindowTitle(spec.title);
+  manager.resize(780, 540);
+  auto* root = new QVBoxLayout(&manager);
+  auto* currentLabel = new QLabel(&manager);
+  root->addWidget(currentLabel);
+  auto* body = new QHBoxLayout;
+  auto* list = new QListWidget(&manager);
+  list->setObjectName(spec.listObjectName);
+  list->setMinimumWidth(220);
+  body->addWidget(list, 1);
+  auto* details = new QVBoxLayout;
+  auto* preview = new QLabel(&manager);
+  preview->setObjectName(spec.previewObjectName);
+  preview->setAlignment(Qt::AlignCenter);
+  preview->setMinimumSize(400, 220);
+  preview->setFrameShape(QFrame::StyledPanel);
+  preview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+  details->addWidget(preview, 1);
+  auto* descriptionTitle = new QLabel("Description", &manager);
+  QFont bold = descriptionTitle->font();
+  bold.setBold(true);
+  descriptionTitle->setFont(bold);
+  details->addWidget(descriptionTitle);
+  auto* description = new QLabel(&manager);
+  description->setWordWrap(true);
+  description->setMinimumHeight(70);
+  description->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+  details->addWidget(description);
+  body->addLayout(details, 2);
+  auto* actions = new QVBoxLayout;
+  const auto addButton = [&](const QString& text, const QString& suffix) {
+    auto* button = new QPushButton(text, &manager);
+    button->setObjectName(spec.buttonPrefix + suffix);
+    actions->addWidget(button);
+    return button;
+  };
+  auto* setCurrentButton = spec.setCurrent ? addButton("Set Current", "SetCurrent") : nullptr;
+  auto* newButton = spec.create ? addButton("New…", "New") : nullptr;
+  auto* modifyButton = spec.modify ? addButton("Modify…", "Modify") : nullptr;
+  auto* overrideButton = spec.overrideStyle ? addButton("Override…", "Override") : nullptr;
+  auto* compareButton = spec.properties ? addButton("Compare…", "Compare") : nullptr;
+  auto* copyButton = spec.copy ? addButton("Copy…", "Copy") : nullptr;
+  auto* renameButton = spec.rename ? addButton("Rename…", "Rename") : nullptr;
+  auto* deleteButton = spec.remove ? addButton("Delete", "Delete") : nullptr;
+  actions->addStretch();
+  body->addLayout(actions);
+  root->addLayout(body, 1);
+  auto* bottom = new QHBoxLayout;
+  bottom->addStretch();
+  auto* close = new QPushButton("Close", &manager);
+  bottom->addWidget(close);
+  auto* help = new QPushButton("Help", &manager);
+  bottom->addWidget(help);
+  root->addLayout(bottom);
+
+  const auto refill = [&](const QString& keep) {
+    const QSignalBlocker block(list);
+    list->clear();
+    for (const QString& name : spec.names()) {
+      auto* item = new QListWidgetItem(name == spec.current() ? name + QStringLiteral("  (current)") : name, list);
+      item->setData(Qt::UserRole, name);
+    }
+    int row = 0;
+    for (int i = 0; i < list->count(); ++i)
+      if (list->item(i)->data(Qt::UserRole).toString() == keep) row = i;
+    list->setCurrentRow(row);
+    currentLabel->setText(spec.currentCaption + spec.current());
+  };
+  // The list shows "(current)" next to the active style, so read the real name back from the item data.
+  const auto realName = [list]() { return list->currentItem() ? list->currentItem()->data(Qt::UserRole).toString() : QString(); };
+  const auto showSelectedReal = [&]() {
+    const QString name = realName();
+    if (name.isEmpty()) {
+      preview->clear();
+      description->clear();
+      return;
+    }
+    const qreal dpr = std::max<qreal>(2.0, manager.devicePixelRatioF());
+    preview->setPixmap(spec.preview(name, QSize(420, 228), dpr));
+    description->setText(spec.describe(name));
+  };
+  refill(spec.current());
+  showSelectedReal();
+  QObject::connect(list, &QListWidget::currentRowChanged, &manager, [&](int) { showSelectedReal(); });
+  if (setCurrentButton)
+    QObject::connect(setCurrentButton, &QPushButton::clicked, &manager, [&] {
+      const QString name = realName();
+      if (name.isEmpty()) return;
+      spec.setCurrent(name);
+      if (spec.afterChange) spec.afterChange();
+      refill(name);
+      showSelectedReal();
+    });
+  if (newButton)
+    QObject::connect(newButton, &QPushButton::clicked, &manager, [&] {
+      if (!spec.create()) return;
+      if (spec.afterChange) spec.afterChange();
+      const QStringList all = spec.names();
+      refill(all.isEmpty() ? QString() : all.last());
+      showSelectedReal();
+    });
+  if (modifyButton)
+    QObject::connect(modifyButton, &QPushButton::clicked, &manager, [&] {
+      const QString name = realName();
+      if (name.isEmpty() || !spec.modify(name)) return;
+      if (spec.afterChange) spec.afterChange();
+      refill(name);
+      showSelectedReal();
+    });
+  const auto connectAction = [&](QPushButton* button, const std::function<bool(const QString&)>& action) {
+    if (!button) return;
+    QObject::connect(button, &QPushButton::clicked, &manager, [&, action] {
+      const QString name = realName();
+      if (name.isEmpty() || !action(name)) return;
+      if (spec.afterChange) spec.afterChange();
+      refill(spec.current()); showSelectedReal();
+    });
+  };
+  connectAction(overrideButton, spec.overrideStyle);
+  connectAction(copyButton, spec.copy);
+  connectAction(renameButton, spec.rename);
+  connectAction(deleteButton, spec.remove);
+  if (compareButton) QObject::connect(compareButton, &QPushButton::clicked, &manager, [&] {
+    QDialog compare(&manager); compare.setWindowTitle("Compare Dimension Styles"); compare.resize(740, 500);
+    compare.setObjectName("dimensionStyleCompare");
+    auto* layout = new QVBoxLayout(&compare);
+    auto* selectors = new QHBoxLayout;
+    auto* first = new QComboBox(&compare); auto* second = new QComboBox(&compare);
+    first->addItems(spec.names()); second->addItems(spec.names());
+    first->setCurrentText(realName()); second->setCurrentText(spec.current());
+    selectors->addWidget(new QLabel("Compare:")); selectors->addWidget(first, 1);
+    selectors->addWidget(new QLabel("With:")); selectors->addWidget(second, 1); layout->addLayout(selectors);
+    auto* values = new QTableWidget(&compare); values->setColumnCount(3);
+    values->setHorizontalHeaderLabels({"Setting", "Compare", "With"});
+    values->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    values->setEditTriggers(QAbstractItemView::NoEditTriggers); layout->addWidget(values, 1);
+    const auto update = [&] {
+      const auto left = spec.properties(first->currentText()), right = spec.properties(second->currentText());
+      QMap<QString, QString> keys = left; for (auto it = right.begin(); it != right.end(); ++it) keys.insert(it.key(), it.value());
+      values->setRowCount(keys.size()); int row = 0;
+      for (auto it = keys.begin(); it != keys.end(); ++it, ++row) {
+        const QString a = left.value(it.key()), b = right.value(it.key());
+        values->setItem(row, 0, new QTableWidgetItem(it.key()));
+        values->setItem(row, 1, new QTableWidgetItem(a)); values->setItem(row, 2, new QTableWidgetItem(b));
+        if (a != b) for (int col = 0; col < 3; ++col) {
+          auto font = values->item(row, col)->font(); font.setBold(true); values->item(row, col)->setFont(font);
+        }
+      }
+    };
+    QObject::connect(first, &QComboBox::currentTextChanged, &compare, update);
+    QObject::connect(second, &QComboBox::currentTextChanged, &compare, update);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &compare); layout->addWidget(buttons);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &compare, &QDialog::reject);
+    update(); compare.exec();
+  });
+  QObject::connect(help, &QPushButton::clicked, &manager, [&] {
+    QMessageBox::information(&manager, spec.title,
+        "Select a drawing-owned style to preview or modify it. Set Current chooses the style for new objects. "
+        "Modify updates objects that use that style. New creates a copy of the current style. "
+        "Changes can be undone after closing this window.");
+  });
+  QObject::connect(list, &QListWidget::itemDoubleClicked, &manager, [&](QListWidgetItem*) { if (modifyButton) modifyButton->click(); });
+  QObject::connect(close, &QPushButton::clicked, &manager, &QDialog::accept);
+  manager.exec();
+}
+
 class CoordinateSystemPopupStyle final : public QProxyStyle {
 public:
   explicit CoordinateSystemPopupStyle(const QString& baseStyle) : QProxyStyle(baseStyle) {}
@@ -660,6 +851,375 @@ void EditorWindow::ServiceUiRequests() {
     ShowBlockEditorClosePrompt();
     return;
   }
+  if (m_State.tableInsertDialogRequested) {
+    m_State.tableInsertDialogRequested = false;
+    m_ModalOpen = true;
+    QDialog dialog(this);
+    dialog.setObjectName("insertTableDialog");
+    dialog.setWindowTitle("Insert Table");
+    dialog.resize(940, 570);
+    auto* root = new QVBoxLayout(&dialog);
+    auto* body = new QHBoxLayout;
+    auto* left = new QVBoxLayout;
+    auto* styleForm = new QFormLayout;
+    auto* style = new QComboBox(&dialog);
+    style->setObjectName("insertTableStyle");
+    for (const CadTableStyle& candidate : m_State.tableStyles)
+      if (!candidate.point) style->addItem(QString::fromUtf8(candidate.name.c_str()));
+    const int selectedStyle = style->findText(QString::fromUtf8(m_State.tablePendingStyle.c_str()));
+    if (selectedStyle >= 0) style->setCurrentIndex(selectedStyle);
+    styleForm->addRow("Table style:", style);
+    left->addLayout(styleForm);
+    auto* options = new QGroupBox("Insert options", &dialog);
+    auto* optionLayout = new QVBoxLayout(options);
+    auto* empty = new QRadioButton("Start from empty table", options);
+    empty->setChecked(true);
+    optionLayout->addWidget(empty);
+    auto* dataLink = new QRadioButton("From a data link", options);
+    dataLink->setEnabled(false);
+    optionLayout->addWidget(dataLink);
+    auto* extraction = new QRadioButton("From object data in the drawing (Data Extraction)", options);
+    extraction->setEnabled(false);
+    optionLayout->addWidget(extraction);
+    left->addWidget(options);
+    auto* previewCheck = new QCheckBox("Preview", &dialog);
+    previewCheck->setChecked(true);
+    left->addWidget(previewCheck);
+    auto* preview = new QTableWidget(&dialog);
+    preview->setObjectName("insertTablePreview");
+    preview->setMinimumSize(400, 260);
+    preview->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    preview->setSelectionMode(QAbstractItemView::NoSelection);
+    preview->horizontalHeader()->hide();
+    preview->verticalHeader()->hide();
+    preview->setStyleSheet("QTableWidget{background:#202830;color:#e8a61a;border:1px solid #87939b;gridline-color:#e85b24;font:14px monospace;} QTableWidget::item{border:1px solid #e85b24;padding:4px;}");
+    left->addWidget(preview, 1);
+    QObject::connect(previewCheck, &QCheckBox::toggled, preview, &QWidget::setVisible);
+    auto* right = new QVBoxLayout;
+    auto* insertion = new QGroupBox("Insertion behavior", &dialog);
+    auto* insertionLayout = new QVBoxLayout(insertion);
+    auto* insertionPoint = new QRadioButton("Specify insertion point", insertion);
+    insertionPoint->setChecked(true);
+    insertionLayout->addWidget(insertionPoint);
+    auto* windowInsert = new QRadioButton("Specify window", insertion);
+    windowInsert->setEnabled(false);
+    windowInsert->setToolTip("Window insertion is not supported yet.");
+    insertionLayout->addWidget(windowInsert);
+    right->addWidget(insertion);
+    auto* dimensions = new QGroupBox("Column & row settings", &dialog);
+    auto* dimensionsForm = new QFormLayout(dimensions);
+    auto* columns = new QSpinBox(&dialog);
+    columns->setObjectName("insertTableColumns");
+    columns->setRange(1, 50);
+    columns->setValue(m_State.tablePendingCols);
+    auto* rows = new QSpinBox(&dialog);
+    rows->setObjectName("insertTableRows");
+    rows->setRange(1, 500);
+    rows->setValue(std::max(1, m_State.tablePendingRows - 2));
+    auto* columnWidth = new QDoubleSpinBox(&dialog);
+    columnWidth->setRange(0.001, 100000.0);
+    columnWidth->setDecimals(4);
+    auto* rowHeight = new QDoubleSpinBox(&dialog);
+    rowHeight->setRange(0.001, 100000.0);
+    rowHeight->setDecimals(4);
+    auto updateDimensions = [&] {
+      if (const CadTableStyle* candidate = CadTableFindStyle(m_State.tableStyles,
+                                                             style->currentText().toUtf8().toStdString())) {
+        columnWidth->setValue(candidate->columnWidthInches);
+        rowHeight->setValue(candidate->rowHeightInches);
+        m_State.tablePendingColumnWidthInches = candidate->columnWidthInches;
+        m_State.tablePendingRowHeightInches = candidate->rowHeightInches;
+      }
+    };
+    dimensionsForm->addRow("Columns:", columns);
+    dimensionsForm->addRow("Column width:", columnWidth);
+    dimensionsForm->addRow("Data rows:", rows);
+    dimensionsForm->addRow("Row height:", rowHeight);
+    right->addWidget(dimensions);
+    auto* cellStyles = new QGroupBox("Set cell styles", &dialog);
+    auto* cellStyleForm = new QFormLayout(cellStyles);
+    auto addCellStyle = [&](const char* label, const char* selectedValue) {
+      auto* value = new QComboBox(cellStyles);
+      value->addItems({"Title", "Header", "Data"});
+      value->setCurrentText(QString::fromUtf8(selectedValue));
+      cellStyleForm->addRow(label, value);
+      return value;
+    };
+    auto* titleCellStyle = addCellStyle("First row cell style:", "Title");
+    auto* headerCellStyle = addCellStyle("Second row cell style:", "Header");
+    auto* dataCellStyle = addCellStyle("All other row cell styles:", "Data");
+    right->addWidget(cellStyles);
+    right->addStretch(1);
+    body->addLayout(left, 3);
+    body->addLayout(right, 2);
+    root->addLayout(body, 1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel |
+                                             QDialogButtonBox::Help,
+                                         &dialog);
+    root->addWidget(buttons);
+    auto updatePreview = [&] {
+      const int dataRows = std::clamp(rows->value(), 1, 8);
+      const int rowCount = dataRows + 2;
+      const int colCount = std::clamp(columns->value(), 1, 8);
+      preview->clear();
+      preview->setRowCount(rowCount);
+      preview->setColumnCount(colCount);
+      preview->setSpan(0, 0, 1, colCount);
+      auto setCell = [&](int row, int col, const QString& value, const QComboBox* cellStyle) {
+        auto* item = new QTableWidgetItem(value);
+        item->setTextAlignment(Qt::AlignCenter);
+        const QString cellType = cellStyle->currentText();
+        if (cellType == "Title") item->setBackground(QColor("#202830"));
+        else if (cellType == "Header") item->setBackground(QColor("#293239"));
+        else item->setBackground(QColor("#202830"));
+        item->setForeground(QColor("#ef5424"));
+        preview->setItem(row, col, item);
+      };
+      setCell(0, 0, style->currentText(), titleCellStyle);
+      for (int col = 0; col < colCount; ++col) setCell(1, col, "Header", headerCellStyle);
+      for (int row = 2; row < rowCount; ++row)
+        for (int col = 0; col < colCount; ++col) setCell(row, col, "Data", dataCellStyle);
+      preview->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+      preview->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+    };
+    QObject::connect(titleCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(headerCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(dataCellStyle, &QComboBox::currentTextChanged, &dialog, updatePreview);
+    QObject::connect(style, &QComboBox::currentTextChanged, &dialog, [&] { updateDimensions(); updatePreview(); });
+    QObject::connect(columns, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    QObject::connect(rows, qOverload<int>(&QSpinBox::valueChanged), &dialog, updatePreview);
+    updateDimensions();
+    updatePreview();
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() == QDialog::Accepted) {
+      m_State.tablePendingStyle = style->currentText().toUtf8().toStdString();
+      m_State.tablePendingCols = columns->value();
+      m_State.tablePendingRows = rows->value() + 2;  // title, header, and requested data rows
+      m_State.tablePendingColumnWidthInches = static_cast<float>(columnWidth->value());
+      m_State.tablePendingRowHeightInches = static_cast<float>(rowHeight->value());
+      m_State.tableStage = 3;
+      m_Log.push_back("TABLE — specify the insertion point (upper-left corner):");
+    } else {
+      m_State.active = AppCommandState::Kind::None;
+      m_State.tableStage = 0;
+    }
+    m_ModalOpen = false;
+    Refresh();
+    return;
+  }
+  if (m_State.showTableStyleDialog) {
+    m_State.showTableStyleDialog = false;
+    ShowTableStyles();
+    return;
+  }
+  if (m_State.showDimStyleDialog) {
+    m_State.showDimStyleDialog = false;
+    m_ModalOpen = true;
+    const auto editStyle = [this](DimensionStyle* style, bool create) {
+      QStringList names;
+      for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+      return EditDimensionStyleDialog(this, style, create, names);
+    };
+    if (m_State.dimensionStyles.empty()) m_State.dimensionStyles = DimensionStyles::DefaultStyles();
+    StyleManagerSpec spec;
+    spec.objectName = "dimensionStyleManager"; spec.title = "Dimension Style Manager";
+    spec.currentCaption = "Current dimension style: ";
+    spec.listObjectName = "dimensionStyleList"; spec.previewObjectName = "dimensionStylePreview"; spec.buttonPrefix = "dimensionStyle";
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.dimensionStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()); };
+    spec.preview = [this](const QString& name, QSize size, qreal dpr) {
+      const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      return style ? DimStylePreviewPixmap(*style, size, dpr) : QPixmap();
+    };
+    spec.describe = [this](const QString& name) {
+      const DimensionStyle* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      if (!style) return QString();
+      return QString("Arrowheads: %1, %2 in\nText: %3, %4 in\nDimension line: %5 · Extension lines: %6")
+          .arg(DimArrowTypeName(style->arrowType)).arg(style->arrowSizeInches, 0, 'f', 3)
+          .arg(style->textFont.empty() ? QString("Standard") : QString::fromUtf8(style->textFont.c_str()))
+          .arg(style->textSizeInches, 0, 'f', 3)
+          .arg(QString::fromUtf8(style->dimLineColor.c_str())).arg(QString::fromUtf8(style->extLineColor.c_str()));
+    };
+    spec.setCurrent = [this](const QString& name) {
+      if (const auto* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString())) {
+        PushUndoSnapshot(m_State, "DIMSTY current"); m_State.activeDimensionStyle = *style;
+      }
+    };
+    spec.create = [this, editStyle]() {
+      bool ok = false;
+      const QString n = QInputDialog::getText(this, "New Dimension Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
+      if (!ok || n.isEmpty()) return false;
+      if (DimensionStyles::Find(m_State.dimensionStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
+      DimensionStyle copy = m_State.activeDimensionStyle; copy.name = n.toUtf8().toStdString();
+      if (!editStyle(&copy, true)) return false;
+      // The editor lets the name be changed: check again so two styles never share a name.
+      if (DimensionStyles::Find(m_State.dimensionStyles, copy.name)) { QMessageBox::warning(this, "Dimension Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "DIMSTY new"); m_State.dimensionStyles.push_back(copy); return true;
+    };
+    spec.modify = [this, editStyle](const QString& name) {
+      const std::string n = name.toUtf8().toStdString();
+      auto it = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
+      if (it == m_State.dimensionStyles.end()) return false;
+      DimensionStyle edited = *it;
+      if (!editStyle(&edited, false)) return false;
+      PushUndoSnapshot(m_State, "DIMSTY modify");
+      it = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(), [&](const auto& s) { return s.name == n; });
+      if (it != m_State.dimensionStyles.end()) *it = edited;
+      if (m_State.activeDimensionStyle.name == n) m_State.activeDimensionStyle = edited;
+      return true;
+    };
+    spec.overrideStyle = [this, editStyle](const QString& name) {
+      const auto* original = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      if (!original) return false;
+      DimensionStyle edited = *original;
+      if (!editStyle(&edited, false)) return false;
+      // Keep the base definition intact. A drawing-owned override style gives new dimensions a stable
+      // native DIMSTYLE reference, including after Autodesk saves the drawing without our payload.
+      const std::string base = StyleProperty(original->props, "overrideOf", original->name);
+      edited.name = base + " (Overrides)"; edited.props["overrideOf"] = base;
+      PushUndoSnapshot(m_State, "DIMSTY override");
+      auto found = std::find_if(m_State.dimensionStyles.begin(), m_State.dimensionStyles.end(),
+          [&](const auto& item) { return item.name == edited.name; });
+      if (found == m_State.dimensionStyles.end()) m_State.dimensionStyles.push_back(edited); else *found = edited;
+      m_State.activeDimensionStyle = edited; return true;
+    };
+    spec.properties = [this](const QString& name) {
+      QMap<QString, QString> values;
+      const auto* style = DimensionStyles::Find(m_State.dimensionStyles, name.toUtf8().toStdString());
+      if (!style) return values;
+      for (const auto& [key, value] : style->props) values.insert(QString::fromStdString(key), QString::fromStdString(value));
+      values["Text style"] = QString::fromStdString(style->textFont);
+      values["Text height"] = QString::number(style->textSizeInches); values["Text color"] = QString::fromStdString(style->textColor);
+      values["Text placement"] = DimTextAlignName(style->textAlign);
+      values["Dimension color"] = QString::fromStdString(style->dimLineColor);
+      values["Dimension linetype"] = QString::fromStdString(style->dimLineType);
+      values["Extension color"] = QString::fromStdString(style->extLineColor);
+      values["Extension linetype"] = QString::fromStdString(style->extLineType);
+      values["Arrow symbol"] = DimArrowTypeName(style->arrowType); values["Arrow size"] = QString::number(style->arrowSizeInches);
+      values["Unit format"] = DimUnitFormatName(style->unitFormat); values["Precision"] = QString::number(style->unitPrecision);
+      values["Measurement scale"] = QString::number(style->unitScale); values["Suffix"] = QString::fromStdString(style->unitSuffix);
+      return values;
+    };
+    RunStyleManager(this, spec);
+    m_State.showDimStyleDialog = false; m_ModalOpen = false; Refresh(); return;
+  }
+  if (m_State.showMleaderStyleDialog) {
+    m_State.showMleaderStyleDialog = false;
+    m_ModalOpen = true;
+    if (m_State.multileaderStyles.empty()) m_State.multileaderStyles = MultileaderStyles::DefaultStyles();
+    // The settings form for one multileader style.
+    const auto editStyle = [this](MultileaderStyle* style, bool create) {
+      QStringList names;
+      for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+      return EditMultileaderStyleDialog(this, style, create, names);
+    };
+    StyleManagerSpec spec;
+    spec.objectName = "mleaderStyleDialog"; spec.title = "Multileader Style Manager";
+    spec.currentCaption = "Current multileader style: ";
+    spec.listObjectName = "mleaderStyleList"; spec.previewObjectName = "mleaderStylePreview"; spec.buttonPrefix = "mleaderStyle";
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.multileaderStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.activeMultileaderStyle.name.c_str()); };
+    spec.preview = [this](const QString& name, QSize size, qreal dpr) {
+      const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString());
+      return style ? MleaderStylePreviewPixmap(*style, name, size, dpr) : QPixmap();
+    };
+    spec.describe = [this](const QString& name) {
+      const MultileaderStyle* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString());
+      if (!style) return QString();
+      return QString("Text: %1 in%2\nArrowhead: %3 in · Landing gap: %4 in\n%5")
+          .arg(style->textSizeInches, 0, 'f', 3)
+          .arg(style->textFont.empty() ? QString() : QString(", ") + QString::fromUtf8(style->textFont.c_str()))
+          .arg(style->arrowSizeInches, 0, 'f', 3).arg(style->landingGapInches, 0, 'f', 3)
+          .arg(style->annotativeDefault ? "Annotative by default" : "Not annotative");
+    };
+    spec.setCurrent = [this](const QString& name) {
+      if (const auto* style = MultileaderStyles::Find(m_State.multileaderStyles, name.toUtf8().toStdString())) {
+        PushUndoSnapshot(m_State, "MSTY current"); m_State.activeMultileaderStyle = *style;
+      }
+    };
+    spec.create = [this, editStyle]() {
+      bool ok = false;
+      const QString n = QInputDialog::getText(this, "New Multileader Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
+      if (!ok || n.isEmpty()) return false;
+      if (MultileaderStyles::Find(m_State.multileaderStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
+      MultileaderStyle copy = m_State.activeMultileaderStyle; copy.name = n.toUtf8().toStdString();
+      if (!editStyle(&copy, true)) return false;
+      if (MultileaderStyles::Find(m_State.multileaderStyles, copy.name)) { QMessageBox::warning(this, "Multileader Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "MSTY new"); m_State.multileaderStyles.push_back(copy); return true;
+    };
+    spec.modify = [this, editStyle](const QString& name) {
+      const std::string n = name.toUtf8().toStdString();
+      auto it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
+      if (it == m_State.multileaderStyles.end()) return false;
+      MultileaderStyle edited = *it;
+      if (!editStyle(&edited, false)) return false;
+      PushUndoSnapshot(m_State, "MSTY modify");
+      it = std::find_if(m_State.multileaderStyles.begin(), m_State.multileaderStyles.end(), [&](const MultileaderStyle& s) { return s.name == n; });
+      if (it != m_State.multileaderStyles.end()) *it = edited;
+      if (m_State.activeMultileaderStyle.name == n) m_State.activeMultileaderStyle = edited;
+      return true;
+    };
+    RunStyleManager(this, spec);
+    m_ModalOpen = false;
+    Refresh();
+    return;
+  }
+  if (m_State.showTextStyleManagerWindow) {
+    m_State.showTextStyleManagerWindow = false;
+    m_ModalOpen = true;
+    TextStyles::EnsureStandard(m_State.textStyles);
+    if (m_State.activeTextStyleName.empty()) m_State.activeTextStyleName = TextStyles::kStandardName;
+    const auto editStyle = [this](TextStyle* style, bool create) {
+      return EditTextStyleDialog(this, style, create);
+    };
+    StyleManagerSpec spec;
+    spec.objectName = "textStyleManager"; spec.title = "Text Style Manager";
+    spec.currentCaption = "Current text style: ";
+    spec.listObjectName = "textStyleList"; spec.previewObjectName = "textStylePreview"; spec.buttonPrefix = "textStyle";
+    spec.names = [this] { QStringList out; for (const auto& style : m_State.textStyles) out << QString::fromUtf8(style.name.c_str()); return out; };
+    spec.current = [this] { return QString::fromUtf8(m_State.activeTextStyleName.c_str()); };
+    spec.preview = [this](const QString& name, QSize size, qreal dpr) {
+      const TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      return style ? TextStylePreviewPixmap(*style, size, dpr) : QPixmap();
+    };
+    spec.describe = [this](const QString& name) {
+      const TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      if (!style) return QString();
+      return QString("Font: %1%2%3\nHeight: %4 in · Width factor: %5 · Oblique: %6°")
+          .arg(style->fontFamily.empty() ? QString("Standard") : QString::fromUtf8(style->fontFamily.c_str()))
+          .arg(style->bold ? ", bold" : "").arg(style->italic ? ", italic" : "")
+          .arg(style->heightInches, 0, 'f', 3).arg(style->widthFactor, 0, 'f', 2).arg(style->obliqueDeg, 0, 'f', 1);
+    };
+    spec.setCurrent = [this](const QString& name) { PushUndoSnapshot(m_State, "STYLE current"); m_State.activeTextStyleName = name.toUtf8().toStdString(); };
+    spec.create = [this, editStyle]() {
+      bool ok = false;
+      const QString n = QInputDialog::getText(this, "New Text Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
+      if (!ok || n.isEmpty()) return false;
+      if (TextStyles::Find(m_State.textStyles, n.toUtf8().toStdString())) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
+      const TextStyle* base = TextStyles::Find(m_State.textStyles, m_State.activeTextStyleName);
+      if (!base) base = TextStyles::Find(m_State.textStyles, TextStyles::kStandardName);
+      TextStyle copy = base ? *base : TextStyle{};
+      copy.name = n.toUtf8().toStdString();
+      if (!editStyle(&copy, true)) return false;
+      if (TextStyles::Find(m_State.textStyles, copy.name)) { QMessageBox::warning(this, "Text Style", "That style name already exists."); return false; }
+      PushUndoSnapshot(m_State, "STYLE new"); m_State.textStyles.push_back(copy); return true;
+    };
+    spec.modify = [this, editStyle](const QString& name) {
+      TextStyle* style = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString());
+      if (!style) return false;
+      TextStyle edited = *style;
+      if (!editStyle(&edited, false)) return false;
+      PushUndoSnapshot(m_State, "STYLE modify");
+      // The dialog ran a nested event loop and the undo snapshot touched the state: look the style up again.
+      if (TextStyle* current = TextStyles::Find(m_State.textStyles, name.toUtf8().toStdString())) *current = edited;
+      return true;
+    };
+    RunStyleManager(this, spec);
+    m_ModalOpen = false;
+    Refresh();
+    return;
+  }
   if (m_State.blockAuthoringPaletteOpen) ShowBlockAuthoringPalette();
   else if (auto* palette = findChild<QDialog*>("blockAuthoringPalette")) palette->close();
   if (m_State.pipeFittingPaletteOpen) ShowPipeFittingPalette();
@@ -681,6 +1241,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
+  } else if (m_State.addPointTableDialogRequested) {
+    m_State.addPointTableDialogRequested = false;
+    m_ModalOpen = true;
+    ShowAddPointTableDialog(this, m_State, m_Log);
+    m_ModalOpen = false;
+    Refresh();
   } else if (m_State.showPointGroupManagerWindow) {
     m_State.showPointGroupManagerWindow = false;
     m_ModalOpen = true;
@@ -1347,4 +1913,107 @@ void EditorWindow::ShowUnits() {
   dialog->exec();
   m_ModalOpen = false;
   Refresh();
+}
+
+void EditorWindow::ShowTableStyles() {
+  if (m_ModalOpen) return;
+  m_ModalOpen = true;
+  StyleManagerSpec spec;
+  spec.objectName = "tableStyleManager"; spec.title = "Table Style";
+  spec.currentCaption = "Current table style: ";
+  spec.listObjectName = "tableStyleList"; spec.previewObjectName = "tableStylePreview"; spec.buttonPrefix = "tableStyle";
+  spec.names = [this] { QStringList names; for (const auto& style : m_State.tableStyles) names << QString::fromUtf8(style.name.c_str()); return names; };
+  spec.current = [this] { return QString::fromUtf8(m_State.tablePendingStyle.empty() ? "Standard" : m_State.tablePendingStyle.c_str()); };
+  spec.preview = [this](const QString& name, QSize size, qreal dpr) {
+    QPixmap pixmap(size * dpr); pixmap.setDevicePixelRatio(dpr); pixmap.fill(QColor("#202830"));
+    QPainter painter(&pixmap);
+    const auto* style = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    if (!style) return pixmap;
+    painter.setPen(QColor("#d9e0e5"));
+    const QRectF frame(15, 15, size.width() - 30, size.height() - 30);
+    painter.drawRect(frame);
+    for (int row = 1; row < 4; ++row) painter.drawLine(QPointF(frame.left(), frame.top() + frame.height() * row / 4), QPointF(frame.right(), frame.top() + frame.height() * row / 4));
+    for (int col = 1; col < 3; ++col) painter.drawLine(QPointF(frame.left() + frame.width() * col / 3, frame.top() + frame.height() / 4), QPointF(frame.left() + frame.width() * col / 3, frame.bottom()));
+    painter.drawText(QRectF(frame.left(), frame.top(), frame.width(), frame.height() / 4), Qt::AlignCenter, name);
+    for (int row = 1; row < 4; ++row) for (int col = 0; col < 3; ++col)
+      painter.drawText(QRectF(frame.left() + frame.width() * col / 3, frame.top() + frame.height() * row / 4, frame.width() / 3, frame.height() / 4), Qt::AlignCenter, row == 1 ? "Header" : "Data");
+    return pixmap;
+  };
+  spec.describe = [this](const QString& name) {
+    const auto* style = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    return style ? QString("%1\nText height: %2 · Column width: %3 · Row height: %4")
+        .arg(name).arg(style->textHeightInches).arg(style->columnWidthInches).arg(style->rowHeightInches) : QString();
+  };
+  const auto edit = [this](CadTableStyle* style, bool create) {
+    QStringList names; for (const auto& text : m_State.textStyles) names << QString::fromUtf8(text.name.c_str());
+    return EditTableStyleDialog(this, style, create, names);
+  };
+  spec.setCurrent = [this](const QString& name) { PushUndoSnapshot(m_State, "TABLESTYLE current"); m_State.tablePendingStyle = name.toUtf8().toStdString(); };
+  spec.create = [this, edit] {
+    bool ok = false;
+    const QString name = QInputDialog::getText(this, "New Table Style", "New style name:", QLineEdit::Normal, "", &ok).trimmed();
+    if (!ok || name.isEmpty()) return false;
+    if (CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString())) {
+      QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
+    }
+    const auto* current = CadTableFindStyle(m_State.tableStyles, m_State.tablePendingStyle);
+    CadTableStyle style = current ? *current : CadTableBuiltinStyles().front();
+    style.name = name.toUtf8().toStdString();
+    if (!edit(&style, true)) return false;
+    if (CadTableFindStyle(m_State.tableStyles, style.name)) { QMessageBox::warning(this, "Table Style", "That style name already exists."); return false; }
+    PushUndoSnapshot(m_State, "TABLESTYLE new"); m_State.tableStyles.push_back(std::move(style)); return true;
+  };
+  spec.modify = [this, edit](const QString& name) {
+    const std::string key = name.toUtf8().toStdString();
+    const auto* original = CadTableFindStyle(m_State.tableStyles, key);
+    if (!original) return false;
+    CadTableStyle style = *original;
+    if (!edit(&style, false)) return false;
+    PushUndoSnapshot(m_State, "TABLESTYLE modify");
+    auto found = std::find_if(m_State.tableStyles.begin(), m_State.tableStyles.end(), [&](const auto& item) { return item.name == key; });
+    if (found != m_State.tableStyles.end()) *found = std::move(style);
+    return true;
+  };
+  spec.copy = [this](const QString& name) {
+    const auto* original = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    if (!original) return false;
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this, "Copy Table Style", "Name:", QLineEdit::Normal, name + " Copy", &ok).trimmed();
+    if (!ok || newName.isEmpty()) return false;
+    if (CadTableFindStyle(m_State.tableStyles, newName.toUtf8().toStdString())) {
+      QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
+    }
+    CadTableStyle copy = *original; copy.name = newName.toUtf8().toStdString();
+    PushUndoSnapshot(m_State, "TABLESTYLE copy"); m_State.tableStyles.push_back(std::move(copy)); return true;
+  };
+  spec.rename = [this](const QString& name) {
+    const auto* original = CadTableFindStyle(m_State.tableStyles, name.toUtf8().toStdString());
+    if (!original) return false;
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this, "Rename Table Style", "Name:", QLineEdit::Normal, name, &ok).trimmed();
+    if (!ok || newName.isEmpty() || newName == name) return false;
+    if (const auto* other = CadTableFindStyle(m_State.tableStyles, newName.toUtf8().toStdString()); other && other != original) {
+      QMessageBox::warning(this, "Table Style", "That style name already exists."); return false;
+    }
+    const std::string oldKey = original->name, newKey = newName.toUtf8().toStdString();
+    PushUndoSnapshot(m_State, "TABLESTYLE rename");
+    for (auto& style : m_State.tableStyles) if (style.name == oldKey) style.name = newKey;
+    for (auto& table : m_State.cadTables) if (CadTableNameEquals(table.styleName, oldKey)) table.styleName = newKey;
+    if (CadTableNameEquals(m_State.tablePendingStyle, oldKey)) m_State.tablePendingStyle = newKey;
+    return true;
+  };
+  spec.remove = [this](const QString& name) {
+    const std::string key = name.toUtf8().toStdString();
+    if (CadTableNameEquals(key, "Standard") || CadTableNameEquals(key, m_State.tablePendingStyle) ||
+        std::any_of(m_State.cadTables.begin(), m_State.cadTables.end(), [&](const auto& table) { return CadTableNameEquals(table.styleName, key); })) {
+      QMessageBox::information(this, "Table Style", "This style is current, Standard, or used by a table. Reassign its tables and choose another current style before deleting it.");
+      return false;
+    }
+    PushUndoSnapshot(m_State, "TABLESTYLE delete");
+    m_State.tableStyles.erase(std::remove_if(m_State.tableStyles.begin(), m_State.tableStyles.end(),
+        [&](const auto& style) { return CadTableNameEquals(style.name, key); }), m_State.tableStyles.end());
+    return true;
+  };
+  RunStyleManager(this, spec);
+  m_ModalOpen = false; Refresh();
 }

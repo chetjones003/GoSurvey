@@ -8,6 +8,7 @@
 #endif
 extern "C" {
 #include <dwg.h>
+#include <dwg_api.h>
 #include "../third_party/libredwg/src/bits.h"
 #include "../third_party/libredwg/src/decode.h"
 }
@@ -95,6 +96,88 @@ TEST_CASE("LibreDWG UMC encoding uses canonical unsigned continuation bytes",
     REQUIRE(bit_read_UMC(&chain) == row.value);
     REQUIRE(chain.byte == row.length);
   }
+}
+
+TEST_CASE("LibreDWG BOT encoding preserves type IDs across compact and 16-bit ranges",
+          "[dwg][libredwg][bits]") {
+  const std::array<BITCODE_BS, 9> types = {0, 255, 496, 751, 752, 999, 32767, 32768, 65535};
+  for (const BITCODE_BS type : types) {
+    std::array<unsigned char, 8> storage{};
+    Bit_Chain chain{};
+    chain.chain = storage.data();
+    chain.size = storage.size();
+    bit_write_BOT(&chain, type);
+    chain.byte = 0;
+    chain.bit = 0;
+    REQUIRE(bit_read_BOT(&chain) == type);
+  }
+}
+
+TEST_CASE("LibreDWG opaque bit buffers preserve partial final bytes at every alignment",
+          "[dwg][libredwg][bits][civil3d]") {
+  std::array<unsigned char, 4> original{0x53, 0x01, 0xeb, 0xda};
+  for (unsigned start = 0; start < 8; ++start) {
+    for (unsigned count = 1; count <= 32; ++count) {
+      INFO("alignment " << start << ", bits " << count);
+      std::array<unsigned char, 16> storage{};
+      Bit_Chain writer{};
+      writer.chain = storage.data(); writer.size = storage.size(); writer.bit = start;
+      bit_write_bits(&writer, original.data(), count);
+      Bit_Chain reader{};
+      reader.chain = storage.data(); reader.size = storage.size(); reader.bit = start;
+      auto* decoded = bit_read_bits(&reader, count);
+      REQUIRE(decoded != nullptr);
+      for (unsigned bit = 0; bit < count; ++bit)
+        CHECK(((decoded[bit / 8] >> (7 - bit % 8)) & 1u) ==
+              ((original[bit / 8] >> (7 - bit % 8)) & 1u));
+      std::free(decoded);
+    }
+  }
+}
+
+TEST_CASE("LibreDWG attribute helpers preserve INSERT ownership through object-array growth",
+          "[dwg][libredwg][attributes]") {
+  auto* drawing = dwg_new_Document(R_2018, 0, 0);
+  REQUIRE(drawing != nullptr);
+  auto* model = dwg_model_space_object(drawing)->tio.object->tio.BLOCK_HEADER;
+  auto* definition = dwg_add_BLOCK_HEADER(drawing, "POINT_ATTRIBUTES");
+  REQUIRE(definition != nullptr);
+  dwg_add_BLOCK(definition, "POINT_ATTRIBUTES");
+  dwg_point_3d origin{0, 0, 0};
+  for (const auto* tag : {"NUMBER", "DESCRIPTION", "ELEVATION"})
+    REQUIRE(dwg_add_ATTDEF(definition, 1, 0, tag, &origin, tag, "") != nullptr);
+  dwg_add_ENDBLK(definition);
+  for (unsigned i = 0; i < 40; ++i) {
+    origin.x = i * 10;
+    auto* insert = dwg_add_INSERT(model, &origin, "POINT_ATTRIBUTES", 1, 1, 1, 0);
+    REQUIRE(insert != nullptr);
+    const auto index = insert->parent->objid;
+    const auto block = insert->block_header->absolute_ref;
+    for (const auto* tag : {"NUMBER", "DESCRIPTION", "ELEVATION"}) {
+      insert = drawing->object[index].tio.entity->tio.INSERT;
+      auto* attribute = dwg_add_ATTRIB(insert, 1, 1, &origin, tag, "VALUE");
+      REQUIRE(attribute != nullptr);
+      CHECK(attribute->parent->entmode == 0);
+      REQUIRE(attribute->parent->ownerhandle != nullptr);
+      CHECK(attribute->parent->ownerhandle->absolute_ref == drawing->object[index].handle.value);
+      CHECK(attribute->width_factor == 1);
+      CHECK(attribute->flags == 1);
+      CHECK(attribute->mtext_type == 1);
+      CHECK(drawing->object[index].tio.entity->tio.INSERT->block_header->absolute_ref == block);
+    }
+    insert = drawing->object[index].tio.entity->tio.INSERT;
+    CHECK(insert->num_owned == 3);
+    for (BITCODE_BL j = 0; j < insert->num_owned; ++j)
+      CHECK(insert->attribs[j]->handleref.code == 3);
+    REQUIRE(insert->seqend != nullptr);
+    const auto* end = dwg_resolve_handle_silent(drawing, insert->seqend->absolute_ref);
+    REQUIRE(end != nullptr);
+    CHECK(end->fixedtype == DWG_TYPE_SEQEND);
+    REQUIRE(end->tio.entity->ownerhandle != nullptr);
+    CHECK(end->tio.entity->ownerhandle->absolute_ref == drawing->object[index].handle.value);
+  }
+  dwg_free(drawing);
+  std::free(drawing);
 }
 
 TEST_CASE("LibreDWG TU encoders preserve section and object string conventions",
