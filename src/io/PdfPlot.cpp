@@ -315,9 +315,12 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     const double wPts = static_cast<double>(L.sheetWidthIn()) * kPtPerIn;
     const double hPts = static_cast<double>(L.sheetHeightIn()) * kPtPerIn;
     // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
+    // Only fit and centre read the content extent, so the other options skip walking the sheet for it.
+    const plotsheet::Extent content =
+        L.fitToPaper || L.centerPlot ? SheetContentExtent(st, L, plottable) : plotsheet::Extent{};
     const plotsheet::Transform tr = plotsheet::Compute(
         {L.fitToPaper, L.scaleModelPerPaperIn, L.offsetXIn, L.offsetYIn, L.centerPlot}, L.sheetWidthIn(),
-        L.sheetHeightIn(), SheetContentExtent(st, L, plottable));
+        L.sheetHeightIn(), content);
     FPDF_PAGE page = FPDFPage_New(doc, pages, wPts, hPts);
     if (!page)
       continue;

@@ -209,3 +209,33 @@ TEST_CASE("Fit includes a polyline bulge that bows past its end points (REQ-445 
   CHECK_THAT(bottom, WithinAbs(0.f, 1.0));
   CHECK_THAT(top, WithinAbs(5.5f * kPt, 1.0));
 }
+
+TEST_CASE("Page Setup plot ratio scales native text in the PDF (REQ-445 d, measured)", "[plot][req445]") {
+  // The same 0.5-inch text at 1 : 1 and at 1 : 2. The ratio halves its size and scales its position about the sheet's
+  // lower-left corner, so the measured height and left edge both halve (the glyph side bearing scales with the text).
+  auto plotText = [](float ratio, const std::string& tag) {
+    AppCommandState st;
+    PaperLayout L;
+    L.name = "Sheet";
+    L.landscape = true;
+    L.portraitWidthIn = kSheetH;
+    L.portraitHeightIn = kSheetW;
+    L.scaleModelPerPaperIn = ratio;
+    CadAnnotation text;
+    text.text = "PLOT";
+    text.insX = 1.f;
+    text.insY = 1.f;
+    text.plottedHeightInches = 0.5f;
+    L.paperTexts.push_back(text);
+    st.paperLayouts.push_back(L);
+    const std::vector<Bounds> objs = PlotObjectBounds(st, FPDF_PAGEOBJ_TEXT, tag);
+    REQUIRE(!objs.empty());
+    return objs.front();
+  };
+  const Bounds full = plotText(1.f, "text-1to1");
+  const Bounds half = plotText(2.f, "text-1to2");
+  const float fullH = full.top - full.bottom, halfH = half.top - half.bottom;
+  REQUIRE(fullH > 0.f);
+  CHECK_THAT(halfH, WithinAbs(fullH * 0.5f, 1.0));
+  CHECK_THAT(half.left, WithinAbs(full.left * 0.5f, 1.0));
+}
