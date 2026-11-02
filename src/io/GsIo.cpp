@@ -13,6 +13,7 @@
 #include "BrepJson.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -1972,6 +1973,12 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      if (s.gradingGroup) {
+        o["gradingMembers"] = json::array();
+        for (const auto &member : s.gradingMembers)
+          o["gradingMembers"].push_back(
+              {{"gradingId", member.gradingId}, {"strips", member.strips}});
+      }
       // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
       // has never been given one writes exactly the bytes it wrote before styles existed.
       if (!s.styleName.empty())
@@ -2324,6 +2331,42 @@ json BuildRoot(const AppCommandState& st) {
 }
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
+  // Validate before the loader clears the current drawing (REQ-001).
+  std::vector<std::uint64_t> gradingIds;
+  if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
+    for (const auto& surface : doc["surfaces"]) {
+      if (!surface.is_object() || !surface.contains("gradingMembers")) continue;
+      const auto& members = surface["gradingMembers"];
+      if (!members.is_array()) {
+        log.push_back("Invalid grading group membership in drawing.");
+        return false;
+      }
+      for (const auto& row : members) {
+        if (!row.is_object() || !row.contains("gradingId") || !row["gradingId"].is_number_unsigned() ||
+            row["gradingId"].get<std::uint64_t>() == 0 || !row.contains("strips") ||
+            !row["strips"].is_array() || row["strips"].empty()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
+        const auto id = row["gradingId"].get<std::uint64_t>();
+        if (std::find(gradingIds.begin(), gradingIds.end(), id) != gradingIds.end()) {
+          log.push_back("A grading belongs to more than one group or occurs twice in its group.");
+          return false;
+        }
+        gradingIds.push_back(id);
+        for (const auto& strip : row["strips"]) {
+          if (!strip.is_array() || strip.size() != 12 ||
+              !std::all_of(strip.begin(), strip.end(), [](const json& v) {
+                return v.is_number() && std::isfinite(v.get<double>());
+              })) {
+            log.push_back("Invalid baked grading strip in drawing.");
+            return false;
+          }
+        }
+      }
+    }
+  }
+
   if (!doc.contains("lineVerts") || !doc["lineVerts"].is_array()) {
     log.push_back("internal document payload: missing document.lineVerts array.");
     return false;
@@ -3476,6 +3519,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (!el.is_object())
         continue;
       CadSurface s;
+      if (el.contains("gradingMembers")) {
+        s.gradingGroup = true;
+        for (const auto& row : el["gradingMembers"]) {
+          CadGradingGroupMember member;
+          member.gradingId = row["gradingId"].get<std::uint64_t>();
+          member.strips = row["strips"].get<std::vector<std::vector<double>>>();
+          s.gradingMembers.push_back(std::move(member));
+        }
+      }
       s.name = el.value("name", std::string());
       if (s.name.empty())
         continue;  // an unnamed surface cannot be referenced or managed

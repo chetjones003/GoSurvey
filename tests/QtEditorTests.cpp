@@ -26,99 +26,96 @@
 #ifdef small
 #undef small
 #endif
-#include "PdfViewerCore.hpp"
-#include "QtAnnotations.hpp"
-#include "util/gizmooverlay.hpp"
-#include "GsIo.hpp"
-#include "ProjectPoints.hpp"
-#include "ProjectFiles.hpp"
-#include "ProjectPack.hpp"
-#include "ProjectTurnover.hpp"
-#include "ProjectSettings.hpp"
-#include "geo/CoordinateSystems.hpp"
-#include "SurveyCsv.hpp"
-#include "io/ProjectPointDb.hpp"
-#include "io/Project.hpp"
-#include "GsMigrate.hpp"
 #include "AppPaths.hpp"
-#include "DwgIo.hpp"
-#include "ProjectAddFlow.hpp"
-#include "UserPrefs.hpp"
-#include "platform/HttpFetch.hpp"
-#include "update/UpdateService.hpp"
+#include "CadSurfaceEdit.hpp"
 #include "CrashReporter.hpp"
+#include "DwgIo.hpp"
 #include "FailureReport.hpp"
 #include "FailureReportUi.hpp"
+#include "GsIo.hpp"
+#include "GsMigrate.hpp"
+#include "PdfViewerCore.hpp"
+#include "ProjectAddFlow.hpp"
+#include "ProjectFiles.hpp"
+#include "ProjectPack.hpp"
+#include "ProjectPoints.hpp"
+#include "ProjectSettings.hpp"
+#include "ProjectTurnover.hpp"
+#include "QtAnnotations.hpp"
 #include "StartupFailure.hpp"
-#include "CadSurfaceEdit.hpp"
 #include "SurfaceStyle.hpp"
+#include "SurveyCsv.hpp"
+#include "UserPrefs.hpp"
+#include "geo/CoordinateSystems.hpp"
 #include "io/CadPointCloudLas.hpp"
 #include "io/CadPointCloudLaz.hpp"
 #include "io/CadPointCloudPts.hpp"
 #include "io/CadPointCloudPtx.hpp"
+#include "io/Project.hpp"
+#include "io/ProjectPointDb.hpp"
+#include "platform/HttpFetch.hpp"
+#include "update/UpdateService.hpp"
+#include "util/gizmooverlay.hpp"
+#include "util/surfacevolume.hpp"
 #include <E57SimpleData.h>
 #include <E57SimpleWriter.h>
-#include <array>
-#include <QPdfWriter>
-#include <QAbstractItemView>
-#include <QCheckBox>
-#include <QDockWidget>
-#include <QListView>
-#include <QScrollBar>
-#include <QToolBar>
-#include <QWheelEvent>
-#include <QPainter>
-#include <QtTest/QtTest>
-#include <QAction>
 #include <QAbstractButton>
+#include <QAbstractItemView>
+#include <QAction>
 #include <QApplication>
-#include <QPalette>
-#include <QMessageBox>
+#include <QBoxLayout>
+#include <QCheckBox>
+#include <QClipboard>
+#include <QComboBox>
 #include <QDialog>
-#include <QPlainTextEdit>
-#include <QScrollBar>
-#include <QWheelEvent>
-#include <QSizeGrip>
-#include <QRegularExpression>
-#include <QTextBlock>
-#include <QTextLayout>
-#include <QTextBrowser>
-#include <QLineEdit>
+#include <QDialogButtonBox>
+#include <QDockWidget>
+#include <QDoubleSpinBox>
+#include <QFrame>
+#include <QGroupBox>
+#include <QHeaderView>
 #include <QInputDialog>
 #include <QLabel>
-#include <QMouseEvent>
-#include <QDialogButtonBox>
+#include <QLineEdit>
+#include <QListView>
 #include <QListWidget>
-#include <QDoubleSpinBox>
+#include <QMenu>
+#include <QMenuBar>
+#include <QMessageBox>
+#include <QMouseEvent>
+#include <QPainter>
+#include <QPalette>
+#include <QPdfWriter>
+#include <QPlainTextEdit>
+#include <QProgressBar>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QRegularExpression>
+#include <QScopeGuard>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QSettings>
+#include <QSizeGrip>
 #include <QSlider>
 #include <QSpinBox>
-#include <QComboBox>
-#include <QHeaderView>
-#include <QTableWidget>
-#include <QGroupBox>
-#include <QListWidget>
-#include <QPushButton>
-#include <QProgressBar>
-#include <QToolButton>
-#include <QWidgetAction>
-#include <QMenuBar>
+#include <QStackedWidget>
+#include <QStandardItemModel>
 #include <QStatusBar>
-#include <QMenu>
-#include <QBoxLayout>
+#include <QStyle>
 #include <QStyledItemDelegate>
-#include <QRadioButton>
-#include <QFrame>
-#include <QSettings>
-#include <QTreeWidget>
 #include <QTabBar>
 #include <QTabWidget>
-#include <QStackedWidget>
-#include <QStatusBar>
-#include <QScrollArea>
-#include <QStandardItemModel>
-#include <QClipboard>
-#include <QScopeGuard>
-#include <QStyle>
+#include <QTableWidget>
+#include <QTextBlock>
+#include <QTextBrowser>
+#include <QTextLayout>
+#include <QToolBar>
+#include <QToolButton>
+#include <QTreeWidget>
+#include <QWheelEvent>
+#include <QWidgetAction>
+#include <QtTest/QtTest>
+#include <array>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -7524,6 +7521,293 @@ private Q_SLOTS:
   static bool LogContains(const EditorWindow& window, const char* text) {
     for (const auto& line : window.m_Log) if (line.find(text) != std::string::npos) return true;
     return false;
+  }
+
+  void
+  gradingGroupAddsAndTransfersKeepBakedGeometryAndVolumeParentsStayReady() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Original");
+    const auto baked = state.cadSurfaces[1].tin->vertsXyz;
+    state.featureLineVerts[2] += 1;
+    BumpCadGpuCache(state);
+    window.Submit("GRADINGGROUP Original");
+    QVERIFY(state.cadSurfaces[1].tin->vertsXyz == baked);
+    window.Submit("GRADINGGROUP Moved");
+    QVERIFY(state.cadSurfaces[2].tin->vertsXyz == baked);
+    state.selection.clear();
+    window.Submit("VOLUMESURFACE Difference, Ground, Moved");
+    const int vi = FindSurfaceIndex(state, "Difference"); QVERIFY(vi >= 0);
+    window.Submit("LINE"); window.Submit("1,1"); window.Submit("2,2"); window.Submit("");
+    QTRY_VERIFY_WITH_TIMEOUT(state.cadSurfaces[static_cast<std::size_t>(vi)].builtAtRevision == state.cadGpuRevision, 10000);
+    QVERIFY(state.cadSurfaces[static_cast<std::size_t>(vi)].tin);
+  }
+
+  void gradingGroupDegenerateSourceEditLeavesBothGradingAndGroupIntact() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Earthwork");
+    const auto previous = state.cadSurfaces[1].tin;
+    // Collapse three consecutive baseline stations: the middle one has no normal.
+    for (std::size_t vertex : {1u, 2u})
+      for (std::size_t axis = 0; axis < 3; ++axis)
+        state.featureLineVerts[vertex * 3 + axis] = state.featureLineVerts[axis];
+    const auto before = state.featureLineVerts;
+    window.Submit("GRADING"); window.Submit("");
+    QVERIFY(state.featureLineVerts == before);
+    QVERIFY(state.cadSurfaces[1].tin == previous);
+    QVERIFY(LogContains(window, "incomplete daylight cannot rebuild its group"));
+  }
+
+  void gradingGroupMalformedDwgIsRejectedBeforeReplacingTheDrawing() {
+    QTemporaryDir directory; QVERIFY(directory.isValid());
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Earthwork");
+    const auto saved = state.cadSurfaces[1];
+    state.cadSurfaces[1].gradingMembers[0].strips[0].pop_back();
+    const QByteArray path = directory.filePath("malformed-group.dwg").toUtf8();
+    std::vector<std::string> log;
+    QVERIFY(SaveDrawingDocument(state, path.constData(), log));
+    state.cadSurfaces[1] = saved;
+    const auto original = state.featureLineVerts;
+    QVERIFY(!OpenDrawingDocument(state, path.constData(), log));
+    QVERIFY(state.featureLineVerts == original);
+    QCOMPARE(state.cadSurfaces.size(), std::size_t(2));
+    QVERIFY(state.cadSurfaces[1].gradingMembers[0].strips == saved.gradingMembers[0].strips);
+  }
+
+  void gradingGroupsAreReachableFromRibbonToolsAndShowResultEmptyAndErrorStates() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    auto &state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING");
+    window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    auto *action = window.findChild<QAction *>("ribbon_SvyGrading");
+    QVERIFY(action);
+    action->trigger();
+    auto *bar = window.findChild<QWidget *>("floatingCommandBar");
+    QVERIFY(bar);
+    const QString artifacts = QtTestArtifactDirectory() + "/";
+    QApplication::processEvents();
+    QVERIFY(bar->grab().save(artifacts + "qt-998-tools.png"));
+    window.Submit("Group Earthwork");
+    QVERIFY(FindSurfaceIndex(state, "Earthwork") >= 0);
+    state.selection.clear();
+    window.Submit("ZOOMEXTENTS");
+    window.Submit("VOLUMES Ground, Earthwork");
+    QApplication::processEvents();
+    QTest::qWait(100);
+    QVERIFY(window.grab().save(artifacts + "qt-998-result.png"));
+    QVERIFY(bar->grab().save(artifacts + "qt-998-volumes.png"));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(artifacts +
+                                                      "qt-998-viewport.png"));
+    window.Submit("GRADINGGROUP Empty");
+    QVERIFY(LogContains(window, "no members"));
+    QApplication::processEvents();
+    QVERIFY(bar->grab().save(artifacts + "qt-998-empty.png"));
+    window.ShowSurfaceManager();
+    auto *manager = window.findChild<QDialog *>("surfaceManager");
+    QVERIFY(manager);
+    manager->resize(960, 620);
+    QApplication::processEvents();
+    QVERIFY(manager->grab().save(artifacts + "qt-998-manager.png"));
+    manager->close();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADINGGROUP Invalid");
+    QVERIFY(FindSurfaceIndex(state, "Invalid") < 0);
+    QVERIFY(LogContains(window, "select grading results"));
+    QApplication::processEvents();
+    QVERIFY(bar->grab().save(artifacts + "qt-998-error.png"));
+  }
+
+  void
+  gradingGroupDirectBuildKeepsPrecisionAndRejectsConflictingBakedGeometry() {
+    AppCommandState state;
+    CadSurface group;
+    group.name = "Precise";
+    group.gradingGroup = true;
+    group.gradingMembers = {{1,
+                             {{0, 0, 10000000.125, 10, 0, 10000000.125, 10, 10,
+                               10000000.125, 0, 10, 10000000.125}}}};
+    auto separate = group.gradingMembers[0];
+    separate.gradingId = 3;
+    for (auto& strip : separate.strips)
+      for (std::size_t v = 0; v < strip.size(); v += 3) strip[v] += 30;
+    group.gradingMembers.push_back(std::move(separate));
+    std::vector<std::string> log;
+    QVERIFY(BuildSurfaceFromSources(state, group, log));
+    double z = 0;
+    QVERIFY(TinElevationAt(group.tin->vertsXyz, group.tin->indices, 5, 5, &z));
+    QVERIFY(std::abs(z - 10000000.125) < 0.002);
+    QVERIFY(!TinElevationAt(group.tin->vertsXyz, group.tin->indices, 20, 5, &z));
+    const std::vector<double> ground = {0,0,10000002.125, 40,0,10000002.125,
+                                       40,10,10000002.125, 0,10,10000002.125};
+    const auto cut = ComputeSurfaceVolume(ground, {0,1,2,0,2,3}, group.tin->vertsXyz, group.tin->indices);
+    QVERIFY(std::abs(cut.cutFt3 - 400) < 1.0);
+    QVERIFY(std::abs(cut.fillFt3) < 0.002);
+    const auto previous = group.tin;
+    auto conflict = group.gradingMembers[0];
+    conflict.gradingId = 2;
+    for (auto &strip : conflict.strips)
+      for (std::size_t i = 2; i < strip.size(); i += 3)
+        strip[i] += 2;
+    group.gradingMembers.push_back(conflict);
+    QVERIFY(!BuildSurfaceFromSources(state, group, log));
+    QVERIFY(group.tin == previous);
+    group.gradingMembers.pop_back();
+    group.gradingMembers[0].strips[0].pop_back();
+    QVERIFY(!BuildSurfaceFromSources(state, group, log));
+    QVERIFY(group.tin == previous);
+  }
+
+  void
+  gradingGroupAdjoiningMembersHaveKnownVolumesAndExplicitRegradingUpdatesTheGroup() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto &state = window.State();
+    BuildGradingSite(window);
+    std::vector<int> results;
+    for (const int x : {40, 60}) {
+      state.selection.clear();
+      window.Submit("FEATURELINE Edge");
+      window.Submit(QString::number(x) + ",40,105");
+      window.Submit(QString::number(x + 20) + ",40,105");
+      window.Submit("END");
+      const int baseline = static_cast<int>(state.featureLineInfo.size()) - 1;
+      state.selection = {{SelectedEntity::Type::FeatureLine, baseline}};
+      window.Submit("GRADING");
+      window.Submit("D");
+      window.Submit("L");
+      window.Submit("");
+      results.push_back(static_cast<int>(state.featureLineInfo.size()) - 1);
+    }
+    state.selection = {{SelectedEntity::Type::FeatureLine, results[0]},
+                       {SelectedEntity::Type::FeatureLine, results[1]}};
+    window.Submit("GRADINGGROUP Joined");
+    const int si = FindSurfaceIndex(state, "Joined");
+    QVERIFY(si >= 0);
+    auto &group = state.cadSurfaces[static_cast<std::size_t>(si)];
+    QCOMPARE(group.gradingMembers.size(), std::size_t(2));
+    double z = 0;
+    QVERIFY(
+        TinElevationAt(group.tin->vertsXyz, group.tin->indices, 60, 45, &z));
+    QVERIFY(std::abs(z - 103.333333333) < 0.002);
+    // Two 20 x 15 ft strips, each averaging 2.5 ft of fill: 1500 ft3 = 55.56
+    // yd3.
+    window.Submit("VOLUMES Ground, Joined");
+    QVERIFY(LogContains(window, "(base) vs \"Joined\" (comparison):"));
+    const auto volume = ComputeSurfaceVolume(
+        state.cadSurfaces[0].tin->vertsXyz, state.cadSurfaces[0].tin->indices,
+        group.tin->vertsXyz, group.tin->indices);
+    QVERIFY(std::abs(volume.fillFt3 - 1500) < 1.0);
+    QVERIFY(std::abs(volume.cutFt3) < 0.002);
+    state.selection = {{SelectedEntity::Type::FeatureLine, results[1]}};
+    window.Submit("GRADINGGROUP Joined, Remove");
+    QCOMPARE(
+        state.cadSurfaces[static_cast<std::size_t>(si)].gradingMembers.size(),
+        std::size_t(1));
+    const auto previous = state.cadSurfaces[static_cast<std::size_t>(si)].tin;
+    state.selection = {{SelectedEntity::Type::FeatureLine, results[0]}};
+    window.Submit("GRADING");
+    window.Submit("F");
+    window.Submit("2:1");
+    window.Submit("");
+    const auto updated = state.cadSurfaces[static_cast<std::size_t>(si)].tin;
+    QVERIFY(updated != previous);
+    QVERIFY(TinElevationAt(updated->vertsXyz, updated->indices, 45, 45, &z));
+    QVERIFY(std::abs(z - 102.5) < 0.002);
+  }
+
+  void gradingGroupMembershipTransferUndoAndDwgRoundTrip() {
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto &state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING");
+    window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP First");
+    window.Submit("GRADINGGROUP Second");
+    QCOMPARE(state.cadSurfaces[1].gradingMembers.size(), std::size_t(0));
+    QVERIFY(!state.cadSurfaces[1].tin);
+    QCOMPARE(state.cadSurfaces[2].gradingMembers.size(), std::size_t(1));
+    window.Submit("UNDO");
+    QCOMPARE(state.cadSurfaces.size(), std::size_t(2));
+    QCOMPARE(state.cadSurfaces[1].gradingMembers.size(), std::size_t(1));
+    const auto memberId = state.featureLineAttrs[1].id;
+    const auto vertices = state.cadSurfaces[1].tin->vertsXyz;
+    const auto indices = state.cadSurfaces[1].tin->indices;
+    const QByteArray path = directory.filePath("grading-group.dwg").toUtf8();
+    std::vector<std::string> log;
+    QVERIFY(SaveDrawingDocument(state, path.constData(), log));
+    window.CreateDrawingFromTemplate();
+    QVERIFY(OpenDrawingDocument(state, path.constData(), log));
+    const int si = FindSurfaceIndex(state, "First");
+    QVERIFY(si >= 0);
+    auto &group = state.cadSurfaces[static_cast<std::size_t>(si)];
+    QVERIFY(group.gradingGroup);
+    QCOMPARE(group.gradingMembers.size(), std::size_t(1));
+    QCOMPARE(group.gradingMembers[0].gradingId, memberId);
+    QVERIFY(group.tin->vertsXyz == vertices);
+    QVERIFY(group.tin->indices == indices);
+    QVERIFY(BuildSurfaceFromSources(state, group, log));
+    QVERIFY(group.tin->vertsXyz == vertices);
+    QVERIFY(group.tin->indices == indices);
+    QVERIFY(!state.cadSurfaces[0]
+                 .gradingGroup); // ordinary/legacy surfaces keep their meaning
+  }
+
+  void
+  gradingGroupBuildsAnOrdinarySurfaceAndDirectRebuildPreservesItsFootprint() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto &state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING");
+    window.Submit("");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Earthwork");
+    const int si = FindSurfaceIndex(state, "Earthwork");
+    QVERIFY(si >= 0);
+    auto &surface = state.cadSurfaces[static_cast<std::size_t>(si)];
+    QVERIFY(surface.tin);
+    double z = 0;
+    // Halfway across the first slope: the 105 ft baseline falls to 100 ft
+    // ground.
+    QVERIFY(TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, 100,
+                           34.696699, &z));
+    QVERIFY(std::abs(z - 102.5) < 0.002);
+    QVERIFY(!TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, 100,
+                            100, &z));
+    QVERIFY(
+        !TinElevationAt(surface.tin->vertsXyz, surface.tin->indices, 5, 5, &z));
+    const auto baked = surface.tin->vertsXyz;
+    state.featureLineVerts[2] += 10; // source edits do not regrade baked output
+    std::vector<std::string> log;
+    QVERIFY(BuildSurfaceFromSources(state, surface, log));
+    QVERIFY(surface.tin->vertsXyz == baked);
   }
 
   void gradingStoresAnEditableDefinitionOnTheDaylightLine() {

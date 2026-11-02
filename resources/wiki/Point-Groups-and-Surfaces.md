@@ -194,6 +194,27 @@ Later, after importing a second day of shots coded `EG`:
 
 ---
 
+## Grading groups and earthwork volumes
+
+Create grading results with `GRADING`, then select the daylight feature lines to group.
+Type `GRADINGGROUP Earthwork` to create a named group and add the selected gradings.
+The group appears as an ordinary surface in Surface Manager and supports `SURFELEV`.
+You can also open any ribbon **Grading** tool and type `Group Earthwork` at its prompt;
+`Group Earthwork, Remove` and `Group Earthwork, List` work there too.
+
+- `GRADINGGROUP Earthwork, Add` adds selected grading results, moving them out of any previous group.
+- `GRADINGGROUP Earthwork, Remove` removes selected members and rebuilds the surface.
+- `GRADINGGROUP Earthwork, List` lists the group's members.
+- `VOLUMES Ground, Earthwork` reports cut, fill and net against the existing-ground surface.
+
+The design surface covers the slopes between each baseline and its daylight line. It does not
+fill the interior of a closed pad or bridge the land between separate gradings. A group without
+members has no surface triangles. Membership and the baked surface survive DWG save/reopen.
+
+Baseline and target-surface edits do not automatically regrade a member or change its group's
+surface. Explicitly rebuild a grading with `GRADING`, or re-add it after rebuilding, to refresh
+its contribution. Incomplete daylight lines must be rebuilt before they can be grouped.
+
 ## Common problems
 
 | Problem | Cause | Solution |

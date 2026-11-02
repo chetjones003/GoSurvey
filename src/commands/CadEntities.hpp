@@ -1176,6 +1176,13 @@ struct CadSurfacePointFile {
 
 enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corridor };
 
+/// REQ-404: one member's baked grading strips, in drawing-local XYZ. Separate snapshots
+/// preserve unchanged members when the group membership changes.
+struct CadGradingGroupMember {
+  std::uint64_t gradingId = 0;
+  std::vector<std::vector<double>> strips;
+};
+
 /// A named TIN surface (REQ-068).
 ///
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
@@ -1183,7 +1190,10 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 ///
 /// Surfaces are **not written to DXF**; **DWG** writes a built TIN as `POLYLINE_PFACE` (issue #611).
 /// A surface without a triangulation stays in the export loss list (ADR-028 (f), REQ-201).
+/// Grading groups additionally own per-member baked strips.
 struct CadSurface {
+  bool gradingGroup = false;
+  std::vector<CadGradingGroupMember> gradingMembers;
   std::string name;  ///< Unique within the drawing.
   SurfaceKind kind = SurfaceKind::Tin;
   std::string description;
