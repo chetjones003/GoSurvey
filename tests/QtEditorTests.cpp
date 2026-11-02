@@ -3529,6 +3529,19 @@ private Q_SLOTS:
       categories->setCurrentRow(0);
       QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
+    const QByteArray originalTemplatePath = window.State().defaultDrawingTemplatePathUtf8;
+    auto* templatePath = dialog->findChild<QLineEdit*>("defaultDrawingTemplatePath");
+    auto* settingsApply = dialog->findChild<QPushButton*>("settingsApply");
+    auto* settingsSaveStatus = dialog->findChild<QLabel*>("settingsSaveStatus");
+    QVERIFY(templatePath && settingsApply && settingsSaveStatus);
+    templatePath->setText(QString(800, QLatin1Char('x')));
+    settingsApply->click();
+    QVERIFY(settingsSaveStatus->text().contains("path is too long"));
+    QCOMPARE(QByteArray(window.State().defaultDrawingTemplatePathUtf8), originalTemplatePath);
+    templatePath->setText(QString::fromUtf8(originalTemplatePath));
+    settingsApply->click();
+    QVERIFY(settingsSaveStatus->text().isEmpty());
+
     const float wheelBefore = window.State().displayWheelZoomFactor;
     wheel->setValue(1.5);
     undo->setValue(12);
@@ -6193,6 +6206,14 @@ private Q_SLOTS:
     state.drawingSettings.capturedAreas.push_back(std::move(capturedArea));
     state.currentLayer = "Field";
     state.objectSnapEnabled = true;
+    state.viewportPanX = 9876.0;
+    state.viewportPanY = -5432.0;
+    state.viewportAzimuthDeg = 25.0f;
+    state.viewportProjection = Camera::Projection::Perspective;
+    state.activeUcs.origin = {100.0, 200.0, 30.0};
+    state.ucsNamed.push_back({"Lot Grid", state.activeUcs});
+    state.namedViews.push_back(NamedView{"Source View", 9876.0, -5432.0, 0.0, 2.0f, 25.0f, 45.0f});
+    state.activeViewName = "Source View";
     state.drawingLayerTable = DefaultDrawingLayerTable();
     CadLayerRow fieldLayer;
     fieldLayer.name = "Field";
@@ -6298,6 +6319,16 @@ private Q_SLOTS:
     std::vector<std::string> log;
     const QByteArray targetUtf8 = targetPath.toUtf8();
     QVERIFY2(LoadGoSurveyTemplateFile(loaded, targetUtf8.constData(), log), log.empty() ? "template load failed" : log.back().c_str());
+    QCOMPARE(loaded.viewportPanX, 0.0);
+    QCOMPARE(loaded.viewportPanY, 0.0);
+    QCOMPARE(loaded.viewportAzimuthDeg, 0.0f);
+    QCOMPARE(loaded.viewportProjection, Camera::Projection::Orthographic);
+    QVERIFY(ucs::FramesMatch(loaded.activeUcs, ucs::Ucs{}));
+    QCOMPARE(loaded.namedViews.size(), size_t(1));
+    QCOMPARE(loaded.namedViews.front().name, std::string("Source View"));
+    QCOMPARE(loaded.ucsNamed.size(), size_t(1));
+    QCOMPARE(loaded.ucsNamed.front().name, std::string("Lot Grid"));
+    QVERIFY(loaded.activeViewName.empty());
     QCOMPARE(loaded.userLinesFlat.size(), size_t(6));
     QCOMPARE(loaded.userLinesFlat[3], 100.0);
     QVERIFY(loaded.surveyPoints.empty());

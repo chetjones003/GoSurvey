@@ -420,7 +420,6 @@ void EditorWindow::ShowSettings() {
   layout->addLayout(templateForm);
   auto *templatePath = new QLineEdit(QString::fromUtf8(m_State.defaultDrawingTemplatePathUtf8), dialog);
   templatePath->setObjectName("defaultDrawingTemplatePath");
-  templatePath->setMaxLength(static_cast<int>(sizeof(m_State.defaultDrawingTemplatePathUtf8) - 1));
   templatePath->setReadOnly(true);
   auto *templatePathRow = new QWidget(dialog);
   auto *templatePathLayout = new QHBoxLayout(templatePathRow);

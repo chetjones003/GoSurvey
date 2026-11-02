@@ -4614,6 +4614,17 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
       doc["drawingSettings"].erase("capturedAreas");
 
+    // Keep named views and named UCS definitions as reusable drawing standards, but do not carry
+    // over the source drawing's current camera, projection, active view, or current UCS.
+    if (doc.contains("view") && doc["view"].is_object()) {
+      json reusableViews = json::object();
+      if (doc["view"].contains("namedViews")) reusableViews["namedViews"] = doc["view"]["namedViews"];
+      if (doc["view"].contains("namedUcs")) reusableViews["namedUcs"] = doc["view"]["namedUcs"];
+      doc["view"] = std::move(reusableViews);
+    } else {
+      doc.erase("view");
+    }
+
     // Keep reusable view/settings state and entity ID counters with the retained linework.
     // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
     std::set<std::string> neededBlocks;
