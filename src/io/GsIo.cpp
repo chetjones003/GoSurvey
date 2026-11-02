@@ -4610,6 +4610,10 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 
+    // Captured map tiles are source-drawing imagery, not reusable template settings.
+    if (doc.contains("drawingSettings") && doc["drawingSettings"].is_object())
+      doc["drawingSettings"].erase("capturedAreas");
+
     // Keep reusable view/settings state and entity ID counters with the retained linework.
     // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
     std::set<std::string> neededBlocks;
@@ -4626,16 +4630,24 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
     if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
       json defs = doc["blockDefs"];
       json kept = json::array();
+      const auto isNeededBlock = [&](const std::string& candidate) {
+        return std::any_of(neededBlocks.begin(), neededBlocks.end(), [&](const std::string& needed) {
+          return CadBlockEqCi(candidate, needed);
+        });
+      };
       bool changed = true;
       while (changed) {
         changed = false;
         for (const auto& def : defs) {
           if (!def.is_object() || !def.contains("name") || !def["name"].is_string()) continue;
           const std::string name = def["name"].get<std::string>();
-          if (neededBlocks.find(name) == neededBlocks.end()) continue;
+          if (!isNeededBlock(name)) continue;
           bool already = false;
           for (const auto& prior : kept)
-            if (prior.is_object() && prior.value("name", std::string{}) == name) { already = true; break; }
+            if (prior.is_object() && CadBlockEqCi(prior.value("name", std::string{}), name)) {
+              already = true;
+              break;
+            }
           if (already) continue;
           kept.push_back(def);
           changed = true;
