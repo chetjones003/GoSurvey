@@ -106,6 +106,15 @@ Dwg_Object* AppendMaterialObject(Dwg_Data* dwg, const char* name, unsigned rgb24
   mat->specular_gloss_factor = 0.5;
   mat->opacity_percent = 1.0;
   mat->refraction_index = 1.0;
+  // Every mapper serializes sixteen compact doubles, even when it has no texture. A null
+  // vector makes LibreDWG omit those fields while its reader still consumes them, shifting
+  // all subsequent material fields and producing a drawing AutoCAD cannot open.
+  for (auto* map : {&mat->diffusemap, &mat->specularmap, &mat->reflectionmap,
+                    &mat->opacitymap, &mat->bumpmap, &mat->refractionmap}) {
+    map->transmatrix = static_cast<BITCODE_BD*>(std::calloc(16, sizeof(BITCODE_BD)));
+    if (map->transmatrix == nullptr) return nullptr;
+    for (std::size_t i = 0; i < 16; ++i) map->transmatrix[i] = i % 5 == 0 ? 1.0 : 0.0;
+  }
   return obj;
 }
 
@@ -130,14 +139,27 @@ Dwg_Object* AcadMaterialDictionary(Dwg_Data* dwg) {
 
 void AddMaterialToDictionary(Dwg_Data* dwg, Dwg_Object* matObj) {
   assert(dwg != nullptr && matObj != nullptr);
+  const BITCODE_BL materialIndex = matObj->index;
   Dwg_Object* dictObj = AcadMaterialDictionary(dwg);
   if (dictObj == nullptr || dictObj->tio.object == nullptr ||
       dictObj->tio.object->tio.DICTIONARY == nullptr)
     return;
+  // Creating the dictionary can relocate the object array.
+  matObj = &dwg->object[materialIndex];
   Dwg_Object_MATERIAL* mat = matObj->tio.object->tio.MATERIAL;
   if (mat == nullptr || mat->name == nullptr)
     return;
   dwg_add_DICTIONARY_item(dictObj->tio.object->tio.DICTIONARY, mat->name, matObj->handle.value);
+  auto* common = matObj->tio.object;
+  common->ownerhandle = dwg_add_handleref(dwg, 4, dictObj->handle.value, matObj);
+  common->is_xdic_missing = 1;
+  if (common->num_reactors == 0) {
+    common->reactors = static_cast<BITCODE_H*>(std::calloc(1, sizeof(BITCODE_H)));
+    if (common->reactors != nullptr) {
+      common->reactors[0] = dwg_add_handleref(dwg, 4, dictObj->handle.value, matObj);
+      common->num_reactors = 1;
+    }
+  }
 }
 
 }  // namespace
@@ -213,9 +235,10 @@ const void* DwgTestAddDiffuseMaterial(_dwg_struct* dwgIn, const char* name, unsi
   Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, factor);
   if (obj == nullptr)
     return nullptr;
+  const auto materialHandle = obj->handle.value;  // the dictionary may relocate the object array
   AddMaterialToDictionary(dwg, obj);
   dwg_resolve_objectrefs_silent(dwg);
-  return dwg_add_handleref(dwg, 5, obj->handle.value, nullptr);
+  return dwg_add_handleref(dwg, 5, materialHandle, nullptr);
 }
 
 void DwgExportMaterialContextInit(DwgExportMaterialContext* ctx, bool r2007OrNewer) {
@@ -260,8 +283,8 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* 
       Dwg_Object* obj = AppendMaterialObject(dwg, attr->materialName.c_str(), rgb24, 1.0);
       if (obj == nullptr)
         return;
+      absRef = obj->handle.value;  // read before the dictionary can relocate the object array
       AddMaterialToDictionary(dwg, obj);
-      absRef = obj->handle.value;
       ctx->materialNameToHandle.emplace(attr->materialName, absRef);
       ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
       ++ctx->materialsWritten;
@@ -276,8 +299,8 @@ void DwgExportApplyEntityMaterial(_dwg_struct* dwgIn, DwgExportMaterialContext* 
       Dwg_Object* obj = AppendMaterialObject(dwg, name, rgb24, 1.0);
       if (obj == nullptr)
         return;
+      absRef = obj->handle.value;  // read before the dictionary can relocate the object array
       AddMaterialToDictionary(dwg, obj);
-      absRef = obj->handle.value;
       ctx->diffuseRgbToHandle.emplace(rgb24, absRef);
       ++ctx->materialsWritten;
     } else {

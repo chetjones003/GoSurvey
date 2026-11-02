@@ -477,12 +477,13 @@ void EditorWindow::ShowSurfaceProperties(int surfaceIndex) {
     add("Triangles", QString::number(stats.triangles));
     add("Edges", QString::number(stats.uniqueEdges));
     add("Breakline edges", QString::number(stats.breaklineEdges));
-    add("X range", QString("%1 to %2").arg(stats.minX, 0, 'f', 3).arg(stats.maxX, 0, 'f', 3));
-    add("Y range", QString("%1 to %2").arg(stats.minY, 0, 'f', 3).arg(stats.maxY, 0, 'f', 3));
+    // Statistics are in the drawing's local frame; show world coordinates, as Civil 3D does.
+    add("X range", QString("%1 to %2").arg(stats.minX + m_State.worldDocumentOriginX, 0, 'f', 3).arg(stats.maxX + m_State.worldDocumentOriginX, 0, 'f', 3));
+    add("Y range", QString("%1 to %2").arg(stats.minY + m_State.worldDocumentOriginY, 0, 'f', 3).arg(stats.maxY + m_State.worldDocumentOriginY, 0, 'f', 3));
     add("Elevation", QString("%1 to %2").arg(stats.minZ, 0, 'f', 3).arg(stats.maxZ, 0, 'f', 3));
     add("2D area", QString::number(stats.area2d, 'f', 3));
     add("3D area", QString::number(stats.area3d, 'f', 3));
-    add("Slope", QString("%1 %% to %2 %% (mean %3 %%)").arg(stats.minSlopePct, 0, 'f', 2).arg(stats.maxSlopePct, 0, 'f', 2).arg(stats.meanSlopePct, 0, 'f', 2));
+    add("Slope", QString("%1% to %2% (mean %3%)").arg(stats.minSlopePct, 0, 'f', 2).arg(stats.maxSlopePct, 0, 'f', 2).arg(stats.meanSlopePct, 0, 'f', 2));
     add("Slope (deg)", QString("%1 to %2 (mean %3)").arg(stats.minSlopeDeg, 0, 'f', 2).arg(stats.maxSlopeDeg, 0, 'f', 2).arg(stats.meanSlopeDeg, 0, 'f', 2));
     if (s.isVolumeSurface()) add("Volume (ft3)", QString("cut %1  fill %2").arg(stats.volumeCutFt3, 0, 'f', 3).arg(stats.volumeFillFt3, 0, 'f', 3));
   };
@@ -697,6 +698,10 @@ QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
     const int index = item->data(0, Qt::UserRole).toInt();
     add("Switch to Drawing", "toolspaceSwitchDrawing", true, [this, index] { SwitchDrawing(index); });
     add("Drawing Settings...", "toolspaceDrawingSettingsOf", true, [this, index] { SwitchDrawing(index); Submit("DRAWINGSETTINGS"); });
+  } else if (kind == "settingsFolder" || kind == "pointSettingsFolder" || kind == "pointStyle" || kind == "pointLabelStyle" || kind == "tableStylesFolder" ||
+             kind == "tableStyle") {
+    // Civil-style Settings folders without their own manager yet: the drawing's settings are the one place to edit them.
+    add("Drawing Settings...", "toolspaceFolderSettings", true, [this] { Submit("DRAWINGSETTINGS"); });
   } else if (kind == "generalFolder") {
     add("Drawing Settings...", "toolspaceGeneralSettings", true, [this] { Submit("DRAWINGSETTINGS"); });
   } else if (kind == "textStylesFolder" || kind == "textStyle") {
@@ -705,6 +710,9 @@ QMenu* EditorWindow::BuildToolspaceMenu(QTreeWidgetItem* item) {
     add("Layer Manager...", "toolspaceLayers", true, [this] { m_State.showLayerManagerWindow = true; Refresh(); });
   } else if (kind == "dimensionFolder" || kind == "dimensionStyle") {
     add("Dimension Styles...", "toolspaceDimensionStyles", true, [this] { Submit("DIMSTY"); });
+  } else if (kind == "multileaderStylesFolder" || kind == "multileaderStyle") {
+    add("Multileader Styles...", "toolspaceMultileaderStyles", true,
+        [this] { OpenRibbonStyleManager(QStringLiteral("ribbonMleaderStyleGallery")); });
   } else if (kind == "surfaceSettingsFolder") {
     add("Surface Styles...", "toolspaceSurfaceStylesSettings", true, [this] { m_State.showSurfaceStyleWindow = true; Refresh(); });
   } else {

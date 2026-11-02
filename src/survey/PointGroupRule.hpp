@@ -48,6 +48,11 @@ struct PointGroupRule {
 struct PointGroup {
   std::string name;  ///< Unique within the drawing.
   PointGroupRule rule;
+  std::string pointStyleName;
+  std::string labelStyleName;
+  unsigned displayPriority = 0;
+  bool pointStyleOverride = false;
+  bool labelStyleOverride = false;
 };
 
 /// Case-insensitive wildcard match. `*` matches any run (including empty), `?` exactly one

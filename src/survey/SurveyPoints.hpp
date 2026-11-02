@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cctype>
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -30,6 +32,82 @@ struct SurveyLabelStyleTemplates {
   std::string numberNorthEastElev = "{id}\nN={north}\nE={east}\nZ={elev}";
 };
 
+/// Drawing-owned survey-point style data carried by GoSurvey's DWG payload. Civil 3D point style
+/// values that have a GoSurvey equivalent map into this definition; GoSurvey writes supported
+/// AutoCAD entities/style records rather than authoring Civil 3D custom objects.
+struct SurveyPointStyleComponent {
+  bool visible = true;
+  std::string color = "ByLayer";
+  std::string layer;
+  std::string linetype = "ByLayer";
+  int lineweight = -2;
+  double linetypeScale = 1.0;
+};
+
+struct SurveyPointStyleDefinition {
+  std::string name = "Standard";
+  float crossSpanPlottedInches = 0.14f;
+  std::string color = "ByLayer";
+  std::string labelStyleName = "Standard";
+  /// Civil point-style display components map independently; a hidden component stays hidden.
+  bool markerVisible = true;
+  bool labelVisible = true;
+  bool hasExplicitMarkerGeometry = false;
+  unsigned markerType = 1;  // AutoCAD point=0, custom=1, named block=2.
+  unsigned customMarker = 3;  // Dot, blank, plus, X, vertical line.
+  unsigned markerOverlay = 0;  // Circle=1, square=2, both=3.
+  unsigned markerSizeType = 0;  // Paper size, screen percentage, model size, fixed block scale.
+  unsigned markerOrientation = 1;
+  unsigned markerDisplay3dType = 0;
+  double markerSize = 0.0;
+  double markerRotationRad = 0.0;
+  std::array<double, 3> markerFixedScale = {1.0, 1.0, 1.0};
+  double markerElevation = 0.0;
+  double markerScaleFactor = 1.0;
+  std::string markerBlockName;
+  /// Plan marker/label, model marker/label and section marker/label display components.
+  std::array<SurveyPointStyleComponent, 6> displayComponents;
+};
+
+inline const SurveyPointStyleDefinition* FindSurveyPointStyle(
+    const std::vector<SurveyPointStyleDefinition>& styles, const std::string& name) {
+  for (const auto& style : styles) {
+    if (style.name.size() != name.size()) continue;
+    bool equal = true;
+    for (std::size_t i = 0; i < name.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(style.name[i])) !=
+          std::tolower(static_cast<unsigned char>(name[i]))) {
+        equal = false;
+        break;
+      }
+    }
+    if (equal) return &style;
+  }
+  return nullptr;
+}
+
+/// Named point-label style data. The format selector on each point remains for legacy compatibility;
+/// these templates and text properties travel with the drawing style record.
+struct SurveyPointLabelStyleDefinition {
+  std::string name = "Standard";
+  SurveyLabelStyleTemplates templates;
+  std::string fontFamily;
+  float textHeightPlottedInches = 0.10f;
+  std::string color = "ByLayer";
+  bool visible = true;
+  /// Civil's original component expressions, retained independently of the legacy format selector.
+  /// Numeric property identifiers and formatting modifiers are drawing data, not display names.
+  std::vector<std::string> civilTextContents;
+};
+
+inline std::vector<SurveyPointStyleDefinition> DefaultSurveyPointStyles() {
+  return {SurveyPointStyleDefinition{}};
+}
+
+inline std::vector<SurveyPointLabelStyleDefinition> DefaultSurveyPointLabelStyles() {
+  return {SurveyPointLabelStyleDefinition{}};
+}
+
 struct SurveyPoint {
   int id = 0;
   double easting = 0.0;
@@ -45,6 +123,8 @@ struct SurveyPoint {
   std::string rawDescription;
   std::string layer;
   SurveyPointLabelStyle labelStyle = SurveyPointLabelStyle::NumberDesc;
+  std::string styleName = "Standard";
+  std::string labelStyleName = "Standard";
   /// Stable id (\ref EntityAttributes::id) of this point's linked MTEXT label, or 0 for none.
   ///
   /// **An id, not an index** (REQ-076 / architecture §11.9). It was `labelMtextAnnIndex`, and
@@ -53,6 +133,25 @@ struct SurveyPoint {
   /// fix-up because it never means anything but the entity it was issued to.
   std::uint64_t labelMtextAnnId = 0;
 };
+
+inline bool SurveyPointMarkerVisible(const SurveyPoint& point,
+                                     const std::vector<SurveyPointStyleDefinition>& styles) {
+  const auto* style = FindSurveyPointStyle(styles, point.styleName);
+  return style == nullptr || style->markerVisible;
+}
+
+inline bool SurveyPointLabelVisible(const SurveyPoint& point,
+                                    const std::vector<SurveyPointStyleDefinition>& styles) {
+  const auto* style = FindSurveyPointStyle(styles, point.styleName);
+  return style == nullptr || style->labelVisible;
+}
+
+inline bool SurveyPointNamedLabelVisible(const SurveyPoint& point,
+                                        const std::vector<SurveyPointLabelStyleDefinition>& styles) {
+  for (const auto& style : styles)
+    if (style.name == point.labelStyleName) return style.visible;
+  return true;
+}
 enum class SurveyDuplicatePolicy { Notify, Renumber, Merge, Overwrite };
 
 struct CreatePointsOptions {

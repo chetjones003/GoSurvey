@@ -1,8 +1,96 @@
 #include "util/cadtable.hpp"
+#include "util/cadtablestyle.hpp"
 
 #include "GsAnnotationJson.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
+
+TEST_CASE("CadTableCellIsSurveyPointData skips title and header rows", "[req479][table]") {
+  CadTable t;
+  t.cols = 5;
+  t.mergeTitleRow = true;
+  t.surveyPointDataRows = true;
+  t.cells.assign(15, "x");
+  CHECK_FALSE(CadTableCellIsSurveyPointData(t, 0));
+  CHECK_FALSE(CadTableCellIsSurveyPointData(t, 6));
+  CHECK(CadTableCellIsSurveyPointData(t, 10));
+}
+
+TEST_CASE("CadTableCellIsSurveyPointData follows point table style without flag", "[req479][table]") {
+  CadTableStyle style;
+  style.name = "PNEZD format";
+  style.point = true;
+  const std::vector<CadTableStyle> styles{style};
+  CadTable t;
+  t.cols = 5;
+  t.mergeTitleRow = true;
+  t.styleName = "PNEZD format";
+  t.cells.assign(15, "x");
+  CHECK_FALSE(CadTableCellIsSurveyPointData(styles, t, 6));
+  CHECK(CadTableCellIsSurveyPointData(styles, t, 10));
+}
+
+TEST_CASE("CadTableHitCell honors merged title row band layout", "[req479][table]") {
+  CadTable t;
+  t.cols = 2;
+  t.width = 10.f;
+  t.height = 9.f;
+  t.mergeTitleRow = true;
+  t.columnWeights = {1.f, 2.f};
+  t.rowWeights = {3.f, 2.f, 4.f};
+  t.cells = {"Title", "", "A", "B", "1", "2"};
+  CHECK(CadTableHitCell(t, 8.f, -1.5f) == 0);
+  CHECK(CadTableHitCell(t, 2.f, -4.f) == 2);
+}
+
+TEST_CASE("TABLE retains unequal bands and a merged title through layout and persistence", "[req479][table]") {
+  CadTable t;
+  t.cols = 2;
+  t.width = 12;
+  t.height = 10;
+  t.cells = {"Title", "", "A", "B", "1", "2"};
+  t.columnWeights = {1, 2};
+  t.rowWeights = {3, 2, 5};
+  t.rowTextHeightsInches = {.15f, .1f, .1f};
+  t.mergeTitleRow = true;
+  t.centerText = true;
+  const auto title = CadTableLocalCellRect(t, 0);
+  CHECK(title.x0 == 0);
+  CHECK(title.x1 == 12);
+  CHECK(title.y1 == 3);
+  const auto header = CadTableLocalCellRect(t, 3);
+  CHECK(header.x0 == 4);
+  CHECK(header.x1 == 12);
+  CHECK(header.y0 == 3);
+  CHECK(header.y1 == 5);
+  nlohmann::json json;
+  CadTableToJson(t, json);
+  const auto restored = CadTableFromJson(json);
+  CHECK(restored.rowWeights == t.rowWeights);
+  CHECK(restored.columnWeights == t.columnWeights);
+  CHECK(restored.rowTextHeightsInches == t.rowTextHeightsInches);
+  CHECK(restored.mergeTitleRow);
+  CHECK(restored.centerText);
+}
+
+TEST_CASE("TABLE column weights follow the widest cell in each column", "[req479][table]") {
+  CadTable table;
+  table.cols = 2;
+  table.width = 20.f;
+  table.height = 8.f;
+  table.plottedHeightInches = 0.1f;
+  table.cells = {"Title", "", "Short", "A very long description value", "1", "2"};
+  table.mergeTitleRow = true;
+  table.rowTextHeightsInches = {0.15f, 0.1f, 0.1f};
+  table.rowWeights = {2.f, 2.f, 2.f};
+  CadTableFitColumnWeightsFromContent(&table, 20.f);
+  REQUIRE(table.columnWeights.size() == 2);
+  CHECK(table.columnWeights[1] > table.columnWeights[0]);
+  const auto description = CadTableLocalCellRect(table, 3);
+  const auto name = CadTableLocalCellRect(table, 2);
+  CHECK(description.x1 - description.x0 > name.x1 - name.x0);
+}
 
 TEST_CASE("A 2x2 TABLE lays out four cells inside its box", "[req148][table]") {
   std::vector<std::string> cells{"A", "B", "C", "D"};

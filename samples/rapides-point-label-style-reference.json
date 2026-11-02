@@ -1,0 +1,196 @@
+{
+  "source": "rapides-substation-civil3d-pointtables.dwg",
+  "api": "Civil 3D 2026 LabelStyle.Properties.Label.Visibility and LabelStyleTextComponent.Text.Contents",
+  "styles": [
+    {
+      "handle": "454f",
+      "name": "no points",
+      "visible": false,
+      "components": [
+        {
+          "name": "Point Number",
+          "content": "<[Point Number]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Elevation",
+          "content": "<[Point Elevation(Uft|P3|RN|Sn|OF|AP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "18fc",
+      "name": "Elevation and Description",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Elev",
+          "content": "<[Point Elevation(Uft|P2|RN|AP|Sn|OF)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "1909",
+      "name": "Point Number Only",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Point Number(Sn)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "1903",
+      "name": "Northing and Easting",
+      "visible": true,
+      "components": [
+        {
+          "name": "Northing and Easting",
+          "content": "N:<[Northing(Uft|P2|RN|AP|Sn|OF)]>\\PE:<[Easting(Uft|P2|RN|AP|Sn|OF)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "18ff",
+      "name": "Point#-Elevation-Description",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.004166666666666667,
+          "visible": true
+        },
+        {
+          "name": "Point Number",
+          "content": "<[Point Number(Sn)]>",
+          "height": 0.004166666666666667,
+          "visible": true
+        },
+        {
+          "name": "Point Elev",
+          "content": "<[Point Elevation(Uft|P2|RN|AP|Sn|OF)]>",
+          "height": 0.004166666666666667,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "190b",
+      "name": "Point# and Description",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Number",
+          "content": "<[Point Number(Sn)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "190e",
+      "name": "Description Only",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "1905",
+      "name": "Land Desktop Point Style",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Number",
+          "content": "<[Point Number(Sn)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Elev",
+          "content": "<[Point Elevation(Uft|P2|RN|AP|Sn|OF)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "1a631",
+      "name": "Standard",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Number",
+          "content": "<[Point Number]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Elevation",
+          "content": "<[Point Elevation(Uft|P3|RN|Sn|OF|AP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        },
+        {
+          "name": "Point Description",
+          "content": "<[Full Description(CP)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "handle": "1910",
+      "name": "Elevation Only",
+      "visible": true,
+      "components": [
+        {
+          "name": "Point Elevation",
+          "content": "<[Point Elevation(Uft|P2|RN|AP|Sn|OF)]>",
+          "height": 0.008333333333333333,
+          "visible": true
+        }
+      ]
+    }
+  ]
+}

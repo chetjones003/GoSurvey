@@ -46,7 +46,10 @@ format, `.gst` (same JSON shape, no file association, not opened as a drawing).
    product licence change, not a comment in `third_party/`.
 6. **No native** LGS, LGSX, BLK, BLKX, IMP, Leica BIN, PTG, or Autodesk RCP/RCS in this epic.
    Interchange for those workflows is **export E57/LAS from the vendor tool**.
-7. **No IFC write.** No Plant 3D / Civil 3D custom-object decode (ADR-026 still holds).
+7. **No IFC write or Plant 3D custom-object decode.** Civil 3D semantic import is in scope under REQ-478/479
+   and D-2026-10-31-a/b: GoSurvey decodes supported Civil 3D data into its own domain objects and writes
+   ordinary AutoCAD entities/style records through LibreDWG. It does not author Civil 3D custom objects.
+   AutoCAD/Civil 3D runtimes, Object Enablers, and ODA Civil extensions are not product dependencies.
 8. **Point clouds are not TIN sources** in this epic (REQ-068 D4 / LiDAR density stays out).
    A cloud is reference geometry, like a mesh.
 
@@ -111,7 +114,8 @@ Path is stored; missing file on reload is a logged unload, not a crash (PDF-unde
 - Native LGS, LGSX, BLK, BLKX, IMP, Leica `.bin`, PTG
 - Autodesk RCP / RCS (ReCap is Autodesk, not Leica)
 - IFC authoring or round-trip
-- Plant 3D / Civil 3D object enablers (ADR-026)
+- Plant 3D object enablers and custom-object decoding (ADR-026)
+- Civil 3D object enablers or runtime bridge; Civil 3D native object IO is governed by REQ-478/479
 - Point-cloud snapping, classification, or “surface from cloud”
 - Making `.dwg` the native document (PART 11)
 

@@ -5,6 +5,7 @@
 //
 //   GsJsonDwgFixture to-dwg   <in.json> <out.dwg>   JSON -> .dwg (ExportDwgFile)
 //   GsJsonDwgFixture from-dwg <in.dwg>  <out.json>  .dwg -> the embedded JSON trailer
+//   GsJsonDwgFixture inspect-dwg <in.dwg> <out.json> Import DWG and snapshot decoded domain data.
 //
 // Not shipped: GoSurvey.exe neither links nor installs this (see CMakeLists.txt).
 #include "CadCommands.hpp"
@@ -25,7 +26,8 @@
 static int Usage() {
   std::fprintf(stderr,
                "usage: GsJsonDwgFixture to-dwg   <in.json> <out.dwg>\n"
-               "       GsJsonDwgFixture from-dwg <in.dwg>  <out.json>\n");
+               "       GsJsonDwgFixture from-dwg <in.dwg>  <out.json>\n"
+               "       GsJsonDwgFixture inspect-dwg <in.dwg> <out.json>\n");
   return 1;
 }
 
@@ -68,11 +70,20 @@ int main(int argc, char** argv) {
     if (argc != 4)
       return Usage();
     const std::string mode = argv[1];
-    if (mode == "to-dwg") {
+    if (mode == "to-dwg" || mode == "inspect-dwg") {
       qputenv("QT_QPA_PLATFORM", "offscreen");
       qputenv("QT_QPA_PLATFORM_PLUGIN_PATH", QCoreApplication::applicationDirPath().toLocal8Bit() + "/qt-plugins/platforms");
       QGuiApplication qtApp(argc, argv);
-      return ToDwg(argv[2], argv[3]);
+      if (mode == "to-dwg") return ToDwg(argv[2], argv[3]);
+      AppCommandState state;
+      state.measureAnnotationText = MeasureQtText;
+      std::vector<std::string> log;
+      const bool imported = ImportDwgFile(state, argv[2], log);
+      for (const auto& line : log) std::fprintf(stderr, "%s\n", line.c_str());
+      if (!imported) return 2;
+      std::ofstream out(argv[3], std::ios::binary | std::ios::trunc);
+      out << SerializeGoSurveyJson(state);
+      return out.good() ? 0 : 3;
     }
     if (mode == "from-dwg")
       return FromDwg(argv[2], argv[3]);

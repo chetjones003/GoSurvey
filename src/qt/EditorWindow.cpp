@@ -1,5 +1,6 @@
 #include "EditorWindow.hpp"
 #include "DrawingDocumentTabBar.hpp"
+#include "StylePreview.hpp"
 #include "QtAccent.hpp"
 #include "EditorChrome.hpp"
 #include "QtAppearance.hpp"
@@ -374,6 +375,8 @@ void InstallDrawingDocumentTabStripImpl(QMainWindow* window, QTabBar* tabs) {
 EditorWindow::EditorWindow(QString developmentBranchLabel)
     : m_DevelopmentBranchLabel(std::move(developmentBranchLabel)) {
   m_State.measureAnnotationText = MeasureQtText;
+  // ADDPOINTTABLE opens the point table dialog in this editor rather than asking typed prompts (REQ-474).
+  m_State.addPointTableDialogAvailable = true;
   // Issue #1083: before any drawing can open, so the zone, grid readouts and the online map work
   // without Drawing Settings having been opened first.
   LoadCoordinateSystemDictionaries();
@@ -774,17 +777,16 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   spaceBar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
   spaceBar->setMinimumHeight(34);
   auto* spaceRow = new QHBoxLayout(spaceBar);
-  spaceRow->setContentsMargins(6, 4, 6, 6);
+  spaceRow->setContentsMargins(6, 0, 6, 0);
   spaceRow->setSpacing(4);
-  m_SpaceTabs = new QTabBar(spaceBar);
+  m_SpaceTabs = new DrawingDocumentTabBar(spaceBar, DrawingDocumentTabBar::Kind::Space);
   m_SpaceTabs->setObjectName("paperSpaceTabs");
-  m_SpaceTabs->setExpanding(true);
-  m_SpaceTabs->setMinimumHeight(m_SpaceTabs->fontMetrics().height() + 10);
   m_SpaceTabs->setContextMenuPolicy(Qt::CustomContextMenu);
   spaceRow->addWidget(m_SpaceTabs, 1);
   auto* manageLayouts = new QToolButton(spaceBar);
   manageLayouts->setObjectName("manageLayoutsButton");
   manageLayouts->setText("Manage layouts…");
+  manageLayouts->setAutoRaise(true);
   spaceRow->addWidget(manageLayouts);
   centerLayout->addWidget(spaceBar);
   setCentralWidget(center);
@@ -809,6 +811,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   annotationScale->setMinimumWidth(110);
   annotationScale->setAccessibleName("Annotation scale");
   annotationScale->setToolTip("Current annotation scale");
+  annotationScale->setMaxVisibleItems(14);
+  annotationScale->setStyleSheet(PopupComboStyleSheet());
   statusBar()->addWidget(annotationScale);
   connect(annotationScale, &QComboBox::activated, this, [this](int index) {
     if (index < 0 || index >= static_cast<int>(m_State.annotationScales.size()) ||
@@ -821,8 +825,11 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
   viewportZoom->setMinimumWidth(110);
   viewportZoom->setAccessibleName("Viewport zoom scale");
   viewportZoom->setToolTip("Model viewport zoom ratio (REQ-458)");
+  viewportZoom->setMaxVisibleItems(14);
+  viewportZoom->setStyleSheet(PopupComboStyleSheet());
   statusBar()->addWidget(viewportZoom);
   connect(viewportZoom, QOverload<int>::of(&QComboBox::activated), this, [this, viewportZoom](int index) {
+    if (viewportZoom->itemData(index).toString() == QLatin1String("__live__")) return;
     if (viewportZoom->itemData(index).toString() == QLatin1String("__add__")) {
       bool ok = false;
       const QString text = QInputDialog::getText(this, "Viewport zoom scale", "Enter ratio (e.g. 1:75):",
@@ -2095,6 +2102,17 @@ void EditorWindow::RefreshToolspace() {
   key << "#layers";
   for (const auto& row : m_State.drawingLayerTable) key << QString::fromUtf8(row.name.c_str());
   key << "#dimension" << QString::fromUtf8(m_State.activeDimensionStyle.name.c_str());
+  // The Settings tree lists every style table, so its names belong in the key too.
+  key << "#dimstyles";
+  for (const auto& style : m_State.dimensionStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#mleaderstyles";
+  for (const auto& style : m_State.multileaderStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#tablestyles";
+  for (const auto& style : m_State.tableStyles) key << QString::fromUtf8(style.name.c_str()) + (style.point ? "|p" : "|d");
+  key << "#pointstyles";
+  for (const auto& style : m_State.surveyPointStyles) key << QString::fromUtf8(style.name.c_str());
+  key << "#pointlabelstyles";
+  for (const auto& style : m_State.surveyPointLabelStyles) key << QString::fromUtf8(style.name.c_str());
   key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
   key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
   for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);
@@ -2171,11 +2189,11 @@ void EditorWindow::RefreshToolspace() {
     points->setIcon(0, ToolspaceIcon("Point.png"));
     points->setData(0, Qt::UserRole + 1, "points");
     auto* pointGroups = new QTreeWidgetItem(root, {"Point Groups"});
-    pointGroups->setIcon(0, ToolspaceIcon("Multi_Point.png"));
+    pointGroups->setIcon(0, ToolspaceIcon("Group.png"));
     pointGroups->setData(0, Qt::UserRole + 1, "pointGroupsFolder");
     for (const auto& group : m_State.pointGroups) {
       auto* entry = new QTreeWidgetItem(pointGroups, {QString::fromUtf8(group.name.c_str())});
-      entry->setIcon(0, ToolspaceIcon("Single_Point.png"));
+      entry->setIcon(0, ToolspaceIcon("Group.png"));
       entry->setData(0, Qt::UserRole + 1, "pointGroup");
     }
     auto* surfaces = new QTreeWidgetItem(root, {"Surfaces"});
@@ -2186,6 +2204,30 @@ void EditorWindow::RefreshToolspace() {
       surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
       surface->setData(0, Qt::UserRole + 1, "surface");  // Qt::UserRole itself is the drawing-tab index
       surface->setData(0, Qt::UserRole + 2, i);
+      // Civil 3D's surface branch: Masks, Watersheds and a Definition node listing what builds it.
+      // These are informational nodes; their data lives in the surface's properties.
+      const CadSurface& source = m_State.cadSurfaces[static_cast<size_t>(i)];
+      const auto folder = [&](QTreeWidgetItem* parent, const QString& label) {
+        auto* node = new QTreeWidgetItem(parent, {label});
+        node->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
+        node->setData(0, Qt::UserRole + 1, "surfaceDefinitionNode");
+        node->setData(0, Qt::UserRole + 2, i);
+        return node;
+      };
+      folder(surface, "Masks");
+      folder(surface, "Watersheds");
+      auto* definition = folder(surface, "Definition");
+      folder(definition, "Boundaries");
+      folder(definition, "Breaklines");
+      folder(definition, "Contours");
+      folder(definition, "DEM Files");
+      folder(definition, "Drawing Objects");
+      folder(definition, "Edits");
+      folder(definition, "Point Files");
+      auto* definitionGroups = folder(definition, "Point Groups");
+      for (const std::string& groupName : source.sourcePointGroups) folder(definitionGroups, QString::fromUtf8(groupName.c_str()));
+      folder(definition, "Point Survey Queries");
+      folder(definition, "Figure Survey Queries");
     }
     auto* blocks = new QTreeWidgetItem(root, {"Blocks"});
     blocks->setIcon(0, ToolspaceIcon("block.png"));
@@ -2213,10 +2255,20 @@ void EditorWindow::RefreshToolspace() {
   // Drawing-level style tables only (REQ-142). App-wide preferences stay in View → Settings.
   RebuildToolspaceTree(m_ToolspaceSettings, [this, drawingOpen] {
     if (!drawingOpen) { (new QTreeWidgetItem(m_ToolspaceSettings, {"No drawing is open"}))->setIcon(0, ToolspaceIcon("info.png")); return; }
+    // Civil 3D's Settings tab: General / Point / Surface collections, each with its own folders.
+    const auto settingsFolder = [](QTreeWidgetItem* parent, const QString& label, const char* role = "settingsFolder") {
+      auto* node = new QTreeWidgetItem(parent, {label});
+      node->setIcon(0, ToolspaceIcon("c3d_workfolder.png"));
+      node->setData(0, Qt::UserRole + 1, role);
+      return node;
+    };
     auto* general = new QTreeWidgetItem(m_ToolspaceSettings, {"General"});
     general->setIcon(0, ToolspaceIcon("settings.png"));
     general->setData(0, Qt::UserRole + 1, "generalFolder");
-    auto* textStyles = new QTreeWidgetItem(general, {"Text Styles"});
+    auto* multipurpose = settingsFolder(general, "Multipurpose Styles");
+    settingsFolder(general, "Label Styles");
+    settingsFolder(general, "Commands");
+    auto* textStyles = new QTreeWidgetItem(multipurpose, {"Text Styles"});
     textStyles->setIcon(0, ToolspaceIcon("Text_Style.png"));
     textStyles->setData(0, Qt::UserRole + 1, "textStylesFolder");
     for (const auto& textStyle : m_State.textStyles) {
@@ -2225,7 +2277,7 @@ void EditorWindow::RefreshToolspace() {
       entry->setData(0, Qt::UserRole + 1, "textStyle");
       entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(textStyle.name.c_str()));
     }
-    auto* layers = new QTreeWidgetItem(general, {"Layers"});
+    auto* layers = new QTreeWidgetItem(multipurpose, {"Layers"});
     layers->setIcon(0, ToolspaceIcon("layers.png"));
     layers->setData(0, Qt::UserRole + 1, "layersFolder");
     for (const auto& row : m_State.drawingLayerTable) {
@@ -2234,27 +2286,74 @@ void EditorWindow::RefreshToolspace() {
       entry->setData(0, Qt::UserRole + 1, "layer");
       entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(row.name.c_str()));
     }
-    auto* dimensionStyles = new QTreeWidgetItem(general, {"Dimension Style"});
+    auto* dimensionStyles = new QTreeWidgetItem(multipurpose, {"Dimension Styles"});
     dimensionStyles->setIcon(0, ToolspaceIcon("Dim_Style.png"));
     dimensionStyles->setData(0, Qt::UserRole + 1, "dimensionFolder");
-    auto* dimensionEntry = new QTreeWidgetItem(dimensionStyles, {QString::fromUtf8(m_State.activeDimensionStyle.name.c_str())});
-    dimensionEntry->setIcon(0, ToolspaceIcon("dimstyle.png"));
-    dimensionEntry->setData(0, Qt::UserRole + 1, "dimensionStyle");
-    dimensionEntry->setData(0, Qt::UserRole + 3, QString::fromUtf8(m_State.activeDimensionStyle.name.c_str()));
-    dimensionStyles->setExpanded(true);
+    for (const auto& dimensionStyle : m_State.dimensionStyles) {
+      QString label = QString::fromUtf8(dimensionStyle.name.c_str());
+      if (dimensionStyle.name == m_State.activeDimensionStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(dimensionStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("dimstyle.png"));
+      entry->setData(0, Qt::UserRole + 1, "dimensionStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(dimensionStyle.name.c_str()));
+    }
+    auto* multileaderStyles = new QTreeWidgetItem(multipurpose, {"Multileader Styles"});
+    multileaderStyles->setIcon(0, ToolspaceIcon("Multileader.png"));
+    multileaderStyles->setData(0, Qt::UserRole + 1, "multileaderStylesFolder");
+    for (const auto& mleaderStyle : m_State.multileaderStyles) {
+      QString label = QString::fromUtf8(mleaderStyle.name.c_str());
+      if (mleaderStyle.name == m_State.activeMultileaderStyle.name)
+        label += QStringLiteral(" (current)");
+      auto* entry = new QTreeWidgetItem(multileaderStyles, {label});
+      entry->setIcon(0, ToolspaceIcon("Multileader.png"));
+      entry->setData(0, Qt::UserRole + 1, "multileaderStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(mleaderStyle.name.c_str()));
+    }
+    multipurpose->setExpanded(true);
     general->setExpanded(true);
+    auto* point = new QTreeWidgetItem(m_ToolspaceSettings, {"Point"});
+    point->setIcon(0, ToolspaceIcon("Single_Point.png"));
+    point->setData(0, Qt::UserRole + 1, "pointSettingsFolder");
+    settingsFolder(point, "User-Defined Property Classifications");
+    auto* pointStyleFolder = settingsFolder(point, "Point Styles");
+    for (const auto& pointStyle : m_State.surveyPointStyles) {
+      auto* entry = new QTreeWidgetItem(pointStyleFolder, {QString::fromUtf8(pointStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Single_Point.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointStyle");
+    }
+    auto* pointLabelFolder = settingsFolder(point, "Label Styles");
+    for (const auto& labelStyle : m_State.surveyPointLabelStyles) {
+      auto* entry = new QTreeWidgetItem(pointLabelFolder, {QString::fromUtf8(labelStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("text.png"));
+      entry->setData(0, Qt::UserRole + 1, "pointLabelStyle");
+    }
+    settingsFolder(point, "Point File Formats");
+    settingsFolder(point, "Description Key Sets");
+    settingsFolder(point, "External Data References");
+    auto* pointTableStyles = settingsFolder(point, "Table Styles", "tableStylesFolder");
+    for (const auto& tableStyle : m_State.tableStyles) {
+      if (!tableStyle.point) continue;
+      auto* entry = new QTreeWidgetItem(pointTableStyles, {QString::fromUtf8(tableStyle.name.c_str())});
+      entry->setIcon(0, ToolspaceIcon("Table.png"));
+      entry->setData(0, Qt::UserRole + 1, "tableStyle");
+      entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(tableStyle.name.c_str()));
+    }
+    settingsFolder(point, "Commands");
+    point->setExpanded(true);
     auto* surface = new QTreeWidgetItem(m_ToolspaceSettings, {"Surface"});
     surface->setIcon(0, ToolspaceIcon("c3d_surfaces.png"));
     surface->setData(0, Qt::UserRole + 1, "surfaceSettingsFolder");
-    auto* surfaceStyles = new QTreeWidgetItem(surface, {"Surface Styles"});
-    surfaceStyles->setIcon(0, ToolspaceIcon("Tint.png"));
-    surfaceStyles->setData(0, Qt::UserRole + 1, "stylesFolder");
+    auto* surfaceStyles = settingsFolder(surface, "Surface Styles", "stylesFolder");
     for (const auto& surfaceStyle : m_State.surfaceStyles) {
       auto* entry = new QTreeWidgetItem(surfaceStyles, {QString::fromUtf8(surfaceStyle.name.c_str())});
       entry->setIcon(0, ToolspaceIcon("Tint.png"));
       entry->setData(0, Qt::UserRole + 1, "style");
       entry->setData(0, Qt::UserRole + 3, QString::fromUtf8(surfaceStyle.name.c_str()));
     }
+    settingsFolder(surface, "Label Styles");
+    settingsFolder(surface, "Table Styles");
+    settingsFolder(surface, "Commands");
     surface->setExpanded(true);
   });
 }
@@ -2267,7 +2366,13 @@ void EditorWindow::Refresh() {
     annotationScale->clear();
     for (const auto& scale : m_State.annotationScales)
       annotationScale->addItem(QString::fromUtf8(CadAnnotationScaleStatusLabel(scale).c_str()));
-    annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    if (m_State.annotationScales.empty()) {
+      // No scale list in this drawing: still show the plot scale it is drawn at, read-only.
+      annotationScale->addItem(QString::fromUtf8(PlotScaleLabel(m_State.drawingInsUnits, m_State.modelUnitsPerPlottedInch).c_str()));
+      annotationScale->setCurrentIndex(0);
+    } else {
+      annotationScale->setCurrentIndex(m_State.currentAnnotationScaleIndex);
+    }
     annotationScale->setEnabled(!m_State.annotationScales.empty());
   }
   if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
@@ -2280,10 +2385,17 @@ void EditorWindow::Refresh() {
     for (const CadAnnotationScale& scale : m_State.viewportZoomScales)
       viewportZoom->addItem(QString::fromUtf8(CadViewportZoomScaleStatusLabel(scale).c_str()));
     viewportZoom->addItem(tr("Add custom scale…"), QStringLiteral("__add__"));
-    if (m_State.currentViewportZoomScaleIndex >= 0)
+    if (m_State.currentViewportZoomScaleIndex >= 0) {
       viewportZoom->setCurrentIndex(m_State.currentViewportZoomScaleIndex);
-    else
-      viewportZoom->setCurrentIndex(-1);
+    } else {
+      // Between presets (after a wheel zoom): show the actual ratio rather than an empty box.
+      const float screenInches = std::max(heightPx / dpi, 1.e-3f);
+      const float modelUnitsPerInch = 100.f / (std::max(m_State.viewportZoom, 1.e-9f) * screenInches);
+      char buf[48];
+      std::snprintf(buf, sizeof(buf), "1:%.4g", modelUnitsPerInch);
+      viewportZoom->addItem(QString::fromLatin1(buf), QStringLiteral("__live__"));
+      viewportZoom->setCurrentIndex(viewportZoom->count() - 1);
+    }
     const bool modelSpace = m_State.activeSpaceIndex == kModelSpaceIndex && !InFloatingModelSpace(m_State);
     viewportZoom->setEnabled(modelSpace && !m_State.viewportZoomScales.empty());
   }
