@@ -99,6 +99,8 @@ struct PointStyleRecord {
     const unsigned char* bytes, std::size_t bitCount, std::size_t stringStart,
     std::size_t stringBitCount);
 
+/// Decodes count handles from the bit offset start, resolving relative handles against objectHandle.
+/// Returns no value for truncated data, unsupported codes or arithmetic overflow.
 [[nodiscard]] std::optional<std::vector<uint64_t>> DecodeHandles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t start,
     std::size_t count, uint64_t objectHandle);
@@ -108,6 +110,9 @@ struct PointStyleRecord {
 [[nodiscard]] std::optional<std::vector<PointLocation>> DecodePointNodeLocations(
     const unsigned char* bytes, std::size_t bitCount);
 
+/// Returns point-number and marker-style handle pairs for a supported point node. handleStart is
+/// a bit offset; commonHandles is the number of handles preceding the style handles. Invalid
+/// point records, references or handle data return no value.
 [[nodiscard]] std::optional<std::vector<std::pair<int, uint64_t>>> DecodePointNodeMarkerStyles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t handleStart,
     std::size_t commonHandles, uint64_t objectHandle);
@@ -168,7 +173,8 @@ struct SurfaceStyleRecord {
 };
 
 /// Civil revision 1214 surface styles: name, the five plan display components and the contour
-/// intervals. Smoothing, label, slope and analysis settings are not decoded. The contour intervals
+/// intervals, plus the smoothing flag and factor when their tagged values match the supported layout.
+/// Smoothing type, label, slope and analysis settings are not decoded. The contour intervals
 /// sit in a fixed sequence of ten tagged values inside the record; the record is refused unless that
 /// sequence and the full set of component headers are present and valid.
 [[nodiscard]] std::optional<SurfaceStyleRecord> DecodeSurfaceStyle(
