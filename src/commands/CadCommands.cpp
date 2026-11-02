@@ -163,6 +163,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pdSize                 = cmd.pdSize;
   doc.cadPipeRuns            = cmd.cadPipeRuns;      // pipe runs are per-drawing (issue #486 / REQ-345)
   doc.cadPipeRunAttrs        = cmd.cadPipeRunAttrs;
+  doc.alignments             = cmd.alignments;       // REQ-480: per-drawing
   doc.cadPipingSystems       = cmd.cadPipingSystems;  // indices into cadPipeRuns — travels with it
   doc.blockDefs              = cmd.blockDefs;
   doc.cadBlockRefs           = cmd.cadBlockRefs;
@@ -284,6 +285,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pdSize                     = doc.pdSize;
   cmd.cadPipeRuns                = doc.cadPipeRuns;      // issue #486 / REQ-345
   cmd.cadPipeRunAttrs            = doc.cadPipeRunAttrs;
+  cmd.alignments                 = doc.alignments;       // REQ-480
   cmd.cadPipingSystems           = doc.cadPipingSystems;
   // The derived swept solids belong to the drawing we are leaving. Their rebuild is gated on a
   // signature over the runs alone, and the incoming drawing can legitimately hash the same (two
@@ -1946,6 +1948,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.pdSize               = st.pdSize;
   snap.cadPipeRuns          = st.cadPipeRuns;      // issue #486 / REQ-345
   snap.cadPipeRunAttrs      = st.cadPipeRunAttrs;
+  snap.alignments           = st.alignments;       // REQ-480
   snap.cadPipingSystems     = st.cadPipingSystems; // issue #486 increment B3 / REQ-345
   snap.blockDefs            = st.blockDefs;
   snap.cadBlockRefs         = st.cadBlockRefs;
@@ -2065,6 +2068,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.pdSize               = snap.pdSize;
   st.cadPipeRuns          = snap.cadPipeRuns;      // issue #486 / REQ-345
   st.cadPipeRunAttrs      = snap.cadPipeRunAttrs;
+  st.alignments           = snap.alignments;       // REQ-480
   st.cadPipingSystems     = snap.cadPipingSystems; // issue #486 increment B3 / REQ-345
   st.pipeRunWorldSolidsSig = 0;  // force RebuildPipeRunWorldSolids to re-derive from the swap
   st.blockDefs            = snap.blockDefs;
@@ -7166,6 +7170,13 @@ const CmdEntry kRegistry[] = {
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
     {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
+    {"alignment", "createalignment", "Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]]"},
+    {"alignmentadd", "", "Add a tangent or curve: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN, ..."},
+    {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
+    {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
+    {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y>"},
+    {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
+    {"createalignmentfromobjects", "", "Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
@@ -8624,6 +8635,21 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float za,
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Spline;
       e.index = static_cast<int>(si);
+      hits.push_back(e);
+    }
+  }
+  // REQ-480: an alignment is tested as the curve it draws (sampled to a hundredth of a unit), by the same rule as
+  // the arc and spline above.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    curvePts.clear();
+    for (const alignment::Point2& p : st.alignments[ai].SampleForDisplay(0.01))
+      curvePts.push_back(ray3d::Vec3{p.x, p.y, 0.0});
+    if (CurveHitsRect(curvePts)) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Alignment;
+      e.index = static_cast<int>(ai);
       hits.push_back(e);
     }
   }
@@ -22723,6 +22749,15 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
         consider(v.x, v.y);
     }
   }
+  // REQ-480 alignments: the exact geometry's bounds (arcs bounded by their extreme points), so ZOOM EXTENTS
+  // frames a drawing that holds only an alignment.
+  for (const alignment::Alignment& al : st.alignments) {
+    alignment::Point2 mn{}, mx{};
+    if (!al.Bounds(&mn, &mx))
+      continue;
+    consider(mn.x, mn.y);
+    consider(mx.x, mx.y);
+  }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
       continue;
@@ -23110,6 +23145,20 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
     }
+  }
+  for (const alignment::Alignment& al : st.alignments) {  // REQ-480
+    alignment::Point2 mn{}, mx{};
+    if (!al.Bounds(&mn, &mx))
+      continue;
+    EntityBox b{};
+    EntityBoxGrowZ(b, 0.0, true);
+    b.mnX = mn.x;
+    b.mxX = mx.x;
+    b.mnY = mn.y;
+    b.mxY = mx.y;
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
   }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     if (EntityHiddenInViewport(vpFilter, st.cadPointAttrs, pi))
@@ -27827,6 +27876,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadSplineAttrs.clear();
   st.cadPoints.clear();  // REQ-456
   st.cadPointAttrs.clear();
+  st.alignments.clear();  // REQ-480
   st.pdMode = 0;
   st.pdSize = 0.0;
   // Pipe runs are CAD geometry too (issue #486 / REQ-345). Left behind, an import into a drawing
@@ -28579,6 +28629,20 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
+
+  // Alignments (REQ-480): display-and-erase like the solids and pipe runs above - the caller's one undo
+  // snapshot already covers this removal.
+  {
+    std::set<int> alignIx;
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
+          static_cast<size_t>(e.index) < st.alignments.size())
+        alignIx.insert(e.index);
+    }
+    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
+      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+  }
+
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
   // pushed one snapshot for this whole erase, so removing it here is that one step).
@@ -29993,6 +30057,21 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         bestD2 = std::min(bestD2, d2Segment(sp[i - 1].x, sp[i - 1].y, sp[i - 1].z, sp[i].x, sp[i].y, sp[i].z));
       consider(e, bestD2);
     }
+  }
+  // REQ-480: an alignment is measured against the chords of its display sampling, the metric the spline uses.
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    if (st.alignments[ai].Empty())
+      continue;
+    const std::vector<alignment::Point2> ap = st.alignments[ai].SampleForDisplay(0.01);
+    if (ap.size() < 2)
+      continue;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Alignment;
+    e.index = static_cast<int>(ai);
+    double bestD2 = 1e300;
+    for (size_t i = 1; i < ap.size(); ++i)
+      bestD2 = std::min(bestD2, d2Segment(ap[i - 1].x, ap[i - 1].y, 0.0, ap[i].x, ap[i].y, 0.0));
+    consider(e, bestD2);
   }
   for (size_t pi = 0; pi < st.cadPoints.size(); ++pi) {
     const CadPoint& p = st.cadPoints[pi];
@@ -46868,6 +46947,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
         plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
         plotTok == "quickprofile" || plotTok == "qprof" ||
+        plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
+        plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
+        plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -46892,6 +46974,20 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")
         RunQuickProfile(st, rest, log);
+      else if (plotTok == "alignment" || plotTok == "createalignment")  // REQ-480 / issue #121
+        RunAlignmentCreate(st, rest, log);
+      else if (plotTok == "alignmentadd")
+        RunAlignmentAdd(st, rest, log);
+      else if (plotTok == "alignmentlist")
+        RunAlignmentList(st, rest, log);
+      else if (plotTok == "alignmentdelete")
+        RunAlignmentDelete(st, rest, log);
+      else if (plotTok == "getstationoffset")
+        RunGetStationOffset(st, rest, log);
+      else if (plotTok == "getpointfromstationoffset")
+        RunGetPointFromStationOffset(st, rest, log);
+      else if (plotTok == "createalignmentfromobjects")
+        RunCreateAlignmentFromObjects(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")
@@ -49470,6 +49566,7 @@ void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
     for (int i = 0; i < (int)cmd.cadSplines.size(); ++i)    addCad({SelectedEntity::Type::Spline, i});
     for (int i = 0; i < (int)cmd.cadPoints.size(); ++i)     addCad({SelectedEntity::Type::Point, i});
+    for (int i = 0; i < (int)cmd.alignments.size(); ++i)    addCad({SelectedEntity::Type::Alignment, i});  // REQ-480
     const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});

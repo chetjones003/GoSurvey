@@ -722,6 +722,49 @@ private Q_SLOTS:
     QVERIFY(window.grab().save(Issue914Shot("qt-803-spline-selected.png")));
   }
 
+  void issue121AlignmentPhase1Screenshots() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+
+    std::vector<std::string> log;
+    const auto run = [&](const char* text) {
+      char buf[256];
+      std::snprintf(buf, sizeof buf, "%s", text);
+      ProcessCommandLineSubmit(buf, sizeof buf, window.State(), log);
+    };
+    run("ALIGNMENT Main Road, Two-lane road, 5+00");
+    run("ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90");
+    run("ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT");
+    run("ALIGNMENTADD Main Road, TANGENT, 60");
+    run("ALIGNMENTADD Main Road, CURVE, 60, 50, LEFT");
+    run("ALIGNMENTADD Main Road, TANGENT, 50");
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    run("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-drawn.png")));
+
+    window.State().selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    QTest::qWait(250);
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-selected-properties.png")));
+
+    // Cursor 6 units to the right of the first tangent: the status bar reports station / offset / bearing.
+    const alignment::Alignment& al = window.State().alignments[0];
+    const alignment::Point2 on = al.GetPointFromStationOffset(al.StartStation() + 60.0, 6.0);
+    window.State().alignmentCursorReadout = AlignmentCursorReadout(window.State(), on.x, on.y, 50.0);
+    QVERIFY(!window.State().alignmentCursorReadout.empty());
+    window.m_Viewport->cursorChanged(on.x, on.y, 0.0);
+    QTest::qWait(150);
+    QVERIFY(window.m_Coordinates->text().contains("STA "));
+    QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-cursor-readout.png")));
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

@@ -515,6 +515,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # issue #142). Same TU rules; entry points declared in CadCommands.hpp.
   src/commands/CadCommands_Align.cpp
   src/commands/CadCommands_Geo.cpp
+  src/commands/CadCommands_Alignment.cpp
   src/commands/ProjectSettings.cpp
   src/commands/ProjectPoints.cpp
   # REQ-383 (#696 P9): the warnings before destructive / cross-project actions on shared data
@@ -647,6 +648,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
   src/update/UpdateCheck.cpp
 
+  # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
+  src/alignment/Alignment.cpp
   # Geometry math (util)
   src/util/geom2d.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
@@ -1210,6 +1213,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadTableTests.cpp
     tests/CadBlockTests.cpp
     tests/CadPipeRunTests.cpp
+    tests/AlignmentTests.cpp
+    tests/AlignmentCommandTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp

@@ -1371,6 +1371,36 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  // REQ-490 alignments (issue #121 Phase 1): the geometry points a designer snaps to - beginning, end, PC, PT,
+  // PI (a point no geometry passes through), curve centre and midpoints - plus Nearest on the true curve.
+  // Computed from the exact geometry, never from a tessellation.
+  for (const alignment::Alignment& al : cmd.alignments) {
+    if (al.Empty())
+      continue;
+    if (wantEndpoint || wantMidpoint || wantCenter) {
+      for (const alignment::GeometryPoint& gp : al.GeometryPoints()) {
+        using GC = alignment::GeometryPointCode;
+        Kind k = Kind::Endpoint;
+        if (gp.code == GC::CurveCenter) {
+          if (!wantCenter) continue;
+          k = Kind::Center;
+        } else if (gp.code == GC::LineMidPt || gp.code == GC::CurveMidPt) {
+          if (!wantMidpoint) continue;
+          k = Kind::Midpoint;
+        } else if (!wantEndpoint) {
+          continue;
+        }
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(gp.point.x),
+                 SnapFloatCoordinate(gp.point.y), k, tolWorld, 0.0f);
+      }
+    }
+    if (wantNearest) {
+      const alignment::Point2 n = al.GetClosestPoint(static_cast<double>(wx), static_cast<double>(wy));
+      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(n.x),
+               SnapFloatCoordinate(n.y), Kind::Nearest, tolWorld, 0.0f);
+    }
+  }
+
   if (wantEndpoint) {
     for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&

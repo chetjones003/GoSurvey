@@ -362,6 +362,7 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.alignments = &m_State.alignments;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;
@@ -500,6 +501,7 @@ void EditorViewport::paintGL() {
     ext.circleNormals = &m_State.userCircleNormals;
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
+    ext.alignments = &m_State.alignments;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;
@@ -1227,6 +1229,7 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
     m_State.uiCursorWorldX = static_cast<float>(CadCoord::WorldXFromLocal(m_State, m_Cursor.x));
     m_State.uiCursorWorldY = static_cast<float>(CadCoord::WorldYFromLocal(m_State, m_Cursor.y));
     m_State.uiCursorWorldZ = static_cast<float>(m_Cursor.z);
+    m_State.alignmentCursorReadout = AlignmentCursorReadout(m_State, m_Cursor.x, m_Cursor.y, camera.orthoHalfH * 0.1);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
     if (submitLockedInput && submitLockedInput()) { event->accept(); update(); return; }
     if (m_State.active == AppCommandState::Kind::None && paperModifyActive &&
@@ -1861,6 +1864,7 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
       if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &length)) ann.rotationRad = CadDimReadableTextRotation(std::atan2(ty, tx));
       BumpCadGpuCache(m_State);
     }
+    m_State.alignmentCursorReadout = AlignmentCursorReadout(m_State, m_Cursor.x, m_Cursor.y, camera.orthoHalfH * 0.1);
     if (cursorChanged) cursorChanged(m_Cursor.x, m_Cursor.y, m_Cursor.z);
   }
   update();

@@ -284,6 +284,7 @@ void LoadBlockPrimitivesIntoDrawing(AppCommandState& st, const CadBlockContent& 
   st.cadPipeRuns.clear();
   st.cadPipeRunAttrs.clear();
   st.cadPipingSystems.clear();  // issue #486 increment B3 / REQ-345 — same reason as cadPipeRuns above
+  st.alignments.clear();  // REQ-480: model-space objects, never block content
   st.cadBlockRefs.clear();
   st.cadBlockRefAttrs.clear();
   st.surveyPoints.clear();

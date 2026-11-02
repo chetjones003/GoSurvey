@@ -10,6 +10,7 @@
 #include <QPainter>
 
 #include "CadColor.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "CadPropertyEdit.hpp"
 #include "CadUiStyleWidgets.hpp"
@@ -606,6 +607,36 @@ void EditorWindow::RefreshProperties() {
       readOnly(rows, "Closed", sp.periodic ? "Yes" : "No", "propSplineClosed");
       readOnly(rows, "Point count", QString::number(spline::EditablePointCount(sp)), "propSplinePointCount");
       readOnly(rows, "Length", fmt(spline::Length(sp)), "propSplineLength");
+    }
+  }
+  if (st.selection.size() == 1 && st.selection.front().type == SelectedEntity::Type::Alignment) {  // REQ-501.1
+    const int index = st.selection.front().index;
+    if (index >= 0 && static_cast<size_t>(index) < st.alignments.size()) {
+      const alignment::Alignment& al = st.alignments[static_cast<size_t>(index)];
+      auto* rows = section("Alignment", "propertiesAlignment");
+      static const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
+      readOnly(rows, "Name", Text(al.name), "propAlignmentName");
+      readOnly(rows, "Description", Text(al.description), "propAlignmentDescription");
+      readOnly(rows, "Type", kTypeNames[static_cast<int>(al.type)], "propAlignmentType");
+      readOnly(rows, "Style", Text(al.style), "propAlignmentStyle");
+      readOnly(rows, "Layer", Text(al.layer), "propAlignmentLayer");
+      if (!al.Empty()) {
+        const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
+        const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
+        constexpr double kRadToDeg = 180.0 / alignment::kPi;
+        readOnly(rows, "Start station", Text(alignment::FormatStation(al.StartStation())), "propAlignmentStartStation");
+        readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations())), "propAlignmentEndStation");
+        readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
+        readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),
+                 "propAlignmentStart");
+        readOnly(rows, "End coordinate", fmt(al.EndPoint().x + ox) + ", " + fmt(al.EndPoint().y + oy), "propAlignmentEnd");
+        readOnly(rows, "Start bearing", Text(FormatBearing(al.StartAzimuth() * kRadToDeg, angles)), "propAlignmentStartBearing");
+        readOnly(rows, "End bearing", Text(FormatBearing(al.EndAzimuth() * kRadToDeg, angles)), "propAlignmentEndBearing");
+      }
+      readOnly(rows, "Entity count", QString::number(al.Entities().size()), "propAlignmentEntities");
+      readOnly(rows, "Curve count", QString::number(al.CurveCount()), "propAlignmentCurves");
+      readOnly(rows, "Spiral count", "0", "propAlignmentSpirals");
+      readOnly(rows, "Station equations", QString::number(al.equations.size()), "propAlignmentEquations");
     }
   }
   if (!st.selectedSurveyPointIndices.empty()) {

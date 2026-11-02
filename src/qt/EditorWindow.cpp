@@ -766,7 +766,8 @@ EditorWindow::EditorWindow(QString developmentBranchLabel)
     m_DynamicCursor = {x + m_State.worldDocumentOriginX, y + m_State.worldDocumentOriginY, z};
     const auto local = ucs::WorldToUcs(m_State.activeUcs, m_DynamicCursor);
     m_Coordinates->setText(QString("%1  X %2   Y %3   Z %4").arg(CadUcsIsWorld(m_State) ? "WCS" : "UCS")
-        .arg(local.x, 0, 'f', 4).arg(local.y, 0, 'f', 4).arg(local.z, 0, 'f', 4));
+        .arg(local.x, 0, 'f', 4).arg(local.y, 0, 'f', 4).arg(local.z, 0, 'f', 4)
+        + (m_State.alignmentCursorReadout.empty() ? QString() : QString("   |   ") + QString::fromUtf8(m_State.alignmentCursorReadout.c_str())));
     RefreshDraftingInput();
   };
   modelLayout->addWidget(m_Viewport, 1);
@@ -2164,6 +2165,8 @@ void EditorWindow::RefreshToolspace() {
   for (const auto& style : m_State.surveyPointLabelStyles) key << QString::fromUtf8(style.name.c_str());
   key << "#root" << QString::fromStdString(ToolspaceActiveDrawingName(m_State));
   key << "#featurelines" << QString::number(ToolspaceFeatureLineCount(m_State));
+  key << "#alignments";
+  for (const auto& al : m_State.alignments) key << QString::fromStdString(al.name);
   for (size_t i = 0; i < m_State.featureLineInfo.size(); ++i) key << QString::fromStdString(m_State.featureLineInfo[i].name);
   key << (drawingOpen ? "#open" : "#closed");
   // The Toolspace trees are rebuilt only when what they list changes. Refresh() runs on every viewport click,
@@ -2298,6 +2301,18 @@ void EditorWindow::RefreshToolspace() {
       entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
       entry->setData(0, Qt::UserRole + 1, "featureLine");
       entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+    }
+    // Alignments (REQ-480.4): listed only when the drawing has at least one.
+    if (!m_State.alignments.empty()) {
+      auto* alignments = new QTreeWidgetItem(root, {"Alignments"});
+      alignments->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+      alignments->setData(0, Qt::UserRole + 1, "alignmentsFolder");
+      for (size_t i = 0; i < m_State.alignments.size(); ++i) {
+        auto* entry = new QTreeWidgetItem(alignments, {QString::fromStdString(m_State.alignments[i].name)});
+        entry->setIcon(0, ToolspaceIcon("c3d_featureline.png"));
+        entry->setData(0, Qt::UserRole + 1, "alignment");
+        entry->setData(0, Qt::UserRole + 2, static_cast<int>(i));
+      }
     }
   });
 

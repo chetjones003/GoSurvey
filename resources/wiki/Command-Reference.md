@@ -159,6 +159,18 @@ for a compact list inside the program.
 | `TRAVERSE` | `TRAV`, `TRAVERSEEDITOR` | Open the Traverse Editor | [[Commands/traverse]] |
 | `VIEWPOINTS` | `VWPTS` | View / edit survey points | [[Commands/viewpoints]] |
 
+### Alignments
+
+| Command | Aliases | Description | Details |
+|---|---|---|---|
+| `ALIGNMENT` | `CREATEALIGNMENT` | Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]] | [[Commands/alignment]] |
+| `ALIGNMENTADD` | — | Add a tangent or curve: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN, ... | [[Commands/alignmentadd]] |
+| `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
+| `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
+| `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y> | [[Commands/getstationoffset]] |
+| `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
+| `CREATEALIGNMENTFROMOBJECTS` | — | Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE] | [[Commands/createalignmentfromobjects]] |
+
 ### Surfaces and volumes
 
 | Command | Aliases | Description | Details |
@@ -275,6 +287,10 @@ for a compact list inside the program.
 |---|---|---|
 | `3DPOLY` | `3DP`, `3DPOLYLINE` | [[Commands/3dpoly]] |
 | `ALIGN` | `AL` | [[Commands/align]] |
+| `ALIGNMENT` | `CREATEALIGNMENT` | [[Commands/alignment]] |
+| `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
+| `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
+| `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ARC` | — | [[Commands/arc]] |
 | `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |
@@ -306,6 +322,7 @@ for a compact list inside the program.
 | `COPY` | `CP` | [[Commands/copy]] |
 | `COPYCLIP` | — | [[Commands/copyclip]] |
 | `COPYSEL` | — | [[Commands/copysel]] |
+| `CREATEALIGNMENTFROMOBJECTS` | — | [[Commands/createalignmentfromobjects]] |
 | `CREATEPOINTS` | `CRTPTS` | [[Commands/createpoints]] |
 | `CROSSHAIR3D` | `CURSOR3D`, `XHAIR3D` | [[Commands/crosshair3d]] |
 | `CYLINDER` | `CYL` | [[Commands/cylinder]] |
@@ -332,6 +349,8 @@ for a compact list inside the program.
 | `FLELEV` | — | [[Commands/flelev]] |
 | `FLELEVEDIT` | — | [[Commands/flelevedit]] |
 | `FOV` | `LENS` | [[Commands/fov]] |
+| `GETPOINTFROMSTATIONOFFSET` | — | [[Commands/getpointfromstationoffset]] |
+| `GETSTATIONOFFSET` | — | [[Commands/getstationoffset]] |
 | `GIZMO` | — | [[Commands/gizmo]] |
 | `HATCH` | `H`, `BHATCH` | [[Commands/hatch]] |
 | `HELP` | — | [[Commands/help]] |

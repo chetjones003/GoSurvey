@@ -2744,6 +2744,38 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
+        // REQ-495 alignments: exact tangents and curves, sampled ONLY for display to a quarter of a pixel at this
+        // zoom (a query or export never sees these samples). Z is 0: an alignment is horizontal (REQ-480.3).
+        if (extended->alignments) {
+          const double pixelWorld = 2.0 * static_cast<double>(halfH) / std::max(1.0, static_cast<double>(fbHeight));
+          const double alignTol = std::max(1e-6, 0.25 * pixelWorld);
+          for (const alignment::Alignment& al : *extended->alignments) {
+            if (al.Empty())
+              continue;
+            EntityAttributes attr{};
+            attr.id = al.id;
+            attr.layer = al.layer;
+            if (CadEntityIdHidden(hiddenIds, attr.id))
+              continue;
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const std::vector<alignment::Point2> pts = al.SampleForDisplay(alignTol);
+            if (pts.size() < 2)
+              continue;
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+            float rgba[4];
+            ResolveEntityRgbaForViewport(attr, lr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
+            const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+            std::vector<float> xy(pts.size() * 2);
+            for (size_t i = 0; i < pts.size(); ++i) {
+              xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+              xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+            }
+            CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba,
+                                         &cpuVcLines_);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+          }
+        }
         if (extended->points && !extended->points->empty()) {
           const double viewH = 2.0 * static_cast<double>(halfH);
           const double halfSize = CadPointMarkerSize(extended->pdSize, viewH);

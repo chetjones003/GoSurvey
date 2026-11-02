@@ -2148,6 +2148,46 @@ json BuildRoot(const AppCommandState& st) {
     doc["pipeRunAttrs"] = std::move(pipeRunAttrs);
   }
 
+  // Alignments (REQ-480 / REQ-496, ADR-075). Additive and omitted when there are none. Exact parameters
+  // only - never a sampled polyline (REQ-480.2) - in drawing-local doubles.
+  if (!st.alignments.empty()) {
+    json arr = json::array();
+    for (const alignment::Alignment& a : st.alignments) {
+      json o;
+      o["id"] = a.id;
+      o["name"] = a.name;
+      if (!a.description.empty()) o["description"] = a.description;
+      o["layer"] = a.layer;
+      o["style"] = a.style;
+      o["type"] = static_cast<int>(a.type);
+      o["startingStation"] = a.startingStation;
+      json ents = json::array();
+      for (const alignment::Entity& e : a.Entities()) {
+        json q;
+        q["k"] = e.kind == alignment::EntityKind::Line ? "L" : "A";
+        q["x"] = e.start.x;
+        q["y"] = e.start.y;
+        q["az"] = e.startAzimuth;
+        q["len"] = e.length;
+        if (e.kind == alignment::EntityKind::Arc) {
+          q["r"] = e.radius;
+          q["right"] = e.right;
+        }
+        q["c"] = static_cast<int>(e.constraint);
+        ents.push_back(std::move(q));
+      }
+      o["entities"] = std::move(ents);
+      if (!a.equations.empty()) {
+        json eqs = json::array();
+        for (const alignment::StationEquation& q : a.equations)
+          eqs.push_back({{"rawBack", q.rawBack}, {"ahead", q.ahead}, {"increasing", q.increasing}});
+        o["equations"] = std::move(eqs);
+      }
+      arr.push_back(std::move(o));
+    }
+    doc["alignments"] = std::move(arr);
+  }
+
   // Piping networks (issue #486 increment B3 / REQ-345). Additive and omitted when there are none,
   // same ADR-020 (d) shape as pipeRuns just above — a network is metadata only (a name plus indices
   // into pipeRuns), never geometry.
@@ -3886,6 +3926,61 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       st.cadPipeRunAttrs.push_back(EntityAttributesFromJson(o));
   st.cadPipeRunAttrs.resize(st.cadPipeRuns.size());  // keep the parallel arrays length-locked
 
+  // Alignments (REQ-480 / REQ-496). Guarded, so a drawing written before them simply has none. An invalid
+  // entity (REQ-499: non-positive length or radius) drops THAT alignment; the entity setter refuses what the
+  // spec forbids, so a corrupt entity can never be stored.
+  st.alignments.clear();
+  if (doc.contains("alignments") && doc["alignments"].is_array()) {
+    for (const auto& el : doc["alignments"]) {
+      if (!el.is_object()) continue;
+      alignment::Alignment a;
+      if (el.contains("id") && el["id"].is_number_unsigned()) a.id = el["id"].get<std::uint64_t>();
+      if (el.contains("name") && el["name"].is_string()) a.name = el["name"].get<std::string>();
+      if (el.contains("description") && el["description"].is_string()) a.description = el["description"].get<std::string>();
+      if (el.contains("layer") && el["layer"].is_string()) a.layer = el["layer"].get<std::string>();
+      if (el.contains("style") && el["style"].is_string()) a.style = el["style"].get<std::string>();
+      if (el.contains("type") && el["type"].is_number_integer()) {
+        const int t = el["type"].get<int>();
+        if (t >= 1 && t <= 5) a.type = static_cast<alignment::AlignmentType>(t);
+      }
+      if (el.contains("startingStation") && el["startingStation"].is_number())
+        a.startingStation = el["startingStation"].get<double>();
+      bool ok = el.contains("entities") && el["entities"].is_array();
+      if (ok) {
+        for (const auto& q : el["entities"]) {
+          alignment::Entity e;
+          e.kind = (q.contains("k") && q["k"].is_string() && q["k"].get<std::string>() == "A") ? alignment::EntityKind::Arc
+                                                                                                : alignment::EntityKind::Line;
+          if (q.contains("x") && q["x"].is_number()) e.start.x = q["x"].get<double>();
+          if (q.contains("y") && q["y"].is_number()) e.start.y = q["y"].get<double>();
+          if (q.contains("az") && q["az"].is_number()) e.startAzimuth = q["az"].get<double>();
+          if (q.contains("len") && q["len"].is_number()) e.length = q["len"].get<double>();
+          if (q.contains("r") && q["r"].is_number()) e.radius = q["r"].get<double>();
+          if (q.contains("right") && q["right"].is_boolean()) e.right = q["right"].get<bool>();
+          if (q.contains("c") && q["c"].is_number_integer()) {
+            const int c = q["c"].get<int>();
+            if (c >= 0 && c <= 3) e.constraint = static_cast<alignment::Entity::Constraint>(c);
+          }
+          if (!a.AppendRaw(e)) {
+            ok = false;
+            break;
+          }
+        }
+      }
+      if (!ok) continue;  // an alignment with no geometry yet is valid (REQ-480: ALIGNMENT creates it empty)
+      if (el.contains("equations") && el["equations"].is_array()) {
+        for (const auto& q : el["equations"]) {
+          alignment::StationEquation eq;
+          if (q.contains("rawBack") && q["rawBack"].is_number()) eq.rawBack = q["rawBack"].get<double>();
+          if (q.contains("ahead") && q["ahead"].is_number()) eq.ahead = q["ahead"].get<double>();
+          if (q.contains("increasing") && q["increasing"].is_boolean()) eq.increasing = q["increasing"].get<bool>();
+          (void)a.AddStationEquation(eq);  // a refused equation is dropped, never stored half-valid
+        }
+      }
+      st.alignments.push_back(std::move(a));
+    }
+  }
+
   // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them
   // simply has none. An out-of-range index (a hand-edited or corrupted file) is dropped rather than
   // trusted — REQ-201: nothing invalid is ever stored, and pipeRuns above is already loaded so its
@@ -4606,7 +4701,7 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
              "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
              "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
-             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
+             "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "alignments", "surfaces",
              "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 

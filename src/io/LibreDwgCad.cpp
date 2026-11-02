@@ -7503,6 +7503,37 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         AppendGosurveyStringEed(dwg, pl->parent, {info.name, info.description});
     }
   }
+  // REQ-496.2 / issue #121: an alignment is exported as ORDINARY AutoCAD LINE and ARC entities on its layer,
+  // tagged with its name in GOSURVEY XDATA, so any DWG reader draws it without Recover. This is display and
+  // interchange only: GoSurvey's own reopen prefers the lossless ADR-044 trailer (exact parameters), so these
+  // entities are never re-read as a second copy. Phase 3 spirals will be sampled to the REQ-495 tolerance here.
+  for (const alignment::Alignment& al : st.alignments) {
+    EntityAttributes alAttrs{};
+    alAttrs.layer = al.layer;
+    for (size_t ei = 0; ei < al.Entities().size(); ++ei) {
+      const alignment::Entity& ae = al.Entities()[ei];
+      Dwg_Object_Entity* parent = nullptr;
+      const double ox = st.worldDocumentOriginX, oy = st.worldDocumentOriginY;
+      if (ae.kind == alignment::EntityKind::Line) {
+        const alignment::Point2 e = al.GetPointAtStation(al.EntityEndStation(static_cast<int>(ei)));
+        dwg_point_3d a{ae.start.x + ox, ae.start.y + oy, 0.0};
+        dwg_point_3d b{e.x + ox, e.y + oy, 0.0};
+        if (Dwg_Entity_LINE* ln = dwg_add_LINE(hdr, &a, &b)) parent = ln->parent;
+      } else {
+        alignment::CurveData cd;
+        if (!al.CurveDataFor(static_cast<int>(ei), &cd)) continue;
+        const double aStart = std::atan2(ae.start.y - cd.center.y, ae.start.x - cd.center.x);
+        const double aEnd = std::atan2(cd.pt.y - cd.center.y, cd.pt.x - cd.center.x);
+        dwg_point_3d c{cd.center.x + ox, cd.center.y + oy, 0.0};
+        // A DWG ARC always runs counter-clockwise; a right (clockwise) alignment curve runs end -> start.
+        if (Dwg_Entity_ARC* ar = dwg_add_ARC(hdr, &c, ae.radius, ae.right ? aEnd : aStart, ae.right ? aStart : aEnd))
+          parent = ar->parent;
+      }
+      if (parent == nullptr) continue;
+      apply(parent, &alAttrs);
+      AppendGosurveyStringEed(dwg, parent, {"ALIGNMENT", al.name});
+    }
+  }
   for (size_t i = 0; i < st.userEllipses.size(); ++i) {
     const CadEllipse& el = st.userEllipses[i];
     dwg_point_3d c{};

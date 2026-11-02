@@ -4,6 +4,7 @@
 #include <limits>
 
 #include "CadEntities.hpp"
+#include "alignment/Alignment.hpp"  // REQ-480 / ADR-075: per-drawing alignment store
 #include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
@@ -150,7 +151,10 @@ struct SelectedEntity {
     /// STRETCH refuse it by name (\ref DropSplinesFromSelection).
     Spline = 19,
     /// CAD POINT (REQ-456 / issue #1019). Appended after Spline so existing type values stay stable.
-    Point = 20
+    Point = 20,
+    /// Horizontal alignment (REQ-480 / issue #121). Appended after Point so existing values stay stable.
+    /// Phase 1: selects, highlights, erases and reports; whole-object transforms arrive with Phase 2 editing.
+    Alignment = 21
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -850,6 +854,8 @@ struct CadExtendedGeometryInput {
   /// REQ-443 splines (NURBS curves), tessellated by the renderer to the view.
   const std::vector<CadSpline>* splines = nullptr;
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
+  /// Horizontal alignments (REQ-480/495, issue #121). Drawn from the exact geometry, sampled for display only.
+  const std::vector<alignment::Alignment>* alignments = nullptr;
   /// REQ-456 CAD POINT entities.
   const std::vector<CadPoint>* points = nullptr;
   const std::vector<EntityAttributes>* pointAttrs = nullptr;
@@ -922,6 +928,8 @@ template <class VT>
   if (e.blockRefs != nullptr && !e.blockRefs->empty())
     return true;
   if (e.splines != nullptr && !e.splines->empty())
+    return true;
+  if (e.alignments != nullptr && !e.alignments->empty())
     return true;
   if (e.points != nullptr && !e.points->empty())
     return true;
@@ -1373,6 +1381,7 @@ struct DrawingGeometrySnapshot {
   /// LoadBlockPrimitivesIntoDrawing), and cadPipeRuns simply arrived after that pass was written.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   /// Named piping networks (issue #486 increment B3 / REQ-345) — swapped alongside `cadPipeRuns`
   /// for the same BEDIT-isolation reason the comment above states: a network's indices are only
   /// meaningful against the drawing's OWN `cadPipeRuns`, so it must travel with it, not stay behind.
@@ -1567,6 +1576,7 @@ struct DrawingDocument {
   /// data rebuilt from these by signature, exactly like `blockRefWorldSolids`.
   std::vector<CadPipeRun>       cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<CadPipingSystem>  cadPipingSystems;
   std::vector<CadBlockDefinition> blockDefs;
   std::vector<CadBlockRef>        cadBlockRefs;
@@ -2774,6 +2784,7 @@ struct AppCommandState {
   double polarIncrementDeg = 90.0;
   std::vector<double> polarExtraAnglesDeg;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
+  std::string alignmentCursorReadout;  ///< REQ-501.2: station/offset/bearing under the cursor; UI-only, never saved
   float uiCursorWorldX = 0.f;
   float uiCursorWorldY = 0.f;
   /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
@@ -3570,6 +3581,7 @@ struct AppCommandState {
   /// solid array.
   std::vector<CadPipeRun> cadPipeRuns;
   std::vector<EntityAttributes> cadPipeRunAttrs;
+  std::vector<alignment::Alignment> alignments;  ///< REQ-480: horizontal alignments, drawing-local doubles
   std::vector<CadSolidPtr> pipeRunWorldSolids;
   std::vector<EntityAttributes> pipeRunWorldSolidAttrs;
   /// Which `cadPipeRuns` index each `pipeRunWorldSolids` entry came from (issue #486, selection
@@ -8015,6 +8027,19 @@ struct DrawingTransformFactors {
 /// The inverse of \ref DrawingPointToGrid: the LOCAL drawing point (x, y) of a grid coordinate in the
 /// zone's unit. Fails, with the reason, exactly when DrawingPointToGrid would.
 [[nodiscard]] geo::GeoResult GridToDrawingPoint(const AppCommandState& st, double easting, double northing);
+
+// --- Alignments (REQ-480..485, 501; GitHub issue #121 Phase 1; CadCommands_Alignment.cpp) ----------------
+// Typed-argument commands, dispatched from ProcessCommandLineSubmit. Geometry lives in alignment/Alignment.hpp.
+void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
+/// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
+[[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);
 
 // --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
 /// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"

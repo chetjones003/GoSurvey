@@ -412,6 +412,16 @@ void ListModelEntity(const AppCommandState& st, const SelectedEntity& e, std::ve
                     log);
     return;
   }
+  if (e.type == T::Alignment) {  // REQ-480
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      return;
+    const alignment::Alignment& al = st.alignments[static_cast<size_t>(e.index)];
+    char buf[256];
+    std::snprintf(buf, sizeof(buf), "ALIGNMENT  Name: %s  Layer: %s  Entities: %zu  Length: %s", al.name.c_str(),
+                  layer.c_str(), al.Entities().size(), FormatLinear(al.Length(), prec).c_str());
+    log.push_back(buf);
+    return;
+  }
   if (e.type == T::Spline) {
     if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadSplines.size())
       return;

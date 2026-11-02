@@ -1,0 +1,881 @@
+#include "alignment/Alignment.hpp"
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
+#include <utility>
+
+namespace alignment {
+namespace {
+
+double NormAz(double a) {
+  a = std::fmod(a, kTwoPi);
+  if (a < 0.0) a += kTwoPi;
+  return a;
+}
+
+/// sin(x)/x without the cancellation near zero (long, shallow curves; REQ-499).
+double Sinc(double x) {
+  if (std::fabs(x) < 1e-4) {
+    const double x2 = x * x;
+    return 1.0 - x2 / 6.0 + x2 * x2 / 120.0;
+  }
+  return std::sin(x) / x;
+}
+
+Point2 Add(Point2 a, double dx, double dy) { return {a.x + dx, a.y + dy}; }
+
+double Dist(Point2 a, Point2 b) { return std::hypot(a.x - b.x, a.y - b.y); }
+
+/// Displacement from an entity start after travelling `s` along it, relative to the start.
+Point2 LocalDisplacement(const Entity& e, double s) {
+  if (e.kind == EntityKind::Line) return {s * std::sin(e.startAzimuth), s * std::cos(e.startAzimuth)};
+  const double theta = (e.right ? 1.0 : -1.0) * s / e.radius;
+  const double chord = s * Sinc(theta * 0.5);
+  const double mid = e.startAzimuth + theta * 0.5;
+  return {chord * std::sin(mid), chord * std::cos(mid)};
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------- building
+
+void Alignment::Rebuild() {
+  cumStart_.assign(entities_.size() + 1, 0.0);
+  for (size_t i = 0; i < entities_.size(); ++i) cumStart_[i + 1] = cumStart_[i] + entities_[i].length;
+  length_ = cumStart_.back();
+}
+
+void Alignment::Clear() {
+  entities_.clear();
+  Rebuild();
+}
+
+double Alignment::SignedCurvature(const Entity& e) const {
+  if (e.kind == EntityKind::Line) return 0.0;
+  return (e.right ? 1.0 : -1.0) / e.radius;
+}
+
+Point2 Alignment::PointInEntity(int i, double s) const {
+  const Entity& e = entities_[static_cast<size_t>(i)];
+  const Point2 d = LocalDisplacement(e, s);
+  return Add(e.start, d.x, d.y);
+}
+
+double Alignment::AzimuthInEntity(int i, double s) const {
+  const Entity& e = entities_[static_cast<size_t>(i)];
+  return NormAz(e.startAzimuth + SignedCurvature(e) * s);
+}
+
+bool Alignment::AppendRaw(const Entity& e) {
+  if (!(e.length > 0.0) || !std::isfinite(e.length) || !std::isfinite(e.start.x) || !std::isfinite(e.start.y) ||
+      !std::isfinite(e.startAzimuth))
+    return false;
+  if (e.kind == EntityKind::Arc) {
+    if (!(e.radius > 0.0) || !std::isfinite(e.radius)) return false;
+    if (e.length / e.radius >= kTwoPi) return false;  // a full circle is not an alignment curve
+  }
+  Entity c = e;
+  c.startAzimuth = NormAz(c.startAzimuth);
+  entities_.push_back(c);
+  Rebuild();
+  return true;
+}
+
+bool Alignment::AppendTangent(Point2 start, double azimuth, double length) {
+  Entity e;
+  e.kind = EntityKind::Line;
+  e.start = start;
+  e.startAzimuth = azimuth;
+  e.length = length;
+  return AppendRaw(e);
+}
+
+bool Alignment::AppendTangent(double length) {
+  if (entities_.empty()) return false;  // the first entity needs an explicit start and azimuth
+  return AppendTangent(EndPoint(), EndAzimuth(), length);
+}
+
+bool Alignment::AppendTangentTo(Point2 end) {
+  if (entities_.empty()) return false;
+  const Point2 from = EndPoint();
+  const double dx = end.x - from.x;
+  const double dy = end.y - from.y;
+  const double len = std::hypot(dx, dy);
+  if (!(len > 0.0)) return false;
+  return AppendTangent(from, std::atan2(dx, dy), len);
+}
+
+bool Alignment::AppendCurve(double radius, double arcLength, bool right) {
+  if (entities_.empty()) return false;
+  Entity e;
+  e.kind = EntityKind::Arc;
+  e.start = EndPoint();
+  e.startAzimuth = EndAzimuth();
+  e.radius = radius;
+  e.length = arcLength;
+  e.right = right;
+  return AppendRaw(e);
+}
+
+bool Alignment::AppendCurveByDelta(double radius, double delta, bool right) {
+  return AppendCurve(radius, radius * delta, right);
+}
+
+bool Alignment::Reverse(std::string* note) {
+  if (entities_.empty()) return false;
+  for (const ContinuityIssue& c : CheckContinuity()) {
+    if (!c.c0) return false;
+  }
+  std::vector<Entity> rev;
+  rev.reserve(entities_.size());
+  for (int i = static_cast<int>(entities_.size()) - 1; i >= 0; --i) {
+    Entity e = entities_[static_cast<size_t>(i)];
+    const Point2 end = PointInEntity(i, e.length);
+    const double endAz = AzimuthInEntity(i, e.length);
+    e.start = end;
+    e.startAzimuth = NormAz(endAz + kPi);
+    if (e.kind == EntityKind::Arc) e.right = !e.right;
+    rev.push_back(e);
+  }
+  entities_ = std::move(rev);
+  Rebuild();
+  if (!equations.empty() && note != nullptr)
+    *note = std::to_string(equations.size()) + " station equation(s) cleared by the reversal";
+  equations.clear();
+  return true;
+}
+
+// ---------------------------------------------------------------- basic data
+
+double Alignment::EntityStartStation(int i) const { return startingStation + cumStart_[static_cast<size_t>(i)]; }
+double Alignment::EntityEndStation(int i) const { return startingStation + cumStart_[static_cast<size_t>(i) + 1]; }
+
+Point2 Alignment::StartPoint() const { return entities_.empty() ? Point2{} : entities_.front().start; }
+Point2 Alignment::EndPoint() const {
+  if (entities_.empty()) return {};
+  const int last = static_cast<int>(entities_.size()) - 1;
+  return PointInEntity(last, entities_.back().length);
+}
+double Alignment::StartAzimuth() const { return entities_.empty() ? 0.0 : entities_.front().startAzimuth; }
+double Alignment::EndAzimuth() const {
+  if (entities_.empty()) return 0.0;
+  const int last = static_cast<int>(entities_.size()) - 1;
+  return AzimuthInEntity(last, entities_.back().length);
+}
+
+int Alignment::CurveCount() const {
+  int n = 0;
+  for (const Entity& e : entities_) n += e.kind == EntityKind::Arc ? 1 : 0;
+  return n;
+}
+
+// ---------------------------------------------------------------- queries
+
+int Alignment::GetEntityAtStation(double internalStation) const {
+  if (entities_.empty()) return -1;
+  const double d = std::clamp(internalStation - startingStation, 0.0, length_);
+  // First entity whose END is at or beyond d: the earlier entity wins at a junction. O(log n).
+  const auto it = std::lower_bound(cumStart_.begin() + 1, cumStart_.end(), d);
+  const size_t idx = static_cast<size_t>(it - (cumStart_.begin() + 1));
+  return static_cast<int>(std::min(idx, entities_.size() - 1));
+}
+
+Point2 Alignment::GetPointAtStation(double internalStation) const {
+  const int i = GetEntityAtStation(internalStation);
+  if (i < 0) return {};
+  const double d = std::clamp(internalStation - startingStation, 0.0, length_);
+  return PointInEntity(i, std::clamp(d - cumStart_[static_cast<size_t>(i)], 0.0, entities_[static_cast<size_t>(i)].length));
+}
+
+double Alignment::GetBearingAtStation(double internalStation) const {
+  const int i = GetEntityAtStation(internalStation);
+  if (i < 0) return 0.0;
+  const double d = std::clamp(internalStation - startingStation, 0.0, length_);
+  return AzimuthInEntity(i, std::clamp(d - cumStart_[static_cast<size_t>(i)], 0.0, entities_[static_cast<size_t>(i)].length));
+}
+
+Point2 Alignment::GetTangentAtStation(double internalStation) const {
+  const double az = GetBearingAtStation(internalStation);
+  return {std::sin(az), std::cos(az)};
+}
+
+double Alignment::GetCurvatureAtStation(double internalStation) const {
+  const int i = GetEntityAtStation(internalStation);
+  return i < 0 ? 0.0 : SignedCurvature(entities_[static_cast<size_t>(i)]);
+}
+
+Point2 Alignment::GetPointFromStationOffset(double internalStation, double offset, double* azimuthOut) const {
+  const Point2 p = GetPointAtStation(internalStation);
+  const double az = GetBearingAtStation(internalStation);
+  if (azimuthOut != nullptr) *azimuthOut = az;
+  return {p.x + offset * std::cos(az), p.y - offset * std::sin(az)};  // right of travel = (cos az, -sin az)
+}
+
+namespace {
+
+struct Candidate {
+  double dist = std::numeric_limits<double>::infinity();
+  double s = 0.0;       ///< Distance from entity start.
+  double offset = 0.0;  ///< Right positive.
+  bool clampedStart = false;
+  bool clampedEnd = false;
+};
+
+}  // namespace
+
+StationOffset Alignment::GetStationOffset(double x, double y) const {
+  StationOffset r;
+  if (entities_.empty()) return r;
+  Candidate best;
+  int bestIdx = 0;
+  bool ambiguous = false;
+  double bestAlong = 0.0;
+
+  for (size_t i = 0; i < entities_.size(); ++i) {
+    const Entity& e = entities_[i];
+    const double px = x - e.start.x;  // local to the entity start (REQ-499)
+    const double py = y - e.start.y;
+    Candidate c;
+    const double sinA = std::sin(e.startAzimuth);
+    const double cosA = std::cos(e.startAzimuth);
+    if (e.kind == EntityKind::Line) {
+      double t = px * sinA + py * cosA;
+      // A projection within rounding of an end is on the end, not beyond it (out-of-range stays honest).
+      constexpr double kEnd = 1e-9;
+      if (t < 0.0) {
+        c.clampedStart = t < -kEnd;
+        t = 0.0;
+      } else if (t > e.length) {
+        c.clampedEnd = t > e.length + kEnd;
+        t = e.length;
+      }
+      const double fx = px - t * sinA;
+      const double fy = py - t * cosA;
+      c.s = t;
+      c.dist = std::hypot(fx, fy);
+      const double side = fx * cosA - fy * sinA;  // dot with right = (cos, -sin)
+      c.offset = (c.clampedStart || c.clampedEnd) ? (side < 0.0 ? -c.dist : c.dist) : side;
+    } else {
+      const double sgn = e.right ? 1.0 : -1.0;
+      const double cx = sgn * e.radius * cosA;  // centre relative to start
+      const double cy = -sgn * e.radius * sinA;
+      const double ux = px - cx;
+      const double uy = py - cy;
+      const double rho = std::hypot(ux, uy);
+      const double sweep = e.length / e.radius;
+      double s;
+      if (rho == 0.0) {
+        s = 0.0;  // the centre is equidistant from every point; take the start
+        c.clampedStart = true;
+      } else {
+        const double angPoint = std::atan2(ux, uy);
+        const double angStart = std::atan2(-cx, -cy);
+        double phi = sgn * (angPoint - angStart);
+        phi = std::fmod(phi, kTwoPi);
+        if (phi < 0.0) phi += kTwoPi;
+        constexpr double kAng = 1e-12;
+        if (phi >= kTwoPi - kAng) phi = 0.0;
+        if (phi <= sweep + kAng) {
+          s = std::min(phi * e.radius, e.length);
+        } else if (phi - sweep < kTwoPi - phi) {
+          s = e.length;
+          c.clampedEnd = true;
+        } else {
+          s = 0.0;
+          c.clampedStart = true;
+        }
+      }
+      c.s = s;
+      if (!(c.clampedStart || c.clampedEnd)) {  // interior, or within rounding of an end
+        c.dist = std::fabs(e.radius - rho);
+        c.offset = e.right ? (e.radius - rho) : (rho - e.radius);
+      } else {
+        const Point2 f = LocalDisplacement(e, s);
+        const double az = e.startAzimuth + sgn * s / e.radius;
+        const double fx = px - f.x;
+        const double fy = py - f.y;
+        c.dist = std::hypot(fx, fy);
+        const double side = fx * std::cos(az) - fy * std::sin(az);
+        c.offset = side < 0.0 ? -c.dist : c.dist;
+      }
+    }
+
+    const double along = cumStart_[i] + c.s;
+    if (c.dist < best.dist - 1e-12) {
+      best = c;
+      bestIdx = static_cast<int>(i);
+      bestAlong = along;
+      ambiguous = false;
+    } else if (std::fabs(c.dist - best.dist) <= 1e-9 && std::fabs(along - bestAlong) > 1e-6) {
+      ambiguous = true;  // equally close elsewhere; the lower station (found first) is kept
+    }
+  }
+
+  r.entityIndex = bestIdx;
+  r.internalStation = startingStation + bestAlong;
+  r.offset = best.offset;
+  r.azimuth = AzimuthInEntity(bestIdx, best.s);
+  r.closest = PointInEntity(bestIdx, best.s);
+  r.ambiguous = ambiguous;
+  r.outOfRange = (bestIdx == 0 && best.clampedStart) ||
+                 (bestIdx == static_cast<int>(entities_.size()) - 1 && best.clampedEnd);
+  return r;
+}
+
+Point2 Alignment::GetClosestPoint(double x, double y) const { return GetStationOffset(x, y).closest; }
+
+double Alignment::GetDistanceAlongAlignment(double x, double y) const {
+  return GetStationOffset(x, y).internalStation - startingStation;
+}
+
+// ---------------------------------------------------------------- station equations
+
+double Alignment::EquationDifference(int i) const {
+  // diff_i = ahead_i - back_i, where back_i is the displayed station just before equation i.
+  double offset = 0.0;
+  for (int j = 0; j <= i; ++j) {
+    const StationEquation& q = equations[static_cast<size_t>(j)];
+    const double back = q.rawBack + offset;
+    const double diff = q.ahead - back;
+    if (j == i) return diff;
+    offset += diff;
+  }
+  return 0.0;
+}
+
+bool Alignment::AddStationEquation(const StationEquation& eq, std::string* whyNot) {
+  auto fail = [&](const char* why) {
+    if (whyNot != nullptr) *whyNot = why;
+    return false;
+  };
+  if (entities_.empty()) return fail("the alignment has no geometry");
+  if (!std::isfinite(eq.rawBack) || !std::isfinite(eq.ahead)) return fail("station is not a number");
+  if (eq.rawBack < StartStation() - 1e-9 || eq.rawBack > EndStation() + 1e-9)
+    return fail("the equation lies outside the alignment's station range");
+  for (const StationEquation& q : equations) {
+    if (std::fabs(q.rawBack - eq.rawBack) < 1e-9) return fail("an equation already exists at that station");
+  }
+  const double back = DisplayedStation(eq.rawBack, false);
+  if (eq.increasing && eq.ahead < back) return fail("an increasing equation must have ahead >= back");
+  if (!eq.increasing && eq.ahead > back) return fail("a decreasing equation must have ahead <= back");
+  const auto it = std::lower_bound(equations.begin(), equations.end(), eq.rawBack,
+                                   [](const StationEquation& q, double v) { return q.rawBack < v; });
+  equations.insert(it, eq);
+  return true;
+}
+
+double Alignment::DisplayedStation(double rawStation, bool ahead) const {
+  double offset = 0.0;
+  for (size_t j = 0; j < equations.size(); ++j) {
+    const StationEquation& q = equations[j];
+    const bool atEq = std::fabs(rawStation - q.rawBack) < 1e-9;
+    if (rawStation < q.rawBack && !atEq) break;
+    if (atEq && !ahead) break;
+    offset += EquationDifference(static_cast<int>(j));
+  }
+  return rawStation + offset;
+}
+
+double Alignment::EndStationWithEquations() const { return DisplayedStation(EndStation(), true); }
+
+std::vector<double> Alignment::RawStationsForDisplayed(double displayed) const {
+  std::vector<double> out;
+  if (entities_.empty()) return out;
+  const double tol = 1e-9;
+  double offset = 0.0;
+  for (size_t k = 0; k <= equations.size(); ++k) {
+    const double zoneStart = k == 0 ? StartStation() : equations[k - 1].rawBack;
+    const double zoneEnd = k == equations.size() ? EndStation() : equations[k].rawBack;
+    const double raw = displayed - offset;
+    if (raw >= zoneStart - tol && raw <= zoneEnd + tol) {
+      const double v = std::clamp(raw, zoneStart, zoneEnd);
+      if (out.empty() || std::fabs(out.back() - v) > tol) out.push_back(v);
+    }
+    if (k < equations.size()) offset += EquationDifference(static_cast<int>(k));
+  }
+  std::sort(out.begin(), out.end());
+  out.erase(std::unique(out.begin(), out.end(), [&](double a, double b) { return std::fabs(a - b) <= tol; }),
+            out.end());
+  return out;
+}
+
+// ---------------------------------------------------------------- curve data
+
+CurveData ComputeCurveData(Point2 pc, double startAzimuth, double radius, double arcLength, bool right) {
+  CurveData d;
+  d.radius = radius;
+  d.arcLength = arcLength;
+  d.right = right;
+  d.delta = arcLength / radius;
+  const double half = d.delta * 0.5;
+  d.chord = 2.0 * radius * std::sin(half);
+  d.hasPI = d.delta < kPi - 1e-9;
+  d.tangentLength = d.hasPI ? radius * std::tan(half) : std::numeric_limits<double>::infinity();
+  d.external = d.hasPI ? radius * (1.0 / std::cos(half) - 1.0) : std::numeric_limits<double>::infinity();
+  d.midOrdinate = radius * (1.0 - std::cos(half));
+  d.degreeOfCurveArc = (180.0 / kPi) * 100.0 / radius;
+  d.degreeOfCurveChord = radius >= 50.0 ? 2.0 * std::asin(50.0 / radius) * (180.0 / kPi) : 0.0;
+  const double sgn = right ? 1.0 : -1.0;
+  d.pc = pc;
+  d.pi = d.hasPI ? Point2{pc.x + d.tangentLength * std::sin(startAzimuth), pc.y + d.tangentLength * std::cos(startAzimuth)}
+                 : pc;
+  const double mid = startAzimuth + sgn * half;
+  d.pt = {pc.x + d.chord * std::sin(mid), pc.y + d.chord * std::cos(mid)};
+  d.center = {pc.x + sgn * radius * std::cos(startAzimuth), pc.y - sgn * radius * std::sin(startAzimuth)};
+  return d;
+}
+
+bool Alignment::CurveDataFor(int entityIndex, CurveData* out) const {
+  if (entityIndex < 0 || static_cast<size_t>(entityIndex) >= entities_.size()) return false;
+  const Entity& e = entities_[static_cast<size_t>(entityIndex)];
+  if (e.kind != EntityKind::Arc) return false;
+  if (out != nullptr) *out = ComputeCurveData(e.start, e.startAzimuth, e.radius, e.length, e.right);
+  return true;
+}
+
+std::vector<GeometryPoint> Alignment::GeometryPoints() const {
+  std::vector<GeometryPoint> pts;
+  if (entities_.empty()) return pts;
+  auto push = [&](GeometryPointCode code, Point2 p, double station, int idx) {
+    pts.push_back({code, p, station, idx});
+  };
+  const int n = static_cast<int>(entities_.size());
+  push(GeometryPointCode::Begin, StartPoint(), StartStation(), 0);
+  for (int i = 0; i < n; ++i) {
+    const Entity& e = entities_[static_cast<size_t>(i)];
+    const Entity* prev = i > 0 ? &entities_[static_cast<size_t>(i) - 1] : nullptr;
+    const Entity* next = i + 1 < n ? &entities_[static_cast<size_t>(i) + 1] : nullptr;
+    if (e.kind == EntityKind::Line) {
+      if (prev != nullptr && prev->kind == EntityKind::Line) push(GeometryPointCode::TanTan, e.start, EntityStartStation(i), i);
+      push(GeometryPointCode::LineMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
+    } else {
+      GeometryPointCode startCode = GeometryPointCode::TanCurve;
+      if (prev != nullptr && prev->kind == EntityKind::Arc)
+        startCode = prev->right == e.right ? GeometryPointCode::CompCurveCurve : GeometryPointCode::RevCurveCurve;
+      push(startCode, e.start, EntityStartStation(i), i);
+      CurveData cd;
+      (void)CurveDataFor(i, &cd);
+      if (cd.hasPI) push(GeometryPointCode::CurvePI, cd.pi, EntityStartStation(i), i);
+      push(GeometryPointCode::CurveCenter, cd.center, EntityStartStation(i), i);
+      push(GeometryPointCode::CurveMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
+      if (next == nullptr || next->kind == EntityKind::Line)
+        push(GeometryPointCode::CurveTan, PointInEntity(i, e.length), EntityEndStation(i), i);
+    }
+  }
+  push(GeometryPointCode::End, EndPoint(), EndStation(), n - 1);
+  return pts;
+}
+
+std::vector<ContinuityIssue> Alignment::CheckContinuity(ContinuityTolerance tol) const {
+  std::vector<ContinuityIssue> out;
+  for (size_t i = 0; i + 1 < entities_.size(); ++i) {
+    ContinuityIssue c;
+    c.afterEntity = static_cast<int>(i);
+    const Point2 end = PointInEntity(static_cast<int>(i), entities_[i].length);
+    c.gap = Dist(end, entities_[i + 1].start);
+    const double azEnd = AzimuthInEntity(static_cast<int>(i), entities_[i].length);
+    double d = std::fabs(NormAz(azEnd) - NormAz(entities_[i + 1].startAzimuth));
+    if (d > kPi) d = kTwoPi - d;
+    c.angleDelta = d;
+    c.c0 = c.gap <= tol.position;
+    c.c1 = c.angleDelta <= tol.angle;
+    out.push_back(c);
+  }
+  return out;
+}
+
+bool Alignment::Bounds(Point2* mn, Point2* mx) const {
+  if (entities_.empty()) return false;
+  double x0 = std::numeric_limits<double>::infinity(), y0 = x0;
+  double x1 = -x0, y1 = -x0;
+  auto take = [&](Point2 p) {
+    x0 = std::min(x0, p.x);
+    y0 = std::min(y0, p.y);
+    x1 = std::max(x1, p.x);
+    y1 = std::max(y1, p.y);
+  };
+  for (size_t i = 0; i < entities_.size(); ++i) {
+    const Entity& e = entities_[i];
+    take(e.start);
+    take(PointInEntity(static_cast<int>(i), e.length));
+    if (e.kind != EntityKind::Arc) continue;
+    CurveData cd;
+    (void)CurveDataFor(static_cast<int>(i), &cd);
+    const double sgn = e.right ? 1.0 : -1.0;
+    const double a0 = std::atan2(e.start.x - cd.center.x, e.start.y - cd.center.y);
+    const double sweep = e.length / e.radius;
+    for (int q = 0; q < 4; ++q) {  // the four cardinal azimuths about the centre
+      const double target = q * kPi * 0.5;
+      double phi = std::fmod(sgn * (target - a0), kTwoPi);
+      if (phi < 0.0) phi += kTwoPi;
+      if (phi <= sweep) take({cd.center.x + e.radius * std::sin(target), cd.center.y + e.radius * std::cos(target)});
+    }
+  }
+  if (mn != nullptr) *mn = {x0, y0};
+  if (mx != nullptr) *mx = {x1, y1};
+  return true;
+}
+
+std::vector<Point2> Alignment::SampleForDisplay(double maxChordHeight) const {
+  std::vector<Point2> out;
+  if (entities_.empty()) return out;
+  out.push_back(entities_.front().start);
+  for (size_t i = 0; i < entities_.size(); ++i) {
+    const Entity& e = entities_[i];
+    int steps = 1;
+    if (e.kind == EntityKind::Arc) {
+      const double h = std::clamp(maxChordHeight, 1e-9, e.radius * 0.5);
+      const double dTheta = 2.0 * std::acos(1.0 - h / e.radius);
+      steps = std::max(1, static_cast<int>(std::ceil((e.length / e.radius) / dTheta)));
+    }
+    for (int k = 1; k <= steps; ++k) out.push_back(PointInEntity(static_cast<int>(i), e.length * k / steps));
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------- station formatting
+
+std::string FormatStation(double station, const StationFormat& fmt) {
+  const bool neg = station < 0.0;
+  const double v = std::fabs(station);
+  const int dec = std::clamp(fmt.decimals, 0, 9);
+  std::string body;
+  if (fmt.delimiter == '\0') {
+    char buf[64];
+    std::snprintf(buf, sizeof buf, "%.*f", dec, v);
+    body = buf;
+  } else {
+    const int digits = std::clamp(fmt.digitsRight, 1, 9);
+    double scale = 1.0;
+    for (int i = 0; i < dec; ++i) scale *= 10.0;
+    double minorBase = 1.0;
+    for (int i = 0; i < digits; ++i) minorBase *= 10.0;
+    const long long n = std::llround(v * scale);
+    const long long base = static_cast<long long>(minorBase * scale);
+    const long long major = n / base;
+    const long long minor = n % base;
+    const long long whole = minor / static_cast<long long>(scale);
+    const long long frac = minor % static_cast<long long>(scale);
+    char buf[96];
+    if (dec > 0)
+      std::snprintf(buf, sizeof buf, "%lld%c%0*lld.%0*lld", major, fmt.delimiter, digits, whole, dec, frac);
+    else
+      std::snprintf(buf, sizeof buf, "%lld%c%0*lld", major, fmt.delimiter, digits, whole);
+    body = buf;
+  }
+  return fmt.prefix + (neg ? "-" : "") + body + fmt.suffix;
+}
+
+bool ParseStation(const std::string& text, double* station, const StationFormat& fmt) {
+  size_t b = 0, e = text.size();
+  while (b < e && std::isspace(static_cast<unsigned char>(text[b]))) ++b;
+  while (e > b && std::isspace(static_cast<unsigned char>(text[e - 1]))) --e;
+  std::string s = text.substr(b, e - b);
+  if (!fmt.prefix.empty() && s.rfind(fmt.prefix, 0) == 0) s.erase(0, fmt.prefix.size());
+  if (s.size() >= 3 && (s[0] == 'S' || s[0] == 's') && (s[1] == 'T' || s[1] == 't') && (s[2] == 'A' || s[2] == 'a')) {
+    s.erase(0, 3);
+  }
+  if (!fmt.suffix.empty() && s.size() >= fmt.suffix.size() &&
+      s.compare(s.size() - fmt.suffix.size(), fmt.suffix.size(), fmt.suffix) == 0)
+    s.erase(s.size() - fmt.suffix.size());
+  size_t i = 0;
+  while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+  s.erase(0, i);
+  if (s.empty()) return false;
+  bool neg = false;
+  if (s[0] == '-') {
+    neg = true;
+    s.erase(0, 1);
+  }
+  if (s.empty()) return false;
+  const int digits = std::clamp(fmt.digitsRight, 1, 9);
+  size_t dp = std::string::npos;
+  for (size_t k = 0; k < s.size(); ++k) {
+    const char c = s[k];
+    if (c == '+' || (fmt.delimiter != '\0' && fmt.delimiter != '-' && c == fmt.delimiter) ||
+        (fmt.delimiter == '-' && c == '-')) {
+      dp = k;
+      break;
+    }
+  }
+  double value = 0.0;
+  char* endp = nullptr;
+  if (dp == std::string::npos) {
+    value = std::strtod(s.c_str(), &endp);
+    if (endp == s.c_str() || *endp != '\0') return false;
+  } else {
+    const std::string majorStr = s.substr(0, dp);
+    const std::string minorStr = s.substr(dp + 1);
+    if (majorStr.empty() || minorStr.empty()) return false;
+    for (char c : majorStr) {
+      if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    }
+    const double major = std::strtod(majorStr.c_str(), nullptr);
+    const double minor = std::strtod(minorStr.c_str(), &endp);
+    if (endp == minorStr.c_str() || *endp != '\0' || minor < 0.0) return false;
+    double minorBase = 1.0;
+    for (int k = 0; k < digits; ++k) minorBase *= 10.0;
+    if (minor >= minorBase) return false;
+    value = major * minorBase + minor;
+  }
+  if (!std::isfinite(value)) return false;
+  if (station != nullptr) *station = neg ? -value : value;
+  return true;
+}
+
+// ---------------------------------------------------------------- create from objects
+
+SourceSegment SegmentFromBulge(Point2 a, Point2 b, double bulge, int sourceIndex) {
+  SourceSegment s;
+  s.sourceIndex = sourceIndex;
+  s.a = a;
+  s.b = b;
+  if (std::fabs(bulge) < 1e-12) return s;
+  const double theta = 4.0 * std::atan(std::fabs(bulge));  // included angle
+  const double dx = b.x - a.x, dy = b.y - a.y;
+  const double c = std::hypot(dx, dy);
+  const double r = c / (2.0 * std::sin(theta * 0.5));
+  const double d = (c * 0.5) / std::tan(theta * 0.5);  // signed distance from chord midpoint to centre
+  const double lx = -dy / c, ly = dx / c;               // left normal of a->b
+  const double side = bulge > 0.0 ? 1.0 : -1.0;
+  s.isArc = true;
+  s.radius = r;
+  s.center = {(a.x + b.x) * 0.5 + side * lx * d, (a.y + b.y) * 0.5 + side * ly * d};
+  if (bulge > 0.0) {
+    s.startAngle = std::atan2(a.y - s.center.y, a.x - s.center.x);
+  } else {
+    s.startAngle = std::atan2(b.y - s.center.y, b.x - s.center.x);  // CW a->b == CCW b->a
+  }
+  s.endAngle = s.startAngle + theta;
+  return s;
+}
+
+namespace {
+
+struct Oriented {
+  Point2 from;
+  Point2 to;
+  int source = 0;
+  bool isArc = false;
+  const SourceSegment* seg = nullptr;
+  bool forward = true;
+};
+
+Point2 ArcEnd(const SourceSegment& s, bool atEnd) {
+  const double a = atEnd ? s.endAngle : s.startAngle;
+  return {s.center.x + s.radius * std::cos(a), s.center.y + s.radius * std::sin(a)};
+}
+
+std::string Num(double v) {
+  char b[48];
+  std::snprintf(b, sizeof b, "%g", v);
+  return b;
+}
+
+}  // namespace
+
+bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObjectsOptions& opt, Alignment* out,
+                       std::string* error, std::vector<std::string>* warnings) {
+  auto fail = [&](const std::string& m) {
+    if (error != nullptr) *error = m;
+    if (out != nullptr) out->Clear();
+    return false;
+  };
+  if (out == nullptr) return false;
+  out->Clear();
+  if (segments.empty()) return fail("nothing selected to convert");
+
+  // Endpoints per segment, and rejection of degenerate input.
+  struct Ends {
+    Point2 p0, p1;
+  };
+  std::vector<Ends> ends(segments.size());
+  for (size_t i = 0; i < segments.size(); ++i) {
+    const SourceSegment& s = segments[i];
+    if (s.isArc) {
+      double sweep = std::fmod(s.endAngle - s.startAngle, kTwoPi);
+      if (sweep < 0.0) sweep += kTwoPi;
+      if (!(s.radius > 0.0) || sweep < 1e-12)
+        return fail("object " + std::to_string(s.sourceIndex) + " is a zero-length or invalid arc");
+      ends[i] = {ArcEnd(s, false), ArcEnd(s, true)};
+    } else {
+      if (Dist(s.a, s.b) <= opt.gapTolerance * 1e-3)
+        return fail("object " + std::to_string(s.sourceIndex) + " is a zero-length segment");
+      ends[i] = {s.a, s.b};
+    }
+  }
+
+  const double tol = opt.gapTolerance;
+  const size_t n = segments.size();
+  // Free chain ends: an endpoint with no other segment's endpoint within tolerance.
+  struct EndRef {
+    size_t seg;
+    bool atEnd;
+  };
+  std::vector<EndRef> freeEnds;
+  for (size_t i = 0; i < n; ++i) {
+    for (int w = 0; w < 2; ++w) {
+      const Point2 p = w == 0 ? ends[i].p0 : ends[i].p1;
+      bool shared = false;
+      for (size_t j = 0; j < n && !shared; ++j) {
+        if (j == i) continue;
+        shared = Dist(p, ends[j].p0) <= tol || Dist(p, ends[j].p1) <= tol;
+      }
+      if (!shared) freeEnds.push_back({i, w == 1});
+    }
+  }
+  if (freeEnds.size() > 2 && n > 1) {
+    return fail("the selection does not form a single chain: objects " + std::to_string(segments[freeEnds[0].seg].sourceIndex) +
+                " and others have loose ends (gap larger than " + Num(tol) + ")");
+  }
+
+  // Choose the start: nearest free end to the pick, else the first free end, else (closed loop) the first segment.
+  EndRef startRef{0, false};
+  if (!freeEnds.empty()) {
+    startRef = freeEnds.front();
+    if (opt.hasPick) {
+      double bestD = std::numeric_limits<double>::infinity();
+      for (const EndRef& f : freeEnds) {
+        const Point2 p = f.atEnd ? ends[f.seg].p1 : ends[f.seg].p0;
+        const double d = Dist(p, opt.pick);
+        if (d < bestD) {
+          bestD = d;
+          startRef = f;
+        }
+      }
+    }
+  } else if (opt.hasPick) {
+    double bestD = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < n; ++i)
+      for (int w = 0; w < 2; ++w) {
+        const Point2 p = w == 0 ? ends[i].p0 : ends[i].p1;
+        const double d = Dist(p, opt.pick);
+        if (d < bestD) {
+          bestD = d;
+          startRef = {i, w == 1};
+        }
+      }
+  }
+
+  std::vector<Oriented> chain;
+  std::vector<char> used(n, 0);
+  auto orient = [&](size_t i, bool reversed) {
+    Oriented o;
+    o.source = segments[i].sourceIndex;
+    o.isArc = segments[i].isArc;
+    o.seg = &segments[i];
+    o.forward = !reversed;
+    o.from = reversed ? ends[i].p1 : ends[i].p0;
+    o.to = reversed ? ends[i].p0 : ends[i].p1;
+    return o;
+  };
+  chain.push_back(orient(startRef.seg, startRef.atEnd));  // starting at the END means the segment is reversed
+  used[startRef.seg] = 1;
+  for (size_t placed = 1; placed < n; ++placed) {
+    const Point2 tail = chain.back().to;
+    double bestD = std::numeric_limits<double>::infinity();
+    size_t bi = n;
+    bool brev = false;
+    for (size_t j = 0; j < n; ++j) {
+      if (used[j]) continue;
+      const double d0 = Dist(tail, ends[j].p0);
+      const double d1 = Dist(tail, ends[j].p1);
+      if (d0 < bestD) {
+        bestD = d0;
+        bi = j;
+        brev = false;
+      }
+      if (d1 < bestD) {
+        bestD = d1;
+        bi = j;
+        brev = true;
+      }
+    }
+    if (bi == n || bestD > tol) {
+      // Name the object with the smallest gap to the chain tail.
+      return fail("object " + std::to_string(bi == n ? 0 : segments[bi].sourceIndex) + " is not connected: gap of " +
+                  Num(bestD) + " exceeds the tolerance " + Num(tol) + " after object " + std::to_string(chain.back().source));
+    }
+    chain.push_back(orient(bi, brev));
+    used[bi] = 1;
+  }
+
+  // Convert the ordered, oriented chain to exact entities.
+  for (const Oriented& o : chain) {
+    Entity e;
+    e.start = o.from;
+    if (!o.isArc) {
+      const double dx = o.to.x - o.from.x, dy = o.to.y - o.from.y;
+      e.kind = EntityKind::Line;
+      e.startAzimuth = std::atan2(dx, dy);
+      e.length = std::hypot(dx, dy);
+    } else {
+      const SourceSegment& s = *o.seg;
+      double sweep = std::fmod(s.endAngle - s.startAngle, kTwoPi);
+      if (sweep < 0.0) sweep += kTwoPi;
+      e.kind = EntityKind::Arc;
+      e.radius = s.radius;
+      e.length = s.radius * sweep;
+      if (o.forward) {  // CCW travel = left turn
+        e.right = false;
+        e.startAzimuth = std::atan2(-std::sin(s.startAngle), std::cos(s.startAngle));
+      } else {  // traversed from the CCW end back to its start = clockwise = right turn
+        e.right = true;
+        e.startAzimuth = std::atan2(std::sin(s.endAngle), -std::cos(s.endAngle));
+      }
+    }
+    if (!out->AppendRaw(e)) return fail("object " + std::to_string(o.source) + " could not be converted");
+  }
+
+  if (opt.addFillets) {
+    // Fillet each line-line corner with the requested radius; a corner that does not fit stays a PI.
+    const std::vector<Entity> src = out->Entities();
+    std::vector<double> trimStart(src.size(), 0.0), trimEnd(src.size(), 0.0);
+    std::vector<char> filleted(src.size(), 0);
+    std::vector<double> deflection(src.size(), 0.0);
+    for (size_t i = 0; i + 1 < src.size(); ++i) {
+      if (src[i].kind != EntityKind::Line || src[i + 1].kind != EntityKind::Line) continue;
+      double d = std::fmod(src[i + 1].startAzimuth - src[i].startAzimuth, kTwoPi);
+      if (d > kPi) d -= kTwoPi;
+      if (d < -kPi) d += kTwoPi;
+      if (std::fabs(d) < 1e-9) continue;
+      const double t = opt.filletRadius * std::tan(std::fabs(d) * 0.5);
+      const double availA = src[i].length - trimStart[i];
+      const double availB = src[i + 1].length;
+      if (t >= availA - 1e-9 || t >= availB - 1e-9) {
+        if (warnings != nullptr)
+          warnings->push_back("corner after object " + std::to_string(chain[i].source) + " is too tight for radius " +
+                              Num(opt.filletRadius) + "; left as a PI");
+        continue;
+      }
+      trimEnd[i] = t;
+      trimStart[i + 1] = t;
+      filleted[i] = 1;
+      deflection[i] = d;
+    }
+    Alignment rebuilt;
+    for (size_t i = 0; i < src.size(); ++i) {
+      Entity e = src[i];
+      if (e.kind == EntityKind::Line) {
+        e.start = {e.start.x + trimStart[i] * std::sin(e.startAzimuth), e.start.y + trimStart[i] * std::cos(e.startAzimuth)};
+        e.length = src[i].length - trimStart[i] - trimEnd[i];
+      }
+      if (!rebuilt.AppendRaw(e)) return fail("fillet left a zero-length segment");
+      if (filleted[i]) {
+        const bool right = deflection[i] > 0.0;
+        if (!rebuilt.AppendCurve(opt.filletRadius, opt.filletRadius * std::fabs(deflection[i]), right))
+          return fail("fillet could not be created");
+      }
+    }
+    *out = std::move(rebuilt);
+  }
+
+  if (opt.reverse && !out->Reverse(nullptr)) return fail("the chain could not be reversed (it has a gap)");
+  return true;
+}
+
+}  // namespace alignment
