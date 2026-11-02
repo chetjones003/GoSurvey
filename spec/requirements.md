@@ -13610,8 +13610,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
   scales the content to fill the sheet in its limiting direction, with its lower-left corner at the
   sheet's lower-left corner; (d) **plot scale**, a ratio 1 : N that scales the content by 1 / N. Fit and
-  centre use the sheet content extent (viewport frames, line ends, circle and polyline vertices and text
-  anchors); when centre is on, the offsets are ignored. Lineweights keep their width; text sizes and
+  centre use the sheet content extent (viewport frames, line ends, circle and polyline vertices with their
+  bulge arcs, spline and point marks, multileader leaders, arrowheads and labels, and text anchors); when centre is on, the offsets are ignored. Lineweights keep their width; text sizes and
   positions scale with the content. A Page Setup control that the plot does not honour is a defect, not
   an accepted limitation.
 - Acceptance:
@@ -13623,7 +13623,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. a test exists for each of the four options.
 - Owner-layer: IO / Renderer
 - Status: accepted
-- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1). 2026-11-01 — plot scale defined as a ratio 1 : N and the fit, centre and offset rules stated (D-2026-11-01-a, GitHub issue #1145).
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1). 2026-11-01 — plot scale defined as a ratio 1 : N and the fit, centre and offset rules stated (D-2026-11-01-a, GitHub issue #1145). 2026-11-01 — the fit and centre extent includes bulge arcs, splines, points, multileaders and their labels (CodeRabbit review of PR #1147, GitHub issue #1145).
 
 ### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
 

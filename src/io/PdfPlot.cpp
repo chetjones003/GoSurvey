@@ -40,10 +40,11 @@ namespace {
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
 
 // The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, lines, circles,
-// polylines, text and tables. Only entities the draw loop plots count, so an entity on a non-plottable layer is
-// skipped as it is when drawn. Arcs, ellipses, blocks and fills are not included yet.
+// polylines (with their bulge arcs), splines, points, multileaders, text and tables. Only entities the draw loop plots
+// count, so an entity on a non-plottable layer is skipped as it is when drawn. Arcs, ellipses, blocks and fills are not
+// included yet.
 template <class Plottable>
-plotsheet::Extent SheetContentExtent(const PaperLayout& L, Plottable plottable) {
+plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayout& L, Plottable plottable) {
   // Same rule as the draw loop's sheetAttr checks: an index with no attributes is plotted.
   auto onPlottableLayer = [&](const std::vector<EntityAttributes>& attrs, size_t i) {
     return i >= attrs.size() || plottable(attrs[i].layer);
@@ -70,8 +71,73 @@ plotsheet::Extent SheetContentExtent(const PaperLayout& L, Plottable plottable) 
   for (int pi = 0; pi < nPoly; ++pi) {
     if (!onPlottableLayer(L.paperPolyAttrs, static_cast<size_t>(pi)))
       continue;
-    for (int v = L.paperPolyOffsets[static_cast<size_t>(pi)]; v < L.paperPolyOffsets[static_cast<size_t>(pi + 1)]; ++v)
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    for (int v = v0; v < v1; ++v)
       e.Add(L.paperPolyVerts[static_cast<size_t>(v) * 3], L.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
+    // A bulged segment bows past its end points, so measure the same bulge chords the draw loop strokes.
+    const int nVert = v1 - v0;
+    const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] != 0;
+    const int nSeg = closed ? nVert : nVert - 1;
+    for (int s = 0; s < nSeg; ++s) {
+      const int ia = v0 + s;
+      const int ib = v0 + ((s + 1) % nVert);
+      const size_t a = static_cast<size_t>(ia) * 3;
+      const size_t b = static_cast<size_t>(ib) * 3;
+      const float bulge = static_cast<size_t>(ia) < L.paperPolyVertsBulge.size() ? L.paperPolyVertsBulge[static_cast<size_t>(ia)]
+                                                                                : 0.f;
+      ForEachBulgeChord(L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b], L.paperPolyVerts[b + 1], bulge,
+                        16, [&](double ax, double ay, double bx, double by) {
+                          e.Add(static_cast<float>(ax), static_cast<float>(ay));
+                          e.Add(static_cast<float>(bx), static_cast<float>(by));
+                        });
+    }
+  }
+  for (size_t si = 0; si < L.paperSplines.size(); ++si) {
+    if (!onPlottableLayer(L.paperSplineAttrs, si))
+      continue;
+    std::vector<ray3d::Vec3> pts;
+    spline::Tessellate(L.paperSplines[si], kSplineSampleTolerance, &pts);
+    for (const ray3d::Vec3& p : pts)
+      e.Add(static_cast<float>(p.x), static_cast<float>(p.y));
+  }
+  // Point markers are sized from the sheet height, as the draw loop sizes them.
+  const double pointHalfSize = CadPointMarkerSize(st.pdSize, std::max(1.0, static_cast<double>(L.sheetHeightIn())));
+  for (size_t pi = 0; pi < L.paperPoints.size(); ++pi) {
+    if (!onPlottableLayer(L.paperPointAttrs, pi))
+      continue;
+    std::vector<CadPointStroke> strokes;
+    CadPointDisplayStrokes(L.paperPoints[pi], st.pdMode, pointHalfSize, &strokes);
+    for (const CadPointStroke& s : strokes) {
+      e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
+      e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
+    }
+  }
+  // Multileader leader paths and arrowheads, then their labels (labels plot with the sheet text).
+  const float arrowSize = std::max(st.activeMultileaderStyle.arrowSizeInches, 0.01f);
+  for (size_t mi = 0; mi < L.paperMultileaders.size(); ++mi) {
+    if (!onPlottableLayer(L.paperMultileaderAttrs, mi))
+      continue;
+    const CadMultileader& ml = L.paperMultileaders[mi];
+    auto addPath = [&](const std::vector<float>& pts) {
+      for (size_t k = 0; k + 2 < pts.size(); k += 3)
+        e.Add(pts[k], pts[k + 1]);
+      const CadLeaderArrowHead a = CadMultileaderArrow(ml, pts, arrowSize);
+      if (a.valid) {
+        e.Add(a.tipX, a.tipY);
+        e.Add(a.b1x, a.b1y);
+        e.Add(a.b2x, a.b2y);
+      }
+    };
+    addPath(ml.pathXyz);
+    for (const std::vector<float>& branch : ml.extraLeaderPaths)
+      addPath(branch);
+    if (!ml.label.text.empty()) {
+      float x0, y0, x1, y1;
+      PaperTextBoundsIn(ml.label, &x0, &y0, &x1, &y1);
+      e.Add(x0, y0);
+      e.Add(x1, y1);
+    }
   }
   // Text and tables count their drawn extent, not just the insertion point, so a text-only or table-only sheet
   // is fitted to what it prints.
@@ -251,7 +317,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
     const plotsheet::Transform tr = plotsheet::Compute(
         {L.fitToPaper, L.scaleModelPerPaperIn, L.offsetXIn, L.offsetYIn, L.centerPlot}, L.sheetWidthIn(),
-        L.sheetHeightIn(), SheetContentExtent(L, plottable));
+        L.sheetHeightIn(), SheetContentExtent(st, L, plottable));
     FPDF_PAGE page = FPDFPage_New(doc, pages, wPts, hPts);
     if (!page)
       continue;

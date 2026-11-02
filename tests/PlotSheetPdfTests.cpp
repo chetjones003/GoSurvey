@@ -14,6 +14,7 @@
 #include <fpdf_edit.h>
 #include <fpdfview.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -178,4 +179,33 @@ TEST_CASE("Page Setup plot ratio changes the PDF output to the stated scale (REQ
   // include the stroke (0.5 pt) around the geometry, so the measured width is about 1 pt longer than the line.
   CHECK_THAT(b.left, WithinAbs(0.5f * kPt, 1.0));
   CHECK_THAT(b.right - b.left, WithinAbs(1.f * kPt, 1.5));
+}
+
+TEST_CASE("Fit includes a polyline bulge that bows past its end points (REQ-445 c, measured)", "[plot][req445]") {
+  AppCommandState st;
+  PaperLayout L;
+  L.name = "Sheet";
+  L.landscape = true;
+  L.portraitWidthIn = kSheetH;
+  L.portraitHeightIn = kSheetW;
+  L.fitToPaper = true;
+  // A semicircle from (1,1) to (3,1). A positive bulge bows it down to y = 0, so the fit must lift that point to the
+  // sheet's bottom edge rather than let it fall below the page.
+  L.paperPolyOffsets = {0, 2};
+  L.paperPolyVerts = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f};
+  L.paperPolyVertsBulge = {1.f, 0.f};
+  L.paperPolyClosed = {0};
+  L.paperPolyAttrs.resize(1);
+  st.paperLayouts.push_back(L);
+
+  const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "bulge");
+  REQUIRE(!paths.empty());
+  float bottom = paths.front().bottom, top = paths.front().top;
+  for (const Bounds& b : paths) {
+    bottom = std::min(bottom, b.bottom);
+    top = std::max(top, b.top);
+  }
+  // Fit scales by 11 / 2 (width-limited), so the arc's top at y = 1 lands at 5.5 inches and its bottom at the page edge.
+  CHECK_THAT(bottom, WithinAbs(0.f, 1.0));
+  CHECK_THAT(top, WithinAbs(5.5f * kPt, 1.0));
 }
