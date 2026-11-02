@@ -1499,7 +1499,7 @@ void EditorWindow::ShowPageSetupManager(int layoutIndex) {
     const float height = value.landscape ? std::min(value.portraitWidthIn, value.portraitHeightIn) : std::max(value.portraitWidthIn, value.portraitHeightIn);
     details->setText(QString("Device\nGoSurvey PDF (vector)\n\nPaper\n%1\n%2 × %3 in · %4\n\nPlot area\nLayout\n\nScale\n%5")
         .arg(paper).arg(width, 0, 'f', 2).arg(height, 0, 'f', 2).arg(value.landscape ? "Landscape" : "Portrait")
-        .arg(value.fitToPaper ? "Fit to paper" : QString::number(value.scaleModelPerPaperIn, 'g', 5) + " model units / inch"));
+        .arg(value.fitToPaper ? "Fit to paper" : "1 : " + QString::number(value.scaleModelPerPaperIn, 'g', 5)));
     const bool saved = selected > 0 && selected - 1 < static_cast<int>(m_State.savedPageSetups.size());
     apply->setEnabled(writable && saved); modify->setEnabled(writable); create->setEnabled(writable);
     m_State.pageSetupManagerSel = selected - 1;
@@ -1547,7 +1547,7 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   auto* customWidth = new QDoubleSpinBox(&dialog); customWidth->setRange(0.1, 1e5); customWidth->setDecimals(3); customWidth->setSuffix(" in"); customWidth->setValue(draft.portraitWidthIn); form->addRow("Custom width", customWidth);
   auto* customHeight = new QDoubleSpinBox(&dialog); customHeight->setRange(0.1, 1e5); customHeight->setDecimals(3); customHeight->setSuffix(" in"); customHeight->setValue(draft.portraitHeightIn); form->addRow("Custom height", customHeight);
   auto* fit = new QCheckBox("Fit to paper", &dialog); fit->setChecked(draft.fitToPaper); form->addRow("Plot scale", fit);
-  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Model units / inch", scale);
+  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Plot ratio (1 : N)", scale);
   auto* offsetX = new QDoubleSpinBox(&dialog); offsetX->setRange(-1e6, 1e6); offsetX->setDecimals(3); offsetX->setValue(draft.offsetXIn); form->addRow("Offset X (in)", offsetX);
   auto* offsetY = new QDoubleSpinBox(&dialog); offsetY->setRange(-1e6, 1e6); offsetY->setDecimals(3); offsetY->setValue(draft.offsetYIn); form->addRow("Offset Y (in)", offsetY);
   auto* center = new QCheckBox("Center the plot", &dialog); center->setChecked(draft.centerPlot); form->addRow("Placement", center);

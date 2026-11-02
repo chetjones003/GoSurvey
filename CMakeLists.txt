@@ -1075,6 +1075,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PlotFontTests.cpp
     # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
     tests/PlotStrokeTests.cpp
+    # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
+    tests/PlotSheetTests.cpp
     tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
@@ -1402,7 +1404,9 @@ if(GOSURVEY_BUILD_TESTS)
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
+  # NOMINMAX matches the app, so std::min/std::max in the PDF plot compile here as they do in the frontend.
   target_compile_definitions(GoSurveyTests PRIVATE
+    NOMINMAX
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
@@ -1431,7 +1435,10 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfDimAudit.cpp
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
-    src/pdf/PdfDiff.cpp)
+    src/pdf/PdfDiff.cpp
+    # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
+    tests/PlotSheetPdfTests.cpp
+    src/io/PdfPlot.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
