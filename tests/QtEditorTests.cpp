@@ -6296,6 +6296,61 @@ private Q_SLOTS:
     style.fontFamily = "Arial";
     state.textStyles.push_back(style);
     state.activeTextStyleName = "Boundary Notes";
+    DimensionStyle dimensionStyle;
+    dimensionStyle.name = "Field Dimensions";
+    dimensionStyle.textSizeInches = 0.23f;
+    dimensionStyle.props["fitOption"] = "Text";
+    state.dimensionStyles = DimensionStyles::DefaultStyles();
+    state.dimensionStyles.push_back(dimensionStyle);
+    state.activeDimensionStyle = dimensionStyle;
+    MultileaderStyle multileaderStyle;
+    multileaderStyle.name = "Field Callouts";
+    multileaderStyle.landingGapInches = 0.17f;
+    multileaderStyle.props["leaderType"] = "Spline";
+    state.multileaderStyles = MultileaderStyles::DefaultStyles();
+    state.multileaderStyles.push_back(multileaderStyle);
+    state.activeMultileaderStyle = multileaderStyle;
+    CadTableStyle tableStyle;
+    tableStyle.name = "Field Points";
+    tableStyle.point = true;
+    tableStyle.title = "Control Points";
+    tableStyle.pointColumns = {CadPointTableColumn::Name, CadPointTableColumn::Northing,
+                               CadPointTableColumn::Easting, CadPointTableColumn::Elevation};
+    state.tableStyles.push_back(tableStyle);
+    SurfaceStyle surfaceStyle;
+    surfaceStyle.name = "Construction Surface";
+    surfaceStyle.majorContour.color = "Magenta";
+    state.surfaceStyles.push_back(surfaceStyle);
+    SurveyPointStyleDefinition pointStyle;
+    pointStyle.name = "Field Point Symbol";
+    pointStyle.markerType = 2;
+    pointStyle.markerBlockName = "FieldPointMarker";
+    state.surveyPointStyles.push_back(pointStyle);
+    SurveyPointLabelStyleDefinition pointLabelStyle;
+    pointLabelStyle.name = "Field Point Label";
+    pointLabelStyle.fontFamily = "Arial";
+    pointLabelStyle.textHeightPlottedInches = 0.19f;
+    pointLabelStyle.templates.numberDesc = "PT {id}\n{desc}";
+    state.surveyPointLabelStyles.push_back(pointLabelStyle);
+    CadBlockDefinition markerDef;
+    markerDef.id = 1001;
+    markerDef.name = "FieldPointMarker";
+    markerDef.content.lines = {-1.0, 0.0, 0.0, 1.0, 0.0, 0.0};
+    CadBlockNested nestedMarker;
+    nestedMarker.defName = "NestedPointMarker";
+    markerDef.content.nested.push_back(nestedMarker);
+    CadBlockDefinition nestedMarkerDef;
+    nestedMarkerDef.id = 1002;
+    nestedMarkerDef.name = "NestedPointMarker";
+    nestedMarkerDef.content.lines = {0.0, -1.0, 0.0, 0.0, 1.0, 0.0};
+    CadBlockDefinition unrelatedDef;
+    unrelatedDef.id = 1003;
+    unrelatedDef.name = "UnrelatedBlock";
+    unrelatedDef.content.lines = {-2.0, -2.0, 0.0, 2.0, 2.0, 0.0};
+    state.blockDefs = {markerDef, nestedMarkerDef, unrelatedDef};
+    CadBlockRef sourceBlockRef;
+    sourceBlockRef.defName = "UnrelatedBlock";
+    state.cadBlockRefs.push_back(sourceBlockRef);
     state.userLinesFlat = {0.0, 0.0, 0.0, 100.0, 0.0, 0.0};
     state.userLineAttrs = {EntityAttributes{}};
     state.surveyPoints.push_back(SurveyPoint{17, 100.0, 200.0, 3.0, "Control", "CTRL", "Field"});
@@ -6361,12 +6416,77 @@ private Q_SLOTS:
     QCOMPARE(loaded.drawingLayerTable[1].linetype, std::string("Dashed"));
     QCOMPARE(loaded.activeTextStyleName, std::string("Boundary Notes"));
     QCOMPARE(loaded.textStyles.back().name, std::string("Boundary Notes"));
+    const DimensionStyle* loadedDimensionStyle =
+        DimensionStyles::Find(loaded.dimensionStyles, "Field Dimensions");
+    QVERIFY(loadedDimensionStyle);
+    QCOMPARE(loadedDimensionStyle->textSizeInches, 0.23f);
+    QCOMPARE(loadedDimensionStyle->props.at("fitOption"), std::string("Text"));
+    const MultileaderStyle* loadedMultileaderStyle =
+        MultileaderStyles::Find(loaded.multileaderStyles, "Field Callouts");
+    QVERIFY(loadedMultileaderStyle);
+    QCOMPARE(loadedMultileaderStyle->landingGapInches, 0.17f);
+    QCOMPARE(loadedMultileaderStyle->props.at("leaderType"), std::string("Spline"));
+    const auto loadedTableStyle = std::find_if(loaded.tableStyles.begin(), loaded.tableStyles.end(),
+        [](const CadTableStyle& item) { return item.name == "Field Points"; });
+    QVERIFY(loadedTableStyle != loaded.tableStyles.end());
+    QCOMPARE(loadedTableStyle->title, std::string("Control Points"));
+    QCOMPARE(loadedTableStyle->pointColumns.size(), size_t(4));
+    const SurfaceStyle* loadedSurfaceStyle =
+        SurfaceStyles::Find(loaded.surfaceStyles, "Construction Surface");
+    QVERIFY(loadedSurfaceStyle);
+    QCOMPARE(loadedSurfaceStyle->majorContour.color, std::string("Magenta"));
+    const SurveyPointStyleDefinition* loadedPointStyle =
+        FindSurveyPointStyle(loaded.surveyPointStyles, "Field Point Symbol");
+    QVERIFY(loadedPointStyle);
+    QCOMPARE(loadedPointStyle->markerBlockName, std::string("FieldPointMarker"));
+    const auto loadedPointLabelStyle = std::find_if(loaded.surveyPointLabelStyles.begin(),
+        loaded.surveyPointLabelStyles.end(),
+        [](const SurveyPointLabelStyleDefinition& item) { return item.name == "Field Point Label"; });
+    QVERIFY(loadedPointLabelStyle != loaded.surveyPointLabelStyles.end());
+    QCOMPARE(loadedPointLabelStyle->fontFamily, std::string("Arial"));
+    QCOMPARE(loadedPointLabelStyle->templates.numberDesc, std::string("PT {id}\n{desc}"));
+    const int markerDefIndex = CadBlockFindDef(loaded.blockDefs, "FieldPointMarker");
+    QVERIFY(markerDefIndex >= 0);
+    QCOMPARE(loaded.blockDefs[static_cast<size_t>(markerDefIndex)].content.lines.size(), size_t(6));
+    QCOMPARE(loaded.blockDefs[static_cast<size_t>(markerDefIndex)].content.nested.size(), size_t(1));
+    QVERIFY(CadBlockFindDef(loaded.blockDefs, "NestedPointMarker") >= 0);
+    QVERIFY(CadBlockFindDef(loaded.blockDefs, "UnrelatedBlock") < 0);
+    QVERIFY(loaded.cadBlockRefs.empty());
     QCOMPARE(loaded.drawingInsUnits, 2);
     QCOMPARE(loaded.modelUnitsPerPlottedInch, 50.0);
     QVERIFY(loaded.objectSnapEnabled);
     QCOMPARE(loaded.paperLayouts.size(), state.paperLayouts.size());
     QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
     QVERIFY(loaded.paperLayouts[0].paperLines.empty());
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
+      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
+      int templateRow = -1;
+      for (int row = 0; row < list->count(); ++row)
+        if (list->item(row)->text() == "Field Template — Personal") templateRow = row;
+      QVERIFY(templateRow >= 0);
+      list->setCurrentRow(templateRow);
+      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
+          ->button(QDialogButtonBox::Open)->click();
+    });
+    window.NewDrawing();
+    QVERIFY(window.State().userLinesFlat.empty());
+    QVERIFY(window.State().surveyPoints.empty());
+    QVERIFY(window.State().pointGroups.empty());
+    QVERIFY(window.State().cadBlockRefs.empty());
+    QCOMPARE(window.State().activeTextStyleName, std::string("Boundary Notes"));
+    QVERIFY(DimensionStyles::Find(window.State().dimensionStyles, "Field Dimensions"));
+    QVERIFY(MultileaderStyles::Find(window.State().multileaderStyles, "Field Callouts"));
+    QVERIFY(std::any_of(window.State().tableStyles.begin(), window.State().tableStyles.end(),
+        [](const CadTableStyle& item) { return item.name == "Field Points"; }));
+    QVERIFY(SurfaceStyles::Find(window.State().surfaceStyles, "Construction Surface"));
+    QVERIFY(FindSurveyPointStyle(window.State().surveyPointStyles, "Field Point Symbol"));
+    QVERIFY(std::any_of(window.State().surveyPointLabelStyles.begin(),
+        window.State().surveyPointLabelStyles.end(),
+        [](const SurveyPointLabelStyleDefinition& item) { return item.name == "Field Point Label"; }));
+    QVERIFY(CadBlockFindDef(window.State().blockDefs, "FieldPointMarker") >= 0);
+    QVERIFY(CadBlockFindDef(window.State().blockDefs, "NestedPointMarker") >= 0);
   }
 
   void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {

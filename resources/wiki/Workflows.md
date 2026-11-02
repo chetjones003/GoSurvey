@@ -21,8 +21,10 @@ Start-to-finish tasks, using only what GoSurvey actually does.
 6. In **Properties → General** with nothing selected, set **Default text height (in)** — 0.10 is a
    common choice.
 7. **File → Save as Template…**. The dialog starts in the personal template folder. This saves
-   layers, styles, layouts/page setups, plot scale, insertion units, and drawing settings; it leaves
-   model/paper geometry and survey points out.
+   layers, text/dimension/multileader/table/surface/survey-point/point-label styles, layouts and
+   page setups, plot scale, insertion units, and drawing settings. It leaves model/paper entities,
+   survey points, and point groups out. Block definitions required by survey-point block-marker
+   styles are kept as style dependencies; block inserts and unrelated block definitions are not.
 8. **View → Settings… → Files → Startup template (.gst)**, browse to that file, and press
    **Save startup preferences**.
 

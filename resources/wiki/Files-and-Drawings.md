@@ -78,11 +78,15 @@ project's defaults.
 
 The startup workspace template is a separate setting and does not control New Drawing.
 Use **File → Save as Template…** to save reusable setup from the current drawing. Templates keep
-layers and their linetypes, text and annotation styles, layouts and page setups, plot scale,
-insertion units, and drawing settings. Model and paper geometry, survey points, and point groups
-are left out. The save dialog starts in the personal template folder; a saved template is available
-there. Choose the saved `.gst` in **Options → Files** to use it as the default for future standalone
-drawings. A `.gst` is not opened with File → Open.
+layers and their linetypes; text, dimension, multileader, table, surface, survey-point, and
+point-label styles; layouts and page setups; plot scale; insertion units; and drawing settings.
+Model and paper entities, survey points, and point groups are left out. Block definitions used by
+survey-point styles are kept as style dependencies, while source block inserts and unrelated block
+definitions are left out. The save dialog starts in the personal template folder. Choose the saved
+`.gst` in **Options → Files** to use it as the default for future standalone drawings. A `.gst` is
+not opened with File → Open.
+
+The startup workspace template is a separate setting and does not control New Drawing.
 
 **Settings → Files:**
 

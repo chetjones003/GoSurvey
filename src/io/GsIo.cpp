@@ -4612,6 +4612,31 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
              "surfaceAttrs", "surveyPoints", "pointGroups", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 
+    // Survey point styles that use named block markers need those block definitions to render in a
+    // new drawing. Keep only their dependency closure; source block INSERTs and unrelated block
+    // definitions remain drawing content and are omitted.
+    std::vector<bool> requiredBlockDefs(st.blockDefs.size(), false);
+    std::vector<size_t> pendingBlockDefs;
+    auto requireBlockDef = [&](const std::string& name) {
+      const int index = CadBlockFindDef(st.blockDefs, name);
+      if (index >= 0 && !requiredBlockDefs[static_cast<size_t>(index)]) {
+        requiredBlockDefs[static_cast<size_t>(index)] = true;
+        pendingBlockDefs.push_back(static_cast<size_t>(index));
+      }
+    };
+    for (const SurveyPointStyleDefinition& style : st.surveyPointStyles)
+      if (style.markerType == 2 && !style.markerBlockName.empty())
+        requireBlockDef(style.markerBlockName);
+    for (size_t i = 0; i < pendingBlockDefs.size(); ++i)
+      for (const CadBlockNested& nested : st.blockDefs[pendingBlockDefs[i]].content.nested)
+        requireBlockDef(nested.defName);
+
+    json retainedBlockDefs = json::array();
+    for (size_t i = 0; i < st.blockDefs.size(); ++i)
+      if (requiredBlockDefs[i])
+        retainedBlockDefs.push_back(CadBlockDefToJson(st.blockDefs[i]));
+    doc["blockDefs"] = std::move(retainedBlockDefs);
+
     // Viewport clipping and the source drawing's camera/view depend on geometry that is no longer
     // present. Layout/page setup and viewport definitions remain, while sheet entities are removed.
     doc.erase("sectionPlane");
