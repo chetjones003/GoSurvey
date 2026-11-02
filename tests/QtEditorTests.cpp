@@ -6369,15 +6369,9 @@ private Q_SLOTS:
     QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
                         [](const CadBlockDefinition& block) { return block.name == "LayoutBorder"; }));
 
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int row = -1;
-      for (int i = 0; i < list->count(); ++i)
-        if (list->item(i)->text() == "Field Template — Personal") row = i;
-      QVERIFY(row >= 0); list->setCurrentRow(row);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
+    QVERIFY(static_cast<size_t>(targetUtf8.size()) < sizeof(window.State().defaultDrawingTemplatePathUtf8));
+    std::copy(targetUtf8.cbegin(), targetUtf8.cend(), window.State().defaultDrawingTemplatePathUtf8);
+    window.State().defaultDrawingTemplatePathUtf8[targetUtf8.size()] = '\0';
     window.NewDrawing();
     QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
     QCOMPARE(window.State().pointGroups.front().name, std::string("Control Points"));
