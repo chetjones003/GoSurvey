@@ -2161,6 +2161,10 @@ json BuildRoot(const AppCommandState& st) {
       o["style"] = a.style;
       o["type"] = static_cast<int>(a.type);
       o["startingStation"] = a.startingStation;
+      if (a.parentId != 0) {  // REQ-488: a linked offset alignment
+        o["parentId"] = a.parentId;
+        o["offsetDistance"] = a.offsetDistance;
+      }
       json ents = json::array();
       for (const alignment::Entity& e : a.Entities()) {
         json q;
@@ -2174,6 +2178,7 @@ json BuildRoot(const AppCommandState& st) {
           q["right"] = e.right;
         }
         q["c"] = static_cast<int>(e.constraint);
+        if (e.locks != 0) q["lk"] = static_cast<int>(e.locks);
         ents.push_back(std::move(q));
       }
       o["entities"] = std::move(ents);
@@ -3945,6 +3950,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (el.contains("startingStation") && el["startingStation"].is_number())
         a.startingStation = el["startingStation"].get<double>();
+      if (el.contains("parentId") && el["parentId"].is_number_unsigned()) a.parentId = el["parentId"].get<std::uint64_t>();
+      if (el.contains("offsetDistance") && el["offsetDistance"].is_number()) a.offsetDistance = el["offsetDistance"].get<double>();
       bool ok = el.contains("entities") && el["entities"].is_array();
       if (ok) {
         for (const auto& q : el["entities"]) {
@@ -3961,6 +3968,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             const int c = q["c"].get<int>();
             if (c >= 0 && c <= 3) e.constraint = static_cast<alignment::Entity::Constraint>(c);
           }
+          if (q.contains("lk") && q["lk"].is_number_integer()) e.locks = static_cast<unsigned char>(q["lk"].get<int>() & 7);
           if (!a.AppendRaw(e)) {
             ok = false;
             break;

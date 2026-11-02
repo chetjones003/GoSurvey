@@ -1673,6 +1673,13 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::Alignment: {  // REQ-487.1: start, tangent ends, curve radius grips
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.alignments.size()) {
+        for (const alignment::Grip& g : alignment::GripPoints(cmd.alignments[static_cast<size_t>(sel.index)]))
+          tryGrip(sel, static_cast<float>(g.point.x), static_cast<float>(g.point.y), g.which);
+      }
+      break;
+    }
     default:
       break;
     }
@@ -1754,6 +1761,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   }
   case SelectedEntity::Type::Spline:  // REQ-443
     cmd.entityGripOrigSpline = cmd.cadSplines[static_cast<size_t>(bestSel.index)];
+    break;
+  case SelectedEntity::Type::Alignment:  // REQ-487.1
+    cmd.entityGripOrigAlignment = cmd.alignments[static_cast<size_t>(bestSel.index)];
     break;
   default:
     break;
@@ -7177,6 +7187,16 @@ const CmdEntry kRegistry[] = {
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y>"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "", "Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE]"},
+    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
+    {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF"},
+    {"alignmentinsert", "", "Insert a tangent or curve: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE, ..."},
+    {"alignmentremove", "", "Remove an entity: ALIGNMENTREMOVE <name>, <entity#>"},
+    {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
+    {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
+    {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
+    {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
+    {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
+    {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
@@ -9395,9 +9415,63 @@ static void TransformSelectedPipeRuns(AppCommandState& st, PointFn pt, bool dupl
   }
 }
 
+/// REQ-487.1: map every selected alignment through \p fn (an Alignment transform that returns false to refuse), in place or,
+/// with \p duplicate, as a new INDEPENDENT alignment with a unique name and a fresh id. A linked offset that is moved is
+/// rebuilt from its parent afterwards, so it can never be left displaced from the geometry it is defined by.
+template <typename AlignFn>
+static void TransformSelectedAlignments(AppCommandState& st, AlignFn fn, bool duplicate) {
+  std::set<int> seen;
+  bool changed = false;
+  for (const SelectedEntity& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Alignment || e.index < 0 || static_cast<size_t>(e.index) >= st.alignments.size())
+      continue;
+    if (!seen.insert(e.index).second)
+      continue;
+    const size_t ix = static_cast<size_t>(e.index);
+    alignment::Alignment a = st.alignments[ix];
+    if (!fn(a))
+      continue;
+    if (duplicate) {
+      a.id = st.nextEntityId++;
+      a.parentId = 0;
+      const std::string base = a.name;
+      int n = 2;
+      for (;;) {
+        bool taken = false;
+        for (const alignment::Alignment& o : st.alignments) taken = taken || o.name == a.name;
+        if (!taken) break;
+        a.name = base + " (" + std::to_string(n++) + ")";
+      }
+      a.equations = st.alignments[ix].equations;
+      st.alignments.push_back(std::move(a));
+    } else {
+      st.alignments[ix] = std::move(a);
+      changed = true;
+    }
+  }
+  if (changed) {
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
+  }
+}
+
+static void TranslateSelectedAlignments(AppCommandState& st, double dx, double dy, bool duplicate) {
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Translate(dx, dy); return true; }, duplicate);
+}
+
 static void TranslateSelectedPipeRuns(AppCommandState& st, float dx, float dy, float dz, bool duplicate) {
   const ray3d::Vec3 d{static_cast<double>(dx), static_cast<double>(dy), static_cast<double>(dz)};
   TransformSelectedPipeRuns(st, [&](const ray3d::Vec3& p) { return ray3d::Add(p, d); }, duplicate);
+  if (dx != 0.f || dy != 0.f)
+    TranslateSelectedAlignments(st, static_cast<double>(dx), static_cast<double>(dy), duplicate);  // REQ-487.1
+}
+
+static void RotateSelectedAlignments(AppCommandState& st, const ray3d::Vec3& axisPoint, const ray3d::Vec3& axisUnit,
+                                     double angleRad, bool duplicate) {
+  if (std::fabs(axisUnit.z) < 1.0 - 1e-9)
+    return;  // an alignment is horizontal: only a vertical axis keeps it so
+  const double cw = -angleRad * (axisUnit.z > 0.0 ? 1.0 : -1.0);  // ray3d rotates counter-clockwise; azimuths run clockwise
+  TransformSelectedAlignments(st, [&](alignment::Alignment& a) { a.Rotate(axisPoint.x, axisPoint.y, cw); return true; }, duplicate);
 }
 
 static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisPoint,
@@ -9406,6 +9480,7 @@ static void RotateSelectedPipeRuns(AppCommandState& st, const ray3d::Vec3& axisP
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::RotatePointAboutAxis(p, axisPoint, axisUnit, rad); },
       duplicate);
+  RotateSelectedAlignments(st, axisPoint, axisUnit, rad, duplicate);  // REQ-487.1
 }
 
 /// MIRROR's solids and pipe runs, across the plane through \p planePoint with unit normal
@@ -9419,6 +9494,11 @@ static void MirrorSelectedSolidsAndPipeRuns(AppCommandState& st, const ray3d::Ve
   TransformSelectedPipeRuns(
       st, [&](const ray3d::Vec3& p) { return ray3d::ReflectPointAcrossPlane(p, planePoint, planeUnit); },
       /*duplicate=*/true);
+  if (std::fabs(planeUnit.z) < 1e-9) {  // REQ-487.1: a vertical mirror plane keeps an alignment horizontal
+    const double px = planePoint.x, py = planePoint.y;
+    TransformSelectedAlignments(
+        st, [&](alignment::Alignment& a) { return a.Mirror(px, py, px - planeUnit.y, py + planeUnit.x); }, /*duplicate=*/true);
+  }
 }
 
 // dz defaults to 0 so every existing 2D caller (COPY, ARRAY rectangular under the World UCS) is
@@ -11860,6 +11940,8 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float bz, fl
     TransformSelectedPipeRuns(
         st, [&](const ray3d::Vec3& p) { return ray3d::Add(base, ray3d::Scale(ray3d::Sub(p, base), k)); },
         /*duplicate=*/false);
+    TransformSelectedAlignments(  // REQ-487.1: the plan scale; an alignment has no elevation to scale
+        st, [&](alignment::Alignment& a) { return a.Scale(static_cast<double>(bx), static_cast<double>(by), k); }, /*duplicate=*/false);
   }
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
@@ -27484,6 +27566,16 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     }
     return;
   }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1: re-derive from the grabbed shape every move, through the solver
+    if (static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    alignment::Alignment moved;
+    (void)alignment::DragGrip(st.entityGripOrigAlignment, st.entityGripWhich, {static_cast<double>(x), static_cast<double>(y)}, &moved);
+    st.alignments[static_cast<size_t>(idx)] = std::move(moved);
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);
+    return;
+  }
   case SelectedEntity::Type::Circle: {
     if (static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
       return;
@@ -28441,6 +28533,22 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
       }
     }
   }
+  // Alignments (REQ-480): erased with the solids and pipe runs, so MIRROR's delete-source takes them too. The
+  // caller's one undo snapshot already covers this removal. Offsets of an erased parent become independent.
+  {
+    std::set<int> alignIx;
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
+          static_cast<size_t>(e.index) < st.alignments.size())
+        alignIx.insert(e.index);
+    }
+    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
+      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
+    if (!alignIx.empty()) {
+      std::vector<std::string> quiet;
+      RefreshAlignmentOffsets(st, quiet);
+    }
+  }
 }
 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
@@ -28629,19 +28737,6 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
-
-  // Alignments (REQ-480): display-and-erase like the solids and pipe runs above - the caller's one undo
-  // snapshot already covers this removal.
-  {
-    std::set<int> alignIx;
-    for (const auto& e : st.selection) {
-      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 &&
-          static_cast<size_t>(e.index) < st.alignments.size())
-        alignIx.insert(e.index);
-    }
-    for (auto it = alignIx.rbegin(); it != alignIx.rend(); ++it)
-      st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
-  }
 
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -46950,6 +47045,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignment" || plotTok == "createalignment" || plotTok == "alignmentadd" ||
         plotTok == "alignmentlist" || plotTok == "alignmentdelete" || plotTok == "getstationoffset" ||
         plotTok == "getpointfromstationoffset" || plotTok == "createalignmentfromobjects" ||
+        plotTok == "alignmentedit" ||
+        plotTok == "alignmentlock" ||
+        plotTok == "alignmentinsert" ||
+        plotTok == "alignmentremove" ||
+        plotTok == "reversealignment" ||
+        plotTok == "reversealigndirection" ||
+        plotTok == "alignmentstation" ||
+        plotTok == "offsetalignment" ||
+        plotTok == "alignmentdetach" ||
+        plotTok == "alignmentintersect" ||
+        plotTok == "editalignment" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -46988,6 +47094,28 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunGetPointFromStationOffset(st, rest, log);
       else if (plotTok == "createalignmentfromobjects")
         RunCreateAlignmentFromObjects(st, rest, log);
+      else if (plotTok == "alignmentedit")
+        RunAlignmentEdit(st, rest, log);
+      else if (plotTok == "alignmentlock")
+        RunAlignmentLock(st, rest, log);
+      else if (plotTok == "alignmentinsert")
+        RunAlignmentInsert(st, rest, log);
+      else if (plotTok == "alignmentremove")
+        RunAlignmentRemove(st, rest, log);
+      else if (plotTok == "reversealignment")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "reversealigndirection")
+        RunReverseAlignment(st, rest, log);
+      else if (plotTok == "alignmentstation")
+        RunAlignmentStation(st, rest, log);
+      else if (plotTok == "offsetalignment")
+        RunOffsetAlignment(st, rest, log);
+      else if (plotTok == "alignmentdetach")
+        RunAlignmentDetach(st, rest, log);
+      else if (plotTok == "alignmentintersect")
+        RunAlignmentIntersect(st, rest, log);
+      else if (plotTok == "editalignment")
+        RunEditAlignment(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

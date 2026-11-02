@@ -954,6 +954,13 @@ void EditorViewport::paintGL() {
           }
           break;
         }
+        case SelectedEntity::Type::Alignment: {  // REQ-487.1
+          if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
+            for (const alignment::Grip& g : alignment::GripPoints(m_State.alignments[static_cast<std::size_t>(selected.index)]))
+              grips.push_back({g.point.x, g.point.y, 0.0});
+          }
+          break;
+        }
         case SelectedEntity::Type::BlockRef: {
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.cadBlockRefs.size()) {
             const auto& ref = m_State.cadBlockRefs[static_cast<std::size_t>(selected.index)];

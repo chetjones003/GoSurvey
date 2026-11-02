@@ -41,9 +41,20 @@ struct Entity {
   double length = 0.0;        ///< Arc length along the entity (> 0).
   double radius = 0.0;        ///< Arc only (> 0).
   bool right = true;          ///< Arc only: true = curves right (clockwise), false = left.
-  /// Constraint state (REQ-481.6). Phase 1 stores it; the solver arrives in Phase 2 (REQ-486).
-  enum class Constraint { Fixed, FloatOnPrev, FloatOnNext, Free } constraint = Constraint::Fixed;
+  /// Constraint state (REQ-481.6, REQ-486.2). Fixed keeps its own parameters; FloatOnPrev / FloatOnNext stay tangent to
+  /// the entity they are attached to and move with it; Free (an arc between two tangents) re-solves between its
+  /// neighbours. The first entity is Fixed. The integer values are persisted - never reorder.
+  enum class Constraint { Fixed = 0, FloatOnPrev = 1, FloatOnNext = 2, Free = 3 } constraint = Constraint::Fixed;
+  /// REQ-486.3 parameter locks: an edit that would change a locked value is refused, naming the row.
+  static constexpr unsigned char kLockRadius = 1;   ///< Arc radius.
+  static constexpr unsigned char kLockLength = 2;   ///< Line length or arc length.
+  static constexpr unsigned char kLockBearing = 4;  ///< Line start azimuth.
+  unsigned char locks = 0;
 };
+
+/// Which stored parameter an edit changes (REQ-486.1). Derived values (delta, chord, ...) are edited by
+/// converting to one of these, exactly as the layout parameters table does.
+enum class EditParam { LineAzimuth, LineLength, CurveRadius, CurveLength, CurveDelta, CurveDirection, Constraint, Locks };
 
 /// Everything the issue asks to report about a circular curve (REQ-481.2). Derived, never stored.
 struct CurveData {
@@ -150,6 +161,30 @@ class Alignment {
   /// authoritative, so a non-tangent or gapped chain is representable and REQ-482 can report it.
   bool AppendRaw(const Entity& e);
   void Clear();
+  // --- REQ-486 / 487: constraint-aware editing. Each call works on a copy and commits only if the whole chain
+  //     re-solves, so a refused edit changes nothing. `whyNot` names the row and the reason. ---
+  /// Edits one parameter of entity `i` and re-solves the chain: FloatOnPrev entities after it follow, FloatOnNext
+  /// entities before it follow, Free arcs re-fit between their tangents. Editing a radius keeps the arc length;
+  /// editing a delta keeps the radius (GoSurvey rules). Derived (floating) azimuths cannot be edited directly.
+  bool EditEntity(int i, EditParam param, double value, std::string* whyNot = nullptr);
+  /// Inserts a tangent / curve after entity `i` (continuing tangent-continuously, FloatOnPrev) and shifts what follows.
+  bool InsertTangentAfter(int i, double length, std::string* whyNot = nullptr);
+  bool InsertCurveAfter(int i, double radius, double arcLength, bool right, std::string* whyNot = nullptr);
+  /// Deletes entity `i`; a following floating entity re-attaches to the one before it.
+  bool DeleteEntity(int i, std::string* whyNot = nullptr);
+  /// Whole-object transforms (REQ-487.1). Rotate is clockwise radians, like azimuths. Mirror reflects across the line
+  /// through (ax,ay)-(bx,by) and swaps curve handedness. Scale refuses a non-positive factor.
+  void Translate(double dx, double dy);
+  void Rotate(double cx, double cy, double clockwiseRadians);
+  bool Scale(double cx, double cy, double factor);
+  bool Mirror(double ax, double ay, double bx, double by);
+  /// Station equations beyond the end of the geometry after an edit (REQ-483.5). Removed; returns how many.
+  int PruneOrphanEquations();
+
+  // --- REQ-488: an Offset alignment is real geometry linked to its parent by id. `parentId` 0 = independent. ---
+  std::uint64_t parentId = 0;
+  double offsetDistance = 0.0;  ///< Signed, right of the parent positive.
+
   /// Reverses direction and stationing of a continuous alignment (REQ-487.2). The physical geometry
   /// is unchanged. Refuses (returns false) when a C0 gap exists. Reversing twice restores it.
   /// Station equations cannot be mirrored unambiguously (open question, REQ-503), so they are CLEARED
@@ -211,6 +246,8 @@ class Alignment {
 
  private:
   void Rebuild();
+  /// Re-solves every floating / free relationship in the chain (REQ-486.2). False names the failing row.
+  bool Resolve(std::string* whyNot);
   [[nodiscard]] Point2 PointInEntity(int i, double s) const;      ///< s = distance from entity start.
   [[nodiscard]] double AzimuthInEntity(int i, double s) const;
   [[nodiscard]] double SignedCurvature(const Entity& e) const;
@@ -266,5 +303,45 @@ struct FromObjectsOptions {
 
 /// Converts a bulge segment (A to B with DXF bulge) to a SourceSegment arc. A bulge of 0 is a line.
 [[nodiscard]] SourceSegment SegmentFromBulge(Point2 a, Point2 b, double bulge, int sourceIndex);
+
+// --- REQ-487.1 grips ---
+/// One grip on a selected alignment. `which` is stable across a drag: 0 = the start point (moves the whole alignment),
+/// 1 + 2*i = the END of tangent i (sets its length, and its bearing when it is Fixed), 2 + 2*i = the radius grip at the
+/// MIDDLE of curve i (sets its radius).
+struct Grip {
+  Point2 point;
+  int which = 0;
+};
+[[nodiscard]] std::vector<Grip> GripPoints(const Alignment& a);
+/// Applies a drag of grip `which` to `to`, starting from the unmodified `orig`. Goes through the same solver as the layout
+/// table, so a locked or underivable parameter simply does not move (the drag keeps the last valid shape). Returns false
+/// when the grip does not exist; `out` is always a valid alignment (orig when nothing applies).
+[[nodiscard]] bool DragGrip(const Alignment& orig, int which, Point2 to, Alignment* out);
+
+// --- REQ-488 offsets ---
+/// Builds the alignment `parent` offset by `distance` (right positive) into `out`: tangents become parallel tangents, curves
+/// concentric (radius -/+ offset). The parent must be continuous (C0) and tangent-continuous (C1) - Autodesk trims or
+/// extends at kinks; GoSurvey refuses rather than guess - and may not contain a curve whose offset radius would be <= 0.
+/// `out` keeps its own name/layer/style/id; type becomes Offset and the link fields are set.
+[[nodiscard]] bool MakeOffset(const Alignment& parent, double distance, Alignment* out, std::string* whyNot);
+
+// --- REQ-489 intersections ---
+struct Intersection {
+  Point2 point;
+  double stationA = 0.0;  ///< Internal station on the first alignment.
+  double stationB = 0.0;  ///< Internal station on the second.
+  double angle = 0.0;     ///< Crossing angle, radians 0..pi/2 (acute).
+  bool tangential = false;
+};
+struct IntersectionOverlap {
+  double fromStationA = 0.0, toStationA = 0.0;  ///< Coincident range along the first alignment.
+};
+/// Every intersection of two alignments (tangent/tangent, tangent/curve, curve/curve, touching). Coincident collinear
+/// tangents are reported as ranges, not points.
+[[nodiscard]] std::vector<Intersection> IntersectAlignments(const Alignment& a, const Alignment& b,
+                                                            std::vector<IntersectionOverlap>* overlaps = nullptr);
+/// Convenience for alignment/line and alignment/curve: wraps the other object as a one-entity alignment.
+[[nodiscard]] Alignment MakeLineObject(Point2 a, Point2 b);
+[[nodiscard]] Alignment MakeCircleObject(Point2 center, double radius, double startAngleCcw, double sweepCcw);
 
 }  // namespace alignment

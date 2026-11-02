@@ -1,4 +1,4 @@
-# TASK-alignment-phase1-issue121 — Civil-style alignments, Phase 1 (foundation) with the full spec
+# TASK-alignment-phase1-issue121 — Civil-style alignments, Phases 1 and 2 with the full spec
 
 - Type:    feature
 - Status:  in review
@@ -20,10 +20,12 @@
 - In: pure domain module; per-drawing store with undo; typed-argument commands; create from selected objects;
   station formatting/parsing and station equations; station/offset queries; selection, highlight, erase; snaps;
   Properties; Prospector folder; persistence; in-app wiki.
-- Out (later phases, REQ-486..502): layout editor/constraints, grips, REVERSEALIGNMENT command (the domain operation
-  exists and is tested), OFFSETALIGNMENT, intersections, spirals, styles/labels/tables/reports, surface and feature-line
-  integration, COGO commands, design criteria, dynamic-cursor readout, move/copy/rotate/scale of an alignment,
-  interactive on-screen layout.
+- Phase 2 (REQ-486..489, delivered): constraint solver (Fixed / FloatOnPrev / FloatOnNext / Free), parameter locks,
+  insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT layout table (Qt), grips (start, tangent end, curve
+  radius), MOVE/COPY/ROTATE/SCALE/MIRROR/ERASE, REVERSEALIGNMENT, ALIGNMENTSTATION, OFFSETALIGNMENT/ALIGNMENTDETACH
+  with linked refresh, ALIGNMENTINTERSECT.
+- Out (later phases, REQ-481 spirals, 482, 490 remaining snaps, 491..502): spirals, styles/labels/tables/reports, surface and
+  feature-line integration, COGO commands, design criteria, interactive on-screen layout toolbar.
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
@@ -38,9 +40,21 @@
   state-plane precision, tiny/huge radii, equations (increasing/decreasing/multiple/boundaries), formatting,
   continuity, reverse twice = identity, create-from-objects (lines, arcs, bulge polylines, gaps, fillets, pick/R),
   commands, persistence (bit-exact doubles), undo, pick/box/list/erase, snaps.
+- Phase 2: `GoSurveyTests [alignment-edit]` (solver, locks, insert/remove, offset refresh, intersect); Qt editor tests
+  cover EDITALIGNMENT dialog wiring; `ctest --preset ninja-release` — 194/194 passed (2026-11-02,
+  `build/artifacts/ctest-full2.log`).
+- Build: `.\build.bat` (release) from this worktree.
+
+## 7. Pre-PR product documentation (REQ-453)
+- `README.md`: no update needed (already mentions alignments at a high level).
+- `PRIVACY.md`: no update needed (no privacy impact).
+- `resources/wiki/`: updated `Alignments.md`, `Command-Reference.md`, and command pages for Phase 2 commands.
+- Public GitHub wiki: not updated in this session (same content as in-repo wiki pages; update before external publish if required).
 
 ## 6. Known gaps (honest)
 - No Qt screenshot has been captured/approved yet for the Prospector folder, Properties section and viewport display.
-- Dynamic-cursor station/offset readout (REQ-501.2) is not implemented.
+- The cursor readout is a status-bar readout (REQ-501.2 asks for the dynamic cursor itself).
+- The Alignment Layout table has no insert/delete buttons; ALIGNMENTINSERT / ALIGNMENTREMOVE do that.
+- Station-equation reversal is cleared, not mirrored (open question, REQ-503).
 - `Properties` is read-only for alignments (editable fields are REQ-501.1; they arrive with the layout editor).
 - AutoCAD-opens-without-Recover has not been verified with accoreconsole in this task.

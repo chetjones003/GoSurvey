@@ -170,6 +170,16 @@ for a compact list inside the program.
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y> | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | — | Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE] | [[Commands/createalignmentfromobjects]] |
+| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
+| `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING, ON\|OFF | [[Commands/alignmentlock]] |
+| `ALIGNMENTINSERT` | — | Insert a tangent or curve: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE, ... | [[Commands/alignmentinsert]] |
+| `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
+| `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | Reverse alignment direction and stationing: REVERSEALIGNMENT <name> | [[Commands/reversealignment]] |
+| `ALIGNMENTSTATION` | — | Starting station and station equations: ALIGNMENTSTATION <name>, START\|EQ, ... | [[Commands/alignmentstation]] |
+| `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
+| `ALIGNMENTDETACH` | — | Make a linked offset independent: ALIGNMENTDETACH <name> | [[Commands/alignmentdetach]] |
+| `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
+| `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
 
 ### Surfaces and volumes
 
@@ -290,7 +300,14 @@ for a compact list inside the program.
 | `ALIGNMENT` | `CREATEALIGNMENT` | [[Commands/alignment]] |
 | `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
+| `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
+| `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |
+| `ALIGNMENTINSERT` | — | [[Commands/alignmentinsert]] |
+| `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
+| `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
+| `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
+| `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
 | `ARC` | — | [[Commands/arc]] |
 | `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |
@@ -336,6 +353,7 @@ for a compact list inside the program.
 | `DIMSTY` | `DIMSTYLE`, `DSTY` | [[Commands/dimsty]] |
 | `DIST` | `DI` | [[Commands/dist]] |
 | `DIVIDE` | `DIV` | [[Commands/divide]] |
+| `EDITALIGNMENT` | — | [[Commands/editalignment]] |
 | `ELEV` | `UCS` | [[Commands/elev]] |
 | `ELLIPSE` | `EL` | [[Commands/ellipse]] |
 | `EXPLODE` | `X` | [[Commands/explode]] |
@@ -382,6 +400,7 @@ for a compact list inside the program.
 | `MTEXT` | `MT` | [[Commands/mtext]] |
 | `MVIEW` | `RECTVIEWPORT`, `RECTVP` | [[Commands/mview]] |
 | `OFFSET` | `O` | [[Commands/offset]] |
+| `OFFSETALIGNMENT` | — | [[Commands/offsetalignment]] |
 | `OPTIONS` | `OP`, `SETTINGS` | [[Commands/options]] |
 | `ORBIT` | `3DORBIT`, `3DO` | [[Commands/orbit]] |
 | `OVERKILL` | `OK` | [[Commands/overkill]] |
@@ -408,6 +427,7 @@ for a compact list inside the program.
 | `QUICKSELECT` | `QS` | [[Commands/quickselect]] |
 | `RECT` | `RECTANG`, `RECTANGLE` | [[Commands/rect]] |
 | `REGEN` | `RE` | [[Commands/regen]] |
+| `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | [[Commands/reversealignment]] |
 | `REVOLVE` | `REV` | [[Commands/revolve]] |
 | `ROTATE` | `RO` | [[Commands/rotate]] |
 | `ROTATESEL` | — | [[Commands/rotatesel]] |

@@ -5,11 +5,12 @@ An **alignment** is the horizontal path of a road, pipe, utility or baseline: st
 GoSurvey stores the exact tangent and curve numbers — never a many-sided polyline — so a station, an
 offset and a curve's radius are always exact.
 
-> **Status (Phase 1 of 6).** Tangents, circular curves, stationing with station equations,
+> **Status (Phases 1 and 2 of 6).** Tangents, circular curves, stationing with station equations,
 > station/offset queries, creation from typed input or selected objects, display, selection,
-> properties, object snaps, undo and save/reopen are available. Spirals, the layout editor,
-> offsets, labels, tables, reports, surface and feature-line links and design checks arrive in later
-> phases. See `spec/requirements.md` REQ-480 to REQ-503.
+> properties, object snaps, undo and save/reopen (Phase 1); editing with constraints, the Alignment
+> Layout table, grips, move/copy/rotate/scale/mirror, reverse, offset alignments and intersections
+> (Phase 2). Spirals, labels, tables, reports, surface and feature-line links and design checks arrive
+> in later phases. See `spec/requirements.md` REQ-480 to REQ-503.
 
 ## Station format
 
@@ -31,6 +32,16 @@ offset and a curve's radius are always exact.
 | `GETSTATIONOFFSET <alignment>, <x>, <y>` | Station, offset and bearing of a world point. Offsets are **positive to the right** facing the alignment's end. A point beyond an end reports the nearest end. |
 | `GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>` | X, Y and bearing of a station/offset. |
 | `ALIGNMENTDELETE <name>` | Removes the alignment (undoable). |
+| `EDITALIGNMENT [<name>]` | Opens the **Alignment Layout** table: one row per tangent/curve with stations, length, radius, delta, bearing, direction, constraint and continuity. Edit a cell and the whole alignment re-solves; a refused edit changes nothing and says why. |
+| `ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value>` | The same edit from the command line. Bearing is degrees clockwise from north and can only be edited on a **Fixed** tangent (a floating tangent's bearing comes from what it follows). Editing a radius keeps the curve's length; editing a delta keeps its radius. |
+| `ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING, ON\|OFF` | A locked value refuses any edit that would change it. |
+| `ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length>` / `CURVE, <radius>, <delta°>, LEFT\|RIGHT` | Inserts a tangent or curve that continues smoothly; what follows moves with it. |
+| `ALIGNMENTREMOVE <name>, <entity#>` | Removes an entity; a following floating entity re-attaches to the one before. A remaining gap is reported. |
+| `REVERSEALIGNMENT <name>` | Reverses direction and stationing of a continuous alignment (twice gives back the original). Station equations are cleared. |
+| `ALIGNMENTSTATION <name>, START, <station>[, CLEAR]` / `EQ, ADD, <raw>, <ahead>, INC\|DEC` / `EQ, REMOVE, <n>` / `EQ, LIST` | Starting station and station equations. |
+| `OFFSETALIGNMENT <parent>, R12, L12` | Creates real **offset alignments** (right/left of the parent, facing its end). They follow the parent when it is edited or moved. Refused where the offset would collapse a curve, at a kink in the parent,. |
+| `ALIGNMENTDETACH <name>` | Makes a linked offset independent so it can be edited. |
+| `ALIGNMENTINTERSECT <a>, <b>` / `<a>, LINE, x1, y1, x2, y2` / `<a>, CIRCLE, cx, cy, r` | Every intersection with station and crossing angle; coincident tangents are reported as a range. |
 
 ## Selecting, editing and saving
 
@@ -40,13 +51,19 @@ offset and a curve's radius are always exact.
 - Object snaps work on the exact geometry: **Endpoint** snaps to the beginning, end, PC, PT and PI
   (the tangent intersection), **Midpoint** to the middle of each tangent and curve, **Center** to a
   curve's centre, and **Nearest** to the closest point on the true curve.
+- **Grips.** Select an alignment: the start point moves the whole alignment; the end of a tangent sets its
+  length (and bearing, if Fixed); the middle of a curve sets its radius. Esc cancels a drag.
+- **MOVE, COPY, ROTATE, SCALE, MIRROR, ERASE** work on alignments (rotation and mirroring in plan). A copy is a new
+  independent alignment named `<name> (2)`.
+- **Constraints.** A new tangent or curve is *Float (prev)*: it stays tangent to what precedes it. *Fixed* keeps its
+  own values. *Free* is a curve that re-fits between two tangents.
 - Alignments are saved with the drawing as exact numbers. A saved DWG also contains ordinary
   AutoCAD lines and arcs on the alignment's layer so other software can draw it.
 
-## Limits in Phase 1
+## Limits so far
 
-- Geometry is built from typed commands or selected objects; there is no on-screen layout toolbar yet.
-- No spirals, station labels, tables, reports, offset alignments, profiles or surface elevations yet.
-- Moving, copying, rotating or scaling an alignment is not available yet (erase and re-create).
+- Geometry is built from typed commands, the layout table, grips or selected objects; there is no on-screen layout toolbar yet.
+- No spirals, station labels, tables, reports, widening, profiles or surface elevations yet.
+- Offsets are not built at a corner where the parent changes direction without a curve.
 
 See also [[Command Reference]], [[Object Snaps]] and [[Properties]].

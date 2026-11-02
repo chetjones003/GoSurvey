@@ -479,3 +479,483 @@ std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double 
   return "STA " + alignment::FormatStation(best->DisplayedStation(bestSo.internalStation, true)) + "  OFF " +
          FormatLinear(bestSo.offset, st.displayLinearPrecision) + "  " + Brg(st, bestSo.azimuth);
 }
+
+// ======================================================================================================
+// Phase 2 (REQ-486..489): editing, constraints, station control, reverse, offsets, intersections.
+// ======================================================================================================
+
+namespace {
+
+alignment::Alignment* FindById(AppCommandState& st, std::uint64_t id) {
+  for (alignment::Alignment& a : st.alignments) {
+    if (a.id == id) return &a;
+  }
+  return nullptr;
+}
+
+/// REQ-488.3: a linked offset follows its parent. Called after anything that changes a parent. A parent that no
+/// longer exists detaches the offset (it keeps its geometry); an offset that can no longer be built keeps its last
+/// geometry and says why.
+void RefreshLinkedOffsetsImpl(AppCommandState& st, std::vector<std::string>& log) {
+  for (alignment::Alignment& off : st.alignments) {
+    if (off.parentId == 0) continue;
+    alignment::Alignment* parent = FindById(st, off.parentId);
+    if (parent == nullptr) {
+      off.parentId = 0;
+      log.push_back("  Offset \"" + off.name + "\" lost its parent and is now independent.");
+      continue;
+    }
+    alignment::Alignment rebuilt = off;
+    std::string why;
+    if (alignment::MakeOffset(*parent, off.offsetDistance, &rebuilt, &why)) {
+      rebuilt.startingStation = off.startingStation;
+      off = std::move(rebuilt);
+    } else {
+      log.push_back("  Offset \"" + off.name + "\" could not follow \"" + parent->name + "\": " + why + ".");
+    }
+  }
+}
+
+/// Parses "<entity#>" (1-based) into a 0-based index within `a`, or reports.
+bool ParseEntityIndex(const alignment::Alignment& a, const std::string& cmd, const std::string& text, int* out,
+                      std::vector<std::string>& log) {
+  double v = 0.0;
+  if (!ParseNum(text, &v) || v != std::floor(v) || v < 1.0 || v > static_cast<double>(a.Entities().size())) {
+    log.push_back(cmd + " - \"" + text + "\" is not an entity number (1 to " + std::to_string(a.Entities().size()) + ").");
+    return false;
+  }
+  *out = static_cast<int>(v) - 1;
+  return true;
+}
+
+bool IsLinkedOffset(const alignment::Alignment& a, const std::string& cmd, std::vector<std::string>& log) {
+  if (a.parentId == 0) return false;
+  log.push_back(cmd + " - \"" + a.name + "\" is an offset linked to its parent; edit the parent, or ALIGNMENTDETACH it first.");
+  return true;
+}
+
+void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, std::vector<std::string>& log) {
+  for (const alignment::ContinuityIssue& c : r.CheckContinuity()) {
+    if (!c.c0) log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) + " (C0).");
+    else if (!c.c1) log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
+  }
+}
+
+}  // namespace
+
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) { RefreshLinkedOffsetsImpl(st, log); }
+
+// ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>
+void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTEDIT - usage: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value> "
+      "(DIRECTION LEFT|RIGHT; CONSTRAINT FIXED|FLOATPREV|FLOATNEXT|FREE).";
+  if (f.size() != 4) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTEDIT", f[0], log);
+  if (a == nullptr || IsLinkedOffset(*a, "ALIGNMENTEDIT", log)) return;
+  int idx = 0;
+  if (!ParseEntityIndex(*a, "ALIGNMENTEDIT", f[1], &idx, log)) return;
+  const std::string what = Lower(f[2]);
+  const bool isArc = a->Entities()[static_cast<size_t>(idx)].kind == alignment::EntityKind::Arc;
+  alignment::EditParam param{};
+  double v = 0.0;
+  if (what == "bearing" || what == "azimuth") {
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the bearing must be a number of degrees (azimuth from north)."); return; }
+    param = alignment::EditParam::LineAzimuth;
+    v *= kDegToRad;
+  } else if (what == "length") {
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the length must be a number."); return; }
+    param = isArc ? alignment::EditParam::CurveLength : alignment::EditParam::LineLength;
+  } else if (what == "radius") {
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the radius must be a number."); return; }
+    param = alignment::EditParam::CurveRadius;
+  } else if (what == "delta") {
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the delta must be a number of degrees."); return; }
+    param = alignment::EditParam::CurveDelta;
+    v *= kDegToRad;
+  } else if (what == "direction") {
+    const std::string d = Lower(f[3]);
+    if (d != "left" && d != "right") { log.push_back("ALIGNMENTEDIT - the direction must be LEFT or RIGHT."); return; }
+    param = alignment::EditParam::CurveDirection;
+    v = d == "right" ? 1.0 : 0.0;
+  } else if (what == "constraint") {
+    const std::string c = Lower(f[3]);
+    param = alignment::EditParam::Constraint;
+    if (c == "fixed") v = 0.0;
+    else if (c == "floatprev" || c == "floatonprev") v = 1.0;
+    else if (c == "floatnext" || c == "floatonnext") v = 2.0;
+    else if (c == "free") v = 3.0;
+    else { log.push_back("ALIGNMENTEDIT - the constraint must be FIXED, FLOATPREV, FLOATNEXT or FREE."); return; }
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment trial = *a;
+  std::string why;
+  if (!trial.EditEntity(idx, param, v, &why)) {
+    log.push_back("ALIGNMENTEDIT - refused: " + why + ". Nothing changed.");
+    return;
+  }
+  PushUndoSnapshot(st, "Edit alignment");
+  alignment::Alignment* target = Resolve(st, "ALIGNMENTEDIT", f[0], log);
+  *target = std::move(trial);
+  log.push_back("ALIGNMENTEDIT - \"" + target->name + "\" entity " + std::to_string(idx + 1) + " updated; length now " + Lin(st, target->Length()) +
+                ", ending at station " + Sta(*target, target->EndStation()) + ".");
+  ReportContinuity(st, *target, log);
+  RefreshAlignmentOffsets(st, log);
+}
+
+// ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF
+void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 4) {
+    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTLOCK", f[0], log);
+  if (a == nullptr) return;
+  int idx = 0;
+  if (!ParseEntityIndex(*a, "ALIGNMENTLOCK", f[1], &idx, log)) return;
+  const std::string what = Lower(f[2]), onoff = Lower(f[3]);
+  unsigned char bit = 0;
+  if (what == "radius") bit = alignment::Entity::kLockRadius;
+  else if (what == "length") bit = alignment::Entity::kLockLength;
+  else if (what == "bearing") bit = alignment::Entity::kLockBearing;
+  if (bit == 0 || (onoff != "on" && onoff != "off")) {
+    log.push_back("ALIGNMENTLOCK - usage: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF.");
+    return;
+  }
+  unsigned char mask = a->Entities()[static_cast<size_t>(idx)].locks;
+  mask = onoff == "on" ? static_cast<unsigned char>(mask | bit) : static_cast<unsigned char>(mask & ~bit);
+  PushUndoSnapshot(st, "Lock alignment parameter");
+  a = Resolve(st, "ALIGNMENTLOCK", f[0], log);
+  std::string why;
+  (void)a->EditEntity(idx, alignment::EditParam::Locks, static_cast<double>(mask), &why);
+  log.push_back("ALIGNMENTLOCK - entity " + std::to_string(idx + 1) + " of \"" + a->name + "\": " + what + (onoff == "on" ? " locked." : " unlocked."));
+}
+
+// ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length> | CURVE, <radius>, <delta deg>, LEFT|RIGHT
+void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage = "ALIGNMENTINSERT - usage: ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length> | CURVE, <radius>, <delta deg>, LEFT|RIGHT.";
+  if (f.size() < 4) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTINSERT", f[0], log);
+  if (a == nullptr || IsLinkedOffset(*a, "ALIGNMENTINSERT", log)) return;
+  int idx = 0;
+  if (!ParseEntityIndex(*a, "ALIGNMENTINSERT", f[1], &idx, log)) return;
+  alignment::Alignment trial = *a;
+  std::string why;
+  bool ok = false;
+  double v1 = 0.0, v2 = 0.0;
+  const std::string kind = Lower(f[2]);
+  if (kind == "tangent" && f.size() == 4 && ParseNum(f[3], &v1)) {
+    ok = trial.InsertTangentAfter(idx, v1, &why);
+  } else if (kind == "curve" && f.size() == 6 && ParseNum(f[3], &v1) && ParseNum(f[4], &v2) &&
+             (Lower(f[5]) == "left" || Lower(f[5]) == "right")) {
+    ok = trial.InsertCurveAfter(idx, v1, v1 * v2 * kDegToRad, Lower(f[5]) == "right", &why);
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  if (!ok) {
+    log.push_back("ALIGNMENTINSERT - refused: " + why + ". Nothing changed.");
+    return;
+  }
+  PushUndoSnapshot(st, "Insert alignment entity");
+  alignment::Alignment* target = Resolve(st, "ALIGNMENTINSERT", f[0], log);
+  *target = std::move(trial);
+  log.push_back("ALIGNMENTINSERT - \"" + target->name + "\" now has " + std::to_string(target->Entities().size()) + " entities, length " +
+                Lin(st, target->Length()) + ".");
+  RefreshAlignmentOffsets(st, log);
+}
+
+// ALIGNMENTREMOVE <name>, <entity#>
+void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("ALIGNMENTREMOVE - usage: ALIGNMENTREMOVE <name>, <entity#>.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTREMOVE", f[0], log);
+  if (a == nullptr || IsLinkedOffset(*a, "ALIGNMENTREMOVE", log)) return;
+  int idx = 0;
+  if (!ParseEntityIndex(*a, "ALIGNMENTREMOVE", f[1], &idx, log)) return;
+  alignment::Alignment trial = *a;
+  std::string why;
+  if (!trial.DeleteEntity(idx, &why)) {
+    log.push_back("ALIGNMENTREMOVE - refused: " + why + ". Nothing changed.");
+    return;
+  }
+  PushUndoSnapshot(st, "Remove alignment entity");
+  alignment::Alignment* target = Resolve(st, "ALIGNMENTREMOVE", f[0], log);
+  *target = std::move(trial);
+  log.push_back("ALIGNMENTREMOVE - entity " + std::to_string(idx + 1) + " removed; \"" + target->name + "\" has " +
+                std::to_string(target->Entities().size()) + " entities.");
+  ReportContinuity(st, *target, log);
+  RefreshAlignmentOffsets(st, log);
+}
+
+// REVERSEALIGNMENT <name>  (also REVERSEALIGNDIRECTION) - REQ-487.2
+void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = Trim(args);
+  alignment::Alignment* a = Resolve(st, "REVERSEALIGNMENT", name, log);
+  if (a == nullptr || IsLinkedOffset(*a, "REVERSEALIGNMENT", log)) return;
+  alignment::Alignment trial = *a;
+  std::string note;
+  if (!trial.Reverse(&note)) {
+    log.push_back("REVERSEALIGNMENT - refused: the alignment is empty or has a gap (it must be continuous). Nothing changed.");
+    return;
+  }
+  PushUndoSnapshot(st, "Reverse alignment");
+  alignment::Alignment* target = Resolve(st, "REVERSEALIGNMENT", name, log);
+  *target = std::move(trial);
+  log.push_back("REVERSEALIGNMENT - \"" + target->name + "\" now runs from " + Sta(*target, target->StartStation()) + " (was the end) to " +
+                Sta(*target, target->EndStation()) + "." + (note.empty() ? "" : " " + note + "."));
+  RefreshAlignmentOffsets(st, log);
+}
+
+// ALIGNMENTSTATION <name>, START, <station>[, CLEAR]
+//                  <name>, EQ, ADD, <raw station>, <ahead station>, INC|DEC
+//                  <name>, EQ, REMOVE, <n>   |   <name>, EQ, LIST        - REQ-483, REQ-487.3
+void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTSTATION - usage: ALIGNMENTSTATION <name>, START, <station>[, CLEAR] | <name>, EQ, ADD, <raw station>, <ahead station>, INC|DEC | "
+      "<name>, EQ, REMOVE, <n> | <name>, EQ, LIST.";
+  if (f.size() < 3) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+  if (a == nullptr) return;
+  const std::string sub = Lower(f[1]);
+  if (sub == "start") {
+    double sta = 0.0;
+    if (!alignment::ParseStation(f[2], &sta)) {
+      log.push_back("ALIGNMENTSTATION - \"" + f[2] + "\" is not a station.");
+      return;
+    }
+    const bool clear = f.size() == 4 && Lower(f[3]) == "clear";
+    if (!a->equations.empty() && !clear) {
+      log.push_back("ALIGNMENTSTATION - changing the starting station removes this alignment's " + std::to_string(a->equations.size()) +
+                    " station equation(s); repeat with , CLEAR to confirm.");
+      return;
+    }
+    PushUndoSnapshot(st, "Set starting station");
+    a = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+    a->equations.clear();
+    a->startingStation = sta;
+    log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" starts at " + alignment::FormatStation(sta) + " and ends at " + Sta(*a, a->EndStation()) + ".");
+    return;
+  }
+  if (sub != "eq" && sub != "equation") {
+    log.push_back(usage);
+    return;
+  }
+  const std::string verb = Lower(f[2]);
+  if (verb == "list") {
+    if (a->equations.empty()) log.push_back("ALIGNMENTSTATION - \"" + a->name + "\" has no station equations.");
+    for (size_t i = 0; i < a->equations.size(); ++i) {
+      const alignment::StationEquation& q = a->equations[i];
+      log.push_back("  EQUATION " + std::to_string(i + 1) + "  back " + alignment::FormatStation(a->DisplayedStation(q.rawBack, false)) + "  ahead " +
+                    alignment::FormatStation(q.ahead) + "  " + (q.increasing ? "increasing" : "decreasing") + "  (raw station " +
+                    alignment::FormatStation(q.rawBack) + ")");
+    }
+    return;
+  }
+  if (verb == "add" && f.size() == 6) {
+    alignment::StationEquation q;
+    const std::string dir = Lower(f[5]);
+    if (!alignment::ParseStation(f[3], &q.rawBack) || !alignment::ParseStation(f[4], &q.ahead) || (dir != "inc" && dir != "dec")) {
+      log.push_back(usage);
+      return;
+    }
+    q.increasing = dir == "inc";
+    alignment::Alignment trial = *a;
+    std::string why;
+    if (!trial.AddStationEquation(q, &why)) {
+      log.push_back("ALIGNMENTSTATION - refused: " + why + ".");
+      return;
+    }
+    PushUndoSnapshot(st, "Add station equation");
+    alignment::Alignment* target = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+    *target = std::move(trial);
+    log.push_back("ALIGNMENTSTATION - equation added; \"" + target->name + "\" now ends at station " +
+                  alignment::FormatStation(target->EndStationWithEquations()) + ".");
+    return;
+  }
+  if (verb == "remove" && f.size() == 4) {
+    double n = 0.0;
+    if (!ParseNum(f[3], &n) || n < 1.0 || n > static_cast<double>(a->equations.size()) || n != std::floor(n)) {
+      log.push_back("ALIGNMENTSTATION - \"" + f[3] + "\" is not an equation number (1 to " + std::to_string(a->equations.size()) + ").");
+      return;
+    }
+    PushUndoSnapshot(st, "Remove station equation");
+    a = Resolve(st, "ALIGNMENTSTATION", f[0], log);
+    a->equations.erase(a->equations.begin() + static_cast<std::ptrdiff_t>(n) - 1);
+    log.push_back("ALIGNMENTSTATION - equation " + std::to_string(static_cast<int>(n)) + " removed.");
+    return;
+  }
+  log.push_back(usage);
+}
+
+// OFFSETALIGNMENT <parent>, <distance>[, <distance> ...]    distance: 12 / R12 = right, -12 / L12 = left
+void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() < 2) {
+    log.push_back("OFFSETALIGNMENT - usage: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (R12 or 12 = right, L12 or -12 = left).");
+    return;
+  }
+  alignment::Alignment* parent = Resolve(st, "OFFSETALIGNMENT", f[0], log);
+  if (parent == nullptr) return;
+  const std::uint64_t parentId = parent->id;
+  const alignment::Alignment parentCopy = *parent;
+  std::vector<double> dists;
+  for (size_t i = 1; i < f.size(); ++i) {
+    std::string t = f[i];
+    double sign = 1.0;
+    if (!t.empty() && (t[0] == 'L' || t[0] == 'l')) { sign = -1.0; t.erase(0, 1); }
+    else if (!t.empty() && (t[0] == 'R' || t[0] == 'r')) { t.erase(0, 1); }
+    double d = 0.0;
+    if (!ParseNum(t, &d) || d == 0.0) {
+      log.push_back("OFFSETALIGNMENT - \"" + f[i] + "\" is not a non-zero offset distance.");
+      return;
+    }
+    dists.push_back(sign * d);
+  }
+  // Build everything first so one bad distance creates nothing.
+  std::vector<alignment::Alignment> made;
+  for (const double d : dists) {
+    alignment::Alignment off;
+    char buf[160];
+    std::snprintf(buf, sizeof buf, "%s - %s%g", parentCopy.name.c_str(), d < 0.0 ? "L" : "R", std::fabs(d));
+    off.name = buf;
+    if (FindAlignment(st, off.name) >= 0) {
+      log.push_back("OFFSETALIGNMENT - an alignment named \"" + off.name + "\" already exists.");
+      return;
+    }
+    off.layer = parentCopy.layer;
+    off.style = parentCopy.style;
+    std::string why;
+    if (!alignment::MakeOffset(parentCopy, d, &off, &why)) {
+      log.push_back("OFFSETALIGNMENT - refused for " + off.name + ": " + why + ". Nothing was created.");
+      return;
+    }
+    made.push_back(std::move(off));
+  }
+  PushUndoSnapshot(st, "Offset alignment");
+  for (alignment::Alignment& off : made) {
+    off.id = st.nextEntityId++;
+    off.parentId = parentId;
+    log.push_back("OFFSETALIGNMENT - created \"" + off.name + "\" (" + Lin(st, std::fabs(off.offsetDistance)) +
+                  (off.offsetDistance < 0.0 ? " left" : " right") + "), length " + Lin(st, off.Length()) + ".");
+    st.alignments.push_back(std::move(off));
+  }
+}
+
+// ALIGNMENTDETACH <name> - REQ-488.3
+void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = Trim(args);
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTDETACH", name, log);
+  if (a == nullptr) return;
+  if (a->parentId == 0) {
+    log.push_back("ALIGNMENTDETACH - \"" + a->name + "\" is not linked to a parent.");
+    return;
+  }
+  PushUndoSnapshot(st, "Detach alignment");
+  a = Resolve(st, "ALIGNMENTDETACH", name, log);
+  a->parentId = 0;
+  log.push_back("ALIGNMENTDETACH - \"" + a->name + "\" is now independent and can be edited.");
+}
+
+// ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, x1, y1, x2, y2 | <a>, CIRCLE, cx, cy, r   (WORLD coordinates) - REQ-489
+void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTINTERSECT - usage: ALIGNMENTINTERSECT <alignment>, <alignment> | <alignment>, LINE, <x1>, <y1>, <x2>, <y2> | "
+      "<alignment>, CIRCLE, <cx>, <cy>, <r>.";
+  if (f.size() < 2) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTINTERSECT", f[0], log);
+  if (a == nullptr) return;
+  alignment::Alignment other;
+  std::string otherName;
+  const std::string kind = Lower(f[1]);
+  double v[5] = {};
+  auto num = [&](size_t from, size_t n) {
+    if (f.size() != from + n) return false;
+    for (size_t i = 0; i < n; ++i) {
+      if (!ParseNum(f[from + i], &v[i])) return false;
+    }
+    return true;
+  };
+  if (kind == "line" && num(2, 4)) {
+    double ax = 0, ay = 0, bx = 0, by = 0;
+    CadCoord::LocalFromWorld(st, v[0], v[1], &ax, &ay);
+    CadCoord::LocalFromWorld(st, v[2], v[3], &bx, &by);
+    other = alignment::MakeLineObject({ax, ay}, {bx, by});
+    otherName = "the line";
+  } else if (kind == "circle" && num(2, 3) && v[2] > 0.0) {
+    double cx = 0, cy = 0;
+    CadCoord::LocalFromWorld(st, v[0], v[1], &cx, &cy);
+    other = alignment::MakeCircleObject({cx, cy}, v[2], 0.0, alignment::kTwoPi - 1e-9);
+    otherName = "the circle";
+  } else if (f.size() == 2) {
+    alignment::Alignment* b = Resolve(st, "ALIGNMENTINTERSECT", f[1], log);
+    if (b == nullptr) return;
+    other = *b;
+    otherName = "\"" + b->name + "\"";
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  if (a->Empty() || other.Empty()) {
+    log.push_back("ALIGNMENTINTERSECT - both objects need geometry.");
+    return;
+  }
+  std::vector<alignment::IntersectionOverlap> overlaps;
+  const std::vector<alignment::Intersection> hits = alignment::IntersectAlignments(*a, other, &overlaps);
+  log.push_back("ALIGNMENTINTERSECT - \"" + a->name + "\" and " + otherName + ": " + std::to_string(hits.size()) + " intersection(s).");
+  for (size_t i = 0; i < hits.size(); ++i) {
+    const alignment::Intersection& h = hits[i];
+    log.push_back("  " + std::to_string(i + 1) + ": X = " + Lin(st, h.point.x + CadCoord::WorldOriginX(st)) + "  Y = " +
+                  Lin(st, h.point.y + CadCoord::WorldOriginY(st)) + "  Station = " + Sta(*a, h.stationA) + "  Angle = " +
+                  FormatSweptAngle(h.angle / kDegToRad, CadAngleDisplaySettings(st)) + (h.tangential ? "  (tangential)" : ""));
+  }
+  for (const alignment::IntersectionOverlap& o : overlaps)
+    log.push_back("  Coincident from station " + Sta(*a, o.fromStationA) + " to " + Sta(*a, o.toStationA) + ".");
+}
+
+// EDITALIGNMENT [<name>] - REQ-486.1. Opens the Alignment Layout table in the Qt editor; headless it lists the rows.
+void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  std::string name = Trim(args);
+  if (name.empty()) {
+    for (const SelectedEntity& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Alignment && e.index >= 0 && static_cast<size_t>(e.index) < st.alignments.size()) {
+        name = st.alignments[static_cast<size_t>(e.index)].name;
+        break;
+      }
+    }
+  }
+  if (name.empty() && !st.alignments.empty()) name = st.alignments.front().name;
+  if (name.empty()) {
+    log.push_back("EDITALIGNMENT - this drawing has no alignments.");
+    return;
+  }
+  if (FindAlignment(st, name) < 0) {
+    log.push_back("EDITALIGNMENT - no alignment named \"" + name + "\".");
+    return;
+  }
+  st.alignmentLayoutRequested = true;
+  st.alignmentLayoutName = name;
+  RunAlignmentList(st, name, log);  // the same rows, for a window-less run
+}

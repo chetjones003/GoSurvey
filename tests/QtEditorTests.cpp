@@ -765,6 +765,52 @@ private Q_SLOTS:
     QVERIFY(window.grab().save(Issue914Shot("qt-121-alignment-cursor-readout.png")));
   }
 
+  void issue121AlignmentLayoutEditorEditsThroughTheSolver() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1280, 800);
+    for (const char* line : {"ALIGNMENT Main Road, Two-lane road, 5+00", "ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90",
+                             "ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT", "ALIGNMENTADD Main Road, TANGENT, 60",
+                             "ALIGNMENTADD Main Road, CURVE, 60, 50, LEFT", "ALIGNMENTADD Main Road, TANGENT, 50"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    bool opened = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentLayoutDialog");
+      QVERIFY(dialog);
+      opened = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("alignmentLayoutTable");
+      auto* status = dialog->findChild<QLabel*>("alignmentLayoutStatus");
+      QVERIFY(table);
+      QVERIFY(status);
+      QCOMPARE(table->rowCount(), 5);
+      QCOMPARE(table->item(1, 1)->text(), QString("Curve"));
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-table.png")));
+
+      // Editing a radius runs ALIGNMENTEDIT: the solver keeps the chain tangent and the table shows the new values.
+      table->item(1, 5)->setText("100");
+      QTest::qWait(150);
+      QCOMPARE(window.State().alignments[0].Entities()[1].radius, 100.0);
+      QCOMPARE(table->item(1, 5)->text(), QString("100.0000"));
+      QVERIFY(status->text().contains("updated"));
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-edited.png")));
+
+      // A derived (floating) bearing is refused with the reason, and the table shows the real value again.
+      const double before = window.State().alignments[0].Entities()[2].startAzimuth;
+      table->item(2, 7)->setText("10");
+      QTest::qWait(150);
+      QVERIFY(status->text().contains("refused"));
+      QCOMPARE(window.State().alignments[0].Entities()[2].startAzimuth, before);
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-layout-refused.png")));
+      dialog->accept();
+    });
+    window.Submit("EDITALIGNMENT Main Road");
+    QVERIFY(opened);
+    window.Submit("UNDO");
+    QCOMPARE(window.State().alignments[0].Entities()[1].radius, 80.0);  // the edit was one undo step
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

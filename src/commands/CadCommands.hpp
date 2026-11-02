@@ -3624,6 +3624,10 @@ struct AppCommandState {
   /// Set by the Qt editor. ADDPOINTTABLE then opens the dialog instead of typed prompts.
   bool addPointTableDialogAvailable = false;
   bool addPointTableDialogRequested = false;
+  /// REQ-486.1: EDITALIGNMENT asks the Qt editor to open the Alignment Layout table on \ref alignmentLayoutName
+  /// (empty: the selected or first alignment). A headless run only reports it.
+  bool alignmentLayoutRequested = false;
+  std::string alignmentLayoutName;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -4422,6 +4426,7 @@ struct AppCommandState {
   /// REQ-443: the whole spline as it was when a grip drag began, so RMB / Esc restores it exactly (a Fit
   /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
   CadSpline entityGripOrigSpline;
+  alignment::Alignment entityGripOrigAlignment;  ///< REQ-487.1: the alignment as it was when the grip was grabbed
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -7119,6 +7124,8 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripLengthenMode = false;
 }
 
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
   if (!st.entityGripMoveActive)
     return;
@@ -7147,6 +7154,14 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     if (idx < 0 || static_cast<size_t>(idx) >= st.cadSplines.size())
       return;
     st.cadSplines[static_cast<size_t>(idx)] = st.entityGripOrigSpline;
+    break;
+  }
+  case SelectedEntity::Type::Alignment: {  // REQ-487.1
+    if (idx < 0 || static_cast<size_t>(idx) >= st.alignments.size())
+      return;
+    st.alignments[static_cast<size_t>(idx)] = st.entityGripOrigAlignment;
+    std::vector<std::string> quiet;
+    RefreshAlignmentOffsets(st, quiet);  // the linked offsets followed the drag; put them back with it
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -8037,6 +8052,18 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-488.3: rebuilds every linked offset alignment from its parent (a vanished parent detaches it).
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log);
+void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
 /// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
 [[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);

@@ -96,7 +96,13 @@ bool Alignment::AppendTangent(Point2 start, double azimuth, double length) {
 
 bool Alignment::AppendTangent(double length) {
   if (entities_.empty()) return false;  // the first entity needs an explicit start and azimuth
-  return AppendTangent(EndPoint(), EndAzimuth(), length);
+  Entity e;
+  e.kind = EntityKind::Line;
+  e.start = EndPoint();
+  e.startAzimuth = EndAzimuth();
+  e.length = length;
+  e.constraint = Entity::Constraint::FloatOnPrev;  // continues tangent-continuously, so it follows what precedes it
+  return AppendRaw(e);
 }
 
 bool Alignment::AppendTangentTo(Point2 end) {
@@ -118,6 +124,7 @@ bool Alignment::AppendCurve(double radius, double arcLength, bool right) {
   e.radius = radius;
   e.length = arcLength;
   e.right = right;
+  e.constraint = Entity::Constraint::FloatOnPrev;
   return AppendRaw(e);
 }
 
@@ -139,6 +146,9 @@ bool Alignment::Reverse(std::string* note) {
     e.start = end;
     e.startAzimuth = NormAz(endAz + kPi);
     if (e.kind == EntityKind::Arc) e.right = !e.right;
+    // What followed its predecessor now follows its successor, and vice versa.
+    if (e.constraint == Entity::Constraint::FloatOnPrev) e.constraint = Entity::Constraint::FloatOnNext;
+    else if (e.constraint == Entity::Constraint::FloatOnNext) e.constraint = Entity::Constraint::FloatOnPrev;
     rev.push_back(e);
   }
   entities_ = std::move(rev);

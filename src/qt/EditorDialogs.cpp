@@ -2,6 +2,7 @@
 #include "QtAccent.hpp"
 #include "EditorViewport.hpp"
 #include "EditorPointGroups.hpp"
+#include "EditorAlignmentLayout.hpp"
 #include "EditorPointTableDialog.hpp"
 #include "EditorLayerManager.hpp"
 #include "CadCommands.hpp"
@@ -1285,6 +1286,12 @@ void EditorWindow::ServiceUiRequests() {
   } else if (m_State.showLayerManagerWindow) {
     m_State.showLayerManagerWindow = false;
     ShowLayers();
+  } else if (m_State.alignmentLayoutRequested) {  // REQ-486.1
+    m_State.alignmentLayoutRequested = false;
+    m_ModalOpen = true;
+    ShowAlignmentLayoutDialog(this, m_State, m_Log, m_State.alignmentLayoutName);
+    m_ModalOpen = false;
+    Refresh();
   } else if (m_State.addPointTableDialogRequested) {
     m_State.addPointTableDialogRequested = false;
     m_ModalOpen = true;

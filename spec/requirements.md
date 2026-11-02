@@ -16216,11 +16216,13 @@ capability that does not exist. They are recorded here rather than quietly dropp
   1. The issue's example (tangent 250.00', curve R 500 ~132.14', tangent) is reproduced from entered parameters and
      the displayed rows match the table values to display precision.
   2. Changing curve radius from 500 to 400 with both tangents Floating keeps C1 and updates later stations.
-  3. Setting a Fixed radius then editing Δ so radius would change is refused with the row named.
+  3. With the radius locked, a radius edit is refused with the row named; with the length locked, a Δ edit is refused (a Δ
+     edit keeps the radius and changes the length, a radius edit keeps the length - GoSurvey rules). A refused edit changes nothing.
   4. Editing the first tangent's bearing with a Free curve between recomputes the curve; bearing/radius round trip.
   5. Undo/redo restores table and geometry in one step per edit.
 - Owner-layer: Domain, Qt UI.
 - Status: accepted (2026-11-02, user approval)
+- Revisions: Phase 2 delivered 2026-11-02: solver (Fixed/FloatOnPrev/FloatOnNext/Free), locks, insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT table (Qt).
 
 ### REQ-487 — Alignment editing commands, grips, reverse, move
 
@@ -16248,6 +16250,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Copying produces a distinct id and name.
 - Owner-layer: Commands, Domain, Qt UI.
 - Status: accepted (2026-11-02, user approval)
+- Revisions: Phase 2 delivered 2026-11-02: grips (start, tangent end, curve radius), MOVE/COPY/ROTATE/SCALE/MIRROR, REVERSEALIGNMENT, ALIGNMENTSTATION. Reverse clears station equations.
 
 ### REQ-488 — Offset alignments
 
@@ -16284,6 +16287,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   5. A curve with R=10 offset +20 toward the centre is refused.
 - Owner-layer: Domain, Commands.
 - Status: accepted (2026-11-02, user approval)
+- Revisions: Phase 2 delivered 2026-11-02: OFFSETALIGNMENT/ALIGNMENTDETACH, linked refresh; refuses kinks, collapse and (until Phase 3) spirals.
 
 ### REQ-489 — Alignment intersections
 
@@ -16302,6 +16306,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   4. Overlapping tangents report a range.
 - Owner-layer: Domain, Commands.
 - Status: accepted (2026-11-02, user approval)
+- Revisions: Phase 2 delivered 2026-11-02: ALIGNMENTINTERSECT against an alignment, a line or a circle; overlaps reported as ranges.
 
 ### REQ-490 — Geometry points and alignment-specific object snaps
 
