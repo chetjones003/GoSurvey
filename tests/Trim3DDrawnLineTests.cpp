@@ -12,6 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "CadCommands.hpp"
+#include "DwgIo.hpp"
 #include "util/ray3d.hpp"
 
 #include <string>
@@ -210,4 +211,38 @@ TEST_CASE("Plan-view drawn-line TRIM is unchanged when no pick ray is supplied (
   CHECK(st.userLinesFlat[1] == Approx(0.f));
   CHECK(st.userLinesFlat[2] == Approx(0.f));
   CHECK(st.userLinesFlat[3] == Approx(100.f));
+}
+
+TEST_CASE("Plan-view TRIM preserves the exact crossing of double-precision linework", "[trim][precision]") {
+  AppCommandState st;
+  // Coordinates from the reported crossing. Narrowing the cutter endpoints to float moves the
+  // intersection by about 2.8e-7 drawing units, leaving a measurable sliver at high zoom.
+  constexpr double ax = -34.4379;
+  constexpr double ay = 6.8974;
+  constexpr double bx = 15.8321;
+  constexpr double by = 7.8792;
+  constexpr double cx = -12.1502;
+  constexpr double cy = 23.6868;
+  constexpr double dx = -11.9539;
+  constexpr double dy = -12.1502;
+  st.userLinesFlat = {ax, ay, 0.0, bx, by, 0.0, cx, cy, 0.0, dx, dy, 0.0};
+  st.active = AppCommandState::Kind::Trim;
+  st.trimPhase = AppCommandState::TrimPhase::CuttingLine_WaitP1;
+
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double length = std::hypot(vx, vy);
+  const double mx = ax + 0.3 * vx;
+  const double my = ay + 0.3 * vy;
+  const double nx = -vy / length;
+  const double ny = vx / length;
+  std::vector<std::string> log;
+  REQUIRE(SubmitTrimViewportPick(st, static_cast<float>(mx - 2.0 * nx), static_cast<float>(my - 2.0 * ny), 1.f, log));
+  REQUIRE(SubmitTrimViewportPick(st, static_cast<float>(mx + 2.0 * nx), static_cast<float>(my + 2.0 * ny), 1.f, log));
+
+  REQUIRE(st.userLinesFlat.size() == 12);
+  const double trimmedX = st.userLinesFlat[0];
+  const double trimmedY = st.userLinesFlat[1];
+  const double cutterCross = (trimmedX - cx) * (dy - cy) - (trimmedY - cy) * (dx - cx);
+  CHECK(std::abs(cutterCross) / std::hypot(dx - cx, dy - cy) < 1e-12);
 }

@@ -7281,7 +7281,10 @@ private Q_SLOTS:
     };
     const QPointF from = screenPoint(12, 4), to = screenPoint(-2, -4);
     sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, from, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(state.selBoxWaitingSecond);
+    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::NoButton);
+    sendMouse(QEvent::MouseButtonPress, to, Qt::LeftButton, Qt::LeftButton);
     sendMouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
     QVERIFY(!state.selection.empty());
     QVERIFY(!state.selBoxWaitingSecond);

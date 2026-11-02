@@ -1581,7 +1581,7 @@ TEST_CASE("The selection highlight traces the curve that is drawn", "[CadCommand
   sel.index = 0;
   st.selection.push_back(sel);
 
-  std::vector<float> hlLines;
+  std::vector<double> hlLines;
   std::vector<float> hlCircles;
   BuildSelectionHighlight(st, &hlLines, &hlCircles);
   REQUIRE(hlLines.size() >= 12u);

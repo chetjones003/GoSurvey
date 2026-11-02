@@ -27426,6 +27426,19 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     if (static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
       return;
     const size_t k = static_cast<size_t>(idx) * 6;
+    if (st.entityGripLengthenMode) {
+      const float x0 = static_cast<float>(st.userLinesFlat[k]);
+      const float y0 = static_cast<float>(st.userLinesFlat[k + 1]);
+      const float x1 = static_cast<float>(st.userLinesFlat[k + 3]);
+      const float y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+      const float fixedX = st.entityGripWhich == 0 ? x1 : x0;
+      const float fixedY = st.entityGripWhich == 0 ? y1 : y0;
+      float along = (x - fixedX) * st.entityGripLengthenDirX + (y - fixedY) * st.entityGripLengthenDirY;
+      if (!(along > 1e-6f) || !std::isfinite(along))
+        along = 1e-6f;
+      x = fixedX + st.entityGripLengthenDirX * along;
+      y = fixedY + st.entityGripLengthenDirY * along;
+    }
     if (st.entityGripWhich == 0) {
       st.userLinesFlat[k] = x;
       st.userLinesFlat[k + 1] = y;
@@ -29055,8 +29068,8 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   if (cut.type == ST::LineSeg) {
     const size_t k = static_cast<size_t>(cut.index) * 6;
     if (k + 5 < st.userLinesFlat.size())
-      out->push_back({static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]),
-                      static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4])});
+      out->push_back({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                      st.userLinesFlat[k + 4]});
     return;
   }
   if (cut.type == ST::Circle) {
