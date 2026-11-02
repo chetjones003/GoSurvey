@@ -3567,6 +3567,70 @@ private Q_SLOTS:
     QCOMPARE(afterOk.displayWheelZoomFactor, 1.25f);
   }
 
+  void issue1112DefaultDrawingTemplateOptionsPersistAndClear() {
+    IsolatedUserData userData;
+    QTemporaryDir templateDir;
+    QVERIFY(templateDir.isValid());
+    AppCommandState templateSource;
+    templateSource.userLinesFlat = {1.0, 2.0, 0.0, 4.0, 2.0, 0.0};
+    templateSource.userLineAttrs.push_back(EntityAttributes{});
+    const QString templatePath = templateDir.filePath("Field.gst");
+    const QByteArray templatePathUtf8 = templatePath.toUtf8();
+    std::vector<std::string> log;
+    QVERIFY(SaveGoSurveyTemplateFile(templateSource, templatePathUtf8.constData(), log));
+
+    EditorWindow window;
+    window.ShowSettings();
+    auto* dialog = window.findChild<QDialog*>("applicationSettings");
+    QVERIFY(dialog);
+    auto* categories = dialog->findChild<QListWidget*>("settingsCategories");
+    QVERIFY(categories);
+    const auto filesRow = categories->findItems("Files", Qt::MatchExactly);
+    QCOMPARE(filesRow.size(), 1);
+    categories->setCurrentItem(filesRow.front());
+    auto* pathField = dialog->findChild<QLineEdit*>("defaultDrawingTemplatePath");
+    auto* browse = dialog->findChild<QPushButton*>("browseDefaultDrawingTemplate");
+    QVERIFY(pathField && browse);
+
+    QTimer pickerTimer;
+    pickerTimer.setInterval(10);
+    connect(&pickerTimer, &QTimer::timeout, &pickerTimer, [&] {
+      auto* picker = qobject_cast<QFileDialog*>(QApplication::activeModalWidget());
+      if (!picker) return;
+      pickerTimer.stop();
+      picker->selectFile(templatePath);
+      auto* buttons = picker->findChild<QDialogButtonBox*>();
+      QVERIFY(buttons);
+      auto* open = buttons->button(QDialogButtonBox::Open);
+      QVERIFY(open);
+      open->click();
+    });
+    pickerTimer.start();
+    browse->click();
+    QCOMPARE(pathField->text(), templatePath);
+    QVERIFY(window.State().defaultDrawingTemplatePathUtf8[0] == '\0');
+    AppCommandState beforeApply;
+    LoadUserStartupPrefs(beforeApply);
+    QVERIFY(beforeApply.defaultDrawingTemplatePathUtf8[0] == '\0');
+
+    dialog->findChild<QPushButton*>("settingsApply")->click();
+    QCOMPARE(QString::fromUtf8(window.State().defaultDrawingTemplatePathUtf8), templatePath);
+    AppCommandState reloaded;
+    LoadUserStartupPrefs(reloaded);
+    QCOMPARE(QString::fromUtf8(reloaded.defaultDrawingTemplatePathUtf8), templatePath);
+
+    auto* useBundled = dialog->findChild<QPushButton*>("useBundledDrawingTemplate");
+    QVERIFY(useBundled);
+    useBundled->click();
+    QVERIFY(pathField->text().isEmpty());
+    QCOMPARE(QString::fromUtf8(window.State().defaultDrawingTemplatePathUtf8), templatePath);
+    dialog->findChild<QPushButton*>("settingsApply")->click();
+    QVERIFY(window.State().defaultDrawingTemplatePathUtf8[0] == '\0');
+    AppCommandState cleared;
+    LoadUserStartupPrefs(cleared);
+    QVERIFY(cleared.defaultDrawingTemplatePathUtf8[0] == '\0');
+  }
+
   // REQ-450 / issue #1033: cursor controls preview live, Cancel restores, Apply/OK keep and persist.
   void issue1033CursorSettingsPreviewAndCancel() {
     IsolatedUserData userData;

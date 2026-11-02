@@ -12648,7 +12648,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Purpose: a Qt user can start a drawing from a known blank or templated document without altering the source template or the existing drawing.
 - Priority: must
 - Type: functional
-- Decision: D-2026-10-17-a.
+- Decision: D-2026-10-30-a (amends D-2026-10-17-a).
 - Depends on: REQ-055 (drawing tabs), REQ-175 (drawing document), REQ-308 (Start tab), REQ-374 (project defaults), REQ-449 (Qt Options).
 - Statement:
   1. **Default template setting.** Qt Options lets the user choose a `.gst` file to use as the default for standalone new drawings, or clear the selection. The setting is stored in `gosurvey-user.json` and is independent of the startup workspace template setting.
@@ -12664,8 +12664,8 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - New Drawing from the Start screen and normal drawing entry points creates directly without showing a template chooser.
   - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
 - Owner-layer: UI/Options (`src/qt/`); persisted preference (`src/io/UserPrefs`); shared `.gst` loading remains in IO (`src/io/GsIo`).
-- Status: accepted (2026-10-17).
-- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
+- Status: accepted (2026-10-17; amended 2026-10-30).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885); 2026-10-30 — chooser behavior replaced with the configurable default template (D-2026-10-30-a).
 
 ### REQ-425 — Crash and startup-failure reports
 
