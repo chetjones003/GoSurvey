@@ -21,8 +21,9 @@ inline float CadAngNormalizeMinusPiToPi(float a) {
   return a;
 }
 
-/// Normalises a dimension text rotation into (-pi/2, pi/2] so text never reads upside down (REQ-477,
-/// issue #804). Reversing a dimension's extension points flips the direction by pi; this undoes that.
+/// Makes a dimension text rotation readable (REQ-477, issue #804). For an input in [-pi, pi]
+/// radians, the result is in (-pi/2, pi/2], undoing the flip caused by reversing extension points.
+/// Normalization performs at most 16 full turns, so larger inputs may remain outside that range.
 inline float CadDimReadableTextRotation(float a) {
   constexpr float kHalfPi = 1.57079632679489661923f;
   float r = CadAngNormalizeMinusPiToPi(a);
