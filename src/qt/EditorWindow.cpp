@@ -202,44 +202,6 @@ class TopographicStartBody final : public QWidget {
 
 };
 
-struct DrawingTemplateChoice {
-  QString label;
-  QString path;
-  bool blank = false;
-};
-
-QVector<DrawingTemplateChoice> DiscoverDrawingTemplates() {
-  QVector<DrawingTemplateChoice> choices;
-  choices.push_back({"Blank Drawing", {}, true});
-
-  const auto bundled = ResolveBundledAssetPath(std::filesystem::path("resources") / "drawing-templates");
-  const auto userData = UserDataDirectory();
-  const std::array<std::pair<std::filesystem::path, QString>, 2> roots{{
-      {bundled, "Bundled"},
-      {userData.empty() ? std::filesystem::path{} : userData / "drawing-templates", "Personal"}}};
-  for (const auto& [root, origin] : roots) {
-    if (root.empty()) continue;
-    std::error_code ec;
-    std::filesystem::directory_iterator it(root, ec), end;
-    if (ec) continue;
-    for (; it != end; it.increment(ec)) {
-      if (ec) { ec.clear(); continue; }
-      std::error_code fileError;
-      if (!it->is_regular_file(fileError) || fileError) continue;
-      QString extension = QString::fromStdWString(it->path().extension().wstring());
-      if (extension.compare(".gst", Qt::CaseInsensitive) != 0) continue;
-      const QString stem = QString::fromStdWString(it->path().stem().wstring());
-      const QString path = QString::fromStdWString(it->path().wstring());
-      choices.push_back({QString("%1 — %2").arg(stem, origin), path, false});
-    }
-  }
-  std::sort(choices.begin() + 1, choices.end(), [](const auto& a, const auto& b) {
-    const int byLabel = QString::compare(a.label, b.label, Qt::CaseInsensitive);
-    return byLabel == 0 ? a.path.compare(b.path, Qt::CaseInsensitive) < 0 : byLabel < 0;
-  });
-  return choices;
-}
-
 template <typename Action>
 void RunUiActionSafely(Action&& action) noexcept {
   try {
@@ -1037,6 +999,7 @@ void EditorWindow::BuildRibbon() {
   file->addAction(CommandAction("&Open...", "Open.png", "OPEN", QKeySequence::Open));
   file->addAction(CommandAction("&Save", "Save.png", "SAVE", QKeySequence::Save));
   file->addAction(CommandAction("Save &as...", "Save_As.png", "SAVEAS", QKeySequence::SaveAs));
+  file->addAction(CommandAction("Save as &Template...", "Save_As.png", "SAVETEMPLATE"));
   file->addSeparator();
   file->addAction(CommandAction("Drawing Settings...", "settings.png", "DRAWINGSETTINGS"));
   file->addSeparator();
@@ -1373,6 +1336,7 @@ void EditorWindow::Submit(const QString& command) {
     if (!path.isEmpty()) OpenDrawing(path);
   } else if (verb == "SAVE" || verb == "QSAVE") SaveDrawing();
   else if (verb == "SAVEAS") SaveDrawing(true);
+  else if (verb == "SAVETEMPLATE") SaveDrawingTemplate();
   else if (verb == "PDFVIEW") ShowPdf();
   else if (verb == "LSA" || verb == "TRAVERSE") ShowAdjustment();
   else if (verb == "POINTDATABASE") ShowPoints(true);
@@ -1499,7 +1463,7 @@ void EditorWindow::ShowPageSetupManager(int layoutIndex) {
     const float height = value.landscape ? std::min(value.portraitWidthIn, value.portraitHeightIn) : std::max(value.portraitWidthIn, value.portraitHeightIn);
     details->setText(QString("Device\nGoSurvey PDF (vector)\n\nPaper\n%1\n%2 × %3 in · %4\n\nPlot area\nLayout\n\nScale\n%5")
         .arg(paper).arg(width, 0, 'f', 2).arg(height, 0, 'f', 2).arg(value.landscape ? "Landscape" : "Portrait")
-        .arg(value.fitToPaper ? "Fit to paper" : QString::number(value.scaleModelPerPaperIn, 'g', 5) + " model units / inch"));
+        .arg(value.fitToPaper ? "Fit to paper" : "1 : " + QString::number(value.scaleModelPerPaperIn, 'g', 5)));
     const bool saved = selected > 0 && selected - 1 < static_cast<int>(m_State.savedPageSetups.size());
     apply->setEnabled(writable && saved); modify->setEnabled(writable); create->setEnabled(writable);
     m_State.pageSetupManagerSel = selected - 1;
@@ -1547,7 +1511,7 @@ void EditorWindow::ShowPageSetupEditor(int targetIndex) {
   auto* customWidth = new QDoubleSpinBox(&dialog); customWidth->setRange(0.1, 1e5); customWidth->setDecimals(3); customWidth->setSuffix(" in"); customWidth->setValue(draft.portraitWidthIn); form->addRow("Custom width", customWidth);
   auto* customHeight = new QDoubleSpinBox(&dialog); customHeight->setRange(0.1, 1e5); customHeight->setDecimals(3); customHeight->setSuffix(" in"); customHeight->setValue(draft.portraitHeightIn); form->addRow("Custom height", customHeight);
   auto* fit = new QCheckBox("Fit to paper", &dialog); fit->setChecked(draft.fitToPaper); form->addRow("Plot scale", fit);
-  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Model units / inch", scale);
+  auto* scale = new QDoubleSpinBox(&dialog); scale->setRange(0.0001, 1e9); scale->setDecimals(4); scale->setValue(std::max(0.0001f, draft.scaleModelPerPaperIn)); form->addRow("Plot ratio (1 : N)", scale);
   auto* offsetX = new QDoubleSpinBox(&dialog); offsetX->setRange(-1e6, 1e6); offsetX->setDecimals(3); offsetX->setValue(draft.offsetXIn); form->addRow("Offset X (in)", offsetX);
   auto* offsetY = new QDoubleSpinBox(&dialog); offsetY->setRange(-1e6, 1e6); offsetY->setDecimals(3); offsetY->setValue(draft.offsetYIn); form->addRow("Offset Y (in)", offsetY);
   auto* center = new QCheckBox("Center the plot", &dialog); center->setChecked(draft.centerPlot); form->addRow("Placement", center);
@@ -1854,7 +1818,16 @@ void EditorWindow::NewDrawing(std::uint32_t projectUid) {
       m_State.activeDrawingIdx < static_cast<int>(m_State.drawingTabs.size()))
     projectUid = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)].projectUid;
   if (projectUid == 0) {
-    ShowDrawingTemplateChooser();
+    QString templatePath = QString::fromUtf8(m_State.defaultDrawingTemplatePathUtf8);
+    if (templatePath.isEmpty()) {
+      const auto bundled = ResolveDefaultWorkspaceTemplateGstPath();
+      if (bundled.empty()) {
+        QMessageBox::warning(this, "New drawing", "GoSurvey’s default drawing template could not be found.");
+        return;
+      }
+      templatePath = QString::fromStdWString(bundled.wstring());
+    }
+    CreateDrawingFromTemplate(0, templatePath);
     return;
   }
   CreateDrawingFromTemplate(projectUid);
@@ -1900,70 +1873,6 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
   }
   m_Viewport->InvalidateGeometry();
   Refresh();
-}
-
-void EditorWindow::ShowDrawingTemplateChooser() {
-  QDialog dialog(this);
-  dialog.setObjectName("drawingTemplateDialog");
-  dialog.setWindowTitle("New Drawing");
-  dialog.setMinimumSize(720, 430);
-  auto* layout = new QVBoxLayout(&dialog);
-  auto* heading = new QLabel("New Drawing", &dialog);
-  heading->setStyleSheet("font-size:20px; font-weight:600;");
-  layout->addWidget(heading);
-  auto* intro = new QLabel("Choose a blank drawing or start from a template.", &dialog);
-  layout->addWidget(intro);
-  auto* list = new QListWidget(&dialog);
-  list->setObjectName("drawingTemplateList");
-  const auto choices = DiscoverDrawingTemplates();
-  for (const auto& choice : choices) {
-    auto* item = new QListWidgetItem(choice.label, list);
-    item->setData(Qt::UserRole, choice.path);
-    item->setData(Qt::UserRole + 1, choice.blank);
-  }
-  if (list->count()) list->setCurrentRow(0);
-  list->hide();
-  auto* tiles = new QWidget(&dialog);
-  auto* grid = new QGridLayout(tiles);
-  grid->setSpacing(12);
-  grid->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-  auto* group = new QButtonGroup(tiles);
-  group->setExclusive(true);
-  for (int row = 0; row < choices.size(); ++row) {
-    const auto& choice = choices[row];
-    auto* tile = new QPushButton(choice.label + "\n\n" + (choice.blank ?
-        "Start with an empty drawing" : "Use this drawing template"), tiles);
-    tile->setObjectName(QString("drawingTemplateTile%1").arg(row));
-    tile->setCheckable(true);
-    tile->setFixedSize(228, 124);
-    tile->setIcon(style()->standardIcon(choice.blank ? QStyle::SP_FileIcon : QStyle::SP_DirIcon));
-    tile->setIconSize(QSize(34, 34));
-    group->addButton(tile, row);
-    grid->addWidget(tile, row / 3, row % 3);
-    connect(tile, &QPushButton::clicked, &dialog, [list, row] { list->setCurrentRow(row); });
-    if (row == 0) tile->setChecked(true);
-  }
-  connect(list, &QListWidget::currentRowChanged, &dialog, [group](int row) {
-    if (auto* button = group->button(row)) button->setChecked(true);
-  });
-  layout->addWidget(tiles, 1);
-  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Open, &dialog);
-  buttons->setObjectName("drawingTemplateButtons");
-  buttons->button(QDialogButtonBox::Open)->setText("Create Drawing");
-  buttons->button(QDialogButtonBox::Open)->setEnabled(list->currentItem() != nullptr);
-  connect(list, &QListWidget::currentRowChanged, &dialog, [buttons](int row) {
-    buttons->button(QDialogButtonBox::Open)->setEnabled(row >= 0);
-  });
-  connect(list, &QListWidget::itemDoubleClicked, &dialog, [&dialog](QListWidgetItem*) { dialog.accept(); });
-  connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-  layout->addWidget(buttons);
-  m_ModalOpen = true;
-  if (dialog.exec() == QDialog::Accepted && list->currentItem()) {
-    const bool blank = list->currentItem()->data(Qt::UserRole + 1).toBool();
-    CreateDrawingFromTemplate(0, blank ? QString{} : list->currentItem()->data(Qt::UserRole).toString());
-  }
-  m_ModalOpen = false;
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
@@ -2039,6 +1948,53 @@ bool EditorWindow::SaveDrawing(bool saveAs) {
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
   RefreshRecentDrawings();
   Refresh();
+  return true;
+}
+
+bool EditorWindow::SaveDrawingTemplate() {
+  if (m_State.activeDrawingIdx <= 0 || m_State.activeDrawingIdx >= static_cast<int>(m_State.drawingTabs.size())) {
+    QMessageBox::information(this, "Save as Template", "Open a drawing before saving a template.");
+    return false;
+  }
+
+  const auto userDataDirectory = UserDataDirectory();
+  if (userDataDirectory.empty()) {
+    QMessageBox::warning(this, "Save as Template", "The personal GoSurvey data folder is unavailable.");
+    return false;
+  }
+  const auto templateDirectory = userDataDirectory / "drawing-templates";
+  std::error_code directoryError;
+  std::filesystem::create_directories(templateDirectory, directoryError);
+  if (directoryError) {
+    QMessageBox::warning(this, "Save as Template", "The personal template folder could not be created.");
+    return false;
+  }
+
+  const auto& tab = m_State.drawingTabs[static_cast<size_t>(m_State.activeDrawingIdx)];
+  QString baseName = QString::fromUtf8(tab.name.c_str()).trimmed();
+  if (!m_State.activeDocFilePath.empty())
+    baseName = QFileInfo(QString::fromUtf8(m_State.activeDocFilePath.c_str())).completeBaseName();
+  if (baseName.isEmpty()) baseName = "Drawing Template";
+  const QString initialPath = QString::fromStdWString((templateDirectory / (baseName + ".gst").toStdWString()).wstring());
+  QFileDialog dialog(this, "Save as Template", initialPath, "GoSurvey template (*.gst)");
+  dialog.setObjectName("saveDrawingTemplateDialog");
+  dialog.setAcceptMode(QFileDialog::AcceptSave);
+  dialog.setFileMode(QFileDialog::AnyFile);
+  dialog.setDefaultSuffix("gst");
+  dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+
+  m_ModalOpen = true;
+  const bool accepted = dialog.exec() == QDialog::Accepted;
+  m_ModalOpen = false;
+  if (!accepted) return false;
+
+  QString path = dialog.selectedFiles().value(0);
+  if (path.isEmpty()) return false;
+  if (!path.endsWith(".gst", Qt::CaseInsensitive)) path += ".gst";
+  if (!SaveGoSurveyTemplateFile(m_State, path.toUtf8().constData(), m_Log)) {
+    QMessageBox::warning(this, "Save as Template", "The template could not be saved. See the command log.");
+    return false;
+  }
   return true;
 }
 
@@ -3060,7 +3016,7 @@ bool EditorWindow::RunSmokeChecks(QString& error) {
   if (!m_State.userLinesFlat.empty()) { error = "UNDO did not remove segment"; return false; }
   Submit("REDO");
   if (m_State.userLinesFlat.size() != 6) { error = "REDO did not restore segment"; return false; }
-  CreateDrawingFromTemplate();  // NewDrawing() opens the template chooser, a modal dialog
+  CreateDrawingFromTemplate();  // Open Drawing starts with an empty tab before loading the file.
   if (!m_State.userLinesFlat.empty()) { error = "New document inherited geometry"; return false; }
   SwitchDrawing(1);
   if (m_State.userLinesFlat.size() != 6) { error = "Document switch lost geometry"; return false; }

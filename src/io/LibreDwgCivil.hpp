@@ -99,8 +99,8 @@ struct PointStyleRecord {
     const unsigned char* bytes, std::size_t bitCount, std::size_t stringStart,
     std::size_t stringBitCount);
 
-/// Decodes count handles from the bit offset start, resolving relative handles against objectHandle.
-/// Returns no value for truncated data, unsupported codes or arithmetic overflow.
+/// Decodes count handles starting at the bit offset start, resolving relative handles against
+/// objectHandle. Returns no value for unsupported codes, invalid or truncated data, or overflow.
 [[nodiscard]] std::optional<std::vector<uint64_t>> DecodeHandles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t start,
     std::size_t count, uint64_t objectHandle);
@@ -110,9 +110,9 @@ struct PointStyleRecord {
 [[nodiscard]] std::optional<std::vector<PointLocation>> DecodePointNodeLocations(
     const unsigned char* bytes, std::size_t bitCount);
 
-/// Returns point-number and marker-style handle pairs for a supported point node. handleStart is
-/// a bit offset; commonHandles is the number of handles preceding the style handles. Invalid
-/// point records, references or handle data return no value.
+/// Returns point-number and marker-style-handle pairs from a supported point node. handleStart is
+/// a bit offset; commonHandles is the number of leading handles preceding style handles. Returns no
+/// value if point records, references, or handle data are invalid or truncated.
 [[nodiscard]] std::optional<std::vector<std::pair<int, uint64_t>>> DecodePointNodeMarkerStyles(
     const unsigned char* bytes, std::size_t bitCount, std::size_t handleStart,
     std::size_t commonHandles, uint64_t objectHandle);

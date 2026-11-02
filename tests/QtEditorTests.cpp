@@ -76,6 +76,7 @@
 #include <QAction>
 #include <QAbstractButton>
 #include <QApplication>
+#include <QFileDialog>
 #include <QPalette>
 #include <QMessageBox>
 #include <QDialog>
@@ -3499,7 +3500,7 @@ private Q_SLOTS:
     QVERIFY(!dialog->findChild<QLabel*>("crashDiagnosticsDisclosure"));
     QStringList names;
     for (int i = 0; i < categories->count(); ++i) names << categories->item(i)->text();
-    QCOMPARE(names, (QStringList{"Updates", "Display", "Drafting", "Survey Points"}));
+    QCOMPARE(names, (QStringList{"Updates", "Files", "Display", "Drafting", "Survey Points"}));
     QVERIFY(!dialog->findChild<QWidget*>("settingsPageAccount"));
     QVERIFY(!dialog->findChild<QWidget*>("usageDataSection"));
     auto* wheel = dialog->findChild<QDoubleSpinBox*>("settingsWheelZoomFactor");
@@ -3528,6 +3529,19 @@ private Q_SLOTS:
       categories->setCurrentRow(0);
       QVERIFY(dialog->grab().save(artifacts + "qt-1102-settings-without-crash-disclosure.png"));
     }
+    const QByteArray originalTemplatePath = window.State().defaultDrawingTemplatePathUtf8;
+    auto* templatePath = dialog->findChild<QLineEdit*>("defaultDrawingTemplatePath");
+    auto* settingsApply = dialog->findChild<QPushButton*>("settingsApply");
+    auto* settingsSaveStatus = dialog->findChild<QLabel*>("settingsSaveStatus");
+    QVERIFY(templatePath && settingsApply && settingsSaveStatus);
+    templatePath->setText(QString(800, QLatin1Char('x')));
+    settingsApply->click();
+    QVERIFY(settingsSaveStatus->text().contains("path is too long"));
+    QCOMPARE(QByteArray(window.State().defaultDrawingTemplatePathUtf8), originalTemplatePath);
+    templatePath->setText(QString::fromUtf8(originalTemplatePath));
+    settingsApply->click();
+    QVERIFY(settingsSaveStatus->text().isEmpty());
+
     const float wheelBefore = window.State().displayWheelZoomFactor;
     wheel->setValue(1.5);
     undo->setValue(12);
@@ -6105,54 +6119,39 @@ private Q_SLOTS:
     dock->setFloating(false);
   }
 
-  void qtDrawingTemplateWorkflowDiscoversCreatesCancelsAndPreservesFailure() {
+  void qtConfiguredDrawingTemplateOpensAndFailurePreservesActiveDrawing() {
     IsolatedUserData userData;
     const auto userTemplateDir = UserDataDirectory() / "drawing-templates";
     std::filesystem::create_directories(userTemplateDir);
-    auto writeTemplate = [&](const QString& name, double x) {
+    auto writeTemplate = [&](const wchar_t* name, double x) {
       AppCommandState source;
       source.userLinesFlat = {x, 2.0, 0.0, x + 10.0, 2.0, 0.0};
       source.userLineAttrs.push_back(EntityAttributes{});
-      const auto path = userTemplateDir / name.toStdWString();
+      const auto path = userTemplateDir / name;
       const auto pathUtf8 = QString::fromStdWString(path.wstring()).toUtf8();
       std::vector<std::string> log;
       return SaveGoSurveyTemplateFile(source, pathUtf8.constData(), log) ?
           QString::fromStdWString(path.wstring()) : QString{};
     };
-    const QString alphaPath = writeTemplate("Alpha.gst", 21.0);
-    const QString userDuplicatePath = writeTemplate("Field Survey.gst", 31.0);
-    QVERIFY(!alphaPath.isEmpty()); QVERIFY(!userDuplicatePath.isEmpty());
-    QFile ignoredFile(QString::fromStdWString((userTemplateDir / L"ignore.txt").wstring()));
-    QVERIFY(ignoredFile.open(QIODevice::WriteOnly)); ignoredFile.write("not a template"); ignoredFile.close();
-    QFile sourceFile(userDuplicatePath); QVERIFY(sourceFile.open(QIODevice::ReadOnly));
+    const QString selectedTemplate = writeTemplate(L"Field Survey.gst", 31.0);
+    QVERIFY(!selectedTemplate.isEmpty());
+    QFile sourceFile(selectedTemplate); QVERIFY(sourceFile.open(QIODevice::ReadOnly));
     const QByteArray sourceBytes = sourceFile.readAll(); sourceFile.close();
+    const auto brokenPath = userTemplateDir / L"Broken.gst";
+    { std::ofstream broken(brokenPath, std::ios::binary); broken << "{ malformed"; }
 
     EditorWindow window;
     window.SwitchDrawing(1);
     window.State().userLinesFlat = {1.0, 3.0, 0.0, 4.0, 3.0, 0.0};
     SaveDocumentToSnapshot(window.State(), window.State().activeDrawingIdx);
-    const auto beforeLines = window.State().userLinesFlat;
     const auto beforeTabs = window.State().drawingTabs.size();
-
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      QVERIFY(list->count() >= 4);
-      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
-      bool bundledDuplicate = false, userDuplicate = false, hasAlpha = false, hasIgnored = false;
-      int userRow = -1;
-      for (int row = 0; row < list->count(); ++row) {
-        const auto* item = list->item(row);
-        bundledDuplicate |= item->text() == "Field Survey — Bundled";
-        if (item->text() == "Field Survey — Personal") { userDuplicate = true; userRow = row; }
-        hasAlpha |= item->text() == "Alpha — Personal";
-        hasIgnored |= item->text().contains("ignore");
-      }
-      QVERIFY(bundledDuplicate); QVERIFY(userDuplicate); QVERIFY(hasAlpha); QVERIFY(!hasIgnored);
-      QVERIFY(userRow >= 0);
-      list->setCurrentRow(userRow);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
+    auto setTemplatePath = [&](const QString& path) {
+      const QByteArray utf8 = path.toUtf8();
+      QVERIFY(static_cast<size_t>(utf8.size()) < sizeof(window.State().defaultDrawingTemplatePathUtf8));
+      std::copy(utf8.cbegin(), utf8.cend(), window.State().defaultDrawingTemplatePathUtf8);
+      window.State().defaultDrawingTemplatePathUtf8[utf8.size()] = '\0';
+    };
+    setTemplatePath(selectedTemplate);
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), beforeTabs + 1);
     QVERIFY(window.State().activeDrawingIdx > 1);
@@ -6167,53 +6166,239 @@ private Q_SLOTS:
     AppCommandState reopened;
     QVERIFY(OpenDrawingDocument(reopened, drawingPathUtf8.constData(), drawingLog));
     QCOMPARE(reopened.userLinesFlat, window.State().userLinesFlat);
-    sourceFile.setFileName(userDuplicatePath);
     QVERIFY(sourceFile.open(QIODevice::ReadOnly)); QCOMPARE(sourceFile.readAll(), sourceBytes); sourceFile.close();
 
     const auto activeIdx = window.State().activeDrawingIdx;
     const auto activeLines = window.State().userLinesFlat;
     const auto tabCount = window.State().drawingTabs.size();
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
+    setTemplatePath(QString::fromStdWString(brokenPath.wstring()));
+    QTimer::singleShot(0, [] {
+      for (auto* widget : QApplication::topLevelWidgets())
+        if (auto* warning = qobject_cast<QMessageBox*>(widget))
+          if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
     });
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), tabCount);
     QCOMPARE(window.State().activeDrawingIdx, activeIdx);
     QCOMPARE(window.State().userLinesFlat, activeLines);
 
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      QCOMPARE(list->item(0)->text(), QString("Blank Drawing"));
-      list->setCurrentRow(0);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
+    setTemplatePath(QString{});
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
     QVERIFY(window.State().userLinesFlat.empty());
-    window.SwitchDrawing(activeIdx);
+  }
 
-    const auto badPath = userTemplateDir / L"Broken.gst";
-    { std::ofstream bad(badPath, std::ios::binary); bad << "{ malformed"; }
+  void issue1134SaveAsTemplatePreservesReusableLineworkAndSetup() {
+    IsolatedUserData userData;
+    EditorWindow window;
+    window.SwitchDrawing(1);
+    auto& state = window.State();
+    state.activeDocFilePath = "Original.dwg";
+    state.cadGpuRevision = 41;
+    state.activeDocSavedRevision = 38;
+    state.drawingInsUnits = 2;
+    state.modelUnitsPerPlottedInch = 50.0;
+    state.drawingSettings.onlineMap = DrawingSettings::OnlineMap::UsgsTopo;
+    DrawingSettings::CapturedArea capturedArea;
+    capturedArea.map = DrawingSettings::OnlineMap::UsgsTopo;
+    capturedArea.level = 12;
+    capturedArea.tiles.push_back({42, 17, std::make_shared<const std::string>("captured-map-image")});
+    state.drawingSettings.capturedAreas.push_back(std::move(capturedArea));
+    state.currentLayer = "Field";
+    state.objectSnapEnabled = true;
+    state.viewportPanX = 9876.0;
+    state.viewportPanY = -5432.0;
+    state.viewportAzimuthDeg = 25.0f;
+    state.viewportProjection = Camera::Projection::Perspective;
+    state.activeUcs.origin = {100.0, 200.0, 30.0};
+    state.ucsNamed.push_back({"Lot Grid", state.activeUcs});
+    state.namedViews.push_back(NamedView{"Source View", 9876.0, -5432.0, 0.0, 2.0f, 25.0f, 45.0f});
+    state.activeViewName = "Source View";
+    state.drawingLayerTable = DefaultDrawingLayerTable();
+    CadLayerRow fieldLayer;
+    fieldLayer.name = "Field";
+    fieldLayer.linetype = "Dashed";
+    state.drawingLayerTable.push_back(fieldLayer);
+    TextStyle style;
+    style.name = "Boundary Notes";
+    style.fontFamily = "Arial";
+    state.textStyles.push_back(style);
+    state.activeTextStyleName = "Boundary Notes";
+    state.surveyLabelTemplates.numberOnly = "PT {id}";
+    state.activeDimensionStyle.textSizeInches = 0.37f;
+    state.activeMultileaderStyle.name = "Field Leaders";
+    state.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+    state.surfaceStyles.front().name = "Field Surface";
+    SurveyPointStyleDefinition markerStyle;
+    markerStyle.name = "Field Marker";
+    markerStyle.markerType = 2;
+    markerStyle.markerBlockName = "FieldMarkerBlock";
+    state.surveyPointStyles.push_back(markerStyle);
+    SurveyPointLabelStyleDefinition pointLabelStyle;
+    pointLabelStyle.name = "Field Point Labels";
+    pointLabelStyle.templates.numberOnly = "CP {id}";
+    state.surveyPointLabelStyles.push_back(pointLabelStyle);
+    state.tableStyles = CadTableBuiltinStyles();
+    CadTableStyle customTableStyle;
+    customTableStyle.name = "Field Tables";
+    customTableStyle.title = "Field Data";
+    state.tableStyles.push_back(customTableStyle);
+    CadBlockDefinition markerBlock;
+    markerBlock.name = "fieldmarkerblock";
+    markerBlock.content.nested.push_back(CadBlockNested{"NestedMarkerBlock", {}, {}});
+    state.blockDefs.push_back(markerBlock);
+    CadBlockDefinition nestedMarkerBlock;
+    nestedMarkerBlock.name = "nestedmarkerblock";
+    state.blockDefs.push_back(nestedMarkerBlock);
+    CadBlockDefinition unrelatedBlock;
+    unrelatedBlock.name = "UnrelatedBlock";
+    state.blockDefs.push_back(unrelatedBlock);
+    state.userLinesFlat = {0.0, 0.0, 0.0, 100.0, 0.0, 0.0};
+    state.userLineAttrs = {EntityAttributes{}};
+    state.surveyPoints.push_back(SurveyPoint{17, 100.0, 200.0, 3.0, "Control", "CTRL", "Field"});
+    PointGroup group;
+    group.name = "Control Points";
+    group.rule.descriptionMatch = "CTRL*";
+    state.pointGroups.push_back(group);
+    if (state.paperLayouts.empty()) state.paperLayouts.emplace_back();
+    state.paperLayouts[0].name = "Plan Set";
+    state.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+    CadBlockDefinition borderBlock;
+    borderBlock.name = "layoutborder";
+    state.blockDefs.push_back(borderBlock);
+    CadBlockRef borderRef;
+    borderRef.defName = "LayoutBorder";
+    state.paperLayouts[0].paperBlockRefs.push_back(borderRef);
+    SaveDocumentToSnapshot(state, state.activeDrawingIdx);
+
+    auto* action = window.findChild<QAction*>("command_SAVETEMPLATE");
+    QVERIFY(action);
+    auto* fileMenu = window.findChild<QMenu*>("fileMenu");
+    QVERIFY(fileMenu);
+    fileMenu->popup(QPoint(100, 100));
+    QTRY_VERIFY(fileMenu->isVisible());
+    QVERIFY(fileMenu->grab().save(Issue886Shot("qt-1134-file-menu.png")));
+    fileMenu->hide();
+    const auto personalTemplateDir = UserDataDirectory() / "drawing-templates";
+    const QString targetPath = QString::fromStdWString((personalTemplateDir / L"Field Template.gst").wstring());
+    QVERIFY(!std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+
     QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int brokenRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
-      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
-      QTimer::singleShot(0, [] {
-        for (auto* widget : QApplication::topLevelWidgets())
-          if (auto* warning = qobject_cast<QMessageBox*>(widget))
-            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
-      });
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
+      auto* dialog = window.findChild<QFileDialog*>("saveDrawingTemplateDialog");
+      QVERIFY(dialog);
+      QCOMPARE(QDir::cleanPath(dialog->directory().absolutePath()),
+               QDir::cleanPath(QString::fromStdWString(personalTemplateDir.wstring())));
+      QVERIFY(dialog->grab().save(Issue886Shot("qt-1134-save-template-dialog.png")));
+      dialog->reject();
     });
+    action->trigger();
+    QVERIFY(!std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+    QCOMPARE(state.activeDocFilePath, std::string("Original.dwg"));
+    QCOMPARE(state.cadGpuRevision, uint64_t(41));
+    QCOMPARE(state.activeDocSavedRevision, uint64_t(38));
+    QCOMPARE(state.userLinesFlat.size(), size_t(6));
+    QCOMPARE(state.surveyPoints.size(), size_t(1));
+
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QFileDialog*>("saveDrawingTemplateDialog");
+      QVERIFY(dialog);
+      dialog->selectFile(targetPath);
+      auto* buttons = dialog->findChild<QDialogButtonBox*>();
+      QVERIFY(buttons);
+      auto* save = buttons->button(QDialogButtonBox::Save);
+      QVERIFY(save);
+      save->click();
+    });
+    action->trigger();
+    QVERIFY(std::filesystem::exists(std::filesystem::path(targetPath.toStdWString())));
+    QCOMPARE(state.activeDocFilePath, std::string("Original.dwg"));
+    QCOMPARE(state.cadGpuRevision, uint64_t(41));
+    QCOMPARE(state.activeDocSavedRevision, uint64_t(38));
+
+    AppCommandState loaded;
+    std::vector<std::string> log;
+    const QByteArray targetUtf8 = targetPath.toUtf8();
+    QVERIFY2(LoadGoSurveyTemplateFile(loaded, targetUtf8.constData(), log), log.empty() ? "template load failed" : log.back().c_str());
+    QCOMPARE(loaded.viewportPanX, 0.0);
+    QCOMPARE(loaded.viewportPanY, 0.0);
+    QCOMPARE(loaded.viewportAzimuthDeg, 0.0f);
+    QCOMPARE(loaded.viewportProjection, Camera::Projection::Orthographic);
+    QVERIFY(ucs::FramesMatch(loaded.activeUcs, ucs::Ucs{}));
+    QCOMPARE(loaded.namedViews.size(), size_t(1));
+    QCOMPARE(loaded.namedViews.front().name, std::string("Source View"));
+    QCOMPARE(loaded.ucsNamed.size(), size_t(1));
+    QCOMPARE(loaded.ucsNamed.front().name, std::string("Lot Grid"));
+    QVERIFY(loaded.activeViewName.empty());
+    QCOMPARE(loaded.userLinesFlat.size(), size_t(6));
+    QCOMPARE(loaded.userLinesFlat[3], 100.0);
+    QVERIFY(loaded.surveyPoints.empty());
+    QCOMPARE(loaded.pointGroups.size(), size_t(1));
+    QCOMPARE(loaded.pointGroups.front().name, std::string("Control Points"));
+    QCOMPARE(loaded.pointGroups.front().rule.descriptionMatch, std::string("CTRL*"));
+    QVERIFY(loaded.drawingLayerTable.size() >= 2);
+    QCOMPARE(loaded.drawingLayerTable[1].name, std::string("Field"));
+    QCOMPARE(loaded.drawingLayerTable[1].linetype, std::string("Dashed"));
+    QCOMPARE(loaded.activeTextStyleName, std::string("Boundary Notes"));
+    QCOMPARE(loaded.textStyles.back().name, std::string("Boundary Notes"));
+    QCOMPARE(loaded.surveyLabelTemplates.numberOnly, std::string("PT {id}"));
+    QCOMPARE(loaded.activeDimensionStyle.textSizeInches, 0.37f);
+    QCOMPARE(loaded.activeMultileaderStyle.name, std::string("Field Leaders"));
+    QCOMPARE(loaded.drawingSettings.onlineMap, DrawingSettings::OnlineMap::UsgsTopo);
+    QVERIFY(loaded.drawingSettings.capturedAreas.empty());
+    QVERIFY(std::any_of(loaded.surfaceStyles.begin(), loaded.surfaceStyles.end(),
+                        [](const SurfaceStyle& style) { return style.name == "Field Surface"; }));
+    QVERIFY(std::any_of(loaded.surveyPointStyles.begin(), loaded.surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) {
+                          return style.name == "Field Marker" && style.markerBlockName == "FieldMarkerBlock";
+                        }));
+    QVERIFY(std::any_of(loaded.surveyPointLabelStyles.begin(), loaded.surveyPointLabelStyles.end(),
+                        [](const SurveyPointLabelStyleDefinition& style) {
+                          return style.name == "Field Point Labels" && style.templates.numberOnly == "CP {id}";
+                        }));
+    QVERIFY(std::any_of(loaded.tableStyles.begin(), loaded.tableStyles.end(),
+                        [](const CadTableStyle& style) { return style.name == "Field Tables"; }));
+    QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return CadBlockEqCi(block.name, "FieldMarkerBlock"); }));
+    QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return CadBlockEqCi(block.name, "NestedMarkerBlock"); }));
+    QVERIFY(std::none_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                         [](const CadBlockDefinition& block) { return block.name == "UnrelatedBlock"; }));
+    QCOMPARE(loaded.drawingInsUnits, 2);
+    QCOMPARE(loaded.modelUnitsPerPlottedInch, 50.0);
+    QVERIFY(loaded.objectSnapEnabled);
+    QCOMPARE(loaded.paperLayouts.size(), state.paperLayouts.size());
+    QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
+    QCOMPARE(loaded.paperLayouts[0].paperLines.size(), size_t(6));
+    QCOMPARE(loaded.paperLayouts[0].paperBlockRefs.size(), size_t(1));
+    QCOMPARE(loaded.paperLayouts[0].paperBlockRefs.front().defName, std::string("LayoutBorder"));
+    QVERIFY(std::any_of(loaded.blockDefs.begin(), loaded.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return CadBlockEqCi(block.name, "LayoutBorder"); }));
+
+    QVERIFY(static_cast<size_t>(targetUtf8.size()) < sizeof(window.State().defaultDrawingTemplatePathUtf8));
+    std::copy(targetUtf8.cbegin(), targetUtf8.cend(), window.State().defaultDrawingTemplatePathUtf8);
+    window.State().defaultDrawingTemplatePathUtf8[targetUtf8.size()] = '\0';
     window.NewDrawing();
-    QCOMPARE(window.State().drawingTabs.size(), tabCount + 1);
-    QCOMPARE(window.State().activeDrawingIdx, activeIdx);
-    QCOMPARE(window.State().userLinesFlat, activeLines);
+    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
+    QCOMPARE(window.State().pointGroups.front().name, std::string("Control Points"));
+    QVERIFY(std::any_of(window.State().surveyPointStyles.begin(), window.State().surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) { return style.name == "Field Marker"; }));
+    QCOMPARE(window.State().paperLayouts.front().paperLines.size(), size_t(6));
+    QCOMPARE(window.State().paperLayouts.front().paperBlockRefs.front().defName, std::string("LayoutBorder"));
+    const QString reopenedPath = QDir::temp().filePath("issue1134-template-open.dwg");
+    const QByteArray reopenedPathUtf8 = reopenedPath.toUtf8();
+    std::vector<std::string> reopenLog;
+    QVERIFY(SaveDrawingDocument(window.State(), reopenedPathUtf8.constData(), reopenLog));
+    AppCommandState reopened;
+    QVERIFY(OpenDrawingDocument(reopened, reopenedPathUtf8.constData(), reopenLog));
+    QCOMPARE(reopened.userLinesFlat, window.State().userLinesFlat);
+    QCOMPARE(reopened.pointGroups.front().name, std::string("Control Points"));
+    QVERIFY(std::any_of(reopened.surveyPointStyles.begin(), reopened.surveyPointStyles.end(),
+                        [](const SurveyPointStyleDefinition& style) {
+                          return style.name == "Field Marker" && style.markerBlockName == "FieldMarkerBlock";
+                        }));
+    QVERIFY(std::any_of(reopened.blockDefs.begin(), reopened.blockDefs.end(),
+                        [](const CadBlockDefinition& block) { return CadBlockEqCi(block.name, "FieldMarkerBlock"); }));
+    QCOMPARE(reopened.paperLayouts.front().paperBlockRefs.front().defName, std::string("LayoutBorder"));
   }
 
   void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {
@@ -6254,16 +6439,7 @@ private Q_SLOTS:
     const auto initialTabs = window.State().drawingTabs.size();
     QVERIFY(initialTabs >= 2);
     QCOMPARE(window.State().activeDrawingIdx, 0);
-    bool chooserAppeared = false;
-    QTimer::singleShot(0, [&] {
-      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
-        chooserAppeared = true;
-        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
-            ->button(QDialogButtonBox::Cancel)->click();
-      }
-    });
     window.OpenDrawing(drawingPath);
-    QVERIFY(!chooserAppeared);
     QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
     QCOMPARE(window.State().drawingTabs.size(), initialTabs + 1);
     QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(initialTabs));
@@ -6274,16 +6450,7 @@ private Q_SLOTS:
 
     window.SwitchDrawing(1);
     const auto tabsBeforeSecondOpen = window.State().drawingTabs.size();
-    bool secondChooserAppeared = false;
-    QTimer::singleShot(0, [&] {
-      if (auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog")) {
-        secondChooserAppeared = true;
-        dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
-            ->button(QDialogButtonBox::Cancel)->click();
-      }
-    });
     window.OpenDrawing(drawingPath);
-    QVERIFY(!secondChooserAppeared);
     QCOMPARE(window.State().drawingTabs.size(), tabsBeforeSecondOpen + 1);
     QCOMPARE(window.State().activeDrawingIdx, static_cast<int>(tabsBeforeSecondOpen));
     QCOMPARE(window.State().drawingTabs[1].name, std::string("Drawing 1"));
@@ -6303,51 +6470,6 @@ private Q_SLOTS:
     QCOMPARE(window.State().activeDrawingIdx, activeIndex);
     QCOMPARE(window.State().userLinesFlat, linesBeforeFailure);
     QCOMPARE(window.State().drawingTabs.front().name, std::string("Start"));
-  }
-
-  void qtDrawingTemplateScreenshotEvidenceForIssue885() {
-    IsolatedUserData userData;
-    const auto templateDir = UserDataDirectory() / "drawing-templates";
-    std::filesystem::create_directories(templateDir);
-    AppCommandState source;
-    source.userLinesFlat = {1.0, 2.0, 0.0, 5.0, 2.0, 0.0};
-    source.userLineAttrs.push_back(EntityAttributes{});
-    std::vector<std::string> log;
-    const auto templatePath = QString::fromStdWString((templateDir / L"Example.gst").wstring()).toUtf8();
-    QVERIFY(SaveGoSurveyTemplateFile(source, templatePath.constData(), log));
-    { std::ofstream broken(templateDir / L"Broken.gst", std::ios::binary); broken << "{ malformed"; }
-
-    EditorWindow window;
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser.png")));
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int exampleRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Example — Personal") exampleRow = row;
-      QVERIFY(exampleRow >= 0); list->setCurrentRow(exampleRow);
-      QVERIFY(dialog->grab().save(QDir::current().filePath("qt-885-template-chooser-selected.png")));
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Cancel)->click();
-    });
-    window.NewDrawing();
-
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int brokenRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Broken — Personal") brokenRow = row;
-      QVERIFY(brokenRow >= 0); list->setCurrentRow(brokenRow);
-      QTimer::singleShot(0, [] {
-        for (auto* widget : QApplication::topLevelWidgets())
-          if (auto* warning = qobject_cast<QMessageBox*>(widget)) {
-            QVERIFY(warning->grab().save(QDir::current().filePath("qt-885-template-error.png")));
-            if (auto* ok = warning->button(QMessageBox::Ok)) ok->click();
-          }
-      });
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")->button(QDialogButtonBox::Open)->click();
-    });
-    window.NewDrawing();
   }
 
   void appearanceChangesKeepDrawingAndToolspaceState() {

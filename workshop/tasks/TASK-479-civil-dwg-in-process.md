@@ -423,3 +423,13 @@ None. The file version and class inventory will be read from the supplied baseli
 - Product documentation review (REQ-453): `README.md` — no change needed; `PRIVACY.md` — no change needed (no data handling change);
   `resources/wiki/Annotation.md` — already documents the style galleries, Manage Text Styles and DIMSTY; the new Modify windows extend
   those dialogs and should be re-screenshotted for the wiki before release (follow-up); GitHub wiki — not updated in this push (follow-up).
+
+### Docs follow-up for PR #1141 (2026-11-02)
+
+REQ-453 review of the style-editor windows added in PR #1141:
+
+- `README.md` — reviewed, no update needed (no style-editor content).
+- `PRIVACY.md` — reviewed, no update needed (no data-handling change).
+- In-app wiki `resources/wiki/` — updated: `Annotation.md` (Modify Text/Dimension/Multileader/Table Style, with new screenshots), `Commands/dimsty.md`, `Commands/style.md`, `Commands/mleader.md`, `Known-Limitations.md` (table styles are now editable); images `images/commands/modify-*.png`.
+- Public GitHub Wiki — updated (commit e38c97c on the wiki repo): `Annotation.md`, `Known-Limitations.md`, `images/modify-*.png`.
+- Still open: the three-reviewer Civil 3D screenshot comparison panel required by CLAUDE.md for Qt UI changes (not run; mark **inconclusive** until done).

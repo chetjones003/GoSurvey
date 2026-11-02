@@ -12656,17 +12656,21 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. **Cancel and failure.** Cancelling the chooser creates no tab and leaves the active drawing unchanged. A template that cannot be read or validated is reported; it creates no tab, leaves the active drawing unchanged, and does not prevent choosing another template or Blank Drawing.
   4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone template chooser.
   5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
+  6. **Save as Template.** File → **Save as Template…** writes a `.gst` containing reusable drawing styles and settings, including layers, text/dimension/multileader/table styles, survey-point marker and label styles, surface and label styles, point-group definitions/rules, named views and named UCS definitions, layouts/page setups, plot scale, insertion units, and drawing settings. It preserves supported vector linework in model space and layouts (lines, polylines, arcs, circles, ellipses, splines, and feature lines), plus layout border block inserts and their recursively referenced definitions. The source drawing's current viewport camera/projection/UCS and active-view state, survey-point instances, model-space block inserts, and non-linework drawing objects such as annotations, tables, surfaces, solids, meshes, and point clouds are excluded. The dialog defaults to `<UserDataDirectory>/drawing-templates/`, so the saved file appears in the New Drawing chooser. The command does not change the active drawing path, saved revision, or recent-drawing list. Cancelling writes nothing and changes no drawing state. `.gst` remains unsupported by File → Open; use the New Drawing chooser or Settings → Files to use a template.
 - Acceptance:
   - `[req424]` Qt workflow coverage: chooser lists Blank Drawing and valid bundled/user `.gst` templates, ignores unrelated file types, and presents deterministic ordering with duplicate names distinguishable.
   - `[req424]` Qt workflow coverage: selecting a valid template creates and focuses a new tab with its content; saving/reopening preserves that content; the source template remains byte-identical.
   - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
   - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
   - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
+  - `[req424]` Qt workflow coverage: Save as Template writes a loadable `.gst` preserving reusable drawing styles/settings, point-group definitions/rules, named views/UCS definitions, and supported model/layout vector linework (including layout border blocks and referenced definitions); it resets source current-view state and excludes survey-point instances and non-linework drawing objects; the file appears in the personal template chooser.
+  - `[req424]` Qt workflow coverage: cancelling template save creates no file and changes no active drawing state; a failed save reports the failure and leaves active drawing state unchanged.
+  - `[req424]` Qt workflow coverage: File → Save as Template defaults to the per-user template directory without changing the active drawing path/revision; File → Open does not open `.gst` as a drawing.
   - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
   - Update `docs/qt-074-parity-ledger.md` with the implemented workflow and its focused evidence.
 - Owner-layer: UI (`src/qt/`); shared `.gst` loading remains in IO (`src/io/GsIo`).
 - Status: accepted (2026-10-17).
-- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885).
+- Revisions: 2026-10-17 — initial (D-2026-10-17-a; GitHub issue #885); 2026-10-30 — add Save as Template workflow (D-2026-10-30-template-save; GitHub issue #1134).
 
 ### REQ-425 — Crash and startup-failure reports
 
@@ -13608,9 +13612,12 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Statement: The PDF plot of a paper layout honours four Page Setup options, each read from the
   layout's saved settings: (a) **plot offset X and Y**, which move the sheet content by the stated
   amount; (b) **centre the plot**, which centres the content on the sheet; (c) **fit to paper**, which
-  scales the content to fill the printable area; (d) **plot scale**, which sets the scale of the
-  content on the sheet. A Page Setup control that the plot does not honour is a defect, not an
-  accepted limitation.
+  scales the content to fill the sheet in its limiting direction, with its lower-left corner at the
+  sheet's lower-left corner; (d) **plot scale**, a ratio 1 : N that scales the content by 1 / N. Fit and
+  centre use the sheet content extent (viewport frames, line ends, circle, arc and ellipse samples, filled-region vertices, block-reference segments, polyline vertices with their
+  bulge arcs, spline and point marks, multileader leaders, arrowheads and labels, and text anchors); when centre is on, the offsets are ignored. Lineweights keep their width; text sizes and
+  positions scale with the content. A Page Setup control that the plot does not honour is a defect, not
+  an accepted limitation.
 - Acceptance:
   1. with each option set on its own, the PDF differs from the same layout plotted with no option
      set, and a measured offset, centre position, fitted extent or plotted scale matches the stated
@@ -13620,7 +13627,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   3. a test exists for each of the four options.
 - Owner-layer: IO / Renderer
 - Status: accepted
-- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1).
+- Revisions: 2026-10-20 — catalogued and accepted (D-2026-10-20-f, GitHub issue #769, audit #751 P1). 2026-11-01 — plot scale defined as a ratio 1 : N and the fit, centre and offset rules stated (D-2026-11-01-a, GitHub issue #1145). 2026-11-01 — the fit and centre extent includes bulge arcs, splines, points, multileaders and their labels, and arcs, ellipses, filled regions and block references (CodeRabbit review of PR #1147, GitHub issue #1145).
 
 ### REQ-446 — PDF plot honours lineweights and linetypes (GitHub issue #770)
 
@@ -13988,36 +13995,48 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: quality
 - Statement: Building the installer is done by CI from a clean checkout, never from a developer
-  workstation. The pipeline runs only on manual dispatch (REQ-202 (d)) — choosing a target branch
-  in the "Run workflow" ref dropdown builds, runs the test suite, and — depending on which branch
-  was targeted — packages and publishes:
+  workstation. A push to `beta` automatically builds, runs the test suite, and publishes the rolling
+  beta release. Stable publication and builds for other branches remain manual dispatches (REQ-202
+  (d)); choosing a target branch in the "Run workflow" ref dropdown builds, runs the test suite,
+  and — depending on which branch was targeted — packages and publishes:
 
-  | Dispatch target | Result |
+  | Trigger / target | Result |
   |---|---|
   | any other branch | build + test only; the installer job is skipped (run it explicitly if an installer artifact is wanted) |
-  | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
-  | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+  | push to `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | manual dispatch to `beta` | same beta build; a rerun for the same commit reuses its version |
+  | `master` | manual build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
 
   The version gate is what makes a re-dispatch against master safe to repeat: the release step is a
   no-op when `project(VERSION)` still matches the newest release, so re-running the pipeline against
   master does not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
 
-  Every published release carries the installer, a `latest.json` manifest (version, download URL,
-  SHA-256, size, release notes), and nothing that the machine could not regenerate from the tagged
-  commit. A failing test suite blocks publication.
+  The stable version remains `project(VERSION)` in `CMakeLists.txt`. Each new beta commit gets a
+  plain three-part version one patch above the higher of the latest stable version and the previous
+  beta version: with stable `0.7.8`, successive beta commits receive `0.7.9`, `0.7.10`, and so on;
+  after stable `0.8.0`, beta continues at `0.8.1`. Re-running the workflow for the same beta commit
+  reuses the version already recorded for that commit. The rolling beta manifest records the source
+  commit so this is repeatable. A failing test suite blocks publication.
+
+  Every published release carries the installer and a `latest.json` manifest (version, download URL,
+  SHA-256, size, release notes; beta additionally records its source commit), and nothing else that
+  the machine could not regenerate from the built commit.
 
   This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
 
-  **(d) Manual dispatch only (2026-09-06).** The pipeline previously ran on every push to every
-  branch; that automatic trigger has been removed. A push, including one to `beta` or `master`, now
-  runs no CI job at all until someone explicitly runs the workflow. This trades away the
-  build+test-on-every-push safety net REQ-201/REQ-200 relied on for CI minutes and rolling-beta
-  churn that were being spent on commits nobody needed built yet; the tradeoff is deliberate and the
-  user directs each dispatch by hand, so this is not a SPEC GAP the pipeline itself needs to cover.
+  **(d) Dispatch policy (amended 2026-11-02).** Stable release publishing remains manual so a
+  master push cannot publish a release without an explicit dispatch. Feature-branch pushes remain
+  quiet. Beta pushes run automatically because each changed beta commit is intended to become the
+  newest rolling beta build; beta re-runs for the same commit are idempotent and do not advance its
+  version. This replaces the 2026-09-06 manual-only policy for beta while retaining manual stable
+  publication.
 - Acceptance:
-  - no CI job runs on a plain `git push` to any branch;
+  - a push to `beta` runs build + test and updates the rolling beta release; a push to any other
+    branch runs no release job;
+  - a beta build for a new source commit receives the next patch version after the higher of the
+    latest stable version and previous beta version; rerunning the same commit retains its version;
   - dispatching against a feature branch runs build + test, creates no release and no tag, and does
     not run the installer job;
   - dispatching against `beta` leaves exactly one `channel-beta` prerelease in the releases list
@@ -14036,6 +14055,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
                unchanged.
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
+               2026-11-02 — D-2026-11-02-a / ADR-074: beta pushes automatically publish a rolling
+               versioned build; only a new beta commit advances the version. Stable releases remain
+               manually dispatched and version-gated.
 
 ### REQ-453 — Microsoft Store installs run without installer UI
 - Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store

@@ -1085,11 +1085,12 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   every release. REQ-077, REQ-078 and REQ-202 are the response. The binding constraint is REQ-300:
   the project has **no networking code and no HTTP dependency anywhere**, and an updater needs one.
 - Decision:
-  (a) **The CMake `project(VERSION)` is the single source of the version.** A generated
+  (a) **The CMake `project(VERSION)` is the stable source of the version.** A generated
   `Version.hpp` (`configure_file`) gives the application its version; CI reads the same value to
-  drive the installer's `AppVersion`, the git tag, and the manifest. Nothing else stores a version
-  number. The value names the release being *worked toward*, so it is bumped after a stable release,
-  not before one, and every beta in the cycle is `<version>-beta.<n>`.
+  drive the stable installer's `AppVersion`, git tag, and manifest. The stable value names the release
+  being worked toward and is bumped after a stable release, not before one. **Amended by ADR-074:**
+  beta builds derive a plain patch version from the latest stable and rolling beta versions, then pass
+  that value to CMake for application and installer metadata; stable source version remains unchanged.
   (b) **The executable is renamed to a stable `GoSurvey.exe`**, with `[InstallDelete]` sweeping
   `GoSurvey-0.*.exe` out of existing installs. A version-stamped filename breaks shortcuts, the `.gs`
   association's `shell\open\command` path, and any form of self-replacement — it is incompatible with
@@ -5172,3 +5173,29 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
 - **Consequences.** Release packaging must copy the licensed CRT files from the active MSVC toolset
   and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
   those DLLs as part of each release. The Store submission continues to carry the shared redist.
+
+### ADR-074 — Version rolling beta builds from the stable baseline   (2026-11-02, accepted)
+- Context: ADR-029 made all releases manual and used one `project(VERSION)` value for beta and
+  stable. The user wants beta to publish automatically when its source changes, with ordinary
+  three-part patch versions (`0.7.9`, `0.7.10`, …) and a stable release such as `0.8.0` becoming
+  the next beta cycle's baseline. The single rolling `channel-beta` release must remain safe to
+  rerun without offering the same build as a newer update.
+- Decision: Keep `CMakeLists.txt`'s `project(VERSION)` as the stable release version. For beta,
+  CI reads the latest stable version and the current rolling beta manifest, assigns one patch above
+  the higher version for a new beta source commit, and reuses the recorded version when the source
+  commit is unchanged. Add the beta source commit to `latest.json` to make reruns idempotent. A
+  beta push triggers build, tests, and rolling publication. Stable publication remains manual and
+  gated by the immutable `v<version>` tag; feature-branch pushes remain quiet. Pass the computed
+  beta version into CMake for generated application and installer metadata without changing the
+  stable version stored in the source tree.
+- Alternatives: (1) Keep beta versions in `CMakeLists.txt` and require a separate version-bump PR
+  for every beta commit — rejected because it makes normal beta changes depend on extra bookkeeping.
+  (2) Use `-beta.N` prerelease strings — rejected because the user asked for plain patch increments.
+  (3) Increment on every workflow run — rejected because a retry of one commit would create a
+  false newer version, and the user chose to advance only when beta changes.
+- Consequences: the release workflow must read and validate the prior beta manifest before building,
+  fetch the current stable version, and keep concurrent beta publication ordered. The manifest gains
+  an additive beta-only `sourceCommit` field. Generated Windows version metadata must represent the
+  computed beta version consistently with the installer and update manifest. No application
+  dependency or stable-release behavior changes.
+- Status: accepted (D-2026-11-02-a); backs REQ-202.

@@ -103,7 +103,8 @@ struct CadTablePointRow {
 };
 
 /// Cell text for a point table: a header row of column titles, then one row per point, in the order given.
-/// Coordinates use \p decimals decimal places.
+/// Coordinates use \p decimals decimal places, clamped to 0 through 8. Returns an empty vector
+/// when the style has no point columns; otherwise the result is flattened in row order.
 inline std::vector<std::string> CadPointTableCells(const CadTableStyle& style, const std::vector<CadTablePointRow>& rows,
                                                    int decimals) {
   std::vector<std::string> cells;
@@ -155,7 +156,8 @@ inline void CadTableApplyStyleSize(CadTable* t, const CadTableStyle& style, int 
   t->cells.assign(static_cast<size_t>(rows) * static_cast<size_t>(cols), std::string());
 }
 
-/// Index of the cell under world point (\p wx, \p wy), or -1 when the point is outside the table.
+/// Index of the cell under world point (\p wx, \p wy), or -1 when the point is outside the table
+/// or the table has invalid dimensions. Outer edges are included; a merged title row maps to cell 0.
 inline int CadTableCellAtWorld(const CadTable& t, float wx, float wy) {
   const int rows = CadTableRowCount(t);
   if (t.cols <= 0 || rows <= 0 || t.width <= 0.f || t.height <= 0.f)

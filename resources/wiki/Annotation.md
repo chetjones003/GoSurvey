@@ -144,6 +144,13 @@ bottom opens the full dialog.
 | **Preview** | Live `AaBb12` sample |
 | **Buttons** | **New…**, **Set Current**, **Apply**, **Delete**, **Cancel**, **Help** |
 
+### Modify Text Style
+
+**Modify…** (and **New…**) opens the style editor: the same Font, Size and Effects groups, without
+the style list, plus a live preview. It follows the application theme.
+
+![Modify Text Style](wiki-img:commands/modify-text-style.png)
+
 Rules the dialog enforces:
 
 - `Standard` **cannot be deleted**.
@@ -195,9 +202,35 @@ DIMLINEAR — ortho distance in X or Y between extension points; third pick sets
 
 ### Dimension styles
 
-Type `DIMSTY` to open the drawing-wide dimension style manager. Set a listed style current, create one,
-or modify supported properties. Named dimension styles are saved in drawing data and mapped to DWG
-`DIMSTYLE` records; see [[Commands/dimsty]] for the current AutoCAD compatibility limits.
+Type `DIMSTY` (or choose **Manage Dimension Styles…** in the Annotate style gallery) to open the
+drawing-wide dimension style manager. Set a listed style current, create one, or modify it. **Modify…**
+and **New…** open a seven-tab editor with a preview on every tab: **Lines**, **Symbols and Arrows**,
+**Text**, **Fit**, **Primary Units**, **Alternate Units** and **Tolerances**.
+
+![Modify Dimension Style — Lines](wiki-img:commands/modify-dimension-style-lines.png)
+
+![Modify Dimension Style — Text](wiki-img:commands/modify-dimension-style-text.png)
+
+Named dimension styles are saved in drawing data and mapped to DWG `DIMSTYLE` records; see
+[[Commands/dimsty]] for the current AutoCAD compatibility limits. Each dimension is measured and
+redrawn with its own style, not the current one.
+
+### Multileader styles
+
+Type `MSTY` or choose **Manage Multileader Styles…** to list, create, modify, delete and set current the
+drawing's multileader styles. The editor has three tabs — **Leader Format**, **Leader Structure** and
+**Content** — with a preview.
+
+![Modify Multileader Style](wiki-img:commands/modify-multileader-style.png)
+
+### Table styles
+
+Type `TABLESTYLE` (alias `TSTY`) or choose **Manage Table Styles…** in the Annotate style gallery to open the table style manager. The
+editor shows the starting table, the **General** table direction, a table preview, and a **Cell styles**
+list (**Data**, **Header**, **Title**) whose **General**, **Text** and **Borders** tabs have their own
+cell-style preview. Table styles are stored in the GoSurvey drawing data.
+
+![Modify Table Style](wiki-img:commands/modify-table-style.png)
 
 ### DIMANGULAR (`DAN`)
 

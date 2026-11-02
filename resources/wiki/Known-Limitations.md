@@ -94,7 +94,7 @@ presets
 | **Annotative scaling of existing text** | Changing the plot scale does not resize existing text; it does reposition survey point labels |
 | **Coordinate system / projection library** | Coordinates are unprojected numbers. Use `ALIGN` to fit to control |
 | **Unit conversion** | The `UNITS` insertion setting is a **relabel only** — coordinates are never scaled |
-| **Table styles** | Only the built-in `Standard`, `NameNEZD` and `NameNEZD with Comments` styles exist; styles cannot be edited or saved |
+| **Table styles** | Styles can be created and modified in the table style manager and are stored in GoSurvey drawing data; they are not written to DWG table-style records |
 | **DATAEXTRACTION into a drawing table** | Output goes to a `.xlsx` or `.csv` file only |
 | **Linked spreadsheets (`DATALINK`)** | Not available |
 | **Reflex angles on angular dimensions** | Angles larger than 180° are not measured; the smaller angle is shown |

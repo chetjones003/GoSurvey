@@ -10,7 +10,14 @@ if(POLICY CMP0141)
   endif()
 endif()
 
-project(GoSurvey VERSION 0.7.8 LANGUAGES CXX C RC)
+# Stable releases use the checked-in version below. CI supplies a separately resolved plain
+# patch version for beta builds so beta numbering does not require a version-only source commit.
+set(GOSURVEY_STABLE_VERSION "0.7.8")
+set(_gosurvey_project_version "${GOSURVEY_STABLE_VERSION}")
+if(DEFINED GOSURVEY_BETA_VERSION AND NOT GOSURVEY_BETA_VERSION STREQUAL "")
+  set(_gosurvey_project_version "${GOSURVEY_BETA_VERSION}")
+endif()
+project(GoSurvey VERSION "${_gosurvey_project_version}" LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
@@ -77,19 +84,20 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
-# Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
+# Version (ADR-029 (a), amended by ADR-074) — `project(VERSION)` above holds the stable source;
+# CI may override its input for a rolling beta build.
 #
-# It names the release being worked toward, so it is bumped just after a stable
-# release ships. CI passes GOSURVEY_VERSION_SUFFIX ("-beta.7") and
-# GOSURVEY_VERSION_BUILD (7) for a prerelease; a stable build and a developer
-# build leave both at their defaults.
+# The stable value above names the release being worked toward, so it is bumped
+# just after a stable release ships. CI passes GOSURVEY_BETA_VERSION for a beta
+# release and GOSURVEY_VERSION_BUILD for Windows file metadata; stable and local
+# builds leave those values at their defaults.
 #
 # Both generated files land in the build tree, never the source tree (REQ-200).
 # ---------------------------------------------------------------------------
 set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
-    "Prerelease suffix appended to the version, e.g. -beta.7 (empty for a stable build)")
+    "Prerelease suffix appended to the version (empty for stable and rolling beta builds)")
 set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
-    "Fourth field of the Windows VERSIONINFO quad; the beta number, or 0 for a stable build")
+    "Fourth field of the Windows VERSIONINFO quad (default: 0)")
 
 set(GOSURVEY_GIT_COMMIT "" CACHE STRING
     "Short git commit recorded in crash reports (empty: read from git at configure time)")
@@ -1075,6 +1083,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PlotFontTests.cpp
     # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
     tests/PlotStrokeTests.cpp
+    # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
+    tests/PlotSheetTests.cpp
     tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
@@ -1402,7 +1412,9 @@ if(GOSURVEY_BUILD_TESTS)
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
+  # NOMINMAX matches the app, so std::min/std::max in the PDF plot compile here as they do in the frontend.
   target_compile_definitions(GoSurveyTests PRIVATE
+    NOMINMAX
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
@@ -1431,7 +1443,10 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfDimAudit.cpp
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
-    src/pdf/PdfDiff.cpp)
+    src/pdf/PdfDiff.cpp
+    # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
+    tests/PlotSheetPdfTests.cpp
+    src/io/PdfPlot.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
