@@ -82,6 +82,7 @@ private:
   PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;
   QTimer m_ViewAnimTimer;
+  QTimer m_GripMenuTimer;
   QElapsedTimer m_ViewAnimClock;
   bool m_CubePressed = false;  ///< The press in progress was consumed by the ViewCube.
   std::size_t m_LastMapLogSize = 0;

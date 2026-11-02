@@ -215,6 +215,9 @@ FloatingCommandBar::FloatingCommandBar(QWidget* viewport) : QFrame(viewport) {
   m_Hint->setAutoFillBackground(true);
   if (!qApp->property("defaultQtStyle").toBool()) m_Hint->setStyleSheet("color:#8fd09a; background:#29313b; padding:4px 8px; border-radius:3px;");
   m_Hint->setTextFormat(Qt::RichText); m_Hint->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+  // The hint is a link-bearing overlay above the viewport. Keep the complete press/release sequence
+  // with the label, including clicks on link glyphs, so the viewport cannot also treat it as a pick.
+  m_Hint->setAttribute(Qt::WA_NoMousePropagation);
   connect(m_Hint, &QLabel::linkActivated, this, [this](const QString& shortcut) { if (optionSelected) optionSelected(shortcut); });
   m_Hint->hide(); layout->addWidget(m_Hint);
   auto* bar = new QFrame(this); bar->setObjectName("commandRow"); bar->setAutoFillBackground(true);
