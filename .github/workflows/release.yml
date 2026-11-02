@@ -138,7 +138,13 @@ jobs:
               -SkipHttpErrorCheck
             $previousManifest = $null
             if ($manifestResponse.StatusCode -eq 200) {
-              try { $previousManifest = $manifestResponse.Content | ConvertFrom-Json }
+              try {
+                $manifestContent = $manifestResponse.Content
+                if ($manifestContent -is [byte[]]) {
+                  $manifestContent = [Text.Encoding]::UTF8.GetString($manifestContent)
+                }
+                $previousManifest = ConvertFrom-Json -InputObject $manifestContent
+              }
               catch { throw "Could not parse the previous beta manifest: $($_.Exception.Message)" }
               if ($previousManifest.version -notmatch '^\d+\.\d+\.\d+$') {
                 throw "Previous beta manifest has an invalid version: '$($previousManifest.version)'"
