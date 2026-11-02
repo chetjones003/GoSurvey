@@ -12663,7 +12663,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   - `[req424]` Qt workflow coverage: Blank Drawing creates an empty drawing; cancelling creates no tab and changes no active document state.
   - `[req424]` Qt workflow coverage: malformed/unreadable template reports the failure, preserves the current document and leaves the chooser usable.
   - `[req424]` Qt workflow coverage: a new drawing from an active project is empty, uses project defaults, and does not open the standalone template chooser; project read-only state is not mutated by template discovery.
-  - `[req424]` Qt workflow coverage: Save as Template writes a loadable `.gst` with the selected standards/settings and no model or paper geometry, survey points, or point groups; the file appears in the personal template chooser.
+  - `[req424]` Qt workflow coverage: Save as Template writes a loadable `.gst` preserving reusable drawing styles/settings, point-group definitions/rules, supported model/layout vector linework (including layout border blocks and referenced definitions), and excludes survey-point instances and non-linework drawing objects; the file appears in the personal template chooser.
   - `[req424]` Qt workflow coverage: cancelling template save creates no file and changes no active drawing state; a failed save reports the failure and leaves active drawing state unchanged.
   - `[req424]` Qt workflow coverage: File → Save as Template defaults to the per-user template directory without changing the active drawing path/revision; File → Open does not open `.gst` as a drawing.
   - The Qt chooser is reachable through the Start screen and the normal New Drawing entry point; a command route or ribbon button alone is not parity.
@@ -13995,36 +13995,48 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Priority: should
 - Type: quality
 - Statement: Building the installer is done by CI from a clean checkout, never from a developer
-  workstation. The pipeline runs only on manual dispatch (REQ-202 (d)) — choosing a target branch
-  in the "Run workflow" ref dropdown builds, runs the test suite, and — depending on which branch
-  was targeted — packages and publishes:
+  workstation. A push to `beta` automatically builds, runs the test suite, and publishes the rolling
+  beta release. Stable publication and builds for other branches remain manual dispatches (REQ-202
+  (d)); choosing a target branch in the "Run workflow" ref dropdown builds, runs the test suite,
+  and — depending on which branch was targeted — packages and publishes:
 
-  | Dispatch target | Result |
+  | Trigger / target | Result |
   |---|---|
   | any other branch | build + test only; the installer job is skipped (run it explicitly if an installer artifact is wanted) |
-  | `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
-  | `master` | build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+  | push to `beta` | build + test, then installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | manual dispatch to `beta` | same beta build; a rerun for the same commit reuses its version |
+  | `master` | manual build + test, then version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
 
   The version gate is what makes a re-dispatch against master safe to repeat: the release step is a
   no-op when `project(VERSION)` still matches the newest release, so re-running the pipeline against
   master does not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
 
-  Every published release carries the installer, a `latest.json` manifest (version, download URL,
-  SHA-256, size, release notes), and nothing that the machine could not regenerate from the tagged
-  commit. A failing test suite blocks publication.
+  The stable version remains `project(VERSION)` in `CMakeLists.txt`. Each new beta commit gets a
+  plain three-part version one patch above the higher of the latest stable version and the previous
+  beta version: with stable `0.7.8`, successive beta commits receive `0.7.9`, `0.7.10`, and so on;
+  after stable `0.8.0`, beta continues at `0.8.1`. Re-running the workflow for the same beta commit
+  reuses the version already recorded for that commit. The rolling beta manifest records the source
+  commit so this is repeatable. A failing test suite blocks publication.
+
+  Every published release carries the installer and a `latest.json` manifest (version, download URL,
+  SHA-256, size, release notes; beta additionally records its source commit), and nothing else that
+  the machine could not regenerate from the built commit.
 
   This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
   this says the artifact users actually receive **is** that build, rather than whatever happened to
   be in a developer's `build/` directory.
 
-  **(d) Manual dispatch only (2026-09-06).** The pipeline previously ran on every push to every
-  branch; that automatic trigger has been removed. A push, including one to `beta` or `master`, now
-  runs no CI job at all until someone explicitly runs the workflow. This trades away the
-  build+test-on-every-push safety net REQ-201/REQ-200 relied on for CI minutes and rolling-beta
-  churn that were being spent on commits nobody needed built yet; the tradeoff is deliberate and the
-  user directs each dispatch by hand, so this is not a SPEC GAP the pipeline itself needs to cover.
+  **(d) Dispatch policy (amended 2026-11-02).** Stable release publishing remains manual so a
+  master push cannot publish a release without an explicit dispatch. Feature-branch pushes remain
+  quiet. Beta pushes run automatically because each changed beta commit is intended to become the
+  newest rolling beta build; beta re-runs for the same commit are idempotent and do not advance its
+  version. This replaces the 2026-09-06 manual-only policy for beta while retaining manual stable
+  publication.
 - Acceptance:
-  - no CI job runs on a plain `git push` to any branch;
+  - a push to `beta` runs build + test and updates the rolling beta release; a push to any other
+    branch runs no release job;
+  - a beta build for a new source commit receives the next patch version after the higher of the
+    latest stable version and previous beta version; rerunning the same commit retains its version;
   - dispatching against a feature branch runs build + test, creates no release and no tag, and does
     not run the installer job;
   - dispatching against `beta` leaves exactly one `channel-beta` prerelease in the releases list
@@ -14043,6 +14055,9 @@ capability that does not exist. They are recorded here rather than quietly dropp
                unchanged.
                2026-09-06 — (d): automatic push trigger removed; the pipeline now runs only on
                manual `workflow_dispatch`, targeting whichever branch is chosen in the ref dropdown.
+               2026-11-02 — D-2026-11-02-a / ADR-074: beta pushes automatically publish a rolling
+               versioned build; only a new beta commit advances the version. Stable releases remain
+               manually dispatched and version-gated.
 
 ### REQ-453 — Microsoft Store installs run without installer UI
 - Purpose: allow GoSurvey's existing Win32 installer to be submitted through the Microsoft Store
