@@ -55,3 +55,10 @@ Approved for implementation under amended REQ-424 (D-2026-10-30-template-save).
 - **Product documentation review:** `README.md` and `PRIVACY.md` reviewed; no changes needed. Updated the in-app manual in `resources/wiki/Files-and-Drawings.md`, `resources/wiki/User-Interface.md`, and `resources/wiki/Workflows.md`. Updated `docs/qt-074-parity-ledger.md`. Reviewed the public GitHub Wiki's Files and Drawings and Workflows pages; those external pages and the `gosurveycad.com/docs` route are not editable from this source checkout (the web reader could not access the site route). Per CLAUDE.md's pre-PR rule, those public pages must be updated before a PR is opened; no PR is being opened in this task.
 - **Assumptions / technical debt:** none recorded.
 - **Verdict:** PASS for local implementation and verification; the Civil 3D comparison and external public-manual updates remain pre-PR follow-ups.
+
+## Scope amendment — 2026-11-02
+
+- **Owner decision:** `.gst` also preserves supported model- and paper-space vector linework, layout border blocks and their referenced definitions, and reusable drawing styles/settings including point-group rules and survey-point marker/label styling. Survey-point instances and unrelated non-linework drawing objects remain excluded.
+- **Implementation:** `SaveGoSurveyTemplateFile` now filters non-linework entity arrays while retaining vector geometry, layout setup, point-group definitions, and block-definition dependencies referenced by layout borders and marker styles. Updated the accepted REQ-424 statement and in-app Files/Workflows wiki.
+- **Verification:** Release `.\build.bat` succeeded after the change. `issue1134SaveAsTemplatePreservesReusableLineworkAndSetup` passed (3 Qt test cases including init/cleanup). `git diff --check` passed. The full CTest suite was not rerun for this scope amendment; prior full-suite results above predate it.
+- **External documentation:** README and PRIVACY remain unaffected. Public GitHub Wiki and `gosurveycad.com/docs` remain outside this checkout's editable sources; the existing PR's documentation follow-up remains outstanding.

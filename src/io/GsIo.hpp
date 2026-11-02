@@ -7,8 +7,8 @@
 struct AppCommandState;
 struct DrawingSettings;
 
-/// GoSurvey workspace-template (.gst) file I/O: drawing standards and setup (JSON in UTF-8).
-/// Templates omit model/paper geometry, survey points and point-group data. NOT the drawing format —
+/// GoSurvey workspace-template (.gst) file I/O: drawing styles, setup and supported linework (JSON in UTF-8).
+/// Templates omit survey-point instances and non-linework drawing objects. NOT the drawing format —
 /// that is `.dwg` (ADR-044); this reads/writes the narrow startup-template file only. `GsIo` is a historical
 /// module name: it serializes the document JSON payload and `.gst` templates, not standalone
 /// `.gs` drawings (retired by issue #264).

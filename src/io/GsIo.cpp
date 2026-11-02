@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -4256,36 +4257,59 @@ bool SaveGoSurveyTemplateFile(const AppCommandState& st, const char* pathUtf8, s
   try {
     json root = BuildRoot(st);
     json& doc = root["document"];
-    // A .gst carries standards and setup into a new drawing, not the source drawing's contents.
-    // Keep this list in sync with BuildRoot whenever a new model-space entity store is added.
+    // A .gst carries reusable standards, setup, and vector linework. Keep this list in sync with
+    // BuildRoot whenever a new entity store is added; only non-linework drawing content is removed.
     for (const char* key : {
-             "lineVerts", "lineAttrs", "circles", "circlesZ", "circlesN", "circleAttrs", "arcs", "arcAttrs",
-             "ellipses", "ellAttrs", "polylineOffsets", "polylineVerts", "polylineVertsBulge",
-             "polylineVertsNormal", "polylineClosed", "polylineAttrs", "featureLineOffsets", "featureLineVerts",
-             "featureLineClosed", "featureLineElevPt", "featureLineInfo", "featureLineAttrs", "annotations",
+             "annotations",
              "annotationAttrs", "tables", "tableAttrs", "positionMarkers", "positionMarkerAttrs", "multileaders",
-             "multileaderAttrs", "splines", "splineAttrs", "cadPoints", "cadPointAttrs", "blockDefs", "blockRefs",
-             "blockRefAttrs", "filledRegions", "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
+             "multileaderAttrs", "cadPoints", "cadPointAttrs", "blockRefs", "blockRefAttrs", "filledRegions",
+             "filledRegionAttrs", "meshes", "meshAttrs", "pointClouds",
              "pointCloudAttrs", "solids", "solidAttrs", "pipeRuns", "pipeRunAttrs", "pipingSystems", "surfaces",
-             "surfaceAttrs", "surveyPoints", "pointGroups", "blockFavorites", "blockRecent"})
+             "surfaceAttrs", "surveyPoints", "blockFavorites", "blockRecent"})
       doc[key] = json::array();
 
-    // Viewport clipping and the source drawing's camera/view depend on geometry that is no longer
-    // present. Layout/page setup and viewport definitions remain, while sheet entities are removed.
-    doc.erase("sectionPlane");
-    doc.erase("pointVisibility");
-    doc["worldDocumentOriginX"] = 0.0;
-    doc["worldDocumentOriginY"] = 0.0;
-    doc["nextEntityId"] = 1;
-    doc["createPointsNextId"] = 1;
+    // Keep reusable view/settings state and entity ID counters with the retained linework.
+    // Block definitions are limited to dependencies of paper-space border inserts and point-style markers.
+    std::set<std::string> neededBlocks;
+    auto collectBlock = [&](const json& value, const char* field) {
+      if (value.is_object() && value.contains(field) && value[field].is_string())
+        neededBlocks.insert(value[field].get<std::string>());
+    };
+    if (doc.contains("pointStyles") && doc["pointStyles"].is_array())
+      for (const auto& style : doc["pointStyles"]) collectBlock(style, "markerBlockName");
+    if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array())
+      for (const auto& layout : doc["paperLayouts"])
+        if (layout.contains("paperBlockRefs") && layout["paperBlockRefs"].is_array())
+          for (const auto& ref : layout["paperBlockRefs"]) collectBlock(ref, "defName");
+    if (doc.contains("blockDefs") && doc["blockDefs"].is_array()) {
+      json defs = doc["blockDefs"];
+      json kept = json::array();
+      bool changed = true;
+      while (changed) {
+        changed = false;
+        for (const auto& def : defs) {
+          if (!def.is_object() || !def.contains("name") || !def["name"].is_string()) continue;
+          const std::string name = def["name"].get<std::string>();
+          if (neededBlocks.find(name) == neededBlocks.end()) continue;
+          bool already = false;
+          for (const auto& prior : kept)
+            if (prior.is_object() && prior.value("name", std::string{}) == name) { already = true; break; }
+          if (already) continue;
+          kept.push_back(def);
+          changed = true;
+          if (def.contains("content") && def["content"].is_object() &&
+              def["content"].contains("nested") && def["content"]["nested"].is_array())
+            for (const auto& nested : def["content"]["nested"]) collectBlock(nested, "defName");
+        }
+      }
+      doc["blockDefs"] = std::move(kept);
+    }
     if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
       for (json& layout : doc["paperLayouts"]) {
         for (const char* key : {
-                 "paperLines", "paperLineAttrs", "paperTexts", "paperTextAttrs", "paperCircles",
-                 "paperCircleAttrs", "paperArcs", "paperArcAttrs", "paperEllipses", "paperEllAttrs", "paperImages",
-                 "paperImageAttrs", "paperPolyOffsets", "paperPolyVerts", "paperPolyVertsBulge", "paperPolyClosed",
-                 "paperPolyAttrs", "paperFilledRegions", "paperFilledRegionAttrs", "paperBlockRefs",
-                 "paperBlockRefAttrs", "paperSplines", "paperSplineAttrs", "paperPoints", "paperPointAttrs"})
+                 "paperTexts", "paperTextAttrs", "paperImages", "paperImageAttrs", "paperFilledRegions",
+                 "paperFilledRegionAttrs", "paperPoints", "paperPointAttrs", "paperMultileaders",
+                 "paperMultileaderAttrs", "paperTables", "paperTableAttrs"})
           layout[key] = json::array();
       }
     }

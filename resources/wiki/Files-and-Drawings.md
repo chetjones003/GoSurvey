@@ -41,7 +41,7 @@ Tabs can be hidden with **Settings → Display → Display File Tabs**.
 | **Open** | File → Open or `Ctrl+O` | Opens the selected DWG directly in a new, active tab, named after the file. Does not show the New Drawing chooser or replace what you are working on |
 | **Save** | `Ctrl+S`, File → Save | Writes to the current path. With no path yet, the Save-As dialog opens first |
 | **Save As** | File → Save As… | New name and location; the tab is renamed to the file stem and later saves go to the new path |
-| **Save as Template** | File → Save as Template… | Saves reusable drawing standards and setup as a `.gst`; does not change the drawing's path or saved state |
+| **Save as Template** | File → Save as Template… | Saves reusable styles/settings, point-group rules, supported model/paper linework, and layout border blocks as a `.gst`; omits survey-point instances and non-linework objects, and does not change the drawing's path or saved state |
 
 There is **no autosave, no backup file, and no drawing recovery**. Save deliberately, and save often.
 

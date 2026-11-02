@@ -6213,7 +6213,7 @@ private Q_SLOTS:
     QCOMPARE(window.State().userLinesFlat, activeLines);
   }
 
-  void issue1134SaveAsTemplateOmitsDrawingContentAndKeepsDrawingState() {
+  void issue1134SaveAsTemplatePreservesReusableLineworkAndSetup() {
     IsolatedUserData userData;
     EditorWindow window;
     window.SwitchDrawing(1);
@@ -6235,10 +6235,18 @@ private Q_SLOTS:
     style.fontFamily = "Arial";
     state.textStyles.push_back(style);
     state.activeTextStyleName = "Boundary Notes";
+    state.surveyLabelTemplates.numberOnly = "PT {id}";
+    state.activeDimensionStyle.textSizeInches = 0.37f;
+    state.activeMultileaderStyle.name = "Field Leaders";
+    state.surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+    state.surfaceStyles.front().name = "Field Surface";
     state.userLinesFlat = {0.0, 0.0, 0.0, 100.0, 0.0, 0.0};
     state.userLineAttrs = {EntityAttributes{}};
     state.surveyPoints.push_back(SurveyPoint{17, 100.0, 200.0, 3.0, "Control", "CTRL", "Field"});
-    state.pointGroups.push_back(PointGroup{});
+    PointGroup group;
+    group.name = "Control Points";
+    group.rule.descriptionMatch = "CTRL*";
+    state.pointGroups.push_back(group);
     if (state.paperLayouts.empty()) state.paperLayouts.emplace_back();
     state.paperLayouts[0].name = "Plan Set";
     state.paperLayouts[0].paperLines = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
@@ -6292,20 +6300,28 @@ private Q_SLOTS:
     std::vector<std::string> log;
     const QByteArray targetUtf8 = targetPath.toUtf8();
     QVERIFY2(LoadGoSurveyTemplateFile(loaded, targetUtf8.constData(), log), log.empty() ? "template load failed" : log.back().c_str());
-    QVERIFY(loaded.userLinesFlat.empty());
+    QCOMPARE(loaded.userLinesFlat.size(), size_t(6));
+    QCOMPARE(loaded.userLinesFlat[3], 100.0);
     QVERIFY(loaded.surveyPoints.empty());
-    QVERIFY(loaded.pointGroups.empty());
+    QCOMPARE(loaded.pointGroups.size(), size_t(1));
+    QCOMPARE(loaded.pointGroups.front().name, std::string("Control Points"));
+    QCOMPARE(loaded.pointGroups.front().rule.descriptionMatch, std::string("CTRL*"));
     QVERIFY(loaded.drawingLayerTable.size() >= 2);
     QCOMPARE(loaded.drawingLayerTable[1].name, std::string("Field"));
     QCOMPARE(loaded.drawingLayerTable[1].linetype, std::string("Dashed"));
     QCOMPARE(loaded.activeTextStyleName, std::string("Boundary Notes"));
     QCOMPARE(loaded.textStyles.back().name, std::string("Boundary Notes"));
+    QCOMPARE(loaded.surveyLabelTemplates.numberOnly, std::string("PT {id}"));
+    QCOMPARE(loaded.activeDimensionStyle.textSizeInches, 0.37f);
+    QCOMPARE(loaded.activeMultileaderStyle.name, std::string("Field Leaders"));
+    QVERIFY(std::any_of(loaded.surfaceStyles.begin(), loaded.surfaceStyles.end(),
+                        [](const SurfaceStyle& style) { return style.name == "Field Surface"; }));
     QCOMPARE(loaded.drawingInsUnits, 2);
     QCOMPARE(loaded.modelUnitsPerPlottedInch, 50.0);
     QVERIFY(loaded.objectSnapEnabled);
     QCOMPARE(loaded.paperLayouts.size(), state.paperLayouts.size());
     QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
-    QVERIFY(loaded.paperLayouts[0].paperLines.empty());
+    QCOMPARE(loaded.paperLayouts[0].paperLines.size(), size_t(6));
   }
 
   void qtNewDrawingInProjectUsesDefaultsWithoutTemplateChooser() {

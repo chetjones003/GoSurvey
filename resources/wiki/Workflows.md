@@ -20,9 +20,9 @@ Start-to-finish tasks, using only what GoSurvey actually does.
 5. Set the **annotation scale** on the status bar to the scale you usually plot at.
 6. In **Properties → General** with nothing selected, set **Default text height (in)** — 0.10 is a
    common choice.
-7. **File → Save as Template…**. The dialog starts in the personal template folder. This saves
-   layers, styles, layouts/page setups, plot scale, insertion units, and drawing settings; it leaves
-   model/paper geometry and survey points out.
+  7. **File → Save as Template…**. The dialog starts in the personal template folder. This saves
+     drawing styles/settings and point-group rules, supported model/paper linework, and layout border
+     blocks; it leaves survey-point instances and non-linework objects out.
 8. **View → Settings… → Files → Startup template (.gst)**, browse to that file, and press
    **Save startup preferences**.
 
