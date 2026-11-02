@@ -86,18 +86,16 @@ A new tab appears named `Drawing 2`, `Drawing 3`, and so on. Each tab is a **com
 document**: its own geometry, layers, survey points, paper layouts, plot scale, and undo history.
 Switching tabs switches all of it.
 
-When no project drawing is active, **File → New** opens the **New Drawing** chooser. Choose
-**Blank Drawing** for an empty drawing, or select one of the bundled or personal `.gst` templates
-to load its contents into a fresh tab. The source template is not changed. When a drawing in an
-open project is active, a new drawing starts empty with that project's defaults instead.
+When no project drawing is active, **File → New** creates a drawing from the default `.gst` template
+configured in **Options → Files**. Choose **Use GoSurvey default** there to use the bundled template.
+The source template is not changed. When a drawing in an open project is active, a new drawing
+starts empty with that project's defaults instead.
 
-The startup workspace template in **Settings → Files** is a separate setting; it is not the source
-of the choices in the New Drawing chooser.
+The startup workspace template is a separate setting; it does not control New Drawing.
 
 ## Opening an existing drawing
 
-**File → Open** (or **Ctrl+O**) → choose a DWG drawing. Opening an existing drawing does not show
-the **New Drawing** template chooser.
+**File → Open** (or **Ctrl+O**) → choose a DWG drawing.
 
 The drawing opens **in a new, active tab**, named after the file. Opening does not replace what you
 are working on.
