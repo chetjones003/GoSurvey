@@ -711,13 +711,17 @@ void EditorWindow::ShowProjectPointWarning() {
   const bool conflict = !pending.conflicts.empty() && pending.conflictAnswer == Answer::None;
   if (!conflict && (!pending.deletePending || pending.deleteAnswer != Answer::None)) return;
   m_ModalOpen = true;
-  QMessageBox question(QMessageBox::Warning, "Shared project points", {}, QMessageBox::NoButton, this);
-  question.setObjectName("projectPointWarning");
+  QMessageBox question(QMessageBox::Warning,
+                       pending.clipboardPaste ? "Paste survey points" : "Shared project points",
+                       {}, QMessageBox::NoButton, this);
+  question.setObjectName(pending.clipboardPaste ? "pastePointNumberConflict" : "projectPointWarning");
   QStringList ids;
   const auto& numbers = conflict ? pending.conflicts : pending.removed;
   for (int id : numbers) { if (ids.size() == 8) { ids.append("…"); break; } ids.append(QString::number(id)); }
   const auto project = QString::fromUtf8(pending.projectName.c_str());
-  if (conflict) question.setText(QString("Project %1 already contains point number(s) %2, hidden in this drawing. Overwrite replaces them throughout the project. Renumber preserves them and gives the new points free numbers.").arg(project, ids.join(", ")));
+  if (conflict && pending.clipboardPaste)
+    question.setText(QString("Point number(s) %1 already exist in the destination. Overwrite replaces the destination points. Renumber gives the copied points free numbers.").arg(ids.join(", ")));
+  else if (conflict) question.setText(QString("Project %1 already contains point number(s) %2, hidden in this drawing. Overwrite replaces them throughout the project. Renumber preserves them and gives the new points free numbers.").arg(project, ids.join(", ")));
   else {
     question.setText(QString("Deleting point(s) %1 removes them from project %2 and its other drawings. Hide here preserves the shared points.").arg(ids.join(", "), project));
     QStringList names;
@@ -731,8 +735,11 @@ void EditorWindow::ShowProjectPointWarning() {
   question.exec();
   const auto& current = m_State.pointEditPrompt;
   if (current.active && current.projectUid == pending.projectUid && current.tabIdx == pending.tabIdx) {
-    AnswerPointEdit(m_State, !conflict, question.clickedButton() == proceed ? Answer::Proceed :
-        question.clickedButton() == alternative ? (conflict ? Answer::Renumber : Answer::HideHere) : Answer::Cancel);
+    const Answer answer = question.clickedButton() == proceed ? Answer::Proceed :
+        question.clickedButton() == alternative ? (conflict ? Answer::Renumber : Answer::HideHere) : Answer::Cancel;
+    AnswerPointEdit(m_State, !conflict, answer);
+    if (pending.clipboardPaste)
+      ResolveClipboardPastePointConflict(m_State, answer, m_Log);
     RefreshProjects();
   }
   m_ModalOpen = false;

@@ -1018,6 +1018,7 @@ struct CadClipboard {
   std::vector<EntityAttributes> blockRefAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
+  std::vector<SurveyPoint>       surveyPoints; ///< Selected model-space survey points (REQ-383 #782).
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
   /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
   bool fromPaper = false;
@@ -1034,7 +1035,7 @@ struct CadClipboard {
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && splines.empty() && annotations.empty() && tables.empty() && blockRefs.empty() &&
-           filledRegions.empty();
+           filledRegions.empty() && surveyPoints.empty();
   }
 };
 
@@ -5167,6 +5168,7 @@ struct AppCommandState {
     int         othersOpenShowing = 0;   ///< other OPEN drawings of the project that show a deleted point
     int         othersClosedMaybe = 0;   ///< drawings of the project that are not open (rules unread)
     bool        deletePending = false;   ///< the delete question (not only the number-conflict one) is showing
+    bool        clipboardPaste = false;  ///< number conflict came from a pending clipboard paste.
     std::vector<std::string> otherNames; ///< names of those open drawings
     /// The answers. None = not asked yet. Delete: Proceed / HideHere / Cancel. Conflict: Proceed
     /// (overwrite) / Renumber / Cancel.
@@ -5174,6 +5176,9 @@ struct AppCommandState {
     Answer      deleteAnswer = Answer::None;
     Answer      conflictAnswer = Answer::None;
   } pointEditPrompt;
+  bool clipboardPasteResolving = false; ///< the user answered a clipboard point-number question; bypass preflight once.
+  bool clipboardPasteOverwrite = false;
+  bool clipboardPasteOriginal = false;
   /// REQ-383 clauses 1 and 3: a paste that crosses a project / coordinate-system / units boundary.
   /// `block` = coordinate-system mismatch (only Cancel); otherwise Paste anyway / Cancel.
   struct PastePrompt {
@@ -8477,6 +8482,8 @@ void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
 /// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
 void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
 void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.
