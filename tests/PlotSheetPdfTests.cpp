@@ -110,6 +110,66 @@ TEST_CASE("Page Setup fit changes the PDF output to fill the sheet (REQ-445 c, m
   CHECK_THAT(b.right, WithinAbs(kSheetW * kPt, 0.5));
 }
 
+namespace {
+
+// Plots \p L on the sheet and returns the bounds of every page object of type \p wantType (points).
+std::vector<Bounds> PlotObjectBounds(AppCommandState& st, int wantType, const std::string& tag) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / ("gosurvey-plotsheet-" + tag + ".pdf");
+  std::vector<std::string> log;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(st, {0}, path.string().c_str(), log));
+
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(path.string().c_str(), nullptr);
+  REQUIRE(doc != nullptr);
+  FPDF_PAGE page = FPDF_LoadPage(doc, 0);
+  REQUIRE(page != nullptr);
+  std::vector<Bounds> out;
+  const int count = FPDFPage_CountObjects(page);
+  for (int i = 0; i < count; ++i) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+    if (FPDFPageObj_GetType(obj) != wantType)
+      continue;
+    Bounds b;
+    if (FPDFPageObj_GetBounds(obj, &b.left, &b.bottom, &b.right, &b.top))
+      out.push_back(b);
+  }
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(doc);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("Fit ignores sheet lines on a non-plottable layer (REQ-445 c, measured)", "[plot][req445]") {
+  AppCommandState st;
+  CadLayerRow hidden;
+  hidden.name = "Hidden";
+  hidden.on = true;
+  hidden.frozen = false;
+  hidden.plottable = false;
+  st.drawingLayerTable.push_back(hidden);
+
+  PaperLayout L;
+  L.name = "Sheet";
+  L.landscape = true;
+  L.portraitWidthIn = kSheetH;
+  L.portraitHeightIn = kSheetW;
+  L.fitToPaper = true;
+  // A visible 2-inch line at y = 1 and a far-away line on the hidden layer, which must not count towards the fit.
+  L.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f, 1.f, 7.f, 0.f, 9.f, 7.f, 0.f};
+  L.paperLineAttrs.resize(2);
+  L.paperLineAttrs[1].layer = "Hidden";
+  st.paperLayouts.push_back(L);
+
+  const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "hidden-layer");
+  REQUIRE(!paths.empty());
+  // Visible line only: fitted across the sheet width, so it runs from the left edge to the right edge.
+  CHECK_THAT(paths.front().left, WithinAbs(0.f, 0.5));
+  CHECK_THAT(paths.front().right, WithinAbs(kSheetW * kPt, 0.5));
+}
+
 TEST_CASE("Page Setup plot ratio changes the PDF output to the stated scale (REQ-445 d, measured)", "[plot][req445]") {
   plotsheet::Settings s;
   s.plotRatio = 2.f;

@@ -39,27 +39,58 @@ namespace {
 
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
 
-// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, line ends,
-// circle and polyline vertices, and text anchors. Arcs, ellipses, blocks and fills are not included yet.
-plotsheet::Extent SheetContentExtent(const PaperLayout& L) {
+// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, lines, circles,
+// polylines, text and tables. Only entities the draw loop plots count, so an entity on a non-plottable layer is
+// skipped as it is when drawn. Arcs, ellipses, blocks and fills are not included yet.
+template <class Plottable>
+plotsheet::Extent SheetContentExtent(const PaperLayout& L, Plottable plottable) {
+  // Same rule as the draw loop's sheetAttr checks: an index with no attributes is plotted.
+  auto onPlottableLayer = [&](const std::vector<EntityAttributes>& attrs, size_t i) {
+    return i >= attrs.size() || plottable(attrs[i].layer);
+  };
   plotsheet::Extent e;
   for (const Viewport& vp : L.viewports) {
     e.Add(vp.paperXIn, vp.paperYIn);
     e.Add(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
   }
   for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    if (!onPlottableLayer(L.paperLineAttrs, i / 6))
+      continue;
     e.Add(L.paperLines[i], L.paperLines[i + 1]);
     e.Add(L.paperLines[i + 3], L.paperLines[i + 4]);
   }
   for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    if (!onPlottableLayer(L.paperCircleAttrs, i / 3))
+      continue;
     const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
     e.Add(cx - r, cy - r);
     e.Add(cx + r, cy + r);
   }
-  for (size_t i = 0; i + 1 < L.paperPolyVerts.size(); i += 3)
-    e.Add(L.paperPolyVerts[i], L.paperPolyVerts[i + 1]);
-  for (const CadAnnotation& a : L.paperTexts)
-    e.Add(a.insX, a.insY);
+  const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
+  for (int pi = 0; pi < nPoly; ++pi) {
+    if (!onPlottableLayer(L.paperPolyAttrs, static_cast<size_t>(pi)))
+      continue;
+    for (int v = L.paperPolyOffsets[static_cast<size_t>(pi)]; v < L.paperPolyOffsets[static_cast<size_t>(pi + 1)]; ++v)
+      e.Add(L.paperPolyVerts[static_cast<size_t>(v) * 3], L.paperPolyVerts[static_cast<size_t>(v) * 3 + 1]);
+  }
+  // Text and tables count their drawn extent, not just the insertion point, so a text-only or table-only sheet
+  // is fitted to what it prints.
+  for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
+    if (L.paperTexts[ti].text.empty() || !onPlottableLayer(L.paperTextAttrs, ti))
+      continue;
+    float x0, y0, x1, y1;
+    PaperTextBoundsIn(L.paperTexts[ti], &x0, &y0, &x1, &y1);
+    e.Add(x0, y0);
+    e.Add(x1, y1);
+  }
+  for (size_t tbi = 0; tbi < L.paperTables.size(); ++tbi) {
+    if (!onPlottableLayer(L.paperTableAttrs, tbi))
+      continue;
+    float x0, y0, x1, y1;
+    CadTableWorldAabb(L.paperTables[tbi], &x0, &y0, &x1, &y1);
+    e.Add(x0, y0);
+    e.Add(x1, y1);
+  }
   return e;
 }
 
@@ -220,7 +251,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
     // REQ-445: the layout's Page Setup offset, centre, fit and plot ratio place every sheet point and text size.
     const plotsheet::Transform tr = plotsheet::Compute(
         {L.fitToPaper, L.scaleModelPerPaperIn, L.offsetXIn, L.offsetYIn, L.centerPlot}, L.sheetWidthIn(),
-        L.sheetHeightIn(), SheetContentExtent(L));
+        L.sheetHeightIn(), SheetContentExtent(L, plottable));
     FPDF_PAGE page = FPDFPage_New(doc, pages, wPts, hPts);
     if (!page)
       continue;
