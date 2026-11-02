@@ -239,3 +239,29 @@ TEST_CASE("Page Setup plot ratio scales native text in the PDF (REQ-445 d, measu
   CHECK_THAT(halfH, WithinAbs(fullH * 0.5f, 1.0));
   CHECK_THAT(half.left, WithinAbs(full.left * 0.5f, 1.0));
 }
+
+TEST_CASE("Fit measures an arc as sheet content (REQ-445 c, measured)", "[plot][req445]") {
+  AppCommandState st;
+  PaperLayout L;
+  L.name = "Sheet";
+  L.landscape = true;
+  L.portraitWidthIn = kSheetH;
+  L.portraitHeightIn = kSheetW;
+  L.fitToPaper = true;
+  // A semicircle of radius 1 inch centred at (2,2), running from (1,2) through the bottom to (3,2). Its only content
+  // is the arc, so without arcs in the extent the sheet would not be fitted and the arc would stay 2 inches wide.
+  CadArc arc;
+  arc.cx = 2.f;
+  arc.cy = 2.f;
+  arc.r = 1.f;
+  arc.startRad = 3.14159265f;
+  arc.sweepRad = 3.14159265f;
+  L.paperArcs.push_back(arc);
+  st.paperLayouts.push_back(L);
+
+  const std::vector<Bounds> paths = PlotObjectBounds(st, FPDF_PAGEOBJ_PATH, "arc-fit");
+  REQUIRE(!paths.empty());
+  // PDFium's path bounds include the stroke (about 0.5 pt each side), so the edges allow 1 pt.
+  CHECK_THAT(paths.front().left, WithinAbs(0.f, 1.0));
+  CHECK_THAT(paths.front().right, WithinAbs(kSheetW * kPt, 1.0));
+}

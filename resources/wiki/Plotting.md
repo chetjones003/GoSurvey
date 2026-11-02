@@ -117,7 +117,7 @@ The layout's **Page Setup Manager** holds four placement options that the PDF pl
 | **Center the plot** | Centres the sheet content on the sheet. The offsets are ignored while this is on |
 | **Plot offset X / Y** | Moves the sheet content by that many inches from the sheet's lower-left corner |
 
-Fit and centre measure the content on the sheet: viewport frames, lines, circles, polylines (including their
+Fit and centre measure the content on the sheet: viewport frames, lines, circles, arcs, ellipses, fills, block references, polylines (including their
 bulges), splines, points, multileaders and text. Lineweights keep the width the layer or entity asks for.
 
 > AutoCAD plots layouts at 1:1 and turns fit and centre off for them. GoSurvey applies them, so a sheet

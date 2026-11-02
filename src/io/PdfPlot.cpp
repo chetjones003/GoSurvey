@@ -39,10 +39,10 @@ namespace {
 
 constexpr float kPtPerIn = 72.f;  // PDF user space is points (1/72 inch), origin bottom-left, Y up.
 
-// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, lines, circles,
-// polylines (with their bulge arcs), splines, points, multileaders, text and tables. Only entities the draw loop plots
-// count, so an entity on a non-plottable layer is skipped as it is when drawn. Arcs, ellipses, blocks and fills are not
-// included yet.
+// The sheet content that the placement rules (REQ-445) fit, centre and measure: viewport frames, lines, circles, arcs,
+// ellipses, filled regions, block references, polylines (with their bulge arcs), splines, points, multileaders, text
+// and tables. Only entities the draw loop plots count, so an entity on a non-plottable layer is skipped as it is when
+// drawn.
 template <class Plottable>
 plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayout& L, Plottable plottable) {
   // Same rule as the draw loop's sheetAttr checks: an index with no attributes is plotted.
@@ -91,6 +91,59 @@ plotsheet::Extent SheetContentExtent(const AppCommandState& st, const PaperLayou
                           e.Add(static_cast<float>(ax), static_cast<float>(ay));
                           e.Add(static_cast<float>(bx), static_cast<float>(by));
                         });
+    }
+  }
+  // Arcs and ellipses measure the same samples the draw loop strokes.
+  for (size_t ai = 0; ai < L.paperArcs.size(); ++ai) {
+    if (!onPlottableLayer(L.paperArcAttrs, ai))
+      continue;
+    const CadArc& arc = L.paperArcs[ai];
+    const int kSeg = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.1f) + 2, 2, 256);
+    for (int k = 0; k <= kSeg; ++k) {
+      const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(kSeg));
+      e.Add(static_cast<float>(arc.cx + arc.r * std::cos(t)), static_cast<float>(arc.cy + arc.r * std::sin(t)));
+    }
+  }
+  for (size_t ei = 0; ei < L.paperEllipses.size(); ++ei) {
+    if (!onPlottableLayer(L.paperEllAttrs, ei))
+      continue;
+    const CadEllipse& el = L.paperEllipses[ei];
+    const float mnx = -el.majVy * el.ratio, mny = el.majVx * el.ratio;  // minor axis = perp(major) x ratio
+    constexpr int kSeg = 64;
+    for (int k = 0; k <= kSeg; ++k) {
+      const float t = 6.2831853f * (static_cast<float>(k) / static_cast<float>(kSeg));
+      const float ct = std::cos(t), stt = std::sin(t);
+      e.Add(static_cast<float>(el.cx + el.majVx * ct + mnx * stt), static_cast<float>(el.cy + el.majVy * ct + mny * stt));
+    }
+  }
+  // Filled regions measure their loop vertices, as the fill path does.
+  for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
+    if (!onPlottableLayer(L.paperFilledRegionAttrs, fi))
+      continue;
+    const CadFilledRegion& fr = L.paperFilledRegions[fi];
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)
+      continue;
+    for (size_t lp = 0; lp < fr.loopStart.size(); ++lp) {
+      const int cnt = fr.loopCount(lp);
+      if (cnt < 3)
+        continue;
+      const int begin = fr.loopStart[lp];
+      for (int k = 0; k < cnt; ++k) {
+        const size_t vi = static_cast<size_t>(begin + k);
+        e.Add(fr.vertsXyz[vi * 3], fr.vertsXyz[vi * 3 + 1]);
+      }
+    }
+  }
+  // Block references measure the world segments the draw loop strokes for them.
+  for (size_t bi = 0; bi < L.paperBlockRefs.size(); ++bi) {
+    if (!onPlottableLayer(L.paperBlockRefAttrs, bi))
+      continue;
+    const EntityAttributes attr = bi < L.paperBlockRefAttrs.size() ? L.paperBlockRefAttrs[bi] : EntityAttributes{};
+    std::vector<CadBlockWorldSeg> segs;
+    CadBlockCollectWorldLines(st.blockDefs, L.paperBlockRefs[bi], attr, &segs);
+    for (const CadBlockWorldSeg& s : segs) {
+      e.Add(static_cast<float>(s.x0), static_cast<float>(s.y0));
+      e.Add(static_cast<float>(s.x1), static_cast<float>(s.y1));
     }
   }
   for (size_t si = 0; si < L.paperSplines.size(); ++si) {
