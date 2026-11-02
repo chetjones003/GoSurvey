@@ -1,7 +1,7 @@
 # TASK-alignment-phase1-issue121 — Civil-style alignments, Phases 1 and 2 with the full spec
 
 - Type:    feature
-- Status:  in review
+- Status:  needs review (PR #1152)
 - Opened:  2026-11-02
 - Owner:   chetjones003 (decision), Claude (implementation)
 - GitHub:  #121 "Implement Civil 3D-Style Alignments"
