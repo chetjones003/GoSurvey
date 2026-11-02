@@ -6203,8 +6203,7 @@ private Q_SLOTS:
     std::filesystem::create_directories(userTemplateDir);
     auto writeTemplate = [&](const QString& name, double x) {
       AppCommandState source;
-      source.userLinesFlat = {x, 2.0, 0.0, x + 10.0, 2.0, 0.0};
-      source.userLineAttrs.push_back(EntityAttributes{});
+      source.modelUnitsPerPlottedInch = x;
       const auto path = userTemplateDir / name.toStdWString();
       const auto pathUtf8 = QString::fromStdWString(path.wstring()).toUtf8();
       std::vector<std::string> log;
@@ -6240,9 +6239,8 @@ private Q_SLOTS:
     const auto customTabs = window.State().drawingTabs.size();
     window.NewDrawing();
     QCOMPARE(window.State().drawingTabs.size(), customTabs + 1);
-    QCOMPARE(window.State().userLinesFlat.size(), size_t(6));
-    QCOMPARE(window.State().userLinesFlat[0], 31.0);
-    QCOMPARE(window.State().userLinesFlat[3], 41.0);
+    QVERIFY(window.State().userLinesFlat.empty());
+    QCOMPARE(window.State().modelUnitsPerPlottedInch, 31.0);
     QCOMPARE(window.State().drawingTabs.back().projectUid, 0u);
     QVERIFY(!window.findChild<QDialog*>("drawingTemplateDialog"));
     const auto drawingPath = QString::fromStdWString((userTemplateDir / L"Created.dwg").wstring());
@@ -6252,6 +6250,7 @@ private Q_SLOTS:
     AppCommandState reopened;
     QVERIFY(OpenDrawingDocument(reopened, drawingPathUtf8.constData(), drawingLog));
     QCOMPARE(reopened.userLinesFlat, window.State().userLinesFlat);
+    QCOMPARE(reopened.modelUnitsPerPlottedInch, window.State().modelUnitsPerPlottedInch);
     sourceFile.setFileName(userDuplicatePath);
     QVERIFY(sourceFile.open(QIODevice::ReadOnly)); QCOMPARE(sourceFile.readAll(), sourceBytes); sourceFile.close();
 
@@ -6459,17 +6458,8 @@ private Q_SLOTS:
     QCOMPARE(loaded.paperLayouts[0].name, std::string("Plan Set"));
     QVERIFY(loaded.paperLayouts[0].paperLines.empty());
 
-    QTimer::singleShot(0, [&] {
-      auto* dialog = window.findChild<QDialog*>("drawingTemplateDialog"); QVERIFY(dialog);
-      auto* list = dialog->findChild<QListWidget*>("drawingTemplateList"); QVERIFY(list);
-      int templateRow = -1;
-      for (int row = 0; row < list->count(); ++row)
-        if (list->item(row)->text() == "Field Template — Personal") templateRow = row;
-      QVERIFY(templateRow >= 0);
-      list->setCurrentRow(templateRow);
-      dialog->findChild<QDialogButtonBox*>("drawingTemplateButtons")
-          ->button(QDialogButtonBox::Open)->click();
-    });
+    CopyUtf8PathCapped(window.State().defaultDrawingTemplatePathUtf8,
+                       sizeof(window.State().defaultDrawingTemplatePathUtf8), targetUtf8.constData());
     window.NewDrawing();
     QVERIFY(window.State().userLinesFlat.empty());
     QVERIFY(window.State().surveyPoints.empty());

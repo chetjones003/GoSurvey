@@ -14920,7 +14920,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 | REQ-418 | compute | `TraverseTests` `[req418]` per-measurement rows, standardized residual, mark over 3, chi-square bounds | accepted |
 | REQ-422 | compute/IO | `TraverseTests` `[req422]` centering error, refraction correction, iteration/convergence, settings round-trip | accepted |
 | REQ-423 | compute/UI | `TraverseTests` `[req423]` report section order, export file validity, empty-file-list case | accepted |
-| REQ-424 | Qt UI/IO | `GoSurveyQtTests` `[req424]` template discovery, selection, blank, cancel, failure preservation, and project-default behavior | accepted |
+| REQ-424 | Qt UI/IO | `GoSurveyQtTests` configured/bundled default-template workflows, Save as Template content and state preservation, named style and point-marker dependency round-trip, malformed-template and project-default behavior | accepted |
 | REQ-425 | Platform/UI/Release/Agent tooling | Qt `[req425]` crash reporting and identity; Worker dump/PDB storage; release PDB archive; admin report-ID prompt; PowerShell triage read/identity/missing-artifact tests; manual `--gosurvey-test-crash` | accepted |
 | REQ-426 | Qt UI/Commands | `GoSurveyQtTests`: `releaseRibbonPipeNetworkRunsAndUndoesCompleteWorkflow`, `releaseRibbonFeatureLineRunsAndCancelsCompleteWorkflow`, `pipeAndFeatureLineRibbonActionsRespectReadOnlyProjectSaveRules` | accepted |
 | REQ-428 | Qt UI/Commands | `GoSurveyQtTests`: `issue903DraftingModesAndCursorFields`, `issue903PolarSettingsAndOneShotSnap`, `issue903OrthoAndPolarConstrainInActiveUcs`, `issue903VisualOptions` | accepted |

@@ -25,8 +25,8 @@ Start-to-finish tasks, using only what GoSurvey actually does.
    page setups, plot scale, insertion units, and drawing settings. It leaves model/paper entities,
    survey points, and point groups out. Block definitions required by survey-point block-marker
    styles are kept as style dependencies; block inserts and unrelated block definitions are not.
-8. **View → Settings… → Files → Startup template (.gst)**, browse to that file, and press
-   **Save startup preferences**.
+8. Open **Options → Files**, choose the saved `.gst` as the default drawing template, and save the
+   preference. The startup workspace template is a separate setting.
 
 **Result:** every new drawing starts with your layers, styles, and scale.
 
