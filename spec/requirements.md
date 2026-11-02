@@ -12645,7 +12645,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ### REQ-424 — Qt drawing-template workflow (GitHub issue #885)
 
-- Purpose: a Qt user can start a drawing from a known blank or templated document without altering the source template or the existing drawing.
+- Purpose: a Qt user can start a drawing from the configured or bundled template without altering the source template or the existing drawing.
 - Priority: must
 - Type: functional
 - Decision: D-2026-10-30-a (amends D-2026-10-17-a).
@@ -12655,7 +12655,7 @@ capability that does not exist. They are recorded here rather than quietly dropp
   2. **New standalone drawing.** New Drawing from the Start screen, ribbon, tab control, or `NEW` command creates a drawing from the configured default template. If no custom path is configured, it uses the GoSurvey-supplied `resources/default-template.gst`. The template is loaded into a fresh drawing tab and remains unchanged. The blank/template chooser is not shown.
   3. **Failure.** If the configured template cannot be read or validated, the failure is reported, no drawing tab is created, and the active drawing remains unchanged.
   4. **Project behavior.** When the active drawing belongs to an open project, creating a new drawing follows REQ-374: it starts empty with that project's defaults and does not use the standalone default template.
-  5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; template discovery itself is read-only and must work when library files are not writable.
+  5. **Undo and read-only behavior.** A created drawing has its own undo history; using a template does not add an edit to the source document or its history. Existing project read-only rules continue to govern project data; the source template is only read and need not be writable to create a drawing from it.
 - Acceptance:
   - `[req424]` Qt workflow coverage: Options stages, saves, clears, and reloads the custom default drawing-template path.
   - `[req424]` Qt workflow coverage: New Drawing uses the configured template or the bundled default when no custom path is set, creates and focuses a new tab with the template content, and leaves the source template unchanged.
