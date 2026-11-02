@@ -133,13 +133,12 @@ jobs:
 
             # The rolling release is the persistent counter. A missing asset is the first run;
             # any other download/parse problem fails closed rather than guessing a version.
-            $manifestPath = Join-Path $env:RUNNER_TEMP 'previous-beta-latest.json'
             $manifestResponse = Invoke-WebRequest `
               -Uri "https://github.com/$($env:REPOSITORY)/releases/download/channel-beta/latest.json" `
-              -OutFile $manifestPath -SkipHttpErrorCheck
+              -SkipHttpErrorCheck
             $previousManifest = $null
             if ($manifestResponse.StatusCode -eq 200) {
-              try { $previousManifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json }
+              try { $previousManifest = $manifestResponse.Content | ConvertFrom-Json }
               catch { throw "Could not parse the previous beta manifest: $($_.Exception.Message)" }
               if ($previousManifest.version -notmatch '^\d+\.\d+\.\d+$') {
                 throw "Previous beta manifest has an invalid version: '$($previousManifest.version)'"
@@ -656,6 +655,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A queued beta run can finish after a newer commit. Check the branch tip immediately
+          # before touching the rolling release so an older build cannot replace newer assets.
+          $remoteBeta = git ls-remote origin refs/heads/beta
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve current beta head before publishing" }
+          $remoteBetaSha = ($remoteBeta -split '\s+')[0]
+          if ([string]::IsNullOrWhiteSpace($remoteBetaSha)) { throw "Could not resolve current beta head before publishing" }
+          if ($remoteBetaSha -ne $env:GITHUB_SHA) {
+            Write-Host "Skipping stale beta build $($env:GITHUB_SHA); current beta head is $remoteBetaSha."
+            exit 0
+          }
+
           # One permanent prerelease row, not one per push. `--clobber` replaces the assets in
           # place, which is what gives the beta manifest a fixed, forever-valid URL.
           $exists = gh release view channel-beta 2>$null
