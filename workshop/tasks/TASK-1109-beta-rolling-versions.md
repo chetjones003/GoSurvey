@@ -1,7 +1,7 @@
 # TASK-1109 — Publish a rolling beta version for each changed beta head
 
 - Type: feature / release workflow
-- Status: implement
+- Status: submitted — PR #1151
 - Opened: 2026-11-02
 - Owner: Workshop
 
@@ -46,8 +46,8 @@ None. The idempotency rule and stable baseline are recorded in D-2026-11-02-a / 
   CMake and the installer and record source provenance in the beta manifest.
 - Files/functions: `.github/workflows/release.yml`; `CMakeLists.txt`; `spec/requirements.md`,
   `spec/architecture.md`, `spec/project.md`; verification review and this task log.
-- Test approach: no test files added or test commands run under the session's test-execution
-  instruction. Review version scenarios and workflow guards; run `git diff --check`.
+- Test approach: no test files or test commands for this workflow change. Review version scenarios
+  and workflow guards; CI on the PR provides the build/test gate.
 - Steps:
   - [x] Specification accepted and plan reviewed (Verification APPROVE).
   - [x] Add beta push trigger and idempotent version calculation/provenance.
@@ -69,6 +69,8 @@ None. The idempotency rule and stable baseline are recorded in D-2026-11-02-a / 
   initiated beta updates without promising a version format or release cadence.
 - 2026-11-02 — `git diff --check` passed. Build and tests were not run; no CI workflow execution
   occurred in this task.
+- 2026-11-02 — Opened [PR #1151](https://github.com/chetjones003/GoSurvey/pull/1151) against
+  `beta`, labeled `feature`, `github_actions`, and `needs review`.
 
 ## 9. Self-verification
 - [ ] build-project — not run.
