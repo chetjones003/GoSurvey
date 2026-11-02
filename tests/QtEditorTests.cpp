@@ -3621,6 +3621,17 @@ private Q_SLOTS:
     LoadUserStartupPrefs(reloaded);
     QCOMPARE(QString::fromUtf8(reloaded.defaultDrawingTemplatePathUtf8), templatePath);
 
+    // Qt startup uses this loader; an overlong UTF-8 path must be rejected before it is copied or saved.
+    QString longPath = templateDir.path() + "/" + QString(300, QChar(0x4e2d)) + ".gst";
+    QVERIFY(longPath.toUtf8().size() > static_cast<int>(sizeof(window.State().defaultDrawingTemplatePathUtf8) - 1));
+    pathField->setText(longPath);
+    dialog->findChild<QPushButton*>("settingsApply")->click();
+    QVERIFY(!dialog->findChild<QLabel*>("settingsSaveStatus")->text().isEmpty());
+    QCOMPARE(QString::fromUtf8(window.State().defaultDrawingTemplatePathUtf8), templatePath);
+    AppCommandState rejected;
+    LoadUserStartupPrefs(rejected);
+    QCOMPARE(QString::fromUtf8(rejected.defaultDrawingTemplatePathUtf8), templatePath);
+
     auto* useBundled = dialog->findChild<QPushButton*>("useBundledDrawingTemplate");
     QVERIFY(useBundled);
     useBundled->click();
@@ -6352,7 +6363,7 @@ private Q_SLOTS:
     const auto filesRow = categories->findItems("Files", Qt::MatchExactly);
     QCOMPARE(filesRow.size(), 1);
     categories->setCurrentItem(filesRow.front());
-    const QString artifacts = QDir::current().filePath("build/artifacts");
+    const QString artifacts = QtTestArtifactDirectory();
     QVERIFY(QDir().mkpath(artifacts));
     QVERIFY(dialog->grab().save(QDir(artifacts).filePath("qt-default-drawing-template-options.png")));
   }
