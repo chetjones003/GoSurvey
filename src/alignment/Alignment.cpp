@@ -571,11 +571,19 @@ std::vector<GeometryPoint> Alignment::GeometryPoints() const {
       push(GeometryPointCode::CurveMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
       if (next == nullptr || next->kind == EntityKind::Line)
         push(GeometryPointCode::CurveTan, PointInEntity(i, e.length), EntityEndStation(i), i);
-    } else {
-      push(GeometryPointCode::TanCurve, e.start, EntityStartStation(i), i);
-      push(GeometryPointCode::LineMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
+    } else if (e.kind == EntityKind::Spiral) {
+      GeometryPointCode startCode = GeometryPointCode::TanSpiral;
+      if (prev != nullptr) {
+        if (prev->kind == EntityKind::Arc)
+          startCode = GeometryPointCode::CurveSpiral;
+        else if (prev->kind == EntityKind::Spiral)
+          startCode = GeometryPointCode::SpiralSpiral;
+      }
+      push(startCode, e.start, EntityStartStation(i), i);
       if (next == nullptr || next->kind == EntityKind::Line)
-        push(GeometryPointCode::CurveTan, PointInEntity(i, e.length), EntityEndStation(i), i);
+        push(GeometryPointCode::SpiralTan, PointInEntity(i, e.length), EntityEndStation(i), i);
+      else if (next != nullptr && next->kind == EntityKind::Arc)
+        push(GeometryPointCode::SpiralCurve, PointInEntity(i, e.length), EntityEndStation(i), i);
     }
   }
   push(GeometryPointCode::End, EndPoint(), EndStation(), n - 1);

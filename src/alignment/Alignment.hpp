@@ -103,6 +103,11 @@ enum class GeometryPointCode {
   CurveTan,    ///< PT (EC): curve to tangent.
   CompCurveCurve,
   RevCurveCurve,
+  TanSpiral,   ///< TS: tangent to spiral.
+  SpiralTan,   ///< ST: spiral to tangent.
+  CurveSpiral, ///< CS: curve to spiral.
+  SpiralCurve, ///< SC: spiral to curve.
+  SpiralSpiral,///< SS: spiral to spiral.
   CurveMidPt,
   CurvePI,     ///< Intersection of the two tangents a curve joins.
   CurveCenter,

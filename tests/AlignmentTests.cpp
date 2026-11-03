@@ -609,6 +609,57 @@ TEST_CASE("Tangent-spiral-curve junction is C2 when radii match", "[req481][req4
   CHECK_FALSE(issues[1].FailsRequirement(a.continuityRequirement));
 }
 
+TEST_CASE("Spiral geometry points TS SC CS ST", "[req490][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 100.0));
+  REQUIRE(a.AppendSpiral(100.0, 0.0, 500.0, true));
+  REQUIRE(a.AppendCurve(500.0, 50.0, true));
+  using C = alignment::GeometryPointCode;
+  int ts = 0;
+  int sc = 0;
+  Point2 tsPt{};
+  Point2 scPt{};
+  for (const alignment::GeometryPoint& p : a.GeometryPoints()) {
+    if (p.code == C::TanSpiral) {
+      ++ts;
+      tsPt = p.point;
+    }
+    if (p.code == C::SpiralCurve) {
+      ++sc;
+      scPt = p.point;
+    }
+  }
+  CHECK(ts == 1);
+  CHECK(sc == 1);
+  CHECK(tsPt.x == Approx(0.0).margin(1e-9));
+  CHECK(tsPt.y == Approx(100.0).margin(1e-9));
+  const Point2 spiralEnd = a.GetPointAtStation(a.EntityEndStation(1));
+  CHECK(scPt.x == Approx(spiralEnd.x).margin(1e-8));
+  CHECK(scPt.y == Approx(spiralEnd.y).margin(1e-8));
+
+  Alignment stAlign;
+  REQUIRE(stAlign.AppendTangent({0.0, 0.0}, 0.0, 80.0));
+  REQUIRE(stAlign.AppendSpiral(60.0, 0.0, 600.0, true));
+  REQUIRE(stAlign.AppendTangent(40.0));
+  int st = 0;
+  for (const alignment::GeometryPoint& p : stAlign.GeometryPoints()) {
+    if (p.code == C::SpiralTan)
+      ++st;
+  }
+  CHECK(st == 1);
+
+  Alignment ss;
+  REQUIRE(ss.AppendTangent({0.0, 0.0}, 0.0, 20.0));
+  REQUIRE(ss.AppendSpiral(50.0, 0.0, 800.0, true));
+  REQUIRE(ss.AppendSpiral(50.0, 800.0, 400.0, true));
+  int spiralSpiral = 0;
+  for (const alignment::GeometryPoint& p : ss.GeometryPoints()) {
+    if (p.code == C::SpiralSpiral)
+      ++spiralSpiral;
+  }
+  CHECK(spiralSpiral == 1);
+}
+
 TEST_CASE("Spiral-curve C2 mismatch is flagged at C2 level", "[req482][alignment]") {
   Alignment a;
   REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 50.0));
