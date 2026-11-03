@@ -2200,7 +2200,8 @@ json BuildRoot(const AppCommandState& st) {
       if (s.gradingGroup) {
         o["gradingMembers"] = json::array();
         for (const auto &member : s.gradingMembers) {
-          json row = {{"gradingId", member.gradingId}, {"strips", member.strips}};
+          json row = {{"gradingId", member.gradingId},
+                      {"strips", member.strips ? json(*member.strips) : json::array()}};
           if (member.infill) row["infill"] = true;
           o["gradingMembers"].push_back(std::move(row));
         }
@@ -2666,7 +2667,14 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
         log.push_back("Invalid grading target in drawing.");
         return false;
       }
-      const int target = grading.value("target", -1);
+      int target = -1;
+      if (grading["target"].is_number_unsigned()) {
+        const auto raw = grading["target"].get<std::uint64_t>();
+        if (raw <= 3) target = static_cast<int>(raw);
+      } else {
+        const auto raw = grading["target"].get<std::int64_t>();
+        if (raw >= 0 && raw <= 3) target = static_cast<int>(raw);
+      }
       if (target != static_cast<int>(CadGradingDefinition::Target::Surface) &&
           !grading.contains("targetValue")) {
         log.push_back("Invalid grading target in drawing.");
@@ -2677,7 +2685,7 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
         log.push_back("Invalid grading target in drawing.");
         return false;
       }
-      const double value = grading.value("targetValue", std::numeric_limits<double>::quiet_NaN());
+      const double value = grading.value("targetValue", 0.0);
       const double percent = grading.value("distanceGradePercent", 0.0);
       if (target < 0 || target > 3 || !std::isfinite(value) || !std::isfinite(percent) ||
           (target == static_cast<int>(CadGradingDefinition::Target::Distance) && value <= 0.0)) {
@@ -4096,7 +4104,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           CadGradingGroupMember member;
           member.gradingId = row["gradingId"].get<std::uint64_t>();
           member.infill = row.value("infill", false);
-          member.strips = row["strips"].get<std::vector<std::vector<double>>>();
+          member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+              row["strips"].get<std::vector<std::vector<double>>>());
           s.gradingMembers.push_back(std::move(member));
         }
       }

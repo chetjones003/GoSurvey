@@ -3217,7 +3217,13 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 
   if (surface.gradingGroup) {
     for (const auto &member : surface.gradingMembers) {
-      for (const auto &strip : member.strips) {
+      if (!member.strips) {
+        in.inputsIncomplete = true;
+        in.incompleteReason = "missing baked grading strips";
+        log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+        return in;
+      }
+      for (const auto &strip : *member.strips) {
         if (((member.infill && (strip.size() < 9 || strip.size() % 3 != 0)) ||
              (!member.infill && strip.size() != 12)) ||
             !std::all_of(strip.begin(), strip.end(),
@@ -24739,6 +24745,22 @@ void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(msg);
 }
 
+std::string GradingTargetDescription(const AppCommandState& st,
+                                     const CadSurface* surface) {
+  switch (st.gradingTarget) {
+    case CadGradingDefinition::Target::Surface:
+      return surface ? "to " + surface->name : "to the selected surface";
+    case CadGradingDefinition::Target::Distance:
+      return "distance " + std::to_string(st.gradingTargetValue) +
+             " at " + std::to_string(st.gradingDistanceGradePercent) + "% grade";
+    case CadGradingDefinition::Target::AbsoluteElevation:
+      return "absolute elevation " + std::to_string(st.gradingTargetValue);
+    case CadGradingDefinition::Target::RelativeElevation:
+      return "relative elevation change " + std::to_string(st.gradingTargetValue);
+  }
+  return "unknown target";
+}
+
 /// The feature line the command will grade from: the STABLE ID of the one selected, or 0.
 std::uint64_t GradingSelectedFeatureLine(AppCommandState& st, int* outCount) {
   EnsureEntityIds(st);  // so a line drawn moments ago already has the id the grading will hold it by
@@ -24824,7 +24846,8 @@ CadGradingGroupMember BakeGradingMember(const AppCommandState &st,
   CadGradingGroupMember member;
   member.gradingId = id;
   const size_t n = baseline.verts.size();
-  member.strips.reserve(n);
+  std::vector<std::vector<double>> strips;
+  strips.reserve(n);
   for (size_t i = 0; i < (baseline.closed ? n : n - 1); ++i) {
     const size_t j = (i + 1) % n;
     std::vector<double> strip;
@@ -24835,8 +24858,9 @@ CadGradingGroupMember BakeGradingMember(const AppCommandState &st,
       strip.push_back(v[1] - st.worldDocumentOriginY);
       strip.push_back(v[2]);
     }
-    member.strips.push_back(std::move(strip));
+    strips.push_back(std::move(strip));
   }
+  member.strips = std::make_shared<const std::vector<std::vector<double>>>(std::move(strips));
   return member;
 }
 
@@ -25032,7 +25056,7 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   def.distanceGradePercent = st.gradingDistanceGradePercent;
   const std::string description = "REQ-398 daylight line: cut " + FormatSlope(slopes.cutRun) +
                                   ", fill " + FormatSlope(slopes.fillRun) + ", " +
-                                  (surf ? "to " + surf->name : "target " + std::to_string(static_cast<int>(st.gradingTarget)));
+                                  GradingTargetDescription(st, surf);
 
   std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
   if (st.gradingEditId != 0) {
@@ -25345,7 +25369,8 @@ void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
     if (!IsSimpleInfillPolygon(ring, &polygonError)) {
       log.push_back("GRADINGINFILL - " + polygonError + "."); return;
     }
-    member.strips.push_back(std::move(ring));
+    member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+        std::vector<std::vector<double>>{std::move(ring)});
     infills.push_back(std::move(member));
   }
   if (infills.empty()) {
@@ -25456,9 +25481,12 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
       else { log.push_back("GRADING - target must be Surface, Distance, Absolute, or Relative."); return; }
       if (st.gradingTarget == CadGradingDefinition::Target::Surface) { GradingPrompt(st, log); return; }
       st.gradingPhase = P::WaitTargetValue;
-      log.push_back(st.gradingTarget == CadGradingDefinition::Target::Distance
-                        ? "GRADING - enter horizontal distance (> 0)."
-                        : "GRADING - enter target elevation change (finite; signed values allowed).");
+      if (st.gradingTarget == CadGradingDefinition::Target::Distance)
+        log.push_back("GRADING - enter horizontal distance (> 0).");
+      else if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation)
+        log.push_back("GRADING - enter absolute target elevation (finite).");
+      else
+        log.push_back("GRADING - enter target elevation change from the baseline (finite; signed values allowed).");
       return;
     case P::WaitTargetValue: {
       char* end = nullptr;

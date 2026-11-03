@@ -1741,7 +1741,6 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     if (!path.isEmpty()) PlotLayoutsToPdf(m_State, {std::max(0, m_State.activeSpaceIndex)}, path.toUtf8().constData(), m_Log);
   } else if (command == "GRADING") {
     CancelActiveCommand(m_State, m_Log);
-    Submit(command);
     ShowGradingTools();
   } else if (!command.startsWith('@')) {
     CancelActiveCommand(m_State, m_Log); Submit(command);

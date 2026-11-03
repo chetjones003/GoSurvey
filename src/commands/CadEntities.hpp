@@ -1337,7 +1337,9 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 /// preserve unchanged members when the group membership changes.
 struct CadGradingGroupMember {
   std::uint64_t gradingId = 0;
-  std::vector<std::vector<double>> strips;
+  // Immutable baked geometry is shared by drawing/undo snapshots; replacing a member installs
+  // new strips without copying every coordinate into every snapshot.
+  std::shared_ptr<const std::vector<std::vector<double>>> strips;
   bool infill = false;
 };
 

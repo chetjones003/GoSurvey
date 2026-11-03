@@ -1,6 +1,8 @@
-# Civil 3D grading tools: GoSurvey expansion proposal
+# Civil 3D grading tools: historical expansion research
 
-Research date: 2026-11-02. Inspected checkout: `feat/issue-813`, HEAD `ce018da7` (#998 grading groups). **Research and proposed scope only: no new behavior, specification change, or implementation is approved by this report.** The user chose creation/editing expansion before specifying optimizer #813. The existing task records 191/191 passing tests; this notes-only investigation ran no builds or tests.
+> **Historical snapshot.** This report records the repository state inspected on 2026-11-02 (`feat/issue-813`, HEAD `ce018da7`). It predates the accepted four-stage scope and its Stage 1/2 implementation. Do not use its capability table, open-decision notes, or recommendations as current status. Current authority and implementation status are in [the grading toolkit specification](../../spec/grading-toolkit.md), [project decisions](../../spec/project.md), and [Stage 2 task](../../workshop/tasks/TASK-grading-toolkit-stage2.md). The optimizer issue #813 remains separately scoped.
+
+Research date: 2026-11-02. **Research and proposed scope only:** this report itself does not approve behavior or change the specification. Its recommendations describe the state before later decisions. The notes-only investigation ran no builds or tests.
 
 ## Current capability and authority
 
@@ -67,7 +69,7 @@ grading visibly deleted while its earthwork remains in the group. This is propos
 REQ-404 does not currently specify deletion semantics. Recommend the broader toolkit in the four
 stages above, with explicit rebuild and copied presets retained initially. User scope decision pending.
 
-These are specification gaps for future implementation, not blockers to this research. No requirement numbers are assigned here.
+These were specification gaps at the time of this research and have since been resolved for the accepted stages noted above.
 
 - **How updates happen:** current approval retains inputs but rebuilds only when asked. Recommend keeping that rule for the first phase. Automatic source updates, preset propagation or chained rebuilds change how designs react to edits and require a recorded change to the relevant accepted decisions. A visible “inputs changed; rebuild needed” status is itself proposed behavior, not something the current baked group machinery guarantees.
 - **What a new target means:** approve valid target/projection combinations, signed grades, units, upward/downward choices, zero-grade/equal-elevation cases, and what happens when no solution exists. Changing the current “surface required” guard (`CadCommands.cpp:24474`) is necessary for non-surface targets. Do not approximate an elevation target by manufacturing a hidden terrain surface.

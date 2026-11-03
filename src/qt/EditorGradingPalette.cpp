@@ -153,10 +153,30 @@ bool SelectFeature(EditorWindow& window, QComboBox* combo) {
 
 void EditorWindow::ShowGradingTools() {
   if (auto* prior = findChild<QDialog*>("gradingToolsPalette")) {
+    const bool sameDocument = prior->property("documentGeneration").toULongLong() == m_DocumentGeneration;
     auto* line = prior->findChild<QComboBox*>("gradingFeatureLine");
     auto* surface = prior->findChild<QComboBox*>("gradingSurface");
-    if (line) RefreshFeatureLines(*this, line, CurrentFeatureId(line));
-    if (surface) RefreshSurfaces(*this, surface, surface->currentData().toULongLong());
+    auto* copyBaseline = prior->findChild<QComboBox*>("gradingCopyBaseline");
+    if (line) RefreshFeatureLines(*this, line, sameDocument ? CurrentFeatureId(line) : 0);
+    if (copyBaseline) RefreshFeatureLines(*this, copyBaseline, sameDocument ? CurrentFeatureId(copyBaseline) : 0);
+    if (surface) RefreshSurfaces(*this, surface, sameDocument ? surface->currentData().toULongLong() : 0);
+    if (!sameDocument) {
+      if (auto* presets = prior->findChild<QComboBox*>("gradingPreset")) {
+        const QSignalBlocker blocker(presets);
+        presets->clear();
+        for (const auto& preset : m_State.gradingPresets)
+          presets->addItem(QString::fromUtf8(preset.name.c_str()));
+        presets->setCurrentIndex(-1);
+      }
+      if (auto* name = prior->findChild<QLineEdit*>("gradingPresetName")) name->clear();
+      if (auto* target = prior->findChild<QComboBox*>("gradingTarget")) target->setCurrentIndex(0);
+      if (auto* value = prior->findChild<QDoubleSpinBox*>("gradingTargetValue")) value->setValue(10.0);
+      if (auto* grade = prior->findChild<QDoubleSpinBox*>("gradingDistanceGrade")) grade->setValue(-2.0);
+      if (auto* cut = prior->findChild<QLineEdit*>("gradingCutSlope")) cut->setText(QString::number(m_State.gradingCutRun, 'g', 8) + ":1");
+      if (auto* fill = prior->findChild<QLineEdit*>("gradingFillSlope")) fill->setText(QString::number(m_State.gradingFillRun, 'g', 8) + ":1");
+      if (auto* group = prior->findChild<QLineEdit*>("gradingGroupName")) group->clear();
+      if (auto* status = prior->findChild<QLabel*>("gradingStatus")) status->setText("Drawing changed. Choose criteria for this drawing.");
+    }
     if (line) {
       const int selected = line->currentIndex();
       line->setCurrentIndex(-1);
@@ -273,11 +293,25 @@ void EditorWindow::ShowGradingTools() {
   };
   QObject::connect(line, qOverload<int>(&QComboBox::currentIndexChanged), dialog, populateInputs);
   populateInputs(line->currentIndex());
-  auto paletteIsCurrent = [this, dialog, line, surface, status]() {
+  auto paletteIsCurrent = [this, dialog, line, surface, status, target, value, grade, cut, fill, side, group]() {
     const auto generation = dialog->property("documentGeneration").toULongLong();
     if (generation == m_DocumentGeneration) return true;
     RefreshFeatureLines(*this, line, 0);
     RefreshSurfaces(*this, surface);
+    if (auto* copyBaseline = dialog->findChild<QComboBox*>("gradingCopyBaseline"))
+      RefreshFeatureLines(*this, copyBaseline, 0);
+    if (auto* presets = dialog->findChild<QComboBox*>("gradingPreset")) {
+      const QSignalBlocker blocker(presets);
+      presets->clear();
+      for (const auto& preset : m_State.gradingPresets)
+        presets->addItem(QString::fromUtf8(preset.name.c_str()));
+      presets->setCurrentIndex(-1);
+    }
+    if (auto* name = dialog->findChild<QLineEdit*>("gradingPresetName")) name->clear();
+    target->setCurrentIndex(0); value->setValue(10.0); grade->setValue(-2.0);
+    cut->setText(QString::number(m_State.gradingCutRun, 'g', 8) + ":1");
+    fill->setText(QString::number(m_State.gradingFillRun, 'g', 8) + ":1");
+    side->setCurrentIndex(0); group->clear();
     dialog->setProperty("documentGeneration", QVariant::fromValue<qulonglong>(m_DocumentGeneration));
     status->setText("Drawing changed. Select a feature line again.");
     return false;
@@ -307,8 +341,8 @@ void EditorWindow::ShowGradingTools() {
     Submit(kinds.at(target->currentIndex()));
     if (target->currentIndex() == 0) { Submit("S"); Submit(surface->currentText()); }
     else {
-      Submit("V"); Submit(QString::number(value->value()));
-      if (target->currentIndex() == 1) { Submit("P"); Submit(QString::number(grade->value())); }
+      Submit("V"); Submit(QString::number(value->value(), 'f', value->decimals()));
+      if (target->currentIndex() == 1) { Submit("P"); Submit(QString::number(grade->value(), 'f', grade->decimals())); }
     }
     Submit("C"); Submit(cut->text()); Submit("F"); Submit(fill->text());
     if (static_cast<size_t>(lineIx) < m_State.featureLineClosed.size() &&
@@ -433,14 +467,16 @@ void EditorWindow::ShowGradingTools() {
     create->click();
   });
   QObject::connect(presets, qOverload<int>(&QComboBox::currentIndexChanged), dialog,
-                   [this, presets, presetName, applyPresetToFields](int ix) {
+                   [this, presets, presetName, applyPresetToFields, paletteIsCurrent](int ix) {
+    if (!paletteIsCurrent()) return;
     if (ix < 0 || static_cast<size_t>(ix) >= m_State.gradingPresets.size()) return;
     const auto& p = m_State.gradingPresets[static_cast<size_t>(ix)];
     presetName->setText(QString::fromUtf8(p.name.c_str()));
     applyPresetToFields(p);
   });
   auto savePresetValue = [this, presetName, target, surface, value, grade, cut, fill, side,
-                          presets, refreshPresets, status](bool update) {
+                          presets, refreshPresets, status, paletteIsCurrent](bool update) {
+    if (!paletteIsCurrent()) return;
     const QString qname = presetName->text().trimmed();
     if (qname.isEmpty()) { status->setText("Enter a name for the grading preset."); return; }
     const std::string name = qname.toUtf8().toStdString();
@@ -474,7 +510,8 @@ void EditorWindow::ShowGradingTools() {
   };
   QObject::connect(savePreset, &QPushButton::clicked, dialog, [savePresetValue] { savePresetValue(false); });
   QObject::connect(updatePreset, &QPushButton::clicked, dialog, [savePresetValue] { savePresetValue(true); });
-  QObject::connect(deletePreset, &QPushButton::clicked, dialog, [this, presets, status, refreshPresets] {
+  QObject::connect(deletePreset, &QPushButton::clicked, dialog, [this, presets, status, refreshPresets, paletteIsCurrent] {
+    if (!paletteIsCurrent()) return;
     const int ix = presets->currentIndex();
     if (ix < 0 || static_cast<size_t>(ix) >= m_State.gradingPresets.size()) { status->setText("Select a preset to delete."); return; }
     PushUndoSnapshot(m_State, "Delete grading preset");

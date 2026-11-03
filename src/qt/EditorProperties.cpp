@@ -581,6 +581,8 @@ void EditorWindow::RefreshProperties() {
         targetValue = si >= 0 ? Text(st.cadSurfaces[static_cast<size_t>(si)].name) : QString("Missing surface");
       }
       readOnly(rows, "Target", targetValue, "propGradingTarget");
+      if (grading.target == CadGradingDefinition::Target::Distance)
+        readOnly(rows, "Distance grade (%)", fmt(grading.distanceGradePercent), "propGradingDistanceGrade");
       readOnly(rows, "Cut slope (H:V)", fmt(grading.cutRun) + ":1", "propGradingCutSlope");
       readOnly(rows, "Fill slope (H:V)", fmt(grading.fillRun) + ":1", "propGradingFillSlope");
       if (static_cast<size_t>(index) < st.featureLineClosed.size() && !st.featureLineClosed[static_cast<size_t>(index)])
