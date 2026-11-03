@@ -1573,6 +1573,12 @@ json BuildRoot(const AppCommandState& st) {
       g["cutRun"] = i.grading->cutRun;
       g["fillRun"] = i.grading->fillRun;
       g["sideLeft"] = i.grading->sideLeft;
+      if (i.grading->target != CadGradingDefinition::Target::Surface) {
+        g["target"] = static_cast<int>(i.grading->target);
+        g["targetValue"] = i.grading->targetValue;
+        if (i.grading->target == CadGradingDefinition::Target::Distance)
+          g["distanceGradePercent"] = i.grading->distanceGradePercent;
+      }
       o["grading"] = std::move(g);
     }
     flInfo.push_back(std::move(o));
@@ -1975,9 +1981,11 @@ json BuildRoot(const AppCommandState& st) {
       o["name"] = s.name;
       if (s.gradingGroup) {
         o["gradingMembers"] = json::array();
-        for (const auto &member : s.gradingMembers)
-          o["gradingMembers"].push_back(
-              {{"gradingId", member.gradingId}, {"strips", member.strips}});
+        for (const auto &member : s.gradingMembers) {
+          json row = {{"gradingId", member.gradingId}, {"strips", member.strips}};
+          if (member.infill) row["infill"] = true;
+          o["gradingMembers"].push_back(std::move(row));
+        }
       }
       // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
       // has never been given one writes exactly the bytes it wrote before styles existed.
@@ -2332,6 +2340,37 @@ json BuildRoot(const AppCommandState& st) {
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
   // Validate before the loader clears the current drawing (REQ-001).
+  if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array()) {
+    for (const auto& info : doc["featureLineInfo"]) {
+      if (!info.is_object() || !info.contains("grading") || !info["grading"].is_object()) continue;
+      const auto& grading = info["grading"];
+      if (!grading.contains("target")) continue; // legacy REQ-398/997 definition means Surface
+      if (!grading["target"].is_number_integer() ||
+          (grading.contains("targetValue") && !grading["targetValue"].is_number()) ||
+          (grading.contains("distanceGradePercent") && !grading["distanceGradePercent"].is_number())) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      const int target = grading.value("target", -1);
+      if (target != static_cast<int>(CadGradingDefinition::Target::Surface) &&
+          !grading.contains("targetValue")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      if (target == static_cast<int>(CadGradingDefinition::Target::Distance) &&
+          !grading.contains("distanceGradePercent")) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+      const double value = grading.value("targetValue", std::numeric_limits<double>::quiet_NaN());
+      const double percent = grading.value("distanceGradePercent", 0.0);
+      if (target < 0 || target > 3 || !std::isfinite(value) || !std::isfinite(percent) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Distance) && value <= 0.0)) {
+        log.push_back("Invalid grading target in drawing.");
+        return false;
+      }
+    }
+  }
   std::vector<std::uint64_t> gradingIds;
   if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
     for (const auto& surface : doc["surfaces"]) {
@@ -2348,6 +2387,10 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
           log.push_back("Invalid grading group member in drawing.");
           return false;
         }
+        if (row.contains("infill") && !row["infill"].is_boolean()) {
+          log.push_back("Invalid grading group member in drawing.");
+          return false;
+        }
         const auto id = row["gradingId"].get<std::uint64_t>();
         if (std::find(gradingIds.begin(), gradingIds.end(), id) != gradingIds.end()) {
           log.push_back("A grading belongs to more than one group or occurs twice in its group.");
@@ -2355,7 +2398,9 @@ bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
         }
         gradingIds.push_back(id);
         for (const auto& strip : row["strips"]) {
-          if (!strip.is_array() || strip.size() != 12 ||
+          const bool infill = row.value("infill", false);
+          if (!strip.is_array() ||
+              (infill ? (strip.size() < 9 || strip.size() % 3 != 0) : strip.size() != 12) ||
               !std::all_of(strip.begin(), strip.end(), [](const json& v) {
                 return v.is_number() && std::isfinite(v.get<double>());
               })) {
@@ -3141,8 +3186,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           d.cutRun = g->value("cutRun", 0.0);
           d.fillRun = g->value("fillRun", 0.0);
           d.sideLeft = g->value("sideLeft", true);
+          const int target = g->value("target", 0);
+          const bool validTarget = target >= 0 && target <= 3;
+          if (validTarget) d.target = static_cast<CadGradingDefinition::Target>(target);
+          d.targetValue = g->value("targetValue", 0.0);
+          d.distanceGradePercent = g->value("distanceGradePercent", 0.0);
           if (d.baselineId != 0 && std::isfinite(d.cutRun) && d.cutRun > 0.0 &&
-              std::isfinite(d.fillRun) && d.fillRun > 0.0)
+              std::isfinite(d.fillRun) && d.fillRun > 0.0 &&
+              validTarget && std::isfinite(d.targetValue) && std::isfinite(d.distanceGradePercent) &&
+              (d.target != CadGradingDefinition::Target::Distance || d.targetValue > 0.0))
             i.grading = d;
         }
       }
@@ -3524,6 +3576,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& row : el["gradingMembers"]) {
           CadGradingGroupMember member;
           member.gradingId = row["gradingId"].get<std::uint64_t>();
+          member.infill = row.value("infill", false);
           member.strips = row["strips"].get<std::vector<std::vector<double>>>();
           s.gradingMembers.push_back(std::move(member));
         }

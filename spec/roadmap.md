@@ -8,6 +8,16 @@
 
 ---
 
+## Approved grading toolkit sequence (D-2026-11-02-a)
+
+1. REQ-456–458: four target modes, explicit infill, group-aware deletion and Qt palette.
+2. REQ-459: Copy Create, copied presets and Qt feature-line elevation editing.
+3. REQ-460: reviewed regional/transition semantics and explicitly rebuilt bench chains.
+4. REQ-461: detached snapshots, group/selection raise-lower and reviewed quality utilities.
+
+See [grading-toolkit.md](grading-toolkit.md). Each increment requires its own verification
+and Qt screenshot gate. Automatic source tracking and optimizer #813 are separately scoped.
+
 ## How to use this document
 
 - The roadmap pulls from `requirements.md`. A roadmap item should reference the

@@ -14842,6 +14842,42 @@ capability that does not exist. They are recorded here rather than quietly dropp
 
 ---
 
+## Grading toolkit expansion (D-2026-11-02-a)
+
+### REQ-456 — Distance and absolute/relative elevation grading targets
+- Status: accepted (2026-11-02, user selected the full toolkit in stages).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Target definitions.
+- Owner-layer: Domain, Commands, IO. Retains REQ-398 surface grading and explicit rebuild.
+
+### REQ-457 — Explicit grading infill and group-aware deletion
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Explicit infill
+  and Qt palette/group-aware deletion. Extends REQ-404 without changing automatic-fill behavior.
+- Owner-layer: Domain, Commands, IO.
+
+### REQ-458 — Qt grading creation and editing palette
+- Status: accepted (2026-11-02, D-2026-11-02-a).
+- Statement and acceptance: [grading-toolkit.md, Stage 1](grading-toolkit.md), Qt palette and
+  group-aware deletion. All four grading ribbon controls expose the shared grading services.
+- Owner-layer: UI, Commands. REQ-081 appearance and CLAUDE.md screenshot review apply.
+
+### REQ-459 — Grading reuse and Qt elevation editing
+- Status: accepted scope (Stage 2, follows REQ-456–458).
+- Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Copied presets,
+  Copy Create, existing elevation services and properties; no automatic criteria propagation.
+- Owner-layer: Domain, Commands, UI, IO.
+
+### REQ-460 — Regional gradings, transitions and explicit bench chains
+- Status: accepted scope (Stage 3; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 3](grading-toolkit.md). Interval and
+  compatibility semantics must be resolved before coding this stage.
+- Owner-layer: Domain, Commands, UI, IO.
+
+### REQ-461 — Grading utilities and surface quality controls
+- Status: accepted scope (Stage 4; detailed task verification precedes implementation).
+- Statement and acceptance: [grading-toolkit.md, Stage 4](grading-toolkit.md).
+- Owner-layer: Domain, Commands, UI, IO. Optimizer #813 remains separately scoped.
+
 ## Traceability matrix
 
 > Keep this table current. It is the at-a-glance health check: a requirement with

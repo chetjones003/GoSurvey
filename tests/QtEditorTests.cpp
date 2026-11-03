@@ -7547,6 +7547,192 @@ private Q_SLOTS:
     QVERIFY(state.cadSurfaces[static_cast<std::size_t>(vi)].tin);
   }
 
+  void gradingDistanceNeedsNoTerrainAndUsesSignedGrade() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    window.Submit("FEATURELINE Shoulder");
+    window.Submit("0,0,105"); window.Submit("20,0,105"); window.Submit("END");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING");
+    QCOMPARE(state.active, AppCommandState::Kind::Grading);
+    window.Submit("T"); window.Submit("Distance");
+    window.Submit("V"); window.Submit("10"); window.Submit("P"); window.Submit("-2");
+    window.Submit("D"); window.Submit("L"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    const auto v = static_cast<std::size_t>(state.featureLineOffsets[1]) * 3;
+    QVERIFY(std::abs(state.featureLineVerts[v] - 0) < 0.002);
+    QVERIFY(std::abs(state.featureLineVerts[v + 1] - 10) < 0.002);
+    QVERIFY(std::abs(state.featureLineVerts[v + 2] - 104.8) < 0.002);
+    QVERIFY(state.featureLineInfo[1].grading.has_value());
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath("distance-grade.dwg").toUtf8();
+    std::vector<std::string> log;
+    QVERIFY(SaveDrawingDocument(state, path.constData(), log));
+    window.CreateDrawingFromTemplate();
+    QVERIFY(OpenDrawingDocument(state, path.constData(), log));
+    QVERIFY(state.featureLineInfo[1].grading.has_value());
+    QCOMPARE(state.featureLineInfo[1].grading->target, CadGradingDefinition::Target::Distance);
+    QCOMPARE(state.featureLineInfo[1].grading->targetValue, 10.0);
+    QCOMPARE(state.featureLineInfo[1].grading->distanceGradePercent, -2.0);
+  }
+
+  void gradingElevationTargetsUseTheCutAndFillRuns() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    window.Submit("FEATURELINE Datum");
+    window.Submit("0,0,105"); window.Submit("20,0,105"); window.Submit("END");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Absolute");
+    window.Submit("V"); window.Submit("100"); window.Submit("D"); window.Submit("L"); window.Submit("");
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+    size_t v = static_cast<size_t>(state.featureLineOffsets[1]) * 3;
+    QVERIFY(std::abs(state.featureLineVerts[v + 1] - 15.0) < 0.002);
+    QVERIFY(std::abs(state.featureLineVerts[v + 2] - 100.0) < 0.002);
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Relative");
+    window.Submit("V"); window.Submit("2"); window.Submit("D"); window.Submit("L"); window.Submit("");
+    QCOMPARE(state.featureLineOffsets.size(), size_t(4));
+    v = static_cast<size_t>(state.featureLineOffsets[2]) * 3;
+    QVERIFY(std::abs(state.featureLineVerts[v + 1] - 4.0) < 0.002);
+    QVERIFY(std::abs(state.featureLineVerts[v + 2] - 107.0) < 0.002);
+  }
+
+  void gradingPaletteShowsTargetAndGroupTools() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette");
+    QVERIFY(palette);
+    QVERIFY(palette->isVisible());
+    QVERIFY(palette->findChild<QComboBox*>("gradingTarget"));
+    QVERIFY(palette->findChild<QComboBox*>("gradingSurface"));
+    QVERIFY(palette->findChild<QPushButton*>("gradingApply"));
+    QVERIFY(palette->findChild<QPushButton*>("gradingInfill"));
+    QVERIFY(palette->findChild<QPushButton*>("gradingDelete"));
+    QVERIFY(palette->findChild<QPushButton*>("gradingList"));
+    QVERIFY(palette->findChild<QLabel*>("gradingIntroHeading"));
+    QVERIFY(palette->findChild<QLabel*>("gradingIntroGuidance"));
+    QVERIFY(palette->findChild<QLabel*>("gradingTargetHelp")->text().contains("target surface"));
+    QVERIFY(palette->findChild<QLabel*>("gradingGroupHelp"));
+    QVERIFY(!palette->findChild<QPushButton*>("gradingApply")->icon().isNull());
+    QVERIFY(!palette->findChild<QPushButton*>("gradingInfill")->icon().isNull());
+    auto* target = palette->findChild<QComboBox*>("gradingTarget");
+    auto* valueLabel = palette->findChild<QLabel*>("gradingValueLabel");
+    QCOMPARE(valueLabel->text(), QString("Target value"));
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-surface.png")));
+    for (int i = 1; i < target->count(); ++i) {
+      target->setCurrentIndex(i);
+      QApplication::processEvents();
+      QVERIFY(!palette->findChild<QLabel*>("gradingTargetHelp")->text().isEmpty());
+      QCOMPARE(valueLabel->text(), QStringList({"Target value", "Horizontal width", "Target elevation", "Elevation change"}).at(i));
+      QVERIFY(palette->grab().save(Issue893Shot(("qt-grading-tools-target-" + std::to_string(i) + ".png").c_str())));
+    }
+    palette->findChild<QPushButton*>("gradingApply")->click();
+    QApplication::processEvents();
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-no-baseline.png")));
+    palette->findChild<QLineEdit*>("gradingGroupName")->setText("Missing group");
+    palette->findChild<QPushButton*>("gradingList")->click();
+    QApplication::processEvents();
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-group-error.png")));
+    palette->close();
+  }
+
+  void gradingPaletteCreatesEditsAndGroupsThroughSharedCommands() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette");
+    QVERIFY(palette);
+    auto* line = palette->findChild<QComboBox*>("gradingFeatureLine");
+    auto* target = palette->findChild<QComboBox*>("gradingTarget");
+    auto* grade = palette->findChild<QDoubleSpinBox*>("gradingDistanceGrade");
+    auto* group = palette->findChild<QLineEdit*>("gradingGroupName");
+    auto* apply = palette->findChild<QPushButton*>("gradingApply");
+    QVERIFY(line && target && grade && group && apply);
+    target->setCurrentIndex(1);
+    apply->click();
+    QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-created.png")));
+
+    grade->setValue(-3.0);
+    apply->click();
+    QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+    QCOMPARE(state.featureLineInfo[1].grading->distanceGradePercent, -3.0);
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-edited.png")));
+
+    group->setText("Earthwork");
+    palette->findChild<QPushButton*>("gradingAdd")->click();
+    QApplication::processEvents();
+    QVERIFY(FindSurfaceIndex(state, "Earthwork") >= 0);
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-group-added.png")));
+
+    const auto boundaryId = state.featureLineAttrs[0].id;
+    line->setCurrentIndex(line->findData(QVariant::fromValue<qulonglong>(boundaryId)));
+    palette->findChild<QPushButton*>("gradingInfill")->click();
+    QApplication::processEvents();
+    const int groupIndex = FindSurfaceIndex(state, "Earthwork");
+    QVERIFY(groupIndex >= 0);
+    QVERIFY(std::any_of(state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.begin(),
+                        state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.end(),
+                        [](const auto& member) { return member.infill; }));
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-infill.png")));
+    palette->close();
+  }
+
+  void gradingPaletteEditCanChangeOpenSideWithoutReplacingResultId() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    window.Submit("FEATURELINE Shoulder");
+    window.Submit("0,0,105"); window.Submit("20,0,105"); window.Submit("END");
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette");
+    QVERIFY(palette);
+    auto* line = palette->findChild<QComboBox*>("gradingFeatureLine");
+    auto* target = palette->findChild<QComboBox*>("gradingTarget");
+    auto* side = palette->findChild<QComboBox*>("gradingSide");
+    auto* apply = palette->findChild<QPushButton*>("gradingApply");
+    QVERIFY(line && target && side && apply);
+    target->setCurrentIndex(1);
+    apply->click();
+    QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+    const std::uint64_t resultId = state.featureLineAttrs[1].id;
+    const int resultInPalette = line->findData(QVariant::fromValue<qulonglong>(resultId));
+    QVERIFY(resultInPalette >= 0);
+    line->setCurrentIndex(resultInPalette);
+    side->setCurrentIndex(1);
+    apply->click();
+    QApplication::processEvents();
+    QCOMPARE(state.featureLineAttrs[1].id, resultId);
+    QCOMPARE(state.featureLineInfo[1].grading->sideLeft, false);
+    const size_t vertex = static_cast<size_t>(state.featureLineOffsets[1]) * 3;
+    QVERIFY(std::abs(state.featureLineVerts[vertex + 1] + 10.0) < 0.002);
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-open-side-edited.png")));
+    palette->close();
+  }
+
+  void gradingPaletteInvalidatesSelectionAfterDrawingSwitch() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    window.Submit("FEATURELINE Old"); window.Submit("0,0,100"); window.Submit("10,0,100"); window.Submit("END");
+    window.State().selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette");
+    QVERIFY(palette);
+    window.CreateDrawingFromTemplate();
+    window.Submit("FEATURELINE New"); window.Submit("0,0,100"); window.Submit("10,0,100"); window.Submit("END");
+    palette->findChild<QPushButton*>("gradingApply")->click();
+    QCOMPARE(window.State().featureLineOffsets.size(), size_t(2));
+    QCOMPARE(palette->findChild<QComboBox*>("gradingFeatureLine")->currentIndex(), -1);
+    QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("Drawing changed"));
+    palette->close();
+  }
+
   void gradingGroupDegenerateSourceEditLeavesBothGradingAndGroupIntact() {
     EditorWindow window; window.CreateDrawingFromTemplate();
     auto& state = window.State();
@@ -7676,6 +7862,61 @@ private Q_SLOTS:
     group.gradingMembers[0].strips[0].pop_back();
     QVERIFY(!BuildSurfaceFromSources(state, group, log));
     QVERIFY(group.tin == previous);
+  }
+
+  void gradingInfillDirectBuildAndErasePreserveGroupUndo() {
+    AppCommandState state;
+    CadSurface group;
+    group.name = "Infill";
+    group.gradingGroup = true;
+    CadGradingGroupMember member;
+    member.gradingId = 7;
+    member.infill = true;
+    member.strips = {{0, 0, 105, 20, 0, 105, 20, 10, 105, 0, 10, 105}};
+    group.gradingMembers.push_back(member);
+    std::vector<std::string> log;
+    QVERIFY(BuildSurfaceFromSources(state, group, log));
+    double elevation = 0;
+    QVERIFY(TinElevationAt(group.tin->vertsXyz, group.tin->indices, 10, 5, &elevation));
+    QCOMPARE(elevation, 105.0);
+    QVERIFY(!TinElevationAt(group.tin->vertsXyz, group.tin->indices, 21, 5, &elevation));
+    const std::vector<double> ground = {0,0,100, 20,0,100, 20,10,100, 0,10,100};
+    const auto volume = ComputeSurfaceVolume(ground, {0,1,2,0,2,3}, group.tin->vertsXyz, group.tin->indices);
+    QVERIFY(std::abs(volume.fillFt3 - 1000.0) < 0.1);
+    const auto previousTin = group.tin;
+    group.gradingMembers[0].strips[0] = {0,0,105, 20,10,105, 0,10,105, 20,0,105};
+    QVERIFY(!BuildSurfaceFromSources(state, group, log));
+    QVERIFY(group.tin == previousTin);
+    group.gradingMembers[0].strips[0] = {0,0,105, 20,0,105, 20,10,105, 10,0,105, 0,10,105};
+    QVERIFY(!BuildSurfaceFromSources(state, group, log));
+    QVERIFY(group.tin == previousTin);
+
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    BuildGradingSite(window);
+    auto& drawing = window.State();
+    drawing.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADINGINFILL Earthwork");
+    int si = FindSurfaceIndex(drawing, "Earthwork");
+    QVERIFY(si >= 0);
+    QCOMPARE(drawing.cadSurfaces[static_cast<size_t>(si)].gradingMembers.size(), size_t(1));
+    QVERIFY(drawing.cadSurfaces[static_cast<size_t>(si)].gradingMembers[0].infill);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray path = directory.filePath("grading-infill.dwg").toUtf8();
+    QVERIFY(SaveDrawingDocument(drawing, path.constData(), log));
+    window.CreateDrawingFromTemplate();
+    QVERIFY(OpenDrawingDocument(drawing, path.constData(), log));
+    si = FindSurfaceIndex(drawing, "Earthwork");
+    QVERIFY(si >= 0);
+    QVERIFY(drawing.cadSurfaces[static_cast<size_t>(si)].gradingMembers[0].infill);
+    drawing.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    ExecuteDeleteSelection(drawing, log);
+    QCOMPARE(drawing.featureLineOffsets.size(), size_t(0));
+    QCOMPARE(drawing.cadSurfaces[static_cast<size_t>(si)].gradingMembers.size(), size_t(0));
+    window.Submit("UNDO");
+    QCOMPARE(drawing.featureLineOffsets.size(), size_t(2));
+    QCOMPARE(drawing.cadSurfaces[static_cast<size_t>(si)].gradingMembers.size(), size_t(1));
   }
 
   void

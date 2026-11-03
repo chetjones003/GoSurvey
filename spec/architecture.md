@@ -5154,3 +5154,16 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
 - **Consequences.** Release packaging must copy the licensed CRT files from the active MSVC toolset
   and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
   those DLLs as part of each release. The Store submission continues to carry the shared redist.
+
+### ADR-074 — Extend existing grading metadata and shared commands for the staged toolkit (2026-11-02)
+
+- Status: accepted for Stage 1 under D-2026-11-02-a; later stage details reviewed before coding.
+- Context/decision: REQ-456–458 and [grading-toolkit.md](grading-toolkit.md) define the approved
+  target and infill representation: extend CadGradingDefinition; retain infill/baked polygon
+  members on ordinary CadSurface. Extend additive DWG payload fields, preserving legacy defaults.
+  Use existing constrained TIN construction and volume comparison. Qt adapts shared commands;
+  it does not own numerical rules, and no new geometry entity, group store or live graph is added.
+- Consequences: explicit rebuilds preserve source-edit behavior; infill is an explicit additional
+  bounded face, never an automatic convex hull. Member deletion updates groups in the entity's
+  undo transaction. This extends ADR-070's quadrilateral-only implementation to bounded infill
+  polygons without altering its surface ownership, baked-update or volume-engine decisions.

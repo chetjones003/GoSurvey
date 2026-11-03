@@ -3236,6 +3236,9 @@ struct AppCommandState {
     WaitFillSlope,
     WaitSurfaceName,
     WaitSide,
+    WaitTargetKind,
+    WaitTargetValue,
+    WaitDistanceGrade,
   } gradingPhase = GradingPhase::WaitBaseline;
   /// The baseline, held by **stable entity id** and never by array index — REQ-076's own words,
   /// which say "never an array index, so an edit that compacts the store cannot silently retarget
@@ -3246,6 +3249,9 @@ struct AppCommandState {
   std::string gradingSurface;      ///< target surface name, remembered between runs
   bool gradingSideLeft = true;     ///< open baselines only; meaningless for a closed one
   bool gradingSideChosen = false;  ///< an open baseline must be told, so this starts false
+  CadGradingDefinition::Target gradingTarget = CadGradingDefinition::Target::Surface;
+  double gradingTargetValue = 0.0;
+  double gradingDistanceGradePercent = 0.0;
   /// Issue #997: the stable id of the grading result being EDITED, or 0 when GRADING is creating a
   /// new one. Set when GRADING starts on a selected result; Enter then rebuilds that line in place.
   std::uint64_t gradingEditId = 0;

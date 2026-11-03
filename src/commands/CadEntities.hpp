@@ -1124,11 +1124,15 @@ struct CadSurfaceBreakline {
 /// reopened and rebuilt rather than redrawn. Sources are held by stable entity id (REQ-076), never
 /// by index or name, so a deleted source resolves to nothing instead of to whatever took its place.
 struct CadGradingDefinition {
+  enum class Target : std::uint8_t { Surface, Distance, AbsoluteElevation, RelativeElevation };
   std::uint64_t baselineId = 0;  ///< the baseline feature line
   std::uint64_t surfaceId = 0;   ///< the target surface
   double cutRun = 2.0;           ///< run of run:rise where the baseline sits below ground
   double fillRun = 3.0;          ///< ...and above it
   bool sideLeft = true;          ///< outward side for an open baseline; unused when it is closed
+  Target target = Target::Surface;
+  double targetValue = 0.0;      ///< width, absolute elevation, or relative elevation
+  double distanceGradePercent = 0.0; ///< signed grade for Distance targets
 };
 
 struct CadFeatureLineInfo {
@@ -1181,6 +1185,7 @@ enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corrid
 struct CadGradingGroupMember {
   std::uint64_t gradingId = 0;
   std::vector<std::vector<double>> strips;
+  bool infill = false;
 };
 
 /// A named TIN surface (REQ-068).
