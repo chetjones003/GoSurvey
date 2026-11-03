@@ -14862,10 +14862,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: UI, Commands. REQ-081 appearance and CLAUDE.md screenshot review apply.
 
 ### REQ-459 — Grading reuse and Qt elevation editing
-- Status: accepted scope (Stage 2, follows REQ-456–458).
-- Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Copied presets,
-  Copy Create, existing elevation services and properties; no automatic criteria propagation.
-- Owner-layer: Domain, Commands, UI, IO.
+- Status: accepted (2026-11-03, D-2026-11-03-a; ADR-075).
+- Statement and acceptance: [grading-toolkit.md, Stage 2](grading-toolkit.md). Drawing-local copied presets,
+  independent Copy Create, Qt FLELEV table, grading/group properties and explicit membership transfer.
+- Owner-layer: Domain, Commands, IO, UI.
 
 ### REQ-460 — Regional gradings, transitions and explicit bench chains
 - Status: accepted scope (Stage 3; detailed task verification precedes implementation).

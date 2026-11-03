@@ -85,14 +85,55 @@ Domain/Commands, persistence in IO, and Qt widgets as adapters. Domain errors mu
 
 ## Stage 2 — reuse and elevation editing (REQ-459)
 
-Copy Create explicitly copies an existing grading's inputs to a chosen new baseline, rather
-than editing the source. Named presets copy their values into each created result; changing
-a preset never silently updates previous results. Build a Qt elevation table using the existing
-FLELEV elevation/grade/raise/insert/delete services, preserving one undo transaction per applied
-edit. Add grading/group properties and visible membership transfers. Acceptance includes independent
-copied results/presets, accurate displayed elevations/grades, undo, failure preservation and DWG
-persistence. Linked criteria, locking propagation and automatic regrading are outside this stage.
+### Copy Create
 
+Copy Create requires an existing grading result as the source and a different feature line as
+its new baseline. It copies the source's target kind, target surface reference (when applicable),
+cut/fill runs, open-baseline side, target value and distance grade. It does not copy the source's
+baseline id, entity id, name or geometry. The source remains unchanged; the created result gets a
+new stable id and is independently editable. A missing target surface is reported and never
+substituted.
+
+### Drawing-local named presets
+
+Each drawing owns named grading presets and persists them additively in its DWG trailer. A preset
+stores criteria only: target kind, target surface stable id when applicable, cut/fill runs, open
+baseline side, target value and distance grade. It stores no baseline or result id. Saving a new
+preset, explicitly updating a preset, and deleting a preset each make one undo step. Names must be
+nonempty and unique within the drawing; a collision is refused rather than silently replacing a
+preset. A preset's criteria are copied into a newly created grading definition. Later preset
+changes never propagate into existing results. A preset whose target surface has been deleted is
+reported on apply and does not silently select another surface. A drawing with no preset field
+loads with an empty preset collection; malformed preset data is rejected before the current drawing
+is replaced.
+
+### Qt elevation table and properties
+
+`FLELEVEDIT` opens a Qt table for the selected feature line. It displays the REQ-088 station,
+elevation, length ahead, grade back and grade ahead values from the existing derived table builder.
+Station and length are read-only. Elevation, grade back and grade ahead cells are editable where
+a segment exists; each edit uses the corresponding existing FLELEV command/service. Raising or
+lowering all elevations, and inserting or deleting an elevation point also use one existing
+FLELEV command/service per action. Every applied action makes one undo step. Invalid and cancelled operations preserve
+geometry and redo history. Breakline surfaces continue to rebuild through REQ-088's existing dirty
+revision behavior; grading and group outputs remain baked and update only through their explicit
+rebuild/member operations.
+
+The grading properties display the source baseline, target kind and target reference/value, cut and
+fill runs, and open-baseline side. Group properties display the group surface and its member feature
+lines, marking infill members. Explicit Add/Remove/transfer operations update the visible membership
+immediately and remain undoable. No property view creates a live link between a preset, grading,
+or group member.
+
+Acceptance: Copy Create produces a new stable result on the chosen baseline while preserving the
+source definition; edits to either result remain independent. Preset create/update/delete are
+undoable and round-trip through tab switching and DWG save/reopen; applying a preset copies its
+values, and later preset changes leave earlier results unchanged. The Qt table matches the derived
+FLELEV values, each supported edit matches its existing command/service and is one undo step, and
+invalid/cancelled edits preserve geometry and redo history. Grading properties show the persisted
+criteria; group properties show current grading and infill membership, and transfers/removal survive
+undo and reopen. All new payload values are validated before replacing the open document.
+Linked criteria, locking propagation and automatic regrading remain outside this stage.
 ## Stage 3 — regions, transitions and benches (REQ-460)
 
 Provide explicit start/end station intervals, compatible-target transitions, and an explicit
