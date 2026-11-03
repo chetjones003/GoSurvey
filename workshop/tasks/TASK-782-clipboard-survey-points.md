@@ -24,3 +24,10 @@
 
 - Merged current `beta` into the PR branch. In `CadClipboard::empty()`, retained the newer CAD point check and the survey point check. In paper paste, retained the current dimensions-only skip message because paper space now stores splines, plus the survey-point skip message because survey points belong to model space.
 - Release build passed; `ctest --preset ninja-release --output-on-failure` passed 194/194 tests, including all Qt shards and `build.output-layout`. `git diff --check` passed.
+
+## PR review follow-up
+
+- CodeRabbit's clipboard finding was valid: the overwrite question omitted the project-wide effect for a destination drawing using shared project points. The prompt now states that effect, with detached and standalone wording unchanged. The PASTE and PASTEORIG manual pages now explain it.
+- CodeRabbit's Qt test finding was valid: early assertions could leave a modal dialog open, and the coordinate-system screenshot directory was not created. Both affected callbacks now have a close-on-failure guard and a 20-second watchdog; the directory is created before saving.
+- The other six inline findings concern input routing, grip snapping, line rendering, intersection snapping, and trim precision that arrived from `beta` with the merge. Those files are unchanged relative to `beta` in this PR; they need review on their owning changes rather than unrelated changes to PR 1153.
+- Rebuilt Release and ran the three affected Qt tests on the hidden desktop; each passed. The shared-project prompt screenshot is `build/artifacts/Release/issue782-project-point-number-conflict.png`. The Civil 3D comparison is inconclusive: this machine has the Civil 3D 2025 Object Enabler, but no Civil 3D application installation to capture a matching dialog.

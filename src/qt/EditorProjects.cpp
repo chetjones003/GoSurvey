@@ -719,8 +719,17 @@ void EditorWindow::ShowProjectPointWarning() {
   const auto& numbers = conflict ? pending.conflicts : pending.removed;
   for (int id : numbers) { if (ids.size() == 8) { ids.append("…"); break; } ids.append(QString::number(id)); }
   const auto project = QString::fromUtf8(pending.projectName.c_str());
-  if (conflict && pending.clipboardPaste)
-    question.setText(QString("Point number(s) %1 already exist in the destination. Overwrite replaces the destination points. Renumber gives the copied points free numbers.").arg(ids.join(", ")));
+  const bool sharedProjectPoints = pending.tabIdx > 0 &&
+      pending.tabIdx < static_cast<int>(m_State.drawingTabs.size()) &&
+      m_State.drawingTabs[static_cast<size_t>(pending.tabIdx)].projectUid != 0 &&
+      m_State.drawingTabs[static_cast<size_t>(pending.tabIdx)].pointsMode !=
+          AppCommandState::DrawingTab::PointsMode::Detached;
+  if (conflict && pending.clipboardPaste) {
+    QString text = QString("Point number(s) %1 already exist in the destination. Overwrite replaces the destination points. Renumber gives the copied points free numbers.").arg(ids.join(", "));
+    if (sharedProjectPoints)
+      text += " Overwrite also replaces matching points throughout the project and its other drawings.";
+    question.setText(text);
+  }
   else if (conflict) question.setText(QString("Project %1 already contains point number(s) %2, hidden in this drawing. Overwrite replaces them throughout the project. Renumber preserves them and gives the new points free numbers.").arg(project, ids.join(", ")));
   else {
     question.setText(QString("Deleting point(s) %1 removes them from project %2 and its other drawings. Hide here preserves the shared points.").arg(ids.join(", "), project));
