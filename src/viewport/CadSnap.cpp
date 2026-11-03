@@ -1,6 +1,7 @@
 #include "CadSnap.hpp"
 
 #include "SurveyPoints.hpp"
+#include "alignment/Alignment.hpp"
 #include "geom2d.hpp"
 #include "util/cadblock.hpp"
 #include "util/cadpiperun.hpp"
@@ -676,6 +677,28 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
       continue;  // tilted: not this plan-space path (GitHub #531)
     if (NearCursor(ray, wx, wy, el.cx, el.cy, el.z, ma, tol))
       conics->push_back(IsectConic{curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio), el.z});
+  }
+
+  // REQ-490: alignments participate in INT/APPINT with lines, arcs and other alignments (exact geometry sampled to
+  // segments only for display tolerance — same chord height as the viewport uses at this aperture).
+  const double alignChord = std::max(tol * 0.25, 1e-6);
+  for (const alignment::Alignment& al : cmd.alignments) {
+    if (al.Empty())
+      continue;
+    const int nEnt = static_cast<int>(al.Entities().size());
+    for (int ei = 0; ei < nEnt; ++ei) {
+      const std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignChord);
+      if (pts.size() < 2)
+        continue;
+      for (size_t k = 1; k < pts.size(); ++k) {
+        IsectSeg s{pts[k - 1].x, pts[k - 1].y, 0.0, pts[k].x, pts[k].y, 0.0};
+        const double mx = 0.5 * (s.x0 + s.x1);
+        const double my = 0.5 * (s.y0 + s.y1);
+        const double r = 0.5 * std::hypot(s.x1 - s.x0, s.y1 - s.y0);
+        if (NearCursor(ray, wx, wy, mx, my, 0.0, r, tol))
+          segs->push_back(s);
+      }
+    }
   }
 }
 

@@ -53,7 +53,8 @@ offset and a curve's radius are always exact.
 - Object snaps work on the exact geometry: **Endpoint** snaps to the beginning, end, PC, PT, PI and
   spiral junctions (TS, SC, CS, ST, SS), **Midpoint** to the middle of each tangent and curve,
   **Center** to a curve's centre, **Quadrant** on cardinal tangents and spirals (not on circular
-  curve segments), **Nearest** to the closest point on the true curve, and **Station** when you type
+  curve segments), **Nearest** to the closest point on the true curve, **Intersection** where an
+  alignment meets another alignment or a line or arc, and **Station** when you type
   `STATION 12+45.32` at a point prompt (or enable Station OSNAP after a station value is latched).
 - **Grips.** Select an alignment: the start point moves the whole alignment; the end of a tangent sets its
   length (and bearing, if Fixed); the middle of a curve sets its radius. Esc cancels a drag.

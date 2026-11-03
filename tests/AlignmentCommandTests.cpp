@@ -320,6 +320,34 @@ TEST_CASE("Alignment quadrant snap on cardinal tangents only, not on curves", "[
   CHECK_FALSE(onCurve.valid);
 }
 
+TEST_CASE("Intersection snap hits crossing alignments and alignment-line crosses", "[req490][alignment]") {
+  using Kind = CadSnap::Kind;
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  st.objectSnapIntersection = true;
+  Submit(st, "ALIGNMENT EW", log);
+  Submit(st, "ALIGNMENTADD EW, TANGENT, -50, 0, 90, 100", log);
+  Submit(st, "ALIGNMENT NS", log);
+  Submit(st, "ALIGNMENTADD NS, TANGENT, 25, -50, 0, 100", log);
+  const float tol = 2.0f;
+  const Kind onlyInt = Kind::Intersection;
+  const auto aa = CadSnap::FindBest(25.0f, 0.4f, st, true, tol, {}, nullptr, &onlyInt);
+  REQUIRE(aa.valid);
+  CHECK(aa.kind == Kind::Intersection);
+  CHECK(aa.x == Catch::Approx(25.0).margin(0.05));
+  CHECK(aa.y == Catch::Approx(0.0).margin(0.05));
+
+  PushLine(st, 0.0, 40.0, 50.0, 40.0);
+  const auto al = CadSnap::FindBest(25.0f, 40.4f, st, true, tol, {}, nullptr, &onlyInt);
+  REQUIRE(al.valid);
+  CHECK(al.kind == Kind::Intersection);
+  CHECK(al.x == Catch::Approx(25.0).margin(0.05));
+  CHECK(al.y == Catch::Approx(40.0).margin(0.05));
+}
+
 TEST_CASE("An alignment can be picked, boxed, listed and erased", "[req480][req501][alignment]") {
   AppCommandState st = Drawing();
   std::vector<std::string> log;

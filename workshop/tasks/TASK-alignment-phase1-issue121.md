@@ -40,7 +40,8 @@
   REQ-490 follow-up: spiral junction geometry points (`77050294`); alignment Quadrant on cardinal
   tangents/spirals, not curves (PR #1152, `b1664acf`).
   REQ-490 Station snap: typed `STATION 12+45.32` at point prompts + OSNAP Station with latched value.
-  Verification: `[alignment]` 76/76 (includes `[req491]`).
+  REQ-490 Intersection snap: alignments in `GatherNearCursor` for INT/APPINT vs lines, arcs and other alignments.
+  Verification: `[alignment]` 77/77 (includes `[req491]`).
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
