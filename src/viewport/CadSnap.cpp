@@ -951,6 +951,70 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
   }
   return found;
 }
+
+/// REQ-490: alignment tangents/spirals offer Quadrant when their heading matches a UCS axis; curves do not.
+[[nodiscard]] bool AlignmentDirectionCardinalInUcs(double azimuth, const ucs::Ucs& ucs) {
+  const double dx = std::sin(azimuth);
+  const double dy = std::cos(azimuth);
+  const auto axisParallel = [&](double ux, double uy) {
+    const double len = std::hypot(ux, uy);
+    if (len < 1.e-12)
+      return false;
+    const double dot = (dx * ux + dy * uy) / len;
+    return std::fabs(dot) >= 1.0 - 1.e-6;
+  };
+  return axisParallel(ucs.xAxis.x, ucs.xAxis.y) || axisParallel(ucs.yAxis.x, ucs.yAxis.y);
+}
+
+void ConsiderSegmentQuadrant(SnapPickAccum* acc, float wx, float wy, double x0, double y0, double x1, double y1,
+                             float tolWorld) {
+  assert(acc != nullptr);
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len2 = dx * dx + dy * dy;
+  if (len2 < 1.e-24)
+    return;
+  const double t =
+      std::clamp(((static_cast<double>(wx) - x0) * dx + (static_cast<double>(wy) - y0) * dy) / len2, 0.0, 1.0);
+  const double px = x0 + t * dx;
+  const double py = y0 + t * dy;
+  Consider(acc, wx, wy, SnapFloatCoordinate(px), SnapFloatCoordinate(py), Kind::Quadrant, tolWorld, 0.0f);
+}
+
+void AppendAlignmentQuadrantCandidates(SnapPickAccum* acc, float wx, float wy, const alignment::Alignment& al,
+                                       const ucs::Ucs& activeUcs, float tolWorld) {
+  assert(acc != nullptr);
+  const std::vector<alignment::Entity>& ents = al.Entities();
+  for (size_t ei = 0; ei < ents.size(); ++ei) {
+    const alignment::Entity& e = ents[ei];
+    if (e.kind == alignment::EntityKind::Arc)
+      continue;
+    if (e.kind == alignment::EntityKind::Line) {
+      if (!AlignmentDirectionCardinalInUcs(e.startAzimuth, activeUcs))
+        continue;
+      const double sinA = std::sin(e.startAzimuth);
+      const double cosA = std::cos(e.startAzimuth);
+      ConsiderSegmentQuadrant(acc, wx, wy, e.start.x, e.start.y, e.start.x + e.length * sinA,
+                              e.start.y + e.length * cosA, tolWorld);
+      continue;
+    }
+    if (e.kind != alignment::EntityKind::Spiral)
+      continue;
+    constexpr int kSteps = 48;
+    const int iEnt = static_cast<int>(ei);
+    bool prevCard = false;
+    for (int step = 0; step <= kSteps; ++step) {
+      const double dist = e.length * (static_cast<double>(step) / kSteps);
+      const double sta = al.EntityStartStation(iEnt) + dist;
+      const bool card = AlignmentDirectionCardinalInUcs(al.GetBearingAtStation(sta), activeUcs);
+      if (card && !prevCard) {
+        const alignment::Point2 p = al.GetPointAtStation(sta);
+        Consider(acc, wx, wy, SnapFloatCoordinate(p.x), SnapFloatCoordinate(p.y), Kind::Quadrant, tolWorld, 0.0f);
+      }
+      prevCard = card;
+    }
+  }
+}
 } // namespace
 
 Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, float tolWorld,
@@ -1399,6 +1463,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(n.x),
                SnapFloatCoordinate(n.y), Kind::Nearest, tolWorld, 0.0f);
     }
+    if (wantQuadrant)
+      AppendAlignmentQuadrantCandidates(&acc, wx, wy, al, cmd.activeUcs, tolWorld);
   }
 
   if (wantEndpoint) {

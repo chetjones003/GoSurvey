@@ -267,6 +267,32 @@ TEST_CASE("Alignment geometry points snap: PC, PT, PI, centre and nearest", "[re
   CHECK(centre.y == Approx(100.0f).margin(1e-3));
 }
 
+TEST_CASE("Alignment quadrant snap on cardinal tangents only, not on curves", "[req490][alignment]") {
+  using Kind = CadSnap::Kind;
+  AppCommandState st = Drawing();
+  st.objectSnapEnabled = true;
+  st.objectSnapQuadrant = true;
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT Q490", log);
+  Submit(st, "ALIGNMENTADD Q490, TANGENT, 0, 0, 90, 200", log);  // due east (+X)
+  Submit(st, "ALIGNMENTADD Q490, CURVE, 100, 90, RIGHT", log);
+  REQUIRE(st.alignments.size() == 1);
+  const Kind onlyQuadrant = Kind::Quadrant;
+  const float tol = 2.0f;
+  const auto onTangent = CadSnap::FindBest(100.0f, 0.4f, st, true, tol, {}, nullptr, &onlyQuadrant);
+  REQUIRE(onTangent.valid);
+  CHECK(onTangent.kind == Kind::Quadrant);
+  CHECK(onTangent.x == Approx(100.0f).margin(1e-3));
+  CHECK(onTangent.y == Approx(0.0f).margin(1e-3));
+  const alignment::Alignment& al = st.alignments[0];
+  REQUIRE(al.Entities().size() == 2);
+  const double midSta = al.EntityStartStation(1) + al.Entities()[1].length * 0.5;
+  const alignment::Point2 midCurve = al.GetPointAtStation(midSta);
+  const auto onCurve = CadSnap::FindBest(static_cast<float>(midCurve.x), static_cast<float>(midCurve.y + 0.4), st,
+                                         true, tol, {}, nullptr, &onlyQuadrant);
+  CHECK_FALSE(onCurve.valid);
+}
+
 TEST_CASE("An alignment can be picked, boxed, listed and erased", "[req480][req501][alignment]") {
   AppCommandState st = Drawing();
   std::vector<std::string> log;
