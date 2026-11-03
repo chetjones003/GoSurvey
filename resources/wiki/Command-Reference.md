@@ -164,16 +164,17 @@ for a compact list inside the program.
 | Command | Aliases | Description | Details |
 |---|---|---|---|
 | `ALIGNMENT` | `CREATEALIGNMENT` | Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]] | [[Commands/alignment]] |
-| `ALIGNMENTADD` | — | Add a tangent or curve: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN, ... | [[Commands/alignmentadd]] |
+| `ALIGNMENTADD` | — | Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT\|TANGENTTO\|CURVE\|CURVELEN\|SPIRAL, ... | [[Commands/alignmentadd]] |
 | `ALIGNMENTLIST` | — | Report alignments, stations and entities: ALIGNMENTLIST [<name>] | [[Commands/alignmentlist]] |
 | `ALIGNMENTDELETE` | — | Delete an alignment: ALIGNMENTDELETE <name> | [[Commands/alignmentdelete]] |
 | `GETSTATIONOFFSET` | — | Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y> | [[Commands/getstationoffset]] |
 | `GETPOINTFROMSTATIONOFFSET` | — | Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset> | [[Commands/getpointfromstationoffset]] |
 | `CREATEALIGNMENTFROMOBJECTS` | — | Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE] | [[Commands/createalignmentfromobjects]] |
-| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
+| `ALIGNMENTEDIT` | — | Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value> | [[Commands/alignmentedit]] |
 | `ALIGNMENTLOCK` | — | Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING, ON\|OFF | [[Commands/alignmentlock]] |
-| `ALIGNMENTINSERT` | — | Insert a tangent or curve: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE, ... | [[Commands/alignmentinsert]] |
+| `ALIGNMENTINSERT` | — | Insert tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT\|CURVE\|SPIRAL, ... | [[Commands/alignmentinsert]] |
 | `ALIGNMENTREMOVE` | — | Remove an entity: ALIGNMENTREMOVE <name>, <entity#> | [[Commands/alignmentremove]] |
+| `ALIGNMENTCONTINUITY` | — | Continuity check level: ALIGNMENTCONTINUITY <name>, C0\|C1\|C2 \| LIST | [[Commands/alignmentcontinuity]] |
 | `REVERSEALIGNMENT` | `REVERSEALIGNDIRECTION` | Reverse alignment direction and stationing: REVERSEALIGNMENT <name> | [[Commands/reversealignment]] |
 | `ALIGNMENTSTATION` | — | Starting station and station equations: ALIGNMENTSTATION <name>, START\|EQ, ... | [[Commands/alignmentstation]] |
 | `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
@@ -299,6 +300,7 @@ for a compact list inside the program.
 | `ALIGN` | `AL` | [[Commands/align]] |
 | `ALIGNMENT` | `CREATEALIGNMENT` | [[Commands/alignment]] |
 | `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
+| `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
 | `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |

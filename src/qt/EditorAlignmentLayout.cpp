@@ -125,6 +125,7 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
       const alignment::Entity& e = a->Entities()[i];
       const int row = static_cast<int>(i);
       const bool arc = e.kind == alignment::EntityKind::Arc;
+      const bool spiral = e.kind == alignment::EntityKind::Spiral;
       const auto set = [&](int col, const QString& text, bool editable) {
         auto* item = new QTableWidgetItem(text);
         Qt::ItemFlags flags = item->flags() & ~Qt::ItemIsEditable;
@@ -133,21 +134,30 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
         table->setItem(row, col, item);
       };
       set(ColNo, QString::number(i + 1), false);
-      set(ColType, arc ? "Curve" : "Tangent", false);
+      set(ColType, arc ? "Curve" : spiral ? "Spiral" : "Tangent", false);
       set(ColStart, Q(alignment::FormatStation(a->DisplayedStation(a->EntityStartStation(row), true))), false);
       set(ColEnd, Q(alignment::FormatStation(a->DisplayedStation(a->EntityEndStation(row), false))), false);
       set(ColLength, lin(e.length), true);
       alignment::CurveData cd;
+      alignment::SpiralData sd;
       if (arc) (void)a->CurveDataFor(row, &cd);
-      set(ColRadius, arc ? lin(e.radius) : QString::fromUtf8("\xE2\x80\x94"), arc);
-      set(ColDelta, arc ? deg(cd.delta) : QString::fromUtf8("\xE2\x80\x94"), arc);
-      const bool bearingEditable = !arc && e.constraint == alignment::Entity::Constraint::Fixed;
+      if (spiral) (void)alignment::SpiralDataFor(row, *a, &sd);
+      set(ColRadius, arc ? lin(e.radius) : spiral ? lin(e.radius) : QString::fromUtf8("\xE2\x80\x94"), arc || spiral);
+      set(ColDelta, arc ? deg(cd.delta) : spiral ? deg(sd.deflection) : QString::fromUtf8("\xE2\x80\x94"), arc);
+      const bool bearingEditable = !arc && !spiral && e.constraint == alignment::Entity::Constraint::Fixed;
       set(ColBearing, deg(e.startAzimuth), bearingEditable);
-      set(ColDirection, arc ? (e.right ? "RIGHT" : "LEFT") : QString::fromUtf8("\xE2\x80\x94"), arc);
+      set(ColDirection, (arc || spiral) ? (e.right ? "RIGHT" : "LEFT") : QString::fromUtf8("\xE2\x80\x94"), arc);
       set(ColConstraint, ConstraintName(e.constraint), true);
       QString cont = QString::fromUtf8("\xE2\x80\x94");
-      if (i + 1 < a->Entities().size() && i < issues.size())
-        cont = !issues[i].c0 ? QString("gap %1").arg(lin(issues[i].gap)) : !issues[i].c1 ? "kink (C0 only)" : "C0 C1";
+      if (i + 1 < a->Entities().size() && i < issues.size()) {
+        const alignment::ContinuityIssue& iss = issues[static_cast<size_t>(i)];
+        if (iss.FailsRequirement(a->continuityRequirement))
+          cont = !iss.c0 ? QString("gap %1").arg(lin(iss.gap))
+                         : !iss.c1 ? "kink (C0 only)"
+                                   : !iss.c2 ? QString("curvature %1 (C2)").arg(lin(iss.curvatureGap)) : cont;
+        else
+          cont = iss.c2 ? "C0 C1 C2" : "C0 C1";
+      }
       set(ColStatus, cont, false);
     }
     table->resizeColumnsToContents();

@@ -7181,16 +7181,17 @@ const CmdEntry kRegistry[] = {
     {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
     {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
     {"alignment", "createalignment", "Create an empty alignment: ALIGNMENT <name>[, <description>[, <station>[, <layer>[, <style>]]]]"},
-    {"alignmentadd", "", "Add a tangent or curve: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN, ..."},
+    {"alignmentadd", "", "Add tangent, curve or spiral: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN|SPIRAL, ..."},
     {"alignmentlist", "", "Report alignments, stations and entities: ALIGNMENTLIST [<name>]"},
     {"alignmentdelete", "", "Delete an alignment: ALIGNMENTDELETE <name>"},
     {"getstationoffset", "", "Station and offset of a point: GETSTATIONOFFSET <alignment>, <x>, <y>"},
     {"getpointfromstationoffset", "", "Point at a station and offset: GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>"},
     {"createalignmentfromobjects", "", "Convert selected lines/arcs/polylines: CREATEALIGNMENTFROMOBJECTS <name>[, START=][, FILLET=][, REVERSE]"},
-    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
+    {"alignmentedit", "", "Edit an alignment parameter: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, <value>"},
     {"alignmentlock", "", "Lock a parameter: ALIGNMENTLOCK <name>, <entity#>, RADIUS|LENGTH|BEARING, ON|OFF"},
-    {"alignmentinsert", "", "Insert a tangent or curve: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE, ..."},
+    {"alignmentinsert", "", "Insert a tangent, curve or spiral: ALIGNMENTINSERT <name>, <after#>, TANGENT|CURVE|SPIRAL, ..."},
     {"alignmentremove", "", "Remove an entity: ALIGNMENTREMOVE <name>, <entity#>"},
+    {"alignmentcontinuity", "", "Set or list continuity checks: ALIGNMENTCONTINUITY <name>, C0|C1|C2 | LIST"},
     {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
     {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
     {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
@@ -47049,6 +47050,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentlock" ||
         plotTok == "alignmentinsert" ||
         plotTok == "alignmentremove" ||
+        plotTok == "alignmentcontinuity" ||
         plotTok == "reversealignment" ||
         plotTok == "reversealigndirection" ||
         plotTok == "alignmentstation" ||
@@ -47102,6 +47104,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentInsert(st, rest, log);
       else if (plotTok == "alignmentremove")
         RunAlignmentRemove(st, rest, log);
+      else if (plotTok == "alignmentcontinuity")
+        RunAlignmentContinuity(st, rest, log);
       else if (plotTok == "reversealignment")
         RunReverseAlignment(st, rest, log);
       else if (plotTok == "reversealigndirection")

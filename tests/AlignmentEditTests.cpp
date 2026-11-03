@@ -351,6 +351,16 @@ TEST_CASE("Offsets are refused where they would not be real geometry", "[req488]
   CHECK_FALSE(alignment::MakeOffset(Alignment{}, 5.0, &off, &why));
 }
 
+TEST_CASE("Offsets refuse parent alignments that contain spirals", "[req488][alignment]") {
+  Alignment parent;
+  REQUIRE(parent.AppendTangent({0, 0}, 0.0, 100.0));
+  REQUIRE(parent.AppendSpiral(80.0, 0.0, 300.0, true));
+  Alignment off;
+  std::string why;
+  CHECK_FALSE(alignment::MakeOffset(parent, 10.0, &off, &why));
+  CHECK(why.find("spiral") != std::string::npos);
+}
+
 TEST_CASE("Intersections of tangents, curves and touching circles", "[req489][alignment]") {
   Alignment east, north;
   REQUIRE(east.AppendTangent({0, 0}, 90.0 * kDeg, 100.0));

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /// Horizontal alignment domain object (REQ-480..484, ADR-075, issue #121).
@@ -30,8 +31,8 @@ struct Point2 {
   double y = 0.0;
 };
 
-/// Phase 1 ships Line and Arc; Spiral (clothoid) arrives in Phase 3 (REQ-481.3).
-enum class EntityKind { Line, Arc };
+/// Phase 1 ships Line and Arc; clothoid Spiral in Phase 3 (REQ-481.3).
+enum class EntityKind { Line, Arc, Spiral };
 
 /// One exact sub-entity. Stored parameters are the ONLY geometry; every other value is derived.
 struct Entity {
@@ -39,8 +40,9 @@ struct Entity {
   Point2 start;               ///< Start coordinate, drawing-local.
   double startAzimuth = 0.0;  ///< Direction of travel at the start, radians clockwise from north.
   double length = 0.0;        ///< Arc length along the entity (> 0).
-  double radius = 0.0;        ///< Arc only (> 0).
-  bool right = true;          ///< Arc only: true = curves right (clockwise), false = left.
+  double radius = 0.0;        ///< Arc: curvature radius (> 0). Spiral: end radius (0 = tangent / infinite).
+  double startRadius = 0.0;   ///< Spiral only: start radius (0 = tangent / infinite).
+  bool right = true;          ///< Arc and spiral: true = curves right (clockwise), false = left.
   /// Constraint state (REQ-481.6, REQ-486.2). Fixed keeps its own parameters; FloatOnPrev / FloatOnNext stay tangent to
   /// the entity they are attached to and move with it; Free (an arc between two tangents) re-solves between its
   /// neighbours. The first entity is Fixed. The integer values are persisted - never reorder.
@@ -54,7 +56,17 @@ struct Entity {
 
 /// Which stored parameter an edit changes (REQ-486.1). Derived values (delta, chord, ...) are edited by
 /// converting to one of these, exactly as the layout parameters table does.
-enum class EditParam { LineAzimuth, LineLength, CurveRadius, CurveLength, CurveDelta, CurveDirection, Constraint, Locks };
+enum class EditParam {
+  LineAzimuth,
+  LineLength,
+  CurveRadius,
+  CurveLength,
+  CurveDelta,
+  CurveDirection,
+  SpiralStartRadius,
+  Constraint,
+  Locks
+};
 
 /// Everything the issue asks to report about a circular curve (REQ-481.2). Derived, never stored.
 struct CurveData {
@@ -115,18 +127,26 @@ struct StationOffset {
   bool ambiguous = false;    ///< Another location was equally close (lowest station reported).
 };
 
-/// A continuity finding between two consecutive entities (REQ-482). Phase 1 reports C0 and C1.
+/// Selected continuity requirement for warnings (REQ-482). Default C1.
+enum class ContinuityRequirement { C0 = 0, C1 = 1, C2 = 2 };
+
+/// A continuity finding between two consecutive entities (REQ-482).
 struct ContinuityIssue {
   int afterEntity = 0;          ///< Index of the entity BEFORE the junction.
   bool c0 = true;               ///< Position continuity holds.
   bool c1 = true;               ///< Direction continuity holds.
+  bool c2 = true;               ///< Curvature continuity (only meaningful when a spiral is at the junction).
   double gap = 0.0;             ///< End-to-start distance.
   double angleDelta = 0.0;      ///< Absolute azimuth difference, radians (0..pi).
+  double curvatureGap = 0.0;    ///< |κ_end − κ_start| at the junction.
+  /// True when this junction fails the alignment's `continuityRequirement` (C2 checks only spiral junctions).
+  [[nodiscard]] bool FailsRequirement(ContinuityRequirement level) const;
 };
 
 struct ContinuityTolerance {
   double position = 1e-6;
   double angle = 1e-9;
+  double curvature = 1e-9;
 };
 
 class Alignment {
@@ -138,6 +158,7 @@ class Alignment {
   std::string layer = "0";
   std::string style = "Standard";
   AlignmentType type = AlignmentType::Centerline;
+  ContinuityRequirement continuityRequirement = ContinuityRequirement::C1;
 
   // --- station domain (REQ-483) ---
   double startingStation = 0.0;
@@ -157,6 +178,8 @@ class Alignment {
   /// and `radius` must be positive; a sweep >= 2*pi is refused (REQ-499).
   bool AppendCurve(double radius, double arcLength, bool right);
   bool AppendCurveByDelta(double radius, double delta, bool right);
+  /// Clothoid spiral continuing from the previous end. `startRadius` / `radius` use 0 for infinite (tangent).
+  bool AppendSpiral(double length, double startRadius, double endRadius, bool right);
   /// Appends an entity verbatim (used by create-from-objects and the DWG reader). Its own start is
   /// authoritative, so a non-tangent or gapped chain is representable and REQ-482 can report it.
   bool AppendRaw(const Entity& e);
@@ -170,6 +193,8 @@ class Alignment {
   /// Inserts a tangent / curve after entity `i` (continuing tangent-continuously, FloatOnPrev) and shifts what follows.
   bool InsertTangentAfter(int i, double length, std::string* whyNot = nullptr);
   bool InsertCurveAfter(int i, double radius, double arcLength, bool right, std::string* whyNot = nullptr);
+  bool InsertSpiralAfter(int i, double length, double startRadius, double endRadius, bool right,
+                         std::string* whyNot = nullptr);
   /// Deletes entity `i`; a following floating entity re-attaches to the one before it.
   bool DeleteEntity(int i, std::string* whyNot = nullptr);
   /// Whole-object transforms (REQ-487.1). Rotate is clockwise radians, like azimuths. Mirror reflects across the line
@@ -237,6 +262,7 @@ class Alignment {
   [[nodiscard]] std::vector<GeometryPoint> GeometryPoints() const;
   [[nodiscard]] std::vector<ContinuityIssue> CheckContinuity(ContinuityTolerance tol = {}) const;
   [[nodiscard]] int CurveCount() const;
+  [[nodiscard]] int SpiralCount() const;
   /// Axis-aligned bounds of the true geometry (arcs bounded by their extreme points). False when empty.
   [[nodiscard]] bool Bounds(Point2* mn, Point2* mx) const;
 
@@ -251,6 +277,7 @@ class Alignment {
   [[nodiscard]] Point2 PointInEntity(int i, double s) const;      ///< s = distance from entity start.
   [[nodiscard]] double AzimuthInEntity(int i, double s) const;
   [[nodiscard]] double SignedCurvature(const Entity& e) const;
+  [[nodiscard]] double SignedCurvatureAt(const Entity& e, double s) const;
 
   std::vector<Entity> entities_;
   std::vector<double> cumStart_;  ///< Distance from alignment start to each entity start (size n+1).
@@ -272,6 +299,20 @@ struct StationFormat {
 
 // --- Curve helpers (closed forms; shared with tests and the layout editor) ---
 [[nodiscard]] CurveData ComputeCurveData(Point2 pc, double startAzimuth, double radius, double arcLength, bool right);
+
+/// Derived clothoid values (REQ-481.3). `A` is √(R·Ls) when one side is tangent; deflection θ = Ls/(2R) in that case.
+struct SpiralData {
+  double length = 0.0;
+  double startRadius = 0.0;
+  double endRadius = 0.0;
+  double parameterA = 0.0;
+  double deflection = 0.0;  ///< Total heading change, radians.
+  bool right = true;
+};
+[[nodiscard]] bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out);
+
+[[nodiscard]] const char* ContinuityRequirementLabel(ContinuityRequirement level);
+[[nodiscard]] bool ParseContinuityRequirement(std::string_view text, ContinuityRequirement* out);
 
 // --- Create from objects (REQ-485.2) ---
 struct SourceSegment {

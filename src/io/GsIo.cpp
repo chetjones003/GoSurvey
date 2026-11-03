@@ -2161,6 +2161,8 @@ json BuildRoot(const AppCommandState& st) {
       o["style"] = a.style;
       o["type"] = static_cast<int>(a.type);
       o["startingStation"] = a.startingStation;
+      if (a.continuityRequirement != alignment::ContinuityRequirement::C1)
+        o["continuityRequirement"] = static_cast<int>(a.continuityRequirement);
       if (a.parentId != 0) {  // REQ-488: a linked offset alignment
         o["parentId"] = a.parentId;
         o["offsetDistance"] = a.offsetDistance;
@@ -2168,13 +2170,18 @@ json BuildRoot(const AppCommandState& st) {
       json ents = json::array();
       for (const alignment::Entity& e : a.Entities()) {
         json q;
-        q["k"] = e.kind == alignment::EntityKind::Line ? "L" : "A";
+        q["k"] = e.kind == alignment::EntityKind::Line ? "L" : e.kind == alignment::EntityKind::Arc ? "A" : "S";
         q["x"] = e.start.x;
         q["y"] = e.start.y;
         q["az"] = e.startAzimuth;
         q["len"] = e.length;
         if (e.kind == alignment::EntityKind::Arc) {
           q["r"] = e.radius;
+          q["right"] = e.right;
+        }
+        if (e.kind == alignment::EntityKind::Spiral) {
+          q["r"] = e.radius;
+          q["rs"] = e.startRadius;
           q["right"] = e.right;
         }
         q["c"] = static_cast<int>(e.constraint);
@@ -3950,6 +3957,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       if (el.contains("startingStation") && el["startingStation"].is_number())
         a.startingStation = el["startingStation"].get<double>();
+      if (el.contains("continuityRequirement") && el["continuityRequirement"].is_number_integer()) {
+        const int cr = el["continuityRequirement"].get<int>();
+        if (cr >= 0 && cr <= 2) a.continuityRequirement = static_cast<alignment::ContinuityRequirement>(cr);
+      }
       if (el.contains("parentId") && el["parentId"].is_number_unsigned()) a.parentId = el["parentId"].get<std::uint64_t>();
       if (el.contains("offsetDistance") && el["offsetDistance"].is_number()) a.offsetDistance = el["offsetDistance"].get<double>();
       bool ok = el.contains("entities") && el["entities"].is_array();
@@ -3957,12 +3968,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& q : el["entities"]) {
           alignment::Entity e;
           e.kind = (q.contains("k") && q["k"].is_string() && q["k"].get<std::string>() == "A") ? alignment::EntityKind::Arc
-                                                                                                : alignment::EntityKind::Line;
+                   : (q.contains("k") && q["k"].is_string() && q["k"].get<std::string>() == "S")
+                         ? alignment::EntityKind::Spiral
+                         : alignment::EntityKind::Line;
           if (q.contains("x") && q["x"].is_number()) e.start.x = q["x"].get<double>();
           if (q.contains("y") && q["y"].is_number()) e.start.y = q["y"].get<double>();
           if (q.contains("az") && q["az"].is_number()) e.startAzimuth = q["az"].get<double>();
           if (q.contains("len") && q["len"].is_number()) e.length = q["len"].get<double>();
           if (q.contains("r") && q["r"].is_number()) e.radius = q["r"].get<double>();
+          if (q.contains("rs") && q["rs"].is_number()) e.startRadius = q["rs"].get<double>();
           if (q.contains("right") && q["right"].is_boolean()) e.right = q["right"].get<bool>();
           if (q.contains("c") && q["c"].is_number_integer()) {
             const int c = q["c"].get<int>();

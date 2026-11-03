@@ -1,8 +1,10 @@
 // AlignmentEdit.cpp - constraint-aware editing, whole-object transforms, offsets and intersections
 // (REQ-486..489, issue #121 Phase 2). Split from Alignment.cpp so each file stays one concern.
 #include "alignment/Alignment.hpp"
+#include "alignment/Clothoid.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -26,11 +28,19 @@ double Sinc(double x) {
 
 double Curvature(const Entity& e) {
   if (e.kind == EntityKind::Line) return 0.0;
-  return (e.right ? 1.0 : -1.0) / e.radius;
+  if (e.kind == EntityKind::Arc) return (e.right ? 1.0 : -1.0) / e.radius;
+  return SpiralKappaStart(e);
+}
+
+double HeadingChange(const Entity& e) {
+  if (e.kind == EntityKind::Line) return 0.0;
+  if (e.kind == EntityKind::Arc) return Curvature(e) * e.length;
+  return SpiralHeadingDelta(e, e.length);
 }
 
 Point2 Displacement(const Entity& e, double s) {
   if (e.kind == EntityKind::Line) return {s * std::sin(e.startAzimuth), s * std::cos(e.startAzimuth)};
+  if (e.kind == EntityKind::Spiral) return SpiralDisplacementLocal(e, s);
   const double theta = Curvature(e) * s;
   const double chord = s * Sinc(theta * 0.5);
   const double mid = e.startAzimuth + theta * 0.5;
@@ -42,7 +52,7 @@ Point2 EndOf(const Entity& e) {
   return {e.start.x + d.x, e.start.y + d.y};
 }
 
-double EndAzOf(const Entity& e) { return NormAz(e.startAzimuth + Curvature(e) * e.length); }
+double EndAzOf(const Entity& e) { return NormAz(e.startAzimuth + HeadingChange(e)); }
 
 bool Valid(const Entity& e) {
   if (!(e.length > 0.0) || !std::isfinite(e.length) || !std::isfinite(e.start.x) || !std::isfinite(e.start.y) ||
@@ -50,6 +60,10 @@ bool Valid(const Entity& e) {
     return false;
   if (e.kind == EntityKind::Arc && (!(e.radius > 0.0) || !std::isfinite(e.radius) || e.length / e.radius >= kTwoPi))
     return false;
+  if (e.kind == EntityKind::Spiral) {
+    if (!std::isfinite(e.startRadius) || !std::isfinite(e.radius)) return false;
+    if (std::fabs(EntityEndCurvature(e) - EntityStartCurvature(e)) < 1e-15) return false;
+  }
   return true;
 }
 
@@ -79,7 +93,7 @@ bool Alignment::Resolve(std::string* whyNot) {
       Entity& e = entities_[static_cast<size_t>(j)];
       if (e.constraint != Entity::Constraint::FloatOnNext) continue;
       const Entity& nx = entities_[static_cast<size_t>(j) + 1];
-      e.startAzimuth = NormAz(nx.startAzimuth - Curvature(e) * e.length);
+      e.startAzimuth = NormAz(nx.startAzimuth - HeadingChange(e));
       const Point2 d = Displacement(e, e.length);
       e.start = {nx.start.x - d.x, nx.start.y - d.y};
     }
@@ -139,10 +153,11 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
   Alignment work = *this;
   Entity& e = work.entities_[static_cast<size_t>(i)];
   const bool arc = e.kind == EntityKind::Arc;
+  const bool spiral = e.kind == EntityKind::Spiral;
   const std::string row = Row(i);
   switch (param) {
     case EditParam::LineAzimuth:
-      if (arc) return fail(row + " is a curve, not a tangent");
+      if (arc || spiral) return fail(row + " is not a tangent");
       if (e.constraint != Entity::Constraint::Fixed)
         return fail(row + "'s bearing is derived from the entity it is attached to; make it Fixed to edit the bearing");
       if ((e.locks & Entity::kLockBearing) != 0) return fail(row + " has a fixed bearing");
@@ -150,31 +165,39 @@ bool Alignment::EditEntity(int i, EditParam param, double value, std::string* wh
       break;
     case EditParam::LineLength:
       if (arc) return fail(row + " is a curve, not a tangent");
+      if (spiral) return fail(row + " is a spiral; edit its length with LENGTH on that row");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length");
       if (!(value > 0.0)) return fail("the length must be positive");
       e.length = value;
       break;
     case EditParam::CurveRadius:
-      if (!arc) return fail(row + " is a tangent, not a curve");
+      if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
       if ((e.locks & Entity::kLockRadius) != 0) return fail(row + " has a fixed radius");
-      if (!(value > 0.0)) return fail("the radius must be positive");
-      e.radius = value;  // the arc length is kept (GoSurvey rule), so delta changes
+      if (value < 0.0 || !std::isfinite(value)) return fail("the radius must be zero (tangent) or positive");
+      if (arc && !(value > 0.0)) return fail("the radius must be positive");
+      e.radius = value;
       break;
     case EditParam::CurveLength:
-      if (!arc) return fail(row + " is a tangent, not a curve");
+      if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length");
       if (!(value > 0.0)) return fail("the length must be positive");
       e.length = value;
       break;
     case EditParam::CurveDelta:
-      if (!arc) return fail(row + " is a tangent, not a curve");
+      if (!arc) return fail(row + " is not a circular curve");
       if ((e.locks & Entity::kLockLength) != 0) return fail(row + " has a fixed length, so its delta cannot change");
       if (!(value > 0.0) || value >= kTwoPi) return fail("the delta must be between 0 and 360 degrees");
       e.length = e.radius * value;  // the radius is kept
       break;
     case EditParam::CurveDirection:
-      if (!arc) return fail(row + " is a tangent, not a curve");
+      if (!arc && !spiral) return fail(row + " is a tangent, not a curve or spiral");
       e.right = value != 0.0;
+      break;
+    case EditParam::SpiralStartRadius:
+      if (!spiral) return fail(row + " is not a spiral");
+      if ((e.locks & Entity::kLockRadius) != 0) return fail(row + " has a fixed radius");
+      if (value < 0.0 || !std::isfinite(value)) return fail("the start radius must be zero (tangent) or positive");
+      e.startRadius = value;
       break;
     case EditParam::Constraint: {
       const int c = static_cast<int>(value);
@@ -234,6 +257,30 @@ bool Alignment::InsertCurveAfter(int i, double radius, double arcLength, bool ri
   e.kind = EntityKind::Arc;
   e.radius = radius;
   e.length = arcLength;
+  e.right = right;
+  e.constraint = Entity::Constraint::FloatOnPrev;
+  work.entities_.insert(work.entities_.begin() + i + 1, e);
+  std::string why;
+  if (!work.Resolve(&why)) return fail(why.c_str());
+  work.Rebuild();
+  *this = std::move(work);
+  PruneOrphanEquations();
+  return true;
+}
+
+bool Alignment::InsertSpiralAfter(int i, double length, double startRadius, double endRadius, bool right, std::string* whyNot) {
+  auto fail = [&](const char* m) {
+    if (whyNot != nullptr) *whyNot = m;
+    return false;
+  };
+  if (i < 0 || static_cast<size_t>(i) >= entities_.size()) return fail("no such entity");
+  if (!(length > 0.0)) return fail("the length must be positive");
+  Alignment work = *this;
+  Entity e;
+  e.kind = EntityKind::Spiral;
+  e.length = length;
+  e.startRadius = startRadius;
+  e.radius = endRadius;
   e.right = right;
   e.constraint = Entity::Constraint::FloatOnPrev;
   work.entities_.insert(work.entities_.begin() + i + 1, e);
@@ -307,6 +354,10 @@ bool Alignment::Scale(double cx, double cy, double f) {
     e.start = {cx + (e.start.x - cx) * f, cy + (e.start.y - cy) * f};
     e.length *= f;
     if (e.kind == EntityKind::Arc) e.radius *= f;
+    if (e.kind == EntityKind::Spiral) {
+      if (!IsInfiniteSpiralRadius(e.startRadius)) e.startRadius *= f;
+      if (!IsInfiniteSpiralRadius(e.radius)) e.radius *= f;
+    }
   }
   Rebuild();
   for (StationEquation& q : equations) {  // distances scale, so raw stations measured from the start do too
@@ -332,6 +383,10 @@ bool Alignment::Mirror(double ax, double ay, double bx, double by) {
     const double mx = 2.0 * dot * ux - vx, my = 2.0 * dot * uy - vy;  // reflected direction
     e.startAzimuth = NormAz(std::atan2(mx, my));
     if (e.kind == EntityKind::Arc) e.right = !e.right;
+    if (e.kind == EntityKind::Spiral) {
+      e.right = !e.right;
+      std::swap(e.startRadius, e.radius);
+    }
   }
   return true;
 }
@@ -346,10 +401,11 @@ std::vector<Grip> GripPoints(const Alignment& a) {
   for (size_t i = 0; i < a.Entities().size(); ++i) {
     const Entity& e = a.Entities()[i];
     const int ii = static_cast<int>(i);
-    if (e.kind == EntityKind::Line) {
-      g.push_back({a.GetPointAtStation(a.EntityEndStation(ii)), 1 + 2 * ii});
-    } else {
-      g.push_back({a.GetPointAtStation(a.EntityStartStation(ii) + e.length * 0.5), 2 + 2 * ii});
+    if (e.kind == EntityKind::Line || e.kind == EntityKind::Spiral) {
+      g.push_back({a.GetPointAtStation(a.EntityEndStation(ii)), 1 + 2 * static_cast<int>(i)});
+    }
+    if (e.kind == EntityKind::Arc || e.kind == EntityKind::Spiral) {
+      g.push_back({a.GetPointAtStation(a.EntityStartStation(ii) + e.length * 0.5), 2 + 2 * static_cast<int>(i)});
     }
   }
   return g;
@@ -389,6 +445,33 @@ bool DragGrip(const Alignment& orig, int which, Point2 to, Alignment* out) {
     }
     return true;
   }
+  if (isEnd && e.kind == EntityKind::Spiral) {
+    const double along = (to.x - e.start.x) * std::sin(e.startAzimuth) + (to.y - e.start.y) * std::cos(e.startAzimuth);
+    Alignment w = orig;
+    if (along > 1e-9 && w.EditEntity(i, EditParam::CurveLength, along)) *out = w;
+    return true;
+  }
+  if (!isEnd && e.kind == EntityKind::Spiral) {
+    const double sMid = e.length * 0.5;
+    const double staMid = orig.EntityStartStation(i) + sMid;
+    const Point2 pMid = orig.GetPointAtStation(staMid);
+    const double az = orig.GetBearingAtStation(staMid);
+    const double kMidCur = SpiralKappaAt(e, sMid);
+    if (!(std::fabs(kMidCur) > 1e-14)) return true;
+    const double rInst = 1.0 / std::fabs(kMidCur);
+    const double rx = std::cos(az);
+    const double ry = -std::sin(az);
+    const Point2 center =
+        e.right ? Point2{pMid.x + rInst * rx, pMid.y + rInst * ry} : Point2{pMid.x - rInst * rx, pMid.y + rInst * ry};
+    const double rNew = std::hypot(to.x - center.x, to.y - center.y);
+    if (!(rNew > 1e-6)) return true;
+    const double sign = e.right ? 1.0 : -1.0;
+    const double kEnd = 2.0 * (sign / rNew) - EntityStartCurvature(e);
+    if (!(std::fabs(kEnd) > 1e-14)) return true;
+    Alignment w = orig;
+    if (w.EditEntity(i, EditParam::CurveRadius, 1.0 / std::fabs(kEnd))) *out = w;
+    return true;
+  }
   if (!isEnd && e.kind == EntityKind::Arc) {
     CurveData cd;
     (void)orig.CurveDataFor(i, &cd);
@@ -410,6 +493,11 @@ bool MakeOffset(const Alignment& parent, double distance, Alignment* out, std::s
   if (out == nullptr) return false;
   if (parent.Empty()) return fail("the parent alignment has no geometry");
   if (!std::isfinite(distance) || distance == 0.0) return fail("the offset distance must be a non-zero number");
+  for (size_t si = 0; si < parent.Entities().size(); ++si) {
+    if (parent.Entities()[si].kind == EntityKind::Spiral)
+      return fail("entity " + std::to_string(si + 1) +
+                  " is a spiral; GoSurvey does not offset alignments that contain spirals");
+  }
   for (const ContinuityIssue& c : parent.CheckContinuity()) {
     if (!c.c0) return fail("the parent has a gap after entity " + std::to_string(c.afterEntity + 1) + "; an offset needs a continuous alignment");
     if (!c.c1)
@@ -431,6 +519,8 @@ bool MakeOffset(const Alignment& parent, double distance, Alignment* out, std::s
       const double delta = e.length / e.radius;
       e.radius = newR;
       e.length = newR * delta;
+    } else if (e.kind == EntityKind::Spiral) {
+      return fail("entity " + std::to_string(i + 1) + " is a spiral; GoSurvey does not offset spirals");
     }
     e.locks = 0;
     e.constraint = i == 0 ? Entity::Constraint::Fixed : Entity::Constraint::FloatOnPrev;

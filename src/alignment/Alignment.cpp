@@ -1,11 +1,14 @@
 #include "alignment/Alignment.hpp"
+#include "alignment/Clothoid.hpp"
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <string_view>
 #include <utility>
 
 namespace alignment {
@@ -33,6 +36,7 @@ double Dist(Point2 a, Point2 b) { return std::hypot(a.x - b.x, a.y - b.y); }
 /// Displacement from an entity start after travelling `s` along it, relative to the start.
 Point2 LocalDisplacement(const Entity& e, double s) {
   if (e.kind == EntityKind::Line) return {s * std::sin(e.startAzimuth), s * std::cos(e.startAzimuth)};
+  if (e.kind == EntityKind::Spiral) return SpiralDisplacementLocal(e, s);
   const double theta = (e.right ? 1.0 : -1.0) * s / e.radius;
   const double chord = s * Sinc(theta * 0.5);
   const double mid = e.startAzimuth + theta * 0.5;
@@ -40,6 +44,14 @@ Point2 LocalDisplacement(const Entity& e, double s) {
 }
 
 }  // namespace
+
+bool ContinuityIssue::FailsRequirement(ContinuityRequirement level) const {
+  if (level == ContinuityRequirement::C0) return !c0;
+  if (!c0) return true;
+  if (level == ContinuityRequirement::C1) return !c1;
+  if (!c1) return true;
+  return !c2;
+}
 
 // ---------------------------------------------------------------- building
 
@@ -54,9 +66,12 @@ void Alignment::Clear() {
   Rebuild();
 }
 
-double Alignment::SignedCurvature(const Entity& e) const {
+double Alignment::SignedCurvature(const Entity& e) const { return SignedCurvatureAt(e, 0.0); }
+
+double Alignment::SignedCurvatureAt(const Entity& e, double s) const {
   if (e.kind == EntityKind::Line) return 0.0;
-  return (e.right ? 1.0 : -1.0) / e.radius;
+  if (e.kind == EntityKind::Arc) return (e.right ? 1.0 : -1.0) / e.radius;
+  return SpiralKappaAt(e, s);
 }
 
 Point2 Alignment::PointInEntity(int i, double s) const {
@@ -67,7 +82,8 @@ Point2 Alignment::PointInEntity(int i, double s) const {
 
 double Alignment::AzimuthInEntity(int i, double s) const {
   const Entity& e = entities_[static_cast<size_t>(i)];
-  return NormAz(e.startAzimuth + SignedCurvature(e) * s);
+  if (e.kind == EntityKind::Spiral) return NormAz(e.startAzimuth + SpiralHeadingDelta(e, s));
+  return NormAz(e.startAzimuth + SignedCurvatureAt(e, s) * s);
 }
 
 bool Alignment::AppendRaw(const Entity& e) {
@@ -77,6 +93,12 @@ bool Alignment::AppendRaw(const Entity& e) {
   if (e.kind == EntityKind::Arc) {
     if (!(e.radius > 0.0) || !std::isfinite(e.radius)) return false;
     if (e.length / e.radius >= kTwoPi) return false;  // a full circle is not an alignment curve
+  }
+  if (e.kind == EntityKind::Spiral) {
+    if (!std::isfinite(e.startRadius) || !std::isfinite(e.radius)) return false;
+    const double k0 = EntityStartCurvature(e);
+    const double k1 = EntityEndCurvature(e);
+    if (std::fabs(k1 - k0) < 1e-15) return false;  // zero curvature change is a tangent, not a spiral
   }
   Entity c = e;
   c.startAzimuth = NormAz(c.startAzimuth);
@@ -132,6 +154,20 @@ bool Alignment::AppendCurveByDelta(double radius, double delta, bool right) {
   return AppendCurve(radius, radius * delta, right);
 }
 
+bool Alignment::AppendSpiral(double length, double startRadius, double endRadius, bool right) {
+  if (entities_.empty() || !(length > 0.0)) return false;
+  Entity e;
+  e.kind = EntityKind::Spiral;
+  e.start = EndPoint();
+  e.startAzimuth = EndAzimuth();
+  e.length = length;
+  e.startRadius = startRadius;
+  e.radius = endRadius;
+  e.right = right;
+  e.constraint = Entity::Constraint::FloatOnPrev;
+  return AppendRaw(e);
+}
+
 bool Alignment::Reverse(std::string* note) {
   if (entities_.empty()) return false;
   for (const ContinuityIssue& c : CheckContinuity()) {
@@ -146,6 +182,10 @@ bool Alignment::Reverse(std::string* note) {
     e.start = end;
     e.startAzimuth = NormAz(endAz + kPi);
     if (e.kind == EntityKind::Arc) e.right = !e.right;
+    if (e.kind == EntityKind::Spiral) {
+      e.right = !e.right;
+      std::swap(e.startRadius, e.radius);
+    }
     // What followed its predecessor now follows its successor, and vice versa.
     if (e.constraint == Entity::Constraint::FloatOnPrev) e.constraint = Entity::Constraint::FloatOnNext;
     else if (e.constraint == Entity::Constraint::FloatOnNext) e.constraint = Entity::Constraint::FloatOnPrev;
@@ -183,6 +223,12 @@ int Alignment::CurveCount() const {
   return n;
 }
 
+int Alignment::SpiralCount() const {
+  int n = 0;
+  for (const Entity& e : entities_) n += e.kind == EntityKind::Spiral ? 1 : 0;
+  return n;
+}
+
 // ---------------------------------------------------------------- queries
 
 int Alignment::GetEntityAtStation(double internalStation) const {
@@ -215,7 +261,11 @@ Point2 Alignment::GetTangentAtStation(double internalStation) const {
 
 double Alignment::GetCurvatureAtStation(double internalStation) const {
   const int i = GetEntityAtStation(internalStation);
-  return i < 0 ? 0.0 : SignedCurvature(entities_[static_cast<size_t>(i)]);
+  if (i < 0) return 0.0;
+  const double d = std::clamp(internalStation - startingStation, 0.0, length_);
+  const double s =
+      std::clamp(d - cumStart_[static_cast<size_t>(i)], 0.0, entities_[static_cast<size_t>(i)].length);
+  return SignedCurvatureAt(entities_[static_cast<size_t>(i)], s);
 }
 
 Point2 Alignment::GetPointFromStationOffset(double internalStation, double offset, double* azimuthOut) const {
@@ -269,7 +319,7 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
       c.dist = std::hypot(fx, fy);
       const double side = fx * cosA - fy * sinA;  // dot with right = (cos, -sin)
       c.offset = (c.clampedStart || c.clampedEnd) ? (side < 0.0 ? -c.dist : c.dist) : side;
-    } else {
+    } else if (e.kind == EntityKind::Arc) {
       const double sgn = e.right ? 1.0 : -1.0;
       const double cx = sgn * e.radius * cosA;  // centre relative to start
       const double cy = -sgn * e.radius * sinA;
@@ -309,6 +359,53 @@ StationOffset Alignment::GetStationOffset(double x, double y) const {
         const double fx = px - f.x;
         const double fy = py - f.y;
         c.dist = std::hypot(fx, fy);
+        const double side = fx * std::cos(az) - fy * std::sin(az);
+        c.offset = side < 0.0 ? -c.dist : c.dist;
+      }
+    } else {
+      assert(e.kind == EntityKind::Spiral);
+      constexpr int kCoarse = 64;
+      double sBest = 0.0;
+      double dBest = std::numeric_limits<double>::infinity();
+      for (int k = 0; k <= kCoarse; ++k) {
+        const double s = e.length * static_cast<double>(k) / static_cast<double>(kCoarse);
+        const Point2 f = LocalDisplacement(e, s);
+        const double d = std::hypot(px - f.x, py - f.y);
+        if (d < dBest) {
+          dBest = d;
+          sBest = s;
+        }
+      }
+      const double ds = e.length / static_cast<double>(kCoarse);
+      const double sLo = std::max(0.0, sBest - ds);
+      const double sHi = std::min(e.length, sBest + ds);
+      constexpr int kFine = 32;
+      for (int k = 0; k <= kFine; ++k) {
+        const double s = sLo + (sHi - sLo) * static_cast<double>(k) / static_cast<double>(kFine);
+        const Point2 f = LocalDisplacement(e, s);
+        const double d = std::hypot(px - f.x, py - f.y);
+        if (d < dBest) {
+          dBest = d;
+          sBest = s;
+        }
+      }
+      constexpr double kEnd = 1e-9;
+      if (sBest <= kEnd) c.clampedStart = true;
+      if (sBest >= e.length - kEnd) c.clampedEnd = true;
+      c.s = sBest;
+      c.dist = dBest;
+      if (!(c.clampedStart || c.clampedEnd)) {
+        const double az = e.startAzimuth + SpiralHeadingDelta(e, sBest);
+        const Point2 f = LocalDisplacement(e, sBest);
+        const double fx = px - f.x;
+        const double fy = py - f.y;
+        const double side = fx * std::cos(az) - fy * std::sin(az);
+        c.offset = side < 0.0 ? -c.dist : c.dist;
+      } else {
+        const Point2 f = LocalDisplacement(e, sBest);
+        const double az = e.startAzimuth + SpiralHeadingDelta(e, sBest);
+        const double fx = px - f.x;
+        const double fy = py - f.y;
         const double side = fx * std::cos(az) - fy * std::sin(az);
         c.offset = side < 0.0 ? -c.dist : c.dist;
       }
@@ -462,7 +559,7 @@ std::vector<GeometryPoint> Alignment::GeometryPoints() const {
     if (e.kind == EntityKind::Line) {
       if (prev != nullptr && prev->kind == EntityKind::Line) push(GeometryPointCode::TanTan, e.start, EntityStartStation(i), i);
       push(GeometryPointCode::LineMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
-    } else {
+    } else if (e.kind == EntityKind::Arc) {
       GeometryPointCode startCode = GeometryPointCode::TanCurve;
       if (prev != nullptr && prev->kind == EntityKind::Arc)
         startCode = prev->right == e.right ? GeometryPointCode::CompCurveCurve : GeometryPointCode::RevCurveCurve;
@@ -472,6 +569,11 @@ std::vector<GeometryPoint> Alignment::GeometryPoints() const {
       if (cd.hasPI) push(GeometryPointCode::CurvePI, cd.pi, EntityStartStation(i), i);
       push(GeometryPointCode::CurveCenter, cd.center, EntityStartStation(i), i);
       push(GeometryPointCode::CurveMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
+      if (next == nullptr || next->kind == EntityKind::Line)
+        push(GeometryPointCode::CurveTan, PointInEntity(i, e.length), EntityEndStation(i), i);
+    } else {
+      push(GeometryPointCode::TanCurve, e.start, EntityStartStation(i), i);
+      push(GeometryPointCode::LineMidPt, PointInEntity(i, e.length * 0.5), EntityStartStation(i) + e.length * 0.5, i);
       if (next == nullptr || next->kind == EntityKind::Line)
         push(GeometryPointCode::CurveTan, PointInEntity(i, e.length), EntityEndStation(i), i);
     }
@@ -485,14 +587,25 @@ std::vector<ContinuityIssue> Alignment::CheckContinuity(ContinuityTolerance tol)
   for (size_t i = 0; i + 1 < entities_.size(); ++i) {
     ContinuityIssue c;
     c.afterEntity = static_cast<int>(i);
-    const Point2 end = PointInEntity(static_cast<int>(i), entities_[i].length);
-    c.gap = Dist(end, entities_[i + 1].start);
-    const double azEnd = AzimuthInEntity(static_cast<int>(i), entities_[i].length);
-    double d = std::fabs(NormAz(azEnd) - NormAz(entities_[i + 1].startAzimuth));
+    const Entity& left = entities_[i];
+    const Entity& right = entities_[i + 1];
+    const Point2 end = PointInEntity(static_cast<int>(i), left.length);
+    c.gap = Dist(end, right.start);
+    const double azEnd = AzimuthInEntity(static_cast<int>(i), left.length);
+    double d = std::fabs(NormAz(azEnd) - NormAz(right.startAzimuth));
     if (d > kPi) d = kTwoPi - d;
     c.angleDelta = d;
     c.c0 = c.gap <= tol.position;
     c.c1 = c.angleDelta <= tol.angle;
+    const bool spiralJunction = left.kind == EntityKind::Spiral || right.kind == EntityKind::Spiral;
+    if (spiralJunction) {
+      const double kEnd = EntityEndCurvature(left);
+      const double kStart = EntityStartCurvature(right);
+      c.curvatureGap = std::fabs(kEnd - kStart);
+      c.c2 = c.curvatureGap <= tol.curvature;
+    } else {
+      c.c2 = true;
+    }
     out.push_back(c);
   }
   return out;
@@ -541,6 +654,8 @@ std::vector<Point2> Alignment::SampleForDisplay(double maxChordHeight) const {
       const double h = std::clamp(maxChordHeight, 1e-9, e.radius * 0.5);
       const double dTheta = 2.0 * std::acos(1.0 - h / e.radius);
       steps = std::max(1, static_cast<int>(std::ceil((e.length / e.radius) / dTheta)));
+    } else if (e.kind == EntityKind::Spiral) {
+      steps = std::max(1, static_cast<int>(std::ceil(e.length / std::max(maxChordHeight, 1e-6))));
     }
     for (int k = 1; k <= steps; ++k) out.push_back(PointInEntity(static_cast<int>(i), e.length * k / steps));
   }
@@ -886,6 +1001,53 @@ bool BuildFromSegments(const std::vector<SourceSegment>& segments, const FromObj
 
   if (opt.reverse && !out->Reverse(nullptr)) return fail("the chain could not be reversed (it has a gap)");
   return true;
+}
+
+bool SpiralDataFor(int entityIndex, const Alignment& a, SpiralData* out) {
+  if (out == nullptr) return false;
+  if (entityIndex < 0 || static_cast<size_t>(entityIndex) >= a.Entities().size()) return false;
+  const Entity& e = a.Entities()[static_cast<size_t>(entityIndex)];
+  if (e.kind != EntityKind::Spiral) return false;
+  out->length = e.length;
+  out->startRadius = e.startRadius;
+  out->endRadius = e.radius;
+  out->right = e.right;
+  out->deflection = SpiralHeadingDelta(e, e.length);
+  const double rFinite = IsInfiniteSpiralRadius(e.radius) ? e.startRadius : e.radius;
+  if (IsInfiniteSpiralRadius(rFinite)) return true;
+  out->parameterA = std::sqrt(rFinite * e.length);
+  return true;
+}
+
+const char* ContinuityRequirementLabel(ContinuityRequirement level) {
+  switch (level) {
+    case ContinuityRequirement::C0:
+      return "C0";
+    case ContinuityRequirement::C1:
+      return "C1";
+    case ContinuityRequirement::C2:
+      return "C2";
+  }
+  return "C1";
+}
+
+bool ParseContinuityRequirement(const std::string_view text, ContinuityRequirement* out) {
+  if (out == nullptr) return false;
+  if (text.size() == 2 && (text[0] == 'c' || text[0] == 'C')) {
+    if (text[1] == '0') {
+      *out = ContinuityRequirement::C0;
+      return true;
+    }
+    if (text[1] == '1') {
+      *out = ContinuityRequirement::C1;
+      return true;
+    }
+    if (text[1] == '2') {
+      *out = ContinuityRequirement::C2;
+      return true;
+    }
+  }
+  return false;
 }
 
 }  // namespace alignment

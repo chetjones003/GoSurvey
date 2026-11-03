@@ -141,12 +141,15 @@ void RunAlignmentCreate(AppCommandState& st, const std::string& args, std::vecto
 //              <name>, TANGENTTO, <x>, <y>                            tangent to a WORLD point
 //              <name>, CURVE, <radius>, <delta deg>, LEFT|RIGHT       circular curve by central angle
 //              <name>, CURVELEN, <radius>, <arc length>, LEFT|RIGHT   circular curve by arc length
+//              <name>, SPIRAL, <length>, <end radius>, LEFT|RIGHT     clothoid from tangent (start R = infinite)
+//              <name>, SPIRAL, <length>, <start radius>, <end radius>, LEFT|RIGHT
 void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTADD - usage: ALIGNMENTADD <name>, TANGENT, <x>, <y>, <azimuth deg>, <length> | <name>, TANGENT, "
       "<length> | <name>, TANGENTTO, <x>, <y> | <name>, CURVE, <radius>, <delta deg>, LEFT|RIGHT | <name>, CURVELEN, "
-      "<radius>, <arc length>, LEFT|RIGHT.";
+      "<radius>, <arc length>, LEFT|RIGHT | <name>, SPIRAL, <length>, <end radius>, LEFT|RIGHT | <name>, SPIRAL, "
+      "<length>, <start radius>, <end radius>, LEFT|RIGHT (0 radius = tangent / infinite).";
   if (f.size() < 3) {
     log.push_back(usage);
     return;
@@ -219,6 +222,31 @@ void RunAlignmentAdd(AppCommandState& st, const std::string& args, std::vector<s
     ok = kind == "curve" ? edited.AppendCurveByDelta(v[0], v[1] * kDegToRad, side == "right")
                          : edited.AppendCurve(v[0], v[1], side == "right");
     what = "curve";
+  } else if (kind == "spiral" && (f.size() == 5 || f.size() == 6)) {
+    if (edited.Empty()) {
+      log.push_back("ALIGNMENTADD - a spiral needs geometry before it; add a tangent first.");
+      return;
+    }
+    const std::string side = Lower(f.back());
+    if (side != "left" && side != "right") {
+      log.push_back("ALIGNMENTADD - the spiral direction must be LEFT or RIGHT.");
+      return;
+    }
+    double ls = 0.0, rs = 0.0, re = 0.0;
+    if (f.size() == 5) {
+      if (!ParseNum(f[2], &ls) || !ParseNum(f[3], &re)) {
+        log.push_back(usage);
+        return;
+      }
+      rs = 0.0;
+    } else {
+      if (!ParseNum(f[2], &ls) || !ParseNum(f[3], &rs) || !ParseNum(f[4], &re)) {
+        log.push_back(usage);
+        return;
+      }
+    }
+    ok = edited.AppendSpiral(ls, rs, re, side == "right");
+    what = "spiral";
   } else {
     log.push_back(usage);
     return;
@@ -263,7 +291,9 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
     log.push_back("  Start: " + Lin(st, wsx) + ", " + Lin(st, wsy) + "  bearing " + Brg(st, a.StartAzimuth()));
     log.push_back("  End:   " + Lin(st, wex) + ", " + Lin(st, wey) + "  bearing " + Brg(st, a.EndAzimuth()));
     log.push_back("  Entities: " + std::to_string(a.Entities().size()) + "   Curves: " + std::to_string(a.CurveCount()) +
-                  "   Spirals: 0   Station equations: " + std::to_string(a.equations.size()));
+                  "   Spirals: " + std::to_string(a.SpiralCount()) + "   Station equations: " +
+                  std::to_string(a.equations.size()) + "   Continuity check: " +
+                  alignment::ContinuityRequirementLabel(a.continuityRequirement));
     for (size_t i = 0; i < a.Entities().size(); ++i) {
       const alignment::Entity& e = a.Entities()[i];
       const int ii = static_cast<int>(i);
@@ -271,18 +301,32 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
                         Sta(a, a.EntityEndStation(ii)) + "  ";
       if (e.kind == alignment::EntityKind::Line) {
         row += "Tangent  bearing " + Brg(st, e.startAzimuth) + "  length " + Lin(st, e.length);
-      } else {
+      } else if (e.kind == alignment::EntityKind::Arc) {
         alignment::CurveData cd;
         (void)a.CurveDataFor(ii, &cd);
         row += std::string("Curve ") + (e.right ? "right" : "left") + "  R " + Lin(st, cd.radius) + "  delta " +
                FormatSweptAngle(cd.delta / kDegToRad, CadAngleDisplaySettings(st)) + "  L " + Lin(st, cd.arcLength) +
                "  T " + Lin(st, cd.tangentLength) + "  C " + Lin(st, cd.chord);
+      } else {
+        alignment::SpiralData sd;
+        (void)alignment::SpiralDataFor(ii, a, &sd);
+        row += std::string("Spiral ") + (e.right ? "right" : "left") + "  Ls " + Lin(st, sd.length) + "  R " +
+               Lin(st, sd.endRadius) + "  theta " + FormatSweptAngle(sd.deflection / kDegToRad, CadAngleDisplaySettings(st));
+        if (sd.parameterA > 0.0) row += "  A " + Lin(st, sd.parameterA);
       }
       log.push_back(row);
     }
     for (const alignment::ContinuityIssue& c : a.CheckContinuity()) {
-      if (!c.c0) log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) + " (C0).");
-      else if (!c.c1) log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
+      if (c.FailsRequirement(a.continuityRequirement)) {
+        if (!c.c0)
+          log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) +
+                        " (C0).");
+        else if (!c.c1)
+          log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
+        else if (!c.c2)
+          log.push_back("  WARNING: curvature mismatch of " + Lin(st, c.curvatureGap) + " after entity " +
+                        std::to_string(c.afterEntity + 1) + " (C2).");
+      }
     }
   }
 }
@@ -536,8 +580,14 @@ bool IsLinkedOffset(const alignment::Alignment& a, const std::string& cmd, std::
 
 void ReportContinuity(const AppCommandState& st, const alignment::Alignment& r, std::vector<std::string>& log) {
   for (const alignment::ContinuityIssue& c : r.CheckContinuity()) {
-    if (!c.c0) log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) + " (C0).");
-    else if (!c.c1) log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
+    if (!c.FailsRequirement(r.continuityRequirement)) continue;
+    if (!c.c0)
+      log.push_back("  WARNING: gap of " + Lin(st, c.gap) + " after entity " + std::to_string(c.afterEntity + 1) + " (C0).");
+    else if (!c.c1)
+      log.push_back("  WARNING: direction changes after entity " + std::to_string(c.afterEntity + 1) + " (C1).");
+    else if (!c.c2)
+      log.push_back("  WARNING: curvature mismatch of " + Lin(st, c.curvatureGap) + " after entity " +
+                    std::to_string(c.afterEntity + 1) + " (C2).");
   }
 }
 
@@ -549,8 +599,8 @@ void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log)
 void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
-      "ALIGNMENTEDIT - usage: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value> "
-      "(DIRECTION LEFT|RIGHT; CONSTRAINT FIXED|FLOATPREV|FLOATNEXT|FREE).";
+      "ALIGNMENTEDIT - usage: ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|STARTRADIUS|DELTA|DIRECTION|CONSTRAINT, "
+      "<value> (DIRECTION LEFT|RIGHT; CONSTRAINT FIXED|FLOATPREV|FLOATNEXT|FREE; spiral RADIUS/STARTRADIUS 0 = tangent).";
   if (f.size() != 4) {
     log.push_back(usage);
     return;
@@ -559,8 +609,10 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
   if (a == nullptr || IsLinkedOffset(*a, "ALIGNMENTEDIT", log)) return;
   int idx = 0;
   if (!ParseEntityIndex(*a, "ALIGNMENTEDIT", f[1], &idx, log)) return;
+  const alignment::EntityKind kind = a->Entities()[static_cast<size_t>(idx)].kind;
+  const bool isArc = kind == alignment::EntityKind::Arc;
+  const bool isSpiral = kind == alignment::EntityKind::Spiral;
   const std::string what = Lower(f[2]);
-  const bool isArc = a->Entities()[static_cast<size_t>(idx)].kind == alignment::EntityKind::Arc;
   alignment::EditParam param{};
   double v = 0.0;
   if (what == "bearing" || what == "azimuth") {
@@ -569,11 +621,18 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
     v *= kDegToRad;
   } else if (what == "length") {
     if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the length must be a number."); return; }
-    param = isArc ? alignment::EditParam::CurveLength : alignment::EditParam::LineLength;
+    param = (isArc || isSpiral) ? alignment::EditParam::CurveLength : alignment::EditParam::LineLength;
   } else if (what == "radius") {
     if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the radius must be a number."); return; }
     param = alignment::EditParam::CurveRadius;
+  } else if (what == "startradius" || what == "rs") {
+    if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the start radius must be a number (0 = tangent)."); return; }
+    param = alignment::EditParam::SpiralStartRadius;
   } else if (what == "delta") {
+    if (isSpiral) {
+      log.push_back("ALIGNMENTEDIT - a spiral has no delta; edit LENGTH or RADIUS instead.");
+      return;
+    }
     if (!ParseNum(f[3], &v)) { log.push_back("ALIGNMENTEDIT - the delta must be a number of degrees."); return; }
     param = alignment::EditParam::CurveDelta;
     v *= kDegToRad;
@@ -639,9 +698,12 @@ void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<
 }
 
 // ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length> | CURVE, <radius>, <delta deg>, LEFT|RIGHT
+//                 | SPIRAL, <length>, <end radius>, LEFT|RIGHT | SPIRAL, <length>, <start R>, <end R>, LEFT|RIGHT
 void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
-  const char* usage = "ALIGNMENTINSERT - usage: ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length> | CURVE, <radius>, <delta deg>, LEFT|RIGHT.";
+  const char* usage =
+      "ALIGNMENTINSERT - usage: ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length> | CURVE, <radius>, <delta deg>, "
+      "LEFT|RIGHT | SPIRAL, <length>, <end radius>, LEFT|RIGHT | SPIRAL, <length>, <start radius>, <end radius>, LEFT|RIGHT.";
   if (f.size() < 4) {
     log.push_back(usage);
     return;
@@ -660,6 +722,25 @@ void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vecto
   } else if (kind == "curve" && f.size() == 6 && ParseNum(f[3], &v1) && ParseNum(f[4], &v2) &&
              (Lower(f[5]) == "left" || Lower(f[5]) == "right")) {
     ok = trial.InsertCurveAfter(idx, v1, v1 * v2 * kDegToRad, Lower(f[5]) == "right", &why);
+  } else if (kind == "spiral" && (f.size() == 5 || f.size() == 7)) {
+    const std::string side = Lower(f.back());
+    if (side != "left" && side != "right") {
+      log.push_back(usage);
+      return;
+    }
+    double ls = 0.0, rs = 0.0, re = 0.0;
+    if (f.size() == 5) {
+      if (!ParseNum(f[3], &ls) || !ParseNum(f[4], &re)) {
+        log.push_back(usage);
+        return;
+      }
+    } else {
+      if (!ParseNum(f[3], &ls) || !ParseNum(f[4], &rs) || !ParseNum(f[5], &re)) {
+        log.push_back(usage);
+        return;
+      }
+    }
+    ok = trial.InsertSpiralAfter(idx, ls, rs, re, side == "right", &why);
   } else {
     log.push_back(usage);
     return;
@@ -700,6 +781,40 @@ void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vecto
                 std::to_string(target->Entities().size()) + " entities.");
   ReportContinuity(st, *target, log);
   RefreshAlignmentOffsets(st, log);
+}
+
+// ALIGNMENTCONTINUITY <name>, C0|C1|C2 | <name>, LIST   - REQ-482
+void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("ALIGNMENTCONTINUITY - usage: ALIGNMENTCONTINUITY <name>, C0|C1|C2 | <name>, LIST.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTCONTINUITY", f[0], log);
+  if (a == nullptr) return;
+  const std::string sub = Lower(f[1]);
+  if (sub == "list") {
+    log.push_back("ALIGNMENTCONTINUITY - \"" + a->name + "\" requires " +
+                  std::string(alignment::ContinuityRequirementLabel(a->continuityRequirement)) + " at junctions.");
+    int warnings = 0;
+    for (const alignment::ContinuityIssue& c : a->CheckContinuity()) {
+      if (c.FailsRequirement(a->continuityRequirement)) ++warnings;
+    }
+    ReportContinuity(st, *a, log);
+    if (warnings == 0) log.push_back("  No continuity warnings at this level.");
+    return;
+  }
+  alignment::ContinuityRequirement level = alignment::ContinuityRequirement::C1;
+  if (!alignment::ParseContinuityRequirement(sub, &level)) {
+    log.push_back("ALIGNMENTCONTINUITY - the level must be C0, C1 or C2.");
+    return;
+  }
+  PushUndoSnapshot(st, "Set alignment continuity requirement");
+  a = Resolve(st, "ALIGNMENTCONTINUITY", f[0], log);
+  a->continuityRequirement = level;
+  log.push_back("ALIGNMENTCONTINUITY - \"" + a->name + "\" now checks " +
+                std::string(alignment::ContinuityRequirementLabel(level)) + " at junctions.");
+  ReportContinuity(st, *a, log);
 }
 
 // REVERSEALIGNMENT <name>  (also REVERSEALIGNDIRECTION) - REQ-487.2

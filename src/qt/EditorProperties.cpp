@@ -635,7 +635,15 @@ void EditorWindow::RefreshProperties() {
       }
       readOnly(rows, "Entity count", QString::number(al.Entities().size()), "propAlignmentEntities");
       readOnly(rows, "Curve count", QString::number(al.CurveCount()), "propAlignmentCurves");
-      readOnly(rows, "Spiral count", "0", "propAlignmentSpirals");
+      readOnly(rows, "Spiral count", QString::number(al.SpiralCount()), "propAlignmentSpirals");
+      readOnly(rows, "Continuity requirement", alignment::ContinuityRequirementLabel(al.continuityRequirement),
+                 "propAlignmentContinuityReq");
+      int continuityWarnings = 0;
+      for (const alignment::ContinuityIssue& c : al.CheckContinuity()) {
+        if (c.FailsRequirement(al.continuityRequirement)) ++continuityWarnings;
+      }
+      readOnly(rows, "Continuity status", continuityWarnings == 0 ? "OK" : QString("%1 warning(s)").arg(continuityWarnings),
+               "propAlignmentContinuityStatus");
       readOnly(rows, "Station equations", QString::number(al.equations.size()), "propAlignmentEquations");
     }
   }

@@ -9,7 +9,7 @@ offset and a curve's radius are always exact.
 > station/offset queries, creation from typed input or selected objects, display, selection,
 > properties, object snaps, undo and save/reopen (Phase 1); editing with constraints, the Alignment
 > Layout table, grips, move/copy/rotate/scale/mirror, reverse, offset alignments and intersections
-> (Phase 2). Spirals, labels, tables, reports, surface and feature-line links and design checks arrive
+> (Phase 2). **Clothoid spirals** and C2 continuity checks arrive in Phase 3 (issue #121). Labels, tables, reports, surface and feature-line links and design checks arrive
 > in later phases. See `spec/requirements.md` REQ-480 to REQ-503.
 
 ## Station format
@@ -28,18 +28,19 @@ offset and a curve's radius are always exact.
 | `ALIGNMENTADD <name>, CURVE, <radius>, <delta°>, LEFT\|RIGHT` | A circular curve that continues smoothly (tangent-continuous) from the end. |
 | `ALIGNMENTADD <name>, CURVELEN, <radius>, <arc length>, LEFT\|RIGHT` | The same, given by arc length. |
 | `CREATEALIGNMENTFROMOBJECTS <name>[, START=<station>][, FILLET=<radius>][, REVERSE][, TOL=<gap>]` | Converts the **selected** lines, arcs and polylines. A line becomes a tangent; an arc or a polyline's bulge segment becomes a true curve. `FILLET` rounds corners between tangents (a corner that is too tight stays a corner and is reported). Gaps larger than `TOL` (default 0.001) are refused, naming the object. |
-| `ALIGNMENTLIST [<name>]` | Reports the type, stations, length, start/end bearings, every tangent and curve (radius, delta, length, tangent, chord) and any gap or kink. |
+| `ALIGNMENTLIST [<name>]` | Reports the type, stations, length, start/end bearings, every tangent, curve and **clothoid spiral**, and any gap, kink or curvature mismatch at the alignment's continuity level. |
 | `GETSTATIONOFFSET <alignment>, <x>, <y>` | Station, offset and bearing of a world point. Offsets are **positive to the right** facing the alignment's end. A point beyond an end reports the nearest end. |
 | `GETPOINTFROMSTATIONOFFSET <alignment>, <station>, <offset>` | X, Y and bearing of a station/offset. |
 | `ALIGNMENTDELETE <name>` | Removes the alignment (undoable). |
-| `EDITALIGNMENT [<name>]` | Opens the **Alignment Layout** table: one row per tangent/curve with stations, length, radius, delta, bearing, direction, constraint and continuity. Edit a cell and the whole alignment re-solves; a refused edit changes nothing and says why. |
-| `ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value>` | The same edit from the command line. Bearing is degrees clockwise from north and can only be edited on a **Fixed** tangent (a floating tangent's bearing comes from what it follows). Editing a radius keeps the curve's length; editing a delta keeps its radius. |
+| `EDITALIGNMENT [<name>]` | Opens the **Alignment Layout** table: one row per tangent, curve or spiral with stations, length, radius, delta/deflection, bearing, direction, constraint and continuity (C0/C1/C2 at spiral junctions). Edit a cell and the whole alignment re-solves; a refused edit changes nothing and says why. |
+| `ALIGNMENTEDIT <name>, <entity#>, BEARING\|LENGTH\|RADIUS\|STARTRADIUS\|DELTA\|DIRECTION\|CONSTRAINT, <value>` | The same edit from the command line. Spiral **RADIUS** / **STARTRADIUS** use **0** for a tangent (infinite) side. Bearing is degrees clockwise from north and can only be edited on a **Fixed** tangent. |
 | `ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING, ON\|OFF` | A locked value refuses any edit that would change it. |
-| `ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length>` / `CURVE, <radius>, <delta°>, LEFT\|RIGHT` | Inserts a tangent or curve that continues smoothly; what follows moves with it. |
+| `ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length>` / `CURVE, <radius>, <delta°>, LEFT\|RIGHT` / `SPIRAL, <length>, <end radius>, LEFT\|RIGHT` (optional start radius) | Inserts a tangent, curve or clothoid spiral that continues smoothly; what follows moves with it. |
 | `ALIGNMENTREMOVE <name>, <entity#>` | Removes an entity; a following floating entity re-attaches to the one before. A remaining gap is reported. |
 | `REVERSEALIGNMENT <name>` | Reverses direction and stationing of a continuous alignment (twice gives back the original). Station equations are cleared. |
-| `ALIGNMENTSTATION <name>, START, <station>[, CLEAR]` / `EQ, ADD, <raw>, <ahead>, INC\|DEC` / `EQ, REMOVE, <n>` / `EQ, LIST` | Starting station and station equations. |
-| `OFFSETALIGNMENT <parent>, R12, L12` | Creates real **offset alignments** (right/left of the parent, facing its end). They follow the parent when it is edited or moved. Refused where the offset would collapse a curve, at a kink in the parent,. |
+| `ALIGNMENTSTATION <name>, START, <station>[, CLEAR]` / `EQ, ADD, ...` | Starting station and station equations. |
+| `ALIGNMENTCONTINUITY <name>, C0\|C1\|C2` / `LIST` | Sets which continuity level is checked at junctions (default **C1**). **LIST** reports warnings at that level. |
+| `OFFSETALIGNMENT <parent>, R12, L12` | Creates real **offset alignments** (right/left of the parent, facing its end). They follow the parent when it is edited or moved. Refused where the offset would collapse a curve, at a kink in the parent, or when the parent contains a **spiral**. |
 | `ALIGNMENTDETACH <name>` | Makes a linked offset independent so it can be edited. |
 | `ALIGNMENTINTERSECT <a>, <b>` / `<a>, LINE, x1, y1, x2, y2` / `<a>, CIRCLE, cx, cy, r` | Every intersection with station and crossing angle; coincident tangents are reported as a range. |
 
@@ -58,12 +59,12 @@ offset and a curve's radius are always exact.
 - **Constraints.** A new tangent or curve is *Float (prev)*: it stays tangent to what precedes it. *Fixed* keeps its
   own values. *Free* is a curve that re-fits between two tangents.
 - Alignments are saved with the drawing as exact numbers. A saved DWG also contains ordinary
-  AutoCAD lines and arcs on the alignment's layer so other software can draw it.
+  AutoCAD lines and arcs (and short line segments approximating **spirals** for display) on the alignment's layer so other software can draw it.
 
 ## Limits so far
 
 - Geometry is built from typed commands, the layout table, grips or selected objects; there is no on-screen layout toolbar yet.
-- No spirals, station labels, tables, reports, widening, profiles or surface elevations yet.
-- Offsets are not built at a corner where the parent changes direction without a curve.
+- No station labels, tables, reports, widening, profiles or surface elevations yet.
+- Offsets are not built at a corner where the parent changes direction without a curve, and not when the parent has spirals.
 
 See also [[Command Reference]], [[Object Snaps]] and [[Properties]].

@@ -7519,7 +7519,7 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         dwg_point_3d a{ae.start.x + ox, ae.start.y + oy, 0.0};
         dwg_point_3d b{e.x + ox, e.y + oy, 0.0};
         if (Dwg_Entity_LINE* ln = dwg_add_LINE(hdr, &a, &b)) parent = ln->parent;
-      } else {
+      } else if (ae.kind == alignment::EntityKind::Arc) {
         alignment::CurveData cd;
         if (!al.CurveDataFor(static_cast<int>(ei), &cd)) continue;
         const double aStart = std::atan2(ae.start.y - cd.center.y, ae.start.x - cd.center.x);
@@ -7528,6 +7528,24 @@ void FillFromState(const AppCommandState& st, Dwg_Data* dwg, Dwg_Object_BLOCK_HE
         // A DWG ARC always runs counter-clockwise; a right (clockwise) alignment curve runs end -> start.
         if (Dwg_Entity_ARC* ar = dwg_add_ARC(hdr, &c, ae.radius, ae.right ? aEnd : aStart, ae.right ? aStart : aEnd))
           parent = ar->parent;
+      } else {
+        constexpr double kChord = 0.001;  // REQ-495 display tolerance for interchange spirals
+        const int segs = std::max(2, static_cast<int>(std::ceil(ae.length / kChord)));
+        const double sta0 = al.EntityStartStation(static_cast<int>(ei));
+        alignment::Point2 prev = al.GetPointAtStation(sta0);
+        for (int k = 1; k <= segs; ++k) {
+          const alignment::Point2 cur = al.GetPointAtStation(sta0 + ae.length * static_cast<double>(k) / static_cast<double>(segs));
+          dwg_point_3d a{prev.x + ox, prev.y + oy, 0.0};
+          dwg_point_3d b{cur.x + ox, cur.y + oy, 0.0};
+          Dwg_Object_Entity* segParent = nullptr;
+          if (Dwg_Entity_LINE* ln = dwg_add_LINE(hdr, &a, &b)) segParent = ln->parent;
+          if (segParent != nullptr) {
+            apply(segParent, &alAttrs);
+            AppendGosurveyStringEed(dwg, segParent, {"ALIGNMENT", al.name});
+          }
+          prev = cur;
+        }
+        continue;
       }
       if (parent == nullptr) continue;
       apply(parent, &alAttrs);

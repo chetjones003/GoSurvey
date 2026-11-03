@@ -8058,6 +8058,7 @@ void RunAlignmentEdit(AppCommandState& st, const std::string& args, std::vector<
 void RunAlignmentLock(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentInsert(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

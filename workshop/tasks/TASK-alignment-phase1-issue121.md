@@ -1,7 +1,7 @@
 # TASK-alignment-phase1-issue121 — Civil-style alignments, Phases 1 and 2 with the full spec
 
 - Type:    feature
-- Status:  needs review (PR #1152)
+- Status:  in progress (Phase 3 on PR #1152; commit pending)
 - Opened:  2026-11-02
 - Owner:   chetjones003 (decision), Claude (implementation)
 - GitHub:  #121 "Implement Civil 3D-Style Alignments"
@@ -24,8 +24,15 @@
   insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT layout table (Qt), grips (start, tangent end, curve
   radius), MOVE/COPY/ROTATE/SCALE/MIRROR/ERASE, REVERSEALIGNMENT, ALIGNMENTSTATION, OFFSETALIGNMENT/ALIGNMENTDETACH
   with linked refresh, ALIGNMENTINTERSECT.
-- Out (later phases, REQ-481 spirals, 482, 490 remaining snaps, 491..502): spirals, styles/labels/tables/reports, surface and
+- Out (later phases, REQ-490 remaining snaps, 491..502): styles/labels/tables/reports, surface and
   feature-line integration, COGO commands, design criteria, interactive on-screen layout toolbar.
+- Phase 3 (in progress on `feat/implement-issue-121`): REQ-481 clothoid spirals (`Clothoid.cpp`,
+  `AppendSpiral`, station/offset queries, persistence `k:S`), REQ-482 C2 continuity + requirement level,
+  offset refusal for spiral parents, LIST/EDITALIGNMENT spiral rows, **ALIGNMENTADD/INSERT/EDIT** spiral
+  syntax, DWG export samples spirals to LINE segments, command tests (`AlignmentSpiralCommandTests.cpp`).
+  Spiral grips (end = length, mid = end radius), `ALIGNMENTCONTINUITY`, Properties continuity fields,
+  in-repo wiki (`Command-Reference`, `alignmentadd/edit/insert/continuity`).
+  Verification: `[alignment]` 70/70; full suite 194/194 (`build/artifacts/ctest-phase3.log`).
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
@@ -48,7 +55,7 @@
 ## 7. Pre-PR product documentation (REQ-453)
 - `README.md`: no update needed (already mentions alignments at a high level).
 - `PRIVACY.md`: no update needed (no privacy impact).
-- `resources/wiki/`: updated `Alignments.md`, `Command-Reference.md`, and command pages for Phase 2 commands.
+- `resources/wiki/`: updated `Alignments.md`, `Command-Reference.md`, `alignmentadd/edit/insert/continuity` command pages (Phase 3 spirals and continuity).
 - Public GitHub wiki: not updated in this session (same content as in-repo wiki pages; update before external publish if required).
 
 ## 6. Known gaps (honest)

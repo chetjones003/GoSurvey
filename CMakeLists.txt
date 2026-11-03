@@ -651,6 +651,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Civil alignments (REQ-480..484, ADR-075, issue #121): exact tangent/curve geometry, stationing, queries
   src/alignment/Alignment.cpp
   src/alignment/AlignmentEdit.cpp
+  src/alignment/Clothoid.cpp
   # Geometry math (util)
   src/util/geom2d.cpp
   # REQ-443 SPLINE mathematics (NURBS curve: fit / control-vertex construction, evaluation, tessellation)
@@ -1216,6 +1217,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipeRunTests.cpp
     tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
+    tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp

@@ -3,9 +3,17 @@
 **Command:** `ALIGNMENTADD`
 **Category overview:** [[Alignments]]
 
-Add a tangent or curve: ALIGNMENTADD <name>, TANGENT|TANGENTTO|CURVE|CURVELEN, ...
+Add geometry to an alignment (continues tangent-continuously when the chain already has entities):
 
-See [[Alignments]] for the full workflow, the station format, and what Phase 1 does and does not include.
+- `TANGENT, <x>, <y>, <azimuth deg>, <length>` — first tangent (world coordinates).
+- `TANGENT, <length>` — continue a tangent.
+- `TANGENTTO, <x>, <y>` — tangent to a world point.
+- `CURVE, <radius>, <delta deg>, LEFT|RIGHT` — circular curve by central angle.
+- `CURVELEN, <radius>, <arc length>, LEFT|RIGHT` — circular curve by arc length.
+- `SPIRAL, <length>, <end radius>, LEFT|RIGHT` — clothoid from tangent (start radius infinite).
+- `SPIRAL, <length>, <start radius>, <end radius>, LEFT|RIGHT` — use **0** for infinite / tangent.
+
+See [[Alignments]] for the full workflow and station format.
 
 ---
 

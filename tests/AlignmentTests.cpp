@@ -575,3 +575,52 @@ TEST_CASE("Display sampling never exceeds the chord height", "[req495][alignment
     CHECK(std::fabs(so.offset) <= h * 1.0001);
   }
 }
+
+TEST_CASE("Clothoid spiral deflection and end curvature", "[req481][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 50.0));
+  REQUIRE(a.AppendSpiral(100.0, 0.0, 500.0, true));  // tangent→spiral, R=500, Ls=100
+  CHECK(a.SpiralCount() == 1);
+  CHECK(a.EndAzimuth() == Approx(0.1).margin(1e-9));
+  CHECK(a.GetCurvatureAtStation(a.EndStation()) == Approx(1.0 / 500.0).margin(1e-12));
+  const Point2 end = a.EndPoint();
+  CHECK(end.x == Approx(3.330959502573634).margin(1e-8));
+  CHECK(end.y == Approx(50.0 + 99.900046285311).margin(1e-8));
+  alignment::SpiralData sd;
+  REQUIRE(alignment::SpiralDataFor(1, a, &sd));
+  CHECK(sd.parameterA == Approx(std::sqrt(500.0 * 100.0)).margin(1e-6));
+  CHECK(sd.deflection == Approx(0.1).margin(1e-9));
+}
+
+TEST_CASE("Tangent-spiral-curve junction is C2 when radii match", "[req481][req482][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 100.0));
+  REQUIRE(a.AppendSpiral(100.0, 0.0, 500.0, true));
+  REQUIRE(a.AppendCurve(500.0, 50.0, true));
+  const auto issues = a.CheckContinuity();
+  REQUIRE(issues.size() == 2);
+  CHECK(issues[0].c0);
+  CHECK(issues[0].c1);
+  CHECK(issues[0].c2);
+  CHECK(issues[1].c0);
+  CHECK(issues[1].c1);
+  CHECK(issues[1].c2);
+  a.continuityRequirement = alignment::ContinuityRequirement::C2;
+  CHECK_FALSE(issues[1].FailsRequirement(a.continuityRequirement));
+}
+
+TEST_CASE("Spiral-curve C2 mismatch is flagged at C2 level", "[req482][alignment]") {
+  Alignment a;
+  REQUIRE(a.AppendTangent({0.0, 0.0}, 0.0, 50.0));
+  REQUIRE(a.AppendSpiral(100.0, 0.0, 500.0, true));
+  REQUIRE(a.AppendCurve(400.0, 40.0, true));  // end radius 500 vs curve 400
+  const alignment::ContinuityIssue& j = a.CheckContinuity().back();
+  CHECK(j.c0);
+  CHECK(j.c1);
+  CHECK_FALSE(j.c2);
+  CHECK(j.curvatureGap == Approx(0.0005).margin(1e-12));
+  a.continuityRequirement = alignment::ContinuityRequirement::C1;
+  CHECK_FALSE(j.FailsRequirement(a.continuityRequirement));
+  a.continuityRequirement = alignment::ContinuityRequirement::C2;
+  CHECK(j.FailsRequirement(a.continuityRequirement));
+}
