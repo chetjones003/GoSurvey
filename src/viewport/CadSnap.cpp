@@ -1033,6 +1033,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const bool wantMidpoint = want(Kind::Midpoint, cmd.objectSnapMidpoint);
   const bool wantCenter = want(Kind::Center, cmd.objectSnapCenter);
   const bool wantQuadrant = want(Kind::Quadrant, cmd.objectSnapQuadrant);
+  const bool wantStation =
+      want(Kind::Station, cmd.objectSnapStation && cmd.objectSnapStationDisplayedValid);
   const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
   const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
@@ -1465,6 +1467,19 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
     if (wantQuadrant)
       AppendAlignmentQuadrantCandidates(&acc, wx, wy, al, cmd.activeUcs, tolWorld);
+  }
+
+  if (wantStation) {
+    for (const alignment::Alignment& al : cmd.alignments) {
+      if (al.Empty())
+        continue;
+      const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
+      for (const double raw : raws) {
+        const alignment::Point2 p = al.GetPointAtStation(raw);
+        Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+                 SnapFloatCoordinate(p.y), Kind::Station, tolWorld, 0.0f);
+      }
+    }
   }
 
   if (wantEndpoint) {
@@ -2345,6 +2360,20 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     }
     break;
   }
+  case Kind::Station:
+    for (const alignment::Alignment& al : cmd.alignments) {
+      if (al.Empty())
+        continue;
+      if (!cmd.objectSnapStationDisplayedValid)
+        break;
+      const std::vector<double> raws = al.RawStationsForDisplayed(cmd.objectSnapStationDisplayed);
+      for (const double raw : raws) {
+        const alignment::Point2 p = al.GetPointAtStation(raw);
+        PushSnapPickerEntry(static_cast<float>(p.x), static_cast<float>(p.y), Kind::Station, sortWorldX, sortWorldY,
+                            out, 0.f);
+      }
+    }
+    break;
   case Kind::Nearest:
     for (const CadSpline& sp : cmd.cadSplines) {
       std::vector<spline::Vec3> points;

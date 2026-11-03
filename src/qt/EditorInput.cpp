@@ -423,6 +423,7 @@ void EditorWindow::ShowSnapOverride(const QPoint& position) {
   const std::pair<const char*, CadSnap::Kind> kinds[] = {
       {"Endpoint", CadSnap::Kind::Endpoint}, {"Midpoint", CadSnap::Kind::Midpoint},
       {"Center", CadSnap::Kind::Center}, {"Quadrant", CadSnap::Kind::Quadrant},
+      {"Station", CadSnap::Kind::Station},
       {"Perpendicular", CadSnap::Kind::Perpendicular}, {"Survey", CadSnap::Kind::SurveyCenter},
       {"Geometric center", CadSnap::Kind::GeometricCenter}, {"Intersection", CadSnap::Kind::Intersection},
       {"Apparent intersection", CadSnap::Kind::ApparentIntersection}, {"Surface", CadSnap::Kind::Surface},

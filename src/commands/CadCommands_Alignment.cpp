@@ -11,12 +11,14 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "StringUtil.hpp"
 #include "util/NumFormat.hpp"
 
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -522,6 +524,101 @@ std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double 
   if (best == nullptr) return {};
   return "STA " + alignment::FormatStation(best->DisplayedStation(bestSo.internalStation, true)) + "  OFF " +
          FormatLinear(bestSo.offset, st.displayLinearPrecision) + "  " + Brg(st, bestSo.azimuth);
+}
+
+bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displayed, float preferLocalX,
+                                      float preferLocalY, float* outLx, float* outLy) {
+  if (outLx == nullptr || outLy == nullptr)
+    return false;
+  const alignment::Alignment* bestAl = nullptr;
+  alignment::Point2 bestPt{};
+  double bestDist2 = std::numeric_limits<double>::infinity();
+  for (const alignment::Alignment& a : st.alignments) {
+    if (a.Empty())
+      continue;
+    const std::vector<double> raws = a.RawStationsForDisplayed(displayed);
+    for (const double raw : raws) {
+      const alignment::Point2 p = a.GetPointAtStation(raw);
+      float lx = 0.f;
+      float ly = 0.f;
+      double wx = 0.0;
+      double wy = 0.0;
+      CadCoord::WorldFromLocal(st, p.x, p.y, &wx, &wy);
+      CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+      const double dx = static_cast<double>(lx) - static_cast<double>(preferLocalX);
+      const double dy = static_cast<double>(ly) - static_cast<double>(preferLocalY);
+      const double d2 = dx * dx + dy * dy;
+      if (bestAl == nullptr || d2 < bestDist2) {
+        bestAl = &a;
+        bestPt = p;
+        bestDist2 = d2;
+      }
+    }
+  }
+  if (bestAl == nullptr)
+    return false;
+  double wx = 0.0;
+  double wy = 0.0;
+  CadCoord::WorldFromLocal(st, bestPt.x, bestPt.y, &wx, &wy);
+  CadCoord::LocalFromWorld(st, wx, wy, outLx, outLy);
+  return std::isfinite(*outLx) && std::isfinite(*outLy);
+}
+
+bool LooksLikeAlignmentStationSnapInput(const std::string& raw) {
+  const std::string trimmed = StringUtil::trimCopy(raw);
+  if (trimmed.size() < 7)
+    return false;
+  const std::string low = Lower(trimmed);
+  return low.rfind("station", 0) == 0;
+}
+
+bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::string& raw, float* lx, float* ly,
+                                              double* outWorldZ, bool /*allowRelative*/, float baseLocalX,
+                                              float baseLocalY) {
+  st.alignmentStationSnapRejectReason.clear();
+  if (!LooksLikeAlignmentStationSnapInput(raw))
+    return false;
+  if (lx == nullptr || ly == nullptr) {
+    st.alignmentStationSnapRejectReason = "STATION snap — internal error (null output).";
+    return false;
+  }
+  std::string trimmed = StringUtil::trimCopy(raw);
+  const std::string low = Lower(trimmed);
+  if (low.size() < 7) {
+    st.alignmentStationSnapRejectReason = "STATION snap — usage: STATION 12+45.32 (displayed station on an alignment).";
+    return false;
+  }
+  size_t i = 7;
+  while (i < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[i])) != 0)
+    ++i;
+  if (i < trimmed.size() && (trimmed[i] == ',' || trimmed[i] == '='))
+    ++i;
+  while (i < trimmed.size() && std::isspace(static_cast<unsigned char>(trimmed[i])) != 0)
+    ++i;
+  const std::string staText = StringUtil::trimCopy(trimmed.substr(i));
+  if (staText.empty()) {
+    st.alignmentStationSnapRejectReason = "STATION snap — missing station value (try 12+45.32).";
+    return false;
+  }
+  double displayed = 0.0;
+  if (!alignment::ParseStation(staText, &displayed)) {
+    st.alignmentStationSnapRejectReason = "STATION snap — \"" + staText + "\" is not a station.";
+    return false;
+  }
+  if (!ResolveAlignmentStationSnapPoint(st, displayed, baseLocalX, baseLocalY, lx, ly)) {
+    st.alignmentStationSnapRejectReason =
+        "STATION snap — station " + alignment::FormatStation(displayed) + " is not on any alignment.";
+    return false;
+  }
+  st.objectSnapStationDisplayedValid = true;
+  st.objectSnapStationDisplayed = displayed;
+  if (outWorldZ != nullptr)
+    *outWorldZ = static_cast<double>(CadWorkPlaneElevation(st));
+  st.resolvedPointZValid = true;
+  st.resolvedPointZ = static_cast<float>(CadWorkPlaneElevation(st));
+  st.resolvedPointZTyped = false;
+  st.viewportSnapPickValid = false;
+  return true;
 }
 
 // ======================================================================================================

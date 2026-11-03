@@ -2611,6 +2611,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapMidpoint"] = st.objectSnapMidpoint;
   settings["objectSnapCenter"] = st.objectSnapCenter;
   settings["objectSnapQuadrant"] = st.objectSnapQuadrant;
+  settings["objectSnapStation"] = st.objectSnapStation;
   settings["objectSnapPerpendicular"] = st.objectSnapPerpendicular;
   settings["objectSnapSurveyPoint"] = st.objectSnapSurveyPoint;
   settings["objectSnapGeometricCenter"] = st.objectSnapGeometricCenter;
@@ -2805,6 +2806,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapMidpoint", &st.objectSnapMidpoint);
   b(s, "objectSnapCenter", &st.objectSnapCenter);
   b(s, "objectSnapQuadrant", &st.objectSnapQuadrant);
+  b(s, "objectSnapStation", &st.objectSnapStation);
   b(s, "objectSnapPerpendicular", &st.objectSnapPerpendicular);
   b(s, "objectSnapSurveyPoint", &st.objectSnapSurveyPoint);
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);

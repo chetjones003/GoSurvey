@@ -267,6 +267,33 @@ TEST_CASE("Alignment geometry points snap: PC, PT, PI, centre and nearest", "[re
   CHECK(centre.y == Approx(100.0f).margin(1e-3));
 }
 
+TEST_CASE("STATION snap resolves to GetPointAtStation", "[req490][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT STA", log);
+  Submit(st, "ALIGNMENTADD STA, TANGENT, 0, 0, 0, 100", log);
+  REQUIRE(st.alignments.size() == 1);
+  const alignment::Alignment& al = st.alignments[0];
+  const alignment::Point2 expected = al.GetPointAtStation(50.0);
+  float lx = 0.f;
+  float ly = 0.f;
+  REQUIRE(TryParseAlignmentStationSnapStoragePoint(st, "STATION 0+50", &lx, &ly, nullptr, false, 0.f, 0.f));
+  CHECK(lx == Approx(static_cast<float>(expected.x)).margin(1e-4f));
+  CHECK(ly == Approx(static_cast<float>(expected.y)).margin(1e-4f));
+  CHECK(st.objectSnapStationDisplayedValid);
+  CHECK(st.objectSnapStationDisplayed == Approx(50.0).margin(1e-9));
+
+  st.objectSnapEnabled = true;
+  st.objectSnapStation = true;
+  const CadSnap::Kind onlyStation = CadSnap::Kind::Station;
+  const auto hit = CadSnap::FindBest(static_cast<float>(expected.x), static_cast<float>(expected.y + 0.5f), st, true,
+                                     2.0f, {}, nullptr, &onlyStation);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == CadSnap::Kind::Station);
+  CHECK(hit.x == Approx(static_cast<float>(expected.x)).margin(1e-3f));
+  CHECK(hit.y == Approx(static_cast<float>(expected.y)).margin(1e-3f));
+}
+
 TEST_CASE("Alignment quadrant snap on cardinal tangents only, not on curves", "[req490][alignment]") {
   using Kind = CadSnap::Kind;
   AppCommandState st = Drawing();

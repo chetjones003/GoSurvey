@@ -2543,6 +2543,13 @@ struct AppCommandState {
   /// not one of the default running object snaps); reachable immediately via the Shift+right-click
   /// "snap once" override.
   bool objectSnapQuadrant = false;
+  /// Snap to a typed displayed station on an alignment (REQ-490). Default OFF; `STATION 12+45.32`
+  /// at a point prompt also resolves directly. While enabled, uses \ref objectSnapStationDisplayed when valid.
+  bool objectSnapStation = false;
+  bool objectSnapStationDisplayedValid = false;
+  double objectSnapStationDisplayed = 0.0;
+  /// Set when a `STATION …` point entry fails; cleared after the active command logs it (REQ-490).
+  std::string alignmentStationSnapRejectReason;
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;
@@ -8068,6 +8075,16 @@ void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<
 /// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an
 /// empty string when no alignment lies within \p maxOffset (drawing units). Read-only; used by the status bar.
 [[nodiscard]] std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset);
+/// REQ-490 station snap: resolve \p displayed on the alignment whose station point is nearest
+/// (\p preferLocalX, \p preferLocalY) in storage coordinates.
+[[nodiscard]] bool ResolveAlignmentStationSnapPoint(const AppCommandState& st, double displayed, float preferLocalX,
+                                                    float preferLocalY, float* outLx, float* outLy);
+/// True when \p raw is `STATION …` point entry (case-insensitive prefix).
+[[nodiscard]] bool LooksLikeAlignmentStationSnapInput(const std::string& raw);
+/// Parses `STATION 12+45.32` into storage coordinates. Returns false if \p raw is not a station line.
+[[nodiscard]] bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::string& raw, float* lx,
+                                                            float* ly, double* outWorldZ, bool allowRelative,
+                                                            float baseLocalX, float baseLocalY);
 
 // --- Traverse Editor scale factor (REQ-401, GitHub issue #828; CadCommands_Geo.cpp) ---------------
 /// Resolves the ground→grid multiplier the Traverse Editor applies when its "Apply scale factor"

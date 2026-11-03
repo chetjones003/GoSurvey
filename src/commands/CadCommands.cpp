@@ -23782,6 +23782,10 @@ bool ParseStoragePointZ(AppCommandState& st, const std::string& raw, float* lx, 
     st.resolvedPointZValid = false;
     st.resolvedPointZTyped = false;
   }
+  if (TryParseAlignmentStationSnapStoragePoint(st, raw, lx, ly, outWorldZ, allowRelative, baseLocalX, baseLocalY))
+    return true;
+  if (!st.alignmentStationSnapRejectReason.empty())
+    return false;
   std::string xy;
   double typedZ = 0.0;
   bool hasZ = false;
@@ -48226,6 +48230,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
     if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY, &st.anchorZ)) {
       SubmitLineVertex(st, px, py, log);
+      return;
+    }
+    if (!st.alignmentStationSnapRejectReason.empty()) {
+      log.push_back(st.alignmentStationSnapRejectReason);
+      st.alignmentStationSnapRejectReason.clear();
       return;
     }
 

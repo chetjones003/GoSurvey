@@ -24,7 +24,7 @@
   insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT layout table (Qt), grips (start, tangent end, curve
   radius), MOVE/COPY/ROTATE/SCALE/MIRROR/ERASE, REVERSEALIGNMENT, ALIGNMENTSTATION, OFFSETALIGNMENT/ALIGNMENTDETACH
   with linked refresh, ALIGNMENTINTERSECT.
-- Out (later phases, REQ-490 remaining: Station snap; 491..502): styles/labels/tables/reports, surface and
+- Out (later phases, REQ-491..502): styles/labels/tables/reports, surface and
   feature-line integration, COGO commands, design criteria, interactive on-screen layout toolbar.
 - Phase 3 (in progress on `feat/implement-issue-121`): REQ-481 clothoid spirals (`Clothoid.cpp`,
   `AppendSpiral`, station/offset queries, persistence `k:S`), REQ-482 C2 continuity + requirement level,
@@ -35,6 +35,7 @@
   Verification: `[alignment]` 70/70; full suite 194/194 (`build/artifacts/ctest-phase3.log`).
   REQ-490 follow-up: spiral junction geometry points (`77050294`); alignment Quadrant on cardinal
   tangents/spirals, not curves (PR #1152, `b1664acf`).
+  REQ-490 Station snap: typed `STATION 12+45.32` at point prompts + OSNAP Station with latched value.
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
