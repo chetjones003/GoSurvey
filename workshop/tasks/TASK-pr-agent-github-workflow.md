@@ -43,6 +43,7 @@
 
 - 2026-11-03 — Added workflow for automatic same-repository PR reviews and manual `/review` comments on PRs. Fork PRs are excluded from automatic runs; no fork code is checked out.
 - 2026-11-03 — Restricted manual comment triggers to the repository owner and `/review` commands. `git diff --check` passes; Python YAML parser accepts the workflow (its YAML 1.1 mode treats the GitHub `on` key as a boolean, so the event keys were also visually checked). `actionlint` is not installed in this environment.
+- 2026-11-03 — PR-Agent review found that its own `pr_actions` allowlist omits `synchronize` by default. Explicitly added the event to the allowlist to make update-triggered reviews work; pushed as a follow-up commit for a fresh review.
 
 ## 7. Verification result
 
