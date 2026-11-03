@@ -10,7 +10,14 @@ if(POLICY CMP0141)
   endif()
 endif()
 
-project(GoSurvey VERSION 0.7.8 LANGUAGES CXX C RC)
+# Stable releases use the checked-in version below. CI supplies a separately resolved plain
+# patch version for beta builds so beta numbering does not require a version-only source commit.
+set(GOSURVEY_STABLE_VERSION "0.7.8")
+set(_gosurvey_project_version "${GOSURVEY_STABLE_VERSION}")
+if(DEFINED GOSURVEY_BETA_VERSION AND NOT GOSURVEY_BETA_VERSION STREQUAL "")
+  set(_gosurvey_project_version "${GOSURVEY_BETA_VERSION}")
+endif()
+project(GoSurvey VERSION "${_gosurvey_project_version}" LANGUAGES CXX C RC)
 
 if(MSVC)
   # third_party/xerces-c/lib/win-x64/xerces-c_3.lib is vendored prebuilt against the Release DLL CRT
@@ -77,19 +84,20 @@ if(MSVC)
 endif()
 
 # ---------------------------------------------------------------------------
-# Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
+# Version (ADR-029 (a), amended by ADR-074) — `project(VERSION)` above holds the stable source;
+# CI may override its input for a rolling beta build.
 #
-# It names the release being worked toward, so it is bumped just after a stable
-# release ships. CI passes GOSURVEY_VERSION_SUFFIX ("-beta.7") and
-# GOSURVEY_VERSION_BUILD (7) for a prerelease; a stable build and a developer
-# build leave both at their defaults.
+# The stable value above names the release being worked toward, so it is bumped
+# just after a stable release ships. CI passes GOSURVEY_BETA_VERSION for a beta
+# release and GOSURVEY_VERSION_BUILD for Windows file metadata; stable and local
+# builds leave those values at their defaults.
 #
 # Both generated files land in the build tree, never the source tree (REQ-200).
 # ---------------------------------------------------------------------------
 set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
-    "Prerelease suffix appended to the version, e.g. -beta.7 (empty for a stable build)")
+    "Prerelease suffix appended to the version (empty for stable and rolling beta builds)")
 set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
-    "Fourth field of the Windows VERSIONINFO quad; the beta number, or 0 for a stable build")
+    "Fourth field of the Windows VERSIONINFO quad (default: 0)")
 
 set(GOSURVEY_GIT_COMMIT "" CACHE STRING
     "Short git commit recorded in crash reports (empty: read from git at configure time)")
@@ -466,6 +474,38 @@ endif()
 #   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
 # PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
 # ---------------------------------------------------------------------------
+# --- OpenXLSX (vendored, third_party/OpenXLSX, approved D-2026-10-30-a): .xlsx read/write for
+# Extract Data and Link Data (REQ-467 / REQ-468). Compiled into gosurvey_domain with the pugixml
+# copy above; zip support comes from the vendored miniz.
+set(GOSURVEY_OPENXLSX_SOURCES
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCell.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellIterator.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellRange.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellReference.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLCellValue.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLColor.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLColumn.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLComments.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLContentTypes.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDateTime.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDocument.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLDrawing.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLFormula.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLMergeCells.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLProperties.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRelationships.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRow.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLRowData.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLSharedStrings.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLSheet.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLStyles.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLTables.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLWorkbook.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlData.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlFile.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLXmlParser.cpp
+  ${GOSURVEY_TP}/OpenXLSX/sources/XLZipArchive.cpp
+)
 set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
@@ -485,6 +525,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/ProjectFiles.cpp
   src/commands/ConvertDrawing.cpp
   src/commands/CadCommands_Mleader.cpp
+  src/commands/CadCommands_DrawInquiry.cpp
   src/commands/CadCommands_Ucs.cpp
   src/commands/CadDynInput.cpp
   src/commands/CadCommands_Bench.cpp
@@ -493,6 +534,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/commands/EntityId.cpp
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
+  src/commands/ViewportZoomScale.cpp
   src/commands/CadColor.cpp
   # Issue #891: property-panel edit services shared by the Qt Properties panels
   src/commands/CadPropertyEdit.cpp
@@ -501,6 +543,7 @@ set(GOSURVEY_DOMAIN_SOURCES
 
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
+  src/pdf/PdfSnap.cpp
 
   # Preview geometry (pure geometry; no GL, same as CadSnap.cpp above — it builds vertex lists, it
   # does not draw them). Moved into the shared list by TASK-101 so the headless driver can assert
@@ -531,6 +574,9 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/traverse/Rw5Import.cpp
   src/traverse/JobXmlImport.cpp
   ${GOSURVEY_TP}/pugixml/src/pugixml.cpp
+  ${GOSURVEY_OPENXLSX_SOURCES}
+  # REQ-467 / REQ-468 (#804): spreadsheet read/write over OpenXLSX and hand-written CSV.
+  src/io/SpreadsheetIo.cpp
 
   # I/O
   src/io/GsIo.cpp
@@ -547,6 +593,8 @@ set(GOSURVEY_DOMAIN_SOURCES
   # REQ-363 / ADR-064 (c): online map tile fetch + disk cache (fetch injected; no WinHTTP here)
   src/platform/MapTileService.cpp
   src/platform/StbImage.cpp
+  # REQ-457 / issue #1010: probe and place sheet raster images (JPEG/PNG/BMP)
+  src/io/RasterImage.cpp
   # REQ-363: the online map controller (GL-free; the app injects texture upload)
   src/commands/CadOnlineMap.cpp
   # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
@@ -578,6 +626,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/io/DwgProbe.cpp
   src/io/LibreDwg.cpp
   src/io/LibreDwgCad.cpp
+  src/io/LibreDwgCivil.cpp
   src/io/LibreDwgField.cpp
   src/io/LibreDwgDynamicBlock.cpp
   src/io/LibreDwgMaterial.cpp
@@ -699,6 +748,10 @@ target_include_directories(gosurvey_domain PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
   ${PUGIXML_INCLUDE}
+  ${GOSURVEY_TP}/OpenXLSX
+  ${GOSURVEY_TP}/OpenXLSX/headers
+  ${GOSURVEY_TP}/OpenXLSX/generated
+  ${GOSURVEY_TP}/OpenXLSX/shims
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(gosurvey_domain PUBLIC LibreDWG::libredwg E57Format::E57Format CsMap::csmap miniz Laszip::laszip)
@@ -714,6 +767,13 @@ set_source_files_properties(
   "${GOSURVEY_TP}/pugixml/src/pugixml.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/StbImage.cpp"
   PROPERTIES COMPILE_OPTIONS "/analyze-")
+# OpenXLSX is unmodified upstream code (third_party/OpenXLSX/VENDORED.md), so its compiler
+# warnings are silenced here rather than edited; /W0 keeps /WX in msvc-analyze from failing on them.
+if(MSVC)
+  set_source_files_properties(
+    ${GOSURVEY_OPENXLSX_SOURCES}
+    PROPERTIES COMPILE_OPTIONS "/analyze-;/W0")
+endif()
 
 # ADR-063 (c): CoordinateSystems.cpp is the only source that sees CS-MAP headers. Keep its
 # platform macros and C header out of the shared precompiled header.
@@ -987,6 +1047,8 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PaperLeaderTests.cpp
     tests/PaperTableTests.cpp
     tests/DimViewportTests.cpp
+    tests/SpreadsheetIoTests.cpp
+    tests/TableStyleTests.cpp
     tests/ViewportCameraTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
@@ -1019,6 +1081,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
+    # REQ-446 PDF plot lineweights and linetypes: pure width/dash-unit helpers and the dash runs the plot lays.
+    tests/PlotStrokeTests.cpp
+    # REQ-445 PDF plot Page Setup options: pure sheet placement rules and the measured PDF output.
+    tests/PlotSheetTests.cpp
     tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
@@ -1346,7 +1412,9 @@ if(GOSURVEY_BUILD_TESTS)
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
     ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
+  # NOMINMAX matches the app, so std::min/std::max in the PDF plot compile here as they do in the frontend.
   target_compile_definitions(GoSurveyTests PRIVATE
+    NOMINMAX
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
   )
   # REQ-387: the PDF viewer's pure core and its PDFium wrapper (opened against generated PDFs).
@@ -1371,12 +1439,14 @@ if(GOSURVEY_BUILD_TESTS)
     src/font/ShxFont.cpp
     src/pdf/PdfRaw.cpp
     src/pdf/PdfMeasure.cpp
-    src/pdf/PdfSnap.cpp
     src/pdf/PdfScaleCheck.cpp
     src/pdf/PdfDimAudit.cpp
     src/pdf/PdfCoordExtract.cpp
     src/pdf/PdfAlign.cpp
-    src/pdf/PdfDiff.cpp)
+    src/pdf/PdfDiff.cpp
+    # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
+    tests/PlotSheetPdfTests.cpp
+    src/io/PdfPlot.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD
@@ -1476,6 +1546,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/RibbonWiringGapTests.cpp
     # REQ-356 / D-2026-09-29-a — CHPROP, MATCHPROP, LAYMCUR, the current colour (issue #575).
     tests/PropertyCommandTests.cpp
+    # TASK-0.7.8 — modify selection accumulate, annotation MOVE preview, REQ-121 prompt.
+    tests/Task078InteractionTests.cpp
+    tests/ViewportZoomScaleTests.cpp
     # REQ-370 / D-2026-10-05-a — box-selection live preview.
     tests/BoxSelectionPreviewTests.cpp
     # REQ-357 / D-2026-09-29-b,c — the Drawing Settings window (issue #582 increment 1).
@@ -1503,6 +1576,7 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-105 (issue #382) — DIST. Needs gosurvey_domain for ProcessCommandLineSubmit /
     # StartDistCommand, like TrimLinePreviewTests above.
     tests/DistCommandTests.cpp
+    tests/Issue1019CommandTests.cpp
     # Issue #785 — regression test that every row in the command registry still has code behind
     # it. Needs gosurvey_domain for ProcessCommandLineSubmit / RegisteredCommandPrimariesForTest.
     tests/CommandRegistryHandlerTests.cpp

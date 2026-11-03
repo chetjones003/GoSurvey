@@ -310,6 +310,8 @@ bool ClipboardWorldExtents(const CadClipboard& cb, double* minX, double* maxX, d
   for (const CadFilledRegion& r : cb.filledRegions)
     for (size_t i = 0; i + 2 < r.vertsXyz.size(); i += 3)
       add(r.vertsXyz[i], r.vertsXyz[i + 1]);
+  for (const SurveyPoint& point : cb.surveyPoints)
+    add(point.easting, point.northing);
   if (x0 > x1) {  // nothing to measure
     *minX = *maxX = cb.srcOriginX;
     *minY = *maxY = cb.srcOriginY;
@@ -338,6 +340,10 @@ void ApplyClipboardConversion(CadClipboard& cb, const geo::Similarity& t, double
   MoveAnnotations(cb.annotations, f, t.rotationRad);
   MoveTables(cb.tables, f, t.rotationRad);
   MoveBlockRefs(cb.blockRefs, f, t.rotationRad);
+  for (SurveyPoint& point : cb.surveyPoints) {
+    f.Pt(&point.easting, &point.northing);
+    f.Z(&point.elevation);
+  }
   f.Pt(&cb.basePtX, &cb.basePtY);
   cb.srcOriginX = destOriginX;
   cb.srcOriginY = destOriginY;

@@ -956,6 +956,10 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
 Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, float tolWorld,
              SnapExclude exclude, const ray3d::Ray* pickRay, const Kind* onlyKind) {
   SnapPickAccum acc{};
+  const auto isolatedOut = [&](const std::vector<EntityAttributes>& attrs, size_t index) {
+    return !cmd.hiddenEntityIds.empty() && index < attrs.size() &&
+           CadEntityIdHidden(&cmd.hiddenEntityIds, attrs[index].id);
+  };
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
   acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
   if (cmd.activeSpaceIndex < 0)
@@ -1009,6 +1013,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
           exclude.index == static_cast<int>(i / 6)) continue;
       const float x0 = L[i];
@@ -1052,6 +1057,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& C = cmd.userCirclesCxCyZR;
   if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
+      if (isolatedOut(cmd.userCircleAttrs, i / 4)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
@@ -1082,6 +1088,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const int polyCount =
       static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
+    if (isolatedOut(cmd.userPolylineAttrs, static_cast<size_t>(pi))) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Polyline && exclude.index == pi) continue;
     const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
@@ -1198,6 +1205,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   constexpr int kArcSnapSeg = 24;
   for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
+    if (isolatedOut(cmd.userArcAttrs, arcIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
     const CadArc& a = cmd.userArcs[arcIdx];
@@ -1258,6 +1266,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   constexpr int kEllSnapSeg = 36;
   constexpr float kTwoPi = 6.28318530718f;
   for (size_t ellIdx = 0; ellIdx < cmd.userEllipses.size(); ++ellIdx) {
+    if (isolatedOut(cmd.userEllAttrs, ellIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
         exclude.index == static_cast<int>(ellIdx)) continue;
     const CadEllipse& el = cmd.userEllipses[ellIdx];
@@ -1332,6 +1341,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // REQ-443: a spline's editable fit/CV points and its true curve ends participate in Endpoint;
   // perpendicular candidates are projected onto its adaptive tessellation chords.
   for (size_t splineIdx = 0; splineIdx < cmd.cadSplines.size(); ++splineIdx) {
+    if (isolatedOut(cmd.cadSplineAttrs, splineIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Spline &&
         exclude.index == static_cast<int>(splineIdx)) continue;
     const CadSpline& sp = cmd.cadSplines[splineIdx];
@@ -1371,6 +1381,17 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     }
   }
 
+  if (wantEndpoint) {
+    for (size_t pi = 0; pi < cmd.cadPoints.size(); ++pi) {
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Point &&
+          exclude.index == static_cast<int>(pi))
+        continue;
+      const CadPoint& p = cmd.cadPoints[pi];
+      Consider(&acc, SnapFloatCoordinate(wx), SnapFloatCoordinate(wy), SnapFloatCoordinate(p.x),
+               SnapFloatCoordinate(p.y), Kind::Endpoint, tolWorld, SnapFloatCoordinate(p.z));
+    }
+  }
+
   // Intersection / apparent intersection (REQ-062). Gathered once and shared: both walk the same
   // near-cursor object list, and the cull is the only thing that keeps a pairwise snap affordable.
   if (wantIntersection || wantApparentIntersection) {
@@ -1399,6 +1420,12 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
     const float arm =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
+      const float ex = static_cast<float>(sp.easting);
+      const float ey = static_cast<float>(sp.northing);
+      const float ez = static_cast<float>(sp.elevation);
+      // Exact centre: needed when the cursor sits on the point node (ALIGN / IMPORT workflows)
+      // even if it is not over the plotted X arms.
+      Consider(&acc, wx, wy, ex, ey, Kind::SurveyCenter, tolWorld, ez);
       // The X marker's half-span is a fixed plotted size, so at a zoomed-out view it is many
       // apertures wide — the same "cursor is over the SHAPE" heuristic circles get, and the same
       // orbited-view breakage (issue #372): evaluate it where the ray meets the point's own plane.
@@ -1406,11 +1433,11 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       float hy = 0.f;
       // Snap-candidate pipeline stays float (established render/pick boundary, Phase D) — narrow the
       // double survey-point coordinate here, same as every other entity kind in this loop.
-      const bool heur = CenterHeuristicPoint(acc, wx, wy, static_cast<float>(sp.elevation), &hx, &hy);
+      const bool heur = CenterHeuristicPoint(acc, wx, wy, ez, &hx, &hy);
       const float p2 =
-          MinDistSqToSurveyMarker(hx, hy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), arm);
-      ConsiderSnap(&acc, wx, wy, static_cast<float>(sp.easting), static_cast<float>(sp.northing), Kind::SurveyCenter,
-                   p2, tolWorld, static_cast<float>(sp.elevation),
+          MinDistSqToSurveyMarker(hx, hy, ex, ey, arm);
+      ConsiderSnap(&acc, wx, wy, ex, ey, Kind::SurveyCenter,
+                   p2, tolWorld, ez,
                    /*heuristicAccept=*/heur);  // elevation IS the point's Z (REQ-057)
     }
   }
@@ -1771,6 +1798,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // --- PDF underlay snap points ---
   if (cmd.objectSnapEnabled) {
     for (const PdfAttachment& att : cmd.pdfAttachments) {
+      if (!att.snapEnabled)
+        continue;
       const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
       const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
       const float sc   = att.scale;
@@ -1790,7 +1819,26 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
       const float pdfCurY   = (-dxW * sinR + dyW * cosR) / sc;
       const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
 
-      // ---- Endpoint snap via spatial grid (O(cells-near-cursor)) ----------
+      // ---- Calm snap (REQ-391): same SnapPoints + SnapIndex path as the PDF viewer ----
+      const bool useCalmSnap = att.snapCalmIndex.Size() > 0 && pdfTol > 0.f;
+      const float calmMerge  = 0.6f * pdfTol;
+      if (useCalmSnap && (wantEndpoint || wantCenter)) {
+        const bool linesOk   = att.snapLines && wantEndpoint;
+        const bool circlesOk = att.snapCircles && wantCenter;
+        if (linesOk || circlesOk) {
+          pdfview::SnapIndex::Pt hit{};
+          float weight = 0.f;
+          if (att.snapCalmIndex.Nearest(pdfCurX, pdfCurY, pdfTol, hit, calmMerge, &weight, linesOk, circlesOk)) {
+            float lx = 0.f, ly = 0.f;
+            pdfToLocal(hit.first, hit.second, &lx, &ly);
+            if (weight >= 3.5f && circlesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Center, tolWorld);
+            else if (linesOk)
+              Consider(&acc, wx, wy, lx, ly, Kind::Endpoint, tolWorld);
+          }
+        }
+      } else {
+      // ---- Endpoint snap via spatial grid (legacy attachments without calm index) ----
       if (att.snapLines && wantEndpoint) {
         // Visibility-mask check: returns true if pdfX,pdfY is inside or
         // adjacent to a cell marked as having visible foreground content.
@@ -1803,13 +1851,27 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           if (!hasMask || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
             return true;
           // Map PDF coords (y-up, origin BL) to mask coords (row 0 = top of page).
-          // The endpoint coordinate and the line pixels that pass through it map to
-          // the same cell by construction, so an exact single-cell check is correct.
-          // A 3x3 neighbourhood is too permissive on dense drawings (13 pt cells → every
-          // "empty" area on a busy engineering plan is within one cell of some drawn line).
           const int cx = std::clamp(static_cast<int>(pdfX / att.pageWidthPts  * MW), 0, MW - 1);
           const int cy = std::clamp(static_cast<int>((1.f - pdfY / att.pageHeightPts) * MH), 0, MH - 1);
-          return att.snapVisMask[static_cast<size_t>(cy) * MW + cx] != 0;
+          auto cellForeground = [&](int mx, int my) -> bool {
+            if (mx < 0 || mx >= MW || my < 0 || my >= MH)
+              return false;
+            return att.snapVisMask[static_cast<size_t>(my) * MW + static_cast<size_t>(mx)] != 0;
+          };
+          if (cellForeground(cx, cy))
+            return true;
+          // Vector endpoints and the 256² raster mask can disagree by a few cells when strokes are
+          // thin, anti-aliased, or the point sits inside a ring (circle centre). Search a small
+          // neighbourhood before rejecting a path-derived endpoint.
+          for (int dy = -2; dy <= 2; ++dy) {
+            for (int dx = -2; dx <= 2; ++dx) {
+              if (dx == 0 && dy == 0)
+                continue;
+              if (cellForeground(cx + dx, cy + dy))
+                return true;
+            }
+          }
+          return false;
         };
 
         const auto& grid = att.snapEndptGrid;
@@ -1897,6 +1959,8 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
           const float lr = SC[i + 2] * sc;
+          // Small plan symbols: snap when the cursor is near the centre point itself.
+          Consider(&acc, wx, wy, lcx, lcy, Kind::Center, tolWorld, 0.f);
           float hx = 0.f;
           float hy = 0.f;
           // planeZ 0: a PDF underlay's snap geometry sits on the drawing datum, the same assumption
@@ -1906,6 +1970,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
           ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld, 0.f, /*heuristicAccept=*/heur);
         }
       }
+      } // !useCalmSnap
 
       // ---- Text insertion-point snap --------------------------------------
       // NOTE: Text positions are intentionally NOT emitted here.
@@ -2371,6 +2436,14 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
 
   // CAD entity grips
   for (const SelectedEntity& sel : cmd.selection) {
+    // The moving entity must not snap its own live grip back to the preceding mouse frame; that
+    // turns a drag into a sticky cursor. Other selected entities' grips remain valid targets.
+    if ((cmd.entityGripMoveActive && sel.type == cmd.entityGripType &&
+         sel.index == cmd.entityGripEntityIndex) ||
+        ((cmd.dimGripMoveActive || cmd.mtextGripMoveActive) &&
+         sel.type == SelectedEntity::Type::Annotation &&
+         sel.index == (cmd.dimGripMoveActive ? cmd.dimGripAnnotationIndex : cmd.mtextGripAnnotationIndex)))
+      continue;
     if (sel.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(sel.index) * 6;
       if (k + 5 < cmd.userLinesFlat.size()) {

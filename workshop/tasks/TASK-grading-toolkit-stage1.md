@@ -2,7 +2,7 @@
 
 - Type: feature
 - Status: implement (pre-implementation Verification APPROVE below)
-- Authority: accepted REQ-456–458, D-2026-11-02-a, ADR-074 and spec/grading-toolkit.md.
+- Authority: accepted REQ-456–458, D-2026-11-02-a, ADR-075 and spec/grading-toolkit.md.
 - User decision: Full toolkit in stages, keeping explicit rebuilding. This task is the first
   increment; REQ-459/460/461 remain sequenced follow-ups and #813 is separately scoped.
 - Goal: create/edit practical pad, shoulder and elevation gradings through a native palette.
@@ -35,7 +35,7 @@
 ## Pre-implementation verification
 
 - Architecture: existing feature-line definitions, surface metadata, Commands/IO/Qt ownership
-  retained; representation explicitly defined by ADR-074. No new dependency, store, global,
+  retained; representation explicitly defined by ADR-075. No new dependency, store, global,
   entity kind, ownership layer, volume engine or automatic dependency graph.
 - Risks: wrong slope sign; inadvertently requiring terrain for algebraic targets; silently filling
   pad interiors; self-crossing/overlapping infill; partial load/delete mutations; stale palette

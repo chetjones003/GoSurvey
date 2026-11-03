@@ -9,7 +9,7 @@
 # had no equivalent branch for its neighbour Surface in the same enum. OVERKILL reported skipping
 # nothing of any kind: grep -cE "ignored|excluded|skipped" over its whole body returned 0.
 
-# This transcript was migrated from the retired standalone `.gs` format to `.dwg` by issue #264;
+# This transcript was migrated from the retired standalone JSON drawing format to `.dwg` by issue #264;
 # its old-format history explains why the fixture now uses the DWG payload path. Every surface transcript in the
 # suite now opens the same `.dwg` fixture.
 OPEN samples/surface-demo.dwg

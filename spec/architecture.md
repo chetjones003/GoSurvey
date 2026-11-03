@@ -424,7 +424,7 @@ A change is rejected if it breaks any of these:
 - Consequences: the document model grows by two small owned vectors + an enum; the
   Renderer learns one new pass reusing existing batches; `.gs` gains a layouts
   section (REQ-031); DXF layout/VPORT export is explicitly deferred. Built
-  incrementally (decision log) so each slice passes Verification.
+  incrementally (decision log) so each slice passes Verification. Addendum (2026-10-28, issue #1018): the `.gs` and deferred-DXF wording in this decision is historical; layouts persist in DWG and DXF under REQ-031 and REQ-113 (D-2026-10-20-a, D-2026-09-03-h).
 
 ### ADR-007 — Plot output as vector PDF via the bundled PDFium edit API   (2026-06-15, accepted)
 - Context:    REQ-029/030 require plotting a layout (and batches) to a printable
@@ -594,7 +594,7 @@ A change is rejected if it breaks any of these:
   pass) via a **screen-space scanline even-odd fill** over all loops — matching the model GL stencil pass's
   even-odd rule, so concave shapes and island holes (e.g. the logo's counters) are correct. Colour resolves
   like the model (`ResolveEntityRgbaForViewport` with the layer row). DXF persistence of paper fills stays
-  deferred (.gs only).
+  deferred (.gs only). Addendum (2026-10-28, issue #1018): superseded — paper fills persist in DWG and DXF under REQ-113 (D-2026-10-20-a).
 
 ### ADR-020 — Document-owned text-style table + bake-on-write resolution with per-property overrides   (2026-06-21, accepted)
 - Context:    REQ-044 adds AutoCAD-style named text styles (font, height, oblique, bold/italic) with a
@@ -927,6 +927,24 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   for everything else: Plant's parametric engine data is not interpreted, and a part with neither a
   stored solid nor a straight-pipe centreline (a structural member) is refused by name.
 
+### ADR-074 — Decode supported Civil 3D data into GoSurvey objects in-process   (2026-10-31, amended)
+- Context: GoSurvey must open Civil 3D drawings without a CAD runtime and convert supported point, surface,
+  alignment, label, and style data into editable GoSurvey objects (D-2026-10-31-a/b). The earlier bridge used
+  Civil 3D's API and could not meet the standalone requirement. The user clarified that native Civil 3D object
+  authoring and identity preservation are not required; valid AutoCAD DWG output is.
+- Decision: GoSurvey decodes supported Civil 3D records in its existing LibreDWG IO path and maps their
+  semantics into GoSurvey domain objects. It exports ordinary AutoCAD entities and supported AutoCAD style
+  records that open without Recover; it does not author Civil 3D custom objects. No CAD runtime, Object Enabler,
+  external bridge, or ODA Civil extension is shipped or required. REA may be used for investigation only.
+- Alternatives: a runtime bridge (fails standalone use); ODA Civil SDK (excluded by the in-house parser
+  requirement); treating proxy graphics as semantic surface/point data (proxies are display fallback only).
+- Consequences: DWG IO owns binary decoding and ordinary-entity export; Domain owns mapped GoSurvey values.
+  Each supported class needs fixture assertions for semantic fields and DWG export/re-import. Unsupported
+  classes and unmapped fields are named in the log; they are not claimed as preserved semantic data. Plant 3D
+  custom objects remain excluded by ADR-026.
+- Amendment to ADR-026: Civil 3D semantic decoding/mapping is allowed under REQ-478/479 and this ADR; native
+  Civil 3D custom-object creation is not required. Plant 3D custom-object boundaries remain unchanged.
+
 ### ADR-027 — Stable entity identity   (2026-08-12, accepted)
 - Context:  Raised as a **blocking Verification finding against REQ-069**, before any code was
   written. A dynamic surface must reference the polylines used as its breaklines and boundaries.
@@ -1067,11 +1085,12 @@ See `spec/file-format-specs.md` and D-2026-08-29-g.
   every release. REQ-077, REQ-078 and REQ-202 are the response. The binding constraint is REQ-300:
   the project has **no networking code and no HTTP dependency anywhere**, and an updater needs one.
 - Decision:
-  (a) **The CMake `project(VERSION)` is the single source of the version.** A generated
+  (a) **The CMake `project(VERSION)` is the stable source of the version.** A generated
   `Version.hpp` (`configure_file`) gives the application its version; CI reads the same value to
-  drive the installer's `AppVersion`, the git tag, and the manifest. Nothing else stores a version
-  number. The value names the release being *worked toward*, so it is bumped after a stable release,
-  not before one, and every beta in the cycle is `<version>-beta.<n>`.
+  drive the stable installer's `AppVersion`, git tag, and manifest. The stable value names the release
+  being worked toward and is bumped after a stable release, not before one. **Amended by ADR-074:**
+  beta builds derive a plain patch version from the latest stable and rolling beta versions, then pass
+  that value to CMake for application and installer metadata; stable source version remains unchanged.
   (b) **The executable is renamed to a stable `GoSurvey.exe`**, with `[InstallDelete]` sweeping
   `GoSurvey-0.*.exe` out of existing installs. A version-stamped filename breaks shortcuts, the `.gs`
   association's `shell\open\command` path, and any form of self-replacement — it is incompatible with
@@ -5155,7 +5174,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   and fail if required files are absent. GoSurvey becomes responsible for refreshing and validating
   those DLLs as part of each release. The Store submission continues to carry the shared redist.
 
-### ADR-074 — Extend existing grading metadata and shared commands for the staged toolkit (2026-11-02)
+### ADR-075 — Extend existing grading metadata and shared commands for the staged toolkit (2026-11-02)
 
 - Status: accepted for Stage 1 under D-2026-11-02-a; later stage details reviewed before coding.
 - Context/decision: REQ-456–458 and [grading-toolkit.md](grading-toolkit.md) define the approved
@@ -5168,7 +5187,7 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
   undo transaction. This extends ADR-070's quadrilateral-only implementation to bounded infill
   polygons without altering its surface ownership, baked-update or volume-engine decisions.
 
-### ADR-075 — Drawing-owned grading presets and Qt reuse/elevation editing (2026-11-03, accepted)
+### ADR-076 — Drawing-owned grading presets and Qt reuse/elevation editing (2026-11-03, accepted)
 
 - Status: accepted by the user for Stage 2 under D-2026-11-03-a.
 - Context: REQ-459 requires named grading presets that copy values into results, DWG persistence,
@@ -5197,3 +5216,28 @@ defined. The rule is the quantity's own nature, not consistency for its own sake
 - Consequences: the existing document snapshot, undo snapshot and ADR-044 serializer gain the preset
   value collection and validation. No new entity kind, global store, third-party dependency, or live
   dependency graph is introduced.
+### ADR-074 — Version rolling beta builds from the stable baseline   (2026-11-02, accepted)
+- Context: ADR-029 made all releases manual and used one `project(VERSION)` value for beta and
+  stable. The user wants beta to publish automatically when its source changes, with ordinary
+  three-part patch versions (`0.7.9`, `0.7.10`, …) and a stable release such as `0.8.0` becoming
+  the next beta cycle's baseline. The single rolling `channel-beta` release must remain safe to
+  rerun without offering the same build as a newer update.
+- Decision: Keep `CMakeLists.txt`'s `project(VERSION)` as the stable release version. For beta,
+  CI reads the latest stable version and the current rolling beta manifest, assigns one patch above
+  the higher version for a new beta source commit, and reuses the recorded version when the source
+  commit is unchanged. Add the beta source commit to `latest.json` to make reruns idempotent. A
+  beta push triggers build, tests, and rolling publication. Stable publication remains manual and
+  gated by the immutable `v<version>` tag; feature-branch pushes remain quiet. Pass the computed
+  beta version into CMake for generated application and installer metadata without changing the
+  stable version stored in the source tree.
+- Alternatives: (1) Keep beta versions in `CMakeLists.txt` and require a separate version-bump PR
+  for every beta commit — rejected because it makes normal beta changes depend on extra bookkeeping.
+  (2) Use `-beta.N` prerelease strings — rejected because the user asked for plain patch increments.
+  (3) Increment on every workflow run — rejected because a retry of one commit would create a
+  false newer version, and the user chose to advance only when beta changes.
+- Consequences: the release workflow must read and validate the prior beta manifest before building,
+  fetch the current stable version, and keep concurrent beta publication ordered. The manifest gains
+  an additive beta-only `sourceCommit` field. Generated Windows version metadata must represent the
+  computed beta version consistently with the installer and update manifest. No application
+  dependency or stable-release behavior changes.
+- Status: accepted (D-2026-11-02-a); backs REQ-202.

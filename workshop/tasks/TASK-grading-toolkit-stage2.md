@@ -8,8 +8,8 @@
 ## 1. Authority
 
 - Goal: no numbered GOAL is defined for this feature in the current project spec. Direct authority is accepted REQ-459 / REQ-088 and D-2026-11-02-a.
-- Requirements: REQ-459 (accepted 2026-11-03, D-2026-11-03-a / ADR-075) and REQ-088 (accepted).
-- Constraints: REQ-076 stable identity; REQ-101 coordinate/elevation accuracy; REQ-201 visible errors; REQ-300 dependency policy; REQ-301 minimal abstractions; ADR-044 DWG JSON trailer; ADR-074 grading ownership; ADR-075 preset ownership.
+- Requirements: REQ-459 (accepted 2026-11-03, D-2026-11-03-a / ADR-076) and REQ-088 (accepted).
+- Constraints: REQ-076 stable identity; REQ-101 coordinate/elevation accuracy; REQ-201 visible errors; REQ-300 dependency policy; REQ-301 minimal abstractions; ADR-044 DWG JSON trailer; ADR-075 grading ownership; ADR-076 preset ownership.
 - Acceptance (REQ-459):
   > Copy Create explicitly copies an existing grading's inputs to a chosen new baseline, rather than editing the source. Named presets copy their values into each created result; changing a preset never silently updates previous results. Build a Qt elevation table using the existing FLELEV elevation/grade/raise/insert/delete services, preserving one undo transaction per applied edit. Add grading/group properties and visible membership transfers. Acceptance includes independent copied results/presets, accurate displayed elevations/grades, undo, failure preservation and DWG persistence. Linked criteria, locking propagation and automatic regrading are outside this stage.
 - Acceptance (REQ-088): a feature-line elevation table shows station, elevation, length ahead, grade back and grade ahead; elevation edits update adjacent grades; grade edits update downstream elevations; raise/lower operations are supported; elevation points can be inserted/deleted independently of PIs. Each edit is one undo step and breakline surfaces rebuild without user action.
@@ -19,11 +19,11 @@
 
 - In scope: independent Copy Create; drawing-local named presets saved in DWG; Qt FLELEV table; grading/group properties; visible group membership transfer.
 - Out of scope: automatic criteria propagation/regrading; linked criteria; locking propagation; optimizer #813; Stage 3 transitions/benches; Stage 4 utilities/quality controls.
-- Smallest change: adapt existing grading definitions, FLELEV services, group commands and property/UI services; add only the preset value collection approved by ADR-075.
+- Smallest change: adapt existing grading definitions, FLELEV services, group commands and property/UI services; add only the preset value collection approved by ADR-076.
 
 ## 3. Architectural boundary check
 
-- Preset ownership and serialization were approved and recorded by D-2026-11-03-a / ADR-075: value-owned records in active drawing state, per-tab `DrawingDocument`, and `DrawingGeometrySnapshot`; additive optional field in the existing ADR-044 trailer; each preset stores criteria but no baseline/result id; create/update/delete is undoable.
+- Preset ownership and serialization were approved and recorded by D-2026-11-03-a / ADR-076: value-owned records in active drawing state, per-tab `DrawingDocument`, and `DrawingGeometrySnapshot`; additive optional field in the existing ADR-044 trailer; each preset stores criteria but no baseline/result id; create/update/delete is undoable.
 - The Qt table routes edits through existing FLELEV services and shows derived row data. Copy Create and membership transfer route through shared grading/group commands. No new entity kind, global store, dependency, or live graph is introduced.
 - [x] No architecture/data-format decision remains open.
 
@@ -40,14 +40,14 @@
 - [x] Add preset lifecycle and Copy Create to the palette; test independent results, copied values and undo.
 - [x] Add the FLELEV table and route every mutation through existing services; focused table/edit/undo test passes and existing REQ-088 transcript covers remaining edits.
 - [x] Add grading/group properties and membership transfer view; palette actions use shared group commands, with group membership visible in Properties.
-- [x] Rebuild and rerun full Release CTest after review fixes; focused Stage 2 Qt tests pass 10/10 including DWG round-trip, invalid surface-id payload, explicit create-from-preset path, per-tab isolation, and deleted-surface refusal. Full Release CTest passes 191/191; `build.output-layout` passes.
+- [x] Rebuild and rerun full Release CTest after review fixes; focused Stage 2 Qt tests pass 10/10 including DWG round-trip, invalid surface-id payload, explicit create-from-preset path, per-tab isolation, and deleted-surface refusal. Full Release CTest passes 194/194 on the current `beta` base after conflict resolution; `build.output-layout` passes.
 - [x] Present current screenshots and receive approval before commit (2026-11-03).
 - [x] Pre-PR documentation review: `README.md` and `PRIVACY.md` reviewed; no product-facing content there is affected. Updated `resources/wiki/Point-Groups-and-Surfaces.md` and the public GoSurvey GitHub Wiki page `Point-Groups-and-Surfaces` with preset, target, group-boundary, deletion and FLELEVEDIT behavior. The public wiki update was published as `f87eb15`.
 
 ## 5. Decisions
 
 - Q1 (2026-11-03): Preset scope? Answer: per drawing, saved in DWG.
-- Q2 (2026-11-03): Approve value-owned per-drawing records, additive trailer persistence, undoable preset create/update/delete? Answer: approved; D-2026-11-03-a / ADR-075.
+- Q2 (2026-11-03): Approve value-owned per-drawing records, additive trailer persistence, undoable preset create/update/delete? Answer: approved; D-2026-11-03-a / ADR-076.
 
 ## 6. Verification result
 

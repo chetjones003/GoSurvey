@@ -683,14 +683,17 @@ bit_write_BOT (Bit_Chain *dat, BITCODE_BS value)
       bit_write_BB (dat, 0);
       bit_write_RC (dat, value);
     }
-  else if (value < 0x7fff)
+  else if (value >= 0x1f0 && value < 0x2f0)
     {
       bit_write_BB (dat, 1);
       bit_write_RC (dat, value - 0x1f0);
     }
   else
     {
-      bit_write_BB (dat, 1);
+      // BB=2 selects the full 16-bit type form in bit_read_BOT. Values
+      // outside the one-byte 0x1f0..0x2ef window must not use BB=1, which
+      // truncates the type delta to a byte (for example class 999 -> 743).
+      bit_write_BB (dat, 2);
       bit_write_RS (dat, value);
     }
 }
@@ -1729,7 +1732,9 @@ bit_read_bits (Bit_Chain *dat, size_t bits)
       for (int i = 0; i < rest; i++)
         {
           BITCODE_RC last = bit_read_B (dat);
-          chain[bytes] |= last << i;
+          // Opaque bit buffers use the same MSB-first layout as bit_write_bits and BIT().
+          // Packing the tail into low bits reverses its order and corrupts final handle bits.
+          chain[bytes] |= last << (7 - i);
         }
       dat->size--;
       // we are now in overflow state

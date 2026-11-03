@@ -65,9 +65,14 @@ echo   Build it first:  build.bat
 exit /b 1
 
 :launch
-echo Running: %CD%\%EXE%
-"%EXE%"%APPARGS%
-exit /b %errorlevel%
+for %%I in ("%EXE%") do (
+  echo Running: %%~fI
+  pushd "%%~dpI"
+  ".\%%~nxI"%APPARGS%
+  set "RC=!ERRORLEVEL!"
+  popd
+)
+exit /b !RC!
 
 :norel
 echo ERROR: release build not found at "%CD%\%REL%".

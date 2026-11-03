@@ -389,6 +389,8 @@ bool CadCommandExpectsPointEntry(const AppCommandState& cmd) {
     using IPh = AppCommandState::InsertBlockPhase;
     return cmd.insertBlockPhase == IPh::WaitInsertPoint || cmd.insertBlockPhase == IPh::WaitScale;
   }
+  case K::PdfAttach:
+    return cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint;
   // REQ-354 / GitHub issue #564 section 5: PIPERUN's start and next points are point prompts like
   // any other (its size and wall prompts are not). It was missing, so PIPERUN had a single field.
   case K::PipeRun: {
@@ -453,12 +455,16 @@ CadDynInputPrompt CadDynInputPromptFor(const AppCommandState& cmd) {
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
       base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
       p.initialMode = dyninput::Mode::RelativePolar;  // REQ-024: an anchored segment
+      // REQ-047: distance-only entry under ORTHO is handled by the command's ortho-distance path,
+      // not as a polar @dx,dy from the crosshair angle.
+      p.directDistance = cmd.orthoMode;
     }
     break;
   case K::Polyline:
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
       base(cmd.anchorX, cmd.anchorY, cmd.anchorZ);
       p.initialMode = dyninput::Mode::RelativePolar;
+      p.directDistance = cmd.orthoMode;
     }
     break;
   case K::Move:

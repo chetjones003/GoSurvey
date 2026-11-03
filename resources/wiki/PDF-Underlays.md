@@ -26,7 +26,8 @@ The **PDF Attach** dialog:
 Then press **Attach**.
 
 - **Specify on screen** — `PDFATTACH — click in viewport to set insertion point. ESC to cancel.`
-  Click to place, then set the scale.
+  The page follows the cursor as a preview until you click. Scale and rotation can be entered in the
+  dialog or requested on screen. After placement, use **SCALE** with a reference length to calibrate it.
 - **Direct insert** — enter the insertion point, scale, and rotation numerically and it is placed
   without a click.
 
@@ -62,8 +63,9 @@ Appears when a PDF attachment is selected.
 
 | Control | What it does |
 |---|---|
-| **Background** | Toggles paper transparency, as above |
-| **Vectorize** | *Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer* |
+| **Show Underlay** | Shows or hides the underlay raster background |
+| **Enable Snap** | Enables or disables snap targets from the selected underlay |
+| **Import as Objects** | Adds PDF snap-line geometry as drawing entities on the current layer |
 | **Fade** | 0–100% opacity slider |
 | **Snap: L / C / T** | Per-underlay snap toggles for **L**ines, **C**ircles, **T**ext |
 
@@ -79,10 +81,9 @@ Set the current layer before you press it — everything lands there.
 
 ## Snapping to a PDF
 
-Snap targets are found by analysing the **rendered raster image**, not the internal PDF path
-structure. This matters: GIS exports, scanned drawings, and dense CAD PDFs routinely contain path
-objects that do not correspond to any visible line. Reading the image is what makes snap land on
-what you can actually see.
+The underlay uses the PDF viewer's snap-point index for vector endpoints, corners and circle
+centers. It prefers stable features over clusters of tiny curve vertices. Legacy attachments
+without that index use raster-derived targets and the existing visibility mask.
 
 | Target | How it is recognised |
 |---|---|
@@ -95,8 +96,10 @@ what you can actually see.
 Candidates are filtered through a visibility mask so only points in areas with visible content are
 offered, and a spatial grid keeps lookup fast even on PDFs with thousands of targets.
 
-Object snap must be on (`F3`) and the underlay's own **Lines / Circles / Text** toggles decide
-what it offers. See [[Object Snaps]].
+Object snap must be on (`F3`) and **Enable Snap** must be enabled for the underlay. Line and circle
+targets respect the corresponding snap options. Page vector endpoints/corners and circle centers
+use the PDF viewer's snap-point index, with a raster-derived fallback for legacy attachments.
+See [[Object Snaps]].
 
 ---
 
@@ -153,6 +156,19 @@ Select an underlay and the Properties panel shows:
 | Vectorize produced a mess of short segments | Raster tracing always does, on a busy sheet | `OVERKILL`, then `JOIN` |
 
 ---
+
+## Extract coordinates in the PDF viewer
+
+Open the PDF from a drawing and choose **Extract Coordinates** in the PDF viewer. Drag over the
+selectable text containing a table or coordinate labels. Review the source text before accepting
+any candidate. **Accept** creates geometry in the drawing; **Deny** leaves it unchanged.
+
+Tables can use **Northing / Easting** columns in either order, alongside **Mark**, **Drawing** and
+**Equipment** columns. Numeric coordinates with a trailing foot mark, such as **626.319'**, are
+accepted. Rows with blank cells or notes such as **SEE DWG…** appear separately under **Skipped
+table rows**, with the missing coordinate reported. Valid rows remain available for review.
+Rows with both a description and elevation create survey points; other valid coordinate pairs
+create circles. This reads selectable PDF text and does not perform OCR on scanned tables.
 
 ## Related
 

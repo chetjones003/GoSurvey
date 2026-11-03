@@ -9,6 +9,7 @@
 #include "PdfDimAudit.hpp"
 
 #include <optional>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -26,11 +27,25 @@ struct CoordCandidate {
 
   bool HasDescription() const { return !description.empty(); }
   bool HasElevation() const { return elevation.has_value(); }
+  enum class CreateAs : std::uint8_t { Auto, Circle, SurveyPoint };
+  CreateAs createAs = CreateAs::Auto;
+
   /// REQ-399 clause 6: a survey point needs elevation AND description; otherwise it is a circle.
-  bool IsSurveyPoint() const { return HasDescription() && HasElevation(); }
+  /// The review dialog may override that default per row.
+  bool IsSurveyPoint() const {
+    if (createAs == CreateAs::SurveyPoint) return true;
+    if (createAs == CreateAs::Circle) return false;
+    return HasDescription() && HasElevation();
+  }
 
   /// The source text this candidate was read from, for the side-by-side review (REQ-399 clause 5).
   std::string sourceText;
+};
+
+/// A table row that was read but could not become a candidate (REQ-399 amended 2026-10-29).
+struct SkippedTableRow {
+  std::string sourceText;
+  std::string reason;
 };
 
 enum class ExtractStatus {
@@ -42,6 +57,7 @@ enum class ExtractStatus {
 struct ExtractResult {
   ExtractStatus status = ExtractStatus::NoText;
   std::vector<CoordCandidate> candidates;
+  std::vector<SkippedTableRow> skippedTableRows;
   /// User-facing message for NoText / Unparsed (REQ-399 clause 3's required wording for NoText).
   std::string message;
 };

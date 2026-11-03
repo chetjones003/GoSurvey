@@ -13,6 +13,7 @@
 
 #include "CadCommands.hpp"
 #include "GsIo.hpp"
+#include "GsIoTestSupport.hpp"
 
 using Catch::Approx;
 
@@ -42,10 +43,10 @@ TEST_CASE("Per-viewport camera round-trips through document JSON payload (REQ-06
 
   const std::filesystem::path path = UniqueGsPath("vpcam");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 2);
 
@@ -74,10 +75,10 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
 
   const std::filesystem::path path = UniqueGsPath("vpvis");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 3);
   CHECK(loaded.paperLayouts[0].viewports[0].visualStyle == VisualStyle::Wireframe2D);
@@ -96,7 +97,7 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
 
   const std::filesystem::path path = UniqueGsPath("legacy");
   std::vector<std::string> log;
-  REQUIRE(SaveGoSurveyTemplateFile(st, path.string().c_str(), log));
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
 
   // Strip the camera keys from the saved JSON to simulate a file written before REQ-061.
   std::string raw;
@@ -132,7 +133,7 @@ TEST_CASE("A legacy document JSON payload with no camera keys loads every viewpo
   }
 
   AppCommandState loaded;
-  REQUIRE(LoadGoSurveyTemplateFile(loaded, path.string().c_str(), log));
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
   REQUIRE(loaded.paperLayouts.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
   REQUIRE(loaded.paperLayouts[0].viewports[0].cameraIsPlan());

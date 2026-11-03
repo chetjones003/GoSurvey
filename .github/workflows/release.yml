@@ -3,8 +3,8 @@
 # Two jobs, three publish outcomes, decided by which branch the run targets:
 #
 #   build             compile GoSurvey.exe (Qt frontend) and supporting checks — this
-#                     pipeline ships the app, it does not verify it), run only on manual
-#                     dispatch (REQ-202 (d))
+#                     pipeline ships the app, it does not verify it), on beta pushes or
+#                     manual dispatch (REQ-202)
 #   package           Inno installer from the build artifacts; then:
 #     any other branch  installer kept as a workflow artifact; nothing published
 #     beta              installer published to the ROLLING `channel-beta` prerelease (assets replaced)
@@ -15,17 +15,15 @@
 # master does not republish, retag, or notify users. Bumping the version in CMakeLists.txt IS the
 # release.
 #
-# The version has exactly one source (ADR-029 (a)): project(VERSION) in CMakeLists.txt. It is
-# read here and passed onward; nothing in this file hard-codes a version number.
+# The stable version source (ADR-029 / ADR-074) is GOSURVEY_STABLE_VERSION in CMakeLists.txt.
+# Beta derives a rolling patch version from that source and the previous rolling manifest.
 
 name: release
 
 on:
-  # REQ-202 (d): manual dispatch only. The pipeline used to run on every push; that automatic
-  # trigger is gone by deliberate choice (2026-09-06) — CI minutes and rolling-beta churn were
-  # spent on commits that did not need a build, and a stable release must never be one push away
-  # from firing on its own. Choose the target branch in the "Run workflow" ref dropdown; that
-  # selection drives the same beta/master routing this file always had.
+  # Stable publication remains manual; beta publishes when its source branch changes.
+  push:
+    branches: [beta]
   workflow_dispatch:
 
 concurrency:
@@ -55,9 +53,9 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          # Full history only on master (version-gate / tag inspection). Feature and beta
-          # pushes do not need it; the gate itself asks the remote via git ls-remote.
-          fetch-depth: ${{ github.ref_name == 'master' && '0' || '1' }}
+          # Beta resolves its number against the current master version and prior beta manifest;
+          # master also needs full history for stable tag inspection.
+          fetch-depth: ${{ (github.ref_name == 'master' || github.ref_name == 'beta') && '0' || '1' }}
 
       - name: Set up MSVC
         # Puts cl.exe, the linker and the Windows SDK on PATH. Required: CMakePresets pins the
@@ -110,31 +108,98 @@ jobs:
           # the environment rather than pasted into the script. Branch names may contain
           # characters PowerShell treats as syntax.
           BRANCH_NAME: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $line = Select-String -Path CMakeLists.txt -Pattern 'project\(GoSurvey VERSION ([0-9]+\.[0-9]+\.[0-9]+)'
-          if (-not $line) { throw "Could not read project(VERSION) from CMakeLists.txt" }
-          $version = $line.Matches[0].Groups[1].Value
-
           $branch = $env:BRANCH_NAME
+          $betaVersion = ''
           if ($branch -eq 'master') {
+            $line = Select-String -Path CMakeLists.txt -Pattern 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"'
+            if (-not $line) { throw "Could not read GOSURVEY_STABLE_VERSION from CMakeLists.txt" }
+            $version = $line.Matches[0].Groups[1].Value
             $channel  = 'stable'
             $full     = $version
             $suffix   = ''
             $quadLast = '0'
             $tag      = "v$version"
           } elseif ($branch -eq 'beta') {
+            git fetch --no-tags origin master
+            if ($LASTEXITCODE -ne 0) { throw "Could not fetch master to resolve the stable beta baseline" }
+            $stableSource = git show origin/master:CMakeLists.txt
+            if ($LASTEXITCODE -ne 0) { throw "Could not read master CMakeLists.txt" }
+            $stableMatch = [regex]::Match(($stableSource -join "`n"), 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"')
+            if (-not $stableMatch.Success) {
+              # Until the stable-version declaration reaches master, use its existing
+              # project(VERSION) as the stable baseline.
+              $stableMatch = [regex]::Match(($stableSource -join "`n"), 'project\(GoSurvey\s+VERSION\s+"?([0-9]+\.[0-9]+\.[0-9]+)"?')
+            }
+            if (-not $stableMatch.Success) { throw "Could not read the stable version from master CMakeLists.txt" }
+            $stableVersion = [version]::Parse($stableMatch.Groups[1].Value)
+
+            # The rolling release is the persistent counter. A missing asset is the first run;
+            # any other download/parse problem fails closed rather than guessing a version.
+            $manifestResponse = Invoke-WebRequest `
+              -Uri "https://github.com/$($env:REPOSITORY)/releases/download/channel-beta/latest.json" `
+              -SkipHttpErrorCheck
+            $previousManifest = $null
+            if ($manifestResponse.StatusCode -eq 200) {
+              try {
+                $manifestContent = $manifestResponse.Content
+                if ($manifestContent -is [byte[]]) {
+                  $manifestContent = [Text.Encoding]::UTF8.GetString($manifestContent)
+                }
+                $previousManifest = ConvertFrom-Json -InputObject $manifestContent
+              }
+              catch { throw "Could not parse the previous beta manifest: $($_.Exception.Message)" }
+              if ($previousManifest.version -notmatch '^\d+\.\d+\.\d+$') {
+                throw "Previous beta manifest has an invalid version: '$($previousManifest.version)'"
+              }
+              # The existing channel-beta manifest predates sourceCommit. Permit that one
+              # legacy shape; the next published manifest writes the provenance field.
+              $sourceCommitProperty = $previousManifest.PSObject.Properties['sourceCommit']
+              if ($sourceCommitProperty -and ($null -eq $sourceCommitProperty.Value -or $sourceCommitProperty.Value -notmatch '^[0-9a-fA-F]{40}$')) {
+                throw "Previous beta manifest has an invalid sourceCommit: '$($sourceCommitProperty.Value)'"
+              }
+            } elseif ($manifestResponse.StatusCode -ne 404) {
+              throw "Could not fetch previous beta manifest (HTTP $($manifestResponse.StatusCode))"
+            } else {
+              # A missing manifest is a first run only when the rolling release is absent too.
+              # Otherwise the persistent version counter was lost; stop rather than reset it.
+              $releaseResponse = Invoke-WebRequest `
+                -Uri "https://api.github.com/repos/$($env:REPOSITORY)/releases/tags/channel-beta" `
+                -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } `
+                -SkipHttpErrorCheck
+              if ($releaseResponse.StatusCode -eq 200) {
+                throw "channel-beta exists but latest.json is missing. Restore latest.json before publishing beta again."
+              }
+              if ($releaseResponse.StatusCode -ne 404) {
+                throw "Could not check the channel-beta release (HTTP $($releaseResponse.StatusCode))"
+              }
+            }
+
+            $sameCommit = $previousManifest -and $previousManifest.sourceCommit -eq $env:SOURCE_COMMIT
+            if ($sameCommit) {
+              $version = $previousManifest.version
+            } else {
+              $baseVersion = $stableVersion
+              if ($previousManifest) {
+                $previousVersion = [version]::Parse($previousManifest.version)
+                if ($previousVersion -gt $baseVersion) { $baseVersion = $previousVersion }
+              }
+              $version = '{0}.{1}.{2}' -f $baseVersion.Major, $baseVersion.Minor, ($baseVersion.Build + 1)
+            }
+
             $channel  = 'beta'
-            # REQ-402 (2026-10-09): no auto-appended "-beta.N" suffix. The target beta version
-            # (e.g. 0.7.1 vs 0.8.0 — a real decision, not a running counter) is chosen in CLI
-            # conversation and committed as a project(VERSION) bump BEFORE this workflow is
-            # dispatched against beta, the same way a master release is decided. The rolling
-            # `channel-beta` prerelease tag/assets still get replaced on every dispatch; only the
-            # version STRING shown to users is now the plain version, matching what was bumped.
+            $betaVersion = $version
             $suffix   = ''
             $full     = $version
-            $quadLast = "${{ github.run_number }}"
+            $quadLast = '0'
             $tag      = 'channel-beta'
           } else {
+            $line = Select-String -Path CMakeLists.txt -Pattern 'GOSURVEY_STABLE_VERSION\s+"([0-9]+\.[0-9]+\.[0-9]+)"'
+            if (-not $line) { throw "Could not read GOSURVEY_STABLE_VERSION from CMakeLists.txt" }
+            $version = $line.Matches[0].Groups[1].Value
             $channel  = 'none'
             $suffix   = "-dev.${{ github.run_number }}"
             $full     = "$version$suffix"
@@ -146,8 +211,11 @@ jobs:
           "full=$full"         | Out-File $env:GITHUB_OUTPUT -Append
           "suffix=$suffix"     | Out-File $env:GITHUB_OUTPUT -Append
           "quad=$version.$quadLast" | Out-File $env:GITHUB_OUTPUT -Append
+          "buildField=$quadLast" | Out-File $env:GITHUB_OUTPUT -Append
           "channel=$channel"   | Out-File $env:GITHUB_OUTPUT -Append
           "tag=$tag"           | Out-File $env:GITHUB_OUTPUT -Append
+          "betaVersion=$betaVersion" | Out-File $env:GITHUB_OUTPUT -Append
+          if ($branch -eq 'beta') { "sourceCommit=$($env:SOURCE_COMMIT)" | Out-File $env:GITHUB_OUTPUT -Append }
           Write-Host "version=$version full=$full channel=$channel tag=$tag"
 
       - name: Check whether this version was already released
@@ -190,8 +258,9 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=sccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
           -DGOSURVEY_ENABLE_ANALYZE=ON
+          -DGOSURVEY_BETA_VERSION="${{ steps.ver.outputs.betaVersion }}"
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
-          -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
+          -DGOSURVEY_VERSION_BUILD=${{ steps.ver.outputs.buildField }}
 
       - name: Register MSVC /analyze problem matcher
         # Turns `/analyze` warnings in the Build step's log into GitHub Actions annotations
@@ -575,6 +644,11 @@ jobs:
             }
             notes       = $notes
           }
+          if ($env:GITHUB_REF_NAME -eq 'beta') {
+            # This makes retries idempotent: the version resolver can recognize the exact source
+            # commit already represented by the rolling manifest.
+            $manifest['sourceCommit'] = $env:GITHUB_SHA
+          }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
           if ($env:GITHUB_REF_NAME -eq 'master') {
             @(
@@ -609,6 +683,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A queued beta run can finish after a newer commit. Check the branch tip immediately
+          # before touching the rolling release so an older build cannot replace newer assets.
+          $remoteBeta = git ls-remote origin refs/heads/beta
+          if ($LASTEXITCODE -ne 0) { throw "Could not resolve current beta head before publishing" }
+          $remoteBetaSha = ($remoteBeta -split '\s+')[0]
+          if ([string]::IsNullOrWhiteSpace($remoteBetaSha)) { throw "Could not resolve current beta head before publishing" }
+          if ($remoteBetaSha -ne $env:GITHUB_SHA) {
+            Write-Host "Skipping stale beta build $($env:GITHUB_SHA); current beta head is $remoteBetaSha."
+            exit 0
+          }
+
           # One permanent prerelease row, not one per push. `--clobber` replaces the assets in
           # place, which is what gives the beta manifest a fixed, forever-valid URL.
           $exists = gh release view channel-beta 2>$null

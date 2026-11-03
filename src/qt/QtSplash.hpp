@@ -16,9 +16,10 @@ double ProgressAt(qint64 elapsedMs);
 QString PhaseLabelAt(qint64 elapsedMs);
 
 // Splash card with background and wordmark, without the progress bar or phase label.
-QPixmap MakeBackdrop(const QPixmap& source);
+// \p devicePixelRatio keeps the raster sharp on HiDPI displays (physical pixels match the screen).
+QPixmap MakeBackdrop(const QPixmap& source, qreal devicePixelRatio = 1.0);
 
 // The backdrop plus the phase label and a progress bar filled to `progress` (clamped to 0..1).
-QPixmap MakeFrame(const QPixmap& backdrop, double progress, const QString& label);
+QPixmap MakeFrame(const QPixmap& backdrop, double progress, const QString& label, qreal devicePixelRatio = 1.0);
 
 }  // namespace qtsplash

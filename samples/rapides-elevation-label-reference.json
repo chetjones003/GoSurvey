@@ -1,0 +1,138 @@
+{
+ "source": "rapides-substation-civil3d.dwg",
+ "api": "Autodesk.Civil.DatabaseServices.SurfaceElevationLabel, exploded (Civil 3D 2026)",
+ "labels": [
+  {
+   "handle": "30f65",
+   "x": 3254514.263820559,
+   "y": 313916.82894756534,
+   "z": 83.36162962853511,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.36",
+   "textHeight": 2.0,
+   "textX": 3254516.763820559,
+   "textY": 313916.82894756534
+  },
+  {
+   "handle": "30f67",
+   "x": 3254535.5370782055,
+   "y": 313961.14160350274,
+   "z": 83.28269501218436,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.28",
+   "textHeight": 2.0,
+   "textX": 3254538.0370782055,
+   "textY": 313961.14160350274
+  },
+  {
+   "handle": "30f69",
+   "x": 3254568.981875082,
+   "y": 314026.7159662319,
+   "z": 83.14771371750902,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.15",
+   "textHeight": 2.0,
+   "textX": 3254571.481875082,
+   "textY": 314026.7159662319
+  },
+  {
+   "handle": "30f98",
+   "x": 3254560.144509277,
+   "y": 314001.61409849464,
+   "z": 83.27705693224507,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.28",
+   "textHeight": 2.0,
+   "textX": 3254562.644509277,
+   "textY": 314001.61409849464
+  },
+  {
+   "handle": "30f99",
+   "x": 3254684.776569487,
+   "y": 313959.64000746974,
+   "z": 82.76015603585347,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "82.76",
+   "textHeight": 2.0,
+   "textX": 3254687.276569487,
+   "textY": 313959.64000746974
+  },
+  {
+   "handle": "30f9b",
+   "x": 3254646.057685046,
+   "y": 313920.76847934537,
+   "z": 82.91361938594531,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "82.91",
+   "textHeight": 2.0,
+   "textX": 3254648.557685046,
+   "textY": 313920.76847934537
+  },
+  {
+   "handle": "30f9c",
+   "x": 3254684.1250595455,
+   "y": 313926.8746125325,
+   "z": 82.77658726535175,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "82.78",
+   "textHeight": 2.0,
+   "textX": 3254686.6250595455,
+   "textY": 313926.8746125325
+  },
+  {
+   "handle": "30f9d",
+   "x": 3254640.620029817,
+   "y": 313880.92148260353,
+   "z": 82.90616709255887,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "82.91",
+   "textHeight": 2.0,
+   "textX": 3254643.120029817,
+   "textY": 313880.92148260353
+  },
+  {
+   "handle": "30f9e",
+   "x": 3254667.8081736197,
+   "y": 313851.21734872024,
+   "z": 82.93701901945998,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "82.94",
+   "textHeight": 2.0,
+   "textX": 3254670.3081736197,
+   "textY": 313851.21734872024
+  },
+  {
+   "handle": "30f9f",
+   "x": 3254622.629745179,
+   "y": 313772.48926720594,
+   "z": 83.24271474819767,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.24",
+   "textHeight": 2.0,
+   "textX": 3254625.129745179,
+   "textY": 313772.48926720594
+  },
+  {
+   "handle": "30fab",
+   "x": 3254599.9954113103,
+   "y": 314012.6496415587,
+   "z": 83.20971298244471,
+   "style": "Elevation Only",
+   "markerRadius": 1.0,
+   "text": "83.21",
+   "textHeight": 2.0,
+   "textX": 3254602.4954113103,
+   "textY": 314012.6496415587
+  }
+ ]
+}

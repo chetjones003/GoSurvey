@@ -102,16 +102,17 @@ The dialog reports the result: `Plot size: 17.00 x 11.00 inches (ANSI B (11" x 1
 | Setting | Notes |
 |---|---|
 | **What to plot** / **Plot area** | What part of the sheet is plotted |
-| **Plot scale** | Sheet plot scale |
-| **Fit to paper** | Scale to fit |
+| **Plot scale** | Plot ratio **1 : N**. The whole sheet, text sizes included, is drawn at 1 / N |
+| **Fit to paper** | Scales the sheet content to fill the sheet |
 | **Plot offset (inches)** — X, Y | Shifts the plot on the sheet |
-| **Center the plot** | Centres it instead |
+| **Center the plot** | Centres the sheet content on the sheet and ignores the offsets |
 | **Plot object lineweights** | Honour lineweights |
 | **Plot transparency** | Honour transparency |
 | **Plot paperspace last** | Drawing order |
 
-> *Plot styles / options apply once PDF plotting lands (a later update).* Some of these controls
-> are recorded but not yet acted on by the PDF writer.
+Fit to paper, centre, offset and the plot ratio all act on the PDF. Fit and centre measure the sheet's
+content (viewport frames, lines, circles, polylines and text anchors). Lineweights keep their width.
+**Plot transparency** and **Plot paperspace last** are recorded but not yet acted on by the PDF writer.
 
 ---
 
@@ -185,7 +186,16 @@ See [[Layers]].
 ## Drawing on the sheet
 
 In paper space, draw and modify commands act on **paper geometry** measured in paper inches. This
-is where a border, a titleblock, and sheet notes belong.
+is where a border, a titleblock, and sheet notes belong. `LINE`, `POLYLINE`, `SPLINE`, `POINT`,
+`LEADER`, `PEDIT`, `MEASURE`, `DIVIDE`, `AREA`, and `LIST` all run on the sheet without changing
+model geometry. Paper `POINT`, `SPLINE`, and `LEADER` round-trip through DXF and DWG. On a sheet a
+leader's Mtext box is sized in paper inches.
+
+DWG saves each sheet object as a native AutoCAD object on its layout: `SPLINE`, `POINT`, `DIMENSION`
+and raster `IMAGE`. Sheet leaders are `MULTILEADER` in R2010 and later DWG files, and `LEADER` with
+`MTEXT` in R2000 DWG. A sheet image is saved by file path: if its file is moved or deleted, the image
+unloads when the drawing reopens and the log says so, and the rest of the sheet still loads. A sheet
+point's size and style follow the drawing's point mode (`PDMODE`) and size (`PDSIZE`).
 
 - The clipboard moves objects between model and paper space at 1:1 raw coordinates — copy in model
   space, switch to the layout, and **Paste**. See [[Modify Tools]].
