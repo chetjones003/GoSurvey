@@ -5536,7 +5536,11 @@ private Q_SLOTS:
       QTest::mouseRelease(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
     };
     st.selection = {{SelectedEntity::Type::LineSeg, 0}};
-    dragSecondLine();
+    const QPoint first = screenAt(15, 15), second = screenAt(35, 5);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, first);
+    QVERIFY(st.selBoxWaitingSecond);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
+    QVERIFY(!st.selBoxWaitingSecond);
     QCOMPARE(st.selection.size(), std::size_t(2));
     const QPoint empty = screenAt(-70, -50), hit = screenAt(25, 10);
     QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, empty);
@@ -7281,14 +7285,19 @@ private Q_SLOTS:
     };
     const QPointF from = screenPoint(12, 4), to = screenPoint(-2, -4);
     sendMouse(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, from, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(state.selBoxWaitingSecond);
+    sendMouse(QEvent::MouseMove, to, Qt::NoButton, Qt::NoButton);
+    sendMouse(QEvent::MouseButtonPress, to, Qt::LeftButton, Qt::LeftButton);
     sendMouse(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
     QVERIFY(!state.selection.empty());
     QVERIFY(!state.selBoxWaitingSecond);
     const auto selected = state.selection;
     const QPointF blank = screenPoint(-30, -20);  // clear of the ViewCube, which owns the top-right corner
     sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, blank, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(state.selBoxWaitingSecond);
+    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::NoButton);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(viewport, &escape);
     QCOMPARE(state.selection.size(), selected.size());
@@ -7361,10 +7370,23 @@ private Q_SLOTS:
 
   void nativePasteWarningBlocksUnsafePasteAndCancels() {
     EditorWindow window; window.CreateDrawingFromTemplate();
-    window.State().pastePrompt = {true, true, false, "Coordinate systems differ", true, false};
+    window.State().pastePrompt = {true, true, false,
+      "The copied objects use the coordinate system HARN/TX.TX-CF, but this standalone drawing uses HARN/TX.TX-N. "
+      "Pasting them as they are would put them in the wrong place on the ground, so this paste is blocked. "
+      "Convert moves them into this drawing's coordinate system and units, keeping their place on the ground. "
+      "The leftover error after converting is 0.0000 m.", true, true};
+    QTimer::singleShot(20000, &window, [] { if (auto* modal = QApplication::activeModalWidget()) modal->close(); });
     QTimer::singleShot(0, &window, [&] {
       auto* dialog = window.findChild<QMessageBox*>("pasteWarning"); QVERIFY(dialog);
-      for (auto* button : dialog->buttons()) QVERIFY(button->text() != "Paste anyway");
+      auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+      bool hasConvert = false;
+      for (auto* button : dialog->buttons()) {
+        QVERIFY(button->text() != "Paste anyway");
+        hasConvert = hasConvert || button->text() == "Convert and paste";
+      }
+      QVERIFY(hasConvert);
+      QVERIFY(QDir().mkpath(QtTestArtifactDirectory()));
+      QVERIFY(dialog->grab().save(QtTestArtifactDirectory() + "/issue782-coordinate-system-mismatch.png"));
       dialog->button(QMessageBox::Cancel)->click();
     });
     window.Submit("");
@@ -8941,6 +8963,64 @@ private Q_SLOTS:
     QCOMPARE(session.points->points.size(), std::size_t(2));
     QCOMPARE(session.points->points[0].point.easting, 500.0);
     QVERIFY(SurveyPointIndexForId(state, 10) >= 0);
+  }
+
+  void clipboardPointNumberConflictUsesExistingQuestion() {
+    EditorWindow window; window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    SurveyPoint point; point.id = 42; point.easting = 10; point.northing = 20; point.description = "SOURCE";
+    state.surveyPoints = {point};
+    state.clipboard.surveyPoints = {point};
+    state.clipboard.basePtX = 10; state.clipboard.basePtY = 20;
+    std::vector<std::string> log;
+    CommitClipboardPasteAt(state, 100, 200, log);
+    QVERIFY(state.pointEditPrompt.active);
+    QVERIFY(state.pointEditPrompt.clipboardPaste);
+    QTimer::singleShot(20000, &window, [] { if (auto* modal = QApplication::activeModalWidget()) modal->close(); });
+    QTimer::singleShot(0, &window, [&] {
+      auto* message = window.findChild<QMessageBox*>("pastePointNumberConflict");
+      QVERIFY(message);
+      auto closeOnFailure = qScopeGuard([message] { if (message->isVisible()) message->reject(); });
+      QVERIFY(message->text().contains("42"));
+      QDir().mkpath(QtTestArtifactDirectory());
+      QVERIFY(message->grab().save(QDir(QtTestArtifactDirectory()).filePath("issue782-point-number-conflict.png")));
+      message->button(QMessageBox::Cancel)->click();
+    });
+    window.Submit("REGEN");
+    QCOMPARE(state.surveyPoints.size(), std::size_t(1));
+    QCOMPARE(state.surveyPoints[0].description, std::string("SOURCE"));
+    QVERIFY(!state.pointEditPrompt.active);
+  }
+
+  void clipboardPointNumberConflictWarnsSharedProjectOnly() {
+    using PointsMode = AppCommandState::DrawingTab::PointsMode;
+    for (const PointsMode mode : {PointsMode::Shared, PointsMode::Detached}) {
+      EditorWindow window; window.CreateDrawingFromTemplate();
+      auto& state = window.State();
+      auto& tab = state.drawingTabs[static_cast<size_t>(state.activeDrawingIdx)];
+      tab.projectUid = 77;
+      tab.pointsMode = mode;
+      SurveyPoint point; point.id = 42; point.easting = 10; point.northing = 20;
+      state.surveyPoints = {point};
+      state.clipboard.surveyPoints = {point};
+      state.clipboard.basePtX = 10; state.clipboard.basePtY = 20;
+      std::vector<std::string> log;
+      CommitClipboardPasteAt(state, 100, 200, log);
+      QVERIFY(state.pointEditPrompt.active);
+      QTimer::singleShot(20000, &window, [] { if (auto* modal = QApplication::activeModalWidget()) modal->close(); });
+      QTimer::singleShot(0, &window, [&] {
+        auto* dialog = window.findChild<QMessageBox*>("pastePointNumberConflict"); QVERIFY(dialog);
+        auto closeOnFailure = qScopeGuard([dialog] { if (dialog->isVisible()) dialog->reject(); });
+        QCOMPARE(dialog->text().contains("throughout the project"), mode == PointsMode::Shared);
+        if (mode == PointsMode::Shared) {
+          QVERIFY(QDir().mkpath(QtTestArtifactDirectory()));
+          QVERIFY(dialog->grab().save(QDir(QtTestArtifactDirectory()).filePath("issue782-project-point-number-conflict.png")));
+        }
+        dialog->button(QMessageBox::Cancel)->click();
+      });
+      window.Submit("REGEN");
+      QVERIFY(!state.pointEditPrompt.active);
+    }
   }
 
   void pdfAnnotationsSaveAsWithoutChangingSource() {

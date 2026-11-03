@@ -956,6 +956,10 @@ bool RayHitSolidFace(const ray3d::Ray& ray, const std::vector<float>& triVerts,
 Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, float tolWorld,
              SnapExclude exclude, const ray3d::Ray* pickRay, const Kind* onlyKind) {
   SnapPickAccum acc{};
+  const auto isolatedOut = [&](const std::vector<EntityAttributes>& attrs, size_t index) {
+    return !cmd.hiddenEntityIds.empty() && index < attrs.size() &&
+           CadEntityIdHidden(&cmd.hiddenEntityIds, attrs[index].id);
+  };
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
   acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
   if (cmd.activeSpaceIndex < 0)
@@ -1009,6 +1013,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (isolatedOut(cmd.userLineAttrs, i / 6)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
           exclude.index == static_cast<int>(i / 6)) continue;
       const float x0 = L[i];
@@ -1052,6 +1057,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const auto& C = cmd.userCirclesCxCyZR;
   if (C.size() % 4 == 0 && (wantCenter || wantQuadrant)) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
+      if (isolatedOut(cmd.userCircleAttrs, i / 4)) continue;
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
@@ -1082,6 +1088,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   const int polyCount =
       static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
+    if (isolatedOut(cmd.userPolylineAttrs, static_cast<size_t>(pi))) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Polyline && exclude.index == pi) continue;
     const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
@@ -1198,6 +1205,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
 
   constexpr int kArcSnapSeg = 24;
   for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
+    if (isolatedOut(cmd.userArcAttrs, arcIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
         exclude.index == static_cast<int>(arcIdx)) continue;
     const CadArc& a = cmd.userArcs[arcIdx];
@@ -1258,6 +1266,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   constexpr int kEllSnapSeg = 36;
   constexpr float kTwoPi = 6.28318530718f;
   for (size_t ellIdx = 0; ellIdx < cmd.userEllipses.size(); ++ellIdx) {
+    if (isolatedOut(cmd.userEllAttrs, ellIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
         exclude.index == static_cast<int>(ellIdx)) continue;
     const CadEllipse& el = cmd.userEllipses[ellIdx];
@@ -1332,6 +1341,7 @@ Hit FindBest(double wx, double wy, AppCommandState& cmd, bool commandActive, flo
   // REQ-443: a spline's editable fit/CV points and its true curve ends participate in Endpoint;
   // perpendicular candidates are projected onto its adaptive tessellation chords.
   for (size_t splineIdx = 0; splineIdx < cmd.cadSplines.size(); ++splineIdx) {
+    if (isolatedOut(cmd.cadSplineAttrs, splineIdx)) continue;
     if (exclude.valid && exclude.type == SelectedEntity::Type::Spline &&
         exclude.index == static_cast<int>(splineIdx)) continue;
     const CadSpline& sp = cmd.cadSplines[splineIdx];
@@ -2426,6 +2436,14 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
 
   // CAD entity grips
   for (const SelectedEntity& sel : cmd.selection) {
+    // The moving entity must not snap its own live grip back to the preceding mouse frame; that
+    // turns a drag into a sticky cursor. Other selected entities' grips remain valid targets.
+    if ((cmd.entityGripMoveActive && sel.type == cmd.entityGripType &&
+         sel.index == cmd.entityGripEntityIndex) ||
+        ((cmd.dimGripMoveActive || cmd.mtextGripMoveActive) &&
+         sel.type == SelectedEntity::Type::Annotation &&
+         sel.index == (cmd.dimGripMoveActive ? cmd.dimGripAnnotationIndex : cmd.mtextGripAnnotationIndex)))
+      continue;
     if (sel.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(sel.index) * 6;
       if (k + 5 < cmd.userLinesFlat.size()) {

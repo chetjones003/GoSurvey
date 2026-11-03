@@ -632,6 +632,41 @@ void AppendSnapCircle(std::vector<float>& out, const SnapGlyphFrame& f, float r,
   }
 }
 
+/// Liang-Barsky clip of a world segment to the square |x - cx| <= r, |y - cy| <= r, in double.
+/// Returns false when nothing of the segment lies inside; otherwise the endpoints are replaced by the
+/// clipped ones. Done before any float narrowing, so the GPU never sees a far-off endpoint.
+static bool ClipSegmentToSquare(double& x0, double& y0, double& x1, double& y1, double cx, double cy, double r) {
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double p[4] = {-dx, dx, -dy, dy};
+  const double q[4] = {x0 - (cx - r), (cx + r) - x0, y0 - (cy - r), (cy + r) - y0};
+  double t0 = 0.0;
+  double t1 = 1.0;
+  for (int i = 0; i < 4; ++i) {
+    if (p[i] == 0.0) {
+      if (q[i] < 0.0)
+        return false;
+      continue;
+    }
+    const double t = q[i] / p[i];
+    if (p[i] < 0.0) {
+      if (t > t1)
+        return false;
+      t0 = std::max(t0, t);
+    } else {
+      if (t < t0)
+        return false;
+      t1 = std::min(t1, t);
+    }
+  }
+  const double nx0 = x0 + dx * t0;
+  const double ny0 = y0 + dy * t0;
+  x1 = x0 + dx * t1;
+  y1 = y0 + dy * t1;
+  x0 = nx0;
+  y0 = ny0;
+  return true;
+}
 
 void ConvertLineVertsWorldToView(const std::vector<float>& world, double viewAnchorX, double viewAnchorY,
                                  std::vector<float>* rel) {
@@ -645,6 +680,20 @@ void ConvertLineVertsWorldToView(const std::vector<float>& world, double viewAnc
     rel->push_back(rx);
     rel->push_back(ry);
     rel->push_back(world[i + 2]);
+  }
+}
+
+void ConvertLineVertsWorldToView(const std::vector<double>& world, double viewAnchorX, double viewAnchorY,
+                                 std::vector<float>* rel) {
+  rel->clear();
+  rel->reserve(world.size());
+  for (size_t i = 0; i + 2 < world.size(); i += 3) {
+    float rx = 0.f;
+    float ry = 0.f;
+    WorldToViewRelativeFloat(world[i], world[i + 1], viewAnchorX, viewAnchorY, &rx, &ry);
+    rel->push_back(rx);
+    rel->push_back(ry);
+    rel->push_back(static_cast<float>(world[i + 2]));
   }
 }
 
@@ -1200,7 +1249,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                                    const std::vector<float>* previewLines,
-                                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
+                                   const std::vector<float>* previewCircles, const std::vector<double>* highlightLines,
                                    const std::vector<float>* highlightCircles, const std::vector<float>* hoverLines,
                                    const std::vector<float>* hoverCircles, const std::vector<float>* surveyMarkers,
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
@@ -2635,9 +2684,16 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       // so the REQ-100 budget is untouched.
       const std::vector<std::uint64_t>* const hiddenIds = extended ? extended->hiddenEntityIds : nullptr;
 
-      auto appendUserLineSeg = [&](const EntityAttributes& attr, float x0, float y0, float z0, float x1, float y1,
+      // Clip square about the view anchor, in double. The drift budget keeps the view inside it for the
+      // life of the cache, and a scale change rebuilds the cache, so nothing visible is lost.
+      const double lineClipR = 2.0 * std::max(halfWd, halfHd);
+      auto appendUserLineSeg = [&](const EntityAttributes& attr, double x0, double y0, float z0, double x1, double y1,
                                    float z1, float dr, float dg, float db) {
         if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+          return;
+        // Clip in double BEFORE narrowing. A segment with one far-off endpoint otherwise reaches the GPU as
+        // clip coordinates in the 1e7 range, where float rounding moves the visible part by many pixels.
+        if (!ClipSegmentToSquare(x0, y0, x1, y1, viewAnchorX, viewAnchorY, lineClipR))
           return;
         const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
         const int vertsBefore = static_cast<int>(cpuVcLines_.size() / 7);
@@ -3062,15 +3118,36 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---
   if (highlightLines && !highlightLines->empty() && highlightLines->size() % 6 == 0) {
+    const double lineClipR = 2.0 * std::max(halfWd, halfHd);
+    std::vector<double> clipped;
+    clipped.reserve(highlightLines->size());
+    for (size_t i = 0; i + 5 < highlightLines->size(); i += 6) {
+      double x0 = (*highlightLines)[i];
+      double y0 = (*highlightLines)[i + 1];
+      double x1 = (*highlightLines)[i + 3];
+      double y1 = (*highlightLines)[i + 4];
+      const float z0 = static_cast<float>((*highlightLines)[i + 2]);
+      const float z1 = static_cast<float>((*highlightLines)[i + 5]);
+      if (!ClipSegmentToSquare(x0, y0, x1, y1, viewAnchorX, viewAnchorY, lineClipR))
+        continue;
+      clipped.push_back(x0);
+      clipped.push_back(y0);
+      clipped.push_back(z0);
+      clipped.push_back(x1);
+      clipped.push_back(y1);
+      clipped.push_back(z1);
+    }
     std::vector<float> hlLineRel;
-    ConvertLineVertsWorldToView(*highlightLines, viewAnchorX, viewAnchorY, &hlLineRel);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
-    glLineWidth(kLwHiLine);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlLineRel.size() * sizeof(float)), hlLineRel.data(),
-                 GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hlLineRel.size() / 3));
-    glLineWidth(kLwMain);
+    ConvertLineVertsWorldToView(clipped, viewAnchorX, viewAnchorY, &hlLineRel);
+    if (!hlLineRel.empty()) {
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, 0.30f, 0.58f, 1.f, 1.f);  // REQ-370 selected: blue tint
+      glLineWidth(kLwHiLine);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlLineRel.size() * sizeof(float)), hlLineRel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hlLineRel.size() / 3));
+      glLineWidth(kLwMain);
+    }
   }
   if (highlightCircles && !highlightCircles->empty() && highlightCircles->size() % 4 == 0) {
     std::vector<float> hlCircGeom;

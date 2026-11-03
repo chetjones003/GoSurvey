@@ -9645,7 +9645,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
 
 // Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
 // entities (REQ-038 #5). Caller pushes the undo snapshot.
-static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
+static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
   const CadClipboard& cb = st.clipboard;
   using ST = SelectedEntity::Type;
   st.selection.clear();
@@ -9914,7 +9914,17 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
 
 // Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
 // Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
-static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+static bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
+  const int tab = st.activeDrawingIdx;
+  if (tab <= 0 || tab >= static_cast<int>(st.drawingTabs.size())) return false;
+  const auto& drawing = st.drawingTabs[static_cast<size_t>(tab)];
+  if (drawing.projectUid == 0 || drawing.pointsMode == AppCommandState::DrawingTab::PointsMode::Detached) return false;
+  for (const auto& project : st.openProjects)
+    if (project.uid == drawing.projectUid) return project.readOnly;
+  return false;
+}
+
+static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, std::vector<std::string>& log) {
   // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
   // Cleared on the clipboard rather than on the destination arrays because this is the one place
   // both paste paths (PASTE and PASTEORIG) and both destination spaces pass through; the next
@@ -9931,13 +9941,43 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
-    const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
+    const int skipped = CommitPasteIntoPaper(st, *L, static_cast<float>(dx), static_cast<float>(dy));
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
                     " object(s) skipped (paper space does not store dimensions).");
+    if (!st.clipboard.surveyPoints.empty())
+      log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) +
+                    " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
+    st.selectedSurveyPointIndices.clear();
+    if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
+      log.push_back("PASTE — survey points not pasted: this project is open read-only.");
+    } else {
+      for (const SurveyPoint& source : st.clipboard.surveyPoints) {
+        SurveyPoint copy = source;
+        copy.easting += dx;
+        copy.northing += dy;
+        auto existing = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+                                     [&](const SurveyPoint& p) { return p.id == copy.id; });
+        if (st.clipboardPasteOverwrite && existing != st.surveyPoints.end()) {
+          const size_t index = static_cast<size_t>(existing - st.surveyPoints.begin());
+          copy.labelMtextAnnId = existing->labelMtextAnnId;
+          *existing = std::move(copy);
+          EnsureSurveyPointLabelMtext(st, index, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(index));
+        } else {
+          copy.labelMtextAnnId = 0;
+          st.surveyPoints.push_back(std::move(copy));
+          EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(st.surveyPoints.size() - 1));
+        }
+      }
+      if (!st.clipboard.surveyPoints.empty())
+        log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) + " survey point(s) pasted.");
+    }
+    st.clipboardPasteOverwrite = false;
   }
 }
 
@@ -15476,7 +15516,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
-    CommitClipboardPasteAt(st, static_cast<float>(wx), static_cast<float>(wy), log);  // routes by active space; builds the new selection
+    CommitClipboardPasteAt(st, wx, wy, log);  // routes by active space; builds the new selection
     return;
   }
 
@@ -16917,14 +16957,115 @@ bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
 // (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.
 // Calls the file-local CommitPasteFromClipboard (visible here via the anonymous namespace's using-directive).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
   if (st.clipboard.empty())
     return;
-  PushUndoSnapshot(st, "Paste");
-  CommitPasteFromClipboard(st, x - st.clipboard.basePtX, y - st.clipboard.basePtY, log);
+  const double dx = x - st.clipboard.basePtX;
+  const double dy = y - st.clipboard.basePtY;
+  if (!st.clipboardPasteResolving && !st.clipboard.surveyPoints.empty() &&
+      !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
+    std::unordered_set<int> destinationIds;
+    for (const SurveyPoint& point : st.surveyPoints)
+      destinationIds.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (projectUid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                                 AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == projectUid && project.points)
+            for (const auto& entry : project.points->points)
+              destinationIds.insert(entry.point.id);
+    }
+    std::vector<int> conflicts;
+    for (const SurveyPoint& point : st.clipboard.surveyPoints)
+      if (destinationIds.count(point.id))
+        conflicts.push_back(point.id);
+    if (!conflicts.empty()) {
+      st.pointEditPrompt = {};
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.clipboardPaste = true;
+      st.pointEditPrompt.tabIdx = st.activeDrawingIdx;
+      st.pointEditPrompt.conflicts = std::move(conflicts);
+      st.pointEditPrompt.projectUid = tab > 0 && tab < static_cast<int>(st.drawingTabs.size())
+                                          ? st.drawingTabs[static_cast<size_t>(tab)].projectUid : 0;
+      st.pointEditPrompt.projectName = "clipboard paste";
+      st.clipboardPasteResolving = false;
+      st.pendingCopyDx = dx;
+      st.pendingCopyDy = dy;
+      st.active = AppCommandState::Kind::None;
+      st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+      log.push_back("PASTE — point number conflict; choose overwrite, renumber, or cancel.");
+      return;
+    }
+  }
+  st.clipboardPasteResolving = false;
+  PushUndoSnapshot(st, st.clipboardPasteOriginal ? "Paste original" : "Paste");
+  CommitPasteFromClipboard(st, dx, dy, log);
   st.active = AppCommandState::Kind::None;
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  log.push_back("PASTE complete.");
+  if (st.clipboardPasteOriginal) {
+    log.push_back("PASTEORIG — clipboard contents pasted at original coordinates.");
+    st.clipboardPasteOriginal = false;
+  } else {
+    log.push_back("PASTE complete.");
+  }
+}
+
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log) {
+  if (!st.pointEditPrompt.active || !st.pointEditPrompt.clipboardPaste)
+    return;
+  const std::vector<int> conflicts = st.pointEditPrompt.conflicts;
+  st.pointEditPrompt = {};
+  if (answer == AppCommandState::PointEditPrompt::Answer::Cancel) {
+    st.clipboardPasteOriginal = false;
+    log.push_back("PASTE — cancelled; the drawing and clipboard are unchanged.");
+    return;
+  }
+  std::vector<SurveyPoint> originalPoints = st.clipboard.surveyPoints;
+  if (answer == AppCommandState::PointEditPrompt::Answer::Renumber) {
+    std::unordered_set<int> used;
+    for (const SurveyPoint& point : st.surveyPoints) used.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t uid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (uid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                          AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == uid && project.points)
+            for (const auto& entry : project.points->points) used.insert(entry.point.id);
+    }
+    int next = st.createPointsNextId - 1;
+    for (const int id : used) next = std::max(next, id);
+    ++next;
+    for (SurveyPoint& point : st.clipboard.surveyPoints) {
+      if (std::find(conflicts.begin(), conflicts.end(), point.id) == conflicts.end()) continue;
+      point.id = next;
+      used.insert(next++);
+      point.labelMtextAnnId = 0;
+    }
+    st.createPointsNextId = std::max(st.createPointsNextId, next);
+  } else if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    st.clipboardPasteOverwrite = true;
+  }
+  st.clipboardPasteResolving = true;
+  const double x = st.clipboard.basePtX + st.pendingCopyDx;
+  const double y = st.clipboard.basePtY + st.pendingCopyDy;
+  CommitClipboardPasteAt(st, x, y, log);
+  st.clipboard.surveyPoints = std::move(originalPoints);
+  if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size()) &&
+        st.drawingTabs[static_cast<size_t>(tab)].projectUid != 0 &&
+        st.drawingTabs[static_cast<size_t>(tab)].pointsMode != AppCommandState::DrawingTab::PointsMode::Detached) {
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      st.pointEditPrompt.tabIdx = tab;
+      st.pointEditPrompt.conflicts = conflicts;
+      st.pointEditPrompt.conflictAnswer = AppCommandState::PointEditPrompt::Answer::Proceed;
+    }
+  }
 }
 
 // Append filled regions fully enclosed by [mnX,mxX]×[mnY,mxY] to the clipboard (REQ-038 addendum). Fills are
@@ -17090,7 +17231,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     CopyPaperSelectionToClipboard(st, *L, log);
     return;
   }
-  if (st.selection.empty()) {
+  if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
   }
@@ -17117,8 +17258,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
-  float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
-  auto expandBbox = [&](float x, float y) {
+  double mnX = 1e300, mnY = 1e300, mxX = -1e300, mxY = -1e300;
+  auto expandBbox = [&](double x, double y) {
     mnX = std::min(mnX, x); mnY = std::min(mnY, y);
     mxX = std::max(mxX, x); mxY = std::max(mxY, y);
   };
@@ -17240,6 +17381,13 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         expandBbox(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]));
     }
   }
+  for (const int index : st.selectedSurveyPointIndices) {
+    if (index < 0 || static_cast<size_t>(index) >= st.surveyPoints.size())
+      continue;
+    const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
+    cb.surveyPoints.push_back(point);
+    expandBbox(point.easting, point.northing);
+  }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
   // the ones already taken so they aren't duplicated.
@@ -17249,8 +17397,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     cb.basePtX = 0.f;
     cb.basePtY = 0.f;
   } else {
-    cb.basePtX = (mnX + mxX) * 0.5f;
-    cb.basePtY = (mnY + mxY) * 0.5f;
+    cb.basePtX = (mnX + mxX) * 0.5;
+    cb.basePtY = (mnY + mxY) * 0.5;
   }
 
   // REQ-087 / REQ-201. The clipboard has no feature-line store, so the walk above skips them — and
@@ -17264,7 +17412,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       ++featureLinesNotCopied;
   log.push_back("COPYCLIP — " +
                 std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
-                " object(s) copied to clipboard.");
+                " object(s) and " + std::to_string(cb.surveyPoints.size()) +
+                " survey point(s) copied to clipboard.");
   if (featureLinesNotCopied > 0)
     log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
                   (featureLinesNotCopied == 1 ? "" : "s") +
@@ -17296,6 +17445,7 @@ void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, false, log))
     return;
+  st.clipboardPasteOriginal = false;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -17314,9 +17464,8 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, true, log))
     return;
-  PushUndoSnapshot(st, "Paste original");
-  CommitPasteFromClipboard(st, 0.f, 0.f, log);
-  log.push_back("PASTEORIG — objects pasted at original coordinates.");
+  st.clipboardPasteOriginal = true;
+  CommitClipboardPasteAt(st, st.clipboard.basePtX, st.clipboard.basePtY, log);
 }
 
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -27426,6 +27575,19 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y, float z) {
     if (static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
       return;
     const size_t k = static_cast<size_t>(idx) * 6;
+    if (st.entityGripLengthenMode) {
+      const float x0 = static_cast<float>(st.userLinesFlat[k]);
+      const float y0 = static_cast<float>(st.userLinesFlat[k + 1]);
+      const float x1 = static_cast<float>(st.userLinesFlat[k + 3]);
+      const float y1 = static_cast<float>(st.userLinesFlat[k + 4]);
+      const float fixedX = st.entityGripWhich == 0 ? x1 : x0;
+      const float fixedY = st.entityGripWhich == 0 ? y1 : y0;
+      float along = (x - fixedX) * st.entityGripLengthenDirX + (y - fixedY) * st.entityGripLengthenDirY;
+      if (!(along > 1e-6f) || !std::isfinite(along))
+        along = 1e-6f;
+      x = fixedX + st.entityGripLengthenDirX * along;
+      y = fixedY + st.entityGripLengthenDirY * along;
+    }
     if (st.entityGripWhich == 0) {
       st.userLinesFlat[k] = x;
       st.userLinesFlat[k + 1] = y;
@@ -29023,24 +29185,16 @@ bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vecto
   return false;
 }
 
-static bool SegSegIntersectParam(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
-                                 float* tAB) {
-  const float rx = bx - ax;
-  const float ry = by - ay;
-  const float sx = dx - cx;
-  const float sy = dy - cy;
-  const float denom = rx * sy - ry * sx;
-  if (std::fabs(denom) < 1e-12f)
-    return false;
-  /// Solve A + t r = C + u s  =>  t r - u s = C - A  (Cramer's rule on t, u).
-  const float wx = cx - ax;
-  const float wy = cy - ay;
-  const float t = (wx * sy - wy * sx) / denom;
-  const float u = (wx * ry - wy * rx) / denom;
-  if (t >= 0.f && t <= 1.f && u >= 0.f && u <= 1.f) {
-    *tAB = t;
-    return true;
-  }
+static bool SegSegIntersectParamD(double ax, double ay, double bx, double by, double cx, double cy,
+                                  double dx, double dy, double* tAB) {
+  const double rx = bx - ax, ry = by - ay;
+  const double sx = dx - cx, sy = dy - cy;
+  const double denom = rx * sy - ry * sx;
+  if (std::fabs(denom) < 1e-12) return false;
+  const double wx = cx - ax, wy = cy - ay;
+  const double t = (wx * sy - wy * sx) / denom;
+  const double u = (wx * ry - wy * rx) / denom;
+  if (t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0) { *tAB = t; return true; }
   return false;
 }
 
@@ -29050,6 +29204,8 @@ struct TrimTargetEdge {
   int polyIx = -1;
   int vLo = -1;
 };
+
+static double PickDistSqPointSegmentD(double px, double py, double ax, double ay, double bx, double by);
 
 static bool SelectedEntityMatches(const SelectedEntity& a, const SelectedEntity& b) {
   return a.type == b.type && a.index == b.index;
@@ -29061,8 +29217,8 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
   if (cut.type == ST::LineSeg) {
     const size_t k = static_cast<size_t>(cut.index) * 6;
     if (k + 5 < st.userLinesFlat.size())
-      out->push_back({static_cast<float>(st.userLinesFlat[k]), static_cast<float>(st.userLinesFlat[k + 1]),
-                      static_cast<float>(st.userLinesFlat[k + 3]), static_cast<float>(st.userLinesFlat[k + 4])});
+      out->push_back({st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                      st.userLinesFlat[k + 4]});
     return;
   }
   if (cut.type == ST::Circle) {
@@ -29269,7 +29425,7 @@ static void BuildTrimCutSegments(const AppCommandState& st, const std::vector<Se
 }
 
 static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy, float tolWorld,
-                                  TrimTargetEdge* outRef, float* ax, float* ay, float* bx, float* by,
+                                  TrimTargetEdge* outRef, double* ax, double* ay, double* bx, double* by,
                                   float* outDistSq) {
   if (!outRef || !ax || !ay || !bx || !by || !outDistSq)
     return false;
@@ -29277,16 +29433,13 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
   bool any = false;
   float best = 0.f;
   TrimTargetEdge bestR{};
-  float bax = 0.f, bay = 0.f, bbx = 0.f, bby = 0.f;
+  double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
   const auto& Lf = st.userLinesFlat;
   if (Lf.size() % 6 == 0) {
     for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const float x0 = static_cast<float>(Lf[li]);
-      const float y0 = static_cast<float>(Lf[li + 1]);
-      const float x1 = static_cast<float>(Lf[li + 3]);
-      const float y1 = static_cast<float>(Lf[li + 4]);
-      const float d2 = CadCmdGeom::DistSqPointSegment(wx, wy, x0, y0, x1, y1);
+      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
+      const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         continue;
       if (!any || d2 < best - 1e-12f) {
@@ -29310,11 +29463,11 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const float x0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-      const float y0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-      const float x1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-      const float y1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
-      const float d2 = CadCmdGeom::DistSqPointSegment(wx, wy, x0, y0, x1, y1);
+      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
+      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
+      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
+      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
+      const float d2 = static_cast<float>(PickDistSqPointSegmentD(wx, wy, x0, y0, x1, y1));
       if (d2 > tol2)
         return;
       if (!any || d2 < best - 1e-12f) {
@@ -29348,23 +29501,20 @@ static bool PickClosestTrimTarget(const AppCommandState& st, float wx, float wy,
 
 /// Drawing edge (line or poly segment) whose geometry passes closest to the user-drawn segment \p u1–\p u2.
 static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float u1x, float u1y, float u2x, float u2y,
-                                                 float tolWorld, TrimTargetEdge* outRef, float* ax, float* ay,
-                                                 float* bx, float* by, float* outDistSq) {
+                                                 float tolWorld, TrimTargetEdge* outRef, double* ax, double* ay,
+                                                 double* bx, double* by, float* outDistSq) {
   if (!outRef || !ax || !ay || !bx || !by || !outDistSq)
     return false;
   const float tol2 = tolWorld * tolWorld;
   bool any = false;
   float best = 0.f;
   TrimTargetEdge bestR{};
-  float bax = 0.f, bay = 0.f, bbx = 0.f, bby = 0.f;
+  double bax = 0.0, bay = 0.0, bbx = 0.0, bby = 0.0;
 
   const auto& Lf = st.userLinesFlat;
   if (Lf.size() % 6 == 0) {
     for (size_t li = 0; li + 5 < Lf.size(); li += 6) {
-      const float x0 = static_cast<float>(Lf[li]);
-      const float y0 = static_cast<float>(Lf[li + 1]);
-      const float x1 = static_cast<float>(Lf[li + 3]);
-      const float y1 = static_cast<float>(Lf[li + 4]);
+      const double x0 = Lf[li], y0 = Lf[li + 1], x1 = Lf[li + 3], y1 = Lf[li + 4];
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         continue;
@@ -29389,10 +29539,10 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
     const bool closed =
         static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
     auto tryEdge = [&](int vi) {
-      const float x0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3)]);
-      const float y0 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)]);
-      const float x1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)]);
-      const float y1 = static_cast<float>(st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)]);
+      const double x0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3)];
+      const double y0 = st.userPolylineVerts[(static_cast<size_t>(vi)* 3 + 1)];
+      const double x1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3)];
+      const double y1 = st.userPolylineVerts[(static_cast<size_t>((vi + 1))* 3 + 1)];
       const float d2 = CadCmdGeom::MinDistSqSegSeg(u1x, u1y, u2x, u2y, x0, y0, x1, y1);
       if (d2 > tol2)
         return;
@@ -29425,36 +29575,35 @@ static bool PickTrimTargetClosestToDrawnSegment(const AppCommandState& st, float
   return true;
 }
 
-static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by, float pickX, float pickY,
+static bool TrimSegmentIntersectPickSide(double ax, double ay, double bx, double by, double pickX, double pickY,
                                          const std::vector<std::array<double, 4>>& cuts, const AppCommandState& st,
-                                         float fenceFx, float fenceFy, float fenceGx, float fenceGy,
+                                         double fenceFx, double fenceFy, double fenceGx, double fenceGy,
                                          bool useFenceToPickIntersection,
-                                         float* outIx, float* outIy, bool* trimFromA, std::vector<std::string>* log) {
-  float epsGeom = 1e-5f;
+                                         double* outIx, double* outIy, bool* trimFromA, std::vector<std::string>* log) {
+  double epsGeom = 1e-5;
   double dmnX = 0.;
   double dmxX = 0.;
   double dmnY = 0.;
   double dmxY = 0.;
   if (ComputeWorldExtents(st, &dmnX, &dmxX, &dmnY, &dmxY))
-    epsGeom = std::max(1e-8f, static_cast<float>(1e-6 * std::max(dmxX - dmnX, dmxY - dmnY)));
+    epsGeom = std::max(1e-8, 1e-6 * std::max(dmxX - dmnX, dmxY - dmnY));
 
-  const float vx = bx - ax;
-  const float vy = by - ay;
-  const float len2 = vx * vx + vy * vy;
-  if (len2 < 1e-18f) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1e-24) {
     if (log)
       log->push_back("TRIM — degenerate segment.");
     return false;
   }
-  const float segLen = std::sqrt(len2);
-  const float epsT =
-      std::clamp(segLen > 1e-12f ? epsGeom / segLen : 1e-7f, 1e-9f, 0.05f);
+  const double segLen = std::sqrt(len2);
+  const double epsT = std::clamp(segLen > 1e-12 ? epsGeom / segLen : 1e-9, 1e-12, 0.05);
 
-  std::vector<float> ts;
+  std::vector<double> ts;
   for (const auto& seg : cuts) {
-    float t = 0.f;
-    if (SegSegIntersectParam(ax, ay, bx, by, static_cast<float>(seg[0]), static_cast<float>(seg[1]), static_cast<float>(seg[2]), static_cast<float>(seg[3]), &t)) {
-      if (t > epsT && t < 1.f - epsT)
+    double t = 0.0;
+    if (SegSegIntersectParamD(ax, ay, bx, by, seg[0], seg[1], seg[2], seg[3], &t)) {
+      if (t > epsT && t < 1.0 - epsT)
         ts.push_back(t);
     }
   }
@@ -29466,47 +29615,46 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
 
   std::sort(ts.begin(), ts.end());
   ts.erase(std::unique(ts.begin(), ts.end(),
-                       [&](float a, float b) { return std::fabs(a - b) < std::max(1e-7f, epsGeom / segLen); }),
+                       [&](double a, double b) { return std::fabs(a - b) < std::max(1e-12, epsGeom / segLen); }),
            ts.end());
 
-  const float u =
-      std::clamp(((pickX - ax) * vx + (pickY - ay) * vy) / len2, 0.f, 1.f);
+  const double u = std::clamp(((pickX - ax) * vx + (pickY - ay) * vy) / len2, 0.0, 1.0);
 
-  const float fdx = fenceGx - fenceFx;
-  const float fdy = fenceGy - fenceFy;
-  const float fenceLen2 = fdx * fdx + fdy * fdy;
-  const bool fenceOk = useFenceToPickIntersection && fenceLen2 >= 1e-24f;
+  const double fdx = fenceGx - fenceFx;
+  const double fdy = fenceGy - fenceFy;
+  const double fenceLen2 = fdx * fdx + fdy * fdy;
+  const bool fenceOk = useFenceToPickIntersection && fenceLen2 >= 1e-24;
 
-  float tNear = ts.front();
+  double tNear = ts.front();
   if (fenceOk) {
-    float bestFenceD2 = 1e30f;
-    float bestPickAbs = 1e30f;
-    for (float t : ts) {
-      const float ix = ax + t * vx;
-      const float iy = ay + t * vy;
-      const float df2 = CadCmdGeom::DistSqPointSegment(ix, iy, fenceFx, fenceFy, fenceGx, fenceGy);
-      const float dp = std::fabs(t - u);
-      if (df2 < bestFenceD2 - 1e-18f ||
-          (std::fabs(df2 - bestFenceD2) <= 1e-18f && dp < bestPickAbs - 1e-12f)) {
+    double bestFenceD2 = 1e300;
+    double bestPickAbs = 1e300;
+    for (double t : ts) {
+      const double ix = ax + t * vx;
+      const double iy = ay + t * vy;
+      const double df2 = PickDistSqPointSegmentD(ix, iy, fenceFx, fenceFy, fenceGx, fenceGy);
+      const double dp = std::fabs(t - u);
+      if (df2 < bestFenceD2 - 1e-24 ||
+          (std::fabs(df2 - bestFenceD2) <= 1e-24 && dp < bestPickAbs - 1e-15)) {
         bestFenceD2 = df2;
         bestPickAbs = dp;
         tNear = t;
       }
     }
   } else {
-    float bestAbs = std::fabs(ts.front() - u);
-    for (float t : ts) {
-      const float d = std::fabs(t - u);
-      if (d < bestAbs - 1e-12f) {
+    double bestAbs = std::fabs(ts.front() - u);
+    for (double t : ts) {
+      const double d = std::fabs(t - u);
+      if (d < bestAbs - 1e-15) {
         bestAbs = d;
         tNear = t;
       }
     }
   }
 
-  const float ix = ax + tNear * vx;
-  const float iy = ay + tNear * vy;
-  const float epsParam = std::max(1e-7f, epsGeom / segLen);
+  const double ix = ax + tNear * vx;
+  const double iy = ay + tNear * vy;
+  const double epsParam = std::max(1e-12, epsGeom / segLen);
 
   bool trimA = false;
   if (u < tNear - epsParam)
@@ -29514,8 +29662,8 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
   else if (u > tNear + epsParam)
     trimA = false;
   else {
-    const float dA = (pickX - ax) * (pickX - ax) + (pickY - ay) * (pickY - ay);
-    const float dB = (pickX - bx) * (pickX - bx) + (pickY - by) * (pickY - by);
+    const double dA = (pickX - ax) * (pickX - ax) + (pickY - ay) * (pickY - ay);
+    const double dB = (pickX - bx) * (pickX - bx) + (pickY - by) * (pickY - by);
     trimA = dA <= dB;
   }
 
@@ -29527,19 +29675,19 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
 
 /// AutoCAD-style: shorten segment toward the nearest cutting intersection from the pick (portion containing pick is
 /// removed).
-static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge& tgt, float ax, float ay, float bx,
-                                      float by, float pickX, float pickY,
+static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge& tgt, double ax, double ay, double bx,
+                                      double by, double pickX, double pickY,
                                       const std::vector<std::array<double, 4>>& cuts, bool useFence,
-                                      float fenceFx, float fenceFy, float fenceGx, float fenceGy,
+                                      double fenceFx, double fenceFy, double fenceGx, double fenceGy,
                                       std::vector<std::string>& log) {
-  float ix = 0.f, iy = 0.f;
+  double ix = 0.0, iy = 0.0;
   bool trimA = false;
   if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickX, pickY, cuts, st, fenceFx, fenceFy, fenceGx, fenceGy,
                                     useFence, &ix, &iy, &trimA, &log))
     return false;
 
-  const float rx = ix;
-  const float ry = iy;
+  const double rx = ix;
+  const double ry = iy;
 
   if (tgt.kind == TrimTargetEdge::Line) {
     const size_t k = static_cast<size_t>(tgt.lineIx) * 6;
@@ -29552,9 +29700,9 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
       st.userLinesFlat[k + 3] = rx;
       st.userLinesFlat[k + 4] = ry;
     }
-    const float exx = static_cast<float>(st.userLinesFlat[k + 3] - st.userLinesFlat[k]);
-    const float eyy = static_cast<float>(st.userLinesFlat[k + 4] - st.userLinesFlat[k + 1]);
-    if (exx * exx + eyy * eyy < 1e-12f) {
+    const double exx = st.userLinesFlat[k + 3] - st.userLinesFlat[k];
+    const double eyy = st.userLinesFlat[k + 4] - st.userLinesFlat[k + 1];
+    if (exx * exx + eyy * eyy < 1e-24) {
       st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
                              st.userLinesFlat.begin() + (static_cast<std::ptrdiff_t>(k)+ 6));
       if (static_cast<size_t>(tgt.lineIx) < st.userLineAttrs.size())
@@ -30936,7 +31084,8 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
     matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
 
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float dEdge = 0.f;
   if (!PickTrimTargetClosestToDrawnSegment(st, fenceP1x, fenceP1y, fenceP2x, fenceP2y, matchTol, &tgt, &ax, &ay,
                                            &bx, &by, &dEdge))
     return;
@@ -30946,16 +31095,16 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
   if (cuts.empty())
     return;
 
-  float ix = 0.f, iy = 0.f;
+  double ix = 0.0, iy = 0.0;
   bool trimA = false;
   if (!TrimSegmentIntersectPickSide(ax, ay, bx, by, pickPreviewX, pickPreviewY, cuts, st, fenceP1x, fenceP1y,
                                     fenceP2x, fenceP2y, true, &ix, &iy, &trimA, nullptr))
     return;
 
-  const float rx = trimA ? ax : ix;
-  const float ry = trimA ? ay : iy;
-  const float sx = trimA ? ix : bx;
-  const float sy = trimA ? iy : by;
+  const double rx = trimA ? ax : ix;
+  const double ry = trimA ? ay : iy;
+  const double sx = trimA ? ix : bx;
+  const double sy = trimA ? iy : by;
   previewLinesOut->push_back(rx);
   previewLinesOut->push_back(ry);
   previewLinesOut->push_back(0.f);
@@ -30974,7 +31123,8 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float dEdge = 0.f;
   if (!PickTrimTargetClosestToDrawnSegment(st, p1x, p1y, p2x, p2y, matchTol, &tgt, &ax, &ay, &bx, &by, &dEdge)) {
     log.push_back("TRIM — no segment close enough to your line (draw along the edge to shorten).");
     return;
@@ -31721,7 +31871,8 @@ static bool SubmitPaperTrimPick(AppCommandState& st, float x, float y, float tol
   }
 
   TrimTargetEdge target{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float d2 = 0.f;
   if (!PickClosestTrimTarget(staged, x, y, tol, &target, &ax, &ay, &bx, &by, &d2)) {
     log.push_back("TRIM — nothing to trim at paper-space pick.");
     return false;
@@ -31861,7 +32012,8 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     return Try3DLineTrim(st, wx, wy, tolWorld, *pickRay, log);
 
   TrimTargetEdge tgt{};
-  float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
+  double ax = 0.0, ay = 0.0, bx = 0.0, by = 0.0;
+  float d2 = 0.f;
   if (!PickClosestTrimTarget(st, wx, wy, tolWorld, &tgt, &ax, &ay, &bx, &by, &d2)) {
     // REQ-087 / REQ-201. "Nothing to trim" is a lie when there plainly IS something under the
     // cursor and it happens to be a feature line. Say which it is: trimming one is undefined —

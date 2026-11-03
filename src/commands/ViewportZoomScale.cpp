@@ -85,11 +85,18 @@ float ViewportZoomForModelUnitsPerInch(float modelUnitsPerInch, float viewportHe
   return 100.f / std::max(visibleWorld, 1.e-6f);
 }
 
-void ApplyViewportZoomScaleIndex(AppCommandState& st, int index, float viewportHeightPx, float dpiY) {
+void SetCurrentViewportZoomScaleIndex(AppCommandState& st, int index) {
   EnsureDefaultViewportZoomScales(st.viewportZoomScales);
   if (index < 0 || index >= static_cast<int>(st.viewportZoomScales.size()))
     return;
   st.currentViewportZoomScaleIndex = index;
+}
+
+void ApplyViewportZoomScaleIndex(AppCommandState& st, int index, float viewportHeightPx, float dpiY) {
+  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
+  if (index < 0 || index >= static_cast<int>(st.viewportZoomScales.size()))
+    return;
+  SetCurrentViewportZoomScaleIndex(st, index);
   const float mupi = CadViewportZoomScaleModelUnitsPerInch(st.viewportZoomScales[static_cast<std::size_t>(index)]);
   st.viewportZoom = ViewportZoomForModelUnitsPerInch(mupi, viewportHeightPx, dpiY);
   if (st.activeSpaceIndex == kModelSpaceIndex) {
@@ -101,25 +108,22 @@ void ApplyViewportZoomScaleIndex(AppCommandState& st, int index, float viewportH
   BumpCadGpuCache(st);
 }
 
-void SyncCurrentViewportZoomScaleIndex(AppCommandState& st, float viewportHeightPx, float dpiY) {
+void EnsureViewportZoomScaleIndexForDisplay(AppCommandState& st) {
+  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
   if (st.viewportZoomScales.empty()) {
     st.currentViewportZoomScaleIndex = -1;
     return;
   }
-  const float currentZoom = std::max(st.viewportZoom, 1.e-9f);
-  int best = -1;
-  float bestErr = 1e9f;
+  if (st.currentViewportZoomScaleIndex >= 0 &&
+      st.currentViewportZoomScaleIndex < static_cast<int>(st.viewportZoomScales.size()))
+    return;
   for (int i = 0; i < static_cast<int>(st.viewportZoomScales.size()); ++i) {
-    const float mupi =
-        CadViewportZoomScaleModelUnitsPerInch(st.viewportZoomScales[static_cast<std::size_t>(i)]);
-    const float expected = ViewportZoomForModelUnitsPerInch(mupi, viewportHeightPx, dpiY);
-    const float err = std::fabs(expected - currentZoom) / currentZoom;
-    if (err < bestErr) {
-      bestErr = err;
-      best = i;
+    if (st.viewportZoomScales[static_cast<std::size_t>(i)].name == "1:50") {
+      st.currentViewportZoomScaleIndex = i;
+      return;
     }
   }
-  st.currentViewportZoomScaleIndex = bestErr < 0.02f ? best : -1;
+  st.currentViewportZoomScaleIndex = 0;
 }
 
 std::string CadViewportZoomScaleStatusLabel(const CadAnnotationScale& scale) {
