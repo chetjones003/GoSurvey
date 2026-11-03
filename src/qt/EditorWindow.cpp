@@ -1794,6 +1794,7 @@ void EditorWindow::EndInteractiveResize() {
 }
 
 void EditorWindow::SwitchDrawing(int index) {
+  ++m_DocumentGeneration;
   if (index < 0 || index >= static_cast<int>(m_State.drawingTabs.size()) || index == m_State.activeDrawingIdx) return;
   CancelActiveCommand(m_State, m_Log);
   RefreshProjects();
@@ -1828,6 +1829,7 @@ void EditorWindow::NewDrawing(std::uint32_t projectUid) {
 }
 
 void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QString& templatePath) {
+  ++m_DocumentGeneration;
   RefreshProjects();
   const int previous = m_State.activeDrawingIdx;
   SaveDocumentToSnapshot(m_State, m_State.activeDrawingIdx);
@@ -1870,6 +1872,7 @@ void EditorWindow::CreateDrawingFromTemplate(std::uint32_t projectUid, const QSt
 }
 
 void EditorWindow::OpenDrawing(const QString& path) {
+  ++m_DocumentGeneration;
   const auto found = gsproj::FindProjectFor(std::filesystem::path(path.toStdWString()));
   std::uint32_t uid = 0;
   if (found.state == gsproj::FindState::Damaged) {

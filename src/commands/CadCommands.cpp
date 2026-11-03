@@ -135,6 +135,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.featureLineClosed      = cmd.featureLineClosed;
   doc.featureLineElevPt      = cmd.featureLineElevPt;
   doc.featureLineInfo        = cmd.featureLineInfo;
+  doc.gradingPresets         = cmd.gradingPresets;
   doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
@@ -256,6 +257,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.featureLineClosed          = doc.featureLineClosed;
   cmd.featureLineElevPt          = doc.featureLineElevPt;
   cmd.featureLineInfo            = doc.featureLineInfo;
+  cmd.gradingPresets              = doc.gradingPresets;
   cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
@@ -1970,6 +1972,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.featureLineClosed    = st.featureLineClosed;
   snap.featureLineElevPt    = st.featureLineElevPt;
   snap.featureLineInfo      = st.featureLineInfo;
+  snap.gradingPresets       = st.gradingPresets;
   snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
@@ -2037,6 +2040,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.featureLineClosed    = snap.featureLineClosed;
   st.featureLineElevPt    = snap.featureLineElevPt;
   st.featureLineInfo      = snap.featureLineInfo;
+  st.gradingPresets       = snap.gradingPresets;
   st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
@@ -3062,14 +3066,14 @@ void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::v
     return;
   for (size_t i = 0; i + 1 < n; ++i) {
     TinConstraint c;
-    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = static_cast<float>(chain.verts[i][2]);
-    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = static_cast<float>(chain.verts[i + 1][2]);
+    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = chain.verts[i][2];
+    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = chain.verts[i + 1][2];
     out.push_back(c);
   }
   if ((forceClosed || chain.closed) && n >= 3) {
     TinConstraint c;
-    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = static_cast<float>(chain.verts[n - 1][2]);
-    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = static_cast<float>(chain.verts[0][2]);
+    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = chain.verts[n - 1][2];
+    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = chain.verts[0][2];
     out.push_back(c);
   }
 }
@@ -3095,6 +3099,56 @@ struct SurfaceBuildInputs {
   std::vector<double> volumeCompVertsXyz;
   std::vector<std::uint32_t> volumeCompIndices;
 };
+
+bool IsSimpleInfillPolygon(const std::vector<double>& xyz, std::string* why) {
+  const size_t n = xyz.size() / 3;
+  if (n < 3 || xyz.size() % 3 != 0) { if (why) *why = "boundary needs at least three vertices"; return false; }
+  double minX = xyz[0], maxX = xyz[0], minY = xyz[1], maxY = xyz[1];
+  for (size_t i = 0; i < n; ++i) {
+    minX = std::min(minX, xyz[i * 3]); maxX = std::max(maxX, xyz[i * 3]);
+    minY = std::min(minY, xyz[i * 3 + 1]); maxY = std::max(maxY, xyz[i * 3 + 1]);
+  }
+  const double scale = std::max(1.0, std::hypot(maxX - minX, maxY - minY));
+  const double eps = scale * 1e-10, crossEps = eps * scale;
+  const double ox = xyz[0], oy = xyz[1];
+  double area2 = 0.0;
+  for (size_t i = 0; i < n; ++i) {
+    const size_t j = (i + 1) % n;
+    const double ax = xyz[i * 3] - ox, ay = xyz[i * 3 + 1] - oy;
+    const double bx = xyz[j * 3] - ox, by = xyz[j * 3 + 1] - oy;
+    if (std::hypot(ax - bx, ay - by) <= eps) { if (why) *why = "boundary has a zero-length edge"; return false; }
+    area2 += ax * by - bx * ay;
+  }
+  if (std::abs(area2) <= crossEps) { if (why) *why = "boundary has zero plan area"; return false; }
+  auto orient = [&](size_t a, size_t b, size_t c) {
+    const double abx = xyz[b * 3] - xyz[a * 3], aby = xyz[b * 3 + 1] - xyz[a * 3 + 1];
+    const double acx = xyz[c * 3] - xyz[a * 3], acy = xyz[c * 3 + 1] - xyz[a * 3 + 1];
+    return abx * acy - aby * acx;
+  };
+  auto onSegment = [&](size_t a, size_t b, size_t p) {
+    return xyz[p * 3] >= std::min(xyz[a * 3], xyz[b * 3]) - eps &&
+           xyz[p * 3] <= std::max(xyz[a * 3], xyz[b * 3]) + eps &&
+           xyz[p * 3 + 1] >= std::min(xyz[a * 3 + 1], xyz[b * 3 + 1]) - eps &&
+           xyz[p * 3 + 1] <= std::max(xyz[a * 3 + 1], xyz[b * 3 + 1]) + eps;
+  };
+  for (size_t a = 0; a < n; ++a) {
+    const size_t b = (a + 1) % n;
+    for (size_t c = a + 1; c < n; ++c) {
+      const size_t d = (c + 1) % n;
+      if (a == c || b == c || d == a) continue;
+      const double abC = orient(a, b, c), abD = orient(a, b, d);
+      const double cdA = orient(c, d, a), cdB = orient(c, d, b);
+      const bool proper = ((abC > crossEps && abD < -crossEps) || (abC < -crossEps && abD > crossEps)) &&
+                          ((cdA > crossEps && cdB < -crossEps) || (cdA < -crossEps && cdB > crossEps));
+      const bool touch = (std::abs(abC) <= crossEps && onSegment(a, b, c)) ||
+                         (std::abs(abD) <= crossEps && onSegment(a, b, d)) ||
+                         (std::abs(cdA) <= crossEps && onSegment(c, d, a)) ||
+                         (std::abs(cdB) <= crossEps && onSegment(c, d, b));
+      if (proper || touch) { if (why) *why = "boundary self-intersects or touches itself"; return false; }
+    }
+  }
+  return true;
+}
 
 static void ApplyDefinitionPointEdits(const CadSurface& surface, SurfaceBuildInputs& in) {
   assert(std::isfinite(in.originX));
@@ -3160,6 +3214,55 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
   SurfaceBuildInputs in;
   in.originX = st.worldDocumentOriginX;
   in.originY = st.worldDocumentOriginY;
+
+  if (surface.gradingGroup) {
+    for (const auto &member : surface.gradingMembers) {
+      if (!member.strips) {
+        in.inputsIncomplete = true;
+        in.incompleteReason = "missing baked grading strips";
+        log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+        return in;
+      }
+      for (const auto &strip : *member.strips) {
+        if (((member.infill && (strip.size() < 9 || strip.size() % 3 != 0)) ||
+             (!member.infill && strip.size() != 12)) ||
+            !std::all_of(strip.begin(), strip.end(),
+                         [](double v) { return std::isfinite(v); })) {
+          in.inputsIncomplete = true;
+          in.incompleteReason = "invalid baked grading strip";
+          log.push_back("Surface \"" + surface.name +
+                        "\": " + in.incompleteReason);
+          return in;
+        }
+        if (member.infill) {
+          std::string polygonError;
+          if (!IsSimpleInfillPolygon(strip, &polygonError)) {
+            in.inputsIncomplete = true;
+            in.incompleteReason = "infill " + polygonError;
+            log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+            return in;
+          }
+        }
+        ResolvedChain chain;
+        TinBoundaryLoop loop;
+        loop.kind =
+            TinBoundaryKind::Clip; // union, including disconnected members
+        for (size_t v = 0; v < strip.size(); v += 3) {
+          const double x = strip[v] + in.originX, y = strip[v + 1] + in.originY;
+          chain.verts.push_back({x, y, strip[v + 2]});
+          loop.ring.emplace_back(x, y);
+        }
+        AppendChainConstraints(chain, true, in.constraints);
+        in.cullLoops.push_back(std::move(loop));
+      }
+    }
+    if (!TinFindCrossingConflicts(in.constraints).empty()) {
+      in.inputsIncomplete = true;
+      in.incompleteReason = "grading strips cross at different elevations";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason);
+    }
+    return in;
+  }
 
   // Gather points from every named group. Groups are referenced by name (REQ-067), so a name that
   // no longer resolves is reported rather than silently contributing nothing — otherwise a renamed
@@ -3543,6 +3646,14 @@ bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<
 } // namespace
 
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  if (surface.gradingGroup && surface.gradingMembers.empty()) {
+    surface.tin.reset();
+    surface.builtAtRevision = st.cadGpuRevision;
+    surface.lastBuildIncomplete = false;
+    surface.lastBuildMessage = "Empty grading group.";
+    log.push_back("Grading group \"" + surface.name + "\": no members.");
+    return true;
+  }
   // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
   // result immediately rather than waiting a frame for the async path below to pick them up.
   if (surface.kind == SurfaceKind::Grid || surface.kind == SurfaceKind::GridVolume)
@@ -3594,6 +3705,15 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
   const TinBuildResult r = RunSurfaceBuild(in);
   surface.builtAtRevision = st.cadGpuRevision;
   surface.lastBuildIncomplete = false;
+  if (surface.gradingGroup &&
+      (r.conflictingDuplicates > 0 || r.constraintsUnresolved > 0)) {
+    surface.lastBuildIncomplete = true;
+    surface.lastBuildMessage =
+        "Conflicting grading elevations or unresolved grading boundary edges.";
+    log.push_back("Grading group \"" + surface.name +
+                  "\": " + surface.lastBuildMessage);
+    return false;
+  }
   if (!r.ok()) {
     // No partial surface, and the previous triangulation is left alone (REQ-001).
     surface.lastBuildMessage = r.message;
@@ -3779,6 +3899,12 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
   for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
     CadSurface& surface = st.cadSurfaces[sIdx];
+    // REQ-404 / ADR-070: only membership edits and explicit grading rebuilds
+    // refresh these snapshots.
+    if (surface.gradingGroup) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      continue;
+    }
     if (surface.builtAtRevision == st.cadGpuRevision)
       continue;
     // The id is assigned by EnsureEntityIds, which main.cpp runs immediately before this every frame.
@@ -7068,13 +7194,18 @@ const CmdEntry kRegistry[] = {
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
-    {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
-    {"grading", "grd", "Side slopes from a feature line out to a surface, giving the daylight line (REQ-398)"},
+    {"featureline", "fl",
+     "Draw a feature line: named 3D linework with per-vertex elevations "
+     "(REQ-087)"},
+    {"grading", "grd",
+     "Side slopes from a feature line out to a surface, giving the daylight "
+     "line (REQ-398)"},
     {"featurelinelist", "fllist", "List every feature line and its vertices"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
-     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
+     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE "
+     "[points] | BENCH MESH [triangles] | BENCH SOLID [count]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"perspective", "projection, persp", "View projection: ON (perspective) / OFF (orthographic)"},
     {"sectionclip", "sclip, clip", "Live section clip by the UCS plane: ON / OFF / FLIP / <offset>"},
@@ -7082,44 +7213,79 @@ const CmdEntry kRegistry[] = {
     {"fov", "lens", "Perspective field of view, in degrees"},
     {"crosshair3d", "cursor3d, xhair3d", "3D crosshair cursor showing the UCS axes: ON / OFF"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
-    {"pointcloudattach", "importpointcloud", "Import a point cloud (E57, PTS, PTX, LAS, or LAZ) as reference geometry (REQ-172)"},
-    {"exportpts", "", "Export the selected point cloud(s) (or all, if none selected) to a PTS file (REQ-172)"},
-    {"exportptx", "", "Export the selected point cloud(s) (or all, if none selected) to a PTX file (REQ-172)"},
-    {"exportlas", "", "Export the selected point cloud(s) (or all, if none selected) to a LAS file (REQ-172)"},
-    {"exportlaz", "", "Export the selected point cloud(s) (or all, if none selected) to a LAZ file (REQ-172)"},
-    // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point in the active UCS and
-    // then its exact dimensions; the UCS supplies the orientation.
+    {"pointcloudattach", "importpointcloud",
+     "Import a point cloud (E57, PTS, PTX, LAS, or LAZ) as reference geometry "
+     "(REQ-172)"},
+    {"exportpts", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a PTS "
+     "file (REQ-172)"},
+    {"exportptx", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a PTX "
+     "file (REQ-172)"},
+    {"exportlas", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a LAS "
+     "file (REQ-172)"},
+    {"exportlaz", "",
+     "Export the selected point cloud(s) (or all, if none selected) to a LAZ "
+     "file (REQ-172)"},
+    // The seven primitive solids (REQ-313 / ADR-045). Each takes a base point
+    // in the active UCS and then its exact dimensions; the UCS supplies the
+    // orientation.
     {"box", "", "Create a box solid: BOX <X,Y[,Z]> <length> <width> <height>"},
     {"wedge", "we", "Create a wedge solid: WEDGE <X,Y[,Z]> <length> <width> <height>"},
-    {"pyramid", "pyr", "Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> <height>"},
+    {"pyramid", "pyr",
+     "Create a pyramid solid: PYRAMID <X,Y[,Z]> <sides> <base r> <top r> "
+     "<height>"},
     {"cylinder", "cyl", "Create a cylinder solid: CYLINDER <X,Y[,Z]> <radius> <height>"},
     {"cone", "", "Create a cone solid: CONE <X,Y[,Z]> <base radius> <top radius> <height>"},
     {"sphere", "sph", "Create a sphere solid: SPHERE <X,Y[,Z]> <radius>"},
     {"torus", "tor", "Create a torus solid: TORUS <X,Y[,Z]> <radius> <tube radius>"},
     {"presspull", "pp",
-     "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, select a target, then a distance"},
+     "Move a solid FACE, or turn a closed shape into a solid: PRESSPULL, "
+     "select a target, then a distance"},
     {"solidlist", "solids", "List every solid: kind, layer, volume, surface area, topology counts"},
     {"massprop", "massproperties, solidmassprop, massp",
-     "Mass properties of every solid: volume, area, centroid, inertia tensor, principal axes (REQ-349)"},
-    {"section",     "", "Cross-section of solids by a plane through three points (or the UCS), as a closed polyline"},
-    {"solidcheck", "scheck", "Check every solid (or the selection): closed, manifold, oriented, self-intersecting"},
-    {"polysolid", "psolid", "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, H/W/J, O object)"},
-    {"revcloud", "", "Revision cloud: click corners round an area, or O to convert a closed shape (A arc length, R reverse, D delete original)"},
+     "Mass properties of every solid: volume, area, centroid, inertia tensor, "
+     "principal axes (REQ-349)"},
+    {"section",     "",
+     "Cross-section of solids by a plane through three points (or the UCS), as "
+     "a closed polyline"},
+    {"solidcheck", "scheck",
+     "Check every solid (or the selection): closed, manifold, oriented, "
+     "self-intersecting"},
+    {"polysolid", "psolid",
+     "Sweep a wall along a path: POLYSOLID, then points (A arc, C close, "
+     "H/W/J, O object)"},
+    {"revcloud", "",
+     "Revision cloud: click corners round an area, or O to convert a closed "
+     "shape (A arc length, R reverse, D delete original)"},
     {"piperun", "pipe",
-     "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = schedule 40), then "
+     "Route a pipe run: PIPERUN, nominal size [class], wall thickness (Enter = "
+     "schedule 40), then "
      "points (U undo, END/Enter finishes)"},
     {"pipesys", "pipenet, pipingsystem",
-     "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> (ADD/REMOVE use the "
+     "Named piping networks: PIPESYS NEW/ADD/REMOVE/RENAME/DELETE/LIST <name> "
+     "(ADD/REMOVE use the "
      "current pipe-run selection)"},
     {"pipecatalog", "pcat",
-     "Look up a fitting in the library by size/class/type: PIPECATALOG <part type> <size> [class]"},
-    {"isolines", "", "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to report"},
-    {"extrude", "ext", "Extrude a selected closed polyline or circle into a solid: EXTRUDE <height>"},
+     "Look up a fitting in the library by size/class/type: PIPECATALOG <part "
+     "type> <size> [class]"},
+    {"isolines", "",
+     "Curves drawn around a curved solid face: ISOLINES [0-256], or bare to "
+     "report"},
+    {"extrude", "ext",
+     "Extrude a selected closed polyline or circle into a solid: EXTRUDE "
+     "<height>"},
     {"revolve", "rev", "Revolve a selected closed polyline or circle about an axis into a solid"},
-    {"slice", "sl", "Cut selected solids with a plane (three points), keeping one side or both"},
-    {"loft", "lft", "Loft a solid through two or more selected closed polylines or circles, in pick order"},
+    {"slice", "sl",
+     "Cut selected solids with a plane (three points), keeping one side or "
+     "both"},
+    {"loft", "lft",
+     "Loft a solid through two or more selected closed polylines or circles, "
+     "in pick order"},
     {"sweep", "swp",
-     "Sweep a closed profile along a line, arc or open polyline path (T twist, A path-alignment)"},
+     "Sweep a closed profile along a line, arc or open polyline path (T twist, "
+     "A path-alignment)"},
     {"union", "uni", "Combine two selected solids into one"},
     {"subtract", "su", "Subtract the second selected solid from the first"},
     {"intersect", "in", "Keep only the volume two selected solids share"},
@@ -7155,33 +7321,55 @@ const CmdEntry kRegistry[] = {
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
     {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
-    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show/clip)"},
-    {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
-    {"surfacecreategrid", "sfgrid", "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, rows[, z…]"},
+    {"designateboundary", "dbd",
+     "Add a picked closed polyline as a surface boundary "
+     "(outer/hide/show/clip)"},
+    {"surfacecreate", "sfcreate",
+     "Create a surface from point groups: SURFACECREATE <name>, <group>[, "
+     "<group>…]"},
+    {"surfacecreategrid", "sfgrid",
+     "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, "
+     "rows[, z…]"},
     {"surfacecreatecorr", "sfcorr", "Create a corridor surface: SURFACECREATECORR <name>"},
     {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
     {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
     {"surfaceaddpoint", "sfaddpt", "Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>]"},
-    {"surfacemovepoint", "sfmovept", "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>]"},
+    {"surfacemovepoint", "sfmovept",
+     "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, "
+     "<x2>, <y2>, <z2>]"},
     {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
-    {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
-    {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
+    {"surfacedelpoint", "sfdelpt",
+     "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, "
+     "<y>]"},
+    {"quickprofile", "qprof",
+     "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, "
+     "<x2>, <y2>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
     {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
-    {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
+    {"surfacerebuild", "sfrebuild",
+     "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD "
+     "[<name>]"},
     {"surfacelist", "sflist", "List every surface and its full definition"},
     {"surfacestats", "sfstats", "Surface statistics: SURFACESTATS [<name>]"},
     {"watershed", "wshed", "Watershed basins: WATERSHED [<name>]"},
     {"waterdrop", "wdrop", "Water-drop path: WATERDROP <name>[, <x>, <y>] | WATERDROP EXTRACT"},
-    {"catchment", "catch", "Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] | CATCHMENT EXTRACT"},
-    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
-    {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
+    {"catchment", "catch",
+     "Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] | CATCHMENT "
+     "EXTRACT"},
+    {"undesignate", "undes",
+     "Remove one definition item: UNDESIGNATE <surface>, "
+     "<BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
+    {"surfaceaddfile", "sfaddfile",
+     "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, "
+     "<layout>[, HEADER]]"},
     {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
-    {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
+    {"flelev", "",
+     "Feature line elevations: FLELEV <n> "
+     "[SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
     {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"gizmo", "", "Show the 3D gizmo on every selection: GIZMO MOVE | ROTATE | SCALE | OFF"},
@@ -7210,8 +7398,12 @@ const CmdEntry kRegistry[] = {
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
-    {"ucsfollow", "", "0 = changing the UCS leaves the view alone; 1 = it switches to a plan view"},
-    {"ucs", "", "Define the User Coordinate System (N names one; restore/delete in the View Manager)"},
+    {"ucsfollow", "",
+     "0 = changing the UCS leaves the view alone; 1 = it switches to a plan "
+     "view"},
+    {"ucs", "",
+     "Define the User Coordinate System (N names one; restore/delete in the "
+     "View Manager)"},
     {"plan", "", "View the XY plane of a coordinate system (does not change the UCS)"},
     {"orbit", "3dorbit, 3do", "Free orbit the model view (drag with the left mouse button)"},
     {"isolateobjects", "isolate", "Hide everything except the selection"},
@@ -7223,7 +7415,9 @@ const CmdEntry kRegistry[] = {
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
     {"exportpoints", "exppts", "Export survey points"},
-    {"exportlandxml", "", "Export survey points, TIN surfaces and feature lines to LandXML 1.2: EXPORTLANDXML [<path>]"},
+    {"exportlandxml", "",
+     "Export survey points, TIN surfaces and feature lines to LandXML 1.2: "
+     "EXPORTLANDXML [<path>]"},
     {"traverse", "trav, traverseeditor", "Open the LSA Editor"},
     {"select", "", "Build a selection set"},
     {"help", "", "Show command help"},
@@ -7232,18 +7426,43 @@ const CmdEntry kRegistry[] = {
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
-    {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
-    {"padsolid", "pad", "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, <elevation>"},
-    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
-    {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
+    {"extract", "",
+     "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, "
+     "<layer>]"},
+    {"padsolid", "pad",
+     "Cut/fill solids for a pad: select the boundary, then PADSOLID <surface>, "
+     "<elevation>"},
+    {"gradinggroup", "",
+     "Grading group: GRADINGGROUP <name>[, Add/Remove/List] with selected "
+     "grading results"},
+    {"gradinginfill", "",
+     "GRADINGINFILL <group>: add selected closed feature-line interiors to a grading group"},
+    {"volumes", "vol",
+     "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, "
+     "<clip id>]"},
+    {"voldash", "",
+     "Volume Dashboard: live cut/fill/net panel between two surfaces "
+     "(REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"drawingsettings", "editdrawingsettings", "Drawing Settings: units, scale and the drawing's settings"},
-    {"projectsettings", "", "Project Settings: the project's coordinate system, units and defaults (REQ-375)"},
-    {"projecthealth", "", "Project Health: linked, missing and unsaved files before you pack or hand over (REQ-379)"},
-    {"packproject", "", "Pack Project: write the whole project as one .gspack file to send (REQ-380)"},
-    {"turnover", "", "Create Turnover: record which project files were handed to whom, and when (REQ-381)"},
-    {"openpack", "", "Open Packed Project: unpack a .gspack into a folder and open it (REQ-380)"},
-    {"adddrawing", "", "Add Drawing to Project: bring an existing drawing and its points into this project (REQ-378)"},
+    {"projectsettings", "",
+     "Project Settings: the project's coordinate system, units and defaults "
+     "(REQ-375)"},
+    {"projecthealth", "",
+     "Project Health: linked, missing and unsaved files before you pack or "
+     "hand over (REQ-379)"},
+    {"packproject", "",
+     "Pack Project: write the whole project as one .gspack file to send "
+     "(REQ-380)"},
+    {"turnover", "",
+     "Create Turnover: record which project files were handed to whom, and "
+     "when (REQ-381)"},
+    {"openpack", "",
+     "Open Packed Project: unpack a .gspack into a folder and open it "
+     "(REQ-380)"},
+    {"adddrawing", "",
+     "Add Drawing to Project: bring an existing drawing and its points into "
+     "this project (REQ-378)"},
     {"geomarkpoint", "", "Place a Position Marker at a picked point (geolocated drawing)"},
     {"geomarklatlong", "", "Place a Position Marker at a typed latitude and longitude"},
     {"georeorientmarker", "", "Set the geographic marker: a design point, then north"},
@@ -7253,19 +7472,26 @@ const CmdEntry kRegistry[] = {
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
-    {"view", "v, ddview", "Named views: VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for the View Manager"},
-    // SELECTSIMILAR had no registry entry at all (issue 05): the function existed, was declared in
-    // the header and was perfectly reachable, but its only caller in the whole codebase was one
-    // right-click menu item - so nothing could invoke it by name, users included, and it had zero
-    // possible test coverage.
+    {"view", "v, ddview",
+     "Named views: VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for the "
+     "View Manager"},
+    // SELECTSIMILAR had no registry entry at all (issue 05): the function
+    // existed, was declared in the header and was perfectly reachable, but its
+    // only caller in the whole codebase was one right-click menu item - so
+    // nothing could invoke it by name, users included, and it had zero possible
+    // test coverage.
     {"selectsimilar", "sesim", "Select entities matching the current selection's type, layer and colour"},
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
     {"mspace",       "ms", "Edit the model through the selected viewport (floating model space)"},
     {"pspace",       "ps", "Return to paper space from a floating viewport"},
-    {"block", "", "Define a block from the selection: BLOCK <name>, <x>, <y>[, CONVERT|DELETE|RETAIN]"},
-    {"insert", "i", "Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, sz, z]]"},
+    {"block", "",
+     "Define a block from the selection: BLOCK <name>, <x>, <y>[, "
+     "CONVERT|DELETE|RETAIN]"},
+    {"insert", "i",
+     "Insert a block (dialog); or INSERT <name>, <x>, <y>[, sx, sy, rotDeg[, "
+     "sz, z]]"},
     {"explode", "x", "Explode selected block references"},
     {"bedit", "", "Open the block editor: BEDIT <name>"},
     {"bsave", "", "Save the block being edited"},
@@ -24501,16 +24727,38 @@ bool GradingBaselineIsOpen(const AppCommandState& st) {
 void GradingPrompt(AppCommandState& st, std::vector<std::string>& log) {
   st.gradingPhase = AppCommandState::GradingPhase::WaitOptions;
   const std::string surf = GradingDefaultSurface(st);
+  const char* target = "Surface";
+  if (st.gradingTarget == CadGradingDefinition::Target::Distance) target = "Distance";
+  if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation) target = "Absolute";
+  if (st.gradingTarget == CadGradingDefinition::Target::RelativeElevation) target = "Relative";
   std::string msg = "GRADING - Enter to grade, or [Cut/Fill/Surface";
   if (GradingBaselineIsOpen(st))
     msg += "/Side";
-  msg += "] <cut " + FormatSlope(st.gradingCutRun) + ", fill " + FormatSlope(st.gradingFillRun) +
-         ", " + (surf.empty() ? std::string("no surface chosen") : surf);
+  msg += "] or [Target] <cut " + FormatSlope(st.gradingCutRun) + ", fill " + FormatSlope(st.gradingFillRun) +
+         ", " + target + (st.gradingTarget == CadGradingDefinition::Target::Surface
+                               ? ", " + (surf.empty() ? std::string("no surface chosen") : surf)
+                               : ", " + std::to_string(st.gradingTargetValue));
   if (GradingBaselineIsOpen(st))
     msg += st.gradingSideChosen ? (st.gradingSideLeft ? ", side left" : ", side right")
                                 : ", side NOT chosen";
   msg += ">. ESC cancels.";
   log.push_back(msg);
+}
+
+std::string GradingTargetDescription(const AppCommandState& st,
+                                     const CadSurface* surface) {
+  switch (st.gradingTarget) {
+    case CadGradingDefinition::Target::Surface:
+      return surface ? "to " + surface->name : "to the selected surface";
+    case CadGradingDefinition::Target::Distance:
+      return "distance " + std::to_string(st.gradingTargetValue) +
+             " at " + std::to_string(st.gradingDistanceGradePercent) + "% grade";
+    case CadGradingDefinition::Target::AbsoluteElevation:
+      return "absolute elevation " + std::to_string(st.gradingTargetValue);
+    case CadGradingDefinition::Target::RelativeElevation:
+      return "relative elevation change " + std::to_string(st.gradingTargetValue);
+  }
+  return "unknown target";
 }
 
 /// The feature line the command will grade from: the STABLE ID of the one selected, or 0.
@@ -24557,11 +24805,14 @@ bool GradingTakeFeatureLine(AppCommandState& st, std::uint64_t id, std::vector<s
   st.gradingCutRun = def.cutRun;
   st.gradingFillRun = def.fillRun;
   st.gradingSideLeft = def.sideLeft;
+  st.gradingTarget = def.target;
+  st.gradingTargetValue = def.targetValue;
+  st.gradingDistanceGradePercent = def.distanceGradePercent;
   st.gradingSideChosen = true;
   const int si = FindSurfaceIndexById(st, def.surfaceId);
   st.gradingSurface = si >= 0 ? st.cadSurfaces[static_cast<size_t>(si)].name : std::string();
   log.push_back("GRADING - editing \"" + info->name + "\". Enter rebuilds it in place.");
-  if (si < 0)
+  if (si < 0 && def.target == CadGradingDefinition::Target::Surface)
     log.push_back("GRADING - its target surface is gone. Type S to choose another.");
   return true;
 }
@@ -24587,7 +24838,32 @@ void ReplaceFeatureLineVertices(AppCommandState& st, size_t li, const std::vecto
   st.featureLineClosed[li] = static_cast<uint8_t>(closed ? 1 : 0);
 }
 
-/// Project the baseline's side slopes out to the surface and commit the daylight line.
+/// Snapshot the strips between corresponding baseline and daylight stations.
+CadGradingGroupMember BakeGradingMember(const AppCommandState &st,
+                                        std::uint64_t id,
+                                        const ResolvedChain &baseline,
+                                        const ResolvedChain &daylight) {
+  CadGradingGroupMember member;
+  member.gradingId = id;
+  const size_t n = baseline.verts.size();
+  std::vector<std::vector<double>> strips;
+  strips.reserve(n);
+  for (size_t i = 0; i < (baseline.closed ? n : n - 1); ++i) {
+    const size_t j = (i + 1) % n;
+    std::vector<double> strip;
+    strip.reserve(12);
+    for (const auto &v : {baseline.verts[i], baseline.verts[j],
+                          daylight.verts[j], daylight.verts[i]}) {
+      strip.push_back(v[0] - st.worldDocumentOriginX);
+      strip.push_back(v[1] - st.worldDocumentOriginY);
+      strip.push_back(v[2]);
+    }
+    strips.push_back(std::move(strip));
+  }
+  member.strips = std::make_shared<const std::vector<std::vector<double>>>(std::move(strips));
+  return member;
+}
+
 void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   const int bi = GradingBaselineIndex(st);
   if (bi < 0) {
@@ -24597,16 +24873,20 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   const std::string surfName = GradingDefaultSurface(st);
-  const int si = FindSurfaceIndex(st, surfName);
-  if (si < 0) {
-    log.push_back("GRADING - choose a surface first: type S.");
-    return;
-  }
-  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
-  std::unique_ptr<ISurfaceQuery> ground = MakeSurfaceQuery(st, surf);
-  if (!ground) {
-    log.push_back("GRADING - \"" + surf.name + "\" has never been built; there is no ground to meet.");
-    return;
+  const int si = st.gradingTarget == CadGradingDefinition::Target::Surface
+                     ? FindSurfaceIndex(st, surfName) : -1;
+  const CadSurface* surf = si >= 0 ? &st.cadSurfaces[static_cast<size_t>(si)] : nullptr;
+  std::unique_ptr<ISurfaceQuery> ground;
+  if (st.gradingTarget == CadGradingDefinition::Target::Surface) {
+    if (!surf) {
+      log.push_back("GRADING - choose a surface first: type S, or T for another target.");
+      return;
+    }
+    ground = MakeSurfaceQuery(st, *surf);
+    if (!ground) {
+      log.push_back("GRADING - \"" + surf->name + "\" has never been built; there is no ground to meet.");
+      return;
+    }
   }
 
   const bool closed = st.featureLineClosed[static_cast<size_t>(bi)] != 0;
@@ -24642,19 +24922,19 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   DaylightSearch search;
   search.stepFt = 1.0;
   search.maxOffsetFt = 1000.0;
-  if (surf.tin && surf.tin->indices.size() >= 3 && surf.tin->vertsXyz.size() >= 6) {
+  if (surf && surf->tin && surf->tin->indices.size() >= 3 && surf->tin->vertsXyz.size() >= 6) {
     // Representative triangle span = sqrt(plan bbox area / triangle count), halved so the march
     // cannot stride over a whole triangle. Clamped so a pathological surface cannot make the search
     // either useless or unbearably slow.
-    double minX = surf.tin->vertsXyz[0], maxX = minX;
-    double minY = surf.tin->vertsXyz[1], maxY = minY;
-    for (size_t k = 0; k + 2 < surf.tin->vertsXyz.size(); k += 3) {
-      minX = std::min(minX, surf.tin->vertsXyz[k]);
-      maxX = std::max(maxX, surf.tin->vertsXyz[k]);
-      minY = std::min(minY, surf.tin->vertsXyz[k + 1]);
-      maxY = std::max(maxY, surf.tin->vertsXyz[k + 1]);
+    double minX = surf->tin->vertsXyz[0], maxX = minX;
+    double minY = surf->tin->vertsXyz[1], maxY = minY;
+    for (size_t k = 0; k + 2 < surf->tin->vertsXyz.size(); k += 3) {
+      minX = std::min(minX, surf->tin->vertsXyz[k]);
+      maxX = std::max(maxX, surf->tin->vertsXyz[k]);
+      minY = std::min(minY, surf->tin->vertsXyz[k + 1]);
+      maxY = std::max(maxY, surf->tin->vertsXyz[k + 1]);
     }
-    const size_t tris = std::max<size_t>(surf.tin->indices.size() / 3, 1);
+    const size_t tris = std::max<size_t>(surf->tin->indices.size() / 3, 1);
     const double area = std::max(1.0, (maxX - minX) * (maxY - minY));
     const double triSpan = std::sqrt(area / static_cast<double>(tris));
     search.stepFt = std::clamp(triSpan * 0.5, 0.05, 10.0);
@@ -24676,10 +24956,43 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
     const double bz = st.featureLineVerts[(static_cast<size_t>(v0)+ k) * 3 + 2];
     const double dx = nxy[static_cast<size_t>(k) * 2 + 0];
     const double dy = nxy[static_cast<size_t>(k) * 2 + 1];
-    if (dx == 0.0 && dy == 0.0)
+    if (dx == 0.0 && dy == 0.0) {
+      ++degenerate;
       continue;
+    }
 
-    const DaylightPoint d = SolveDaylightPoint(*ground, bx, by, bz, dx, dy, slopes, search);
+    DaylightPoint d;
+    if (st.gradingTarget == CadGradingDefinition::Target::Surface) {
+      d = SolveDaylightPoint(*ground, bx, by, bz, dx, dy, slopes, search);
+    } else {
+      double offset = 0.0, z = bz;
+      switch (st.gradingTarget) {
+        case CadGradingDefinition::Target::Distance:
+          offset = st.gradingTargetValue;
+          z += offset * st.gradingDistanceGradePercent / 100.0;
+          break;
+        case CadGradingDefinition::Target::AbsoluteElevation: {
+          z = st.gradingTargetValue;
+          const double delta = z - bz;
+          offset = std::abs(delta) * (delta > 0.0 ? slopes.cutRun : slopes.fillRun);
+          break;
+        }
+        case CadGradingDefinition::Target::RelativeElevation: {
+          const double delta = st.gradingTargetValue;
+          z += delta;
+          offset = std::abs(delta) * (delta > 0.0 ? slopes.cutRun : slopes.fillRun);
+          break;
+        }
+        case CadGradingDefinition::Target::Surface: break;
+      }
+      d.daylighted = true;
+      d.offset = offset;
+      d.x = bx + dx * offset;
+      d.y = by + dy * offset;
+      d.z = z;
+      if (!std::isfinite(d.x) || !std::isfinite(d.y) || !std::isfinite(d.z) ||
+          !std::isfinite(offset) || offset < 0.0) d.daylighted = false;
+    }
     if (!d.daylighted) {
       switch (d.why) {
         case DaylightFailure::BaselineOutsideSurface:
@@ -24738,8 +25051,66 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   def.cutRun = slopes.cutRun;
   def.fillRun = slopes.fillRun;
   def.sideLeft = st.gradingSideLeft;
+  def.target = st.gradingTarget;
+  def.targetValue = st.gradingTargetValue;
+  def.distanceGradePercent = st.gradingDistanceGradePercent;
   const std::string description = "REQ-398 daylight line: cut " + FormatSlope(slopes.cutRun) +
-                                  ", fill " + FormatSlope(slopes.fillRun) + ", to " + surf.name;
+                                  ", fill " + FormatSlope(slopes.fillRun) + ", " +
+                                  GradingTargetDescription(st, surf);
+
+  std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
+  if (st.gradingEditId != 0) {
+    for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+      const auto &group = st.cadSurfaces[i];
+      if (!group.gradingGroup)
+        continue;
+      const auto it = std::find_if(
+          group.gradingMembers.begin(), group.gradingMembers.end(),
+          [&](const auto &m) { return m.gradingId == st.gradingEditId; });
+      if (it == group.gradingMembers.end())
+        continue;
+      if (skippedAny) {
+        log.push_back("GRADING - incomplete daylight cannot rebuild its group; "
+                      "nothing changed.");
+        return;
+      }
+      ResolvedChain baseline, daylight;
+      if (!ResolveDefinitionChain(st, def.baselineId, false, baseline)) {
+        log.push_back("GRADING - missing group baseline; nothing changed.");
+        return;
+      }
+      daylight.closed = emitClosed;
+      for (size_t v = 0; v < out.size(); v += 3)
+        daylight.verts.push_back({out[v] + st.worldDocumentOriginX,
+                                  out[v + 1] + st.worldDocumentOriginY,
+                                  out[v + 2]});
+      if (baseline.verts.size() != daylight.verts.size() || baseline.closed != daylight.closed) {
+        log.push_back("GRADING - incomplete group station correspondence; nothing changed.");
+        return;
+      }
+      CadSurface candidate = group;
+      CadGradingGroupMember rebuilt =
+          BakeGradingMember(st, st.gradingEditId, baseline, daylight);
+      if (it->infill) {
+        std::vector<double> ring;
+        ring.reserve(daylight.verts.size() * 3);
+        for (const auto& point : daylight.verts)
+          ring.insert(ring.end(), {point[0] - st.worldDocumentOriginX,
+                                   point[1] - st.worldDocumentOriginY, point[2]});
+        rebuilt.infill = true;
+        rebuilt.strips = std::make_shared<const std::vector<std::vector<double>>>(
+            std::vector<std::vector<double>>{std::move(ring)});
+      }
+      candidate.gradingMembers[static_cast<size_t>(
+          it - group.gradingMembers.begin())] = std::move(rebuilt);
+      if (!BuildSurfaceFromSources(st, candidate, log)) {
+        log.push_back(
+            "GRADING - group surface could not be rebuilt; nothing changed.");
+        return;
+      }
+      rebuiltGroups.emplace_back(i, std::move(candidate));
+    }
+  }
 
   size_t resultIx = 0;
   const bool editing = st.gradingEditId != 0;
@@ -24780,6 +25151,12 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
   }
   BumpCadGpuCache(st);
 
+  for (auto &entry : rebuiltGroups) {
+    st.cadSurfaces[entry.first] = std::move(entry.second);
+    st.cadSurfaces[entry.first].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[entry.first].name);
+  }
+
   log.push_back("GRADING - daylight line \"" + st.featureLineInfo[resultIx].name + "\" " +
                 (editing ? "rebuilt" : "created") + ", " + std::to_string(got) + " of " +
                 std::to_string(nv) + " stations daylighted.");
@@ -24802,6 +25179,242 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
 
 }  // namespace
 
+namespace {
+
+bool SnapshotGradingMember(const AppCommandState &st, std::uint64_t id,
+                           CadGradingGroupMember &member,
+                           std::vector<std::string> &log) {
+  const int ix = FindEntityIndexById(st.featureLineAttrs, id);
+  if (ix < 0 || static_cast<size_t>(ix) >= st.featureLineInfo.size() ||
+      !st.featureLineInfo[static_cast<size_t>(ix)].grading) {
+    log.push_back(
+        "GRADINGGROUP - select grading results, not ordinary feature lines.");
+    return false;
+  }
+  const auto &def = *st.featureLineInfo[static_cast<size_t>(ix)].grading;
+  ResolvedChain baseline, daylight;
+  if (!ResolveDefinitionChain(st, def.baselineId, false, baseline) ||
+      !ResolveDefinitionChain(st, id, false, daylight) ||
+      baseline.verts.size() != daylight.verts.size() ||
+      baseline.closed != daylight.closed) {
+    log.push_back("GRADINGGROUP - missing baseline or incomplete daylight "
+                  "line; rebuild the grading first.");
+    return false;
+  }
+  member = BakeGradingMember(st, id, baseline, daylight);
+  return true;
+}
+
+} // namespace
+
+/// REQ-404: assign selected grading results to a named ordinary design surface.
+/// Validate and build temporary surfaces before publishing one undoable
+/// membership change.
+void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
+                                std::vector<std::string> &log) {
+  const auto fields = SplitCommaFields(args);
+  const std::string name = fields.empty() ? std::string() : fields[0];
+  const std::string verb =
+      fields.size() > 1 ? StringUtil::toLowerAsciiCopy(fields[1]) : "add";
+  if (name.empty() || fields.size() > 2 ||
+      (verb != "add" && verb != "remove" && verb != "list")) {
+    log.push_back(
+        "GRADINGGROUP - usage: GRADINGGROUP <name>[, Add/Remove/List]. Select "
+        "grading results first; Add creates the group if needed.");
+    return;
+  }
+  const int existing = FindSurfaceIndex(st, name);
+  if (existing >= 0 &&
+      !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+    log.push_back("GRADINGGROUP - that name belongs to an ordinary surface. "
+                  "Choose another name.");
+    return;
+  }
+  if (verb == "list") {
+    if (existing < 0) {
+      log.push_back("GRADINGGROUP - no group named \"" + name + "\".");
+      return;
+    }
+    const auto &group = st.cadSurfaces[static_cast<size_t>(existing)];
+    log.push_back("GRADINGGROUP - \"" + name +
+                  "\": " + std::to_string(group.gradingMembers.size()) +
+                  " member(s). Use VOLUMES <ground surface>, " + name +
+                  " for cut/fill/net.");
+    for (const auto &member : group.gradingMembers) {
+      const int ix = FindEntityIndexById(st.featureLineAttrs, member.gradingId);
+      const std::string label =
+          ix >= 0 && static_cast<size_t>(ix) < st.featureLineInfo.size()
+              ? st.featureLineInfo[static_cast<size_t>(ix)].name
+              : "missing grading";
+      log.push_back("  " + label + " (id " + std::to_string(member.gradingId) +
+                    ")");
+    }
+    return;
+  }
+  if (verb == "remove" && existing < 0) {
+    log.push_back("GRADINGGROUP - no group named \"" + name + "\".");
+    return;
+  }
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> ids;
+  for (const auto &e : st.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine || e.index < 0 ||
+        static_cast<size_t>(e.index) >= st.featureLineAttrs.size()) {
+      log.push_back("GRADINGGROUP - select only grading results.");
+      return;
+    }
+    const auto id = st.featureLineAttrs[static_cast<size_t>(e.index)].id;
+    if (std::find(ids.begin(), ids.end(), id) == ids.end())
+      ids.push_back(id);
+  }
+  if (ids.empty() && (verb == "remove" || existing >= 0)) {
+    log.push_back("GRADINGGROUP - select grading results to add or remove; use "
+                  "List to inspect the group.");
+    return;
+  }
+  auto candidates = st.cadSurfaces;
+  const size_t target =
+      existing < 0 ? candidates.size() : static_cast<size_t>(existing);
+  if (existing < 0) {
+    CadSurface group;
+    group.name = name;
+    group.gradingGroup = true;
+    candidates.push_back(std::move(group));
+  }
+  std::vector<size_t> changed{target};
+  for (const auto id : ids) {
+    CadGradingGroupMember snapshot;
+    if (verb == "add") {
+      bool foundBaked = false;
+      for (const auto& source : candidates) {
+        if (!source.gradingGroup) continue;
+        const auto member = std::find_if(source.gradingMembers.begin(), source.gradingMembers.end(),
+                                        [id](const auto& m) { return m.gradingId == id; });
+        if (member != source.gradingMembers.end() && !member->infill) {
+          snapshot = *member;
+          foundBaked = true;
+          break;
+        }
+      }
+      if (!foundBaked && !SnapshotGradingMember(st, id, snapshot, log)) return;
+    }
+    for (size_t i = 0; i < candidates.size(); ++i) {
+      auto &group = candidates[i];
+      if (!group.gradingGroup || (verb == "remove" && i != target))
+        continue;
+      const auto end = std::remove_if(
+          group.gradingMembers.begin(), group.gradingMembers.end(),
+          [id](const auto &m) { return m.gradingId == id; });
+      if (end != group.gradingMembers.end()) {
+        group.gradingMembers.erase(end, group.gradingMembers.end());
+        if (std::find(changed.begin(), changed.end(), i) == changed.end())
+          changed.push_back(i);
+      }
+    }
+    if (verb == "add")
+      candidates[target].gradingMembers.push_back(std::move(snapshot));
+  }
+  for (const auto i : changed) {
+    if (!BuildSurfaceFromSources(st, candidates[i], log)) {
+      log.push_back("GRADINGGROUP - nothing changed; the group surface could "
+                    "not be built.");
+      return;
+    }
+  }
+  PushUndoSnapshot(st, "Grading group membership");
+  st.cadSurfaces = std::move(candidates);
+  if (existing < 0)
+    st.cadSurfaceAttrs.push_back(
+        MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
+  BumpCadGpuCache(st);
+  for (const auto i : changed) {
+    st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision;
+    MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name);
+  }
+  log.push_back("GRADINGGROUP - \"" + name + "\": " +
+                std::to_string(st.cadSurfaces[target].gradingMembers.size()) +
+                " member(s). Use VOLUMES <ground surface>, " + name +
+                " for cut/fill/net.");
+}
+
+void ExecuteGradingInfillCommand(AppCommandState& st, const std::string& name,
+                                 std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("GRADINGINFILL - usage: GRADINGINFILL <group>. Select closed feature lines.");
+    return;
+  }
+  int existing = FindSurfaceIndex(st, name);
+  if (existing >= 0 && !st.cadSurfaces[static_cast<size_t>(existing)].gradingGroup) {
+    log.push_back("GRADINGINFILL - that name belongs to an ordinary surface.");
+    return;
+  }
+  EnsureEntityIds(st);
+  std::vector<CadGradingGroupMember> infills;
+  for (const auto& selected : st.selection) {
+    if (selected.type != SelectedEntity::Type::FeatureLine || selected.index < 0 ||
+        static_cast<size_t>(selected.index) >= st.featureLineAttrs.size() ||
+        static_cast<size_t>(selected.index) >= st.featureLineClosed.size() ||
+        !st.featureLineClosed[static_cast<size_t>(selected.index)]) {
+      log.push_back("GRADINGINFILL - select only closed feature lines.");
+      return;
+    }
+    const size_t ix = static_cast<size_t>(selected.index);
+    const int first = st.featureLineOffsets[ix], last = st.featureLineOffsets[ix + 1];
+    if (last - first < 3) {
+      log.push_back("GRADINGINFILL - a boundary needs at least three vertices.");
+      return;
+    }
+    CadGradingGroupMember member;
+    member.gradingId = st.featureLineAttrs[ix].id;
+    member.infill = true;
+    std::vector<double> ring;
+    for (int v = first; v < last; ++v) {
+      const size_t p = static_cast<size_t>(v) * 3;
+      const double x = st.featureLineVerts[p], y = st.featureLineVerts[p + 1], z = st.featureLineVerts[p + 2];
+      if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+        log.push_back("GRADINGINFILL - boundary contains a nonfinite coordinate."); return;
+      }
+      ring.insert(ring.end(), {x, y, z});
+    }
+    std::string polygonError;
+    if (!IsSimpleInfillPolygon(ring, &polygonError)) {
+      log.push_back("GRADINGINFILL - " + polygonError + "."); return;
+    }
+    member.strips = std::make_shared<const std::vector<std::vector<double>>>(
+        std::vector<std::vector<double>>{std::move(ring)});
+    infills.push_back(std::move(member));
+  }
+  if (infills.empty()) {
+    log.push_back("GRADINGINFILL - select closed feature lines first."); return;
+  }
+  auto candidates = st.cadSurfaces;
+  const size_t target = existing < 0 ? candidates.size() : static_cast<size_t>(existing);
+  if (existing < 0) { CadSurface group; group.name = name; group.gradingGroup = true; candidates.push_back(std::move(group)); }
+  std::vector<size_t> changed;
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    auto& group = candidates[i];
+    if (!group.gradingGroup) continue;
+    const auto oldSize = group.gradingMembers.size();
+    for (const auto& infill : infills)
+      group.gradingMembers.erase(std::remove_if(group.gradingMembers.begin(), group.gradingMembers.end(),
+        [&](const auto& m) { return m.gradingId == infill.gradingId; }), group.gradingMembers.end());
+    if (group.gradingMembers.size() != oldSize) changed.push_back(i);
+  }
+  for (auto& infill : infills) candidates[target].gradingMembers.push_back(std::move(infill));
+  if (std::find(changed.begin(), changed.end(), target) == changed.end()) changed.push_back(target);
+  for (size_t i : changed) {
+    if (!BuildSurfaceFromSources(st, candidates[i], log)) {
+      log.push_back("GRADINGINFILL - group surface could not be built; nothing changed."); return;
+    }
+  }
+  PushUndoSnapshot(st, "Grading group infill");
+  st.cadSurfaces = std::move(candidates);
+  if (existing < 0) st.cadSurfaceAttrs.push_back(MakeNewObjectAttrs(st, ObjectLayerKind::Surface, name));
+  BumpCadGpuCache(st);
+  for (size_t i : changed) { st.cadSurfaces[i].builtAtRevision = st.cadGpuRevision; MarkVolumeSurfacesDirtyForParent(st, st.cadSurfaces[i].name); }
+  log.push_back("GRADINGINFILL - added/refreshed " + std::to_string(infills.size()) + " boundary member(s) in \"" + name + "\".");
+}
+
 void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -24810,6 +25423,13 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.gradingBaselineId = 0;
   st.gradingSideChosen = false;
   st.gradingEditId = 0;
+  st.gradingTarget = CadGradingDefinition::Target::Surface;
+  st.gradingTargetValue = 0.0;
+  st.gradingDistanceGradePercent = 0.0;
+
+  log.push_back("GRADING - groups: type Group <name>[, Add/Remove/List] for "
+                "selected grading results. Type T for Surface, Distance, Absolute, or Relative targets; "
+                "use GRADINGINFILL <group> on a selected closed feature line to fill its interior.");
 
   if (st.featureLineOffsets.size() < 2) {
     log.push_back("GRADING - the drawing has no feature lines. Draw one with FEATURELINE first: it "
@@ -24817,16 +25437,8 @@ void StartGradingCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.active = AppCommandState::Kind::None;
     return;
   }
-  if (st.cadSurfaces.empty()) {
-    // Said UP FRONT rather than after a round trip through the options prompt. Without this the
-    // conversation is circular: Enter says "choose a surface first: type S", and S says "there are
-    // no surfaces" — two steps to learn the command could never have worked.
-    log.push_back("GRADING - the drawing has no surfaces. The slopes need existing ground to run "
-                  "out to; build one with SURFACECREATE first.");
-    st.active = AppCommandState::Kind::None;
-    return;
-  }
-
+  if (st.cadSurfaces.empty())
+    log.push_back("GRADING - the drawing has no surfaces. Type T to choose Distance, Absolute, or Relative elevation, or build a surface for Surface grading.");
   int n = 0;
   const std::uint64_t id = GradingSelectedFeatureLine(st, &n);
   if (n == 1) {
@@ -24853,7 +25465,65 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
   const std::string tr = StringUtil::trimCopy(line);
   const std::string low = StringUtil::toLowerAsciiCopy(tr);
 
+  if ((st.gradingPhase == P::WaitBaseline ||
+       st.gradingPhase == P::WaitOptions) &&
+      (low == "group" || low == "g" || low.rfind("group ", 0) == 0 ||
+       low.rfind("g ", 0) == 0)) {
+    const size_t space = tr.find(' ');
+    if (space == std::string::npos) {
+      log.push_back("GRADING - type Group <name>[, Add/Remove/List] for "
+                    "selected grading results.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;
+    st.gradingEditId = 0;
+    st.gradingPhase = P::WaitBaseline;
+    ExecuteGradingGroupCommand(st, StringUtil::trimCopy(tr.substr(space + 1)),
+                               log);
+    return;
+  }
+
   switch (st.gradingPhase) {
+    case P::WaitTargetKind:
+      if (low == "surface" || low == "s") st.gradingTarget = CadGradingDefinition::Target::Surface;
+      else if (low == "distance" || low == "d") st.gradingTarget = CadGradingDefinition::Target::Distance;
+      else if (low == "absolute" || low == "a") st.gradingTarget = CadGradingDefinition::Target::AbsoluteElevation;
+      else if (low == "relative" || low == "r") st.gradingTarget = CadGradingDefinition::Target::RelativeElevation;
+      else { log.push_back("GRADING - target must be Surface, Distance, Absolute, or Relative."); return; }
+      if (st.gradingTarget == CadGradingDefinition::Target::Surface) { GradingPrompt(st, log); return; }
+      st.gradingPhase = P::WaitTargetValue;
+      if (st.gradingTarget == CadGradingDefinition::Target::Distance)
+        log.push_back("GRADING - enter horizontal distance (> 0).");
+      else if (st.gradingTarget == CadGradingDefinition::Target::AbsoluteElevation)
+        log.push_back("GRADING - enter absolute target elevation (finite).");
+      else
+        log.push_back("GRADING - enter target elevation change from the baseline (finite; signed values allowed).");
+      return;
+    case P::WaitTargetValue: {
+      char* end = nullptr;
+      const double value = std::strtod(tr.c_str(), &end);
+      if (tr.empty() || end != tr.c_str() + tr.size() || !std::isfinite(value) ||
+          (st.gradingTarget == CadGradingDefinition::Target::Distance && value <= 0.0)) {
+        log.push_back("GRADING - enter a finite value" + std::string(st.gradingTarget == CadGradingDefinition::Target::Distance ? " greater than zero." : "."));
+        return;
+      }
+      st.gradingTargetValue = value;
+      if (st.gradingTarget == CadGradingDefinition::Target::Distance) {
+        st.gradingPhase = P::WaitDistanceGrade;
+        log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
+      } else GradingPrompt(st, log);
+      return;
+    }
+    case P::WaitDistanceGrade: {
+      char* end = nullptr;
+      const double value = std::strtod(tr.c_str(), &end);
+      if (tr.empty() || end != tr.c_str() + tr.size() || !std::isfinite(value)) {
+        log.push_back("GRADING - enter a finite signed grade percent."); return;
+      }
+      st.gradingDistanceGradePercent = value;
+      GradingPrompt(st, log);
+      return;
+    }
     case P::WaitCutSlope:
     case P::WaitFillSlope: {
       const bool isCut = st.gradingPhase == P::WaitCutSlope;
@@ -24888,6 +25558,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
         return;
       }
       st.gradingSurface = tr;
+      st.gradingTarget = CadGradingDefinition::Target::Surface;
       GradingPrompt(st, log);
       return;
     }
@@ -24931,6 +25602,16 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
                                     : "GRADING - enter surface name. Surfaces: " + names + ".");
         return;
       }
+      if (low == "t" || low == "target") {
+        st.gradingPhase = P::WaitTargetKind;
+        log.push_back("GRADING - target [Surface/Distance/Absolute/Relative].");
+        return;
+      }
+      if (low == "p" || low == "percent") {
+        st.gradingPhase = P::WaitDistanceGrade;
+        log.push_back("GRADING - enter signed grade percent (for example -2). Zero is valid.");
+        return;
+      }
       if (low == "d" || low == "side") {
         if (!GradingBaselineIsOpen(st)) {
           log.push_back("GRADING - this baseline is closed, so outward is away from its interior "
@@ -24949,7 +25630,7 @@ void ProcessGradingCommandLine(AppCommandState& st, const std::string& line,
         GradingPrompt(st, log);
         return;
       }
-      log.push_back("GRADING - press Enter to grade, or C, F, S" +
+      log.push_back("GRADING - press Enter to grade, or C, F, S, T" +
                     std::string(GradingBaselineIsOpen(st) ? " or D" : "") + " to change a setting.");
       return;
     }
@@ -28558,7 +29239,31 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> erasedFeatureIds;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
+        static_cast<size_t>(e.index) < st.featureLineAttrs.size())
+      erasedFeatureIds.push_back(st.featureLineAttrs[static_cast<size_t>(e.index)].id);
+  std::vector<std::pair<size_t, CadSurface>> rebuiltGroups;
+  std::vector<std::string> rebuiltGroupNames;
+  for (size_t i = 0; i < st.cadSurfaces.size(); ++i) {
+    const auto& source = st.cadSurfaces[i];
+    if (!source.gradingGroup) continue;
+    CadSurface candidate = source;
+    const auto end = std::remove_if(candidate.gradingMembers.begin(), candidate.gradingMembers.end(),
+      [&](const auto& member) { return std::find(erasedFeatureIds.begin(), erasedFeatureIds.end(), member.gradingId) != erasedFeatureIds.end(); });
+    if (end == candidate.gradingMembers.end()) continue;
+    candidate.gradingMembers.erase(end, candidate.gradingMembers.end());
+    if (!BuildSurfaceFromSources(st, candidate, log)) {
+      log.push_back("ERASE - group contribution could not be rebuilt; nothing was deleted.");
+      return;
+    }
+    rebuiltGroups.emplace_back(i, std::move(candidate));
+    rebuiltGroupNames.push_back(source.name);
+  }
   PushUndoSnapshot(st, "Delete");
+  for (auto& [index, candidate] : rebuiltGroups) st.cadSurfaces[index] = std::move(candidate);
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
@@ -28796,13 +29501,20 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
+                        polyIx.size() + flIx.size() + pdfIx.size() + fillIx.size() + meshIx.size() + markerIx.size() +
                       multileaderIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
   if (nDel > 0) {
     BumpCadGpuCache(st);
+    for (const auto& name : rebuiltGroupNames) {
+      const int index = FindSurfaceIndex(st, name);
+      if (index >= 0) {
+        st.cadSurfaces[static_cast<size_t>(index)].builtAtRevision = st.cadGpuRevision;
+        MarkVolumeSurfacesDirtyForParent(st, name);
+      }
+    }
     log.push_back("Deleted " + std::to_string(nDel) + " object(s).");
   }
 }
@@ -39066,7 +39778,6 @@ void SubmitSolidViewportPick(AppCommandState& st, float wx, float wy, std::vecto
                   " — this dimension cannot be picked from here; type a value, or orbit the view.");
     return;
   }
-
   int n = 0;
   const SolidParamSpec* specs = CadSolidParamSpecs(st.solidKind, &n);
   if (specs[picking].pick == SolidPickKind::CornerXY) {
@@ -46819,6 +47530,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     // REQ-073. `VOLUMES <base surface>, <comparison surface>` — the synchronous command form of
     // the cut/fill/net report, reachable from a headless transcript the way SURFELEV/SURFSTYLE are.
+    if (plotTok == "gradinggroup") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteGradingGroupCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    if (plotTok == "gradinginfill") {
+      std::string name;
+      std::getline(issIdle, name);
+      ExecuteGradingInfillCommand(st, StringUtil::trimCopy(name), log);
+      return;
+    }
     if (plotTok == "volumes" || plotTok == "vol") {
       std::string rest;
       std::getline(issIdle, rest);
