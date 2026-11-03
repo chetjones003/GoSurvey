@@ -180,6 +180,7 @@ for a compact list inside the program.
 | `OFFSETALIGNMENT` | — | Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right) | [[Commands/offsetalignment]] |
 | `ALIGNMENTDETACH` | — | Make a linked offset independent: ALIGNMENTDETACH <name> | [[Commands/alignmentdetach]] |
 | `ALIGNMENTINTERSECT` | — | Intersections: ALIGNMENTINTERSECT <a>, <b> \| <a>, LINE, ... \| <a>, CIRCLE, ... | [[Commands/alignmentintersect]] |
+| `ALIGNMENTSTYLE` | — | Alignment display styles: ALIGNMENTSTYLE LIST\|NEW\|DELETE\|ASSIGN\|SHOW\|HIDE\|COLOR, ... | [[Commands/alignmentstyle]] |
 | `EDITALIGNMENT` | — | Open the Alignment Layout table: EDITALIGNMENT [<name>] | [[Commands/editalignment]] |
 
 ### Surfaces and volumes
@@ -310,6 +311,7 @@ for a compact list inside the program.
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
 | `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
 | `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
+| `ALIGNMENTSTYLE` | — | [[Commands/alignmentstyle]] |
 | `ARC` | — | [[Commands/arc]] |
 | `AREA` | `AA` | [[Commands/area]] |
 | `ARRAY` | `AR` | [[Commands/array]] |

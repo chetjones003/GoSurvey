@@ -1267,6 +1267,30 @@ json BuildRoot(const AppCommandState& st) {
       doc["surfaceStyles"] = std::move(styles);
     }
   }
+  {
+    const bool onlyUntouchedStandard =
+        st.alignmentStyles.size() == 1 && st.alignmentStyles[0] == AlignmentStyles::StandardAlignmentStyle();
+    if (!st.alignmentStyles.empty() && !onlyUntouchedStandard) {
+      const auto componentToJson = [](const SurfaceComponentStyle& c) {
+        json o;
+        o["visible"] = c.visible;
+        o["color"] = c.color;
+        o["linetype"] = c.linetype;
+        o["lineweightMm"] = c.lineweightMm;
+        return o;
+      };
+      json styles = json::array();
+      for (const AlignmentStyle& s : st.alignmentStyles) {
+        json o;
+        o["name"] = s.name;
+        o["tangent"] = componentToJson(s.tangent);
+        o["curve"] = componentToJson(s.curve);
+        o["spiral"] = componentToJson(s.spiral);
+        styles.push_back(std::move(o));
+      }
+      doc["alignmentStyles"] = std::move(styles);
+    }
+  }
   // Dimension style (issue #99). Single active style, additive, no version bump.
   {
     const DimensionStyle& ds = st.activeDimensionStyle;
@@ -3316,6 +3340,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
 
+  st.alignmentStyles.clear();
+  if (doc.contains("alignmentStyles") && doc["alignmentStyles"].is_array()) {
+    const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
+      if (!o.is_object() || c == nullptr) return;
+      if (o.contains("visible") && o["visible"].is_boolean()) c->visible = o["visible"].get<bool>();
+      if (o.contains("color") && o["color"].is_string()) c->color = o["color"].get<std::string>();
+      if (o.contains("linetype") && o["linetype"].is_string()) c->linetype = o["linetype"].get<std::string>();
+      if (o.contains("lineweightMm") && o["lineweightMm"].is_number()) c->lineweightMm = o["lineweightMm"].get<float>();
+    };
+    for (const auto& o : doc["alignmentStyles"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentStyle s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("tangent")) componentFromJson(o["tangent"], &s.tangent);
+      if (o.contains("curve")) componentFromJson(o["curve"], &s.curve);
+      if (o.contains("spiral")) componentFromJson(o["spiral"], &s.spiral);
+      st.alignmentStyles.push_back(std::move(s));
+    }
+  }
+  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+
   // Dimension style (issue #99). Missing section -> default.
   {
     DimensionStyle ds = DimensionStyles::Default();
@@ -4003,6 +4048,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       }
       st.alignments.push_back(std::move(a));
     }
+  }
+  for (alignment::Alignment& a : st.alignments) {
+    if (a.style.empty()) continue;
+    if (AlignmentStyles::Find(st.alignmentStyles, a.style) != nullptr) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing style \"" + a.style +
+                  "\"; using Standard.");
+    a.style = AlignmentStyles::kStandardName;
   }
 
   // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them

@@ -13,6 +13,7 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
+#include "AlignmentStyle.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "util/cadtablestyle.hpp"
@@ -856,6 +857,8 @@ struct CadExtendedGeometryInput {
   const std::vector<EntityAttributes>* splineAttrs = nullptr;
   /// Horizontal alignments (REQ-480/495, issue #121). Drawn from the exact geometry, sampled for display only.
   const std::vector<alignment::Alignment>* alignments = nullptr;
+  /// Named alignment styles (REQ-491); read when drawing each alignment entity.
+  const std::vector<AlignmentStyle>* alignmentStyles = nullptr;
   /// REQ-456 CAD POINT entities.
   const std::vector<CadPoint>* points = nullptr;
   const std::vector<EntityAttributes>* pointAttrs = nullptr;
@@ -1403,6 +1406,7 @@ struct DrawingGeometrySnapshot {
   /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
+  std::vector<AlignmentStyle>   alignmentStyles;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -1595,6 +1599,7 @@ struct DrawingDocument {
   projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
+  std::vector<AlignmentStyle>   alignmentStyles;        ///< Named alignment styles (REQ-491).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -4910,6 +4915,7 @@ struct AppCommandState {
   /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
+  std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
@@ -8068,6 +8074,7 @@ void RunAlignmentRemove(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

@@ -11,6 +11,7 @@
 #include "CadCommands.hpp"
 #include "CadCommandsInternal.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "AlignmentStyle.hpp"
 #include "StringUtil.hpp"
 #include "util/NumFormat.hpp"
 
@@ -1170,4 +1171,150 @@ void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<
   st.alignmentLayoutRequested = true;
   st.alignmentLayoutName = name;
   RunAlignmentList(st, name, log);  // the same rows, for a window-less run
+}
+
+SurfaceComponentStyle* AlignmentComponentByName(AlignmentStyle& s, const std::string& word, std::string* why) {
+  const std::string w = Lower(word);
+  if (w == "tangent" || w == "line") return &s.tangent;
+  if (w == "curve" || w == "arc") return &s.curve;
+  if (w == "spiral") return &s.spiral;
+  if (why != nullptr)
+    *why = "component must be TANGENT, CURVE or SPIRAL, not \"" + word + "\".";
+  return nullptr;
+}
+
+void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  const auto usage = [&]() {
+    log.push_back(
+        "ALIGNMENTSTYLE - usage: ALIGNMENTSTYLE LIST | NEW <style> | DELETE <style> | ASSIGN <alignment>, <style> | "
+        "SHOW|HIDE <style>, <tangent|curve|spiral> | COLOR <style>, <tangent|curve|spiral>, <color>.");
+  };
+  const std::string trimmed = Trim(args);
+  if (trimmed.empty()) {
+    usage();
+    return;
+  }
+  const std::vector<std::string> f = SplitFields(trimmed);
+  const std::string verb = Lower(f[0]);
+  if (verb == "list") {
+    if (st.alignmentStyles.empty()) {
+      log.push_back("ALIGNMENTSTYLE - no alignment styles.");
+      return;
+    }
+    for (const AlignmentStyle& s : st.alignmentStyles)
+      log.push_back("  STYLE \"" + s.name + "\"  (used by " +
+                    std::to_string(AlignmentStyles::CountAlignmentsResolvingTo(st.alignments, st.alignmentStyles, s.name)) +
+                    " alignment(s))");
+    return;
+  }
+  if (verb == "new") {
+    if (f.size() < 2 || f[1].empty()) {
+      usage();
+      return;
+    }
+    const std::string name = f[1];
+    if (AlignmentStyles::Find(st.alignmentStyles, name)) {
+      log.push_back("ALIGNMENTSTYLE - a style named \"" + name + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    AlignmentStyle s = AlignmentStyles::StandardAlignmentStyle();
+    s.name = name;
+    st.alignmentStyles.push_back(std::move(s));
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - created style \"" + name + "\" (copied from Standard).");
+    return;
+  }
+  if (verb == "delete") {
+    if (f.size() < 2 || f[1].empty()) {
+      usage();
+      return;
+    }
+    const std::string name = f[1];
+    if (name == AlignmentStyles::kStandardName) {
+      log.push_back("ALIGNMENTSTYLE - \"Standard\" cannot be deleted.");
+      return;
+    }
+    const int users = AlignmentStyles::CountAlignmentsResolvingTo(st.alignments, st.alignmentStyles, name);
+    if (users > 0) {
+      log.push_back("ALIGNMENTSTYLE - \"" + name + "\" is used by " + std::to_string(users) +
+                    " alignment(s) and cannot be deleted.");
+      return;
+    }
+    const auto it = std::find_if(st.alignmentStyles.begin(), st.alignmentStyles.end(),
+                                 [&](const AlignmentStyle& s) { return s.name == name; });
+    if (it == st.alignmentStyles.end()) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + name + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    st.alignmentStyles.erase(it);
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - deleted style \"" + name + "\".");
+    return;
+  }
+  if (verb == "assign") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    alignment::Alignment* a = Resolve(st, "ALIGNMENTSTYLE", f[1], log);
+    if (a == nullptr) return;
+    if (!AlignmentStyles::Find(st.alignmentStyles, f[2])) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + f[2] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    a = Resolve(st, "ALIGNMENTSTYLE", f[1], log);
+    a->style = f[2];
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - alignment \"" + a->name + "\" now uses style \"" + f[2] + "\".");
+    return;
+  }
+  if (verb == "show" || verb == "hide") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
+      return;
+    }
+    std::string why;
+    SurfaceComponentStyle* comp = AlignmentComponentByName(*s, f[2], &why);
+    if (comp == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    comp->visible = (verb == "show");
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - \"" + s->name + "\" " + f[2] + " " + (comp->visible ? "shown." : "hidden."));
+    return;
+  }
+  if (verb == "color") {
+    if (f.size() < 4 || f[1].empty() || f[2].empty() || f[3].empty()) {
+      usage();
+      return;
+    }
+    AlignmentStyle* s = AlignmentStyles::Find(st.alignmentStyles, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - no style named \"" + f[1] + "\".");
+      return;
+    }
+    std::string why;
+    SurfaceComponentStyle* comp = AlignmentComponentByName(*s, f[2], &why);
+    if (comp == nullptr) {
+      log.push_back("ALIGNMENTSTYLE - " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment style");
+    comp->color = f[3];
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTSTYLE - \"" + s->name + "\" " + f[2] + " color set to " + f[3] + ".");
+    return;
+  }
+  usage();
 }

@@ -344,6 +344,19 @@ struct SurfaceStyle {
   bool operator!=(const SurfaceStyle& o) const { return !(*this == o); }
 };
 
+/// Named alignment display style (REQ-491): tangent, curve and spiral line appearance; resolved on read.
+struct AlignmentStyle {
+  std::string name;
+  SurfaceComponentStyle tangent;
+  SurfaceComponentStyle curve;
+  SurfaceComponentStyle spiral;
+
+  bool operator==(const AlignmentStyle& o) const {
+    return name == o.name && tangent == o.tangent && curve == o.curve && spiral == o.spiral;
+  }
+  bool operator!=(const AlignmentStyle& o) const { return !(*this == o); }
+};
+
 /// One drawable run of surface display geometry: a line buffer plus the appearance to draw it with
 /// (REQ-070 / ADR-036 (h)).
 ///

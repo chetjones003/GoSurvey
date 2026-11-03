@@ -43,6 +43,7 @@ offset and a curve's radius are always exact.
 | `OFFSETALIGNMENT <parent>, R12, L12` | Creates real **offset alignments** (right/left of the parent, facing its end). They follow the parent when it is edited or moved. Refused where the offset would collapse a curve, at a kink in the parent, or when the parent contains a **spiral**. |
 | `ALIGNMENTDETACH <name>` | Makes a linked offset independent so it can be edited. |
 | `ALIGNMENTINTERSECT <a>, <b>` / `<a>, LINE, x1, y1, x2, y2` / `<a>, CIRCLE, cx, cy, r` | Every intersection with station and crossing angle; coincident tangents are reported as a range. |
+| `ALIGNMENTSTYLE LIST` / `NEW` / `DELETE` / `ASSIGN` / `SHOW\|HIDE` / `COLOR` | Drawing-wide **display styles** for tangent, curve and spiral components (color, visibility). Each alignment uses a style name (default **Standard**). |
 
 ## Selecting, editing and saving
 

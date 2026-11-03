@@ -1217,6 +1217,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CadPipeRunTests.cpp
     tests/AlignmentTests.cpp
     tests/AlignmentCommandTests.cpp
+    tests/AlignmentStyleTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

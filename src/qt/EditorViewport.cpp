@@ -363,6 +363,7 @@ void EditorViewport::paintGL() {
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.alignments = &m_State.alignments;
+    ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;
@@ -502,6 +503,7 @@ void EditorViewport::paintGL() {
     ext.ellipses = &m_State.userEllipses; ext.ellAttrs = &m_State.userEllAttrs;
     ext.splines = &m_State.cadSplines; ext.splineAttrs = &m_State.cadSplineAttrs;
     ext.alignments = &m_State.alignments;
+    ext.alignmentStyles = &m_State.alignmentStyles;
     ext.points = &m_State.cadPoints; ext.pointAttrs = &m_State.cadPointAttrs;
     ext.pdMode = m_State.pdMode;
     ext.pdSize = m_State.pdSize;

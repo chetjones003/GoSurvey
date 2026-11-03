@@ -2762,22 +2762,40 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             if (CadEntityIdHidden(hiddenIds, attr.id))
               continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
-            const std::vector<alignment::Point2> pts = al.SampleForDisplay(alignTol);
-            if (pts.size() < 2)
-              continue;
-            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
-            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
-            float rgba[4];
-            ResolveEntityRgbaForViewport(attr, lr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
-            const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
-            std::vector<float> xy(pts.size() * 2);
-            for (size_t i = 0; i < pts.size(); ++i) {
-              xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
-              xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+            const AlignmentStyle* sty =
+                extended->alignmentStyles != nullptr
+                    ? AlignmentStyles::Resolve(*extended->alignmentStyles, al.style)
+                    : nullptr;
+            const int nEnt = static_cast<int>(al.Entities().size());
+            for (int ei = 0; ei < nEnt; ++ei) {
+              const alignment::Entity& ent = al.Entities()[static_cast<size_t>(ei)];
+              const SurfaceComponentStyle* comp =
+                  sty != nullptr ? AlignmentStyles::ComponentForEntity(*sty, ent.kind) : nullptr;
+              if (comp != nullptr && !comp->visible)
+                continue;
+              EntityAttributes segAttr = attr;
+              if (comp != nullptr) {
+                if (comp->color != "ByLayer") segAttr.color = comp->color;
+                if (comp->linetype != "ByLayer") segAttr.linetype = comp->linetype;
+                if (comp->lineweightMm >= 0.f) segAttr.lineweightMm = comp->lineweightMm;
+              }
+              const std::vector<alignment::Point2> pts = al.SampleEntityForDisplay(ei, alignTol);
+              if (pts.size() < 2)
+                continue;
+              const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+              maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(segAttr, lr)));
+              float rgba[4];
+              ResolveEntityRgbaForViewport(segAttr, lr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
+              const std::string lt = EffectiveEntityLinetypeNameForViewport(segAttr, lr);
+              std::vector<float> xy(pts.size() * 2);
+              for (size_t i = 0; i < pts.size(); ++i) {
+                xy[i * 2] = static_cast<float>(pts[i].x - viewAnchorX);
+                xy[i * 2 + 1] = static_cast<float>(pts[i].y - viewAnchorY);
+              }
+              CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba,
+                                          &cpuVcLines_);
+              lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
             }
-            CadTessellateLinetypeChainVc(xy.data(), static_cast<int>(pts.size()), 0.f, false, lt, dashPatScale, rgba,
-                                         &cpuVcLines_);
-            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
         if (extended->points && !extended->points->empty()) {

@@ -181,6 +181,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pointVisibility        = cmd.pointVisibility;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
+  doc.alignmentStyles        = cmd.alignmentStyles;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
@@ -310,6 +311,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pointVisibility            = doc.pointVisibility;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
+                                                               : doc.alignmentStyles;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
@@ -1995,6 +1998,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
+  snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
@@ -2091,6 +2095,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
+  st.alignmentStyles      = snap.alignmentStyles;
   st.activeDimensionStyle = snap.dimensionStyle;
   st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
@@ -7194,6 +7199,7 @@ const CmdEntry kRegistry[] = {
     {"alignmentcontinuity", "", "Set or list continuity checks: ALIGNMENTCONTINUITY <name>, C0|C1|C2 | LIST"},
     {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
     {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
+    {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR, ..."},
     {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
     {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
     {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
@@ -47058,6 +47064,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "reversealignment" ||
         plotTok == "reversealigndirection" ||
         plotTok == "alignmentstation" ||
+        plotTok == "alignmentstyle" ||
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
@@ -47116,6 +47123,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunReverseAlignment(st, rest, log);
       else if (plotTok == "alignmentstation")
         RunAlignmentStation(st, rest, log);
+      else if (plotTok == "alignmentstyle")
+        RunAlignmentStyle(st, rest, log);
       else if (plotTok == "offsetalignment")
         RunOffsetAlignment(st, rest, log);
       else if (plotTok == "alignmentdetach")

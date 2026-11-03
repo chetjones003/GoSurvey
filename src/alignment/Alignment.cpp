@@ -670,6 +670,23 @@ std::vector<Point2> Alignment::SampleForDisplay(double maxChordHeight) const {
   return out;
 }
 
+std::vector<Point2> Alignment::SampleEntityForDisplay(int entityIndex, double maxChordHeight) const {
+  std::vector<Point2> out;
+  if (entityIndex < 0 || static_cast<size_t>(entityIndex) >= entities_.size()) return out;
+  const Entity& e = entities_[static_cast<size_t>(entityIndex)];
+  out.push_back(e.start);
+  int steps = 1;
+  if (e.kind == EntityKind::Arc) {
+    const double h = std::clamp(maxChordHeight, 1e-9, e.radius * 0.5);
+    const double dTheta = 2.0 * std::acos(1.0 - h / e.radius);
+    steps = std::max(1, static_cast<int>(std::ceil((e.length / e.radius) / dTheta)));
+  } else if (e.kind == EntityKind::Spiral) {
+    steps = std::max(1, static_cast<int>(std::ceil(e.length / std::max(maxChordHeight, 1e-6))));
+  }
+  for (int k = 1; k <= steps; ++k) out.push_back(PointInEntity(entityIndex, e.length * k / steps));
+  return out;
+}
+
 // ---------------------------------------------------------------- station formatting
 
 std::string FormatStation(double station, const StationFormat& fmt) {

@@ -274,6 +274,8 @@ class Alignment {
   /// Display-only sampling for rendering (REQ-495.1): chord height never exceeds `maxChordHeight`.
   /// Never used by a query or export of geometry.
   [[nodiscard]] std::vector<Point2> SampleForDisplay(double maxChordHeight) const;
+  /// Samples one entity for viewport display (REQ-491 per-segment styling).
+  [[nodiscard]] std::vector<Point2> SampleEntityForDisplay(int entityIndex, double maxChordHeight) const;
 
  private:
   void Rebuild();

@@ -1,7 +1,7 @@
 # TASK-alignment-phase1-issue121 — Civil-style alignments, Phases 1 and 2 with the full spec
 
 - Type:    feature
-- Status:  in progress (PR #1152 head b1664acf)
+- Status:  in progress (PR #1152)
 - Opened:  2026-11-02
 - Owner:   chetjones003 (decision), Claude (implementation)
 - GitHub:  #121 "Implement Civil 3D-Style Alignments"
@@ -24,8 +24,12 @@
   insert/delete, ALIGNMENTEDIT/LOCK/INSERT/REMOVE, EDITALIGNMENT layout table (Qt), grips (start, tangent end, curve
   radius), MOVE/COPY/ROTATE/SCALE/MIRROR/ERASE, REVERSEALIGNMENT, ALIGNMENTSTATION, OFFSETALIGNMENT/ALIGNMENTDETACH
   with linked refresh, ALIGNMENTINTERSECT.
-- Out (later phases, REQ-491..502): styles/labels/tables/reports, surface and
+- Out (later phases, REQ-492..502): labels/tables/reports, surface and
   feature-line integration, COGO commands, design criteria, interactive on-screen layout toolbar.
+- REQ-491 (partial, command-line + viewport): drawing-owned `AlignmentStyle` table (tangent/curve/spiral
+  components), `ALIGNMENTSTYLE` command, JSON persistence, per-entity viewport styling via
+  `SampleEntityForDisplay`, tests `[req491]`. Not yet: station ticks, geometry markers, label visibility,
+  direction arrows, design tab (REQ-502), Qt style editor dialog.
 - Phase 3 (in progress on `feat/implement-issue-121`): REQ-481 clothoid spirals (`Clothoid.cpp`,
   `AppendSpiral`, station/offset queries, persistence `k:S`), REQ-482 C2 continuity + requirement level,
   offset refusal for spiral parents, LIST/EDITALIGNMENT spiral rows, **ALIGNMENTADD/INSERT/EDIT** spiral
@@ -36,6 +40,7 @@
   REQ-490 follow-up: spiral junction geometry points (`77050294`); alignment Quadrant on cardinal
   tangents/spirals, not curves (PR #1152, `b1664acf`).
   REQ-490 Station snap: typed `STATION 12+45.32` at point prompts + OSNAP Station with latched value.
+  Verification: `[alignment]` 76/76 (includes `[req491]`).
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
