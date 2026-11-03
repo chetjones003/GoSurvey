@@ -14,6 +14,7 @@
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
 #include "AlignmentStyle.hpp"
+#include "AlignmentLabelSet.hpp"
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "util/cadtablestyle.hpp"
@@ -1407,6 +1408,7 @@ struct DrawingGeometrySnapshot {
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
   std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<AlignmentLabelSet> alignmentLabelSets;
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -1599,7 +1601,8 @@ struct DrawingDocument {
   projpts::Rules                pointVisibility;        ///< REQ-377: per tab, which project points this drawing shows
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
-  std::vector<AlignmentStyle>   alignmentStyles;        ///< Named alignment styles (REQ-491).
+  std::vector<AlignmentStyle>   alignmentStyles;
+  std::vector<AlignmentLabelSet> alignmentLabelSets;        ///< Named alignment styles (REQ-491).
   DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<DimensionStyle>  dimensionStyles = DimensionStyles::DefaultStyles();
   MultileaderStyle            multileaderStyle = MultileaderStyles::Default();
@@ -4916,6 +4919,7 @@ struct AppCommandState {
   /// the code is entitled to assume cannot happen.
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   std::vector<AlignmentStyle> alignmentStyles = AlignmentStyles::DefaultAlignmentStyles();
+  std::vector<AlignmentLabelSet> alignmentLabelSets = AlignmentLabelSets::DefaultAlignmentLabelSets();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
@@ -8075,6 +8079,7 @@ void RunAlignmentContinuity(AppCommandState& st, const std::string& args, std::v
 void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStation(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);

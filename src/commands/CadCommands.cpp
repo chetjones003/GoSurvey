@@ -182,6 +182,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
   doc.alignmentStyles        = cmd.alignmentStyles;
+  doc.alignmentLabelSets     = cmd.alignmentLabelSets;
   doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.dimensionStyles        = cmd.dimensionStyles;
   doc.multileaderStyle       = cmd.activeMultileaderStyle;
@@ -313,6 +314,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.alignmentStyles            = doc.alignmentStyles.empty() ? AlignmentStyles::DefaultAlignmentStyles()
                                                                : doc.alignmentStyles;
+  cmd.alignmentLabelSets         = doc.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                                  : doc.alignmentLabelSets;
   cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.dimensionStyles            = doc.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : doc.dimensionStyles;
   cmd.activeMultileaderStyle     = doc.multileaderStyle;
@@ -1999,6 +2002,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.alignmentStyles      = st.alignmentStyles;  // REQ-491
+  snap.alignmentLabelSets   = st.alignmentLabelSets;
   snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.dimensionStyles      = st.dimensionStyles;
   snap.multileaderStyle     = st.activeMultileaderStyle;
@@ -2096,6 +2100,8 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
   st.alignmentStyles      = snap.alignmentStyles;
+  st.alignmentLabelSets   = snap.alignmentLabelSets.empty() ? AlignmentLabelSets::DefaultAlignmentLabelSets()
+                                                            : snap.alignmentLabelSets;
   st.activeDimensionStyle = snap.dimensionStyle;
   st.dimensionStyles = snap.dimensionStyles.empty() ? DimensionStyles::DefaultStyles() : snap.dimensionStyles;
   st.activeMultileaderStyle = snap.multileaderStyle;
@@ -7200,6 +7206,7 @@ const CmdEntry kRegistry[] = {
     {"reversealignment", "", "Reverse alignment direction and stationing: REVERSEALIGNMENT <name>"},
     {"alignmentstation", "", "Starting station and station equations: ALIGNMENTSTATION <name>, START|EQ, ..."},
     {"alignmentstyle", "", "Alignment display styles: ALIGNMENTSTYLE LIST|NEW|DELETE|ASSIGN|SHOW|HIDE|COLOR, ..."},
+    {"alignmentlabelset", "", "Alignment label sets: ALIGNMENTLABELSET LIST|NEW|DELETE|ASSIGN|MAJORINTERVAL|MINORINTERVAL|SHOW|HIDE, ..."},
     {"offsetalignment", "", "Create offset alignments: OFFSETALIGNMENT <parent>, <distance>[, <distance>...] (L12 left, R12 right)"},
     {"alignmentdetach", "", "Make a linked offset independent: ALIGNMENTDETACH <name>"},
     {"alignmentintersect", "", "Intersections: ALIGNMENTINTERSECT <a>, <b> | <a>, LINE, ... | <a>, CIRCLE, ..."},
@@ -47065,6 +47072,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "reversealigndirection" ||
         plotTok == "alignmentstation" ||
         plotTok == "alignmentstyle" ||
+        plotTok == "alignmentlabelset" ||
         plotTok == "offsetalignment" ||
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
@@ -47125,6 +47133,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentStation(st, rest, log);
       else if (plotTok == "alignmentstyle")
         RunAlignmentStyle(st, rest, log);
+      else if (plotTok == "alignmentlabelset")
+        RunAlignmentLabelSet(st, rest, log);
       else if (plotTok == "offsetalignment")
         RunOffsetAlignment(st, rest, log);
       else if (plotTok == "alignmentdetach")

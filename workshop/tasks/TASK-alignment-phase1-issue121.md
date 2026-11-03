@@ -30,6 +30,10 @@
   components), `ALIGNMENTSTYLE` command, JSON persistence, per-entity viewport styling via
   `SampleEntityForDisplay`, tests `[req491]`. Not yet: station ticks, geometry markers, label visibility,
   direction arrows, design tab (REQ-502), Qt style editor dialog.
+- REQ-492 (partial): `AlignmentLabelSet` table, `labelSet` on alignments, `CollectMajorMinorStationTicks`
+  (AC1 3 major / 15 minor for 0+00–3+82 @ 100/20), `ALIGNMENTLABELSET` command, JSON persistence, Qt viewport
+  station text via `DrawQtModelAnnotations`, tests `[req492]`. Not yet: segment labels, equation labels,
+  fixed/relative station-offset labels, drawing-owned movable annotations, label styles.
 - Phase 3 (in progress on `feat/implement-issue-121`): REQ-481 clothoid spirals (`Clothoid.cpp`,
   `AppendSpiral`, station/offset queries, persistence `k:S`), REQ-482 C2 continuity + requirement level,
   offset refusal for spiral parents, LIST/EDITALIGNMENT spiral rows, **ALIGNMENTADD/INSERT/EDIT** spiral
@@ -41,7 +45,7 @@
   tangents/spirals, not curves (PR #1152, `b1664acf`).
   REQ-490 Station snap: typed `STATION 12+45.32` at point prompts + OSNAP Station with latched value.
   REQ-490 Intersection snap: alignments in `GatherNearCursor` for INT/APPINT vs lines, arcs and other alignments.
-  Verification: `[alignment]` 77/77 (includes `[req491]`).
+  Verification: `[alignment]` 79/79 (includes `[req491]`, `[req492]`).
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.

@@ -162,6 +162,7 @@ class Alignment {
   std::string description;
   std::string layer = "0";
   std::string style = "Standard";
+  std::string labelSet = "Standard";
   AlignmentType type = AlignmentType::Centerline;
   ContinuityRequirement continuityRequirement = ContinuityRequirement::C1;
 

@@ -1,4 +1,4 @@
-// CadCommands_Alignment.cpp - the alignment commands (REQ-480, 484, 485, 501; issue #121 Phase 1).
+﻿// CadCommands_Alignment.cpp - the alignment commands (REQ-480, 484, 485, 501; issue #121 Phase 1).
 //
 // Same TU conventions as CadCommands_Geo.cpp: entry points are declared in CadCommands.hpp and the
 // geometry itself lives in alignment/Alignment.cpp (pure, no session state). This file only parses
@@ -12,6 +12,7 @@
 #include "CadCommandsInternal.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "AlignmentStyle.hpp"
+#include "AlignmentLabelSet.hpp"
 #include "StringUtil.hpp"
 #include "util/NumFormat.hpp"
 
@@ -580,13 +581,13 @@ bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::st
   if (!LooksLikeAlignmentStationSnapInput(raw))
     return false;
   if (lx == nullptr || ly == nullptr) {
-    st.alignmentStationSnapRejectReason = "STATION snap — internal error (null output).";
+    st.alignmentStationSnapRejectReason = "STATION snap â€” internal error (null output).";
     return false;
   }
   std::string trimmed = StringUtil::trimCopy(raw);
   const std::string low = Lower(trimmed);
   if (low.size() < 7) {
-    st.alignmentStationSnapRejectReason = "STATION snap — usage: STATION 12+45.32 (displayed station on an alignment).";
+    st.alignmentStationSnapRejectReason = "STATION snap â€” usage: STATION 12+45.32 (displayed station on an alignment).";
     return false;
   }
   size_t i = 7;
@@ -598,17 +599,17 @@ bool TryParseAlignmentStationSnapStoragePoint(AppCommandState& st, const std::st
     ++i;
   const std::string staText = StringUtil::trimCopy(trimmed.substr(i));
   if (staText.empty()) {
-    st.alignmentStationSnapRejectReason = "STATION snap — missing station value (try 12+45.32).";
+    st.alignmentStationSnapRejectReason = "STATION snap â€” missing station value (try 12+45.32).";
     return false;
   }
   double displayed = 0.0;
   if (!alignment::ParseStation(staText, &displayed)) {
-    st.alignmentStationSnapRejectReason = "STATION snap — \"" + staText + "\" is not a station.";
+    st.alignmentStationSnapRejectReason = "STATION snap â€” \"" + staText + "\" is not a station.";
     return false;
   }
   if (!ResolveAlignmentStationSnapPoint(st, displayed, baseLocalX, baseLocalY, lx, ly)) {
     st.alignmentStationSnapRejectReason =
-        "STATION snap — station " + alignment::FormatStation(displayed) + " is not on any alignment.";
+        "STATION snap â€” station " + alignment::FormatStation(displayed) + " is not on any alignment.";
     return false;
   }
   st.objectSnapStationDisplayedValid = true;
@@ -1056,6 +1057,7 @@ void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vecto
     }
     off.layer = parentCopy.layer;
     off.style = parentCopy.style;
+    off.labelSet = parentCopy.labelSet;
     std::string why;
     if (!alignment::MakeOffset(parentCopy, d, &off, &why)) {
       log.push_back("OFFSETALIGNMENT - refused for " + off.name + ": " + why + ". Nothing was created.");
@@ -1314,6 +1316,161 @@ void RunAlignmentStyle(AppCommandState& st, const std::string& args, std::vector
     comp->color = f[3];
     BumpCadGpuCache(st);
     log.push_back("ALIGNMENTSTYLE - \"" + s->name + "\" " + f[2] + " color set to " + f[3] + ".");
+    return;
+  }
+  usage();
+}
+
+void RunAlignmentLabelSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+  const auto usage = [&]() {
+    log.push_back(
+        "ALIGNMENTLABELSET - usage: ALIGNMENTLABELSET LIST | NEW <set> | DELETE <set> | ASSIGN <alignment>, <set> | "
+        "MAJORINTERVAL <set>, <interval> | MINORINTERVAL <set>, <interval> | SHOW|HIDE <set>, MAJOR|MINOR.");
+  };
+  const std::string trimmed = Trim(args);
+  if (trimmed.empty()) {
+    usage();
+    return;
+  }
+  const std::vector<std::string> f = SplitFields(trimmed);
+  const std::string verb = Lower(f[0]);
+  if (verb == "list") {
+    for (const AlignmentLabelSet& s : st.alignmentLabelSets)
+      log.push_back("  LABEL SET \"" + s.name + "\"  major=" + Lin(st, s.majorInterval) + " minor=" +
+                    Lin(st, s.minorInterval) +
+                    "  (used by " +
+                    std::to_string(AlignmentLabelSets::CountAlignmentsResolvingTo(st.alignments, st.alignmentLabelSets,
+                                                                                  s.name)) +
+                    " alignment(s))");
+    return;
+  }
+  if (verb == "new") {
+    if (f.size() < 2 || f[1].empty()) {
+      usage();
+      return;
+    }
+    if (AlignmentLabelSets::Find(st.alignmentLabelSets, f[1])) {
+      log.push_back("ALIGNMENTLABELSET - a label set named \"" + f[1] + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label set");
+    AlignmentLabelSet s = AlignmentLabelSets::StandardLabelSet();
+    s.name = f[1];
+    st.alignmentLabelSets.push_back(std::move(s));
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - created label set \"" + f[1] + "\" (copied from Standard).");
+    return;
+  }
+  if (verb == "delete") {
+    if (f.size() < 2 || f[1].empty()) {
+      usage();
+      return;
+    }
+    if (f[1] == AlignmentLabelSets::kStandardName) {
+      log.push_back("ALIGNMENTLABELSET - \"Standard\" cannot be deleted.");
+      return;
+    }
+    const int users = AlignmentLabelSets::CountAlignmentsResolvingTo(st.alignments, st.alignmentLabelSets, f[1]);
+    if (users > 0) {
+      log.push_back("ALIGNMENTLABELSET - \"" + f[1] + "\" is used by " + std::to_string(users) +
+                    " alignment(s) and cannot be deleted.");
+      return;
+    }
+    const auto it = std::find_if(st.alignmentLabelSets.begin(), st.alignmentLabelSets.end(),
+                                 [&](const AlignmentLabelSet& s) { return s.name == f[1]; });
+    if (it == st.alignmentLabelSets.end()) {
+      log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label set");
+    st.alignmentLabelSets.erase(it);
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - deleted label set \"" + f[1] + "\".");
+    return;
+  }
+  if (verb == "assign") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    alignment::Alignment* a = Resolve(st, "ALIGNMENTLABELSET", f[1], log);
+    if (a == nullptr) return;
+    if (!AlignmentLabelSets::Find(st.alignmentLabelSets, f[2])) {
+      log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[2] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label set");
+    a = Resolve(st, "ALIGNMENTLABELSET", f[1], log);
+    a->labelSet = f[2];
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - alignment \"" + a->name + "\" now uses label set \"" + f[2] + "\".");
+    return;
+  }
+  if (verb == "majorinterval") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
+      return;
+    }
+    const double v = std::strtod(f[2].c_str(), nullptr);
+    if (!(v > 0.0)) {
+      log.push_back("ALIGNMENTLABELSET - major interval must be positive.");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label set");
+    s->majorInterval = v;
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" major interval set to " + Lin(st, v) + ".");
+    return;
+  }
+  if (verb == "minorinterval") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
+      return;
+    }
+    const double v = std::strtod(f[2].c_str(), nullptr);
+    if (!(v > 0.0)) {
+      log.push_back("ALIGNMENTLABELSET - minor interval must be positive.");
+      return;
+    }
+    PushUndoSnapshot(st, "Alignment label set");
+    s->minorInterval = v;
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" minor interval set to " + Lin(st, v) + ".");
+    return;
+  }
+  if (verb == "show" || verb == "hide") {
+    if (f.size() < 3 || f[1].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    AlignmentLabelSet* s = AlignmentLabelSets::Find(st.alignmentLabelSets, f[1]);
+    if (s == nullptr) {
+      log.push_back("ALIGNMENTLABELSET - no label set named \"" + f[1] + "\".");
+      return;
+    }
+    const std::string which = Lower(f[2]);
+    PushUndoSnapshot(st, "Alignment label set");
+    if (which == "major")
+      s->majorStationsOn = (verb == "show");
+    else if (which == "minor")
+      s->minorStationsOn = (verb == "show");
+    else {
+      log.push_back("ALIGNMENTLABELSET - component must be MAJOR or MINOR, not \"" + f[2] + "\".");
+      return;
+    }
+    BumpCadGpuCache(st);
+    log.push_back("ALIGNMENTLABELSET - \"" + s->name + "\" " + f[2] + " " + (verb == "show" ? "shown." : "hidden."));
     return;
   }
   usage();

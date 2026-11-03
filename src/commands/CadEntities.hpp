@@ -357,6 +357,21 @@ struct AlignmentStyle {
   bool operator!=(const AlignmentStyle& o) const { return !(*this == o); }
 };
 
+/// Named alignment label set (REQ-492): station tick intervals and visibility (first slice).
+struct AlignmentLabelSet {
+  std::string name;
+  bool majorStationsOn = true;
+  bool minorStationsOn = true;
+  double majorInterval = 100.0;
+  double minorInterval = 20.0;
+
+  bool operator==(const AlignmentLabelSet& o) const {
+    return name == o.name && majorStationsOn == o.majorStationsOn && minorStationsOn == o.minorStationsOn &&
+           majorInterval == o.majorInterval && minorInterval == o.minorInterval;
+  }
+  bool operator!=(const AlignmentLabelSet& o) const { return !(*this == o); }
+};
+
 /// One drawable run of surface display geometry: a line buffer plus the appearance to draw it with
 /// (REQ-070 / ADR-036 (h)).
 ///

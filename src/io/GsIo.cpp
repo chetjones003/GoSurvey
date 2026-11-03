@@ -2,6 +2,8 @@
 #include "GsAnnotationJson.hpp"
 
 #include "CadCommands.hpp"
+#include "AlignmentLabelSet.hpp"
+#include "AlignmentStyle.hpp"
 #include "GsMigrate.hpp"
 #include "ProjectPoints.hpp"
 #include "TextStyle.hpp"
@@ -1291,6 +1293,23 @@ json BuildRoot(const AppCommandState& st) {
       doc["alignmentStyles"] = std::move(styles);
     }
   }
+  {
+    const bool onlyUntouchedStandard =
+        st.alignmentLabelSets.size() == 1 && st.alignmentLabelSets[0] == AlignmentLabelSets::StandardLabelSet();
+    if (!st.alignmentLabelSets.empty() && !onlyUntouchedStandard) {
+      json sets = json::array();
+      for (const AlignmentLabelSet& s : st.alignmentLabelSets) {
+        json o;
+        o["name"] = s.name;
+        o["majorStationsOn"] = s.majorStationsOn;
+        o["minorStationsOn"] = s.minorStationsOn;
+        o["majorInterval"] = s.majorInterval;
+        o["minorInterval"] = s.minorInterval;
+        sets.push_back(std::move(o));
+      }
+      doc["alignmentLabelSets"] = std::move(sets);
+    }
+  }
   // Dimension style (issue #99). Single active style, additive, no version bump.
   {
     const DimensionStyle& ds = st.activeDimensionStyle;
@@ -2183,6 +2202,7 @@ json BuildRoot(const AppCommandState& st) {
       if (!a.description.empty()) o["description"] = a.description;
       o["layer"] = a.layer;
       o["style"] = a.style;
+      if (a.labelSet != AlignmentLabelSets::kStandardName) o["labelSet"] = a.labelSet;
       o["type"] = static_cast<int>(a.type);
       o["startingStation"] = a.startingStation;
       if (a.continuityRequirement != alignment::ContinuityRequirement::C1)
@@ -3361,6 +3381,25 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   }
   AlignmentStyles::EnsureStandard(st.alignmentStyles);
 
+  st.alignmentLabelSets.clear();
+  if (doc.contains("alignmentLabelSets") && doc["alignmentLabelSets"].is_array()) {
+    for (const auto& o : doc["alignmentLabelSets"]) {
+      if (!o.is_object() || !o.contains("name") || !o["name"].is_string()) continue;
+      AlignmentLabelSet s;
+      s.name = o["name"].get<std::string>();
+      if (o.contains("majorStationsOn") && o["majorStationsOn"].is_boolean())
+        s.majorStationsOn = o["majorStationsOn"].get<bool>();
+      if (o.contains("minorStationsOn") && o["minorStationsOn"].is_boolean())
+        s.minorStationsOn = o["minorStationsOn"].get<bool>();
+      if (o.contains("majorInterval") && o["majorInterval"].is_number())
+        s.majorInterval = o["majorInterval"].get<double>();
+      if (o.contains("minorInterval") && o["minorInterval"].is_number())
+        s.minorInterval = o["minorInterval"].get<double>();
+      st.alignmentLabelSets.push_back(std::move(s));
+    }
+  }
+  AlignmentLabelSets::EnsureStandard(st.alignmentLabelSets);
+
   // Dimension style (issue #99). Missing section -> default.
   {
     DimensionStyle ds = DimensionStyles::Default();
@@ -3998,6 +4037,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (el.contains("description") && el["description"].is_string()) a.description = el["description"].get<std::string>();
       if (el.contains("layer") && el["layer"].is_string()) a.layer = el["layer"].get<std::string>();
       if (el.contains("style") && el["style"].is_string()) a.style = el["style"].get<std::string>();
+      if (el.contains("labelSet") && el["labelSet"].is_string()) a.labelSet = el["labelSet"].get<std::string>();
       if (el.contains("type") && el["type"].is_number_integer()) {
         const int t = el["type"].get<int>();
         if (t >= 1 && t <= 5) a.type = static_cast<alignment::AlignmentType>(t);
@@ -4055,6 +4095,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing style \"" + a.style +
                   "\"; using Standard.");
     a.style = AlignmentStyles::kStandardName;
+  }
+  for (alignment::Alignment& a : st.alignments) {
+    if (a.labelSet.empty()) continue;
+    if (AlignmentLabelSets::Find(st.alignmentLabelSets, a.labelSet) != nullptr) continue;
+    log.push_back("ALIGNMENT — alignment \"" + a.name + "\" references missing label set \"" + a.labelSet +
+                  "\"; using Standard.");
+    a.labelSet = AlignmentLabelSets::kStandardName;
   }
 
   // Piping networks (issue #486 increment B3 / REQ-345). Guarded, so a drawing written before them

@@ -6,6 +6,8 @@
 #include "CadDimStroke.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "TextStyle.hpp"
+#include "AlignmentLabelSet.hpp"
+#include "alignment/AlignmentLabels.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
@@ -867,6 +869,27 @@ void DrawQtTransformAnnotationPreviews(QPainter& painter, const AppCommandState&
     }
     document.drawContents(&painter);
     painter.restore();
+  }
+  if (!state.alignments.empty()) {
+    painter.setPen(QColor("#20252a"));
+    QFont stationFont(QStringLiteral("Segoe UI"), 9);
+    painter.setFont(stationFont);
+    const double textOffset = 3.0;
+    for (const alignment::Alignment& al : state.alignments) {
+      if (al.Empty()) continue;
+      const AlignmentLabelSet* ls = AlignmentLabelSets::Resolve(state.alignmentLabelSets, al.labelSet);
+      if (ls == nullptr) continue;
+      const std::vector<alignment::StationTickLabel> ticks = alignment::CollectMajorMinorStationTicks(
+          al, ls->majorInterval, ls->minorInterval, ls->majorStationsOn, ls->minorStationsOn);
+      for (const alignment::StationTickLabel& tick : ticks) {
+        const alignment::Point2 p = al.GetPointAtStation(tick.rawStation);
+        const double az = al.GetBearingAtStation(tick.rawStation);
+        const double lx = p.x + textOffset * std::cos(az);
+        const double ly = p.y - textOffset * std::sin(az);
+        const std::string text = alignment::FormatStation(tick.displayedStation);
+        painter.drawText(project(lx, ly, 0.0), QString::fromStdString(text));
+      }
+    }
   }
   painter.restore();
 }
