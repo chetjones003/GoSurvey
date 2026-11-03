@@ -21,6 +21,27 @@ TEST_CASE("Viewport zoom scale presets and zoom math", "[req458]") {
   CHECK(st.currentViewportZoomScaleIndex == 4);
 }
 
+TEST_CASE("Status bar zoom preset stays user-selected after wheel zoom", "[req458]") {
+  AppCommandState st;
+  ApplyViewportZoomScaleIndex(st, 4, 800.f, 96.f);
+  const int chosen = st.currentViewportZoomScaleIndex;
+  st.viewportZoom *= 1.37f;
+  EnsureViewportZoomScaleIndexForDisplay(st);
+  CHECK(st.currentViewportZoomScaleIndex == chosen);
+}
+
+TEST_CASE("Status bar scale selection does not change viewport zoom", "[req458]") {
+  AppCommandState st;
+  EnsureDefaultViewportZoomScales(st.viewportZoomScales);
+  st.viewportZoom = 2.25f;
+  SetCurrentViewportZoomScaleIndex(st, 4);
+  CHECK(st.currentViewportZoomScaleIndex == 4);
+  CHECK(st.viewportZoom == Catch::Approx(2.25f));
+  SetCurrentViewportZoomScaleIndex(st, 0);
+  CHECK(st.currentViewportZoomScaleIndex == 0);
+  CHECK(st.viewportZoom == Catch::Approx(2.25f));
+}
+
 TEST_CASE("Custom viewport zoom scale parses and adds", "[req458]") {
   AppCommandState st;
   float paper = 0.f, drawing = 0.f;

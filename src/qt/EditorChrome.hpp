@@ -16,9 +16,14 @@ public:
   void ToggleVisible();
   void SetHint(const QString& hint);
   std::function<void(const QString&)> optionSelected;
+  /// The viewport paints a blank cursor; refresh it when the pointer moves over this overlay.
+  std::function<void()> refreshViewportCursor;
 protected:
   bool eventFilter(QObject* watched, QEvent* event) override;
   void keyPressEvent(QKeyEvent* event) override;
+  void enterEvent(QEnterEvent* event) override;
+  void leaveEvent(QEvent* event) override;
+  void mouseMoveEvent(QMouseEvent* event) override;
 private:
   void Place();
   QLineEdit* m_Input;
