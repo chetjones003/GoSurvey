@@ -9645,7 +9645,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
 
 // Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
 // entities (REQ-038 #5). Caller pushes the undo snapshot.
-static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
+static void CommitPasteIntoModel(AppCommandState& st, double dx, double dy) {
   const CadClipboard& cb = st.clipboard;
   using ST = SelectedEntity::Type;
   st.selection.clear();
@@ -9950,7 +9950,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, 
                     " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
-    CommitPasteIntoModel(st, static_cast<float>(dx), static_cast<float>(dy));
+    CommitPasteIntoModel(st, dx, dy);
     st.selectedSurveyPointIndices.clear();
     if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
       log.push_back("PASTE — survey points not pasted: this project is open read-only.");

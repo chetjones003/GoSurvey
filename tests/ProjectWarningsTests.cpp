@@ -889,6 +889,29 @@ TEST_CASE("issue782 survey point paste keeps sub-unit precision at large coordin
   CHECK(std::abs(st.surveyPoints[1].northing - targetY) < 1e-7);
 }
 
+TEST_CASE("issue782 pasted line and survey point use the same precise offset", "[req383][issue782]") {
+  constexpr double sourceX = 1234567.123456789;
+  constexpr double sourceY = 7654321.654321098;
+  AppCommandState st;
+  st.surveyPoints = {Pt(42, sourceX, sourceY, 7, "SOURCE")};
+  st.selectedSurveyPointIndices = {0};
+  st.userLinesFlat = {sourceX, sourceY, 0, sourceX + 0.5, sourceY, 0};
+  st.selection.push_back({SelectedEntity::Type::LineSeg, 0});
+  std::vector<std::string> log;
+  CopySelectionToClipboard(st, log);
+  REQUIRE(st.clipboard.lines.size() == 6);
+  const double destinationX = st.clipboard.basePtX + 1000000.03;
+  const double destinationY = st.clipboard.basePtY + 1000000.07;
+  st.surveyPoints.clear();
+  st.userLinesFlat.clear();
+  st.selection.clear();
+  CommitClipboardPasteAt(st, destinationX, destinationY, log);
+  REQUIRE(st.surveyPoints.size() == 1);
+  REQUIRE(st.userLinesFlat.size() == 6);
+  CHECK(std::abs(st.userLinesFlat[0] - st.surveyPoints[0].easting) < 1e-7);
+  CHECK(std::abs(st.userLinesFlat[1] - st.surveyPoints[0].northing) < 1e-7);
+}
+
 TEST_CASE("issue782 point-number conflict choices keep paste atomic", "[req383][issue782]") {
   SECTION("renumber keeps the destination point and leaves the clipboard number unchanged") {
     AppCommandState st;
