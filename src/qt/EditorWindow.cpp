@@ -2423,7 +2423,6 @@ void EditorWindow::Refresh() {
   if (auto* viewportZoom = findChild<QComboBox*>("statusViewportZoom")) {
     EnsureDefaultViewportZoomScales(m_State.viewportZoomScales);
     EnsureViewportZoomScaleIndexForDisplay(m_State);
-    const float dpi = screen() != nullptr ? static_cast<float>(screen()->logicalDotsPerInchY()) : 96.f;
     const QSignalBlocker block(viewportZoom);
     viewportZoom->clear();
     for (const CadAnnotationScale& scale : m_State.viewportZoomScales)

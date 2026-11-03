@@ -5536,7 +5536,11 @@ private Q_SLOTS:
       QTest::mouseRelease(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
     };
     st.selection = {{SelectedEntity::Type::LineSeg, 0}};
-    dragSecondLine();
+    const QPoint first = screenAt(15, 15), second = screenAt(35, 5);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, first);
+    QVERIFY(st.selBoxWaitingSecond);
+    QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, second);
+    QVERIFY(!st.selBoxWaitingSecond);
     QCOMPARE(st.selection.size(), std::size_t(2));
     const QPoint empty = screenAt(-70, -50), hit = screenAt(25, 10);
     QTest::mouseClick(window.m_Viewport, Qt::LeftButton, Qt::NoModifier, empty);
@@ -7291,7 +7295,9 @@ private Q_SLOTS:
     const auto selected = state.selection;
     const QPointF blank = screenPoint(-30, -20);  // clear of the ViewCube, which owns the top-right corner
     sendMouse(QEvent::MouseButtonPress, blank, Qt::LeftButton, Qt::LeftButton);
-    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::LeftButton);
+    sendMouse(QEvent::MouseButtonRelease, blank, Qt::LeftButton, Qt::NoButton);
+    QVERIFY(state.selBoxWaitingSecond);
+    sendMouse(QEvent::MouseMove, blank + QPointF(12, 10), Qt::NoButton, Qt::NoButton);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QApplication::sendEvent(viewport, &escape);
     QCOMPARE(state.selection.size(), selected.size());

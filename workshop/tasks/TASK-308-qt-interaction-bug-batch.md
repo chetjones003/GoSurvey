@@ -148,3 +148,21 @@ repro proves the shared algorithm is at fault. No new abstractions or dependenci
 - Verification: `GoSurveyTests.exe "[trim]"` passed (27 cases, 122 assertions). `build.bat` compiled
   the changed domain code and test executable, but the final Qt app relink failed with LNK1104 because
   the live `build/GoSurvey.exe` process holds the output file. The currently running app was left open.
+
+## 10. PR 1154 CI follow-up (2026-11-02)
+
+- The latest full-validation run (41549557552) built successfully, then failed two Qt test functions:
+  `qtCrossingSelectionDragAndEscapeCancellation` and
+  `task078IdleAndCommandDragBoxesAccumulateWithoutSwallowingClicks`. Both tests still used an idle
+  press-drag gesture although the accepted idle behavior in section 8 uses two clicks. The first
+  test sent Escape before releasing the first press, so it never armed the box it meant to cancel.
+  Update only those idle sequences; retain the command-selection drag assertion.
+- The same run's MSVC analysis reported C4189 at `EditorWindow.cpp:2426`: `dpi` remained after
+  the status-bar preset stopped changing the camera. Remove that unused local.
+- CI repair is confined to the test sequences and dead local. No application behavior or architecture
+  changes are intended. The Release build passed; both affected Qt cases passed on the hidden desktop
+  (4 QtTest functions including init/cleanup), and the full CTest suite passed 194/194. The refreshed
+  CI MSVC analysis check remains to run after pushing. Build, testing, code review, and architecture
+  checklist verdicts are PASS for this narrow CI repair.
+- The existing PR description records README, PRIVACY, in-app wiki, and public wiki reviews. This
+  follow-up only corrects CI coverage and a dead local; none of those product documents is affected.
