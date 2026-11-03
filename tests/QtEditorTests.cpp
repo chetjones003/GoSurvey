@@ -8338,6 +8338,10 @@ private Q_SLOTS:
     QCOMPARE(window.State().featureLineVerts[2], afterEdit);
     QVERIFY(dialog->findChild<QLabel*>("featureLineElevStatus")->text().contains("supported range"));
     QVERIFY(dialog->grab().save(Issue893Shot("qt-feature-line-elevations-range-error.png")));
+    table->item(0, 1)->setText("not a number"); QApplication::processEvents();
+    QCOMPARE(window.State().featureLineVerts[2], afterEdit);
+    QVERIFY(dialog->findChild<QLabel*>("featureLineElevStatus")->text().contains("finite number"));
+    QVERIFY(dialog->grab().save(Issue893Shot("qt-feature-line-elevations-invalid-input.png")));
     window.Submit("UNDO");
     QVERIFY(std::abs(static_cast<double>(window.State().featureLineVerts[2]) - before) < 1e-5);
     std::vector<std::string> log;
@@ -8515,6 +8519,25 @@ private Q_SLOTS:
     QCOMPARE(state.featureLineOffsets.size(), lineCount);
     QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("not substituted"));
     QVERIFY(state.gradingPresets.front().targetSurfaceId == deletedSurfaceId);
+    palette->close();
+  }
+
+  void deletedGradingTargetSurfaceIsClearedInsteadOfSelectingAnotherSurface() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window, "Other");
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("S"); window.Submit("Ground"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), size_t(2));
+    window.Submit("SURFACEDELETE Ground");
+    QCOMPARE(FindSurfaceIndex(state, "Ground"), -1);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    auto* surface = palette->findChild<QComboBox*>("gradingSurface"); QVERIFY(surface);
+    QCOMPARE(surface->currentIndex(), -1);
+    palette->findChild<QPushButton*>("gradingApply")->click(); QApplication::processEvents();
+    QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("target surface"));
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-deleted-target-surface.png")));
     palette->close();
   }
 
@@ -8958,6 +8981,38 @@ private Q_SLOTS:
     std::vector<std::string> log;
     QVERIFY(BuildSurfaceFromSources(state, surface, log));
     QVERIFY(surface.tin->vertsXyz == baked);
+  }
+
+  void gradingInfillRoleSurvivesRebuildAndAddConvertsItToDaylight() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    auto& state = window.State();
+    BuildGradingSite(window);
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    QCOMPARE(state.featureLineClosed.size(), std::size_t(2));
+    QVERIFY(state.featureLineClosed[1]);
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGINFILL Infill");
+    int groupIndex = FindSurfaceIndex(state, "Infill");
+    QVERIFY(groupIndex >= 0);
+    auto& member = state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.front();
+    QVERIFY(member.infill);
+    const auto previousRing = *member.strips;
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADING"); window.Submit("F"); window.Submit("2:1"); window.Submit("");
+    groupIndex = FindSurfaceIndex(state, "Infill");
+    QVERIFY(groupIndex >= 0);
+    QVERIFY(state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.front().infill);
+    QVERIFY(*state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.front().strips != previousRing);
+
+    state.selection = {{SelectedEntity::Type::FeatureLine, 1}};
+    window.Submit("GRADINGGROUP Infill, Add");
+    const auto& rebuilt = state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.front();
+    QVERIFY(!rebuilt.infill);
+    QCOMPARE(rebuilt.strips->size(), state.featureLineOffsets[1] - state.featureLineOffsets[0]);
   }
 
   void gradingStoresAnEditableDefinitionOnTheDaylightLine() {

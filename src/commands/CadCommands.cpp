@@ -25089,9 +25089,20 @@ void BuildGradingDaylight(AppCommandState& st, std::vector<std::string>& log) {
         return;
       }
       CadSurface candidate = group;
-      candidate.gradingMembers[static_cast<size_t>(
-          it - group.gradingMembers.begin())] =
+      CadGradingGroupMember rebuilt =
           BakeGradingMember(st, st.gradingEditId, baseline, daylight);
+      if (it->infill) {
+        std::vector<double> ring;
+        ring.reserve(daylight.verts.size() * 3);
+        for (const auto& point : daylight.verts)
+          ring.insert(ring.end(), {point[0] - st.worldDocumentOriginX,
+                                   point[1] - st.worldDocumentOriginY, point[2]});
+        rebuilt.infill = true;
+        rebuilt.strips = std::make_shared<const std::vector<std::vector<double>>>(
+            std::vector<std::vector<double>>{std::move(ring)});
+      }
+      candidate.gradingMembers[static_cast<size_t>(
+          it - group.gradingMembers.begin())] = std::move(rebuilt);
       if (!BuildSurfaceFromSources(st, candidate, log)) {
         log.push_back(
             "GRADING - group surface could not be rebuilt; nothing changed.");
@@ -25279,7 +25290,7 @@ void ExecuteGradingGroupCommand(AppCommandState &st, const std::string &args,
         if (!source.gradingGroup) continue;
         const auto member = std::find_if(source.gradingMembers.begin(), source.gradingMembers.end(),
                                         [id](const auto& m) { return m.gradingId == id; });
-        if (member != source.gradingMembers.end()) {
+        if (member != source.gradingMembers.end() && !member->infill) {
           snapshot = *member;
           foundBaked = true;
           break;

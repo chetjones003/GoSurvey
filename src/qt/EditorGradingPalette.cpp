@@ -287,8 +287,8 @@ void EditorWindow::ShowGradingTools() {
     fill->setText(QString::number(def.fillRun, 'g', 8) + ":1");
     side->setCurrentIndex(def.sideLeft ? 0 : 1);
     if (def.target == CadGradingDefinition::Target::Surface) {
-      const int si = FindSurfaceIndexById(m_State, def.surfaceId);
-      if (si >= 0) surface->setCurrentIndex(si);
+      const int comboIndex = surface->findData(QVariant::fromValue<qulonglong>(def.surfaceId));
+      surface->setCurrentIndex(comboIndex);
     }
   };
   QObject::connect(line, qOverload<int>(&QComboBox::currentIndexChanged), dialog, populateInputs);

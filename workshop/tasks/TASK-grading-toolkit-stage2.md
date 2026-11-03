@@ -53,3 +53,11 @@
 
 - Verdict: **APPROVE**. Architecture is recorded; ownership, persistence defaults, undo, failure behavior and non-propagation are testable. Dependencies: none. Hot-path impact: none.
 - Implementation verification and screenshot approval are complete. Pre-PR documentation review is recorded above.
+
+## 7. PR-agent follow-up (2026-11-03)
+
+- Preserved infill membership and regenerated its closed boundary when a grouped grading result is rebuilt; explicitly adding an infill result as a grading member now snapshots baseline-to-daylight strips instead of reusing the infill ring.
+- Elevation edits now report parse/range errors without reusing unrelated command-log entries. The grading palette resolves stored target surfaces by stable ID and clears a missing selection rather than substituting another surface.
+- Added regression coverage for infill rebuild/conversion, invalid elevation text and deleted target surfaces.
+- Release build passed. All six hidden Qt editor shards passed across the final shard runs. Full CTest has not yet been rerun on this follow-up.
+- Refreshed UI screenshots approved by the user on 2026-11-03; full CTest remains pending for this follow-up.

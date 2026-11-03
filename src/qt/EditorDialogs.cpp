@@ -866,10 +866,13 @@ void EditorWindow::ShowFeatureLineElevations() {
       else if (item->column() == 3) applied = SetFeatureLineGradeBack(m_State, fl, point, value, m_Log);
       else if (item->column() == 4) applied = SetFeatureLineGradeAhead(m_State, fl, point, value, m_Log);
     }
+    const bool parsed = ok && std::isfinite(value);
+    const bool inRange = parsed && value >= std::numeric_limits<float>::lowest() &&
+                         value <= std::numeric_limits<float>::max();
     const QString message = applied ? "Elevation edit applied." :
-        (ok && std::isfinite(value) && (value < std::numeric_limits<float>::lowest() || value > std::numeric_limits<float>::max())
-          ? "Elevation is outside the supported range." :
-            (m_Log.empty() ? "Invalid elevation or grade." : QString::fromUtf8(m_Log.back().c_str())));
+        !parsed ? "Enter a finite number." :
+        !inRange ? "Elevation is outside the supported range." :
+        (m_Log.empty() ? "Invalid elevation or grade." : QString::fromUtf8(m_Log.back().c_str()));
     if (applied) Refresh();
     fill();
     status->setText(message);
@@ -882,7 +885,9 @@ void EditorWindow::ShowFeatureLineElevations() {
     const bool changed = featureIndex >= 0 && RaiseFeatureLineElevations(m_State, featureIndex + 1, static_cast<float>(delta), m_Log);
     if (changed) Refresh();
     fill();
-    status->setText(changed ? "Feature line elevations adjusted." : (m_Log.empty() ? "No change." : QString::fromUtf8(m_Log.back().c_str())));
+    status->setText(changed ? "Feature line elevations adjusted." : featureIndex < 0
+        ? "Select a feature line before raising or lowering elevations."
+        : (m_Log.empty() ? "No change." : QString::fromUtf8(m_Log.back().c_str())));
   });
   QObject::connect(insert, &QPushButton::clicked, dialog, [this, feature, status, fill, ensureCurrent] {
     if (!ensureCurrent()) return;
@@ -897,9 +902,11 @@ void EditorWindow::ShowFeatureLineElevations() {
         InsertFeatureLineElevationPoint(m_State, featureIndex + 1, station, static_cast<float>(elevation), m_Log);
     if (changed) Refresh();
     fill();
-    status->setText(changed ? "Elevation point inserted." :
-        (elevation < std::numeric_limits<float>::lowest() || elevation > std::numeric_limits<float>::max()
-          ? "Elevation is outside the supported range." : (m_Log.empty() ? "Could not insert elevation point." : QString::fromUtf8(m_Log.back().c_str()))));
+    status->setText(changed ? "Elevation point inserted." : featureIndex < 0
+        ? "Select a feature line before inserting an elevation point."
+        : elevation < std::numeric_limits<float>::lowest() || elevation > std::numeric_limits<float>::max()
+          ? "Elevation is outside the supported range."
+          : (m_Log.empty() ? "Could not insert elevation point." : QString::fromUtf8(m_Log.back().c_str())));
   });
   QObject::connect(remove, &QPushButton::clicked, dialog, [this, feature, table, status, fill, ensureCurrent] {
     if (!ensureCurrent()) return;
@@ -910,7 +917,9 @@ void EditorWindow::ShowFeatureLineElevations() {
     const bool changed = featureIndex >= 0 && DeleteFeatureLineElevationPoint(m_State, featureIndex + 1, point, m_Log);
     if (changed) Refresh();
     fill();
-    status->setText(changed ? "Elevation point deleted." : (m_Log.empty() ? "Only elevation points can be deleted here." : QString::fromUtf8(m_Log.back().c_str())));
+    status->setText(changed ? "Elevation point deleted." : featureIndex < 0
+        ? "Select a feature line before deleting an elevation point."
+        : (m_Log.empty() ? "Only elevation points can be deleted here." : QString::fromUtf8(m_Log.back().c_str())));
   });
   fill(); dialog->resize(900, 520); dialog->show();
 }
