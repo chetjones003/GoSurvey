@@ -7,6 +7,12 @@
 
 Paste at original coordinates
 
+`PASTEORIG` carries selected model-space survey points with copied geometry. Point-number
+collisions use **Overwrite / Renumber / Cancel**. If both drawings have defined, different
+coordinate systems, paste is blocked until you choose **Convert and paste** or **Cancel**. The same
+coordinate-system and unit checks apply between standalone drawings and across projects. Paper-space
+pastes do not include survey points.
+
 See [[Modify Tools]] for related tools and workflows.
 
 ---

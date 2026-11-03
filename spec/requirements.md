@@ -11634,11 +11634,22 @@ capability that does not exist. They are recorded here rather than quietly dropp
        into a drawing of a *different project* warns. A paste where either drawing is in a project and
        the coordinate systems differ is **blocked**: the user may **convert** the pasted objects or
        cancel (D-2026-10-07-a); differing units warn, and the same convert is offered. A paste between
-       two standalone drawings (neither in a Project) still warns and offers convert on a **unit**
-       mismatch alone — replicating how AutoCAD scales pasted/inserted content by the source and
-       destination drawings' `INSUNITS` — but never checks or blocks on coordinate system, since no
-       zone concept is attached to a standalone drawing pairing (D-2026-10-11-c, GitHub issue #831).
-       Survey points are not carried by Copy/Paste today, so no point number can collide through paste (issue #782).
+       two standalone drawings (neither in a Project) warns and offers convert on a **unit** mismatch —
+       replicating how AutoCAD scales pasted/inserted content by the source and destination drawings'
+       `INSUNITS`. If both drawings have a defined but different coordinate system, the same
+       **Convert / Cancel** flow applies to every drawing pairing, including standalone and cross-project
+       pastes: pasting without conversion is blocked because it would place the copied content in the wrong
+       place on the ground (D-2026-11-02-b). A drawing with no defined coordinate system has nothing to
+       compare, as before.
+       Copy/Paste carries selected model-space survey points as well as drawing geometry for every
+       source/destination drawing pairing: standalone-to-standalone, within one project, and across
+       projects (D-2026-11-02-a, issue #782). Pasted points join the destination drawing's point
+       store, which is the destination project's shared database when the drawing uses shared project
+       points. A point number already present at the destination is resolved before the paste through
+       the existing **overwrite / renumber / cancel** question: overwrite replaces that numbered
+       destination point with the copied point, renumber assigns a free number, and cancel leaves the
+       destination and clipboard unchanged. This rule applies equally to PASTE and PASTEORIG. Points
+  are model-space data and are not pasted into paper space.
      - **Convert pasted content (3).** The copied objects are transformed into the destination
        drawing's coordinate system and units with the SAME one similarity transform as Add Drawing
        (REQ-378 clause 5): scale, rotation about the vertical axis and shift, computed with CS-MAP at the
@@ -11668,7 +11679,10 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Revisions: 2026-10-05 — initial (issue #696 P0; D-2026-10-05-d). 2026-10-05 — P9: clause 7 added
   (D-2026-10-05-k). 2026-10-07 — clause 7: convert for pasted content (D-2026-10-07-a, issue #722).
   2026-10-11 — clause 7: a unit (not coordinate-system) mismatch between two standalone drawings now
-  also warns and offers convert (D-2026-10-11-c, GitHub issue #831).
+  also warns and offers convert (D-2026-10-11-c, GitHub issue #831). 2026-11-02 — clause 7: Copy/Paste
+  carries selected model-space survey points between all drawing pairings, with destination number
+  conflicts resolved by overwrite / renumber / cancel (D-2026-11-02-a, GitHub issue #782), and defined
+  coordinate-system mismatches now use Convert / Cancel for all drawing pairs (D-2026-11-02-b).
 
 ### REQ-384 — AutoCAD annotation context objects DWG interop (GitHub issue #688)
 

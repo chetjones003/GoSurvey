@@ -9914,6 +9914,16 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
 
 // Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
 // Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
+static bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
+  const int tab = st.activeDrawingIdx;
+  if (tab <= 0 || tab >= static_cast<int>(st.drawingTabs.size())) return false;
+  const auto& drawing = st.drawingTabs[static_cast<size_t>(tab)];
+  if (drawing.projectUid == 0 || drawing.pointsMode == AppCommandState::DrawingTab::PointsMode::Detached) return false;
+  for (const auto& project : st.openProjects)
+    if (project.uid == drawing.projectUid) return project.readOnly;
+  return false;
+}
+
 static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
   // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
   // Cleared on the clipboard rather than on the destination arrays because this is the one place
@@ -9935,9 +9945,39 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
                     " object(s) skipped (paper space does not store dimensions).");
+    if (!st.clipboard.surveyPoints.empty())
+      log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) +
+                    " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
     CommitPasteIntoModel(st, dx, dy);
+    st.selectedSurveyPointIndices.clear();
+    if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
+      log.push_back("PASTE — survey points not pasted: this project is open read-only.");
+    } else {
+      for (const SurveyPoint& source : st.clipboard.surveyPoints) {
+        SurveyPoint copy = source;
+        copy.easting += dx;
+        copy.northing += dy;
+        auto existing = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+                                     [&](const SurveyPoint& p) { return p.id == copy.id; });
+        if (st.clipboardPasteOverwrite && existing != st.surveyPoints.end()) {
+          const size_t index = static_cast<size_t>(existing - st.surveyPoints.begin());
+          copy.labelMtextAnnId = existing->labelMtextAnnId;
+          *existing = std::move(copy);
+          EnsureSurveyPointLabelMtext(st, index, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(index));
+        } else {
+          copy.labelMtextAnnId = 0;
+          st.surveyPoints.push_back(std::move(copy));
+          EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
+          st.selectedSurveyPointIndices.push_back(static_cast<int>(st.surveyPoints.size() - 1));
+        }
+      }
+      if (!st.clipboard.surveyPoints.empty())
+        log.push_back("PASTE — " + std::to_string(st.clipboard.surveyPoints.size()) + " survey point(s) pasted.");
+    }
+    st.clipboardPasteOverwrite = false;
   }
 }
 
@@ -16920,11 +16960,112 @@ bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* 
 void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
   if (st.clipboard.empty())
     return;
-  PushUndoSnapshot(st, "Paste");
-  CommitPasteFromClipboard(st, x - st.clipboard.basePtX, y - st.clipboard.basePtY, log);
+  const float dx = x - st.clipboard.basePtX;
+  const float dy = y - st.clipboard.basePtY;
+  if (!st.clipboardPasteResolving && !st.clipboard.surveyPoints.empty() &&
+      !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
+    std::unordered_set<int> destinationIds;
+    for (const SurveyPoint& point : st.surveyPoints)
+      destinationIds.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (projectUid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                                 AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == projectUid && project.points)
+            for (const auto& entry : project.points->points)
+              destinationIds.insert(entry.point.id);
+    }
+    std::vector<int> conflicts;
+    for (const SurveyPoint& point : st.clipboard.surveyPoints)
+      if (destinationIds.count(point.id))
+        conflicts.push_back(point.id);
+    if (!conflicts.empty()) {
+      st.pointEditPrompt = {};
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.clipboardPaste = true;
+      st.pointEditPrompt.tabIdx = st.activeDrawingIdx;
+      st.pointEditPrompt.conflicts = std::move(conflicts);
+      st.pointEditPrompt.projectUid = tab > 0 && tab < static_cast<int>(st.drawingTabs.size())
+                                          ? st.drawingTabs[static_cast<size_t>(tab)].projectUid : 0;
+      st.pointEditPrompt.projectName = "clipboard paste";
+      st.clipboardPasteResolving = false;
+      st.pendingCopyDx = dx;
+      st.pendingCopyDy = dy;
+      st.active = AppCommandState::Kind::None;
+      st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+      log.push_back("PASTE — point number conflict; choose overwrite, renumber, or cancel.");
+      return;
+    }
+  }
+  st.clipboardPasteResolving = false;
+  PushUndoSnapshot(st, st.clipboardPasteOriginal ? "Paste original" : "Paste");
+  CommitPasteFromClipboard(st, dx, dy, log);
   st.active = AppCommandState::Kind::None;
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
-  log.push_back("PASTE complete.");
+  if (st.clipboardPasteOriginal) {
+    log.push_back("PASTEORIG — clipboard contents pasted at original coordinates.");
+    st.clipboardPasteOriginal = false;
+  } else {
+    log.push_back("PASTE complete.");
+  }
+}
+
+void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
+                                        std::vector<std::string>& log) {
+  if (!st.pointEditPrompt.active || !st.pointEditPrompt.clipboardPaste)
+    return;
+  const std::vector<int> conflicts = st.pointEditPrompt.conflicts;
+  st.pointEditPrompt = {};
+  if (answer == AppCommandState::PointEditPrompt::Answer::Cancel) {
+    st.clipboardPasteOriginal = false;
+    log.push_back("PASTE — cancelled; the drawing and clipboard are unchanged.");
+    return;
+  }
+  std::vector<SurveyPoint> originalPoints = st.clipboard.surveyPoints;
+  if (answer == AppCommandState::PointEditPrompt::Answer::Renumber) {
+    std::unordered_set<int> used;
+    for (const SurveyPoint& point : st.surveyPoints) used.insert(point.id);
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size())) {
+      const uint32_t uid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      if (uid != 0 && st.drawingTabs[static_cast<size_t>(tab)].pointsMode !=
+                          AppCommandState::DrawingTab::PointsMode::Detached)
+        for (const auto& project : st.openProjects)
+          if (project.uid == uid && project.points)
+            for (const auto& entry : project.points->points) used.insert(entry.point.id);
+    }
+    int next = st.createPointsNextId - 1;
+    for (const int id : used) next = std::max(next, id);
+    ++next;
+    for (SurveyPoint& point : st.clipboard.surveyPoints) {
+      if (std::find(conflicts.begin(), conflicts.end(), point.id) == conflicts.end()) continue;
+      point.id = next;
+      used.insert(next++);
+      point.labelMtextAnnId = 0;
+    }
+    st.createPointsNextId = std::max(st.createPointsNextId, next);
+  } else if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    st.clipboardPasteOverwrite = true;
+  }
+  st.clipboardPasteResolving = true;
+  const float x = st.clipboard.basePtX + st.pendingCopyDx;
+  const float y = st.clipboard.basePtY + st.pendingCopyDy;
+  CommitClipboardPasteAt(st, x, y, log);
+  st.clipboard.surveyPoints = std::move(originalPoints);
+  if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
+    const int tab = st.activeDrawingIdx;
+    if (tab > 0 && tab < static_cast<int>(st.drawingTabs.size()) &&
+        st.drawingTabs[static_cast<size_t>(tab)].projectUid != 0 &&
+        st.drawingTabs[static_cast<size_t>(tab)].pointsMode != AppCommandState::DrawingTab::PointsMode::Detached) {
+      st.pointEditPrompt.active = true;
+      st.pointEditPrompt.projectUid = st.drawingTabs[static_cast<size_t>(tab)].projectUid;
+      st.pointEditPrompt.tabIdx = tab;
+      st.pointEditPrompt.conflicts = conflicts;
+      st.pointEditPrompt.conflictAnswer = AppCommandState::PointEditPrompt::Answer::Proceed;
+    }
+  }
 }
 
 // Append filled regions fully enclosed by [mnX,mxX]×[mnY,mxY] to the clipboard (REQ-038 addendum). Fills are
@@ -17090,7 +17231,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     CopyPaperSelectionToClipboard(st, *L, log);
     return;
   }
-  if (st.selection.empty()) {
+  if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
   }
@@ -17240,6 +17381,13 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
         expandBbox(static_cast<float>(fr.vertsXyz[v]), static_cast<float>(fr.vertsXyz[v + 1]));
     }
   }
+  for (const int index : st.selectedSurveyPointIndices) {
+    if (index < 0 || static_cast<size_t>(index) >= st.surveyPoints.size())
+      continue;
+    const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
+    cb.surveyPoints.push_back(point);
+    expandBbox(static_cast<float>(point.easting), static_cast<float>(point.northing));
+  }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
   // the ones already taken so they aren't duplicated.
@@ -17264,7 +17412,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       ++featureLinesNotCopied;
   log.push_back("COPYCLIP — " +
                 std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
-                " object(s) copied to clipboard.");
+                " object(s) and " + std::to_string(cb.surveyPoints.size()) +
+                " survey point(s) copied to clipboard.");
   if (featureLinesNotCopied > 0)
     log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
                   (featureLinesNotCopied == 1 ? "" : "s") +
@@ -17296,6 +17445,7 @@ void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, false, log))
     return;
+  st.clipboardPasteOriginal = false;
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Paste;
@@ -17314,9 +17464,8 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   if (PasteWaitsForUser(st, true, log))
     return;
-  PushUndoSnapshot(st, "Paste original");
-  CommitPasteFromClipboard(st, 0.f, 0.f, log);
-  log.push_back("PASTEORIG — objects pasted at original coordinates.");
+  st.clipboardPasteOriginal = true;
+  CommitClipboardPasteAt(st, st.clipboard.basePtX, st.clipboard.basePtY, log);
 }
 
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
