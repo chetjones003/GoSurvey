@@ -1,7 +1,7 @@
 # TASK-alignment-phase1-issue121 — Civil-style alignments, Phases 1 and 2 with the full spec
 
 - Type:    feature
-- Status:  in progress (Phase 3 on PR #1152, head 9cf87405)
+- Status:  in progress (PR #1152 head b1664acf)
 - Opened:  2026-11-02
 - Owner:   chetjones003 (decision), Claude (implementation)
 - GitHub:  #121 "Implement Civil 3D-Style Alignments"
@@ -34,7 +34,7 @@
   in-repo wiki (`Command-Reference`, `alignmentadd/edit/insert/continuity`).
   Verification: `[alignment]` 70/70; full suite 194/194 (`build/artifacts/ctest-phase3.log`).
   REQ-490 follow-up: spiral junction geometry points (`77050294`); alignment Quadrant on cardinal
-  tangents/spirals, not curves (`pending commit`).
+  tangents/spirals, not curves (PR #1152, `b1664acf`).
 
 ## 3. Architectural boundary check
 - [x] Matches ADR-075: dedicated domain object, exact parameters, per-drawing store, trailer authoritative, no Z.
