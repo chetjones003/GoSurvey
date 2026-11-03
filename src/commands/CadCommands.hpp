@@ -1320,6 +1320,7 @@ struct DrawingGeometrySnapshot {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -1505,6 +1506,7 @@ struct DrawingDocument {
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
@@ -3223,6 +3225,7 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
   std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<CadGradingPreset> gradingPresets;
   std::vector<EntityAttributes> featureLineAttrs;
 
   /// GRADING (REQ-398): pick the baseline feature line, then sit on an options prompt offering the

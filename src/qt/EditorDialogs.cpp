@@ -529,8 +529,104 @@ void EditorWindow::ShowSurveyPointDisplay() {
   dialog->show();
 }
 
+void EditorWindow::ShowFeatureLineElevations() {
+  if (auto* prior = findChild<QDialog*>("featureLineElevations")) {
+    prior->show(); prior->raise(); prior->activateWindow(); return;
+  }
+  auto* dialog = new QDialog(this);
+  dialog->setObjectName("featureLineElevations");
+  dialog->setWindowTitle("Feature Line Elevations");
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  auto* layout = new QVBoxLayout(dialog);
+  auto* heading = new QLabel("Edit elevations and grades", dialog);
+  QFont bold = heading->font(); bold.setBold(true); heading->setFont(bold);
+  auto* help = new QLabel("Station and length are derived from plan geometry. Elevation and grade edits change the line; grading outputs update only when explicitly rebuilt.", dialog);
+  help->setWordWrap(true);
+  layout->addWidget(heading); layout->addWidget(help);
+  auto* feature = new QComboBox(dialog); feature->setObjectName("featureLineElevationsFeature");
+  for (size_t i = 0; i + 1 < m_State.featureLineOffsets.size(); ++i) {
+    const QString label = i < m_State.featureLineInfo.size() && !m_State.featureLineInfo[i].name.empty()
+        ? QString::fromUtf8(m_State.featureLineInfo[i].name.c_str()) : QString("Feature line %1").arg(i + 1);
+    feature->addItem(label, static_cast<int>(i));
+  }
+  if (feature->count() > 0) feature->setCurrentIndex(std::clamp(m_State.featureLineElevIndex, 0, feature->count() - 1));
+  layout->addWidget(feature);
+  auto* table = new QTableWidget(dialog); table->setObjectName("featureLineElevationsTable");
+  table->setColumnCount(5); table->setHorizontalHeaderLabels({"Station", "Elevation", "Length ahead", "Grade back (%)", "Grade ahead (%)"});
+  table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  table->setSelectionBehavior(QAbstractItemView::SelectRows);
+  layout->addWidget(table, 1);
+  auto* actions = new QHBoxLayout;
+  auto* raise = new QPushButton("Raise / lower…", dialog); raise->setObjectName("featureLineElevRaise");
+  auto* insert = new QPushButton("Insert elevation point…", dialog); insert->setObjectName("featureLineElevInsert");
+  auto* remove = new QPushButton("Delete elevation point", dialog); remove->setObjectName("featureLineElevDelete");
+  actions->addWidget(raise); actions->addWidget(insert); actions->addWidget(remove); layout->addLayout(actions);
+  auto* status = new QLabel(dialog); status->setObjectName("featureLineElevStatus"); status->setWordWrap(true); layout->addWidget(status);
+
+  auto fill = [this, feature, table, status]() {
+    const int fi = feature->currentData().toInt();
+    std::vector<FeatureLineElevRow> rows;
+    if (!BuildFeatureLineElevTable(m_State, fi, &rows)) { table->setRowCount(0); status->setText("This feature line needs at least two points."); return; }
+    const QSignalBlocker blockTable(table);
+    table->setRowCount(static_cast<int>(rows.size()));
+    for (size_t r = 0; r < rows.size(); ++r) {
+      const auto& row = rows[r];
+      const QStringList values{QString::number(row.station, 'f', 3), QString::number(row.elevation, 'f', 3),
+          QString::number(row.lengthAhead, 'f', 3), std::isnan(row.gradeBackPct) ? QString("—") : QString::number(row.gradeBackPct, 'f', 3),
+          std::isnan(row.gradeAheadPct) ? QString("—") : QString::number(row.gradeAheadPct, 'f', 3)};
+      for (int c = 0; c < 5; ++c) {
+        auto* item = new QTableWidgetItem(values[c]);
+        item->setData(Qt::UserRole, row.vertexIndex + 1);
+        if (c == 0 || c == 2 || (c == 3 && std::isnan(row.gradeBackPct)) || (c == 4 && std::isnan(row.gradeAheadPct)))
+          item->setFlags(item->flags() & ~Qt::ItemIsEditable);
+        table->setItem(static_cast<int>(r), c, item);
+      }
+    }
+    status->setText(QString("Feature line %1: %2 elevation rows.").arg(fi + 1).arg(rows.size()));
+  };
+  QObject::connect(feature, qOverload<int>(&QComboBox::currentIndexChanged), dialog, [this, fill](int i) { if (i >= 0) { m_State.featureLineElevIndex = i; fill(); } });
+  QObject::connect(table, &QTableWidget::itemChanged, dialog, [this, table, status, fill](QTableWidgetItem* item) {
+    if (!item || item->column() == 0 || item->column() == 2) return;
+    bool ok = false; const double value = item->text().toDouble(&ok);
+    const int fl = table->parentWidget()->findChild<QComboBox*>("featureLineElevationsFeature")->currentData().toInt() + 1;
+    const int point = item->data(Qt::UserRole).toInt();
+    bool applied = false;
+    if (ok && std::isfinite(value)) {
+      if (item->column() == 1) applied = SetFeatureLinePointElevation(m_State, fl, point, static_cast<float>(value), m_Log);
+      else if (item->column() == 3) applied = SetFeatureLineGradeBack(m_State, fl, point, value, m_Log);
+      else if (item->column() == 4) applied = SetFeatureLineGradeAhead(m_State, fl, point, value, m_Log);
+    }
+    const QString message = applied ? "Elevation edit applied." : (m_Log.empty() ? "Invalid elevation or grade." : QString::fromUtf8(m_Log.back().c_str()));
+    fill();
+    status->setText(message);
+  });
+  QObject::connect(raise, &QPushButton::clicked, dialog, [this, feature, status, fill] {
+    bool ok = false; const double delta = QInputDialog::getDouble(this, "Raise / lower elevations", "Elevation change", 0.0, -1.0e9, 1.0e9, 3, &ok);
+    if (ok) { const bool changed = RaiseFeatureLineElevations(m_State, feature->currentData().toInt() + 1, static_cast<float>(delta), m_Log); status->setText(changed ? "Feature line elevations adjusted." : (m_Log.empty() ? "No change." : QString::fromUtf8(m_Log.back().c_str()))); fill(); }
+  });
+  QObject::connect(insert, &QPushButton::clicked, dialog, [this, feature, status, fill] {
+    bool stationOk = false, elevationOk = false;
+    const double station = QInputDialog::getDouble(this, "Insert elevation point", "Station", 0.0, 0.0, 1.0e12, 3, &stationOk);
+    if (!stationOk) return;
+    const double elevation = QInputDialog::getDouble(this, "Insert elevation point", "Elevation", 0.0, -1.0e9, 1.0e9, 3, &elevationOk);
+    if (elevationOk) { const bool changed = InsertFeatureLineElevationPoint(m_State, feature->currentData().toInt() + 1, station, static_cast<float>(elevation), m_Log); status->setText(changed ? "Elevation point inserted." : (m_Log.empty() ? "Could not insert elevation point." : QString::fromUtf8(m_Log.back().c_str()))); fill(); }
+  });
+  QObject::connect(remove, &QPushButton::clicked, dialog, [this, feature, table, status, fill] {
+    const int row = table->currentRow();
+    if (row < 0 || !table->item(row, 1)) { status->setText("Select an elevation point to delete."); return; }
+    const int point = table->item(row, 1)->data(Qt::UserRole).toInt();
+    const bool changed = DeleteFeatureLineElevationPoint(m_State, feature->currentData().toInt() + 1, point, m_Log);
+    status->setText(changed ? "Elevation point deleted." : (m_Log.empty() ? "Only elevation points can be deleted here." : QString::fromUtf8(m_Log.back().c_str()))); fill();
+  });
+  fill(); dialog->resize(900, 520); dialog->show();
+}
+
 void EditorWindow::ServiceUiRequests() {
   if (m_State.showCreatePointsWindow) ShowCreatePoints();
+  if (m_State.showFeatureLineElevWindow) {
+    m_State.showFeatureLineElevWindow = false;
+    ShowFeatureLineElevations();
+  }
   if (m_ModalOpen || m_TextDialogOpen) return;
   if (m_State.blockEditCloseAsked) {
     ShowBlockEditorClosePrompt();

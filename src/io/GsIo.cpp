@@ -1584,6 +1584,22 @@ json BuildRoot(const AppCommandState& st) {
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
+  if (!st.gradingPresets.empty()) {
+    json presets = json::array();
+    for (const CadGradingPreset& p : st.gradingPresets) {
+      json o;
+      o["name"] = p.name;
+      o["targetSurfaceId"] = p.targetSurfaceId;
+      o["cutRun"] = p.cutRun;
+      o["fillRun"] = p.fillRun;
+      o["sideLeft"] = p.sideLeft;
+      o["target"] = static_cast<int>(p.target);
+      o["targetValue"] = p.targetValue;
+      o["distanceGradePercent"] = p.distanceGradePercent;
+      presets.push_back(std::move(o));
+    }
+    doc["gradingPresets"] = std::move(presets);
+  }
   json flAttrs = json::array();
   for (const auto& a : st.featureLineAttrs) {
     json o;
@@ -2340,6 +2356,51 @@ json BuildRoot(const AppCommandState& st) {
 
 bool ValidateDocumentJson(const json& doc, std::vector<std::string>& log) {
   // Validate before the loader clears the current drawing (REQ-001).
+  if (doc.contains("gradingPresets")) {
+    if (!doc["gradingPresets"].is_array()) {
+      log.push_back("Invalid grading presets in drawing.");
+      return false;
+    }
+    std::vector<std::string> names;
+    for (const auto& p : doc["gradingPresets"]) {
+      if (!p.is_object() || !p.contains("name") || !p["name"].is_string() ||
+          !p.contains("targetSurfaceId") || !p["targetSurfaceId"].is_number_unsigned() ||
+          !p.contains("cutRun") || !p["cutRun"].is_number() ||
+          !p.contains("fillRun") || !p["fillRun"].is_number() ||
+          !p.contains("sideLeft") || !p["sideLeft"].is_boolean() ||
+          !p.contains("target") || !p["target"].is_number_integer() ||
+          !p.contains("targetValue") || !p["targetValue"].is_number() ||
+          !p.contains("distanceGradePercent") || !p["distanceGradePercent"].is_number()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      const std::string name = p["name"].get<std::string>();
+      const double cut = p["cutRun"].get<double>();
+      const double fill = p["fillRun"].get<double>();
+      const double value = p["targetValue"].get<double>();
+      const double grade = p["distanceGradePercent"].get<double>();
+      int target = -1;
+      if (p["target"].is_number_unsigned()) {
+        const auto rawTarget = p["target"].get<std::uint64_t>();
+        if (rawTarget <= 3) target = static_cast<int>(rawTarget);
+      } else {
+        const auto rawTarget = p["target"].get<std::int64_t>();
+        if (rawTarget >= 0 && rawTarget <= 3) target = static_cast<int>(rawTarget);
+      }
+      const std::string folded = [&name] { std::string v = name; std::transform(v.begin(), v.end(), v.begin(),
+          [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return v; }();
+      if (name.find_first_not_of(" \t\r\n") == std::string::npos || !std::isfinite(cut) || cut <= 0.0 ||
+          !std::isfinite(fill) || fill <= 0.0 || !std::isfinite(value) || !std::isfinite(grade) ||
+          target < 0 || target > 3 || (target == 1 && value <= 0.0) ||
+          (target == static_cast<int>(CadGradingDefinition::Target::Surface) &&
+           p["targetSurfaceId"].get<std::uint64_t>() == 0) ||
+          std::find(names.begin(), names.end(), folded) != names.end()) {
+        log.push_back("Invalid grading preset in drawing.");
+        return false;
+      }
+      names.push_back(folded);
+    }
+  }
   if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array()) {
     for (const auto& info : doc["featureLineInfo"]) {
       if (!info.is_object() || !info.contains("grading") || !info["grading"].is_object()) continue;
@@ -3157,6 +3218,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.featureLineClosed.clear();
   st.featureLineElevPt.clear();
   st.featureLineInfo.clear();
+  st.gradingPresets.clear();
   st.featureLineAttrs.clear();
   if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
     for (const auto& v : doc["featureLineOffsets"])
@@ -3199,6 +3261,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         }
       }
       st.featureLineInfo.push_back(std::move(i));
+    }
+  if (doc.contains("gradingPresets") && doc["gradingPresets"].is_array())
+    for (const auto& o : doc["gradingPresets"]) {
+      CadGradingPreset p;
+      p.name = o.at("name").get<std::string>();
+      p.targetSurfaceId = o.at("targetSurfaceId").get<std::uint64_t>();
+      p.cutRun = o.at("cutRun").get<double>();
+      p.fillRun = o.at("fillRun").get<double>();
+      p.sideLeft = o.at("sideLeft").get<bool>();
+      p.target = static_cast<CadGradingDefinition::Target>(o.at("target").get<int>());
+      p.targetValue = o.at("targetValue").get<double>();
+      p.distanceGradePercent = o.at("distanceGradePercent").get<double>();
+      st.gradingPresets.push_back(std::move(p));
     }
   if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
     for (const auto& o : doc["featureLineAttrs"])

@@ -74,6 +74,7 @@ private:
   void RefreshToolspace();
   void RunRibbonAction(const QString& id);
   void ShowGradingTools();
+  void ShowFeatureLineElevations();
   bool ConfirmDwgExport(const QString& path);
   void EditRibbonHatch(const QString& field, const QString& value);
   void BuildTitleBar(QMenu* applicationMenu);

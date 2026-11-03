@@ -133,6 +133,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.featureLineClosed      = cmd.featureLineClosed;
   doc.featureLineElevPt      = cmd.featureLineElevPt;
   doc.featureLineInfo        = cmd.featureLineInfo;
+  doc.gradingPresets         = cmd.gradingPresets;
   doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
@@ -243,6 +244,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.featureLineClosed          = doc.featureLineClosed;
   cmd.featureLineElevPt          = doc.featureLineElevPt;
   cmd.featureLineInfo            = doc.featureLineInfo;
+  cmd.gradingPresets              = doc.gradingPresets;
   cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
@@ -1800,6 +1802,7 @@ DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const
   snap.featureLineClosed    = st.featureLineClosed;
   snap.featureLineElevPt    = st.featureLineElevPt;
   snap.featureLineInfo      = st.featureLineInfo;
+  snap.gradingPresets       = st.gradingPresets;
   snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
@@ -1863,6 +1866,7 @@ void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot&
   st.featureLineClosed    = snap.featureLineClosed;
   st.featureLineElevPt    = snap.featureLineElevPt;
   st.featureLineInfo      = snap.featureLineInfo;
+  st.gradingPresets       = snap.gradingPresets;
   st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;

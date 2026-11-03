@@ -7639,6 +7639,251 @@ private Q_SLOTS:
     palette->close();
   }
 
+  void gradingPresetsAreDrawingLocalUndoableAndPersistInTheDwgPayload() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Distance");
+    window.Submit("V"); window.Submit("10"); window.Submit("P"); window.Submit("-2");
+    window.Submit("C"); window.Submit("2:1"); window.Submit("F"); window.Submit("3:1"); window.Submit("");
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    auto* name = palette->findChild<QLineEdit*>("gradingPresetName"); QVERIFY(name);
+    auto* presets = palette->findChild<QComboBox*>("gradingPreset"); QVERIFY(presets);
+    auto* save = palette->findChild<QPushButton*>("gradingPresetSave"); QVERIFY(save);
+    auto* update = palette->findChild<QPushButton*>("gradingPresetUpdate"); QVERIFY(update);
+    auto* remove = palette->findChild<QPushButton*>("gradingPresetDelete"); QVERIFY(remove);
+    name->setText("Roadway"); save->click(); QApplication::processEvents();
+    QCOMPARE(presets->currentText(), QString("Roadway"));
+    const std::string saved = SerializeGoSurveyJson(state);
+    QVERIFY(saved.find("gradingPresets") != std::string::npos);
+    QVERIFY(saved.find("Roadway") != std::string::npos);
+    name->setText("roadway"); save->click(); QApplication::processEvents();
+    QCOMPARE(state.gradingPresets.size(), size_t(1));
+    QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("already exists"));
+    name->setText("Roadway");
+
+    std::string malformed = saved;
+    const auto presetPayload = malformed.find("\"gradingPresets\"");
+    QVERIFY(presetPayload != std::string::npos);
+    const auto slope = malformed.find("\"cutRun\": 2.0", presetPayload);
+    QVERIFY(slope != std::string::npos);
+    malformed.replace(slope, std::string("\"cutRun\": 2.0").size(), "\"cutRun\": -1.0");
+    AppCommandState protectedDrawing;
+    protectedDrawing.userLinesFlat = {11.0, 12.0, 13.0};
+    std::vector<std::string> invalidLog;
+    QVERIFY(!LoadGoSurveyFromJsonUtf8(protectedDrawing, malformed, invalidLog));
+    QCOMPARE(protectedDrawing.userLinesFlat, std::vector<double>({11.0, 12.0, 13.0}));
+    std::string missingSurface = saved;
+    const auto surfacePresetPayload = missingSurface.find("\"gradingPresets\"");
+    const std::string surfaceIdKey = "\"targetSurfaceId\": ";
+    const auto surfaceId = missingSurface.find(surfaceIdKey, surfacePresetPayload);
+    QVERIFY(surfaceId != std::string::npos);
+    const auto surfaceIdEnd = missingSurface.find_first_not_of("0123456789", surfaceId + surfaceIdKey.size());
+    QVERIFY(surfaceIdEnd != std::string::npos);
+    missingSurface.replace(surfaceId + surfaceIdKey.size(), surfaceIdEnd - surfaceId - surfaceIdKey.size(), "0");
+    QVERIFY(!LoadGoSurveyFromJsonUtf8(protectedDrawing, missingSurface, invalidLog));
+    QCOMPARE(protectedDrawing.userLinesFlat, std::vector<double>({11.0, 12.0, 13.0}));
+    std::string invalidTarget = saved;
+    const auto targetPresetPayload = invalidTarget.find("\"gradingPresets\"");
+    const auto targetField = invalidTarget.find("\"target\": 0", targetPresetPayload);
+    QVERIFY(targetField != std::string::npos);
+    invalidTarget.replace(targetField, std::string("\"target\": 0").size(),
+                          "\"target\": 18446744073709551615");
+    QVERIFY(!LoadGoSurveyFromJsonUtf8(protectedDrawing, invalidTarget, invalidLog));
+    QCOMPARE(protectedDrawing.userLinesFlat, std::vector<double>({11.0, 12.0, 13.0}));
+
+    AppCommandState reopened;
+    std::vector<std::string> ioLog;
+    QVERIFY(LoadGoSurveyFromJsonUtf8(reopened, saved, ioLog));
+    const std::string reopenedJson = SerializeGoSurveyJson(reopened);
+    QVERIFY(reopenedJson.find("Roadway") != std::string::npos);
+    QTemporaryDir dwgDirectory; QVERIFY(dwgDirectory.isValid());
+    const QByteArray dwgPath = dwgDirectory.filePath("grading-presets.dwg").toUtf8();
+    QVERIFY2(SaveDrawingDocument(state, dwgPath.constData(), ioLog), ioLog.empty() ? "DWG save failed" : ioLog.back().c_str());
+    AppCommandState reopenedDwg;
+    QVERIFY2(OpenDrawingDocument(reopenedDwg, dwgPath.constData(), ioLog), ioLog.empty() ? "DWG reopen failed" : ioLog.back().c_str());
+    QCOMPARE(reopenedDwg.gradingPresets.size(), size_t(1));
+    QCOMPARE(reopenedDwg.gradingPresets.front().name, std::string("Roadway"));
+
+    auto* cut = palette->findChild<QLineEdit*>("gradingCutSlope"); QVERIFY(cut);
+    cut->setText("5:1"); update->click(); QApplication::processEvents();
+    QVERIFY(std::abs(state.gradingPresets.front().cutRun - 5.0) < 1e-9);
+    window.Submit("UNDO");
+    QVERIFY(std::abs(state.gradingPresets.front().cutRun - 2.0) < 1e-9);
+    presets->setCurrentIndex(0); remove->click(); QApplication::processEvents();
+    QVERIFY(state.gradingPresets.empty());
+    window.Submit("UNDO");
+    QCOMPARE(state.gradingPresets.size(), size_t(1));
+
+    const auto resultId = state.featureLineAttrs.back().id;
+    window.Submit("UNDO");
+    QCOMPARE(state.featureLineOffsets.size(), size_t(3));
+    QVERIFY(SerializeGoSurveyJson(state).find("Roadway") == std::string::npos);
+    QVERIFY(FindEntityIndexById(state.featureLineAttrs, resultId) >= 0);
+    palette->close();
+  }
+
+  void featureLineElevationWindowShowsDerivedRowsAndUsesUndoableEdits() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    window.State().featureLineElevIndex = 0;
+    window.ShowFeatureLineElevations();
+    auto* dialog = window.findChild<QDialog*>("featureLineElevations"); QVERIFY(dialog);
+    auto* table = dialog->findChild<QTableWidget*>("featureLineElevationsTable"); QVERIFY(table);
+    QCOMPARE(table->rowCount(), 4);
+    QCOMPARE(table->columnCount(), 5);
+    QVERIFY(!(table->item(0, 0)->flags() & Qt::ItemIsEditable));
+    QVERIFY(!(table->item(0, 2)->flags() & Qt::ItemIsEditable));
+    QVERIFY(table->grab().save(Issue893Shot("qt-feature-line-elevations.png")));
+    const float before = window.State().featureLineVerts[2];
+    table->item(0, 1)->setText(QString::number(before + 2.0));
+    QApplication::processEvents();
+    QVERIFY(std::abs(static_cast<double>(window.State().featureLineVerts[2]) - (before + 2.0f)) < 1e-5);
+    QVERIFY(CanUndo(window.State()));
+    QVERIFY(dialog->findChild<QLabel*>("featureLineElevStatus")->text().contains("applied"));
+    window.Submit("UNDO");
+    QVERIFY(std::abs(static_cast<double>(window.State().featureLineVerts[2]) - before) < 1e-5);
+    dialog->close();
+  }
+
+  void gradingCopyCreateUsesIndependentBaselineAndResultIdentity() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Distance");
+    window.Submit("V"); window.Submit("8"); window.Submit("P"); window.Submit("-1.5");
+    window.Submit("C"); window.Submit("2:1"); window.Submit("F"); window.Submit("4:1"); window.Submit("");
+    window.Submit("FEATURELINE Secondary"); window.Submit("20,20,110"); window.Submit("180,20,110"); window.Submit("END");
+    EnsureEntityIds(state);
+    const auto sourceId = state.featureLineAttrs[1].id;
+    const auto baselineId = state.featureLineAttrs[2].id;
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    auto* source = palette->findChild<QComboBox*>("gradingFeatureLine"); QVERIFY(source);
+    auto* baseline = palette->findChild<QComboBox*>("gradingCopyBaseline"); QVERIFY(baseline);
+    source->setCurrentIndex(source->findData(QVariant::fromValue<qulonglong>(sourceId)));
+    baseline->setCurrentIndex(baseline->findData(QVariant::fromValue<qulonglong>(baselineId)));
+    palette->findChild<QPushButton*>("gradingCopyCreate")->click(); QApplication::processEvents();
+    auto* copyStatus = palette->findChild<QLabel*>("gradingStatus"); QVERIFY(copyStatus);
+    QVERIFY2(state.featureLineOffsets.size() == 5, copyStatus->text().toUtf8().constData());
+    QCOMPARE(state.featureLineOffsets.size(), size_t(5));
+    QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-copy-create.png")));
+    const auto& copied = *state.featureLineInfo.back().grading;
+    QVERIFY(state.featureLineAttrs.back().id != sourceId);
+    QCOMPARE(copied.baselineId, baselineId);
+    QCOMPARE(copied.target, CadGradingDefinition::Target::Distance);
+    QVERIFY(std::abs(copied.targetValue - 8.0) < 1e-9);
+    QVERIFY(std::abs(copied.distanceGradePercent + 1.5) < 1e-9);
+    QVERIFY(std::abs(copied.cutRun - 2.0) < 1e-9);
+    QVERIFY(std::abs(copied.fillRun - 4.0) < 1e-9);
+    QCOMPARE(state.featureLineAttrs[1].id, sourceId);
+    palette->close();
+  }
+
+  void gradingPresetValuesCreateIndependentCriteria() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Distance");
+    window.Submit("V"); window.Submit("12"); window.Submit("P"); window.Submit("-2.25");
+    window.Submit("C"); window.Submit("2.5:1"); window.Submit("F"); window.Submit("3.5:1"); window.Submit("");
+    window.Submit("FEATURELINE Alternate"); window.Submit("20,20,110"); window.Submit("180,20,110"); window.Submit("END");
+    EnsureEntityIds(state);
+    const auto baselineId = state.featureLineAttrs[2].id;
+    const auto oldResultId = state.featureLineAttrs[1].id;
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    auto* line = palette->findChild<QComboBox*>("gradingFeatureLine"); QVERIFY(line);
+    auto* preset = palette->findChild<QComboBox*>("gradingPreset"); QVERIFY(preset);
+    auto* presetName = palette->findChild<QLineEdit*>("gradingPresetName"); QVERIFY(presetName);
+    const int sourceIndex = line->findData(QVariant::fromValue<qulonglong>(oldResultId)); QVERIFY(sourceIndex >= 0);
+    line->setCurrentIndex(sourceIndex);
+    presetName->setText("Driveway");
+    palette->findChild<QPushButton*>("gradingPresetSave")->click();
+    QCOMPARE(state.gradingPresets.size(), size_t(1));
+    preset->setCurrentIndex(0);
+    line->setCurrentIndex(line->findData(QVariant::fromValue<qulonglong>(baselineId)));
+    auto* createFromPreset = palette->findChild<QPushButton*>("gradingPresetCreate"); QVERIFY(createFromPreset);
+    createFromPreset->click(); QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), size_t(5));
+    const auto createdId = state.featureLineAttrs.back().id;
+    QVERIFY(createdId != oldResultId);
+    const auto createdDefinition = *state.featureLineInfo.back().grading;
+    QCOMPARE(createdDefinition.baselineId, baselineId);
+    QVERIFY(std::abs(createdDefinition.targetValue - 12.0) < 1e-9);
+    QVERIFY(std::abs(createdDefinition.distanceGradePercent + 2.25) < 1e-9);
+    QVERIFY(std::abs(createdDefinition.cutRun - 2.5) < 1e-9);
+    QVERIFY(std::abs(createdDefinition.fillRun - 3.5) < 1e-9);
+    const auto resultCount = state.featureLineOffsets.size();
+    line->setCurrentIndex(line->findData(QVariant::fromValue<qulonglong>(createdId)));
+    createFromPreset->click(); QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), resultCount);
+    QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("ordinary feature line"));
+    palette->findChild<QLineEdit*>("gradingCutSlope")->setText("6:1");
+    palette->findChild<QPushButton*>("gradingPresetUpdate")->click();
+    QVERIFY(std::abs(state.gradingPresets.front().cutRun - 6.0) < 1e-9);
+    const int oldResultIndex = FindEntityIndexById(state.featureLineAttrs, oldResultId);
+    QVERIFY(oldResultIndex >= 0);
+    QVERIFY(std::abs(state.featureLineInfo[static_cast<size_t>(oldResultIndex)].grading->cutRun - 2.5) < 1e-9);
+    palette->close();
+  }
+
+  void gradingPresetsRemainLocalWhenSwitchingDrawingTabs() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    const int firstDrawing = state.activeDrawingIdx;
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("T"); window.Submit("Distance");
+    window.Submit("V"); window.Submit("10"); window.Submit("P"); window.Submit("-2");
+    window.Submit("C"); window.Submit("2:1"); window.Submit("F"); window.Submit("3:1"); window.Submit("");
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    palette->findChild<QLineEdit*>("gradingPresetName")->setText("Local roadway");
+    palette->findChild<QPushButton*>("gradingPresetSave")->click();
+    QCOMPARE(state.gradingPresets.size(), size_t(1));
+
+    window.CreateDrawingFromTemplate();
+    const int secondDrawing = window.State().activeDrawingIdx;
+    QVERIFY(window.State().gradingPresets.empty());
+    window.SwitchDrawing(firstDrawing);
+    QCOMPARE(window.State().gradingPresets.size(), size_t(1));
+    QCOMPARE(window.State().gradingPresets.front().name, std::string("Local roadway"));
+    window.SwitchDrawing(secondDrawing);
+    QVERIFY(window.State().gradingPresets.empty());
+    palette->close();
+  }
+
+  void deletedPresetSurfaceIsNotSubstitutedWhenCreatingResult() {
+    EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
+    auto& state = window.State();
+    state.selection = {{SelectedEntity::Type::FeatureLine, 0}};
+    window.Submit("GRADING"); window.Submit("");
+    QVERIFY(state.featureLineInfo[1].grading.has_value());
+    window.ShowGradingTools();
+    auto* palette = window.findChild<QDialog*>("gradingToolsPalette"); QVERIFY(palette);
+    palette->findChild<QLineEdit*>("gradingPresetName")->setText("Surface daylight");
+    palette->findChild<QPushButton*>("gradingPresetSave")->click();
+    QCOMPARE(state.gradingPresets.size(), size_t(1));
+    const auto deletedSurfaceId = state.gradingPresets.front().targetSurfaceId;
+    QVERIFY(deletedSurfaceId != 0);
+    window.Submit("SURFACEDELETE Ground");
+    QCOMPARE(state.gradingPresets.front().targetSurfaceId, deletedSurfaceId);
+    QCOMPARE(state.cadSurfaces.size(), size_t(0));
+
+    auto* line = palette->findChild<QComboBox*>("gradingFeatureLine"); QVERIFY(line);
+    line->setCurrentIndex(line->findData(QVariant::fromValue<qulonglong>(state.featureLineAttrs[0].id)));
+    auto* presets = palette->findChild<QComboBox*>("gradingPreset"); QVERIFY(presets);
+    presets->setCurrentIndex(0);
+    const size_t lineCount = state.featureLineOffsets.size();
+    palette->findChild<QPushButton*>("gradingPresetCreate")->click(); QApplication::processEvents();
+    QCOMPARE(state.featureLineOffsets.size(), lineCount);
+    QVERIFY(palette->findChild<QLabel*>("gradingStatus")->text().contains("not substituted"));
+    QVERIFY(state.gradingPresets.front().targetSurfaceId == deletedSurfaceId);
+    palette->close();
+  }
+
   void gradingPaletteCreatesEditsAndGroupsThroughSharedCommands() {
     EditorWindow window; window.CreateDrawingFromTemplate(); BuildGradingSite(window);
     auto& state = window.State();
@@ -7681,6 +7926,11 @@ private Q_SLOTS:
                         state.cadSurfaces[static_cast<size_t>(groupIndex)].gradingMembers.end(),
                         [](const auto& member) { return member.infill; }));
     QVERIFY(palette->grab().save(Issue893Shot("qt-grading-tools-infill.png")));
+    state.selection = {{SelectedEntity::Type::Surface, groupIndex}};
+    window.RefreshProperties(); QApplication::processEvents();
+    auto* members = window.findChild<QLabel*>("propSurfaceGradingMembers"); QVERIFY(members);
+    QVERIFY(members->text().contains("infill"));
+    QVERIFY(window.grab().save(Issue893Shot("qt-grading-group-properties.png")));
     palette->close();
   }
 

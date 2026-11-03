@@ -215,6 +215,17 @@ Baseline and target-surface edits do not automatically regrade a member or chang
 surface. Explicitly rebuild a grading with `GRADING`, or re-add it after rebuilding, to refresh
 its contribution. Incomplete daylight lines must be rebuilt before they can be grouped.
 
+The **Grading** palette also supports distance, absolute-elevation and relative-elevation targets.
+Use **Copy criteria to new baseline** to make a separate grading from an existing result's values.
+Named criteria are saved with the drawing; saving, updating or deleting one can be undone. Applying
+a preset creates a new result and does not link it to the preset. If its saved target surface has
+been deleted, GoSurvey reports the missing target instead of choosing another surface.
+
+The same palette can add or remove group members, add a closed feature line as an infill boundary,
+list a group's members and delete a feature line together with its group contribution. The
+**FLELEVEDIT** table shows station, elevation, length ahead and grades; edit elevations or grades,
+raise/lower elevations, and insert or delete elevation points. Each applied edit is one undo step.
+
 ## Common problems
 
 | Problem | Cause | Solution |

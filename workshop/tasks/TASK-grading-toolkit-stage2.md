@@ -1,7 +1,7 @@
 # TASK-grading-toolkit-stage2 — Reuse grading settings and edit elevations in Qt
 
 - Type: feature
-- Status: implement (Verification APPROVE; implementation not yet started)
+- Status: verify (Verification APPROVE; full suite passes, screenshot approval pending)
 - Opened: 2026-11-03
 - Owner: Codex / Workshop
 
@@ -30,17 +30,19 @@
 ## 4. Verification plan
 
 - Architecture: one owner per drawing under the existing active/per-tab/undo snapshot pattern; IO serializer stays in IO; Qt stays an adapter; no upward dependency, global, live graph, or new external dependency.
-- Code quality: reject empty/duplicate preset names, nonfinite/out-of-range criteria and dangling target-surface ids without mutation; preserve source result on Copy Create; no stale index references.
+- Code quality: reject empty/duplicate preset names and nonfinite/out-of-range criteria without mutation; persist a deleted target-surface reference as-is and refuse to apply it without substitution; preserve source result on Copy Create; no stale index references.
 - Dependencies: none proposed.
 - Performance: table values are derived on demand by the existing row builder; no rendering hot-path change.
 - Tests: independent copied result identity/criteria; preset create/update/delete undo and DWG save/reopen; applying and later editing a preset leaves prior results unchanged; tab switching; legacy drawings without presets; malformed preset payload rejected before document replacement; FLELEV table values against `BuildFeatureLineElevTable`; all supported edits route through existing operations and undo once; invalid/cancelled edits preserve geometry and redo history; group properties/transfers reflect stable membership and survive undo/reopen; Qt screenshots for empty, valid, edit, error and membership states.
 - Files: `CadEntities.hpp`, `CadCommands.hpp/.cpp`, `GsIo.cpp`, `EditorGradingPalette.cpp`, a Qt FLELEV editor, `EditorProperties.cpp`, command/ribbon routing, CMake source list, command and Qt tests.
 - Steps:
-  - [ ] Add preset value state, document/undo snapshots, serializer validation, and red/green command/IO tests.
-  - [ ] Add preset lifecycle and Copy Create to the palette; test independent results and undo.
-  - [ ] Add the FLELEV table and route every mutation through existing services; test values, errors and undo.
-  - [ ] Add grading/group properties and membership transfer view; test updates and DWG persistence.
-  - [ ] Build Release, run direct/domain, hidden-desktop Qt and full suite; perform architecture/code review; present screenshots and stop for approval before commit.
+- [x] Add preset value state, per-tab/undo snapshots, optional trailer serialization and validation; cover JSON and DWG save/reopen, malformed payload preservation, uniqueness and undo lifecycle.
+- [x] Add preset lifecycle and Copy Create to the palette; test independent results, copied values and undo.
+- [x] Add the FLELEV table and route every mutation through existing services; focused table/edit/undo test passes and existing REQ-088 transcript covers remaining edits.
+- [x] Add grading/group properties and membership transfer view; palette actions use shared group commands, with group membership visible in Properties.
+- [x] Rebuild and rerun full Release CTest after review fixes; focused Stage 2 Qt tests pass 10/10 including DWG round-trip, invalid surface-id payload, explicit create-from-preset path, per-tab isolation, and deleted-surface refusal. Full Release CTest passes 191/191; `build.output-layout` passes.
+- [x] Present current screenshots and receive approval before commit (2026-11-03).
+- [x] Pre-PR documentation review: `README.md` and `PRIVACY.md` reviewed; no product-facing content there is affected. Updated `resources/wiki/Point-Groups-and-Surfaces.md` and the public GoSurvey GitHub Wiki page `Point-Groups-and-Surfaces` with preset, target, group-boundary, deletion and FLELEVEDIT behavior. The public wiki update was published as `f87eb15`.
 
 ## 5. Decisions
 
@@ -50,4 +52,4 @@
 ## 6. Verification result
 
 - Verdict: **APPROVE**. Architecture is recorded; ownership, persistence defaults, undo, failure behavior and non-propagation are testable. Dependencies: none. Hot-path impact: none.
-- No Stage 2 code or tests have been written.
+- Implementation verification and screenshot approval are complete. Pre-PR documentation review is recorded above.

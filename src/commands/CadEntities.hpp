@@ -1135,6 +1135,19 @@ struct CadGradingDefinition {
   double distanceGradePercent = 0.0; ///< signed grade for Distance targets
 };
 
+/// Drawing-local named grading criteria. Deliberately excludes baseline/result identities so the
+/// saved values can be applied to a new baseline and produce an independent result.
+struct CadGradingPreset {
+  std::string name;
+  std::uint64_t targetSurfaceId = 0;
+  double cutRun = 2.0;
+  double fillRun = 3.0;
+  bool sideLeft = true;
+  CadGradingDefinition::Target target = CadGradingDefinition::Target::Surface;
+  double targetValue = 0.0;
+  double distanceGradePercent = 0.0;
+};
+
 struct CadFeatureLineInfo {
   std::string name;         ///< What the user called it. Not required to be unique.
   std::string description;
