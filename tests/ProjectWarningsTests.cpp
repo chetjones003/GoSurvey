@@ -860,6 +860,35 @@ TEST_CASE("issue782 copies selected survey points with a paste anchor and preser
   CHECK(st.surveyPoints[0].labelMtextAnnId != 1234);
 }
 
+TEST_CASE("issue782 survey point paste keeps sub-unit precision at large coordinates", "[req383][issue782]") {
+  constexpr double sourceX = 1234567.123456789;
+  constexpr double sourceY = 7654321.654321098;
+  constexpr double targetX = 1234600.7654321;
+  constexpr double targetY = 7654400.1234567;
+  AppCommandState st;
+  st.surveyPoints = {Pt(42, sourceX, sourceY, 7, "SOURCE")};
+  st.selectedSurveyPointIndices = {0};
+  std::vector<std::string> log;
+  CopySelectionToClipboard(st, log);
+  CHECK(std::abs(st.clipboard.basePtX - sourceX) < 1e-9);
+  CHECK(std::abs(st.clipboard.basePtY - sourceY) < 1e-9);
+
+  st.surveyPoints.clear();
+  st.selectedSurveyPointIndices.clear();
+  CommitClipboardPasteAt(st, targetX, targetY, log);
+  REQUIRE(st.surveyPoints.size() == 1);
+  CHECK(std::abs(st.surveyPoints[0].easting - targetX) < 1e-7);
+  CHECK(std::abs(st.surveyPoints[0].northing - targetY) < 1e-7);
+
+  st.surveyPoints[0] = Pt(42, 1, 2, 3, "DEST");
+  CommitClipboardPasteAt(st, targetX, targetY, log);
+  REQUIRE(st.pointEditPrompt.active);
+  ResolveClipboardPastePointConflict(st, AppCommandState::PointEditPrompt::Answer::Renumber, log);
+  REQUIRE(st.surveyPoints.size() == 2);
+  CHECK(std::abs(st.surveyPoints[1].easting - targetX) < 1e-7);
+  CHECK(std::abs(st.surveyPoints[1].northing - targetY) < 1e-7);
+}
+
 TEST_CASE("issue782 point-number conflict choices keep paste atomic", "[req383][issue782]") {
   SECTION("renumber keeps the destination point and leaves the clipboard number unchanged") {
     AppCommandState st;

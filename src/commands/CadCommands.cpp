@@ -9924,7 +9924,7 @@ static bool ActiveProjectPointsReadOnly(const AppCommandState& st) {
   return false;
 }
 
-static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+static void CommitPasteFromClipboard(AppCommandState& st, double dx, double dy, std::vector<std::string>& log) {
   // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
   // Cleared on the clipboard rather than on the destination arrays because this is the one place
   // both paste paths (PASTE and PASTEORIG) and both destination spaces pass through; the next
@@ -9941,7 +9941,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
   ClearEntityIdsFrom(st.clipboard.blockRefAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
-    const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
+    const int skipped = CommitPasteIntoPaper(st, *L, static_cast<float>(dx), static_cast<float>(dy));
     if (skipped > 0)
       log.push_back("PASTE — " + std::to_string(skipped) +
                     " object(s) skipped (paper space does not store dimensions).");
@@ -9950,7 +9950,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
                     " survey point(s) not pasted: survey points belong to model space.");
   } else {
     ClearPaperEntitySelection(st);
-    CommitPasteIntoModel(st, dx, dy);
+    CommitPasteIntoModel(st, static_cast<float>(dx), static_cast<float>(dy));
     st.selectedSurveyPointIndices.clear();
     if (ActiveProjectPointsReadOnly(st) && !st.clipboard.surveyPoints.empty()) {
       log.push_back("PASTE — survey points not pasted: this project is open read-only.");
@@ -15516,7 +15516,7 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   }
 
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
-    CommitClipboardPasteAt(st, static_cast<float>(wx), static_cast<float>(wy), log);  // routes by active space; builds the new selection
+    CommitClipboardPasteAt(st, wx, wy, log);  // routes by active space; builds the new selection
     return;
   }
 
@@ -16957,11 +16957,11 @@ bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
 // (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.
 // Calls the file-local CommitPasteFromClipboard (visible here via the anonymous namespace's using-directive).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
   if (st.clipboard.empty())
     return;
-  const float dx = x - st.clipboard.basePtX;
-  const float dy = y - st.clipboard.basePtY;
+  const double dx = x - st.clipboard.basePtX;
+  const double dy = y - st.clipboard.basePtY;
   if (!st.clipboardPasteResolving && !st.clipboard.surveyPoints.empty() &&
       !ActivePaperGeometryTarget(st) && !ActiveProjectPointsReadOnly(st)) {
     std::unordered_set<int> destinationIds;
@@ -17050,8 +17050,8 @@ void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::Po
     st.clipboardPasteOverwrite = true;
   }
   st.clipboardPasteResolving = true;
-  const float x = st.clipboard.basePtX + st.pendingCopyDx;
-  const float y = st.clipboard.basePtY + st.pendingCopyDy;
+  const double x = st.clipboard.basePtX + st.pendingCopyDx;
+  const double y = st.clipboard.basePtY + st.pendingCopyDy;
   CommitClipboardPasteAt(st, x, y, log);
   st.clipboard.surveyPoints = std::move(originalPoints);
   if (answer == AppCommandState::PointEditPrompt::Answer::Proceed) {
@@ -17258,8 +17258,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   TagClipboardOrigin(st);  // REQ-383
   cb.fromPaper = false;  // copied from model space
 
-  float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
-  auto expandBbox = [&](float x, float y) {
+  double mnX = 1e300, mnY = 1e300, mxX = -1e300, mxY = -1e300;
+  auto expandBbox = [&](double x, double y) {
     mnX = std::min(mnX, x); mnY = std::min(mnY, y);
     mxX = std::max(mxX, x); mxY = std::max(mxY, y);
   };
@@ -17386,7 +17386,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       continue;
     const SurveyPoint& point = st.surveyPoints[static_cast<size_t>(index)];
     cb.surveyPoints.push_back(point);
-    expandBbox(static_cast<float>(point.easting), static_cast<float>(point.northing));
+    expandBbox(point.easting, point.northing);
   }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
   // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
@@ -17397,8 +17397,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     cb.basePtX = 0.f;
     cb.basePtY = 0.f;
   } else {
-    cb.basePtX = (mnX + mxX) * 0.5f;
-    cb.basePtY = (mnY + mxY) * 0.5f;
+    cb.basePtX = (mnX + mxX) * 0.5;
+    cb.basePtY = (mnY + mxY) * 0.5;
   }
 
   // REQ-087 / REQ-201. The clipboard has no feature-line store, so the walk above skips them — and

@@ -1000,8 +1000,8 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
 
 /// In-process clipboard for COPYCLIP / PASTECLIP.  Geometry stored at local (storage) coordinates.
 struct CadClipboard {
-  float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
-  float basePtY = 0.f;
+  double basePtX = 0.0; ///< Bounding-box center X used as paste anchor (local space).
+  double basePtY = 0.0;
 
   std::vector<double>            lines;
   std::vector<EntityAttributes> lineAttrs;
@@ -5187,8 +5187,8 @@ struct AppCommandState {
   /// COPY placed CAD duplicates; modal collects policy before duplicating selected survey points.
   bool copySurveyDupModalOpen = false;
   bool copySurveyDupModalOpenRequested = false;
-  float pendingCopyDx = 0.f;
-  float pendingCopyDy = 0.f;
+  double pendingCopyDx = 0.0;
+  double pendingCopyDy = 0.0;
   float pendingCopyDz = 0.f;  // REQ-329 increment 1: COPY under a UCS carries a Z delta to survey points
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
   /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
@@ -8674,7 +8674,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
 /// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
-void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+void CommitClipboardPasteAt(AppCommandState& st, double x, double y, std::vector<std::string>& log);
 void ResolveClipboardPastePointConflict(AppCommandState& st, AppCommandState::PointEditPrompt::Answer answer,
                                         std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
