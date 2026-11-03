@@ -30,6 +30,10 @@ This is a read-only review. Do not edit source, create commits, push, merge, clo
 
 Inspect the complete diff, then read changed files and surrounding code. Trace affected callers, data flow, state transitions, persistence, error paths, and tests far enough to establish actual behavior. Check the PR's requirements against the implementation and look for regressions in existing behavior.
 
+Treat review completion as a hard gate before any public review or general comment. Work through every changed file and each distinct functional path; for stateful changes, explicitly trace success, cancellation/failure, retries, and interactions with existing data. Try concrete counterexamples at boundaries such as duplicate identifiers, empty or partial selections, shared versus local storage, and read-only state where applicable. Check tests as evidence, but reason about cases they do not cover. Record a concise private checklist of paths checked and unresolved uncertainty. A plausible issue or an initial impression that the change looks correct is not a completed review.
+
+Before publishing, inspect current PR review threads and general comments. If an automated review is marked in progress, do not publish a verdict while it is incomplete. Continue the source review, then re-check its status and read its completed findings before publication. Verify each finding against the current diff and surrounding code; automated findings are leads, not authority. If the automated review remains in progress or cannot be checked, do not post a no-findings conclusion; report that review publication is pending or limited. Re-read the PR head SHA after this final inspection and restart the affected inspection if it changed.
+
 Run the repository's documented, relevant verification when practical. Do not invent commands. Record what ran and distinguish PR failures from existing or environment failures. Treat tests as evidence, not proof.
 
 Raise a finding only when all of these are true:
@@ -61,6 +65,8 @@ Keep comments concise and respectful. Phrase uncertain claims as questions only 
 | P3 — Low | Minor bug with limited impact |
 
 Before posting, check whether the same defect is already covered by an open review thread or a current, resolved thread. Avoid duplicating an existing finding unless the code has changed and the defect remains.
+
+For a no-findings result, confirm the completion gate in section 2 is satisfied and every changed functional path has been checked. Only then post the required general comment. Never publish a clean result based only on a partial diff read, a few spot checks, or an automated review that has not finished.
 
 ## 4. Publish as one PR review
 
