@@ -3,6 +3,7 @@
 #include "CommandBar.hpp"
 #include "TopographicArtwork.hpp"
 #include <QApplication>
+#include <QMetaObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QKeyEvent>
@@ -124,6 +125,30 @@ void EditorWindow::BuildTitleBar(QMenu* applicationMenu) {
 bool EditorWindow::nativeEvent(const QByteArray& type, void* message, qintptr* result) {
 #ifdef _WIN32
   auto* msg = static_cast<MSG*>(message);
+  if (msg->message == WM_COPYDATA) {
+    constexpr ULONG_PTR kOpenDrawingCopyData = 0x47534457; // "GSDW"
+    const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(msg->lParam);
+    if (data != nullptr && data->dwData == kOpenDrawingCopyData && data->lpData != nullptr &&
+        data->cbData >= sizeof(wchar_t) && data->cbData % sizeof(wchar_t) == 0) {
+      const auto* widePath = static_cast<const wchar_t*>(data->lpData);
+      int charCount = static_cast<int>(data->cbData / sizeof(wchar_t));
+      while (charCount > 0 && widePath[charCount - 1] == L'\0')
+        --charCount;
+      const QString path = QString::fromWCharArray(widePath, charCount);
+      if (!path.isEmpty()) {
+        QMetaObject::invokeMethod(this, [this, path] {
+          showNormal();
+          raise();
+          activateWindow();
+          OpenDrawing(path);
+        }, Qt::QueuedConnection);
+        *result = TRUE;
+        return true;
+      }
+    }
+    *result = FALSE;
+    return true;
+  }
   if (msg->message == WM_NCCALCSIZE) {
     // Keep the custom Qt title bar inside the full client area while retaining the
     // native sizing/caption styles that Windows uses for resize and Snap Assist.

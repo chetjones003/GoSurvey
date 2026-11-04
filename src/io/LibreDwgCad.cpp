@@ -51,6 +51,9 @@ extern "C" {
 #include "out_dxf.h"
 }
 
+extern "C" void dwg_set_next_objhandle(Dwg_Object* obj);
+extern "C" void dwg_resolve_objectrefs_silent(Dwg_Data* dwg);
+
 namespace libredwgcad_detail {
 
 std::string DecodeDwgString(const void* raw, bool utf16le) {
@@ -123,6 +126,19 @@ std::string ColorToStorage(int index, unsigned method, unsigned rgb) {
   char buf[16];
   std::snprintf(buf, sizeof(buf), "#%06X", static_cast<unsigned>(DxfRgbPackedFromAci(index) & 0xFFFFFFu));
   return std::string(buf);
+}
+
+double LegacyLeaderScaleFactor(double dimScale, double paperUnits, double drawingUnits) {
+  if (!(dimScale > 0.0) || !std::isfinite(dimScale))
+    return 1.0;
+  if (!(paperUnits > 0.0) || !(drawingUnits > 0.0) ||
+      !std::isfinite(paperUnits) || !std::isfinite(drawingUnits))
+    return dimScale;
+  const double scaleRatio = drawingUnits / paperUnits;
+  const double tolerance = std::max(1.0, std::fabs(scaleRatio)) * 1e-6;
+  if (std::fabs(dimScale - scaleRatio) <= tolerance)
+    return dimScale / drawingUnits;
+  return dimScale;
 }
 
 /// REQ-320 increment 2 (TASK-734): convert LibreDWG-attached SAB/ASM binary to SAT text.
@@ -875,6 +891,167 @@ static void AppendLocalPathPoint(CadMultileader& m, const AppCommandState& st, d
   m.pathXyz.push_back(static_cast<float>(z));
 }
 
+[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
+
+static void SetMultileaderLabelBounds(CadMultileader& m) {
+  const CadAnnotation& label = m.label;
+  const double width = m.labelWidthWorld;
+  const double height = m.labelHeightWorld;
+  const int attachment = std::clamp(label.mtextAttach, 1, 9) - 1;
+  const int column = attachment % 3;
+  const int row = attachment / 3;
+  const double left = column == 0 ? 0.0 : column == 1 ? -width * 0.5 : -width;
+  const double right = left + width;
+  const double bottom = row == 0 ? -height : row == 1 ? -height * 0.5 : 0.0;
+  const double top = bottom + height;
+  const double c = std::cos(label.rotationRad);
+  const double s = std::sin(label.rotationRad);
+  const double xs[] = {left, right, right, left};
+  const double ys[] = {bottom, bottom, top, top};
+  double minX = std::numeric_limits<double>::infinity();
+  double minY = std::numeric_limits<double>::infinity();
+  double maxX = -std::numeric_limits<double>::infinity();
+  double maxY = -std::numeric_limits<double>::infinity();
+  for (int i = 0; i < 4; ++i) {
+    const double x = label.insX + c * xs[i] - s * ys[i];
+    const double y = label.insY + s * xs[i] + c * ys[i];
+    minX = std::min(minX, x);
+    minY = std::min(minY, y);
+    maxX = std::max(maxX, x);
+    maxY = std::max(maxY, y);
+  }
+  m.label.boxMinX = static_cast<float>(minX);
+  m.label.boxMinY = static_cast<float>(minY);
+  m.label.boxMaxX = static_cast<float>(maxX);
+  m.label.boxMaxY = static_cast<float>(maxY);
+}
+
+static std::string ImportTextStyleFontFamily(Dwg_Data* dwg, BITCODE_H styleRef) {
+  if (dwg == nullptr || styleRef == nullptr || styleRef->absolute_ref == 0)
+    return {};
+  Dwg_Object* styleObj = dwg_resolve_handle_silent(dwg, styleRef->absolute_ref);
+  if (styleObj == nullptr || styleObj->fixedtype != DWG_TYPE_STYLE || styleObj->tio.object == nullptr ||
+      styleObj->tio.object->tio.STYLE == nullptr)
+    return {};
+  return FromT(dwg, styleObj->tio.object->tio.STYLE->font_file);
+}
+
+static double LeaderArrowSizeWorld(Dwg_Data* dwg, const Dwg_Entity_LEADER* leader) {
+  if (dwg == nullptr || leader == nullptr)
+    return 0.18;
+  auto scaleArrow = [dwg](double arrow) {
+    const double dimScale = dwg->header_vars.DIMSCALE;
+    if (!(dimScale > 0.0))
+      return arrow;
+    const char* currentScale = dwg_variable_dict(dwg, "CANNOSCALE");
+    if (currentScale != nullptr) {
+      const std::string scaleName = FromT(dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(currentScale)));
+      for (BITCODE_BL i = 0; i < dwg->num_objects; ++i) {
+        const Dwg_Object* object = &dwg->object[i];
+        if (object->fixedtype != DWG_TYPE_SCALE || object->tio.object == nullptr ||
+            object->tio.object->tio.SCALE == nullptr)
+          continue;
+        const Dwg_Object_SCALE* scale = object->tio.object->tio.SCALE;
+        if (FromT(dwg, scale->name) != scaleName)
+          continue;
+        const double factor = libredwgcad_detail::LegacyLeaderScaleFactor(
+            dimScale, scale->paper_units, scale->drawing_units);
+        return arrow * factor;
+      }
+    }
+    return arrow * dimScale;
+  };
+  if (leader->dimasz > 1e-9)
+    return scaleArrow(leader->dimasz);
+  if (leader->dimstyle != nullptr && leader->dimstyle->absolute_ref != 0) {
+    Dwg_Object* styleObj = dwg_resolve_handle_silent(dwg, leader->dimstyle->absolute_ref);
+    if (styleObj != nullptr && styleObj->fixedtype == DWG_TYPE_DIMSTYLE && styleObj->tio.object != nullptr &&
+        styleObj->tio.object->tio.DIMSTYLE != nullptr && styleObj->tio.object->tio.DIMSTYLE->DIMASZ > 1e-9)
+      return scaleArrow(styleObj->tio.object->tio.DIMSTYLE->DIMASZ);
+  }
+  return scaleArrow(dwg->header_vars.DIMASZ > 1e-9 ? dwg->header_vars.DIMASZ : 0.18);
+}
+
+struct SavedModelViewport {
+  double centerX = 0.0;
+  double centerY = 0.0;
+  double height = 0.0;
+  double twistRadians = 0.0;
+  double targetX = 0.0;
+  double targetY = 0.0;
+  double targetZ = 0.0;
+  double directionX = 0.0;
+  double directionY = 0.0;
+  double directionZ = 1.0;
+};
+
+static bool ReadSavedModelViewport(Dwg_Data* dwg, SavedModelViewport* out) {
+  if (dwg == nullptr || out == nullptr)
+    return false;
+  const BITCODE_H ref = dwg_find_tablehandle(dwg, "*Active", "VPORT");
+  if (ref == nullptr || ref->absolute_ref == 0)
+    return false;
+  Dwg_Object* obj = dwg_resolve_handle_silent(dwg, ref->absolute_ref);
+  if (obj == nullptr || obj->fixedtype != DWG_TYPE_VPORT || obj->tio.object == nullptr ||
+      obj->tio.object->tio.VPORT == nullptr)
+    return false;
+  const Dwg_Object_VPORT& viewport = *obj->tio.object->tio.VPORT;
+  if (!(viewport.VIEWSIZE > 0.0) || !std::isfinite(viewport.VIEWSIZE) ||
+      !std::isfinite(viewport.VIEWCTR.x) || !std::isfinite(viewport.VIEWCTR.y) ||
+      !std::isfinite(viewport.VIEWTWIST) || !std::isfinite(viewport.view_target.x) ||
+      !std::isfinite(viewport.view_target.y) || !std::isfinite(viewport.view_target.z) ||
+      !std::isfinite(viewport.VIEWDIR.x) || !std::isfinite(viewport.VIEWDIR.y) ||
+      !std::isfinite(viewport.VIEWDIR.z))
+    return false;
+  out->centerX = viewport.VIEWCTR.x;
+  out->centerY = viewport.VIEWCTR.y;
+  out->height = viewport.VIEWSIZE;
+  out->twistRadians = viewport.VIEWTWIST;
+  out->targetX = viewport.view_target.x;
+  out->targetY = viewport.view_target.y;
+  out->targetZ = viewport.view_target.z;
+  out->directionX = viewport.VIEWDIR.x;
+  out->directionY = viewport.VIEWDIR.y;
+  out->directionZ = viewport.VIEWDIR.z;
+  return true;
+}
+
+static bool ApplySavedModelViewport(AppCommandState& st, const SavedModelViewport& saved) {
+  const double directionLength = std::sqrt(saved.directionX * saved.directionX +
+                                           saved.directionY * saved.directionY +
+                                           saved.directionZ * saved.directionZ);
+  if (!(directionLength > 1e-12) || !std::isfinite(directionLength))
+    return false;
+  const double nx = saved.directionX / directionLength;
+  const double ny = saved.directionY / directionLength;
+  const double nz = saved.directionZ / directionLength;
+  const double elevation = std::asin(std::clamp(nz, -1.0, 1.0));
+  const double horizontal = std::hypot(nx, ny);
+  const double azimuth = horizontal > 1e-12 ? std::atan2(-nx, -ny) : 0.0;
+  const double degrees = 180.0 / kPi;
+  Camera camera = Camera::Plan(saved.targetX, saved.targetY,
+                               static_cast<float>(saved.height * 0.5));
+  camera.targetZ = saved.targetZ;
+  camera.azimuthDeg = static_cast<float>(azimuth * degrees);
+  camera.elevationDeg = static_cast<float>(elevation * degrees);
+  // AutoCAD's VIEWTWIST rotates the view coordinate system; the camera roll rotates the
+  // camera basis. Their signs are opposite (the VPORT *Active MESSER record is 270 degrees).
+  camera.rollDeg = static_cast<float>(std::remainder(-saved.twistRadians * degrees, 360.0));
+  const ray3d::Vec3 right = camera.RightWorld();
+  const ray3d::Vec3 up = camera.UpWorld();
+  st.viewportPanX = saved.targetX + right.x * saved.centerX + up.x * saved.centerY -
+                    st.worldDocumentOriginX;
+  st.viewportPanY = saved.targetY + right.y * saved.centerX + up.y * saved.centerY -
+                    st.worldDocumentOriginY;
+  st.viewportPanZ = saved.targetZ + right.z * saved.centerX + up.z * saved.centerY;
+  st.viewportZoom = static_cast<float>(100.0 / saved.height);
+  st.viewportAzimuthDeg = camera.azimuthDeg;
+  st.viewportElevationDeg = camera.elevationDeg;
+  st.viewportRollDeg = camera.rollDeg;
+  return std::isfinite(st.viewportPanX) && std::isfinite(st.viewportPanY) &&
+         std::isfinite(st.viewportPanZ) && std::isfinite(st.viewportZoom) && st.viewportZoom > 0.0f;
+}
+
 static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_LEADER* ld, const Xf2& xf,
                                const EntityAttributes& at) {
   if (ld == nullptr || ld->num_points < 2 || ld->points == nullptr)
@@ -898,22 +1075,64 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
     }
     double x = 0.0, y = 0.0;
     xf.apply(mt->ins_pt.x, mt->ins_pt.y, &x, &y);
-    const double rot = std::atan2(mt->x_axis_dir.y, mt->x_axis_dir.x);
     CadAnnotation& an = m.label;
     an.kind = CadAnnotation::Kind::Mtext;
+    an.mtextAttach = mt->attachment >= 1 && mt->attachment <= 9 ? mt->attachment : 1;
     an.insX = static_cast<float>(x - st.worldDocumentOriginX);
     an.insY = static_cast<float>(y - st.worldDocumentOriginY);
     an.insZ = static_cast<float>(mt->ins_pt.z);
     an.plottedHeightInches =
         static_cast<float>(static_cast<double>(mt->text_height) /
                            std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
-    an.rotationRad = static_cast<float>(rot + xf.ang);
     an.text = FromT(dwg, mt->text);
-    an.boxMinX = an.insX;
-    an.boxMinY = an.insY - static_cast<float>(mt->text_height);
-    an.boxMaxX = an.insX + static_cast<float>(
-        std::max(static_cast<double>(mt->rect_width), static_cast<double>(mt->text_height) * 4.0));
-    an.boxMaxY = an.insY;
+    an.fontFamily = ImportTextStyleFontFamily(dwg, mt->style);
+    m.arrowSizeWorld = static_cast<float>(LeaderArrowSizeWorld(dwg, ld));
+    // The path is stored from arrow tip to the text-side landing. AutoCAD draws the hookline
+    // outward from that landing, so its outer endpoint must precede the original landing in this
+    // path order. See Autodesk's LEADER DXF groups 74/75/211 and DIMASZ behavior.
+    if (ld->hookline_on != 0 && m.arrowSizeWorld > 0.0f && m.pathXyz.size() >= 3) {
+      double originX = 0.0, originY = 0.0, directionX = 0.0, directionY = 0.0;
+      xf.apply(0.0, 0.0, &originX, &originY);
+      xf.apply(ld->x_direction.x, ld->x_direction.y, &directionX, &directionY);
+      directionX -= originX;
+      directionY -= originY;
+      const double directionLength = std::hypot(directionX, directionY);
+      if (directionLength > 1e-9) {
+        const int attachmentColumn = (m.label.mtextAttach - 1) % 3;
+        const double outsideTextDirection = attachmentColumn == 0 ? -1.0 : 1.0;
+        const double direction = outsideTextDirection * (ld->hookline_dir != 0 ? 1.0 : -1.0);
+        const size_t last = m.pathXyz.size() - 3;
+        m.pathXyz.insert(
+            m.pathXyz.begin() + static_cast<std::vector<float>::difference_type>(last),
+            {static_cast<float>(m.pathXyz[last] +
+                                direction * directionX / directionLength * m.arrowSizeWorld),
+             static_cast<float>(m.pathXyz[last + 1] +
+                                direction * directionY / directionLength * m.arrowSizeWorld),
+             m.pathXyz[last + 2]});
+      }
+    }
+    const double width = std::max({static_cast<double>(mt->rect_width), static_cast<double>(mt->extents_width),
+                                   static_cast<double>(mt->text_height) * 4.0});
+    // AutoCAD's MTEXT entity extents are a cache and can include the rotated viewport/context
+    // bounds (MESSER LRP 31 reports 6.917 world units for a one-line, 1-unit-high label). The
+    // glyph size is the entity text height; using extents here turns that label into one character
+    // per line when Qt lays it out at the DWG width.
+    const double height = static_cast<double>(mt->text_height);
+    const double widthScale = std::hypot(xf.sx * mt->x_axis_dir.x, xf.sy * mt->x_axis_dir.y);
+    const double heightScale = std::hypot(xf.sx * -mt->x_axis_dir.y, xf.sy * mt->x_axis_dir.x);
+    m.labelWidthWorld = static_cast<float>(width * widthScale);
+    m.labelHeightWorld = static_cast<float>(height * heightScale);
+    double dirX0 = 0.0, dirY0 = 0.0, dirX1 = 0.0, dirY1 = 0.0;
+    xf.apply(0.0, 0.0, &dirX0, &dirY0);
+    xf.apply(mt->x_axis_dir.x, mt->x_axis_dir.y, &dirX1, &dirY1);
+    an.rotationRad = static_cast<float>(std::atan2(dirY1 - dirY0, dirX1 - dirX0));
+    m.annotative = ImportEedMarksAnnotative(dwg, ann->tio.entity) ||
+                   (dwg->header.version >= R_2018 && mt->is_not_annotative == 0);
+    ImportAnnotativeVisibilityFromEntityEed(ld->parent, &m.annotativeVisibleScaleNames);
+    ImportAnnotativeVisibilityFromEntityEed(ann->tio.entity, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ld->parent, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ann->tio.entity, &m.annotativeVisibleScaleNames);
+    SetMultileaderLabelBounds(m);
     st.cadMultileaders.push_back(std::move(m));
     st.cadMultileaderAttrs.push_back(at);
     return true;
@@ -930,8 +1149,6 @@ static bool ImportLeaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Ent
   LocalPolyline(st, xyz, false, at);
   return true;
 }
-
-[[nodiscard]] bool ImportEedMarksAnnotative(const Dwg_Data* dwg, const Dwg_Object_Entity* ent);
 
 static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dwg_Entity_MULTILEADER* ml,
                                     const Xf2& xf, const EntityAttributes& at,
@@ -986,6 +1203,7 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   xf.apply(txt.location.x, txt.location.y, &lx, &ly);
   CadAnnotation& an = m.label;
   an.kind = CadAnnotation::Kind::Mtext;
+  an.mtextAttach = txt.alignment >= 1 && txt.alignment <= 9 ? txt.alignment : 1;
   an.insX = static_cast<float>(lx - st.worldDocumentOriginX);
   an.insY = static_cast<float>(ly - st.worldDocumentOriginY);
   an.insZ = static_cast<float>(txt.location.z);
@@ -993,21 +1211,38 @@ static bool ImportMultileaderEntity(AppCommandState& st, Dwg_Data* dwg, const Dw
   an.plottedHeightInches =
       static_cast<float>(th / std::max(1e-9, static_cast<double>(st.modelUnitsPerPlottedInch)));
   an.text = FromT(dwg, txt.default_text);
+  BITCODE_H textStyle = txt.style;
+  if ((textStyle == nullptr || textStyle->absolute_ref == 0) && ml->mleaderstyle != nullptr &&
+      ml->mleaderstyle->absolute_ref != 0) {
+    Dwg_Object* mleaderStyleObj = dwg_resolve_handle_silent(dwg, ml->mleaderstyle->absolute_ref);
+    if (mleaderStyleObj != nullptr && mleaderStyleObj->fixedtype == DWG_TYPE_MLEADERSTYLE &&
+        mleaderStyleObj->tio.object != nullptr && mleaderStyleObj->tio.object->tio.MLEADERSTYLE != nullptr)
+      textStyle = mleaderStyleObj->tio.object->tio.MLEADERSTYLE->text_style;
+  }
+  if ((textStyle == nullptr || textStyle->absolute_ref == 0) && ml->text_style != nullptr)
+    textStyle = ml->text_style;
+  an.fontFamily = ImportTextStyleFontFamily(dwg, textStyle);
   if (an.text.empty())
     an.text = " ";
-  const double rot = std::atan2(txt.direction.y, txt.direction.x);
-  an.rotationRad = static_cast<float>(rot + xf.ang);
-  an.boxMinX = an.insX;
-  an.boxMinY = an.insY - static_cast<float>(th);
-  an.boxMaxX = an.insX + static_cast<float>(
-      std::max(static_cast<double>(txt.width), th * 4.0));
-  an.boxMaxY = an.insY;
+  m.arrowSizeWorld = static_cast<float>(ml->ctx.arrow_size > 1e-9 ? ml->ctx.arrow_size : ml->arrow_size);
+  double dirX0 = 0.0, dirY0 = 0.0, dirX1 = 0.0, dirY1 = 0.0;
+  xf.apply(0.0, 0.0, &dirX0, &dirY0);
+  xf.apply(txt.direction.x, txt.direction.y, &dirX1, &dirY1);
+  an.rotationRad = static_cast<float>(std::atan2(dirY1 - dirY0, dirX1 - dirX0));
+  const double localWidth = std::max(static_cast<double>(txt.width), th * 4.0);
+  const double widthScale = std::hypot(xf.sx * txt.direction.x, xf.sy * txt.direction.y);
+  const double heightScale = std::hypot(xf.sx * -txt.direction.y, xf.sy * txt.direction.x);
+  m.labelWidthWorld = static_cast<float>(localWidth * widthScale);
+  m.labelHeightWorld = static_cast<float>(th * heightScale);
+  SetMultileaderLabelBounds(m);
 
   m.annotative = ml->is_annotative != 0;
   if (!m.annotative && ownerEnt != nullptr)
     m.annotative = ImportEedMarksAnnotative(dwg, ownerEnt);
-  if (ownerEnt != nullptr)
+  if (ownerEnt != nullptr) {
     ImportAnnotativeVisibilityFromEntityEed(ownerEnt, &m.annotativeVisibleScaleNames);
+    DwgImportAnnotativeScaleNames(dwg, ownerEnt, &m.annotativeVisibleScaleNames);
+  }
   st.cadMultileaders.push_back(std::move(m));
   st.cadMultileaderAttrs.push_back(at);
   return true;
@@ -3255,6 +3490,86 @@ static void WriteGosurveyCannoscaleOnModelSpace(const AppCommandState& st, Dwg_D
   AppendGosurveyStringEed(dwg, eedHost, {kGosurveyCannoscaleEedTag, scaleName});
 }
 
+// AutoCAD reads its active annotation scale from AcDbVariableDictionary.CANNOSCALE. Keep the
+// GoSurvey EED copy for older GoSurvey versions, but write the native variable for other CAD apps.
+static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
+  if (dwg == nullptr || st.annotationScales.empty())
+    return false;
+  const int ix = st.currentAnnotationScaleIndex;
+  if (ix < 0 || ix >= static_cast<int>(st.annotationScales.size()))
+    return false;
+  const std::string& scaleName = st.annotationScales[static_cast<size_t>(ix)].name;
+  if (scaleName.empty())
+    return false;
+
+  BITCODE_H dictRef = dwg_find_dictionary(dwg, "AcDbVariableDictionary");
+  Dwg_Object* dictShell = dictRef != nullptr ? dwg_ref_object_silent(dwg, dictRef) : nullptr;
+  Dwg_Object_DICTIONARY* dict = dictShell != nullptr && dictShell->fixedtype == DWG_TYPE_DICTIONARY &&
+                                        dictShell->tio.object != nullptr
+                                    ? dictShell->tio.object->tio.DICTIONARY
+                                    : nullptr;
+  if (dict == nullptr) {
+    dict = dwg_add_DICTIONARY(dwg, "AcDbVariableDictionary", nullptr, 0);
+    if (dict == nullptr)
+      return false;
+    int error = 0;
+    dictShell = dwg_obj_generic_to_object(dict, &error);
+    if (dictShell == nullptr || error != 0)
+      return false;
+  }
+
+  // Replace the existing value in place when present.
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->texts == nullptr || dict->itemhandles == nullptr || dict->texts[i] == nullptr ||
+        FromT(dwg, dict->texts[i]) != "CANNOSCALE")
+      continue;
+    Dwg_Object* existing = dict->itemhandles[i] != nullptr
+                               ? dwg_ref_object_silent(dwg, dict->itemhandles[i])
+                               : nullptr;
+    if (existing != nullptr && existing->fixedtype == DWG_TYPE_DICTIONARYVAR &&
+        existing->tio.object != nullptr && existing->tio.object->tio.DICTIONARYVAR != nullptr) {
+      existing->tio.object->tio.DICTIONARYVAR->strvalue = dwg_add_u8_input(dwg, scaleName.c_str());
+      return existing->tio.object->tio.DICTIONARYVAR->strvalue != nullptr;
+    }
+    break;
+  }
+
+  const BITCODE_BL idxObj = dwg->num_objects;
+  const int added = dwg_add_object(dwg);
+  if (added > 0)
+    return false;
+  if (added < 0)
+    dwg_resolve_objectrefs_silent(dwg);
+  int classNumber = -1;
+  for (BITCODE_BS i = 0; i < dwg->num_classes; ++i) {
+    if (dwg->dwg_class[i].dxfname != nullptr && std::strcmp(dwg->dwg_class[i].dxfname, "DICTIONARYVAR") == 0) {
+      classNumber = dwg->dwg_class[i].number;
+      break;
+    }
+  }
+  if (classNumber < 0)
+    classNumber = dwg_add_class(dwg, "DICTIONARYVAR", "AcDbDictionaryVar", "ObjectDBX Classes", false);
+  if (classNumber < 0)
+    return false;
+  Dwg_Object* obj = &dwg->object[idxObj];
+  obj->supertype = DWG_SUPERTYPE_OBJECT;
+  obj->fixedtype = DWG_TYPE_DICTIONARYVAR;
+  obj->type = static_cast<BITCODE_BS>(classNumber);
+  obj->dxfname = (dwg->opts & DWG_OPTS_IN) ? _strdup("DICTIONARYVAR") : const_cast<char*>("DICTIONARYVAR");
+  obj->name = (dwg->opts & DWG_OPTS_IN) ? _strdup("DICTIONARYVAR") : const_cast<char*>("DICTIONARYVAR");
+  if (dwg_setup_DICTIONARYVAR(obj) != 0 || obj->tio.object == nullptr ||
+      obj->tio.object->tio.DICTIONARYVAR == nullptr)
+    return false;
+  auto* var = obj->tio.object->tio.DICTIONARYVAR;
+  var->schema = 0;
+  var->strvalue = dwg_add_u8_input(dwg, scaleName.c_str());
+  dwg_set_next_objhandle(obj);
+  obj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictShell->handle.value, nullptr);
+  if (var->strvalue == nullptr || obj->handle.value == 0)
+    return false;
+  return dwg_add_DICTIONARY_item(dict, "CANNOSCALE", obj->handle.value) != nullptr;
+}
+
 namespace dwg_solid_export {
 void WorldPoint(const AppCommandState& st, const ray3d::Vec3& local, dwg_point_3d* out);
 }
@@ -4144,9 +4459,15 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
     else if (ch != '\r')
       wire += ch;
   }
-  const double width = std::max(1.0, static_cast<double>(std::fabs(an.boxMaxX - an.boxMinX)));
-  const double textH =
-      static_cast<double>(CadAnnotationHeightWorld(an, modelUnitsPerPlottedInch));
+  const double width = std::max(1.0, static_cast<double>(ml.labelWidthWorld > 0.f
+                                                              ? ml.labelWidthWorld
+                                                              : std::fabs(an.boxMaxX - an.boxMinX)));
+  // Multileader geometry is already stored in drawing units. Its world height must remain the
+  // source of truth here; the nested label's plotted-height default is for ordinary annotations
+  // and would rescale a native MLEADER (for example, 2 units became 6.25 at a 50-unit plot scale).
+  const double textH = static_cast<double>(ml.labelHeightWorld > 0.f
+                                               ? ml.labelHeightWorld
+                                               : CadAnnotationHeightWorld(an, modelUnitsPerPlottedInch));
   const size_t nPt = ml.pathXyz.size() / 3;
   if (nativeMultileaderExport && nPt >= 2) {
     std::vector<std::vector<dwg_point_3d>> branchPtsStorage;
@@ -4168,26 +4489,17 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
     for (const std::vector<float>& extra : ml.extraLeaderPaths)
       appendBranch(extra);
     if (!branches.empty()) {
-      const std::vector<dwg_point_3d>& primary = branchPtsStorage.front();
-      dwg_point_3d dir{};
-      const size_t last = primary.size() - 1;
-      const size_t prev = primary.size() >= 2 ? last - 1 : 0;
-      dir.x = primary[last].x - primary[prev].x;
-      dir.y = primary[last].y - primary[prev].y;
-      dir.z = primary[last].z - primary[prev].z;
-      const double len = std::sqrt(dir.x * dir.x + dir.y * dir.y + dir.z * dir.z);
-      if (len > 1e-9) {
-        dir.x /= len;
-        dir.y /= len;
-        dir.z /= len;
-      } else {
-        dir.x = 1.0;
-        dir.y = dir.z = 0.0;
-      }
+      dwg_point_3d dir{std::cos(an.rotationRad), std::sin(an.rotationRad), 0.0};
       if (Dwg_Entity_MULTILEADER* mld = dwg_add_MULTILEADER_branches(
               hdr, static_cast<unsigned>(branches.size()), branches.data(),
               wire.empty() ? " " : wire.c_str(), &tp, &dir, textH, width)) {
         mld->is_annotative = ml.annotative ? 1 : 0;
+        if (ml.arrowSizeWorld > 0.f) {
+          mld->arrow_size = ml.arrowSizeWorld;
+          mld->ctx.arrow_size = ml.arrowSizeWorld;
+        }
+        if (mld->ctx.has_content_txt)
+          mld->ctx.content.txt.alignment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
         if (r2018Write && ml.annotative && mld->parent != nullptr)
           WriteAnnotativeEntityEed(dwg, mld->parent, &ml.annotativeVisibleScaleNames);
         if (annotCtx.enabled && ml.annotative && mld->parent != nullptr)
@@ -4201,7 +4513,10 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
       dwg_add_MTEXT(hdr, &tp, width, wire.empty() ? " " : wire.c_str());
   if (mt != nullptr) {
     mt->text_height = textH;
-    mt->attachment = 1;
+    mt->attachment = static_cast<BITCODE_BS>(std::clamp(an.mtextAttach, 1, 9));
+    mt->x_axis_dir.x = std::cos(an.rotationRad);
+    mt->x_axis_dir.y = std::sin(an.rotationRad);
+    mt->x_axis_dir.z = 0.0;
     apply(mt->parent, at);
   }
   if (nPt >= 2) {
@@ -4212,6 +4527,7 @@ static void WriteMultileaderEntity(Dwg_Data* dwg, Dwg_Object_BLOCK_HEADER* hdr, 
     Dwg_Entity_LEADER* ld =
         dwg_add_LEADER(hdr, static_cast<unsigned>(nPt), pts.data(), mt, 0);
     if (ld != nullptr) {
+      ld->arrowhead_on = 1;
       apply(ld->parent, at);
     } else {
       for (size_t j = 0; j + 1 < nPt; ++j) {
@@ -6078,6 +6394,8 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (!LoadDwgData(pathUtf8, asDxf, &dwg, log))
     return false;
   dwg_resolve_objectrefs_silent(&dwg);
+  SavedModelViewport savedModelViewport;
+  const bool hasSavedModelViewport = !asDxf && ReadSavedModelViewport(&dwg, &savedModelViewport);
   DwgMaterialImportBegin();
   DwgAnnotContextImportBegin();
   DwgLightImportBegin();
@@ -6166,10 +6484,28 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   if (dwg.header.version >= R_2007)
     st.viewportVisualStyle = DwgImportModelVisualStyle(&dwg);
   ImportAnnotationScales(st, &dwg);
+  // AutoCAD persists its active annotation context in AcDbVariableDictionary.CANNOSCALE.
+  // Keep it as the authority when present; GoSurvey EED is only the compatibility fallback.
+  bool hasNativeCannoscale = false;
+  if (!st.annotationScales.empty()) {
+    const char* nativeScale = dwg_variable_dict(&dwg, "CANNOSCALE");
+    const std::string savedScale = nativeScale != nullptr
+                                       ? FromT(&dwg, reinterpret_cast<BITCODE_T>(const_cast<char*>(nativeScale)))
+                                       : std::string{};
+    if (!savedScale.empty()) {
+      for (int i = 0; i < static_cast<int>(st.annotationScales.size()); ++i) {
+        if (st.annotationScales[static_cast<size_t>(i)].name == savedScale) {
+          st.currentAnnotationScaleIndex = i;
+          hasNativeCannoscale = true;
+          break;
+        }
+      }
+    }
+  }
   const Dwg_Object* msForCannoscale = dwg_model_space_object(&dwg);
-  if (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
-      !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object),
-                                    st))
+  if (!hasNativeCannoscale &&
+      (msForCannoscale == nullptr || msForCannoscale->tio.object == nullptr ||
+       !ApplyGosurveyCannoscaleFromEed(reinterpret_cast<Dwg_Object_Entity*>(msForCannoscale->tio.object), st)))
     SyncCurrentAnnotationScaleIndex(st);
 
   if (!asDxf) {
@@ -6183,8 +6519,12 @@ bool ImportLibreCadFile(AppCommandState& st, const char* pathUtf8, std::vector<s
   const int fbW = std::max(st.viewportLastFbW, 1);
   const int fbH = std::max(st.viewportLastFbH, 1);
   const float aspect = static_cast<float>(fbW) / static_cast<float>(fbH);
-  if (!CadCoord::FitViewportToDrawing(st, aspect, fbW, fbH))
+  const bool restoredSavedModelViewport = hasSavedModelViewport &&
+                                          ApplySavedModelViewport(st, savedModelViewport);
+  if (!restoredSavedModelViewport && !CadCoord::FitViewportToDrawing(st, aspect, fbW, fbH))
     st.pendingZoomExtents = true;
+  else if (restoredSavedModelViewport)
+    st.pendingZoomExtents = false;
   for (size_t i = 0; i < st.surveyPoints.size(); ++i)
     EnsureSurveyPointLabelMtext(st, i, nullptr);
 
@@ -6283,6 +6623,8 @@ bool ExportLibreCadFile(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   }
   LibreDwgLinkBlockEntities(dwg);  // issue #590: AutoCAD refuses LibreDWG's implicit last link
+  if (!asDxf && !WriteNativeCannoscale(st, dwg) && !st.annotationScales.empty())
+    log.push_back("DWG export — AutoCAD's CANNOSCALE could not be written; GoSurvey scale metadata was retained.");
   WriteGosurveyCannoscaleOnModelSpace(st, dwg);
   AppendSaveTrace("export: encode to disk");
 

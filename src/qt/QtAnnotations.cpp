@@ -15,12 +15,17 @@
 
 namespace {
 bool DrawStrokeText(QPainter& painter, const CadAnnotation& annotation, float pixels,
-                     const std::string& text, bool baseline) {
+                     const std::string& text, bool baseline, int attachment = 1) {
   if (!cadfont::PreferShxStrokes(annotation.fontFamily, text)) return false;
   auto* font = Shx::Resolve(annotation.fontFamily);
   if (!font || !font->valid()) return false;
   const float scale = pixels / font->capHeight();
-  float x = 0, y = baseline ? 0 : pixels;
+  const int attach = std::clamp(attachment, 1, 9) - 1;
+  const int column = attach % 3;
+  const int row = attach / 3;
+  const float width = Shx::MeasureWidthPx(*font, MtextRichFlattenToPlain(text), pixels);
+  float x = column == 1 ? -width * 0.5f : column == 2 ? -width : 0.f;
+  float y = baseline ? 0.f : row == 0 ? pixels : row == 1 ? pixels * 0.5f : 0.f;
   const float shear = std::tan(annotation.obliqueDeg * 3.14159265358979323846f / 180.f);
   const std::string plain = MtextRichFlattenToPlain(text);
   for (const unsigned char character : plain) {
@@ -222,6 +227,108 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
     }
     document.drawContents(&painter);
     painter.restore();
+  }
+  // REQ-367: model-space multileaders (DWG-imported or MLEADER) draw as their leader paths plus label, with
+  // the same hidden-entity, layer, colour and annotative-scale rules as the text annotations above.
+  for (std::size_t i = 0; i < state.cadMultileaders.size(); ++i) {
+    const CadMultileader& leader = state.cadMultileaders[i];
+    const auto* attrs = i < state.cadMultileaderAttrs.size() ? &state.cadMultileaderAttrs[i] : nullptr;
+    if (attrs && CadEntityIdHidden(&state.hiddenEntityIds, attrs->id)) continue;
+    if (leader.annotative && !leader.annotativeVisibleScaleNames.empty() && !activeScaleName.empty() &&
+        std::find(leader.annotativeVisibleScaleNames.begin(), leader.annotativeVisibleScaleNames.end(), activeScaleName) ==
+            leader.annotativeVisibleScaleNames.end()) continue;
+    const CadLayerRow* layer = nullptr;
+    if (attrs) {
+      for (const auto& row : state.drawingLayerTable) if (row.name == attrs->layer) { layer = &row; break; }
+      if (layer && (!layer->on || layer->frozen)) continue;
+    }
+    float rgb[3]{1, 1, 1};
+    if (attrs) CadColorResolveRgb(CadColorEffectiveStorage(attrs->color, layer ? layer->color : "White"), 1, 1, 1, rgb);
+    QColor color = QColor::fromRgbF(rgb[0], rgb[1], rgb[2]);
+    for (const auto& selected : state.selection)
+      if (selected.type == SelectedEntity::Type::Multileader && selected.index == static_cast<int>(i)) color = QColor("#62aaff");
+    QPen pen(color, 1.2); pen.setCosmetic(true);
+    painter.setPen(pen);
+    auto drawPath = [&](const std::vector<float>& pts) {
+      for (std::size_t p = 0; p + 5 < pts.size(); p += 3)
+        painter.drawLine(project(pts[p], pts[p + 1], pts[p + 2]), project(pts[p + 3], pts[p + 4], pts[p + 5]));
+    };
+    drawPath(leader.pathXyz);
+    for (const auto& branch : leader.extraLeaderPaths) drawPath(branch);
+    const CadAnnotation& label = leader.label;
+    const QPointF anchor = project(label.insX, label.insY, label.insZ);
+    const float annotationMup = AnnotativeModelUnitsPerPlottedInch(
+        label, nullptr, state.modelUnitsPerPlottedInch, &state.annotationScales, state.currentAnnotationScaleIndex);
+    const double textWorld = CadAnnotationHeightWorld(label, annotationMup);
+    const double labelHeightWorld = leader.labelHeightWorld > 0.0f
+                                        ? leader.labelHeightWorld
+                                        : std::max(1e-6, static_cast<double>(label.boxMaxY - label.boxMinY));
+    const double labelWidthWorld = leader.labelWidthWorld > 0.0f
+                                       ? leader.labelWidthWorld
+                                       : std::max(1e-6, static_cast<double>(label.boxMaxX - label.boxMinX));
+    const double textScale = textWorld > 0.0 ? textWorld / labelHeightWorld : 1.0;
+    const double displayWidthWorld = labelWidthWorld * textScale;
+    const double c = std::cos(label.rotationRad), s = std::sin(label.rotationRad);
+    const QPointF top = project(label.insX - s * textWorld, label.insY + c * textWorld, label.insZ);
+    const QPointF right = project(label.insX + c * displayWidthWorld, label.insY + s * displayWidthWorld,
+                                  label.insZ);
+    const double heightPx = std::hypot(anchor.x() - top.x(), anchor.y() - top.y());
+    if (!std::isfinite(heightPx) || !std::isfinite(anchor.x()) || !std::isfinite(anchor.y()) || label.text.empty()) continue;
+    const float fontPixels = static_cast<float>(std::max(1.0, std::round(heightPx)));
+    const double textWidthPx = std::hypot(right.x() - anchor.x(), right.y() - anchor.y());
+    const QPointF baseline = project(label.insX + c, label.insY + s, label.insZ) - anchor;
+    const double screenRotation = std::atan2(baseline.y(), baseline.x()) * 180.0 / 3.14159265358979323846;
+    painter.save();
+    painter.translate(anchor);
+    painter.rotate(screenRotation);
+    painter.setPen(QPen(color, 1.0));
+    if (!DrawStrokeText(painter, label, fontPixels, label.text, false, label.mtextAttach)) {
+      QTextDocument document;
+      PopulateQtText(document, fontPixels, label.text, label.fontFamily, color);
+      document.setTextWidth(std::max(1.0, textWidthPx));
+      const int attachment = std::clamp(label.mtextAttach, 1, 9) - 1;
+      const int column = attachment % 3;
+      const int row = attachment / 3;
+      auto option = document.defaultTextOption();
+      option.setAlignment(column == 1 ? Qt::AlignHCenter : column == 2 ? Qt::AlignRight : Qt::AlignLeft);
+      document.setDefaultTextOption(option);
+      const double textHeight = document.size().height();
+      painter.translate(column == 1 ? -textWidthPx * 0.5 : column == 2 ? -textWidthPx : 0.0,
+                        row == 1 ? -textHeight * 0.5 : row == 2 ? -textHeight : 0.0);
+      document.drawContents(&painter);
+    }
+    painter.restore();
+    // The first vertex is the arrow tip. Use the size stored in the DWG context in drawing units,
+    // so the arrow follows viewport zoom and has the same model-space size as the source drawing.
+    auto drawArrow = [&](const std::vector<float>& path) {
+      if (path.size() < 6) return;
+      const double dx = static_cast<double>(path[3]) - path[0];
+      const double dy = static_cast<double>(path[4]) - path[1];
+      const double dz = static_cast<double>(path[5]) - path[2];
+      const double pathLength = std::sqrt(dx * dx + dy * dy + dz * dz);
+      const double arrowLength = leader.arrowSizeWorld;
+      if (pathLength < 1e-9 || arrowLength <= 0.0) return;
+      const double ux = dx / pathLength, uy = dy / pathLength, uz = dz / pathLength;
+      // AutoCAD's closed-filled leader arrow is half as wide at its base as it is long.
+      const double halfWidth = arrowLength * 0.24;
+      const double nx = -uy, ny = ux;
+      const QPointF tip = project(path[0], path[1], path[2]);
+      const QPointF base = project(path[0] + ux * arrowLength, path[1] + uy * arrowLength,
+                                   path[2] + uz * arrowLength);
+      const QPointF normalEnd = project(path[0] + ux * arrowLength + nx * halfWidth,
+                                        path[1] + uy * arrowLength + ny * halfWidth,
+                                        path[2] + uz * arrowLength);
+      const QPointF normalStart = project(path[0] + ux * arrowLength - nx * halfWidth,
+                                          path[1] + uy * arrowLength - ny * halfWidth,
+                                          path[2] + uz * arrowLength);
+      QPolygonF arrow;
+      arrow << tip << normalEnd << normalStart;
+      painter.setPen(Qt::NoPen);
+      painter.setBrush(color);
+      painter.drawPolygon(arrow);
+    };
+    drawArrow(leader.pathXyz);
+    for (const auto& branch : leader.extraLeaderPaths) drawArrow(branch);
   }
   const float markerRadius = PositionMarkerRadiusWorld(state);
   for (std::size_t i = 0; i < state.cadPositionMarkers.size(); ++i) {
