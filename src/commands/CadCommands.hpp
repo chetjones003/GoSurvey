@@ -3644,6 +3644,9 @@ struct AppCommandState {
   /// (empty: the selected or first alignment). A headless run only reports it.
   bool alignmentLayoutRequested = false;
   std::string alignmentLayoutName;
+  /// REQ-491: EDITALIGNMENTSTYLE asks the Qt editor to open the style dialog on ef alignmentStyleEditorName.
+  bool alignmentStyleEditorRequested = false;
+  std::string alignmentStyleEditorName;
   std::vector<CadPositionMarker> cadPositionMarkers;  ///< REQ-359 / D-2026-09-29-e
   std::vector<EntityAttributes> cadPositionMarkerAttrs;
   std::vector<CadMultileader> cadMultileaders;  ///< REQ-367 / issue #619
@@ -8095,6 +8098,7 @@ void RunOffsetAlignment(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-492.5 viewport drag of a station label. Begin returns false when no label lies within \p tolWorld of (lx,ly).
 [[nodiscard]] bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld);

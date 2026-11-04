@@ -65,6 +65,7 @@ add_library(gosurvey_qt_frontend STATIC
   src/qt/EditorPoints.cpp
   src/qt/EditorPointGroups.cpp
   src/qt/EditorAlignmentLayout.cpp
+  src/qt/EditorAlignmentStyle.cpp
   src/qt/EditorPointTableDialog.cpp
   src/qt/EditorLayerManager.cpp
   src/qt/EditorProperties.cpp

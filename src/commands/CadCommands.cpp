@@ -7218,6 +7218,7 @@ const CmdEntry kRegistry[] = {
     {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
     {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
     {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | CLEAR"},
+    {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
     {"alignmenttable", "", "Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
     {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
@@ -47086,7 +47087,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
         plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
-        plotTok == "alignmenttable" ||
+        plotTok == "alignmenttable" || plotTok == "editalignmentstyle" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47161,6 +47162,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentLabel(st, rest, log);
       else if (plotTok == "alignmenttable")
         RunAlignmentTable(st, rest, log);
+      else if (plotTok == "editalignmentstyle")
+        RunEditAlignmentStyle(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

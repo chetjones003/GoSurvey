@@ -40,3 +40,11 @@ Station ticks cross the alignment at the stations of its label set. Geometry mar
 PT and PI points. A direction arrow sits at the middle of the alignment and is off by default. LABELS hides the station,
 equation and station/offset labels while leaving the lines and ticks in place. A style that an alignment uses cannot be
 deleted; if a saved alignment names a style that is missing, it uses Standard and the load log says so.
+
+## Style editor
+
+`EDITALIGNMENTSTYLE [<style>]` opens the Alignment Style dialog. It has five tabs: Information (the name and the alignments
+that use the style), Design (a placeholder until design criteria arrive, REQ-502), Markers (geometry markers and station
+ticks), Display (tangent, curve and spiral visibility and colour, the direction arrow and label visibility) and Summary.
+Each control runs the same command as typing it, so undo and refusals match. New and Delete work the same way as
+`ALIGNMENTSTYLE NEW` and `DELETE`.

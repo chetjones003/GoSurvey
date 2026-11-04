@@ -891,6 +891,47 @@ private Q_SLOTS:
     QVERIFY2(withoutStyle < withStyle, "switching the style items off removes what they draw");
   }
 
+  void issue121AlignmentStyleEditorChangesTheStyle() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT SED1, , 0+00", "ALIGNMENTADD SED1, TANGENT, 0, 0, 90, 300",
+                             "ALIGNMENTADD SED1, CURVE, 120, 60, RIGHT", "ALIGNMENTADD SED1, TANGENT, 150",
+                             "ALIGNMENTSTYLE NEW, Editor"})
+      window.Submit(line);
+    bool opened = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentStyleDialog");
+      QVERIFY(dialog);
+      opened = true;
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* chooser = dialog->findChild<QComboBox*>("alignmentStyleChooser");
+      auto* tabs = dialog->findChild<QTabWidget*>("alignmentStyleTabs");
+      QVERIFY(chooser && tabs);
+      QCOMPARE(tabs->count(), 5);  // Information, Design, Markers, Display, Summary
+      chooser->setCurrentIndex(chooser->findText("Editor"));
+      QTest::qWait(50);
+      // Markers tab: turn the arrows on from the Display tab, then turn the ticks off.
+      dialog->findChild<QCheckBox*>("alignmentStyleArrows")->setChecked(true);
+      QTest::qWait(50);
+      dialog->findChild<QCheckBox*>("alignmentStyleTicks")->setChecked(false);
+      QTest::qWait(50);
+      const AlignmentStyle* edited = AlignmentStyles::Find(window.State().alignmentStyles, "Editor");
+      QVERIFY(edited != nullptr);
+      QVERIFY(edited->arrows.visible);
+      QVERIFY(!edited->ticks.visible);
+      QVERIFY(dialog->findChild<QLabel*>("alignmentStyleSummary")->text().contains("Arrows: on"));
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-121-style-editor.png")));
+      dialog->accept();
+    });
+    window.Submit("EDITALIGNMENTSTYLE Editor");
+    QVERIFY(opened);
+    window.Submit("UNDO");  // the last change (the tick toggle) is one undo step
+    QVERIFY(AlignmentStyles::Find(window.State().alignmentStyles, "Editor")->ticks.visible);
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

@@ -2046,3 +2046,17 @@ void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std:
       st.alignments[static_cast<size_t>(ai)], moved, st.displayLinearPrecision);
   log.push_back("ALIGNMENTLABEL - label " + std::to_string(li + 1) + " moved: " + p.text + ".");
 }
+
+// EDITALIGNMENTSTYLE [<style>] - REQ-491. Opens the Alignment Style editor in the Qt editor; headless it lists the style.
+void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AlignmentStyles::EnsureStandard(st.alignmentStyles);
+  std::string name = Trim(args);
+  if (name.empty() && !st.alignmentStyles.empty()) name = st.alignmentStyles.front().name;
+  if (AlignmentStyles::Find(st.alignmentStyles, name) == nullptr) {
+    log.push_back("EDITALIGNMENTSTYLE - no style named \"" + name + "\".");
+    return;
+  }
+  st.alignmentStyleEditorRequested = true;
+  st.alignmentStyleEditorName = name;
+  RunAlignmentStyle(st, "LIST", log);  // the same list, for a window-less run
+}
