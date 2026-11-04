@@ -171,6 +171,8 @@ struct EntityAttributes {
   std::uint64_t id = 0;
   std::string layer = "0";
   std::string color = "ByLayer";
+  /// Named STB plot style. New GoSurvey entities use Normal; imported ByLayer assignments defer to the layer.
+  std::string plotStyleName = "Normal";
   /// "ByLayer", "ByBlock", or a linetype table name such as "Continuous" / "DASHED" / "CENTER".
   std::string linetype = "ByLayer";
   /// Millimetres on paper; \c -1.f means ByLayer (DXF 370 = -1).

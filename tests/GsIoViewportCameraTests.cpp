@@ -86,6 +86,29 @@ TEST_CASE("Per-viewport visual style round-trips through document JSON payload (
   CHECK(loaded.paperLayouts[0].viewports[2].visualStyle == VisualStyle::Shaded);
 }
 
+TEST_CASE("Closed-polyline viewport clipping boundary round-trips through document JSON (REQ-480)",
+          "[payload][req480]") {
+  AppCommandState st;
+  PaperLayout layout;
+  Viewport vp;
+  vp.clipBoundary = {{1.f, 2.f, 0.5f}, {8.f, 2.f, 0.f}, {4.f, 9.f, -0.25f}};
+  layout.viewports.push_back(vp);
+  st.paperLayouts.push_back(layout);
+  const auto path = UniqueGsPath("vpclip");
+  std::vector<std::string> log;
+  REQUIRE(SaveGoSurveyDocumentJsonForTest(st, path, log));
+  AppCommandState loaded;
+  REQUIRE(LoadGoSurveyDocumentJsonForTest(loaded, path, log));
+  REQUIRE(loaded.paperLayouts.size() == 1);
+  REQUIRE(loaded.paperLayouts[0].viewports.size() == 1);
+  const auto& boundary = loaded.paperLayouts[0].viewports[0].clipBoundary;
+  REQUIRE(boundary.size() == 3);
+  CHECK(boundary[0].xIn == Approx(1.f));
+  CHECK(boundary[0].yIn == Approx(2.f));
+  CHECK(boundary[0].bulge == Approx(0.5f));
+  CHECK(boundary[2].bulge == Approx(-0.25f));
+}
+
 TEST_CASE("A legacy document JSON payload with no camera keys loads every viewport in plan view (REQ-061)", "[payload][req061]") {
   AppCommandState st;
   PaperLayout L;

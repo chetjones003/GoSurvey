@@ -17,6 +17,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QDir>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -33,6 +34,7 @@
 #include <QMessageBox>
 #include <QResizeEvent>
 #include <QPushButton>
+#include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSet>
 #include <QSlider>
@@ -48,6 +50,7 @@
 #include <QWidgetAction>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QTemporaryFile>
 #include "DimensionStyle.hpp"
 #include "MultileaderStyle.hpp"
 #include "cadtablestyle.hpp"
@@ -1465,6 +1468,8 @@ void EditorWindow::RefreshRibbon() {
     if (route == "UNISOLATEOBJECTS") action->setEnabled(!m_State.hiddenEntityIds.empty());
     const auto id = action->property("ribbonId").toString(); if (id.isEmpty()) continue;
     bool enabled = drawing && !action->property("releasePlaceholder").toBool() && !action->property("nativeDialogPending").toBool();
+    if (id == "##RibbonPlotPreview" || id == "##RibbonViewDetails" || id == "##OutDwfxExport") enabled = enabled && paper &&
+        m_State.activeSpaceIndex >= 0 && static_cast<size_t>(m_State.activeSpaceIndex) < m_State.paperLayouts.size();
     if (id == "##RibbonPasteHome") enabled = enabled && !m_State.clipboard.empty();
     if (id == "##RibbonCopyClipHome") enabled = enabled && (!m_State.selection.empty() || !m_State.selectedPaperEntities.empty());
     action->setEnabled(enabled);
@@ -1726,6 +1731,68 @@ void EditorWindow::RunRibbonAction(const QString& id) {
     }
   } else if (command == "@batchPlot") {
     m_State.batchPlotSelected.clear(); if (m_State.activeSpaceIndex >= 0) m_State.batchPlotSelected.push_back(m_State.activeSpaceIndex); m_State.showBatchPlotDialog = true;
+  } else if (command == "@plotPreview") {
+    PreviewActiveLayout();
+  } else if (command == "@viewDetails") {
+    ShowActiveLayoutDetails();
+  } else if (command == "@exportCurrentLayoutPdf") {
+    if (InFloatingModelSpace(m_State) || m_State.activeSpaceIndex < 0 ||
+        static_cast<size_t>(m_State.activeSpaceIndex) >= m_State.paperLayouts.size()) {
+      m_Log.push_back("PDF Export — switch to a paper layout first.");
+    } else {
+      QFileDialog dialog(this, "Export current layout to PDF", {}, "PDF (*.pdf)");
+      dialog.setObjectName("currentLayoutPdfExportDialog");
+      dialog.setAcceptMode(QFileDialog::AcceptSave);
+      dialog.setFileMode(QFileDialog::AnyFile);
+      dialog.setDefaultSuffix("pdf");
+      if (dialog.exec() == QDialog::Accepted && !dialog.selectedFiles().empty()) {
+        const QString outputPath = dialog.selectedFiles().front();
+        const QString stagingTemplate = QFileInfo(outputPath).dir().filePath(".gosurvey-pdf-XXXXXX.pdf");
+        QTemporaryFile staged(stagingTemplate);
+        bool exported = false;
+        QString failure;
+        if (!staged.open()) {
+          failure = "PDF Export — could not create a temporary output file.";
+        } else {
+          const QString stagedPath = staged.fileName();
+          staged.close();
+          if (!PlotLayoutsToPdf(m_State, {m_State.activeSpaceIndex}, stagedPath.toUtf8().constData(), m_Log)) {
+            failure = m_Log.empty() ? "PDF Export — plotting failed." : QString::fromUtf8(m_Log.back().c_str());
+          } else {
+            QFile source(stagedPath);
+            QSaveFile destination(outputPath);
+            if (!source.open(QIODevice::ReadOnly) || !destination.open(QIODevice::WriteOnly)) {
+              failure = "PDF Export — could not open the final output file.";
+            } else {
+              char buffer[64 * 1024];
+              while (!source.atEnd()) {
+                const qint64 bytesRead = source.read(buffer, sizeof(buffer));
+                if (bytesRead <= 0 || destination.write(buffer, bytesRead) != bytesRead) {
+                  failure = "PDF Export — could not publish the completed PDF.";
+                  break;
+                }
+              }
+              source.close();
+              if (failure.isEmpty() && !destination.commit())
+                failure = "PDF Export — could not commit the completed PDF.";
+              else if (!failure.isEmpty())
+                destination.cancelWriting();
+            }
+            if (failure.isEmpty()) {
+              exported = true;
+              if (!m_Log.empty() && m_Log.back().find("PLOT — wrote ") == 0)
+                m_Log.back() = "PLOT — wrote 1 page(s) to " + outputPath.toUtf8().toStdString();
+            }
+          }
+        }
+        if (!exported) {
+          if (failure.isEmpty()) failure = "PDF Export — failed without producing a PDF.";
+          const std::string failureLog = failure.toUtf8().toStdString();
+          if (m_Log.empty() || m_Log.back() != failureLog) m_Log.push_back(failureLog);
+          QMessageBox::warning(this, "Export PDF", failure);
+        }
+      }
+    }
   } else if (command == "@layoutManager") {
     ShowLayoutManager();
   } else if (command == "@pageSetup") {

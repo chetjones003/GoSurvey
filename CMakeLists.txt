@@ -1446,7 +1446,8 @@ if(GOSURVEY_BUILD_TESTS)
     src/pdf/PdfDiff.cpp
     # REQ-445: the PDF plot's Page Setup placement, measured on the PDF it writes.
     tests/PlotSheetPdfTests.cpp
-    src/io/PdfPlot.cpp)
+    src/io/PdfPlot.cpp
+    src/io/PlotStyleTable.cpp)
   target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain LibreDWG::libredwg E57Format::E57Format miniz pdfium Laszip::laszip)
   if(WIN32)
     add_custom_command(TARGET GoSurveyTests POST_BUILD

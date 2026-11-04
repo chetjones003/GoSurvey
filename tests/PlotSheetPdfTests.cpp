@@ -10,14 +10,19 @@
 #include "commands/PaperSpace.hpp"
 #include "io/PdfPlot.hpp"
 #include "io/PlotSheetTransform.hpp"
+#include "io/PlotStyleTable.hpp"
 
 #include <fpdf_edit.h>
 #include <fpdfview.h>
+#include <miniz.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <filesystem>
 #include <string>
 #include <vector>
+#include <fstream>
 
 using Catch::Matchers::WithinAbs;
 
@@ -141,7 +146,170 @@ std::vector<Bounds> PlotObjectBounds(AppCommandState& st, int wantType, const st
   return out;
 }
 
+std::vector<std::array<float, 2>> PlotPathPoints(AppCommandState& st, const std::string& tag) {
+  const std::filesystem::path path = std::filesystem::temp_directory_path() / ("gosurvey-plotsheet-" + tag + ".pdf");
+  std::vector<std::string> log;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(st, {0}, path.string().c_str(), log));
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(path.string().c_str(), nullptr);
+  REQUIRE(doc != nullptr);
+  FPDF_PAGE page = FPDF_LoadPage(doc, 0);
+  REQUIRE(page != nullptr);
+  std::vector<std::array<float, 2>> points;
+  for (int i = 0; i < FPDFPage_CountObjects(page); ++i) {
+    FPDF_PAGEOBJECT obj = FPDFPage_GetObject(page, i);
+    if (FPDFPageObj_GetType(obj) != FPDF_PAGEOBJ_PATH)
+      continue;
+    for (int si = 0; si < FPDFPath_CountSegments(obj); ++si) {
+      FPDF_PATHSEGMENT segment = FPDFPath_GetPathSegment(obj, si);
+      float x = 0.f, y = 0.f;
+      if (FPDFPathSegment_GetPoint(segment, &x, &y))
+        points.push_back({x, y});
+    }
+  }
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(doc);
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+  return points;
+}
+
 }  // namespace
+
+TEST_CASE("CTB and STB tables load and resolve their defined plot styles (REQ-485)", "[plot][req485]") {
+  const auto writeTable = [](const std::string& extension, const std::string& contents) {
+    const auto path = std::filesystem::temp_directory_path() / ("gosurvey-req485" + extension);
+    std::ofstream file(path, std::ios::binary | std::ios::trunc);
+    file << contents;
+    file.close();
+    return path;
+  };
+  const auto ctbPath = writeTable(".ctb",
+    "PIAFILEVERSION_2.0,CTBVER1\ncustom_lineweight_display_units=0\n"
+    "custom_lineweight_table {\n1=0.5\n}\nplot_style {\n6 {\ncolor_policy=4\ncolor=1\nlineweight=1\nscreen=50\n}\n}\n");
+  plotstyle::Table ctb;
+  std::string error;
+  REQUIRE(plotstyle::Load(ctbPath, &ctb, &error));
+  REQUIRE(ctb.colorDependent);
+  const auto* ctbStyle = plotstyle::Find(ctb, 7, "Normal");
+  REQUIRE(ctbStyle != nullptr);
+  CHECK(plotstyle::ApplyColor(ctb, ctbStyle, 0x000000u) == 0xFE7F7Fu);
+  CHECK_THAT(static_cast<float>(plotstyle::LineweightMm(ctb, ctbStyle, 0.25)), WithinAbs(0.5f, 0.001f));
+  std::error_code ec;
+  std::filesystem::remove(ctbPath, ec);
+
+  const auto stbPath = writeTable(".stb",
+    "PIAFILEVERSION_2.0,STBVER1\nplot_style {\n0 {\nname=Normal\n}\n1 {\nname=Heavy\nlineweight=1\n}\n}\n"
+    "custom_lineweight_table {\n1=0.7\n}\n");
+  plotstyle::Table stb;
+  REQUIRE(plotstyle::Load(stbPath, &stb, &error));
+  REQUIRE_FALSE(stb.colorDependent);
+  const auto* stbStyle = plotstyle::Find(stb, 1, "Heavy");
+  REQUIRE(stbStyle != nullptr);
+  CHECK_THAT(static_cast<float>(plotstyle::LineweightMm(stb, stbStyle, 0.25)), WithinAbs(0.7f, 0.001f));
+  CHECK(plotstyle::Find(stb, 1, "Missing")->name == "Normal");
+  std::filesystem::remove(stbPath, ec);
+
+  const std::string compressedBody = "custom_lineweight_display_units=0\nplot_style {\n0 {\nname=Normal\n}\n}\n";
+  std::vector<unsigned char> compressed(mz_compressBound(static_cast<mz_ulong>(compressedBody.size())));
+  mz_ulong compressedSize = static_cast<mz_ulong>(compressed.size());
+  REQUIRE(mz_compress(compressed.data(), &compressedSize,
+                      reinterpret_cast<const unsigned char*>(compressedBody.data()),
+                      static_cast<mz_ulong>(compressedBody.size())) == MZ_OK);
+  const auto compressedPath = std::filesystem::temp_directory_path() / "gosurvey-req485-compressed.stb";
+  {
+    std::ofstream file(compressedPath, std::ios::binary | std::ios::trunc);
+    file << "PIAFILEVERSION_2.0,STBVER1,compress\r\npmzlibcodec";
+    const char tableHeader[8]{};
+    file.write(tableHeader, sizeof(tableHeader));
+    file.write(reinterpret_cast<const char*>(compressed.data()), static_cast<std::streamsize>(compressedSize));
+  }
+  plotstyle::Table compressedStb;
+  REQUIRE(plotstyle::Load(compressedPath, &compressedStb, &error));
+  CHECK(plotstyle::Find(compressedStb, 7, "Normal") != nullptr);
+  std::filesystem::remove(compressedPath, ec);
+
+  const std::filesystem::path autodeskStyles =
+      "C:/Program Files/Autodesk/AutoCAD 2025/UserDataCache/Plotters/Plot Styles";
+  if (std::filesystem::exists(autodeskStyles / "acad.ctb")) {
+    plotstyle::Table actualCtb;
+    REQUIRE(plotstyle::Load(autodeskStyles / "acad.ctb", &actualCtb, &error));
+    CHECK(actualCtb.colorDependent);
+    CHECK(plotstyle::Find(actualCtb, 7, "Normal") != nullptr);
+  }
+  if (std::filesystem::exists(autodeskStyles / "acad.stb")) {
+    plotstyle::Table actualStb;
+    REQUIRE(plotstyle::Load(autodeskStyles / "acad.stb", &actualStb, &error));
+    CHECK_FALSE(actualStb.colorDependent);
+    CHECK(plotstyle::Find(actualStb, 7, "Normal") != nullptr);
+  }
+}
+
+TEST_CASE("A missing configured plot-style table fails before writing PDF (REQ-485)", "[plot][req485]") {
+  AppCommandState state;
+  PaperLayout layout;
+  layout.plotStyleTablePath = (std::filesystem::temp_directory_path() / "gosurvey-no-such-table.ctb").string();
+  layout.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f};
+  layout.paperLineAttrs.resize(1);
+  state.paperLayouts.push_back(layout);
+  const auto output = std::filesystem::temp_directory_path() / "gosurvey-req485-invalid.pdf";
+  std::vector<std::string> log;
+  CHECK_FALSE(PlotLayoutsToPdf(state, {0}, output.string().c_str(), log));
+  CHECK_FALSE(std::filesystem::exists(output));
+  REQUIRE_FALSE(log.empty());
+  CHECK(log.back().find("No PDF was written") != std::string::npos);
+}
+
+TEST_CASE("STB styles apply to both pages of a vector PDF batch (REQ-485)", "[plot][req485]") {
+  const auto table = std::filesystem::temp_directory_path() / "gosurvey-req485-batch.stb";
+  {
+    std::ofstream file(table, std::ios::binary | std::ios::trunc);
+    file << "PIAFILEVERSION_2.0,STBVER1\nplot_style {\n0 {\nname=Normal\n}\n"
+            "1 {\nname=Red Pen\ncolor_policy=4\ncolor=1\n}\n"
+            "2 {\nname=Blue Pen\ncolor_policy=4\ncolor=5\n}\n}\n";
+  }
+  AppCommandState state;
+  for (const auto& [name, style] : {std::pair<std::string, std::string>{"Red sheet", "Red Pen"},
+                                    {"Blue sheet", "Blue Pen"}}) {
+    PaperLayout layout;
+    layout.name = name;
+    layout.plotStyleTablePath = table.string();
+    layout.paperLines = {1.f, 1.f, 0.f, 3.f, 1.f, 0.f};
+    EntityAttributes attr;
+    attr.plotStyleName = style;
+    layout.paperLineAttrs.push_back(attr);
+    state.paperLayouts.push_back(layout);
+  }
+  const auto output = std::filesystem::temp_directory_path() / "gosurvey-req485-batch.pdf";
+  std::vector<std::string> log;
+  FPDF_InitLibrary();
+  REQUIRE(PlotLayoutsToPdf(state, {0, 1}, output.string().c_str(), log));
+  FPDF_DOCUMENT document = FPDF_LoadDocument(output.string().c_str(), nullptr);
+  REQUIRE(document != nullptr);
+  REQUIRE(FPDF_GetPageCount(document) == 2);
+  std::vector<uint32_t> colors;
+  for (int i = 0; i < 2; ++i) {
+    FPDF_PAGE page = FPDF_LoadPage(document, i);
+    REQUIRE(page != nullptr);
+    bool found = false;
+    for (int j = 0; j < FPDFPage_CountObjects(page); ++j) {
+      FPDF_PAGEOBJECT object = FPDFPage_GetObject(page, j);
+      if (FPDFPageObj_GetType(object) != FPDF_PAGEOBJ_PATH) continue;
+      unsigned int r = 0, g = 0, b = 0, a = 0;
+      if (!FPDFPageObj_GetStrokeColor(object, &r, &g, &b, &a)) continue;
+      colors.push_back((r << 16) | (g << 8) | b);
+      found = true;
+      break;
+    }
+    CHECK(found);
+    FPDF_ClosePage(page);
+  }
+  CHECK(colors == std::vector<uint32_t>{0xFF0000u, 0x0000FFu});
+  FPDF_CloseDocument(document);
+  std::error_code ec;
+  std::filesystem::remove(table, ec);
+  std::filesystem::remove(output, ec);
+}
 
 TEST_CASE("Fit ignores sheet lines on a non-plottable layer (REQ-445 c, measured)", "[plot][req445]") {
   AppCommandState st;
@@ -264,4 +432,65 @@ TEST_CASE("Fit measures an arc as sheet content (REQ-445 c, measured)", "[plot][
   // PDFium's path bounds include the stroke (about 0.5 pt each side), so the edges allow 1 pt.
   CHECK_THAT(paths.front().left, WithinAbs(0.f, 1.0));
   CHECK_THAT(paths.front().right, WithinAbs(kSheetW * kPt, 1.0));
+}
+
+TEST_CASE("Closed-polyline viewport boundary clips plotted model strokes as vector paths (REQ-480)",
+          "[plot][req480]") {
+  AppCommandState st;
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.landscape = true;
+  layout.portraitWidthIn = 8.5f;
+  layout.portraitHeightIn = 11.f;
+  Viewport viewport;
+  viewport.paperXIn = 2.f;
+  viewport.paperYIn = 2.f;
+  viewport.paperWIn = 10.f;
+  viewport.paperHIn = 8.f;
+  viewport.modelCenterX = 0.0;
+  viewport.modelCenterY = 0.0;
+  viewport.scaleModelPerPaperIn = 1.f;
+  viewport.clipBoundary = {{2.f, 2.f, 0.f}, {12.f, 2.f, 0.f}, {5.f, 10.f, 0.f}};
+  layout.viewports.push_back(viewport);
+  st.paperLayouts.push_back(layout);
+  // This horizontal model line maps to paper x=[0,14], y=4; the triangle intersects it at x=3.25..10.75.
+  st.userLinesFlat = {-7.f, -2.f, 0.f, 7.f, -2.f, 0.f};
+  st.userLineAttrs.resize(1);
+  const auto points = PlotPathPoints(st, "req480-viewport-clip");
+  bool clippedLineFound = false;
+  for (size_t i = 0; i + 1 < points.size(); ++i) {
+    const float x0 = points[i][0] / kPt, x1 = points[i + 1][0] / kPt;
+    const float y0 = points[i][1] / kPt, y1 = points[i + 1][1] / kPt;
+    if (std::fabs(x0 - 2.75f) < 0.02f && std::fabs(x1 - 10.25f) < 0.02f &&
+        std::fabs(y0 - 4.f) < 0.02f && std::fabs(y1 - 4.f) < 0.02f)
+      clippedLineFound = true;
+  }
+  CHECK(clippedLineFound);
+}
+
+TEST_CASE("Off and hide-plot viewports emit no model content to PDF (REQ-482)", "[plot][req482]") {
+  AppCommandState state;
+  PaperLayout layout;
+  layout.name = "Sheet";
+  layout.portraitWidthIn = 11.f;
+  layout.portraitHeightIn = 17.f;
+  Viewport viewport;
+  viewport.paperXIn = 1.f;
+  viewport.paperYIn = 1.f;
+  viewport.paperWIn = 8.f;
+  viewport.paperHIn = 6.f;
+  viewport.modelCenterX = 0.0;
+  viewport.modelCenterY = 0.0;
+  viewport.scaleModelPerPaperIn = 1.f;
+  layout.viewports.push_back(viewport);
+  state.paperLayouts.push_back(layout);
+  state.userLinesFlat = {-2.f, 0.f, 0.f, 2.f, 0.f, 0.f};
+  state.userLineAttrs.resize(1);
+
+  CHECK_FALSE(PlotPathPoints(state, "req482-viewport-on").empty());
+  state.paperLayouts[0].viewports[0].hidePlot = true;
+  CHECK(PlotPathPoints(state, "req482-viewport-hide-plot").empty());
+  state.paperLayouts[0].viewports[0].hidePlot = false;
+  state.paperLayouts[0].viewports[0].on = false;
+  CHECK(PlotPathPoints(state, "req482-viewport-off").empty());
 }

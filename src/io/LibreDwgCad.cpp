@@ -295,6 +295,25 @@ std::string EntityLinetypeName(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   return n;
 }
 
+static std::string PlotStyleNameFromRef(Dwg_Data* dwg, BITCODE_H ref) {
+  if (dwg == nullptr || ref == nullptr) return "Normal";
+  const std::uint64_t handle = ref->absolute_ref;
+  BITCODE_H dictRef = dwg->header_vars.DICTIONARY_PLOTSTYLENAME;
+  Dwg_Object* dictObj = dictRef ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+  if (dictObj == nullptr || dictObj->fixedtype != DWG_TYPE_DICTIONARYWDFLT || dictObj->tio.object == nullptr ||
+      dictObj->tio.object->tio.DICTIONARYWDFLT == nullptr) return "Normal";
+  const auto* dict = dictObj->tio.object->tio.DICTIONARYWDFLT;
+  if (dict->defaultid != nullptr && dict->defaultid->absolute_ref == handle) return "Normal";
+  for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+    if (dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr &&
+        dict->itemhandles[i]->absolute_ref == handle && dict->texts != nullptr) {
+      const std::string name = FromT(dwg, dict->texts[i]);
+      return name.empty() ? "Normal" : name;
+    }
+  }
+  return "Normal";
+}
+
 // REQ-170, issue #609: DWG stores lineweight as a table index (see dxf_cvt_lweight in dwg.c);
 // GoSurvey stores millimetres on paper, or -1 for ByLayer / default.
 float LineweightMmFromDwgIndex(BITCODE_RC idx) {
@@ -334,6 +353,8 @@ EntityAttributes AttrFromEnt(Dwg_Data* dwg, const Dwg_Object_Entity* ent) {
   a.layer = LayerName(dwg, ent);
   if (ent != nullptr) {
     a.color = ColorStorage(ent->color);
+    a.plotStyleName = ent->plotstyle_flags == 3 ? PlotStyleNameFromRef(dwg, ent->plotstyle)
+                       : ent->plotstyle_flags == 1 ? "ByBlock" : "ByLayer";
     a.linetype = EntityLinetypeName(dwg, ent);
     a.lineweightMm = LineweightMmFromDwgIndex(ent->linewt);
     const float tr = Transparency01FromEntityColor(ent->color);
@@ -3148,6 +3169,7 @@ void ImportLayers(AppCommandState& st, Dwg_Data* dwg, std::vector<std::string>& 
     row.frozen = ly->frozen != 0;
     row.locked = ly->locked != 0;
     row.color = ColorStorage(ly->color);
+    row.plotStyleName = PlotStyleNameFromRef(dwg, ly->plotstyle);
     row.linetype = LayerLinetypeName(dwg, ly);
     row.lineweightMm = LineweightMmFromDwgIndex(ly->linewt);
     const float layerTr = Transparency01FromEntityColor(ly->color);
@@ -3836,6 +3858,7 @@ struct TableWriter {
   std::unordered_map<std::string, BITCODE_BL> layers;  // lower(name) -> parent objid
   std::unordered_map<std::string, BITCODE_BL> ltypes;  // lower(name) -> parent objid
   std::unordered_map<std::string, BITCODE_BL> styles;  // lower(name) -> parent objid
+  std::unordered_map<std::string, BITCODE_BL> plotStyles; // lower(name) -> placeholder objid
   std::unordered_map<std::string, BITCODE_BL> mleaderStyles;  // lower(name) -> parent objid
 
   static bool IsPlainLinetype(const std::string& n) {
@@ -3869,6 +3892,40 @@ struct TableWriter {
 
   BITCODE_H RefObjId(BITCODE_BL objid) {
     return Ref(ObjectAt(objid));
+  }
+
+  Dwg_Object* EnsurePlotStyle(const std::string& name) {
+    if (name.empty() || LowerAscii(name) == "bylayer" || LowerAscii(name) == "byblock") return nullptr;
+    const std::string key = LowerAscii(name);
+    if (auto it = plotStyles.find(key); it != plotStyles.end()) return ObjectAt(it->second);
+    BITCODE_H dictRef = dwg->header_vars.DICTIONARY_PLOTSTYLENAME;
+    Dwg_Object* dictObj = dictRef ? dwg_resolve_handle_silent(dwg, dictRef->absolute_ref) : nullptr;
+    if (dictObj == nullptr || dictObj->tio.object == nullptr || dictObj->tio.object->tio.DICTIONARYWDFLT == nullptr)
+      return nullptr;
+    auto* dictDefault = dictObj->tio.object->tio.DICTIONARYWDFLT;
+    auto* dict = reinterpret_cast<Dwg_Object_DICTIONARY*>(dictDefault);
+    if (key == "normal" && dictDefault->defaultid != nullptr) {
+      Dwg_Object* object = dwg_resolve_handle_silent(dwg, dictDefault->defaultid->absolute_ref);
+      if (object != nullptr) plotStyles[key] = object->index;
+      return object;
+    }
+    for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
+      if (dict->texts != nullptr && dict->texts[i] != nullptr && FromT(dwg, dict->texts[i]) == name &&
+          dict->itemhandles != nullptr && dict->itemhandles[i] != nullptr) {
+        Dwg_Object* object = dwg_resolve_handle_silent(dwg, dict->itemhandles[i]->absolute_ref);
+        if (object != nullptr) plotStyles[key] = object->index;
+        return object;
+      }
+    }
+    Dwg_Object_PLACEHOLDER* placeholder = dwg_add_PLACEHOLDER(dwg);
+    if (placeholder == nullptr || placeholder->parent == nullptr) return nullptr;
+    int error = 0;
+    Dwg_Object* object = dwg_obj_generic_to_object(placeholder, &error);
+    if (object == nullptr || error != 0) return nullptr;
+    object->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictObj->handle.value, dictObj);
+    dwg_add_DICTIONARY_item(dict, name.c_str(), object->handle.value);
+    plotStyles[key] = object->index;
+    return object;
   }
 
   void BuildLayerTable(const AppCommandState& st) {
@@ -3909,6 +3966,8 @@ struct TableWriter {
                                          static_cast<BITCODE_BS>((ly->linewt & 0x1F) << 5));
       if (Dwg_Object* lt = EnsureLtype(row.linetype))
         ly->ltype = Ref(lt);
+      if (Dwg_Object* plotStyle = EnsurePlotStyle(row.plotStyleName))
+        ly->plotstyle = Ref(plotStyle);
       layers[LowerAscii(row.name)] = ly->parent->objid;
     }
   }
@@ -4240,6 +4299,16 @@ struct TableWriter {
       ent->ltype_flags = 3;  // has explicit handle
     }
     ent->linewt = LineweightDwgIndexFromMm(a.lineweightMm, /*layerRow=*/false);
+    if (a.plotStyleName.empty() || LowerAscii(a.plotStyleName) == "bylayer") {
+      ent->plotstyle_flags = 0;
+      ent->plotstyle = nullptr;
+    } else if (a.plotStyleName == "ByBlock") {
+      ent->plotstyle_flags = 1;
+      ent->plotstyle = nullptr;
+    } else if (Dwg_Object* plotStyle = EnsurePlotStyle(a.plotStyleName)) {
+      ent->plotstyle_flags = 3;
+      ent->plotstyle = Ref(plotStyle);
+    }
   }
 };
 
@@ -6186,6 +6255,29 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
     Dwg_Entity_VIEWPORT* vp = dwg_add_VIEWPORT(ps, "");
     if (vp == nullptr)
       continue;
+    if (gv.clipBoundary.size() >= 3) {
+      std::vector<dwg_point_2d> boundaryPoints;
+      boundaryPoints.reserve(gv.clipBoundary.size());
+      for (const Viewport::ClipVertex& point : gv.clipBoundary)
+        boundaryPoints.push_back({static_cast<double>(point.xIn), static_cast<double>(point.yIn)});
+      if (Dwg_Entity_LWPOLYLINE* clip = dwg_add_LWPOLYLINE(ps, static_cast<unsigned>(boundaryPoints.size()),
+                                                            boundaryPoints.data())) {
+        clip->flag = static_cast<BITCODE_BS>(clip->flag | 512 | 16); // closed with per-vertex bulges
+        clip->num_bulges = static_cast<BITCODE_BL>(gv.clipBoundary.size());
+        clip->bulges = static_cast<BITCODE_BD*>(std::calloc(gv.clipBoundary.size(), sizeof(BITCODE_BD)));
+        if (clip->bulges != nullptr) {
+          for (size_t i = 0; i < gv.clipBoundary.size(); ++i)
+            clip->bulges[i] = static_cast<double>(gv.clipBoundary[i].bulge);
+          clip->parent->invisible = 1; // the native VIEWPORT frame presents this boundary to the user
+          const BITCODE_BL clipIndex = clip->parent->objid;
+          if (clipIndex >= 0 && static_cast<BITCODE_BL>(clipIndex) < tw.dwg->num_objects)
+            vp->clip_boundary = dwg_add_handleref(tw.dwg, 5, tw.dwg->object[clipIndex].handle.value, nullptr);
+        } else {
+          clip->flag = static_cast<BITCODE_BS>(clip->flag & ~16);
+          clip->num_bulges = 0;
+        }
+      }
+    }
     const float cx = gv.paperXIn + gv.paperWIn * 0.5f;
     const float cy = gv.paperYIn + gv.paperHIn * 0.5f;
     vp->center.x = static_cast<double>(cx);
@@ -6228,7 +6320,8 @@ static void WritePaperLayoutContent(const PaperLayout& L, Dwg_Object_BLOCK_HEADE
                           ? 35.0 / (2.0 * std::tan(std::clamp(static_cast<double>(gv.camFovDeg), 1.0, 179.0) *
                                                   (kPi / 360.0)))
                           : 50.0;
-    vp->status_flag = (gv.camPerspective ? 1 : 0) | 32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0);
+    vp->status_flag = (gv.camPerspective ? 1 : 0) | 32 | (gv.hidePlot ? 2048 : 0) |
+                      (gv.locked ? 16384 : 0) | (gv.on ? 32768 : 0);
     {
       std::vector<BITCODE_H> frozen;
       for (const std::string& name : gv.frozenLayers)
@@ -6534,6 +6627,24 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     vp.paperHIn = static_cast<float>(e->height);
     vp.paperXIn = static_cast<float>(e->center.x - e->width * 0.5);
     vp.paperYIn = static_cast<float>(e->center.y - e->height * 0.5);
+    if (e->clip_boundary != nullptr) {
+      Dwg_Object* clipObj = dwg_resolve_handle_silent(dwg, e->clip_boundary->absolute_ref);
+      if (clipObj != nullptr && clipObj->fixedtype == DWG_TYPE_LWPOLYLINE && clipObj->tio.entity != nullptr &&
+          clipObj->tio.entity->tio.LWPOLYLINE != nullptr) {
+        const Dwg_Entity_LWPOLYLINE* clip = clipObj->tio.entity->tio.LWPOLYLINE;
+        if ((clip->flag & 512) != 0 && clip->num_points >= 2 && clip->points != nullptr) {
+          vp.clipBoundary.reserve(static_cast<size_t>(clip->num_points));
+          bool valid = true;
+          for (BITCODE_BL i = 0; i < clip->num_points; ++i) {
+            const double bulge = clip->bulges != nullptr && i < clip->num_bulges ? clip->bulges[i] : 0.0;
+            const double x = clip->points[i].x, y = clip->points[i].y;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) { valid = false; break; }
+            vp.clipBoundary.push_back({static_cast<float>(x), static_cast<float>(y), static_cast<float>(bulge)});
+          }
+          if (!valid) vp.clipBoundary.clear();
+        }
+      }
+    }
     if (e->height > 1.e-6)
       vp.scaleModelPerPaperIn = static_cast<float>(e->VIEWSIZE / e->height);
     vp.modelCenterX = e->view_target.x - st.worldDocumentOriginX;
@@ -6544,6 +6655,7 @@ static void ImportPaperEntity(PaperLayout& L, AppCommandState& st, Dwg_Data* dwg
     // Issue #768: view direction, twist, on/off, lock and per-viewport frozen layers.
     vp.on = e->on_off != 0 && (e->status_flag & 32768) != 0;
     vp.locked = (e->status_flag & 16384) != 0;
+    vp.hidePlot = (e->status_flag & 2048) != 0;
     vp.camPerspective = (e->status_flag & 1) != 0;
     if (vp.camPerspective && e->LENSLENGTH > 1.e-6)
       vp.camFovDeg = static_cast<float>(2.0 * std::atan(35.0 / (2.0 * e->LENSLENGTH)) * (180.0 / kPi));
@@ -6759,7 +6871,19 @@ static void ImportPaperLayoutsFromDwg(AppCommandState& st, Dwg_Data* dwg,
     }
     Dwg_Object* blk = LayoutPaperBlockObject(dwg, lo);
     if (blk != nullptr) {
+      std::unordered_set<BITCODE_HV> clipBoundaryHandles;
       for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->fixedtype == DWG_TYPE_VIEWPORT && e->tio.entity != nullptr &&
+            e->tio.entity->tio.VIEWPORT != nullptr && e->tio.entity->tio.VIEWPORT->clip_boundary != nullptr)
+          clipBoundaryHandles.insert(e->tio.entity->tio.VIEWPORT->clip_boundary->absolute_ref);
+      }
+      for (Dwg_Object* e = get_first_owned_entity(blk); e != nullptr; e = get_next_owned_entity(blk, e)) {
+        if (e->supertype == DWG_SUPERTYPE_ENTITY && e->tio.entity != nullptr) {
+          const BITCODE_BL entityIndex = e->tio.entity->objid;
+          if (entityIndex >= 0 && static_cast<BITCODE_BL>(entityIndex) < dwg->num_objects &&
+              clipBoundaryHandles.count(dwg->object[entityIndex].handle.value) != 0)
+            continue;
+        }
         ImportPaperEntity(pl, st, dwg, e, skipHist, degenerateExtrusions);
       }
     }

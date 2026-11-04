@@ -16,7 +16,12 @@
 
 class ViewportRenderer;
 class QPainter;
+class QPainterPath;
 class QLabel;
+class QOpenGLBuffer;
+class QOpenGLShaderProgram;
+class QOpenGLTextureBlitter;
+class QOpenGLVertexArrayObject;
 
 class EditorViewport final : public QOpenGLWidget {
   friend class QtEditorTests;
@@ -70,6 +75,7 @@ private:
   void StepViewAnimation();
   void Cleanup();
   bool WorldPoint(QPointF point, ray3d::Vec3& world) const;
+  bool DrawPaperViewportClipMask(const QPainterPath& path, int framebufferWidth, int framebufferHeight);
   bool ViewPoint(QPointF point, ray3d::Vec3& world) const;
   void ClearTransientInput();
   void RightPress(const QPoint& globalPosition);
@@ -78,6 +84,10 @@ private:
   AppCommandState& m_State;
   std::vector<std::string>& m_Log;
   std::unique_ptr<ViewportRenderer> m_Renderer;
+  std::unique_ptr<QOpenGLBuffer> m_ClipMaskBuffer;
+  std::unique_ptr<QOpenGLShaderProgram> m_ClipMaskProgram;
+  std::unique_ptr<QOpenGLTextureBlitter> m_TextureBlitter;
+  std::unique_ptr<QOpenGLVertexArrayObject> m_ClipMaskVao;
   std::unique_ptr<OnlineMapController> m_OnlineMap;
   PartThumbnailImages m_PartThumbs;
   QTimer m_MapTimer;

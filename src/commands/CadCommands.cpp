@@ -521,16 +521,135 @@ int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In,
   return idx;
 }
 
+static bool AddViewportFromPaperPolyline(AppCommandState& cmd, int layoutIdx, int polylineIndex,
+                                         std::vector<std::string>& log) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return false;
+  PaperLayout& layout = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  if (polylineIndex < 0 || static_cast<size_t>(polylineIndex + 1) >= layout.paperPolyOffsets.size() ||
+      static_cast<size_t>(polylineIndex) >= layout.paperPolyClosed.size() ||
+      layout.paperPolyClosed[static_cast<size_t>(polylineIndex)] == 0) {
+    log.push_back("MVIEW Object — select a closed paper-space polyline.");
+    return false;
+  }
+  const int begin = layout.paperPolyOffsets[static_cast<size_t>(polylineIndex)];
+  const int end = layout.paperPolyOffsets[static_cast<size_t>(polylineIndex + 1)];
+  if (begin < 0 || end - begin < 2 || static_cast<size_t>(end) * 3 > layout.paperPolyVerts.size()) {
+    log.push_back("MVIEW Object — the polyline boundary is invalid.");
+    return false;
+  }
+  Viewport viewport;
+  viewport.clipBoundary.reserve(static_cast<size_t>(end - begin));
+  float minX = std::numeric_limits<float>::infinity(), minY = minX;
+  float maxX = -minX, maxY = -minX;
+  double twiceArea = 0.0;
+  for (int i = begin; i < end; ++i) {
+    const size_t p = static_cast<size_t>(i) * 3;
+    const float x = layout.paperPolyVerts[p], y = layout.paperPolyVerts[p + 1];
+    const size_t next = static_cast<size_t>(i + 1 < end ? i + 1 : begin) * 3;
+    const float nx = layout.paperPolyVerts[next], ny = layout.paperPolyVerts[next + 1];
+    const float bulge = static_cast<size_t>(i) < layout.paperPolyVertsBulge.size()
+                            ? layout.paperPolyVertsBulge[static_cast<size_t>(i)] : 0.f;
+    if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(bulge)) {
+      log.push_back("MVIEW Object — the polyline boundary contains a non-finite coordinate.");
+      return false;
+    }
+    viewport.clipBoundary.push_back({x, y, bulge});
+    ForEachBulgeChord(x, y, nx, ny, bulge, 32, [&](double ax, double ay, double bx, double by) {
+      minX = std::min(minX, static_cast<float>((std::min)(ax, bx)));
+      minY = std::min(minY, static_cast<float>((std::min)(ay, by)));
+      maxX = std::max(maxX, static_cast<float>((std::max)(ax, bx)));
+      maxY = std::max(maxY, static_cast<float>((std::max)(ay, by)));
+      twiceArea += ax * by - ay * bx;
+    });
+  }
+  if (maxX - minX < 1.e-4f || maxY - minY < 1.e-4f || std::fabs(twiceArea) < 1.e-8) {
+    log.push_back("MVIEW Object — the polyline boundary has no usable area.");
+    return false;
+  }
+  viewport.paperXIn = minX;
+  viewport.paperYIn = minY;
+  viewport.paperWIn = maxX - minX;
+  viewport.paperHIn = maxY - minY;
+  viewport.modelCenterX = cmd.worldDocumentOriginX;
+  viewport.modelCenterY = cmd.worldDocumentOriginY;
+  viewport.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  viewport.annotationScaleName = CadActiveAnnotationScaleName(&cmd.annotationScales, cmd.currentAnnotationScaleIndex,
+                                                                nullptr, cmd.modelUnitsPerPlottedInch);
+  PushUndoSnapshot(cmd, "Create MVIEW object viewport");
+  layout.viewports.push_back(std::move(viewport));
+  const int idx = static_cast<int>(layout.viewports.size()) - 1;
+  cmd.selectedViewportLayout = layoutIdx;
+  cmd.selectedViewportIndex = idx;
+  cmd.selectedViewports = {idx};
+  BumpCadGpuCache(cmd);
+  log.push_back("MVIEW Object — viewport created from the closed polyline; source polyline unchanged.");
+  return true;
+}
+
+static bool CreateMviewPreset(AppCommandState& st, const std::string& option, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+    log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
+    return false;
+  }
+  if (option == "object") {
+    st.paperVpMode = 1;
+    st.paperVpPhase = 0;
+    log.push_back("MVIEW Object — select a closed paper-space polyline (Esc to cancel).");
+    return true;
+  }
+  PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  const float width = layout.sheetWidthIn(), height = layout.sheetHeightIn();
+  if (!std::isfinite(width) || !std::isfinite(height) || width <= 0.f || height <= 0.f) {
+    log.push_back("MVIEW — the active layout has invalid paper dimensions.");
+    return false;
+  }
+  std::vector<std::array<float, 4>> rects;
+  if (option == "fit") rects.push_back({0.f, 0.f, width, height});
+  else if (option == "2") {
+    rects.push_back({0.f, 0.f, width * .5f, height});
+    rects.push_back({width * .5f, 0.f, width, height});
+  } else if (option == "3") {
+    rects.push_back({0.f, 0.f, width * .5f, height});
+    rects.push_back({width * .5f, height * .5f, width, height});
+    rects.push_back({width * .5f, 0.f, width, height * .5f});
+  } else if (option == "4") {
+    rects.push_back({0.f, 0.f, width * .5f, height * .5f});
+    rects.push_back({width * .5f, 0.f, width, height * .5f});
+    rects.push_back({0.f, height * .5f, width * .5f, height});
+    rects.push_back({width * .5f, height * .5f, width, height});
+  } else {
+    log.push_back("MVIEW — option must be Fit, 2, 3, 4, or Object.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Create MVIEW viewport(s)");
+  std::vector<int> created;
+  for (const auto& r : rects) {
+    const int index = AddViewportRect(st, st.activeSpaceIndex, r[0], r[1], r[2], r[3]);
+    if (index >= 0) created.push_back(index);
+  }
+  st.selectedViewports = created;
+  st.selectedViewportIndex = created.empty() ? -1 : created.front();
+  st.selectedViewportLayout = created.empty() ? -1 : st.activeSpaceIndex;
+  st.paperVpMode = 0;
+  st.paperVpPhase = 0;
+  st.active = AppCommandState::Kind::None;
+  log.push_back("MVIEW " + (option == "fit" ? std::string("Fit") : option) + " — " +
+                std::to_string(created.size()) + " viewport(s) created.");
+  return !created.empty();
+}
+
 void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.activeSpaceIndex == kModelSpaceIndex || cmd.activeSpaceIndex < 0 ||
       static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size()) {
-    log.push_back("Rectangular viewport — switch to a paper layout first (MODEL/PAPER button).");
+    log.push_back("MVIEW — switch to a paper layout first (MODEL/PAPER button).");
     return;
   }
   cmd.active = AppCommandState::Kind::PaperRectViewport;
   cmd.lastCommand = AppCommandState::Kind::PaperRectViewport;
   cmd.paperVpPhase = 0;
-  log.push_back("Rectangular viewport — click the first corner on the sheet (Esc to cancel).");
+  cmd.paperVpMode = 0;
+  log.push_back("MVIEW — click first corner or type [Fit/2/3/4/Object] (Esc to cancel).");
 }
 
 void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
@@ -1069,11 +1188,12 @@ void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& 
 }
 
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log) {
+                                    std::vector<std::string>& log, bool pushUndo) {
   PaperLayout* L = ActivePaperGeometryTarget(st);
   if (!L || st.selectedPaperEntities.empty())
     return;
-  PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
+  if (pushUndo)
+    PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
   std::vector<PaperRef> newSel;
   auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
     return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
@@ -1271,7 +1391,7 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
 }
 
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log) {
+                                 std::vector<std::string>& log, bool pushUndo) {
   PaperLayout* L = ActivePaperGeometryTarget(st);
   if (!L || st.selectedPaperEntities.empty())
     return;
@@ -1281,10 +1401,12 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
     x = baseX + dx * c - dy * s;
     y = baseY + dx * s + dy * c;
   };
-  DropPaperLeadersFromSelection(st, "ROTATE", log);
+  if (pushUndo)
+    DropPaperLeadersFromSelection(st, "ROTATE", log);
   if (st.selectedPaperEntities.empty())
     return;
-  PushUndoSnapshot(st, "Rotate paper geometry");
+  if (pushUndo)
+    PushUndoSnapshot(st, "Rotate paper geometry");
   for (const PaperRef& r : st.selectedPaperEntities) {
     switch (r.type) {
     case PaperRef::Type::Line: {
@@ -1346,8 +1468,38 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
         CadTableRotateAround(&L->paperTables[static_cast<size_t>(r.index)], baseX, baseY, angRad);
       break;
     }
-    case PaperRef::Type::Leader:  // dropped from the selection above
+    case PaperRef::Type::Leader: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperMultileaders.size()) {
+        CadMultileader& leader = L->paperMultileaders[static_cast<size_t>(r.index)];
+        auto rotatePath = [&](std::vector<float>& xyz) {
+          for (size_t i = 0; i + 2 < xyz.size(); i += 3)
+            rot(xyz[i], xyz[i + 1]);
+        };
+        rotatePath(leader.pathXyz);
+        for (auto& path : leader.extraLeaderPaths) rotatePath(path);
+        rot(leader.label.insX, leader.label.insY);
+        float minX = std::numeric_limits<float>::infinity();
+        float minY = std::numeric_limits<float>::infinity();
+        float maxX = -minX;
+        float maxY = -minY;
+        const std::array<std::array<float, 2>, 4> corners{{
+            {{leader.label.boxMinX, leader.label.boxMinY}},
+            {{leader.label.boxMinX, leader.label.boxMaxY}},
+            {{leader.label.boxMaxX, leader.label.boxMinY}},
+            {{leader.label.boxMaxX, leader.label.boxMaxY}},
+        }};
+        for (const auto& corner : corners) {
+          float x = corner[0], y = corner[1];
+          rot(x, y);
+          minX = std::min(minX, x); minY = std::min(minY, y);
+          maxX = std::max(maxX, x); maxY = std::max(maxY, y);
+        }
+        leader.label.boxMinX = minX; leader.label.boxMinY = minY;
+        leader.label.boxMaxX = maxX; leader.label.boxMaxY = maxY;
+        leader.label.rotationRad += angRad;
+      }
       break;
+    }
     case PaperRef::Type::Spline: {
       if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperSplines.size())
         spline::MapPoints(&L->paperSplines[static_cast<size_t>(r.index)], [&](const spline::Vec3& v) {
@@ -1765,6 +1917,10 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
   PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
     return;
+  if (!L.viewports[static_cast<size_t>(vpIdx)].on) {
+    log.push_back("MSPACE - the selected viewport is off.");
+    return;
+  }
   cmd.floatingViewportLayout = layoutIdx;
   cmd.floatingViewportIndex = vpIdx;
   cmd.active = AppCommandState::Kind::None;
@@ -1830,6 +1986,7 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps) {
   layout.offsetXIn = ps.offsetXIn;
   layout.offsetYIn = ps.offsetYIn;
   layout.centerPlot = ps.centerPlot;
+  layout.plotStyleTablePath = ps.plotStyleTablePath;
   layout.pageSetupName = ps.name;
 }
 
@@ -1846,6 +2003,7 @@ PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name
   ps.offsetXIn = layout.offsetXIn;
   ps.offsetYIn = layout.offsetYIn;
   ps.centerPlot = layout.centerPlot;
+  ps.plotStyleTablePath = layout.plotStyleTablePath;
   return ps;
 }
 
@@ -1854,37 +2012,62 @@ void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool m
   const int n = static_cast<int>(cmd.paperLayouts.size());
   if (layoutIdx < 0 || layoutIdx >= n)
     return;
-  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (makeCopy) {
-    // Unique "Name (2)" style name.
-    std::string base = item.name;
-    int k = 2;
-    auto taken = [&](const std::string& s) {
-      for (const PaperLayout& l : cmd.paperLayouts)
-        if (l.name == s)
-          return true;
-      return false;
-    };
-    std::string nm;
-    do {
-      nm = base + " (" + std::to_string(k++) + ")";
-    } while (taken(nm));
-    item.name = nm;
-    int insertAt = std::clamp(beforeIdx, 0, n);
-    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
-    SetActiveSpace(cmd, insertAt);
-    log.push_back("Layout copied as \"" + item.name + "\".");
-  } else {
-    cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
-    int insertAt = beforeIdx;
-    if (insertAt > layoutIdx)
-      --insertAt;  // account for the removed slot
-    insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
-    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
-    SetActiveSpace(cmd, insertAt);
-    log.push_back("Layout \"" + item.name + "\" moved.");
+    CopyPaperLayout(cmd, layoutIdx, {}, log);
+    return;
   }
+  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
+  int insertAt = beforeIdx;
+  if (insertAt > layoutIdx)
+    --insertAt;  // account for the removed slot
+  insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
+  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
+  SetActiveSpace(cmd, insertAt);
+  log.push_back("Layout \"" + item.name + "\" moved.");
   BumpCadGpuCache(cmd);
+}
+
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log) {
+  const int n = static_cast<int>(cmd.paperLayouts.size());
+  if (layoutIdx < 0 || layoutIdx >= n) {
+    log.push_back("LAYOUT COPY - no source layout was found.");
+    return -1;
+  }
+
+  auto nameTaken = [&](const std::string& name) {
+    const std::string folded = StringUtil::toLowerAsciiCopy(name);
+    return std::any_of(cmd.paperLayouts.begin(), cmd.paperLayouts.end(), [&](const PaperLayout& layout) {
+      return StringUtil::toLowerAsciiCopy(layout.name) == folded;
+    });
+  };
+
+  PaperLayout copy = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  std::string name = StringUtil::trimCopy(requestedName);
+  if (name.empty()) {
+    const std::string base = copy.name;
+    for (int suffix = 2;; ++suffix) {
+      name = base + " (" + std::to_string(suffix) + ")";
+      if (!nameTaken(name))
+        break;
+    }
+  } else if (nameTaken(name)) {
+    log.push_back("LAYOUT COPY - a layout named \"" + name + "\" already exists.");
+    return -1;
+  }
+
+  copy.name = name;
+  // Append instead of inserting beside the source. This keeps every existing layout index stable,
+  // including the current layout index held by the undo system, which does not snapshot tab state.
+  const int insertAt = n;
+  // Validation above must finish before this snapshot so a collision is a true no-op, including history.
+  PushUndoSnapshot(cmd, "Copy layout");
+  cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, std::move(copy));
+
+  BumpCadGpuCache(cmd);
+  log.push_back("Layout copied as \"" + name + "\".");
+  return insertAt;
 }
 
 // ---------------------------------------------------------------------------
@@ -12786,6 +12969,7 @@ static void ResetArrayDraft(AppCommandState& st) {
   st.arrayItemCount = 0;
   st.arrayFillAngleDeg = 360.f;
   st.arrayRotateItems = true;
+  st.arrayOnPaper = false;
 }
 
 /// The rigid reference point ARRAY hangs the pattern on: the selection centroid in X/Y, and the
@@ -12800,6 +12984,82 @@ static void SetArrayAnchorFromSelection(AppCommandState& st) {
   ray3d::Vec3 anchor3{};
   st.arrayAnchorZ = CadGizmoAnchorWorld(st, &anchor3) ? static_cast<float>(anchor3.z)
                                                       : CadCommitElevation(st);
+}
+
+static void SetArrayAnchorFromPaperSelection(AppCommandState& st) {
+  PaperLayout* layout = ActivePaperGeometryTarget(st);
+  if (!layout || st.selectedPaperEntities.empty()) {
+    st.arrayAnchorX = st.arrayAnchorY = 0.f;
+    return;
+  }
+  const PaperEntityRef ref = st.selectedPaperEntities.front();
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t i = static_cast<size_t>(ref.index) * 6;
+    if (i + 4 < layout->paperLines.size()) {
+      st.arrayAnchorX = (layout->paperLines[i] + layout->paperLines[i + 3]) * .5f;
+      st.arrayAnchorY = (layout->paperLines[i + 1] + layout->paperLines[i + 4]) * .5f;
+      return;
+    }
+    break;
+  }
+  case PaperEntityRef::Type::Circle: {
+    const size_t i = static_cast<size_t>(ref.index) * 3;
+    if (i + 1 < layout->paperCircles.size()) {
+      st.arrayAnchorX = layout->paperCircles[i]; st.arrayAnchorY = layout->paperCircles[i + 1]; return;
+    }
+    break;
+  }
+  case PaperEntityRef::Type::Arc:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperArcs.size()) {
+      const auto& a = layout->paperArcs[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = a.cx; st.arrayAnchorY = a.cy; return;
+    }
+    break;
+  case PaperEntityRef::Type::Ellipse:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperEllipses.size()) {
+      const auto& e = layout->paperEllipses[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = e.cx; st.arrayAnchorY = e.cy; return;
+    }
+    break;
+  case PaperEntityRef::Type::Polyline:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index + 1) < layout->paperPolyOffsets.size()) {
+      const int first = layout->paperPolyOffsets[static_cast<size_t>(ref.index)];
+      const size_t i = static_cast<size_t>(std::max(first, 0)) * 3;
+      if (i + 1 < layout->paperPolyVerts.size()) {
+        st.arrayAnchorX = layout->paperPolyVerts[i]; st.arrayAnchorY = layout->paperPolyVerts[i + 1]; return;
+      }
+    }
+    break;
+  case PaperEntityRef::Type::Text:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTexts.size()) {
+      const auto& a = layout->paperTexts[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = a.insX; st.arrayAnchorY = a.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Block:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperBlockRefs.size()) {
+      const auto& b = layout->paperBlockRefs[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = static_cast<float>(b.xf.x); st.arrayAnchorY = static_cast<float>(b.xf.y); return;
+    }
+    break;
+  case PaperEntityRef::Type::Leader:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperMultileaders.size()) {
+      const auto& l = layout->paperMultileaders[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = l.label.insX; st.arrayAnchorY = l.label.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Table:
+    if (ref.index >= 0 && static_cast<size_t>(ref.index) < layout->paperTables.size()) {
+      const auto& t = layout->paperTables[static_cast<size_t>(ref.index)];
+      st.arrayAnchorX = t.insX; st.arrayAnchorY = t.insY; return;
+    }
+    break;
+  case PaperEntityRef::Type::Spline:
+  case PaperEntityRef::Type::Point:
+    break;
+  }
+  st.arrayAnchorX = st.arrayAnchorY = 0.f;
 }
 
 /// Resolve a viewport click onto the active UCS work plane, anchored at (\p ax,\p ay,\p az) — the
@@ -12869,6 +13129,25 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
   const int rows = std::max(st.arrayRows, 1);
   const int levels = std::max(st.arrayLevels, 1);  // GitHub issue #400 increment 2
   PushUndoSnapshot(st, "Array-Rectangular");
+  if (st.arrayOnPaper) {
+    const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
+    std::vector<std::string> transformLog;
+    for (int lv = 0; lv < levels; ++lv) {
+      for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+          if (lv == 0 && r == 0 && c == 0)
+            continue;
+          st.selectedPaperEntities = source;
+          TranslateSelectedPaperEntities(st, static_cast<float>(c) * st.arrayColSpacing,
+                                         static_cast<float>(r) * st.arrayRowSpacing, true, transformLog, false);
+        }
+      }
+    }
+    st.selectedPaperEntities = source;
+    FinishArrayCommand(st, log, cols * rows * levels,
+                       (std::to_string(cols) + " x " + std::to_string(rows)).c_str());
+    return;
+  }
   for (int lv = 0; lv < levels; ++lv) {
     for (int r = 0; r < rows; ++r) {
       for (int c = 0; c < cols; ++c) {
@@ -12907,6 +13186,28 @@ static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log)
   const float step = (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n)
                                                 : fillRad / static_cast<float>(n - 1));
   const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY, anchorZ = st.arrayAnchorZ;
+  if (st.arrayOnPaper) {
+    const std::vector<PaperEntityRef> source = st.selectedPaperEntities;
+    std::vector<std::string> transformLog;
+    PushUndoSnapshot(st, "Array-Polar");
+    for (int i = 1; i < n; ++i) {
+      const float angle = step * static_cast<float>(i);
+      const float dx = anchorX - st.arrayCenterX;
+      const float dy = anchorY - st.arrayCenterY;
+      const float targetX = st.arrayCenterX + dx * std::cos(angle) - dy * std::sin(angle);
+      const float targetY = st.arrayCenterY + dx * std::sin(angle) + dy * std::cos(angle);
+      st.selectedPaperEntities = source;
+      if (st.arrayRotateItems) {
+        TranslateSelectedPaperEntities(st, 0.f, 0.f, true, transformLog, false);
+        RotateSelectedPaperEntities(st, st.arrayCenterX, st.arrayCenterY, angle, transformLog, false);
+      } else {
+        TranslateSelectedPaperEntities(st, targetX - anchorX, targetY - anchorY, true, transformLog, false);
+      }
+    }
+    st.selectedPaperEntities = source;
+    FinishArrayCommand(st, log, n, "polar");
+    return;
+  }
   const ray3d::Vec3 axisPoint{static_cast<double>(st.arrayCenterX), static_cast<double>(st.arrayCenterY),
                               static_cast<double>(st.arrayCenterZ)};
   const ucs::Ucs frame = CadActiveUcsStorage(st);
@@ -14518,6 +14819,54 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   using SP = AppCommandState::ScalePhase;
   using MirP = AppCommandState::MirrorPhase;
 
+  if (st.active == K::PaperRectViewport) {
+    if (st.activeSpaceIndex < 0 || static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size()) {
+      log.push_back("MVIEW — switch to a paper layout first.");
+      st.active = K::None;
+      return;
+    }
+    if (st.paperVpMode == 1) {
+      PaperRef hit{};
+      const PaperLayout& layout = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+      if (!PickPaperEntityAt(layout, static_cast<float>(wx), static_cast<float>(wy),
+                             std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit, &st.blockDefs) ||
+          hit.type != PaperRef::Type::Polyline) {
+        log.push_back("MVIEW Object — pick a closed paper-space polyline.");
+        return;
+      }
+      if (static_cast<size_t>(hit.index) >= layout.paperPolyClosed.size() ||
+          layout.paperPolyClosed[static_cast<size_t>(hit.index)] == 0) {
+        log.push_back("MVIEW Object — the selected polyline is open.");
+        return;
+      }
+      if (AddViewportFromPaperPolyline(st, st.activeSpaceIndex, hit.index, log)) {
+        st.active = K::None;
+        st.paperVpMode = 0;
+        st.paperVpPhase = 0;
+      }
+      return;
+    }
+    const float x = static_cast<float>(wx), y = static_cast<float>(wy);
+    if (st.paperVpPhase == 0) {
+      st.paperVpFirstXIn = x;
+      st.paperVpFirstYIn = y;
+      st.paperVpPhase = 1;
+      log.push_back("MVIEW — click the opposite corner, or type [Fit/2/3/4/Object].");
+      return;
+    }
+    if (std::fabs(x - st.paperVpFirstXIn) < 0.1f || std::fabs(y - st.paperVpFirstYIn) < 0.1f) {
+      log.push_back("MVIEW — viewport corners must be at least 0.1 in apart; pick the opposite corner again.");
+      return;
+    }
+    PushUndoSnapshot(st, "Create MVIEW viewport");
+    AddViewportRect(st, st.activeSpaceIndex, st.paperVpFirstXIn, st.paperVpFirstYIn, x, y);
+    st.active = K::None;
+    st.paperVpPhase = 0;
+    st.paperVpMode = 0;
+    log.push_back("MVIEW — rectangular viewport created.");
+    return;
+  }
+
   // UCS takes its picks here (REQ-154), before anything else looks at them: an origin pick must not
   // also start a selection. It works in WORLD coordinates because a coordinate frame is a
   // world-space object — see CadActiveUcsStorage for why that distinction is load-bearing.
@@ -15360,6 +15709,26 @@ void SubmitViewportPickImpl(AppCommandState& st, double wx, double wy, std::vect
   if (st.active == K::Array) {
     using AP = AppCommandState::ArrayPhase;
     if (st.arrayPhase == AP::PickSelection) {
+      if (st.arrayOnPaper) {
+        PaperLayout* layout = ActivePaperGeometryTarget(st);
+        PaperRef hit{};
+        if (!layout || !PickPaperEntityAt(*layout, static_cast<float>(wx), static_cast<float>(wy),
+                                          std::max(0.12f, CadOffsetEntityPickTolWorld(st)), &hit,
+                                          &st.blockDefs))
+          return;
+        const auto selected = std::find_if(st.selectedPaperEntities.begin(), st.selectedPaperEntities.end(),
+                                           [&](const PaperEntityRef& item) {
+                                             return item.type == hit.type && item.index == hit.index;
+                                           });
+        if (windowSelectionSubtract) {
+          if (selected != st.selectedPaperEntities.end())
+            st.selectedPaperEntities.erase(selected);
+        } else if (selected == st.selectedPaperEntities.end()) {
+          st.selectedPaperEntities.push_back(hit);
+        }
+        log.push_back("ARRAY — paper selection: " + std::to_string(st.selectedPaperEntities.size()) + " object(s).");
+        return;
+      }
       // A finished box merges into the selection and the phase stays put; DropArrayUnsupportedFrom-
       // Selection and the WaitType advance now happen only on Enter (ProcessCommandLineSubmit).
       if (st.selBoxWaitingSecond)
@@ -32498,7 +32867,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 // =============================================================================
-// OVERKILL — batch cleanup of the entire drawing.
+// OVERKILL — batch cleanup of model geometry or the active paper layout.
 //   • Lines: delete zero-length, exact duplicates, merge collinear overlapping
 //            / contiguous segments into the shortest covering segment.
 //   • Circles: delete exact duplicates (same center + radius).
@@ -32508,6 +32877,58 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 // Tolerance is auto-derived from drawing extents (1e-4 × span, min 1e-6).
 // =============================================================================
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
+  if (PaperLayout* layout = ActivePaperGeometryTarget(st)) {
+    PushUndoSnapshot(st, "Overkill paper layout");
+    AppCommandState cleanup;
+    cleanup.activeSpaceIndex = kModelSpaceIndex;
+    cleanup.userLinesFlat.reserve(layout->paperLines.size());
+    for (float value : layout->paperLines)
+      cleanup.userLinesFlat.push_back(value);
+    cleanup.userLineAttrs = layout->paperLineAttrs;
+    cleanup.userArcs = layout->paperArcs;
+    cleanup.userArcAttrs = layout->paperArcAttrs;
+    cleanup.userPolylineOffsets = layout->paperPolyOffsets;
+    cleanup.userPolylineVerts.reserve(layout->paperPolyVerts.size());
+    for (float value : layout->paperPolyVerts)
+      cleanup.userPolylineVerts.push_back(value);
+    cleanup.userPolylineClosed = layout->paperPolyClosed;
+    cleanup.userPolylineVertsBulge = layout->paperPolyVertsBulge;
+    cleanup.userPolylineAttrs = layout->paperPolyAttrs;
+    for (size_t i = 0; i + 2 < layout->paperCircles.size(); i += 3) {
+      cleanup.userCirclesCxCyZR.insert(cleanup.userCirclesCxCyZR.end(),
+                                       {layout->paperCircles[i], layout->paperCircles[i + 1], 0.f,
+                                        layout->paperCircles[i + 2]});
+      PushCircleNormal(cleanup.userCircleNormals);
+    }
+    cleanup.userCircleAttrs = layout->paperCircleAttrs;
+    ExecuteOverkill(cleanup, log);
+    layout->paperLines.clear();
+    layout->paperLines.reserve(cleanup.userLinesFlat.size());
+    for (double value : cleanup.userLinesFlat)
+      layout->paperLines.push_back(static_cast<float>(value));
+    layout->paperLineAttrs = std::move(cleanup.userLineAttrs);
+    layout->paperArcs = std::move(cleanup.userArcs);
+    layout->paperArcAttrs = std::move(cleanup.userArcAttrs);
+    layout->paperPolyOffsets = std::move(cleanup.userPolylineOffsets);
+    layout->paperPolyVerts.clear();
+    layout->paperPolyVerts.reserve(cleanup.userPolylineVerts.size());
+    for (double value : cleanup.userPolylineVerts)
+      layout->paperPolyVerts.push_back(static_cast<float>(value));
+    layout->paperPolyClosed = std::move(cleanup.userPolylineClosed);
+    layout->paperPolyVertsBulge = std::move(cleanup.userPolylineVertsBulge);
+    layout->paperPolyAttrs = std::move(cleanup.userPolylineAttrs);
+    layout->paperCircles.clear();
+    layout->paperCircleAttrs = std::move(cleanup.userCircleAttrs);
+    for (size_t i = 0; i + 3 < cleanup.userCirclesCxCyZR.size(); i += 4) {
+      layout->paperCircles.insert(layout->paperCircles.end(),
+                                  {static_cast<float>(cleanup.userCirclesCxCyZR[i]),
+                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 1]),
+                                   static_cast<float>(cleanup.userCirclesCxCyZR[i + 3])});
+    }
+    st.selectedPaperEntities.clear();
+    BumpCadGpuCache(st);
+    return;
+  }
   // OVERKILL is a MODEL-space tool and has no paper branch (issue 02). Run from a layout it used to
   // ignore the sheet entirely - the only geometry the user can see, and the reason they ran it -
   // while rewriting every model line, and then report "nothing to clean up", which was accurate
@@ -40923,6 +41344,42 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     return;
   }
 
+  if (verb == "copy") {
+    std::string rest;
+    std::getline(iss, rest);
+    rest = StringUtil::trimCopy(rest);
+    int sourceIx = -1;
+    size_t sourceLen = 0;
+    for (size_t i = 0; i < st.paperLayouts.size(); ++i) {
+      const std::string& candidate = st.paperLayouts[i].name;
+      if (rest == candidate) {
+        sourceIx = static_cast<int>(i);
+        sourceLen = candidate.size();
+        break;
+      }
+      if (rest.size() > candidate.size() && rest.compare(0, candidate.size(), candidate) == 0 &&
+          rest[candidate.size()] == ' ' && candidate.size() > sourceLen) {
+        sourceIx = static_cast<int>(i);
+        sourceLen = candidate.size();
+      }
+    }
+    std::string copyName;
+    if (sourceIx >= 0) {
+      copyName = StringUtil::trimCopy(rest.substr(sourceLen));
+    } else if (rest.empty() && st.activeSpaceIndex >= 0 &&
+               st.activeSpaceIndex < static_cast<int>(st.paperLayouts.size())) {
+      sourceIx = st.activeSpaceIndex;
+    }
+    if (sourceIx < 0) {
+      log.push_back("LAYOUT COPY - use LAYOUT COPY [source layout] [new name], or switch to a paper layout first.");
+      return;
+    }
+    if (copyName.size() > 3 && StringUtil::toLowerAsciiCopy(copyName.substr(0, 3)) == "as ")
+      copyName = StringUtil::trimCopy(copyName.substr(3));
+    CopyPaperLayout(st, sourceIx, copyName, log);
+    return;
+  }
+
   // RENAME and DELETE both need an existing layout. Names may contain spaces, so the same
   // greedy-longest-prefix match PIPESYS RENAME uses (above) resolves <target> against the rest of
   // the line; with nothing left over after the match, the active layout is the default target.
@@ -40986,7 +41443,7 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
     return;
   }
 
-  log.push_back("LAYOUT - unknown option \"" + verb + "\". Use NEW, RENAME or DELETE.");
+  log.push_back("LAYOUT - unknown option \"" + verb + "\". Use NEW, COPY, RENAME or DELETE.");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -41036,6 +41493,10 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
                   "exactly one viewport in a paper layout first.");
     return;
   }
+  if (vp->locked) {
+    log.push_back("VPSCALE - viewport display is locked; unlock it before changing the view scale.");
+    return;
+  }
   const std::string typed = StringUtil::trimCopy(args);
   if (typed.empty()) {
     log.push_back("VPSCALE - current viewport scale is " +
@@ -41053,6 +41514,53 @@ void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vec
   vp->scaleModelPerPaperIn = mup;
   BumpCadGpuCache(st);
   log.push_back("VPSCALE - viewport scale set to " + PlotScaleLabel(st.drawingInsUnits, mup) + ".");
+}
+
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log) {
+  const std::string name = StringUtil::trimCopy(args);
+  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size())) {
+    log.push_back("VPMATCHSCALE - switch to a paper layout first.");
+    return;
+  }
+  if (name.empty()) {
+    log.push_back("VPMATCHSCALE - specify a drawing scale name. Usage: VPMATCHSCALE 1:50.");
+    return;
+  }
+  const auto scaleIt = std::find_if(st.annotationScales.begin(), st.annotationScales.end(),
+      [&](const CadAnnotationScale& scale) { return scale.name == name; });
+  if (scaleIt == st.annotationScales.end()) {
+    log.push_back("VPMATCHSCALE - unknown drawing scale \"" + name + "\".");
+    return;
+  }
+  const float modelPerPaperIn = CadAnnotationScaleModelUnitsPerPlottedInch(*scaleIt);
+  if (!(modelPerPaperIn > 1.e-6f) || !std::isfinite(modelPerPaperIn)) {
+    log.push_back("VPMATCHSCALE - drawing scale \"" + name + "\" has an invalid ratio.");
+    return;
+  }
+  std::vector<int> indices = st.selectedViewports;
+  if (indices.empty() && st.selectedViewportIndex >= 0)
+    indices.push_back(st.selectedViewportIndex);
+  std::sort(indices.begin(), indices.end());
+  indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+  auto& viewports = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)].viewports;
+  if (indices.empty() || std::any_of(indices.begin(), indices.end(), [&](int i) {
+        return i < 0 || i >= static_cast<int>(viewports.size()) || viewports[static_cast<size_t>(i)].locked;
+      })) {
+    log.push_back("VPMATCHSCALE - select unlocked paper viewport(s) in the active layout.");
+    return;
+  }
+  if (std::all_of(indices.begin(), indices.end(), [&](int i) {
+        return viewports[static_cast<size_t>(i)].scaleModelPerPaperIn == modelPerPaperIn;
+      })) {
+    log.push_back("VPMATCHSCALE - selected viewport scale already matches \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Match paper viewport scale");
+  for (int i : indices)
+    viewports[static_cast<size_t>(i)].scaleModelPerPaperIn = modelPerPaperIn;
+  BumpCadGpuCache(st);
+  log.push_back("VPMATCHSCALE - applied \"" + name + "\" to " + std::to_string(indices.size()) +
+                " paper viewport(s).");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -44192,21 +44700,27 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back(kSelectObjectsPrompt);
 }
 
-/// REQ-305. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
-/// MOVE/COPY/ROTATE's own Start* shape: a pre-existing selection skips straight to choosing the
-/// array type, otherwise the command opens with the same click-or-window-select every sibling
-/// modify command uses (this fix, D-2026-08-25-n).
+/// REQ-305/483. Mirrors MOVE/COPY/ROTATE's Start* shape: a pre-existing selection skips straight
+/// to choosing the array type, otherwise the command opens with click-or-window selection. Paper
+/// arrays keep their selection and generated geometry in the active layout's native stores.
 void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
-    log.push_back("ARRAY — not available in paper space; switch to model space or a floating viewport.");
-    return;
-  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Array;
   st.lastCommand = AppCommandState::Kind::Array;
   ResetArrayDraft(st);
+  st.arrayOnPaper = ActivePaperGeometryTarget(st) != nullptr;
   st.selBoxWaitingSecond = false;
+  if (st.arrayOnPaper) {
+    if (!st.selectedPaperEntities.empty()) {
+      st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
+      SetArrayAnchorFromPaperSelection(st);
+      log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+    } else {
+      log.push_back("ARRAY — click paper objects or drag a selection window, then press Enter to choose type.");
+    }
+    return;
+  }
   DropArrayUnsupportedFromSelection(st, log);
   if (!st.selection.empty()) {
     st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
@@ -44470,7 +44984,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::PaperRectViewport) {
     st.paperVpPhase = 0;
-    log.push_back("Rectangular viewport canceled.");
+    st.paperVpMode = 0;
+    log.push_back("MVIEW canceled.");
   }
   else if (st.active == AppCommandState::Kind::BConnectMode)
     log.push_back("BCONNECTMODE canceled.");
@@ -45440,6 +45955,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
   }
 
+  if (st.active == K::PaperRectViewport && !line.empty()) {
+    const std::string option = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+    if (option == "fit" || option == "2" || option == "3" || option == "4" || option == "object") {
+      (void)CreateMviewPreset(st, option, log);
+      return;
+    }
+    log.push_back("MVIEW — option must be Fit, 2, 3, 4, or Object; Esc cancels.");
+    return;
+  }
   // #764: typed points for the click-driven paper MOVE/COPY/ROTATE/MIRROR/SCALE gestures.
   if (HandlePaperPhaseText(st, line, log))
     return;
@@ -45800,15 +46324,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     } else if (st.active == K::Array) {
       using AP = AppCommandState::ArrayPhase;
       if (st.arrayPhase == AP::PickSelection) {
-        // Matches the old box-finish sequence exactly (finishBox(); DropArrayUnsupportedFrom-
-        // Selection(); check st.selection.empty()), just triggered by Enter instead.
-        DropArrayUnsupportedFromSelection(st, log);
-        if (st.selection.empty())
-          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
-        else {
-          st.arrayPhase = AP::WaitType;
-          SetArrayAnchorFromSelection(st);
-          log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+        if (st.arrayOnPaper) {
+          if (st.selectedPaperEntities.empty()) {
+            log.push_back("Nothing selected — click paper objects or drag a selection window, then press Enter.");
+          } else {
+            st.arrayPhase = AP::WaitType;
+            SetArrayAnchorFromPaperSelection(st);
+            log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+          }
+        } else {
+          // Matches the old box-finish sequence exactly (finishBox(); DropArrayUnsupportedFrom-
+          // Selection(); check st.selection.empty()), just triggered by Enter instead.
+          DropArrayUnsupportedFromSelection(st, log);
+          if (st.selection.empty())
+            log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+          else {
+            st.arrayPhase = AP::WaitType;
+            SetArrayAnchorFromSelection(st);
+            log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+          }
         }
       } else if (st.arrayPhase == AP::Rect_WaitLevels) {
         // GitHub issue #400 increment 2: a bare Enter here is "1 level" — the pre-#400 2D grid —
@@ -46216,6 +46750,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string restOfLine;
       std::getline(issIdle, restOfLine);
       HandleVpscaleCommand(restOfLine, st, log);
+      return;
+    }
+    // VPMATCHSCALE (REQ-484): apply a named drawing scale to selected paper viewport(s).
+    if (plotTok == "vpmatchscale") {
+      std::string restOfLine;
+      std::getline(issIdle, restOfLine);
+      HandleVpMatchScaleCommand(restOfLine, st, log);
       return;
     }
     // PAGESETUP (REQ-026, issue #751/#753 V3): typed equivalent of "Page Setup Manager…".

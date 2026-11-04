@@ -249,6 +249,8 @@ struct CadLayerRow {
   bool locked = false;
   /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
   std::string color = "White";
+  /// Named STB plot style assigned to this layer; defaults to Normal.
+  std::string plotStyleName = "Normal";
   std::string linetype = "Continuous";
   float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
   float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
@@ -1695,7 +1697,7 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
 void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
 void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
-                                    std::vector<std::string>& log);
+                                    std::vector<std::string>& log, bool pushUndo = true);
 /// #764 - paper-space SCALE: uniform scale of the selected paper entities about a point (paper inches).
 void ScaleSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float factor,
                                 std::vector<std::string>& log);
@@ -1705,7 +1707,7 @@ void FinishPaperMoveCopy(AppCommandState& st, float dxIn, float dyIn, std::vecto
 /// Second-point step of paper MIRROR (click or typed). Refuses a zero-length mirror line.
 void FinishPaperMirror(AppCommandState& st, float x2In, float y2In, std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
-                                 std::vector<std::string>& log);
+                                 std::vector<std::string>& log, bool pushUndo = true);
 /// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
 /// definition's comment for why there is no erase-source toggle here).
 void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
@@ -1780,6 +1782,9 @@ void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
 PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name);
 /// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
+/// Duplicate a layout at the end, leaving the previously active layout selected. Returns the copy index or -1.
+int CopyPaperLayout(AppCommandState& cmd, int layoutIdx, const std::string& requestedName,
+                    std::vector<std::string>& log);
 
 /// REQ-302: top-level ribbon tabs, in display order. UI-layer concept, but the active index is
 /// persisted app state (AppCommandState::activeRibbonTab) so it lives alongside kModelSpaceIndex-
@@ -4535,6 +4540,8 @@ struct AppCommandState {
     Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
     Polar_WaitRotateAnswer, ///< "[Y]es / [N]o"; commits on completion
   } arrayPhase = ArrayPhase::PickSelection;
+  /// True while ARRAY is operating on native entities in the active paper layout.
+  bool arrayOnPaper = false;
 
   int arrayCols = 0;
   int arrayRows = 0;
@@ -5547,6 +5554,7 @@ struct AppCommandState {
   int   paperVpPhase = 0;
   float paperVpFirstXIn = 0.f;
   float paperVpFirstYIn = 0.f;
+  int   paperVpMode = 0;  ///< REQ-480: 0 = rectangle, 1 = awaiting closed polyline Object pick.
   // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
   int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
   // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.
@@ -6581,6 +6589,9 @@ void HandleLayoutCommand(const std::string& args, AppCommandState& st, std::vect
 /// Sets `CurrentViewport(st)`'s scale from a typed "1:N" ratio or a bare model-units-per-inch
 /// number; a blank \p args reports the current viewport's scale instead.
 void HandleVpscaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
+/// Apply one drawing-owned named annotation scale to every selected paper viewport in the active
+/// layout. Unlike VPSCALE, this does not target a floating viewport or parse a free-form ratio.
+void HandleVpMatchScaleCommand(const std::string& args, AppCommandState& st, std::vector<std::string>& log);
 /// Opens the Page Setup Manager dialog for the active layout (refuses in model space).
 void StartPageSetupCommand(AppCommandState& st, std::vector<std::string>& log);
 /// The candidate wall, optionally including the segment \p cursor is currently proposing.

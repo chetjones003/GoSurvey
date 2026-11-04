@@ -1825,6 +1825,389 @@ private Q_SLOTS:
     window.ShowLayoutManager();
   }
 
+  void layoutTabDuplicateCreatesCopyAndPreservesCurrentLayout() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    PaperLayout& source = window.State().paperLayouts[0];
+    source.name = "Source Sheet";
+    source.paperLines = {1.f, 2.f, 0.f, 8.f, 2.f, 0.f};
+    source.paperLineAttrs.resize(1);
+    const auto originalLines = source.paperLines;
+    SetActiveSpace(window.State(), 0);
+    window.Refresh();
+    auto* tabs = window.findChild<QTabBar*>("paperSpaceTabs"); QVERIFY(tabs);
+    window.resize(1000, 700); window.show(); QCoreApplication::processEvents();
+    tabs->setContextMenuPolicy(Qt::CustomContextMenu);
+    QTimer::singleShot(0, [&] {
+      QTRY_VERIFY(window.findChild<QMenu*>("layoutTabContextMenu") != nullptr);
+      QMenu* menu = window.findChild<QMenu*>("layoutTabContextMenu"); QVERIFY(menu);
+      QAction* duplicate = nullptr;
+      for (QAction* action : menu->actions())
+        if (action->text() == "Duplicate") duplicate = action;
+      QVERIFY(menu->grab().save(Issue897Shot("qt-1015-layout-duplicate-context-menu.png")));
+      QVERIFY(duplicate); duplicate->trigger(); menu->close();
+    });
+    const QPoint tabCenter = tabs->tabRect(1).center();
+    QVERIFY(QMetaObject::invokeMethod(tabs, "customContextMenuRequested", Qt::DirectConnection,
+                                      Q_ARG(QPoint, tabCenter)));
+    QTRY_COMPARE(window.State().paperLayouts.size(), size_t(2));
+    QCOMPARE(window.State().paperLayouts[1].name, std::string("Source Sheet (2)"));
+    QCOMPARE(window.State().paperLayouts[1].paperLines, originalLines);
+    QCOMPARE(window.State().activeSpaceIndex, 0);
+  }
+
+  void viewportManagerAppliesOnLockAndHidePlotControls() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate(0);
+    if (window.State().paperLayouts.empty()) AddPaperLayout(window.State());
+    window.State().paperLayouts[0].viewports.push_back(Viewport{});
+    SetActiveSpace(window.State(), 0);
+    window.Refresh();
+    QTimer::singleShot(0, [&] {
+      auto* dialog = window.findChild<QDialog*>("viewportsManager"); QVERIFY(dialog);
+      auto* on = dialog->findChild<QCheckBox*>("viewportOn"); QVERIFY(on);
+      auto* lock = dialog->findChild<QCheckBox*>("viewportDisplayLock"); QVERIFY(lock);
+      auto* hidePlot = dialog->findChild<QCheckBox*>("viewportHidePlot"); QVERIFY(hidePlot);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1007-viewport-controls.png")));
+      on->setChecked(false);
+      lock->setChecked(true);
+      hidePlot->setChecked(true);
+      dialog->findChild<QPushButton*>("viewportClose")->click();
+    });
+    window.ShowViewportsManager();
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].on);
+    QVERIFY(window.State().paperLayouts[0].viewports[0].locked);
+    QVERIFY(window.State().paperLayouts[0].viewports[0].hidePlot);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].on);
+    QVERIFY(window.State().paperLayouts[0].viewports[0].locked);
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].hidePlot);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].on);
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].locked);
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].hidePlot);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QVERIFY(window.State().paperLayouts[0].viewports[0].on);
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].locked);
+    QVERIFY(!window.State().paperLayouts[0].viewports[0].hidePlot);
+  }
+
+  void issue810PlotPreviewOpensEditablePdfAndKeepsDrawingUnchanged() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    auto& layout = state.paperLayouts[0];
+    layout.name = "Preview Sheet";
+    layout.portraitWidthIn = 8.5f;
+    layout.portraitHeightIn = 11.f;
+    layout.landscape = false;
+    layout.paperLines = {1.f, 1.f, 0.f, 7.5f, 1.f, 0.f};
+    layout.paperLineAttrs.resize(1);
+    const auto originalLines = layout.paperLines;
+    const auto documentIndex = static_cast<size_t>(state.activeDrawingIdx);
+    const size_t undoDepth = state.documents[documentIndex].undoStack.size();
+    editor.Refresh();
+    editor.resize(1200, 800);
+    editor.show();
+    QCoreApplication::processEvents();
+
+    auto* ribbonTabs = editor.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbonTabs);
+    for (int index = 0; index < ribbonTabs->count(); ++index)
+      if (ribbonTabs->tabText(index) == "Output") ribbonTabs->setCurrentIndex(index);
+    auto* previewAction = editor.findChild<QAction*>("ribbon_RibbonPlotPreview"); QVERIFY(previewAction);
+    QVERIFY(previewAction->isEnabled());
+    QVERIFY(editor.grab().save(Issue897Shot("qt-810-output-preview-paper-layout.png")));
+    previewAction->trigger();
+    PdfWindow* preview = nullptr;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+      for (QWidget* widget : QApplication::topLevelWidgets())
+        if (auto* candidate = dynamic_cast<PdfWindow*>(widget); candidate && candidate->windowTitle().contains("Plot Preview")) {
+          preview = candidate;
+          return true;
+        }
+      return false;
+    })(), 5000);
+    QVERIFY(preview);
+    QTRY_VERIFY_WITH_TIMEOUT(!preview->IsBusy(), 5000);
+    QVERIFY(preview->m_Document);
+    QCOMPARE(preview->m_Document->PageCount(), 1);
+    QCOMPARE(preview->m_Document->Sizes().size(), size_t(1));
+    QVERIFY(std::abs(preview->m_Document->Sizes()[0].wPt - 612.0) < 1.0);
+    QVERIFY(std::abs(preview->m_Document->Sizes()[0].hPt - 792.0) < 1.0);
+    QVERIFY(preview->m_TemporaryDirectory);
+    const QString previewDirectory = preview->m_TemporaryDirectory->path();
+    QVERIFY(QFileInfo::exists(QDir(previewDirectory).filePath("preview.pdf")));
+    QVERIFY(preview->findChild<QAction*>("pdfSaveAsAction"));
+    QAction* rectangleTool = nullptr;
+    for (QAction* action : preview->actions())
+      if (action->isCheckable() && action->data().toInt() == static_cast<int>(pdfview::Annot::Kind::Rect)) rectangleTool = action;
+    QVERIFY(rectangleTool);
+    QVERIFY(preview->grab().save(Issue897Shot("qt-810-pdf-preview-viewer.png")));
+
+    pdfview::Annot annotation;
+    annotation.kind = pdfview::Annot::Kind::Rect;
+    annotation.x0 = 24.f; annotation.y0 = 24.f; annotation.x1 = 120.f; annotation.y1 = 90.f;
+    QString annotationError;
+    QVERIFY2(preview->AddAnnotation(annotation, annotationError), qPrintable(annotationError));
+    QTemporaryDir savedCopy;
+    QVERIFY(savedCopy.isValid());
+    QString saveError;
+    const QString savedPath = savedCopy.filePath("annotated-preview.pdf");
+    QVERIFY2(preview->SaveFile(savedPath, saveError), qPrintable(saveError));
+    QVERIFY(QFileInfo::exists(savedPath));
+    QCOMPARE(layout.paperLines, originalLines);
+    QCOMPARE(state.documents[documentIndex].undoStack.size(), undoDepth);
+
+    preview->close();
+    QTRY_VERIFY_WITH_TIMEOUT(!QFileInfo::exists(previewDirectory), 5000);
+  }
+
+  void issue810PlotPreviewReportsInvalidStyleAndRejectsModelSpace() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    state.paperLayouts[0].plotStyleTablePath = "C:/GoSurvey-test-missing-preview-table.ctb";
+    editor.Refresh();
+    const QStringList previewDirectoriesBefore = QDir(QDir::tempPath()).entryList(
+        {"GoSurvey-PlotPreview-*"}, QDir::Dirs | QDir::NoDotAndDotDot);
+    QTimer::singleShot(0, [&] {
+      auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(message);
+      QVERIFY(message->text().contains("could not be plotted"));
+      QVERIFY(message->text().contains("not found", Qt::CaseInsensitive) || message->text().contains("plot style", Qt::CaseInsensitive));
+      QVERIFY(message->grab().save(Issue897Shot("qt-810-preview-plot-error.png")));
+      message->accept();
+    });
+    editor.PreviewActiveLayout();
+    QCOMPARE(QDir(QDir::tempPath()).entryList({"GoSurvey-PlotPreview-*"}, QDir::Dirs | QDir::NoDotAndDotDot),
+             previewDirectoriesBefore);
+    for (QWidget* widget : QApplication::topLevelWidgets())
+      QVERIFY(!dynamic_cast<PdfWindow*>(widget));
+
+    SetActiveSpace(state, -1);
+    QTimer::singleShot(0, [&] {
+      auto* message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+      QVERIFY(message);
+      QVERIFY(message->text().contains("paper layout"));
+      message->accept();
+    });
+    editor.PreviewActiveLayout();
+    for (QWidget* widget : QApplication::topLevelWidgets())
+      QVERIFY(!dynamic_cast<PdfWindow*>(widget));
+  }
+
+  void issue810ViewDetailsShowsActiveSetupWithoutMutation() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    auto& layout = state.paperLayouts[0];
+    layout.name = "Details Sheet";
+    layout.pageSetupName = "Named Plot Setup";
+    layout.portraitWidthIn = 13.25f;
+    layout.portraitHeightIn = 19.5f;
+    layout.presetIdx = -1;
+    layout.landscape = true;
+    layout.plotArea = 0;
+    layout.fitToPaper = false;
+    layout.scaleModelPerPaperIn = 42.0f;
+    layout.centerPlot = false;
+    layout.offsetXIn = 1.25f;
+    layout.offsetYIn = -0.5f;
+    layout.plotStyleTablePath = "styles/Survey.stb";
+    state.openProjects.push_back(AppCommandState::ProjectSession{});
+    state.openProjects.back().uid = 810;
+    state.openProjects.back().readOnly = true;
+    state.drawingTabs[state.activeDrawingIdx].projectUid = 810;
+    const auto layoutBefore = layout;
+    const size_t undoDepth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
+    editor.Refresh();
+    editor.resize(1200, 800);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* ribbonTabs = editor.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbonTabs);
+    for (int index = 0; index < ribbonTabs->count(); ++index)
+      if (ribbonTabs->tabText(index) == "Output") ribbonTabs->setCurrentIndex(index);
+    auto* action = editor.findChild<QAction*>("ribbon_RibbonViewDetails"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QVERIFY(editor.grab().save(Issue897Shot("qt-810-output-view-details.png")));
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      QCOMPARE(dialog->objectName(), QString("activeLayoutDetailsDialog"));
+      auto value = [&](const char* name) { auto* label = dialog->findChild<QLabel*>(name); return label ? label->text() : QString(); };
+      QCOMPARE(value("layoutDetailsPageSetup"), QString("Named Plot Setup"));
+      QCOMPARE(value("layoutDetailsDevice"), QString("GoSurvey PDF (vector)"));
+      QCOMPARE(value("layoutDetailsPaper"), QString("Custom — 19.50 × 13.25 in"));
+      QCOMPARE(value("layoutDetailsOrientation"), QString("Landscape"));
+      QCOMPARE(value("layoutDetailsPlotArea"), QString("Layout"));
+      QCOMPARE(value("layoutDetailsScale"), QString("1 : 42"));
+      QCOMPARE(value("layoutDetailsPlacement"), QString("Center: No; offsets: X 1.250 in, Y -0.500 in"));
+      QCOMPARE(value("layoutDetailsPlotStyle"), QString("styles/Survey.stb"));
+      QVERIFY(!dialog->findChild<QPushButton*>("apply"));
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-810-view-details-dialog.png")));
+      dialog->accept();
+    });
+    action->trigger();
+    QCOMPARE(state.paperLayouts[0].pageSetupName, layoutBefore.pageSetupName);
+    QCOMPARE(state.paperLayouts[0].portraitWidthIn, layoutBefore.portraitWidthIn);
+    QCOMPARE(state.paperLayouts[0].portraitHeightIn, layoutBefore.portraitHeightIn);
+    QCOMPARE(state.paperLayouts[0].plotStyleTablePath, layoutBefore.plotStyleTablePath);
+    QCOMPARE(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size(), undoDepth);
+  }
+
+  void issue810ViewDetailsLabelsUnsetValuesAndIsUnavailableOutsidePaper() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    state.paperLayouts[0].pageSetupName.clear();
+    state.paperLayouts[0].plotStyleTablePath.clear();
+    state.paperLayouts[0].presetIdx = kDefaultPaperPresetIdx;
+    state.paperLayouts[0].fitToPaper = true;
+    state.paperLayouts[0].centerPlot = true;
+    editor.Refresh();
+    auto* action = editor.findChild<QAction*>("ribbon_RibbonViewDetails"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QTimer::singleShot(0, [&] {
+      auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget()); QVERIFY(dialog);
+      QCOMPARE(dialog->findChild<QLabel*>("layoutDetailsPageSetup")->text(), QString("No named Page Setup (layout settings)"));
+      QVERIFY(dialog->findChild<QLabel*>("layoutDetailsPaper")->text().startsWith("ANSI B"));
+      QCOMPARE(dialog->findChild<QLabel*>("layoutDetailsScale")->text(), QString("Fit to paper"));
+      QVERIFY(dialog->findChild<QLabel*>("layoutDetailsPlacement")->text().startsWith("Center: Yes;"));
+      QCOMPARE(dialog->findChild<QLabel*>("layoutDetailsPlotStyle")->text(), QString("No plot style table"));
+      dialog->accept();
+    });
+    action->trigger();
+    SetActiveSpace(state, -1);
+    editor.Refresh();
+    QVERIFY(!action->isEnabled());
+    state.paperLayouts[0].viewports.push_back(Viewport{});
+    EnterFloatingModelSpace(state, 0, 0, editor.m_Log);
+    editor.Refresh();
+    QVERIFY(!action->isEnabled());
+  }
+
+  void issue810CurrentLayoutPdfExportWritesPdfWithoutChangingDrawing() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    auto& layout = state.paperLayouts[0];
+    layout.portraitWidthIn = 8.5f;
+    layout.portraitHeightIn = 11.f;
+    layout.presetIdx = 0;
+    layout.landscape = false;
+    layout.paperLines = {1.f, 1.f, 0.f, 5.f, 1.f, 0.f};
+    layout.paperLineAttrs.resize(1);
+    const auto paperLines = layout.paperLines;
+    const auto setupName = layout.pageSetupName;
+    state.openProjects.push_back(AppCommandState::ProjectSession{});
+    state.openProjects.back().uid = 488;
+    state.openProjects.back().readOnly = true;
+    state.drawingTabs[state.activeDrawingIdx].projectUid = 488;
+    const size_t undoDepth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
+    editor.Refresh();
+    editor.resize(1200, 800);
+    editor.show();
+    QCoreApplication::processEvents();
+    auto* ribbon = editor.findChild<QTabWidget*>("ribbon"); QVERIFY(ribbon);
+    for (int index = 0; index < ribbon->count(); ++index)
+      if (ribbon->tabText(index) == "Output") ribbon->setCurrentIndex(index);
+    auto* action = editor.findChild<QAction*>("ribbon_OutDwfxExport"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QVERIFY(editor.grab().save(Issue897Shot("qt-810-current-layout-pdf-export.png")));
+    QTemporaryDir output;
+    QVERIFY(output.isValid());
+    const QString outputPath = output.filePath("Current Layout.pdf");
+    QTimer::singleShot(0, [&] {
+      auto* dialog = editor.findChild<QFileDialog*>("currentLayoutPdfExportDialog"); QVERIFY(dialog);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-810-current-layout-pdf-export-dialog.png")));
+      dialog->selectFile(outputPath);
+      QVERIFY(QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection));
+    });
+    action->trigger();
+    QVERIFY(QFileInfo::exists(outputPath));
+    const QByteArray encoded = QFile::encodeName(outputPath);
+    FPDF_DOCUMENT pdf = FPDF_LoadDocument(encoded.constData(), nullptr);
+    QVERIFY(pdf);
+    QCOMPARE(FPDF_GetPageCount(pdf), 1);
+    FPDF_PAGE page = FPDF_LoadPage(pdf, 0); QVERIFY(page);
+    QVERIFY(std::abs(FPDF_GetPageWidthF(page) - 612.f) < 1.f);
+    QVERIFY(std::abs(FPDF_GetPageHeightF(page) - 792.f) < 1.f);
+    FPDF_ClosePage(page);
+    FPDF_CloseDocument(pdf);
+    QCOMPARE(QDir(output.path()).entryList(QDir::Files | QDir::NoDotAndDotDot).size(), 1);
+    QCOMPARE(state.paperLayouts[0].paperLines, paperLines);
+    QCOMPARE(state.paperLayouts[0].pageSetupName, setupName);
+    QCOMPARE(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size(), undoDepth);
+    QCOMPARE(state.openProjects.back().readOnly, true);
+    QVERIFY(std::any_of(editor.m_Log.begin(), editor.m_Log.end(), [&](const std::string& line) {
+      return line.find("PLOT — wrote 1 page(s) to " + outputPath.toUtf8().toStdString()) != std::string::npos;
+    }));
+
+    QFile::remove(outputPath);
+    QTimer::singleShot(0, [&] {
+      auto* dialog = editor.findChild<QFileDialog*>("currentLayoutPdfExportDialog"); QVERIFY(dialog);
+      dialog->reject();
+    });
+    action->trigger();
+    QVERIFY(!QFileInfo::exists(outputPath));
+    QVERIFY(QDir(output.path()).entryList(QDir::Files | QDir::NoDotAndDotDot).isEmpty());
+    QCOMPARE(state.paperLayouts[0].paperLines, paperLines);
+    QCOMPARE(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size(), undoDepth);
+  }
+
+  void issue810CurrentLayoutPdfExportFailureAndSpaceGuards() {
+    EditorWindow editor;
+    editor.CreateDrawingFromTemplate(0);
+    if (editor.State().paperLayouts.empty()) AddPaperLayout(editor.State());
+    auto& state = editor.State();
+    SetActiveSpace(state, 0);
+    state.paperLayouts[0].plotStyleTablePath = "C:/GoSurvey-test-missing-export-table.ctb";
+    state.paperLayouts[0].viewports.push_back(Viewport{});
+    editor.Refresh();
+    auto* action = editor.findChild<QAction*>("ribbon_OutDwfxExport"); QVERIFY(action);
+    QVERIFY(action->isEnabled());
+    QTemporaryDir output;
+    QVERIFY(output.isValid());
+    const QString outputPath = output.filePath("Failed Layout.pdf");
+    const size_t undoDepth = state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size();
+    const auto paperLines = state.paperLayouts[0].paperLines;
+    QTimer::singleShot(0, [&] {
+      auto* dialog = editor.findChild<QFileDialog*>("currentLayoutPdfExportDialog"); QVERIFY(dialog);
+      dialog->selectFile(outputPath);
+      QVERIFY(QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection));
+      QTimer::singleShot(0, [&] {
+        auto* warning = qobject_cast<QMessageBox*>(QApplication::activeModalWidget()); QVERIFY(warning);
+        QVERIFY(warning->text().contains("No PDF was written."));
+        warning->accept();
+      });
+    });
+    action->trigger();
+    QVERIFY(!QFileInfo::exists(outputPath));
+    QVERIFY(QDir(output.path()).entryList(QDir::Files | QDir::NoDotAndDotDot).isEmpty());
+    QVERIFY(std::any_of(editor.m_Log.begin(), editor.m_Log.end(), [](const std::string& line) {
+      return line.find("No PDF was written.") != std::string::npos;
+    }));
+    QCOMPARE(state.paperLayouts[0].paperLines, paperLines);
+    QCOMPARE(state.documents[static_cast<size_t>(state.activeDrawingIdx)].undoStack.size(), undoDepth);
+
+    SetActiveSpace(state, -1);
+    editor.Refresh();
+    QVERIFY(!action->isEnabled());
+    EnterFloatingModelSpace(state, 0, 0, editor.m_Log);
+    editor.Refresh();
+    QVERIFY(!action->isEnabled());
+  }
+
   void paperTrimHighlightScreenshots() {
     EditorWindow window;
     window.CreateDrawingFromTemplate(0);
@@ -2015,6 +2398,10 @@ private Q_SLOTS:
     QVERIFY(std::fabs(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn - 25.f) < 1e-4f);
     QVERIFY(DoUndo(window.State(), window.m_Log));
     QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, initial);
+    window.Submit("VPMATCHSCALE 1:100");
+    QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, 100.f);
+    QVERIFY(DoUndo(window.State(), window.m_Log));
+    QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, initial);
     QTimer::singleShot(0, [&] {
       auto* dialog = window.findChild<QDialog*>("viewportsManager"); QVERIFY(dialog);
       QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-default.png")));
@@ -2022,6 +2409,10 @@ private Q_SLOTS:
       QCOMPARE(annotationScale->currentText(), QString("1:50"));
       annotationScale->setCurrentText("1:100");
       QVERIFY(dialog->grab().save(Issue897Shot("qt-1013-viewport-scale-selected.png")));
+      auto* drawingScale = dialog->findChild<QComboBox*>("viewportDrawingScale"); QVERIFY(drawingScale);
+      drawingScale->setCurrentText("1:100");
+      QCOMPARE(window.State().paperLayouts[0].viewports[static_cast<size_t>(viewport)].scaleModelPerPaperIn, 100.f);
+      QVERIFY(dialog->grab().save(Issue897Shot("qt-1017-viewport-scale-dropdown.png")));
       QTimer::singleShot(0, [&] {
         for (auto* widget : QApplication::topLevelWidgets())
           if (auto* scaleDialog = qobject_cast<QInputDialog*>(widget); scaleDialog && scaleDialog->windowTitle() == "Viewport Scale") {
@@ -2074,6 +2465,7 @@ private Q_SLOTS:
     layout.paperTexts.push_back(table);
     Viewport layoutViewport;
     layoutViewport.modelCenterX = 50.; layoutViewport.modelCenterY = 50.;
+    layoutViewport.clipBoundary = {{1.f, 1.f, 0.f}, {11.f, 1.f, 0.f}, {6.f, 8.5f, 0.f}};
     layout.viewports.push_back(layoutViewport);
 
     const Camera paperCamera = CadViewCamera(window.State());
@@ -2116,18 +2508,16 @@ private Q_SLOTS:
     const QImage rendered = viewport->grabFramebuffer();
     const QString evidenceDir = QtTestArtifactDirectory();
     QVERIFY(QDir().mkpath(evidenceDir));
-    QVERIFY(rendered.save(evidenceDir + "/req039-paper-offset-layout.png"));
-    float viewportX = 0.f, viewportY = 0.f;
-    paperCamera.WorldToScreen(layoutViewport.paperXIn + layoutViewport.paperWIn * 0.5,
-        layoutViewport.paperYIn + layoutViewport.paperHIn * 0.5, 0.f, static_cast<float>(viewport->width()),
-        static_cast<float>(viewport->height()), &viewportX, &viewportY);
-    const QPoint modelCenter(qRound(viewportX * viewport->devicePixelRatioF()),
-        qRound(viewportY * viewport->devicePixelRatioF()));
-    int litCenterPixels = 0;
-    for (int y = modelCenter.y() - 4; y <= modelCenter.y() + 4; ++y)
-      for (int x = modelCenter.x() - 4; x <= modelCenter.x() + 4; ++x)
-        if (rendered.rect().contains(x, y) && qGray(rendered.pixel(x, y)) > 40) ++litCenterPixels;
-    QVERIFY(litCenterPixels > 0);
+    QVERIFY(rendered.save(evidenceDir + "/req480-paper-viewport-clipping.png"));
+    auto pixelAtPaper = [&](float xIn, float yIn) {
+      float sx = 0.f, sy = 0.f;
+      paperCamera.WorldToScreen(xIn, yIn, 0.f, static_cast<float>(viewport->width()),
+          static_cast<float>(viewport->height()), &sx, &sy);
+      return rendered.pixelColor(qRound(sx * viewport->devicePixelRatioF()),
+          qRound(sy * viewport->devicePixelRatioF()));
+    };
+    QVERIFY(qGray(pixelAtPaper(6.f, 4.75f).rgb()) < 40); // inside: clipped viewport's black render background
+    QVERIFY(qGray(pixelAtPaper(9.f, 7.f).rgb()) > 200);  // outside the triangle, inside its bbox: sheet stays white
     QCOMPARE(window.State().paperLayouts[0].paperTexts[0].tableCells[3], std::string("24.5"));
     QVERIFY(spaces->count() >= 2);
   }

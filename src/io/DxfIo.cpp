@@ -228,6 +228,84 @@ struct DxfPair {
   std::string value;
 };
 
+bool FindSectionBounds(const std::vector<DxfPair>& t, const char* sectionNameCi, size_t* contentBegin,
+                       size_t* contentEnd);
+
+std::string NormalizeDxfHandle(std::string handle) {
+  handle = Trim(std::move(handle));
+  std::transform(handle.begin(), handle.end(), handle.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+  return handle;
+}
+
+std::unordered_map<std::string, std::string> BuildPlotStyleNamesByHandle(const std::vector<DxfPair>& pairs) {
+  std::unordered_map<std::string, std::string> result;
+  size_t begin = 0, end = 0;
+  if (!FindSectionBounds(pairs, "OBJECTS", &begin, &end))
+    return result;
+  std::string dictHandle;
+  for (size_t i = begin; i < end; ++i) {
+    if (pairs[i].code == 3 && EqCiStr(pairs[i].value, "ACAD_PLOTSTYLENAME")) {
+      for (size_t j = i + 1; j < end && pairs[j].code != 0; ++j)
+        if (pairs[j].code == 350) { dictHandle = Trim(pairs[j].value); break; }
+      break;
+    }
+  }
+  if (dictHandle.empty())
+    return result;
+  for (size_t i = begin; i < end; ++i) {
+    if (pairs[i].code != 0 || !EqCiStr(pairs[i].value, "ACDBDICTIONARYWDFLT"))
+      continue;
+    size_t j = i + 1;
+    while (j < end && pairs[j].code != 0) ++j;
+    std::string handle;
+    for (size_t k = i + 1; k < j; ++k)
+      if (pairs[k].code == 5) { handle = Trim(pairs[k].value); break; }
+    if (!EqCiStr(handle, dictHandle)) { i = j - 1; continue; }
+    std::string name;
+    for (size_t k = i + 1; k < j; ++k) {
+      if (pairs[k].code == 3) name = Trim(pairs[k].value);
+      else if (pairs[k].code == 350 && !name.empty()) {
+        result[NormalizeDxfHandle(pairs[k].value)] = name;
+        name.clear();
+      }
+    }
+    break;
+  }
+  return result;
+}
+
+void ApplyDxfLayerPlotStyles(const std::vector<DxfPair>& pairs,
+                            const std::unordered_map<std::string, std::string>& namesByHandle,
+                            AppCommandState& st) {
+  size_t begin = 0, end = 0;
+  if (!FindSectionBounds(pairs, "TABLES", &begin, &end)) return;
+  for (size_t i = begin; i < end; ++i) {
+    if (pairs[i].code != 0 || !EqCiStr(pairs[i].value, "LAYER")) continue;
+    size_t j = i + 1;
+    while (j < end && pairs[j].code != 0) ++j;
+    std::string name, styleHandle;
+    for (size_t k = i + 1; k < j; ++k) {
+      if (pairs[k].code == 2) name = Trim(pairs[k].value);
+      else if (pairs[k].code == 390) styleHandle = Trim(pairs[k].value);
+    }
+    const auto style = namesByHandle.find(NormalizeDxfHandle(std::move(styleHandle)));
+    if (!name.empty() && style != namesByHandle.end()) {
+      auto row = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                              [&](const CadLayerRow& r) { return EqCiStr(r.name, name); });
+      if (row == st.drawingLayerTable.end()) {
+        CadLayerRow added{};
+        added.name = name;
+        added.plotStyleName = style->second;
+        st.drawingLayerTable.push_back(std::move(added));
+      } else {
+        row->plotStyleName = style->second;
+      }
+    }
+    i = j - 1;
+  }
+}
+
 bool LoadDxfPairs(const std::filesystem::path& path, std::vector<DxfPair>* out, std::string* err) {
   out->clear();
   std::ifstream in(path, std::ios::binary);
@@ -689,12 +767,13 @@ void CollectBlockDefinitions(const std::vector<DxfPair>& t,
 
 void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t entEnd, AppCommandState& st,
                        const std::unordered_map<std::string, uint32_t>& layerRgb,
+                       const std::unordered_map<std::string, std::string>& plotStyleNamesByHandle,
                        const std::unordered_map<std::string, std::pair<size_t, size_t>>* blockDefs, const Affine2D& xf,
                        int insertDepth, double* coordMagMax, int* skippedPaper, int* skippedViewport,
                        int* skippedUnknown, std::unordered_map<std::string, int>* skipCounts,
                        std::vector<SurveyPoint>* embeddedPointsLocal,
                        const std::unordered_map<std::string, DxfTextStyle>* textStyles,
-                       int* degenerateExtrusionsOut) {
+                       int* degenerateExtrusionsOut, bool preserveInsertRefs = false) {
   // Counted here, reported once by the caller, in the shape the other four counters already use.
   const auto refuseDegenerateExtrusion = [&]() {
     if (degenerateExtrusionsOut)
@@ -1258,18 +1337,25 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     int c62{256};
     bool has420{false};
     int rgb420{0};
+    std::string plotStyleHandle;
     void parse(int code, const std::string& v) {
       if      (code ==   8) layer = v;
       else if (code ==   6) ltype = Trim(v);
       else if (code ==  62) ParseIntFlexible(v, &c62);
       else if (code == 420) has420 = ParseIntFlexible(v, &rgb420);
+      else if (code == 390) plotStyleHandle = Trim(v);
     }
-    EntityAttributes makeAttr(const std::unordered_map<std::string, uint32_t>& lrgb) const {
+    EntityAttributes makeAttr(const std::unordered_map<std::string, uint32_t>& lrgb,
+                              const std::unordered_map<std::string, std::string>& styles) const {
       EntityAttributes at{};
       at.layer = layer;
       at.color = EntityColorStorage(c62, has420, rgb420, layer, lrgb);
       if (!ltype.empty())
         at.linetype = CadCanonicalLinetypeNameForDxf(ltype);
+      if (!plotStyleHandle.empty()) {
+        const auto it = styles.find(NormalizeDxfHandle(plotStyleHandle));
+        if (it != styles.end()) at.plotStyleName = it->second;
+      }
       return at;
     }
   };
@@ -1348,7 +1434,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         continue;
       }
 
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       const int nv = static_cast<int>(verts.size());
       if (nv >= 2) {
         // REQ-316 / ADR-047: bulges are stored on the polyline now (group 42 -> per-vertex bulge),
@@ -1384,7 +1470,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 21) ParseDouble(v, &y1);
         else if (c == 31) ParseDouble(v, &z1);
       }
-      appendSegXF(x0, y0, x1, y1, base.makeAttr(layerRgb), z0, z1);  // groups 30/31 (REQ-057)
+      appendSegXF(x0, y0, x1, y1, base.makeAttr(layerRgb, plotStyleNamesByHandle), z0, z1);  // groups 30/31 (REQ-057)
       i = j;
       continue;
     }
@@ -1494,7 +1580,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         i = j;
         continue;
       }
-      appendCircleXF(w.x, w.y, rad, base.makeAttr(layerRgb), w.z, nx, ny, nz);  // group 30 (REQ-057)
+      appendCircleXF(w.x, w.y, rad, base.makeAttr(layerRgb, plotStyleNamesByHandle), w.z, nx, ny, nz);  // group 30 (REQ-057)
       i = j;
       continue;
     }
@@ -1517,7 +1603,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 220) ParseDouble(v, &ny);
         else if (c == 230) ParseDouble(v, &nz);
       }
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       ray3d::Vec3 w{cx, cy, cz};
       if (!DxfExtrusionIsFlat(nx, ny, nz) && !DxfOcsToWorld(cx, cy, cz, nx, ny, nz, &w)) {
         refuseDegenerateExtrusion();
@@ -1585,7 +1671,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         }
         if (spline::Validate(s).empty()) {
           st.cadSplines.push_back(std::move(s));
-          st.cadSplineAttrs.push_back(base.makeAttr(layerRgb));
+          st.cadSplineAttrs.push_back(base.makeAttr(layerRgb, plotStyleNamesByHandle));
           accepted = true;
         }
       }
@@ -1624,9 +1710,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       // Absent or +Z is the flat case every file wrote before, byte-identical through this path.
       if (IsFlatNormal(static_cast<float>(enx), static_cast<float>(eny), static_cast<float>(enz)) &&
           std::fabs(mz) <= 1e-12) {
-        appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
+        appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb, plotStyleNamesByHandle), cz);  // group 30 (REQ-057)
       } else {
-        appendTiltedEllipseXF(cx, cy, cz, mx, my, mz, enx, eny, enz, ratio, base.makeAttr(layerRgb));
+        appendTiltedEllipseXF(cx, cy, cz, mx, my, mz, enx, eny, enz, ratio, base.makeAttr(layerRgb, plotStyleNamesByHandle));
       }
       i = j;
       continue;
@@ -1657,7 +1743,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           ++nGoSurveyStrings;
         }
       }
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       if (isGoSurvey) {
         // REQ-023: reconstruct the survey point, applying the same INSERT transform + world-origin offset
         // used for geometry (so it lands 1:1, in precise local coords). Collected in a side buffer and
@@ -1772,7 +1858,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       an.styleName = styleRef;
       an.ovHeight = true;
       st.cadAnnotations.push_back(an);
-      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb));
+      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb, plotStyleNamesByHandle));
       i = j;
       continue;
     }
@@ -1863,7 +1949,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       an.insX = an.boxMinX;  // GoSurvey stores the box bottom-left as the insertion point
       an.insY = an.boxMinY;
       st.cadAnnotations.push_back(an);
-      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb));
+      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb, plotStyleNamesByHandle));
       i = j;
       continue;
     }
@@ -1887,7 +1973,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 16) ParseDouble(v, &px16);
         else if (c == 26) ParseDouble(v, &py16);
       }
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       auto finitePair = [](double x, double y) { return std::isfinite(x) && std::isfinite(y); };
       if (finitePair(px13, py13) && finitePair(px14, py14))
         appendSegXF(px13, py13, px14, py14, at);
@@ -1925,7 +2011,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           haveX = false;
         }
       }
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       if (anyPt && maxx > minx && maxy > miny && maxx - minx < 1e200 && maxy - miny < 1e200) {
         appendSegXF(minx, miny, maxx, miny, at);
         appendSegXF(maxx, miny, maxx, maxy, at);
@@ -1947,7 +2033,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         if      (c == 70) { int f = 0; if (ParseIntFlexible(v, &f)) solid = (f != 0); } // 70 = solid-fill flag
         else if (c ==  2) patName = Trim(v);
       }
-      const auto at = base.makeAttr(layerRgb);
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
       // ADR-011: a SOLID-fill hatch becomes filled region(s); a pattern hatch keeps the boundary outline.
       if (solid || EqCiStr(patName, "SOLID"))
         appendHatchSolidFills(i + 1, j, at);
@@ -1960,8 +2046,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     if (typ == "INSERT") {
       EntityBase base;
       std::string blk;
-      double ix = 0, iy = 0, sx = 1, sy = 1, rot = 0;
-      bool has41 = false, has42 = false;
+      double ix = 0, iy = 0, iz = 0, sx = 1, sy = 1, sz = 1, rot = 0;
+      bool has41 = false, has42 = false, has43 = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1969,13 +2055,16 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         if      (c ==  2) blk = Trim(v);
         else if (c == 10) ParseDouble(v, &ix);
         else if (c == 20) ParseDouble(v, &iy);
+        else if (c == 30) ParseDouble(v, &iz);
         else if (c == 41) { ParseDouble(v, &sx); has41 = true; }
         else if (c == 42) { ParseDouble(v, &sy); has42 = true; }
+        else if (c == 43) { ParseDouble(v, &sz); has43 = true; }
         else if (c == 50) ParseDouble(v, &rot);
       }
       if (!has41) sx = 1;
       if (!has42) sy = 1;
-      const auto at = base.makeAttr(layerRgb);
+      if (!has43) sz = 1;
+      const auto at = base.makeAttr(layerRgb, plotStyleNamesByHandle);
 
       if (!blockDefs || blk.empty() || insertDepth >= kMaxInsertDepth) {
         (*skippedUnknown)++;
@@ -2017,14 +2106,30 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         continue;
       }
 
+      if (preserveInsertRefs) {
+        CadBlockRef ref;
+        ref.defName = blk;
+        ref.xf.x = static_cast<float>(ix - st.worldDocumentOriginX);
+        ref.xf.y = static_cast<float>(iy - st.worldDocumentOriginY);
+        ref.xf.z = static_cast<float>(iz);
+        ref.xf.sx = static_cast<float>(sx);
+        ref.xf.sy = static_cast<float>(sy);
+        ref.xf.sz = static_cast<float>(sz);
+        ref.xf.rotZ = static_cast<float>(rot * (3.14159265358979323846 / 180.0));
+        st.cadBlockRefs.push_back(std::move(ref));
+        st.cadBlockRefAttrs.push_back(at);
+        i = j;
+        continue;
+      }
+
       const Affine2D ins = Affine2D::FromInsert(ix, iy, sx, sy, rot);
       const Affine2D nest = xf.compose(ins);
-      ParseEntityRegion(t, br.first, br.second, st, layerRgb, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
+      ParseEntityRegion(t, br.first, br.second, st, layerRgb, plotStyleNamesByHandle, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
                         skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal, textStyles,
                         degenerateExtrusionsOut);
       // Store the INSERT insertion point as a zero-length segment so snap can hit the exact
       // world coordinate — Civil 3D COGO points use INSERT entities whose center must be snap-able.
-      appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb));
+      appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb, plotStyleNamesByHandle));
       i = j;
       continue;
     }
@@ -2169,6 +2274,82 @@ void RegisterDxfTextStylesIntoDrawing(AppCommandState& st,
   }
 }
 
+void ImportDxfBlockDefinitions(const std::vector<DxfPair>& t,
+                               const std::unordered_map<std::string, std::pair<size_t, size_t>>& blockRanges,
+                               AppCommandState& st, const std::unordered_map<std::string, uint32_t>& layerRgb,
+                               const std::unordered_map<std::string, std::string>& plotStyleNamesByHandle,
+                               const std::unordered_map<std::string, DxfTextStyle>& textStyles,
+                               std::vector<std::string>& log) {
+  uint64_t nextId = 1;
+  for (const CadBlockDefinition& have : st.blockDefs)
+    nextId = std::max(nextId, have.id + 1);
+  const Affine2D identity{};
+  size_t imported = 0;
+  for (const auto& entry : blockRanges) {
+    const std::string& name = entry.first;
+    if (IsModelSpaceBlockName(name) || IsPaperSpaceBlockName(name))
+      continue;
+    if (std::any_of(st.blockDefs.begin(), st.blockDefs.end(), [&](const CadBlockDefinition& have) {
+          return EqCiStr(have.name, name);
+        }))
+      continue;
+
+    CadBlockDefinition def;
+    def.id = nextId++;
+    def.name = name;
+    const size_t begin = entry.second.first;
+    const size_t end = entry.second.second;
+    for (size_t k = begin; k < end && t[k].code != 0; ++k) {
+      double value = 0.0;
+      if (!ParseDouble(t[k].value, &value))
+        continue;
+      if (t[k].code == 10) def.baseX = static_cast<float>(value);
+      else if (t[k].code == 20) def.baseY = static_cast<float>(value);
+      else if (t[k].code == 30) def.baseZ = static_cast<float>(value);
+    }
+    AppCommandState scratch;
+    scratch.worldDocumentOriginX = 0.0;
+    scratch.worldDocumentOriginY = 0.0;
+    scratch.modelUnitsPerPlottedInch = 1.f;
+    double mag = 0.0;
+    int skPaper = 0, skVp = 0, skUnknown = 0, degenerate = 0;
+    std::unordered_map<std::string, int> skipCounts;
+    ParseEntityRegion(t, begin, end, scratch, layerRgb, plotStyleNamesByHandle, &blockRanges, identity, 0, &mag,
+                      &skPaper, &skVp, &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate,
+                      /*preserveInsertRefs=*/true);
+    auto& content = def.content;
+    content.lines.assign(scratch.userLinesFlat.begin(), scratch.userLinesFlat.end());
+    content.lineAttrs = std::move(scratch.userLineAttrs);
+    content.circles.assign(scratch.userCirclesCxCyZR.begin(), scratch.userCirclesCxCyZR.end());
+    content.circleAttrs = std::move(scratch.userCircleAttrs);
+    content.circleNormals = std::move(scratch.userCircleNormals);
+    content.arcs = std::move(scratch.userArcs);
+    content.arcAttrs = std::move(scratch.userArcAttrs);
+    content.ellipses = std::move(scratch.userEllipses);
+    content.ellAttrs = std::move(scratch.userEllAttrs);
+    content.polyOffsets = std::move(scratch.userPolylineOffsets);
+    content.polyVerts = std::move(scratch.userPolylineVerts);
+    content.polyVertsBulge = std::move(scratch.userPolylineVertsBulge);
+    content.polyClosed = std::move(scratch.userPolylineClosed);
+    content.polyAttrs = std::move(scratch.userPolylineAttrs);
+    content.texts = std::move(scratch.cadAnnotations);
+    content.textAttrs = std::move(scratch.cadAnnotationAttrs);
+    for (const CadBlockRef& ref : scratch.cadBlockRefs) {
+      CadBlockNested nested;
+      nested.defName = ref.defName;
+      nested.xf = ref.xf;
+      def.content.nested.push_back(std::move(nested));
+    }
+    if (skUnknown > 0 || degenerate > 0)
+      log.push_back("DXF import — block definition '" + name + "' skipped " + std::to_string(skUnknown) +
+                    " unsupported entity/entities and refused " + std::to_string(degenerate) + " malformed curve(s).");
+    st.blockDefs.push_back(std::move(def));
+    ++imported;
+  }
+  if (imported > 0)
+    log.push_back("DXF import — read " + std::to_string(imported) + " block definition(s) (REQ-113, issue #780).");
+}
+
 uint32_t AttrResolvedRgbPacked(const EntityAttributes& e,
                                const std::unordered_map<std::string, uint32_t>& layerRgbHint) {
   const std::string& c = e.color;
@@ -2269,6 +2450,7 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
                         const std::unordered_map<std::string, DxfTextStyle>& textStyles, bool hasEntitiesSec,
                         size_t eb, size_t ee, std::vector<std::string>& log) {
   constexpr double kPiD = 3.14159265358979323846;
+  const auto plotStyleNamesByHandle = BuildPlotStyleNamesByHandle(t);
   // --- layouts
   std::vector<DxfLayoutRec> recs;
   size_t ob = 0, oe = 0;
@@ -2444,14 +2626,66 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
   if (layouts.empty())
     return 0;
 
-  int nRead = 0, nOther = 0;
+  int nRead = 0;
+  std::unordered_map<std::string, int> unsupportedPaperCounts;
+  int malformedPaperCurves = 0;
   const Affine2D xfRoot{};
+  const auto normalizeHandle = [](std::string handle) {
+    std::transform(handle.begin(), handle.end(), handle.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return handle;
+  };
+  std::unordered_map<std::string, std::vector<Viewport::ClipVertex>> clipBoundaryByHandle;
+  std::unordered_set<std::string> viewportClipHandles;
+  for (const Rec& r : found) {
+    const std::string type = Trim(t[r.lo].value);
+    std::string handle;
+    if (EqCiNorm(type, "VIEWPORT")) {
+      for (size_t k = r.lo + 1; k < r.hi; ++k)
+        if (t[k].code == 340)
+          viewportClipHandles.insert(normalizeHandle(Trim(t[k].value)));
+      continue;
+    }
+    if (!EqCiNorm(type, "LWPOLYLINE"))
+      continue;
+    std::vector<Viewport::ClipVertex> points;
+    bool closed = false;
+    for (size_t k = r.lo + 1; k < r.hi; ++k) {
+      if (t[k].code == 5)
+        handle = normalizeHandle(Trim(t[k].value));
+      else if (t[k].code == 10) {
+        double x = 0.0;
+        if (ParseDouble(t[k].value, &x))
+          points.push_back({static_cast<float>(x), 0.f, 0.f});
+      } else if (t[k].code == 20 && !points.empty()) {
+        double y = 0.0;
+        if (ParseDouble(t[k].value, &y)) points.back().yIn = static_cast<float>(y);
+      } else if (t[k].code == 42 && !points.empty()) {
+        double bulge = 0.0;
+        if (ParseDouble(t[k].value, &bulge)) points.back().bulge = static_cast<float>(bulge);
+      } else if (t[k].code == 70) {
+        int flags = 0;
+        if (ParseIntFlexible(t[k].value, &flags)) closed = (flags & 1) != 0;
+      }
+    }
+    if (!handle.empty() && closed && points.size() >= 2)
+      clipBoundaryByHandle.emplace(std::move(handle), std::move(points));
+  }
   for (const Rec& r : found) {
     PaperLayout& L = layouts[static_cast<size_t>(r.layout)];
+    const std::string recordType = Trim(t[r.lo].value);
+    std::string recordHandle;
+    if (!EqCiNorm(recordType, "VIEWPORT")) {
+      for (size_t k = r.lo + 1; k < r.hi; ++k)
+        if (t[k].code == 5) { recordHandle = normalizeHandle(Trim(t[k].value)); break; }
+      if (!recordHandle.empty() && viewportClipHandles.count(recordHandle) != 0)
+        continue; // The invisible support polyline belongs to the VIEWPORT, not paper geometry.
+    }
     if (EqCiNorm(t[r.lo].value, "VIEWPORT")) {
       Viewport vp;
       double cx = 0, cy = 0, w = 0, h = 0, vcx = 0, vcy = 0, vh = 0, dx = 0, dy = 0, dz = 1, twist = 0;
       int id = 0, flags = 32768, onOff = 1;
+      std::string clipHandle;
       bool hasFlags = false;
       for (size_t k = r.lo + 1; k < r.hi; ++k) {
         const int c = t[k].code;
@@ -2468,6 +2702,8 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
           ParseIntFlexible(v, &onOff);
         else if (c == 69)
           ParseIntFlexible(v, &id);
+        else if (c == 340)
+          clipHandle = normalizeHandle(Trim(v));
         else if (c == 12)
           ParseDouble(v, &vcx);
         else if (c == 22)
@@ -2506,6 +2742,7 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
       vp.modelCenterY = vcy - st.worldDocumentOriginY;
       vp.on = onOff != 0 && (!hasFlags || (flags & 32768) != 0);
       vp.locked = hasFlags && (flags & 16384) != 0;
+      vp.hidePlot = hasFlags && (flags & 2048) != 0;
       const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
       if (len > 1e-9) {
         vp.camElevationDeg = static_cast<float>(std::asin(std::clamp(dz / len, -1.0, 1.0)) * (180.0 / kPiD));
@@ -2514,6 +2751,8 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
                                : static_cast<float>(std::atan2(-dx, -dy) * (180.0 / kPiD));
       }
       vp.camRollDeg = static_cast<float>(twist * (180.0 / kPiD));
+      if (const auto clip = clipBoundaryByHandle.find(clipHandle); clip != clipBoundaryByHandle.end())
+        vp.clipBoundary = clip->second;
       L.viewports.push_back(std::move(vp));
       ++nRead;
       continue;
@@ -2532,16 +2771,35 @@ int ImportDxfPaperSpace(const std::vector<DxfPair>& t, AppCommandState& st,
     double mag = 0;
     int skPaper = 0, skVp = 0, skUnknown = 0, degenerate = 0;
     std::unordered_map<std::string, int> skipCounts;
-    ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
-                      &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate);
+    ParseEntityRegion(sub, 0, sub.size(), scratch, layerRgb, plotStyleNamesByHandle, &blockDefs, xfRoot, 0, &mag, &skPaper, &skVp,
+                      &skUnknown, &skipCounts, nullptr, &textStyles, &degenerate, /*preserveInsertRefs=*/true);
+    for (const auto& skipped : skipCounts)
+      unsupportedPaperCounts[skipped.first] += skipped.second;
+    malformedPaperCurves += degenerate;
     AppendScratchToPaperLayout(L, scratch);
-    if (skUnknown > 0 || degenerate > 0)
-      ++nOther;
+    for (size_t refIndex = 0; refIndex < scratch.cadBlockRefs.size(); ++refIndex) {
+      const CadBlockRef& ref = scratch.cadBlockRefs[refIndex];
+      const auto duplicate = std::find_if(L.paperBlockRefs.begin(), L.paperBlockRefs.end(), [&](const CadBlockRef& have) {
+        return EqCiStr(have.defName, ref.defName) && have.xf.x == ref.xf.x && have.xf.y == ref.xf.y &&
+               have.xf.z == ref.xf.z && have.xf.sx == ref.xf.sx && have.xf.sy == ref.xf.sy &&
+               have.xf.sz == ref.xf.sz && have.xf.rotZ == ref.xf.rotZ;
+      });
+      if (duplicate != L.paperBlockRefs.end())
+        continue;
+      L.paperBlockRefs.push_back(ref);
+      if (refIndex < scratch.cadBlockRefAttrs.size())
+        L.paperBlockRefAttrs.push_back(scratch.cadBlockRefAttrs[refIndex]);
+      else
+        L.paperBlockRefAttrs.emplace_back();
+    }
     ++nRead;
   }
-  if (nOther > 0)
-    log.push_back("DXF import — " + std::to_string(nOther) + " paper-space entit" + (nOther == 1 ? "y" : "ies") +
-                  " of an unsupported type skipped.");
+  for (const auto& skipped : unsupportedPaperCounts)
+    log.push_back("DXF import — skipped paper-space \"" + skipped.first + "\" × " +
+                  std::to_string(skipped.second) + ".");
+  if (malformedPaperCurves > 0)
+    log.push_back("DXF import — refused " + std::to_string(malformedPaperCurves) +
+                  " malformed paper-space ARC/CIRCLE record(s) (zero-length extrusion).");
   st.paperLayouts = std::move(layouts);
   log.push_back("DXF import — " + std::to_string(st.paperLayouts.size()) + " paper layout(s), " +
                 std::to_string(nRead) + " paper-space entit" + (nRead == 1 ? "y" : "ies") + " (REQ-113).");
@@ -2563,6 +2821,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   std::unordered_map<std::string, uint32_t> layerRgb;
   BuildLayerRgbTable(pairs, &layerRgb, log);
+  const auto plotStyleNamesByHandle = BuildPlotStyleNamesByHandle(pairs);
 
   std::unordered_map<std::string, std::pair<size_t, size_t>> blockDefs;
   CollectBlockDefinitions(pairs, &blockDefs);
@@ -2589,6 +2848,8 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   const double oldOriginY = st.worldDocumentOriginY;
   ResetCadToolStateToIdle(st);
   ClearCadGeometry(st);  // zeroes the document origin and drops all annotations (incl. survey labels)
+  ImportDxfBlockDefinitions(pairs, blockDefs, st, layerRgb, plotStyleNamesByHandle, textStyles, log);
+  ApplyDxfLayerPlotStyles(pairs, plotStyleNamesByHandle, st);
   st.selectedSurveyPointIndices.clear();
   const bool hadExistingPoints = !st.surveyPoints.empty();
   if (hadExistingPoints) {
@@ -2718,9 +2979,9 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   std::vector<SurveyPoint> embeddedPoints;  // GOSURVEY XDATA points, local coords (rel. parse-time origin)
   const Affine2D xfRoot{};
   if (hasEntitiesSec)
-    ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
+    ParseEntityRegion(pairs, eb, ee, st, layerRgb, plotStyleNamesByHandle, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
                       &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles,
-                      &degenerateExtrusions);
+                      &degenerateExtrusions, /*preserveInsertRefs=*/true);
 
   // Polylines count as geometry. Before they had a sink of their own, a file holding nothing but
   // polylines still filled userLinesFlat; now it does not, and without this a polyline-only DXF
@@ -2738,9 +2999,9 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
     else if (noGeom)
       log.push_back("DXF import — ENTITIES empty after model-space filter; reading geometry from *MODEL_SPACE block.");
-    ParseEntityRegion(pairs, mb, me, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
+    ParseEntityRegion(pairs, mb, me, st, layerRgb, plotStyleNamesByHandle, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
                       &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles,
-                      &degenerateExtrusions);
+                      &degenerateExtrusions, /*preserveInsertRefs=*/true);
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
@@ -2866,6 +3127,12 @@ std::string DxfPaperBlockName(size_t layoutIdx) {
   return layoutIdx == 0 ? std::string("*Paper_Space") : "*Paper_Space" + std::to_string(layoutIdx - 1);
 }
 
+bool DxfBlockXformIsFinite(const CadBlockXform& xf) {
+  return std::isfinite(xf.x) && std::isfinite(xf.y) && std::isfinite(xf.z) && std::isfinite(xf.sx) &&
+         std::isfinite(xf.sy) && std::isfinite(xf.sz) && std::isfinite(xf.rotX) && std::isfinite(xf.rotY) &&
+         std::isfinite(xf.rotZ);
+}
+
 // Entities a layout writes. Counted by the same rule the writer uses, so the HANDSEED and the writer
 // cannot drift apart (a degenerate polyline is counted but not written: a gap in handles is legal).
 uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
@@ -2882,7 +3149,10 @@ uint64_t DxfPaperLayoutEntityCount(const PaperLayout& L) {
     nLeaderParts += 4 + static_cast<uint64_t>(std::max(tb.cols - 1, 0) + std::max(CadTableRowCount(tb) - 1, 0)) +
                     tb.cells.size();
   return L.paperLines.size() / 6 + L.paperCircles.size() / 3 + L.paperArcs.size() + L.paperEllipses.size() +
-         nPoly + L.paperTexts.size() + L.viewports.size() + L.paperFilledRegions.size() + nLeaderParts +
+         nPoly + L.paperTexts.size() + L.viewports.size() +
+         static_cast<uint64_t>(std::count_if(L.viewports.begin(), L.viewports.end(),
+             [](const Viewport& vp) { return vp.clipBoundary.size() >= 3; })) +
+         L.paperFilledRegions.size() + nLeaderParts + L.paperBlockRefs.size() +
          L.paperPoints.size() + L.paperSplines.size();
 }
 
@@ -2905,12 +3175,13 @@ void DxfTagPaperSpace(std::vector<DxfOutPair>* v, const std::string& layoutName)
 
 // Appends one layout's paper-space entities (REQ-113). Coordinates are paper inches and are written as
 // they are: no document-origin shift, because a sheet is not in the drawing's coordinate system.
-// Paper block references are NOT written: the DXF writer has no BLOCK-definition export (model space
-// either), so an INSERT would name a block the file does not contain. The caller logs them (REQ-201).
+// Entity properties and paper-space ownership tags follow the same rules for primitives and INSERTs.
 void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& L, const std::string& ownerHex,
                                   const std::unordered_map<std::string, uint32_t>& layerRgbHint,
                                   const std::unordered_map<std::string, std::string>& layerHandleHex,
-                                  uint64_t* nextHandle, std::vector<DxfOutPair>* out, size_t* nWritten) {
+                                  const std::unordered_set<std::string>& blockNames,
+                                  uint64_t* nextHandle, std::vector<DxfOutPair>* out, size_t* nWritten,
+                                  size_t* nBlockRefsSkipped) {
   constexpr double kPiD = 3.14159265358979323846;
   auto num = [](double v) { return std::to_string(v); };
   struct Common {
@@ -3135,8 +3406,32 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
       std::vector<DxfOutPair> v;
       DxfAppendTextRecord(rec, &v);
       DxfTagPaperSpace(&v, L.name);
-      flush(v);
+    flush(v);
+  }
+  }
+  for (size_t ri = 0; ri < L.paperBlockRefs.size(); ++ri) {
+    const CadBlockRef& ref = L.paperBlockRefs[ri];
+    const bool hasDefinition = std::any_of(blockNames.begin(), blockNames.end(), [&](const std::string& name) {
+      return EqCiStr(name, Trim(ref.defName));
+    });
+    if (!hasDefinition || !DxfBlockXformIsFinite(ref.xf)) {
+      if (nBlockRefsSkipped)
+        ++*nBlockRefsSkipped;
+      continue;
     }
+    std::vector<DxfOutPair> v;
+    begin(v, "INSERT", commonOf(attrAt(L.paperBlockRefAttrs, ri)));
+    v.push_back({100, "AcDbBlockReference"});
+    v.push_back({2, ref.defName});
+    v.push_back({10, num(ref.xf.x)});
+    v.push_back({20, num(ref.xf.y)});
+    v.push_back({30, num(ref.xf.z)});
+    v.push_back({41, num(ref.xf.sx)});
+    v.push_back({42, num(ref.xf.sy)});
+    v.push_back({43, num(ref.xf.sz)});
+    v.push_back({50, num(static_cast<double>(ref.xf.rotZ) * 180.0 / kPiD)});
+    flat(v);
+    flush(v);
   }
   // Issue #768: fills as solid HATCH, one boundary path per loop (the same shape model space writes).
   for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
@@ -3178,6 +3473,30 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
   }
   int vpId = 2;  // id 1 is the sheet's own viewport
   for (const Viewport& gv : L.viewports) {
+    std::string clipBoundaryHandle;
+    if (gv.clipBoundary.size() >= 3) {
+      clipBoundaryHandle = DxfHex(*nextHandle);
+      Common hiddenBoundary;
+      hiddenBoundary.layer = "0";
+      hiddenBoundary.ltype = "BYLAYER";
+      hiddenBoundary.aci = "256";
+      hiddenBoundary.lw = "-1";
+      std::vector<DxfOutPair> boundary;
+      begin(boundary, "LWPOLYLINE", hiddenBoundary);
+      boundary.push_back({60, "1"}); // clipping support geometry is invisible as a paper entity
+      boundary.push_back({100, "AcDbPolyline"});
+      boundary.push_back({90, std::to_string(gv.clipBoundary.size())});
+      boundary.push_back({70, "1"});
+      boundary.push_back({38, "0.0"});
+      for (const Viewport::ClipVertex& point : gv.clipBoundary) {
+        boundary.push_back({10, num(point.xIn)});
+        boundary.push_back({20, num(point.yIn)});
+        if (point.bulge != 0.f)
+          boundary.push_back({42, num(point.bulge)});
+      }
+      flat(boundary);
+      flush(boundary);
+    }
     EntityAttributes la;
     la.layer = gv.layer;
     std::vector<DxfOutPair> v;
@@ -3190,6 +3509,8 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     v.push_back({41, num(gv.paperHIn)});
     v.push_back({68, gv.on ? "1" : "0"});  // on / off
     v.push_back({69, std::to_string(vpId++)});
+    if (!clipBoundaryHandle.empty())
+      v.push_back({340, clipBoundaryHandle});
     const double cx = gv.modelCenterX + st.worldDocumentOriginX;
     const double cy = gv.modelCenterY + st.worldDocumentOriginY;
     v.push_back({12, num(cx)});
@@ -3208,8 +3529,9 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
     v.push_back({42, "50.0"});
     v.push_back({45, num(static_cast<double>(gv.paperHIn) * static_cast<double>(gv.safeScale()))});
     v.push_back({51, num(static_cast<double>(gv.camRollDeg) * (kPiD / 180.0))});  // view twist
-    // Status flags: 32768 = on, 16384 = display locked, 32 = UCS icon visible (the same bits the DWG keeps).
-    v.push_back({90, std::to_string(32 | (gv.on ? 32768 : 0) | (gv.locked ? 16384 : 0))});
+    // VIEWPORT status flags: 2048 = hide from plotting, 16384 = display locked, 32768 = on.
+    v.push_back({90, std::to_string(32 | (gv.hidePlot ? 2048 : 0) | (gv.locked ? 16384 : 0) |
+                                      (gv.on ? 32768 : 0))});
     for (const std::string& frozen : gv.frozenLayers) {
       const auto it = layerHandleHex.find(frozen);
       if (it != layerHandleHex.end())
@@ -3282,8 +3604,80 @@ void DxfAppendPaperLayoutEntities(const AppCommandState& st, const PaperLayout& 
       parts.paperTexts.push_back(ml.label);
       parts.paperTextAttrs.push_back(at);
     }
-    DxfAppendPaperLayoutEntities(st, parts, ownerHex, layerRgbHint, layerHandleHex, nextHandle, out, nWritten);
+    static const std::unordered_set<std::string> noBlockNames;
+    DxfAppendPaperLayoutEntities(st, parts, ownerHex, layerRgbHint, layerHandleHex, noBlockNames, nextHandle, out,
+                                 nWritten, nullptr);
   }
+}
+
+// Reuse the paper primitive writer for the two-dimensional geometry that block definitions own.
+// BLOCK entities have the same local coordinate tuples as a sheet but no group 67/410 tags.
+std::vector<DxfOutPair> DxfBlockDefinitionEntityPairs(const AppCommandState& st,
+                                                      const CadBlockDefinition& def,
+                                                      const std::string& ownerHex,
+                                                      const std::unordered_map<std::string, uint32_t>& layerRgbHint,
+                                                      const std::unordered_map<std::string, std::string>& layerHandleHex,
+                                                      const std::unordered_set<std::string>& nestedBlockNames,
+                                                      uint64_t* nextHandle, size_t* unsupportedCount) {
+  PaperLayout block;
+  block.name = "";
+  const CadBlockContent& src = def.content;
+  auto toFloat = [](const std::vector<double>& in, std::vector<float>* out) {
+    out->reserve(in.size());
+    for (double v : in)
+      out->push_back(static_cast<float>(v));
+  };
+  toFloat(src.lines, &block.paperLines);
+  block.paperLineAttrs = src.lineAttrs;
+  for (size_t i = 0; i + 3 < src.circles.size(); i += 4) {
+    if (std::fabs(src.circles[i + 2]) > 1e-6) {
+      ++*unsupportedCount;  // paper-space circle codec is planar; keep 3D blocks explicit in the loss log.
+      continue;
+    }
+    block.paperCircles.insert(block.paperCircles.end(), {static_cast<float>(src.circles[i]),
+                                                          static_cast<float>(src.circles[i + 1]),
+                                                          static_cast<float>(src.circles[i + 3])});
+    const size_t attrIndex = i / 4;
+    block.paperCircleAttrs.push_back(attrIndex < src.circleAttrs.size() ? src.circleAttrs[attrIndex]
+                                                                       : EntityAttributes{});
+  }
+  block.paperArcs = src.arcs;
+  block.paperArcAttrs = src.arcAttrs;
+  block.paperEllipses = src.ellipses;
+  block.paperEllAttrs = src.ellAttrs;
+  block.paperPolyOffsets = src.polyOffsets;
+  toFloat(src.polyVerts, &block.paperPolyVerts);
+  block.paperPolyVertsBulge = src.polyVertsBulge;
+  block.paperPolyClosed = src.polyClosed;
+  block.paperPolyAttrs = src.polyAttrs;
+  block.paperTexts = src.texts;
+  block.paperTextAttrs = src.textAttrs;
+  block.paperBlockRefs.reserve(src.nested.size());
+  for (const CadBlockNested& nested : src.nested) {
+    const bool isAllowed = std::any_of(nestedBlockNames.begin(), nestedBlockNames.end(),
+                                       [&](const std::string& name) { return EqCiStr(name, Trim(nested.defName)); });
+    if (!isAllowed || !DxfBlockXformIsFinite(nested.xf))
+      continue;
+    CadBlockRef ref;
+    ref.defName = nested.defName;
+    ref.xf = nested.xf;
+    ref.visState = nested.visState;
+    block.paperBlockRefs.push_back(std::move(ref));
+    block.paperBlockRefAttrs.push_back(EntityAttributes{});
+  }
+  std::vector<DxfOutPair> pairs;
+  size_t written = 0;
+  size_t skippedNestedRefs = 0;
+  DxfAppendPaperLayoutEntities(st, block, ownerHex, layerRgbHint, layerHandleHex, nestedBlockNames, nextHandle, &pairs,
+                               &written, &skippedNestedRefs);
+  pairs.erase(std::remove_if(pairs.begin(), pairs.end(), [](const DxfOutPair& p) {
+                return (p.code == 67 || p.code == 410) &&
+                       (p.code != 410 || p.value.empty());
+              }), pairs.end());
+  if (!src.meshes.empty() || !src.solids.empty())
+    *unsupportedCount += src.meshes.size() + src.solids.size();
+  *unsupportedCount += skippedNestedRefs;
+  return pairs;
 }
 
 bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
@@ -3293,6 +3687,72 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   }
   std::unordered_map<std::string, uint32_t> layerRgbHint;
   BuildExportLayerRgbHint(st, &layerRgbHint);
+
+  // Emit only block definitions reachable from a model, paper, or nested INSERT.
+  std::vector<size_t> dxfBlockDefIndices;
+  std::unordered_set<std::string> dxfBlockDefNames;
+  std::vector<std::unordered_set<std::string>> nestedBlockNamesByDefinition(st.blockDefs.size());
+  size_t missingNestedBlockRefs = 0;
+  size_t cyclicNestedBlockRefs = 0;
+  size_t limitedNestedBlockRefs = 0;
+  size_t invalidNestedBlockRefs = 0;
+  auto findBlockDef = [&](const std::string& name) -> size_t {
+    for (size_t i = 0; i < st.blockDefs.size(); ++i)
+      if (EqCiStr(Trim(st.blockDefs[i].name), Trim(name)))
+        return i;
+    return st.blockDefs.size();
+  };
+  auto blockNameKey = [](std::string name) {
+    name = Trim(std::move(name));
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return name;
+  };
+  // Include reachable definitions once, while retaining only nested edges that do not create a
+  // recursive BLOCK cycle. A cycle would make CAD renderers recurse indefinitely or report an
+  // invalid circular reference, so omit the offending edge and report it below.
+  std::unordered_set<std::string> activeBlockDefKeys;
+  std::function<void(size_t, size_t)> includeBlockDef = [&](size_t index, size_t depth) {
+    const std::string key = blockNameKey(st.blockDefs[index].name);
+    if (!dxfBlockDefNames.insert(key).second)
+      return;
+    dxfBlockDefIndices.push_back(index);
+    activeBlockDefKeys.insert(key);
+    for (const CadBlockNested& nested : st.blockDefs[index].content.nested) {
+      const size_t childIndex = findBlockDef(nested.defName);
+      if (nested.defName.empty() || childIndex == st.blockDefs.size()) {
+        ++missingNestedBlockRefs;
+        continue;
+      }
+      if (!DxfBlockXformIsFinite(nested.xf)) {
+        ++invalidNestedBlockRefs;
+        continue;
+      }
+      const std::string childKey = blockNameKey(st.blockDefs[childIndex].name);
+      if (activeBlockDefKeys.find(childKey) != activeBlockDefKeys.end()) {
+        ++cyclicNestedBlockRefs;
+        continue;
+      }
+      if (depth >= 16) {
+        ++limitedNestedBlockRefs;
+        continue;
+      }
+      nestedBlockNamesByDefinition[index].insert(st.blockDefs[childIndex].name);
+      includeBlockDef(childIndex, depth + 1);
+    }
+    activeBlockDefKeys.erase(key);
+  };
+  for (const CadBlockRef& ref : st.cadBlockRefs) {
+    const size_t index = findBlockDef(ref.defName);
+    if (index != st.blockDefs.size())
+      includeBlockDef(index, 0);
+  }
+  for (const PaperLayout& layout : st.paperLayouts)
+    for (const CadBlockRef& ref : layout.paperBlockRefs) {
+      const size_t index = findBlockDef(ref.defName);
+      if (index != st.blockDefs.size())
+        includeBlockDef(index, 0);
+    }
 
   std::unordered_set<std::string> layerNames;
   auto addLayerName = [&](const std::string& raw) {
@@ -3339,7 +3799,52 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     if (!lr.name.empty())
       addLayerName(lr.name);
   }
+  for (size_t di : dxfBlockDefIndices) {
+    const CadBlockContent& content = st.blockDefs[di].content;
+    for (const auto* attrs : {&content.lineAttrs, &content.circleAttrs, &content.arcAttrs, &content.ellAttrs,
+                              &content.polyAttrs, &content.textAttrs})
+      for (const EntityAttributes& at : *attrs)
+        addLayerName(at.layer);
+  }
+  for (const EntityAttributes& at : st.cadBlockRefAttrs)
+    addLayerName(at.layer);
+  for (const PaperLayout& layout : st.paperLayouts)
+    for (const EntityAttributes& at : layout.paperBlockRefAttrs)
+      addLayerName(at.layer);
   layerNames.insert("0");
+
+  std::unordered_map<std::string, std::string> layerHandleHex;
+  {
+    uint64_t lh = 0x10;
+    for (const std::string& layer : layerNames)
+      layerHandleHex[layer] = DxfHex(lh++);
+  }
+
+  std::vector<std::string> plotStyleNames{"Normal"};
+  auto addPlotStyleName = [&](const std::string& name) {
+    if (name.empty()) return;
+    if (std::none_of(plotStyleNames.begin(), plotStyleNames.end(), [&](const std::string& existing) { return EqCiStr(existing, name); }))
+      plotStyleNames.push_back(name);
+  };
+  auto collectPlotStyles = [&](const std::vector<EntityAttributes>& attrs) {
+    for (const EntityAttributes& at : attrs) addPlotStyleName(at.plotStyleName);
+  };
+  for (const CadLayerRow& layer : st.drawingLayerTable) addPlotStyleName(layer.plotStyleName);
+  for (const auto* attrs : {&st.userLineAttrs, &st.userCircleAttrs, &st.userArcAttrs, &st.userEllAttrs,
+                            &st.userPolylineAttrs, &st.featureLineAttrs, &st.cadAnnotationAttrs,
+                            &st.cadFilledRegionAttrs, &st.cadMeshAttrs, &st.cadPointCloudAttrs,
+                            &st.cadSurfaceAttrs, &st.cadSolidAttrs, &st.cadTableAttrs,
+                            &st.cadPositionMarkerAttrs, &st.cadMultileaderAttrs, &st.cadSplineAttrs,
+                            &st.cadPointAttrs, &st.cadPipeRunAttrs, &st.cadBlockRefAttrs})
+    collectPlotStyles(*attrs);
+  for (const PaperLayout& layout : st.paperLayouts)
+    for (const auto* attrs : {&layout.paperLineAttrs, &layout.paperCircleAttrs, &layout.paperArcAttrs,
+                              &layout.paperEllAttrs, &layout.paperPolyAttrs, &layout.paperTextAttrs,
+                              &layout.paperFilledRegionAttrs, &layout.paperMultileaderAttrs,
+                              &layout.paperTableAttrs, &layout.paperImageAttrs, &layout.paperBlockRefAttrs,
+                              &layout.paperPointAttrs})
+      collectPlotStyles(*attrs);
+  std::sort(plotStyleNames.begin() + 1, plotStyleNames.end());
 
   const size_t nSeg = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
@@ -3365,7 +3870,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // Registered APPID for survey-point XDATA (REQ-023, ADR-005). Appended at the end
   // of the symbol-handle range so no existing handle shifts.
   const uint64_t symGoSurveyAppid = symAfterLayers + 15;
-  const uint64_t lastSymHandle = symGoSurveyAppid;
+  const uint64_t symBlockRecordBase = symAfterLayers + 16;
+  const uint64_t lastSymHandle = symBlockRecordBase + static_cast<uint64_t>(dxfBlockDefIndices.size()) -
+                                 (dxfBlockDefIndices.empty() ? 1ull : 0ull);
+  std::unordered_map<std::string, std::string> dxfBlockRecordHandleByName;
+  for (size_t i = 0; i < dxfBlockDefIndices.size(); ++i)
+    dxfBlockRecordHandleByName[st.blockDefs[dxfBlockDefIndices[i]].name] = DxfHex(symBlockRecordBase + i);
 
   // Every store the writer below emits an entity from must be counted here, or its entities are
   // handed handles the OBJECTS block also owns (#71). Polylines and filled regions were missing:
@@ -3382,6 +3892,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
   uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
                                static_cast<uint64_t>(st.surveyPoints.size()) +
+                               static_cast<uint64_t>(st.cadBlockRefs.size()) +
                                static_cast<uint64_t>(nPoly) +
                                static_cast<uint64_t>(st.cadFilledRegions.size()) +
                                static_cast<uint64_t>(st.userArcs.size()) +
@@ -3430,11 +3941,44 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const uint64_t objPlotPlaceholder = objPlotDictWdflt + 1ull;
   // Paper-space handles (REQ-113): one ACAD_LAYOUT dictionary; per layout its entities and a LAYOUT
   // object, plus a block record and a BLOCK/ENDBLK pair for every layout after the first.
-  const uint64_t paperHandleBase = objPlotPlaceholder + 1ull;
+  const uint64_t paperHandleBase = objPlotPlaceholder + static_cast<uint64_t>(plotStyleNames.size());
   uint64_t paperHandleCount = st.paperLayouts.empty() ? 0ull : 2ull;  // dictionary + Model LAYOUT
   for (size_t li = 0; li < st.paperLayouts.size(); ++li)
     paperHandleCount += DxfPaperLayoutEntityCount(st.paperLayouts[li]) + 1ull + (li == 0 ? 0ull : 3ull);
-  const uint64_t handSeedVal = paperHandleBase + paperHandleCount;
+  struct PaperHandles {
+    uint64_t br = 0, b0 = 0, b1 = 0, layout = 0, ent = 0;
+  };
+  std::vector<PaperHandles> paperH;
+  uint64_t paperNext = paperHandleBase + 1ull;  // paperHandleBase itself is the ACAD_LAYOUT dictionary
+  const uint64_t modelLayoutHandle = st.paperLayouts.empty() ? 0ull : paperNext++;
+  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
+    PaperHandles x;
+    if (li == 0) {
+      x.br = symBrPaper;
+      x.b0 = symBlkPaper0;
+      x.b1 = symBlkPaper1;
+    } else {
+      x.br = paperNext++;
+      x.b0 = paperNext++;
+      x.b1 = paperNext++;
+    }
+    x.layout = paperNext++;
+    x.ent = paperNext;
+    paperNext += DxfPaperLayoutEntityCount(st.paperLayouts[li]);
+    paperH.push_back(x);
+  }
+  const uint64_t userBlockHandleBase = paperHandleBase + paperHandleCount;
+  uint64_t nextBlockEntityHandle = userBlockHandleBase + 2ull * dxfBlockDefIndices.size();
+  std::vector<std::vector<DxfOutPair>> blockDefinitionPairs(dxfBlockDefIndices.size());
+  size_t unsupportedBlockParts = 0;
+  for (size_t i = 0; i < dxfBlockDefIndices.size(); ++i) {
+    const CadBlockDefinition& def = st.blockDefs[dxfBlockDefIndices[i]];
+    blockDefinitionPairs[i] = DxfBlockDefinitionEntityPairs(
+        st, def, dxfBlockRecordHandleByName[def.name], layerRgbHint, layerHandleHex,
+        nestedBlockNamesByDefinition[dxfBlockDefIndices[i]], &nextBlockEntityHandle,
+        &unsupportedBlockParts);
+  }
+  const uint64_t handSeedVal = nextBlockEntityHandle;
   char handSeedBuf[24];
   std::snprintf(handSeedBuf, sizeof(handSeedBuf), "%llX", static_cast<unsigned long long>(handSeedVal));
 
@@ -3463,7 +4007,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   std::snprintf(hObjAcadGroup, sizeof(hObjAcadGroup), "%llX", static_cast<unsigned long long>(objDictAcadGroup));
   std::snprintf(hObjPlotDict, sizeof(hObjPlotDict), "%llX", static_cast<unsigned long long>(objPlotDictWdflt));
   std::snprintf(hObjPlotPh, sizeof(hObjPlotPh), "%llX", static_cast<unsigned long long>(objPlotPlaceholder));
-
+  const auto plotStyleHandleHex = [&](const std::string& name) {
+    for (size_t i = 0; i < plotStyleNames.size(); ++i)
+      if (EqCiStr(plotStyleNames[i], name)) return DxfHex(objPlotPlaceholder + static_cast<uint64_t>(i));
+    return std::string(hObjPlotPh);
+  };
   double extMnX = 0., extMxX = 0., extMnY = 0., extMxY = 0., extMnZ = 0., extMxZ = 0.;
   bool extAny = false;
   bool extZAny = false;
@@ -3919,7 +4467,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(9, "$DIMALT");
   emitPair(70, "0");
   emitPair(9, "$DIMALTD");
-  emitPair(70, "2");
+  emitPair(70, "0");
   emitPair(9, "$DIMALTF");
   emitPair(40, "25.4");
   emitPair(9, "$DIMLFAC");
@@ -4180,7 +4728,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(370, dxfLayerLineweight370Str(row));
     if (row)
       dxfEmitTransparency440IfNeeded(row->transparency);
-    emitPair(390, hObjPlotPh);
+    emitPair(390, plotStyleHandleHex(row ? row->plotStyleName : "Normal"));
   }
 
   emitPair(0, "ENDTAB");
@@ -4324,7 +4872,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(2, "BLOCK_RECORD");
   emitPair(5, hBrTab);
   emitPair(100, "AcDbSymbolTable");
-  emitPair(70, "2");
+  emitPair(70, std::to_string(2 + dxfBlockDefIndices.size()));
   emitPair(0, "BLOCK_RECORD");
   emitPair(5, hBrModel);
   emitPair(100, "AcDbSymbolTableRecord");
@@ -4341,51 +4889,31 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(70, "0");
   emitPair(280, "1");
   emitPair(281, "0");
-  // REQ-113: handles for every layout's block record, BLOCK/ENDBLK pair, LAYOUT object and entities.
-  struct PaperHandles {
-    uint64_t br = 0, b0 = 0, b1 = 0, layout = 0, ent = 0;
-  };
-  std::vector<PaperHandles> paperH;
-  uint64_t paperNext = paperHandleBase + 1ull;  // paperHandleBase itself is the ACAD_LAYOUT dictionary
-  const uint64_t modelLayoutHandle = st.paperLayouts.empty() ? 0ull : paperNext++;
-  for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
-    PaperHandles x;
-    if (li == 0) {
-      x.br = symBrPaper;
-      x.b0 = symBlkPaper0;
-      x.b1 = symBlkPaper1;
-    } else {
-      x.br = paperNext++;
-      x.b0 = paperNext++;
-      x.b1 = paperNext++;
-    }
-    x.layout = paperNext++;
-    x.ent = paperNext;
-    paperNext += DxfPaperLayoutEntityCount(st.paperLayouts[li]);
-    paperH.push_back(x);
+  if (!paperH.empty())
+    emitPair(340, DxfHex(paperH[0].layout));
+  for (size_t i = 0; i < dxfBlockDefIndices.size(); ++i) {
+    const CadBlockDefinition& def = st.blockDefs[dxfBlockDefIndices[i]];
+    emitPair(0, "BLOCK_RECORD");
+    emitPair(5, DxfHex(symBlockRecordBase + i));
+    emitPair(330, hBrTab);
+    emitPair(100, "AcDbSymbolTableRecord");
+    emitPair(100, "AcDbBlockTableRecord");
+    emitPair(2, def.name);
+    emitPair(70, "0");
+    emitPair(280, "1");
+    emitPair(281, "0");
   }
   // Entity records are built here, once: the first layout's go in ENTITIES (as AutoCAD writes them),
   // every later layout's go inside its own BLOCK definition (AutoCAD puts them on the wrong sheet if
   // they are all in ENTITIES — measured with accoreconsole).
-  // Layer name -> handle, in the order the LAYER table below numbers its rows (0x10 up, layerNames order),
-  // so a viewport's frozen-layer references (group 331) name the right layer record.
-  std::unordered_map<std::string, std::string> layerHandleHex;
-  {
-    uint64_t lh = 0x10;
-    for (const std::string& lyr : layerNames)
-      layerHandleHex[lyr] = DxfHex(lh++);
-  }
   std::vector<std::vector<DxfOutPair>> paperPairs(st.paperLayouts.size());
   size_t nPaperWritten = 0;
   size_t nPaperBlockRefsSkipped = 0;
   for (size_t li = 0; li < st.paperLayouts.size(); ++li) {
     uint64_t h = paperH[li].ent;
-    DxfAppendPaperLayoutEntities(st, st.paperLayouts[li], DxfHex(paperH[li].br), layerRgbHint, layerHandleHex, &h,
-                                 &paperPairs[li], &nPaperWritten);
-    nPaperBlockRefsSkipped += st.paperLayouts[li].paperBlockRefs.size();
+    DxfAppendPaperLayoutEntities(st, st.paperLayouts[li], DxfHex(paperH[li].br), layerRgbHint, layerHandleHex,
+                                 dxfBlockDefNames, &h, &paperPairs[li], &nPaperWritten, &nPaperBlockRefsSkipped);
   }
-  if (!paperH.empty())
-    emitPair(340, DxfHex(paperH[0].layout));
   for (size_t li = 1; li < paperH.size(); ++li) {
     emitPair(0, "BLOCK_RECORD");
     emitPair(5, DxfHex(paperH[li].br));
@@ -4461,6 +4989,30 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(8, "0");
     emitPair(100, "AcDbBlockEnd");
   }
+  for (size_t i = 0; i < dxfBlockDefIndices.size(); ++i) {
+    const CadBlockDefinition& def = st.blockDefs[dxfBlockDefIndices[i]];
+    const std::string recordHandle = dxfBlockRecordHandleByName[def.name];
+    emitPair(0, "BLOCK");
+    emitPair(5, DxfHex(userBlockHandleBase + 2ull * i));
+    emitPair(330, recordHandle);
+    emitPair(100, "AcDbEntity");
+    emitPair(8, "0");
+    emitPair(100, "AcDbBlockBegin");
+    emitPair(2, def.name);
+    emitPair(70, "0");
+    emitPair(10, std::to_string(def.baseX));
+    emitPair(20, std::to_string(def.baseY));
+    emitPair(30, std::to_string(def.baseZ));
+    emitPair(3, def.name);
+    for (const DxfOutPair& pp : blockDefinitionPairs[i])
+      emitPair(pp.code, pp.value);
+    emitPair(0, "ENDBLK");
+    emitPair(5, DxfHex(userBlockHandleBase + 2ull * i + 1ull));
+    emitPair(330, recordHandle);
+    emitPair(100, "AcDbEntity");
+    emitPair(8, "0");
+    emitPair(100, "AcDbBlockEnd");
+  }
   emitPair(0, "ENDSEC");
 
   emitPair(0, "SECTION");
@@ -4517,6 +5069,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(6, DxfExportEntityLtype6(at));
     emitPair(62, std::to_string(aci));
     emitPair(370, dxfEntityLineweight370Str(at));
+    if (!at.plotStyleName.empty())
+      emitPair(390, plotStyleHandleHex(at.plotStyleName));
     dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
   };
 
@@ -5569,6 +6123,35 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     ++nHatchOut;
   }
 
+  size_t nModelBlockRefsSkipped = 0;
+  for (size_t ri = 0; ri < st.cadBlockRefs.size(); ++ri) {
+    const CadBlockRef& ref = st.cadBlockRefs[ri];
+    if (findBlockDef(ref.defName) == st.blockDefs.size() || !DxfBlockXformIsFinite(ref.xf)) {
+      ++nModelBlockRefsSkipped;
+      continue;
+    }
+    const EntityAttributes at = ri < st.cadBlockRefAttrs.size() ? st.cadBlockRefAttrs[ri] : EntityAttributes{};
+    const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer);
+    const int aci = DxfNearestAciFromRgbPacked(AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu);
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    emitPair(0, "INSERT");
+    emitEntityHeader(hb, layer, at, aci, lyr);
+    emitPair(100, "AcDbBlockReference");
+    emitPair(2, ref.defName);
+    emitPair(10, std::to_string(worldX(ref.xf.x)));
+    emitPair(20, std::to_string(worldY(ref.xf.y)));
+    emitPair(30, std::to_string(ref.xf.z));
+    emitPair(41, std::to_string(ref.xf.sx));
+    emitPair(42, std::to_string(ref.xf.sy));
+    emitPair(43, std::to_string(ref.xf.sz));
+    emitPair(50, std::to_string(static_cast<double>(ref.xf.rotZ) * 180.0 / 3.14159265358979323846));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+  }
+
   // Paper space (REQ-113, issue #765): each layout's entities, owned by that layout's block record.
   {
     if (!paperPairs.empty())
@@ -5592,9 +6175,18 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         log.push_back("DXF export — " + std::to_string(nLeaders) +
                       " paper-space multileader(s) written as LINE segments plus text: DXF has no multileader here (REQ-113).");
     }
-    if (nPaperBlockRefsSkipped > 0)
-      log.push_back("DXF export — " + std::to_string(nPaperBlockRefsSkipped) +
-                    " paper-space block reference(s) not written: DXF export has no block definitions yet (REQ-113).");
+    if (nModelBlockRefsSkipped > 0 || nPaperBlockRefsSkipped > 0)
+      log.push_back("DXF export — skipped " + std::to_string(nModelBlockRefsSkipped) + " model-space and " +
+                    std::to_string(nPaperBlockRefsSkipped) +
+                    " paper-space INSERT(s) with a missing definition or non-finite transform (REQ-201).");
+    if (missingNestedBlockRefs > 0 || cyclicNestedBlockRefs > 0 || limitedNestedBlockRefs > 0 ||
+        invalidNestedBlockRefs > 0 || unsupportedBlockParts > 0)
+      log.push_back("DXF export — skipped " + std::to_string(missingNestedBlockRefs) +
+                    " nested INSERT(s) with missing definitions, " + std::to_string(cyclicNestedBlockRefs) +
+                    " cyclic nested INSERT(s), " + std::to_string(limitedNestedBlockRefs) +
+                    " nested INSERT(s) beyond the depth limit, " + std::to_string(invalidNestedBlockRefs) +
+                    " nested INSERT(s) with non-finite transforms, and " + std::to_string(unsupportedBlockParts) +
+                    " unsupported block member(s) (REQ-201).");
   }
 
   emitPair(0, "ENDSEC");
@@ -5630,8 +6222,17 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(281, "1");
   emitPair(3, "Normal");
   emitPair(350, hObjPlotPh);
+  for (size_t i = 1; i < plotStyleNames.size(); ++i) {
+    emitPair(3, plotStyleNames[i]);
+    emitPair(350, DxfHex(objPlotPlaceholder + static_cast<uint64_t>(i)));
+  }
   emitPair(100, "AcDbDictionaryWithDefault");
   emitPair(340, hObjPlotPh);
+  for (size_t i = 1; i < plotStyleNames.size(); ++i) {
+    emitPair(0, "ACDBPLACEHOLDER");
+    emitPair(5, DxfHex(objPlotPlaceholder + static_cast<uint64_t>(i)));
+    emitPair(330, hObjPlotDict);
+  }
   if (!paperH.empty()) {
     // REQ-113: the layout dictionary AutoCAD expects: "Model" plus one AcDbLayout per paper layout.
     emitPair(0, "DICTIONARY");

@@ -60,6 +60,13 @@ struct Viewport {
   float paperYIn = 1.f;
   float paperWIn = 10.f;  // rect size, paper inches
   float paperHIn = 7.5f;
+  struct ClipVertex {
+    float xIn = 0.f;
+    float yIn = 0.f;
+    float bulge = 0.f;
+  };
+  // REQ-480: optional copied paper-space clipping boundary. Empty keeps the rectangular fast path.
+  std::vector<ClipVertex> clipBoundary;
   double modelCenterX = 0.0;  // model-space point shown at the viewport's center
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
@@ -69,8 +76,9 @@ struct Viewport {
   VisualStyle visualStyle = VisualStyle::Wireframe2D;  // REQ-371 / #624: per-viewport draw style (DWG VISUALSTYLE)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
-  bool on = true;       // DWG VIEWPORT on/off (issue #768); carried through DWG, not yet enforced when drawing
-  bool locked = false;  // DWG 'display locked' flag (issue #768); carried through DWG, not yet enforced
+  bool on = true;       // DWG VIEWPORT on/off (issue #768, REQ-482); hides model content while off
+  bool locked = false;  // DWG display-lock flag (issue #768, REQ-482); prevents model-view navigation
+  bool hidePlot = false;  // REQ-482: visible in the editor, omitted from plotted output
   // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
   // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
   // viewport (on screen and in the plot). No entry = the layer's normal color.
@@ -411,6 +419,8 @@ struct PageSetup {
   float offsetXIn = 0.f;
   float offsetYIn = 0.f;
   bool  centerPlot = false;
+  /// Optional path to an existing CTB or STB file. Empty preserves current plot appearance.
+  std::string plotStyleTablePath;
 };
 
 /// REQ-457 / issue #1010: a raster IMAGE underlay on a sheet (JPEG, PNG or BMP). Stored by file path
@@ -425,6 +435,8 @@ struct CadRasterImage {
 
 struct PaperLayout {
   std::string name = "Layout1";
+  /// Optional path to an existing CTB or STB file; empty means current plot appearance (REQ-485).
+  std::string plotStyleTablePath;
   // Portrait dimensions in inches (width <= height); orientation chooses how they map to the sheet.
   float portraitWidthIn = kPaperSizePresets[kDefaultPaperPresetIdx].widthIn;
   float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
