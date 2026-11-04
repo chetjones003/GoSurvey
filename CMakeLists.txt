@@ -1231,6 +1231,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentStyleFieldTests.cpp
     tests/AlignmentFeatureLineTests.cpp
     tests/AlignmentProfileSeamTests.cpp
+    tests/AlignmentCogoTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

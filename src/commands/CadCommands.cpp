@@ -7221,6 +7221,10 @@ const CmdEntry kRegistry[] = {
     {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
     {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | CLEAR"},
     {"featurelinefromalignment", "", "Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>]"},
+    {"alignmentprops", "", "Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value>"},
+    {"alignmentinverse", "", "Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD]"},
+    {"alignmentbearing", "", "Bearing at a station: ALIGNMENTBEARING <alignment>, <station>"},
+    {"alignmentdistance", "", "Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y>"},
     {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
     {"alignmenttable", "", "Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
@@ -47092,6 +47096,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentintersect" ||
         plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
         plotTok == "alignmenttable" || plotTok == "editalignmentstyle" || plotTok == "featurelinefromalignment" ||
+        plotTok == "alignmentprops" || plotTok == "alignmentinverse" || plotTok == "alignmentbearing" ||
+        plotTok == "alignmentdistance" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47170,6 +47176,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunEditAlignmentStyle(st, rest, log);
       else if (plotTok == "featurelinefromalignment")
         RunFeatureLineFromAlignment(st, rest, log);
+      else if (plotTok == "alignmentprops")
+        RunAlignmentProps(st, rest, log);
+      else if (plotTok == "alignmentinverse")
+        RunAlignmentInverse(st, rest, log);
+      else if (plotTok == "alignmentbearing")
+        RunAlignmentBearing(st, rest, log);
+      else if (plotTok == "alignmentdistance")
+        RunAlignmentDistance(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

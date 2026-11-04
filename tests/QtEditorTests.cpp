@@ -932,6 +932,27 @@ private Q_SLOTS:
     QVERIFY(AlignmentStyles::Find(window.State().alignmentStyles, "Editor")->ticks.visible);
   }
 
+  void issue121PropertiesRenameTheAlignment() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT PRN1, , 0+00", "ALIGNMENTADD PRN1, TANGENT, 0, 0, 90, 300"}) window.Submit(line);
+    window.State().selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    auto* name = window.findChild<QLineEdit*>("propAlignmentName");
+    QVERIFY(name);
+    QCOMPARE(name->text(), QString("PRN1"));
+    name->setText("Renamed Road");
+    name->editingFinished();
+    QCOMPARE(window.State().alignments[0].name, std::string("Renamed Road"));
+    QTRY_VERIFY_WITH_TIMEOUT(window.findChild<QLineEdit*>("propAlignmentName") != nullptr &&
+                             window.findChild<QLineEdit*>("propAlignmentName")->text() == "Renamed Road", 5000);
+    window.Submit("UNDO");
+    QCOMPARE(window.State().alignments[0].name, std::string("PRN1"));
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

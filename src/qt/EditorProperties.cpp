@@ -18,6 +18,8 @@
 #include "util/NumFormat.hpp"
 
 #include <QColorDialog>
+#include <QTimer>
+#include <cstdio>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDockWidget>
@@ -200,6 +202,23 @@ void EditorWindow::RefreshProperties() {
     outer->addLayout(fieldRow, 1);
     grid->addWidget(row);
     return row;
+  };
+  // REQ-501.1: an editable Properties field. Committing runs ALIGNMENTPROPS, so validation and undo match the command line.
+  // The panel is rebuilt on the next event-loop turn, not inside the edit's own signal.
+  auto editableAlignmentField = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name,
+                                    const char* field, const std::string& alignmentName) {
+    auto* edit = new QLineEdit(value, body);
+    edit->setObjectName(name);
+    QObject::connect(edit, &QLineEdit::editingFinished, body, [this, edit, field, alignmentName]() {
+      const std::string command = "ALIGNMENTPROPS " + alignmentName + ", " + field + ", " + edit->text().toUtf8().toStdString();
+      char buf[1024];
+      std::snprintf(buf, sizeof buf, "%s", command.c_str());
+      std::vector<std::string> out;
+      ProcessCommandLineSubmit(buf, sizeof buf, m_State, out);
+      for (const std::string& line : out) m_Log.push_back(line);
+      QTimer::singleShot(0, this, [this]() { RefreshProperties(); });
+    });
+    addRow(grid, label, edit);
   };
   auto readOnly = [&](QVBoxLayout* grid, const QString& label, const QString& value, const char* name) {
     auto* text = new QLabel(value, body);
@@ -615,16 +634,26 @@ void EditorWindow::RefreshProperties() {
       const alignment::Alignment& al = st.alignments[static_cast<size_t>(index)];
       auto* rows = section("Alignment", "propertiesAlignment");
       static const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
-      readOnly(rows, "Name", Text(al.name), "propAlignmentName");
-      readOnly(rows, "Description", Text(al.description), "propAlignmentDescription");
+      editableAlignmentField(rows, "Name", Text(al.name), "propAlignmentName", "NAME", al.name);
+      editableAlignmentField(rows, "Description", Text(al.description), "propAlignmentDescription", "DESCRIPTION", al.name);
       readOnly(rows, "Type", kTypeNames[static_cast<int>(al.type)], "propAlignmentType");
-      readOnly(rows, "Style", Text(al.style), "propAlignmentStyle");
-      readOnly(rows, "Layer", Text(al.layer), "propAlignmentLayer");
+      editableAlignmentField(rows, "Style", Text(al.style), "propAlignmentStyle", "STYLE", al.name);
+      editableAlignmentField(rows, "Layer", Text(al.layer), "propAlignmentLayer", "LAYER", al.name);
+      // Offsets name their parent by id (REQ-488); design criteria are not built yet (REQ-502).
+      QString parentName = QStringLiteral("(none)");
+      if (al.parentId != 0) {
+        for (const alignment::Alignment& other : st.alignments) {
+          if (other.id == al.parentId) parentName = Text(other.name);
+        }
+      }
+      readOnly(rows, "Parent alignment", parentName, "propAlignmentParent");
+      readOnly(rows, "Design criteria", QStringLiteral("not configured (REQ-502)"), "propAlignmentDesignCriteria");
       if (!al.Empty()) {
         const double ox = CadCoord::WorldOriginX(st), oy = CadCoord::WorldOriginY(st);
         const AngleDisplaySettings angles = CadAngleDisplaySettings(st);
         constexpr double kRadToDeg = 180.0 / alignment::kPi;
-        readOnly(rows, "Start station", Text(alignment::FormatStation(al.StartStation())), "propAlignmentStartStation");
+        editableAlignmentField(rows, "Start station", Text(alignment::FormatStation(al.StartStation())), "propAlignmentStartStation",
+                               "START", al.name);
         readOnly(rows, "End station", Text(alignment::FormatStation(al.EndStationWithEquations())), "propAlignmentEndStation");
         readOnly(rows, "Length", fmt(al.Length()), "propAlignmentLength");
         readOnly(rows, "Start coordinate", fmt(al.StartPoint().x + ox) + ", " + fmt(al.StartPoint().y + oy),

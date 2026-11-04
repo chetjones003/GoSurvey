@@ -8100,6 +8100,10 @@ void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::ve
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-500: QUICKPROFILE <surface>, <alignment>. False only when no alignment has that name.
 bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfaceName, const std::string& alignmentName,
                                    std::vector<std::string>& log);

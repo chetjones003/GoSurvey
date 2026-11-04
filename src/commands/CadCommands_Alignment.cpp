@@ -362,10 +362,25 @@ void RunAlignmentDelete(AppCommandState& st, const std::string& args, std::vecto
 void RunGetStationOffset(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   double x = 0.0, y = 0.0;
-  if (f.size() != 3 || !ParseNum(f[1], &x) || !ParseNum(f[2], &y)) {
-    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>, <x>, <y>.");
+  if (f.size() == 3 && Lower(f[1]) == "point") {  // REQ-501.3: a survey point, by its point number
+    double number = 0.0;
+    if (!ParseNum(f[2], &number)) {
+      log.push_back("GETSTATIONOFFSET - the point number must be a number.");
+      return;
+    }
+    const auto point = std::find_if(st.surveyPoints.begin(), st.surveyPoints.end(),
+                                    [&](const SurveyPoint& p) { return p.id == static_cast<int>(number); });
+    if (point == st.surveyPoints.end()) {
+      log.push_back("GETSTATIONOFFSET - no survey point numbered " + f[2] + ".");
+      return;
+    }
+    x = point->easting;  // the survey point's coordinates are world, and so is the query
+    y = point->northing;
+  } else if (f.size() != 3 || !ParseNum(f[1], &x) || !ParseNum(f[2], &y)) {
+    log.push_back("GETSTATIONOFFSET - usage: GETSTATIONOFFSET <alignment>, <x>, <y> | <alignment>, POINT, <number>.");
     return;
   }
+
   alignment::Alignment* a = Resolve(st, "GETSTATIONOFFSET", f[0], log);
   if (a == nullptr) return;
   if (a->Empty()) {
@@ -2322,4 +2337,185 @@ bool RunQuickProfileAlongAlignment(AppCommandState& st, const std::string& surfa
                 ", " + std::to_string(st.quickProfile.samples.size()) + " sample(s), " + std::to_string(hits) +
                 " on surface, elev " + FormatLinear(minZ, p) + " to " + FormatLinear(maxZ, p) + ".");
   return true;
+}
+
+// ======================================================================================================
+// REQ-501: alignment properties and COGO (issue #121 Phase 5).
+// ======================================================================================================
+
+// ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value>   (REQ-501.1)
+// The editable Properties fields. Names stay unique; a style must exist; the start station cannot change while the
+// alignment has station equations, because the equations are stated against the old stations (REQ-483.1).
+void RunAlignmentProps(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 3) {
+    log.push_back("ALIGNMENTPROPS - usage: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value>.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTPROPS", f[0], log);
+  if (a == nullptr) return;
+  const std::string field = Lower(f[1]);
+  const std::string value = Trim(f[2]);
+  alignment::Alignment edited = *a;
+  if (field == "name") {
+    if (value.empty()) {
+      log.push_back("ALIGNMENTPROPS - the name cannot be empty.");
+      return;
+    }
+    if (FindAlignment(st, value) >= 0 && Lower(value) != Lower(a->name)) {
+      log.push_back("ALIGNMENTPROPS - an alignment named \"" + value + "\" already exists; names must be unique.");
+      return;
+    }
+    edited.name = value;
+  } else if (field == "description") {
+    edited.description = value;
+  } else if (field == "style") {
+    if (AlignmentStyles::Find(st.alignmentStyles, value) == nullptr) {
+      log.push_back("ALIGNMENTPROPS - no style named \"" + value + "\".");
+      return;
+    }
+    edited.style = value;
+  } else if (field == "layer") {
+    if (value.empty()) {
+      log.push_back("ALIGNMENTPROPS - the layer cannot be empty.");
+      return;
+    }
+    edited.layer = value;
+  } else if (field == "start") {
+    double sta = 0.0;
+    if (!alignment::ParseStation(value, &sta)) {
+      log.push_back("ALIGNMENTPROPS - \"" + value + "\" is not a station.");
+      return;
+    }
+    if (!edited.equations.empty()) {
+      log.push_back("ALIGNMENTPROPS - \"" + a->name + "\" has " + std::to_string(edited.equations.size()) +
+                    " station equation(s), stated against the current stations. Remove them with ALIGNMENTSTATION first.");
+      return;
+    }
+    edited.startingStation = sta;
+  } else {
+    log.push_back("ALIGNMENTPROPS - field must be NAME, DESCRIPTION, STYLE, LAYER or START, not \"" + f[1] + "\".");
+    return;
+  }
+  const bool same = edited.name == a->name && edited.description == a->description && edited.style == a->style &&
+                    edited.layer == a->layer && edited.startingStation == a->startingStation;
+  if (same) {
+    log.push_back("ALIGNMENTPROPS - " + f[1] + " is already \"" + value + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Alignment properties");
+  *Resolve(st, "ALIGNMENTPROPS", f[0], log) = std::move(edited);
+  BumpCadGpuCache(st);
+  log.push_back("ALIGNMENTPROPS - \"" + value + "\" set as the " + f[1] + ".");
+}
+
+// ALIGNMENTINVERSE <alignment>, STA, <station1>, <station2>[, CHORD]     stations as displayed (12+45.32)
+//                  <alignment>, PT, <x1>, <y1>, <x2>, <y2>[, CHORD]     points, projected onto the alignment (REQ-501.3)
+// Reports the distance along the alignment between the two stations (the arc length for a curve). CHORD also gives the
+// straight distance between the two points, which the spec's option asks for.
+void RunAlignmentInverse(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "ALIGNMENTINVERSE - usage: ALIGNMENTINVERSE <alignment>, STA, <station1>, <station2>[, CHORD] | "
+      "<alignment>, PT, <x1>, <y1>, <x2>, <y2>[, CHORD].";
+  if (f.size() < 4) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTINVERSE", f[0], log);
+  if (a == nullptr) return;
+  if (a->Empty()) {
+    log.push_back("ALIGNMENTINVERSE - \"" + a->name + "\" has no geometry.");
+    return;
+  }
+  const std::string mode = Lower(f[1]);
+  const bool chordWanted = Lower(f.back()) == "chord";
+  double internal1 = 0.0, internal2 = 0.0;
+  double px1 = 0.0, py1 = 0.0, px2 = 0.0, py2 = 0.0;
+  if (mode == "sta" && (f.size() == 4 || (f.size() == 5 && chordWanted))) {
+    double s1 = 0.0, s2 = 0.0;
+    if (!alignment::ParseStation(f[2], &s1) || !alignment::ParseStation(f[3], &s2)) {
+      log.push_back("ALIGNMENTINVERSE - the stations must be stations (12+45.32).");
+      return;
+    }
+    const std::vector<double> r1 = a->RawStationsForDisplayed(s1), r2 = a->RawStationsForDisplayed(s2);
+    if (r1.empty() || r2.empty()) {
+      log.push_back("ALIGNMENTINVERSE - a station is outside \"" + a->name + "\".");
+      return;
+    }
+    internal1 = r1.front();
+    internal2 = r2.front();
+    const alignment::Point2 p1 = a->GetPointAtStation(internal1), p2 = a->GetPointAtStation(internal2);
+    px1 = p1.x; py1 = p1.y; px2 = p2.x; py2 = p2.y;
+  } else if (mode == "pt" && (f.size() == 6 || (f.size() == 7 && chordWanted))) {
+    double x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0;
+    if (!ParseNum(f[2], &x1) || !ParseNum(f[3], &y1) || !ParseNum(f[4], &x2) || !ParseNum(f[5], &y2)) {
+      log.push_back("ALIGNMENTINVERSE - the points must be two numbers each.");
+      return;
+    }
+    double lx1 = 0.0, ly1 = 0.0, lx2 = 0.0, ly2 = 0.0;
+    CadCoord::LocalFromWorld(st, x1, y1, &lx1, &ly1);
+    CadCoord::LocalFromWorld(st, x2, y2, &lx2, &ly2);
+    internal1 = a->GetStationOffset(lx1, ly1).internalStation;
+    internal2 = a->GetStationOffset(lx2, ly2).internalStation;
+    const alignment::Point2 p1 = a->GetPointAtStation(internal1), p2 = a->GetPointAtStation(internal2);
+    px1 = p1.x; py1 = p1.y; px2 = p2.x; py2 = p2.y;
+  } else {
+    log.push_back(usage);
+    return;
+  }
+  const double arc = std::fabs(internal2 - internal1);
+  const double chord = std::hypot(px2 - px1, py2 - py1);
+  const int p = st.displayLinearPrecision;
+  std::string line = "ALIGNMENTINVERSE - \"" + a->name + "\" from station " +
+                     alignment::FormatStation(a->DisplayedStation(internal1, true)) + " to " +
+                     alignment::FormatStation(a->DisplayedStation(internal2, true)) + ": distance along " + FormatLinear(arc, p);
+  if (chordWanted) line += ", chord " + FormatLinear(chord, p);
+  log.push_back(line + ".");
+}
+
+// ALIGNMENTBEARING <alignment>, <station>   the direction of travel at a station (REQ-501.3)
+void RunAlignmentBearing(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  if (f.size() != 2) {
+    log.push_back("ALIGNMENTBEARING - usage: ALIGNMENTBEARING <alignment>, <station>.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTBEARING", f[0], log);
+  if (a == nullptr) return;
+  double displayed = 0.0;
+  if (!alignment::ParseStation(f[1], &displayed)) {
+    log.push_back("ALIGNMENTBEARING - \"" + f[1] + "\" is not a station.");
+    return;
+  }
+  const std::vector<double> raws = a->RawStationsForDisplayed(displayed);
+  if (raws.empty()) {
+    log.push_back("ALIGNMENTBEARING - station " + alignment::FormatStation(displayed) + " is outside \"" + a->name + "\".");
+    return;
+  }
+  const double az = a->GetBearingAtStation(raws.front());
+  log.push_back("ALIGNMENTBEARING - \"" + a->name + "\" at " + alignment::FormatStation(displayed) + ": " +
+                FormatBearing(az * 180.0 / alignment::kPi, CadAngleDisplaySettings(st)) + ".");
+}
+
+// ALIGNMENTDISTANCE <alignment>, <x>, <y>   the distance along the alignment to the point nearest (x, y) (REQ-501.3)
+void RunAlignmentDistance(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  double x = 0.0, y = 0.0;
+  if (f.size() != 3 || !ParseNum(f[1], &x) || !ParseNum(f[2], &y)) {
+    log.push_back("ALIGNMENTDISTANCE - usage: ALIGNMENTDISTANCE <alignment>, <x>, <y>.");
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "ALIGNMENTDISTANCE", f[0], log);
+  if (a == nullptr) return;
+  if (a->Empty()) {
+    log.push_back("ALIGNMENTDISTANCE - \"" + a->name + "\" has no geometry.");
+    return;
+  }
+  double lx = 0.0, ly = 0.0;
+  CadCoord::LocalFromWorld(st, x, y, &lx, &ly);
+  const alignment::StationOffset so = a->GetStationOffset(lx, ly);
+  log.push_back("ALIGNMENTDISTANCE - \"" + a->name + "\": " + FormatLinear(a->GetDistanceAlongAlignment(lx, ly), st.displayLinearPrecision) +
+                " along from the start, nearest at station " + alignment::FormatStation(a->DisplayedStation(so.internalStation, true)) +
+                (so.outOfRange ? " (beyond an end)" : "") + ".");
 }

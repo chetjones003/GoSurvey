@@ -187,6 +187,10 @@ for a compact list inside the program.
 | `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
 | `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
 | `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
+| `ALIGNMENTPROPS` | — | Alignment properties: ALIGNMENTPROPS <alignment>, NAME|DESCRIPTION|STYLE|LAYER|START, <value> | [[Commands/alignmentprops]] |
+| `ALIGNMENTINVERSE` | — | Distance along an alignment: ALIGNMENTINVERSE <alignment>, STA|PT, ... [, CHORD] | [[Commands/alignmentinverse]] |
+| `ALIGNMENTBEARING` | — | Bearing at a station: ALIGNMENTBEARING <alignment>, <station> | [[Commands/alignmentbearing]] |
+| `ALIGNMENTDISTANCE` | — | Distance along an alignment to a point: ALIGNMENTDISTANCE <alignment>, <x>, <y> | [[Commands/alignmentdistance]] |
 
 ### Surfaces and volumes
 
@@ -306,15 +310,19 @@ for a compact list inside the program.
 | `ALIGN` | `AL` | [[Commands/align]] |
 | `ALIGNMENT` | `CREATEALIGNMENT` | [[Commands/alignment]] |
 | `ALIGNMENTADD` | — | [[Commands/alignmentadd]] |
+| `ALIGNMENTBEARING` | — | [[Commands/alignmentbearing]] |
 | `ALIGNMENTCONTINUITY` | — | [[Commands/alignmentcontinuity]] |
 | `ALIGNMENTDELETE` | — | [[Commands/alignmentdelete]] |
 | `ALIGNMENTDETACH` | — | [[Commands/alignmentdetach]] |
+| `ALIGNMENTDISTANCE` | — | [[Commands/alignmentdistance]] |
 | `ALIGNMENTEDIT` | — | [[Commands/alignmentedit]] |
 | `ALIGNMENTINSERT` | — | [[Commands/alignmentinsert]] |
 | `ALIGNMENTINTERSECT` | — | [[Commands/alignmentintersect]] |
+| `ALIGNMENTINVERSE` | — | [[Commands/alignmentinverse]] |
 | `ALIGNMENTLABEL` | — | [[Commands/alignmentlabel]] |
 | `ALIGNMENTLIST` | — | [[Commands/alignmentlist]] |
 | `ALIGNMENTLOCK` | — | [[Commands/alignmentlock]] |
+| `ALIGNMENTPROPS` | — | [[Commands/alignmentprops]] |
 | `ALIGNMENTREMOVE` | — | [[Commands/alignmentremove]] |
 | `ALIGNMENTREPORT` | — | [[Commands/alignmentreport]] |
 | `ALIGNMENTSTATION` | — | [[Commands/alignmentstation]] |
