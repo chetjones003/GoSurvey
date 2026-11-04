@@ -1,3 +1,5 @@
+#include "AlignmentStyle.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "AdjustmentWindow.hpp"
 #include "EditorWindow.hpp"
 #include "DrawingDocumentTabBar.hpp"
@@ -720,6 +722,89 @@ private Q_SLOTS:
     window.Refresh();
     QTest::qWait(150);
     QVERIFY(window.grab().save(Issue914Shot("qt-803-spline-selected.png")));
+  }
+
+  void issue121Phase6DesignScreenshots() {
+    // REQ-502 surfaces for the visual panel: the viewport flag, the layout table's Design check column, and the style
+    // dialog's Design tab. Captures go to build/artifacts/ only.
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+
+    std::vector<std::string> log;
+    const auto run = [&](const char* text) {
+      char buf[256];
+      std::snprintf(buf, sizeof buf, "%s", text);
+      ProcessCommandLineSubmit(buf, sizeof buf, window.State(), log);
+    };
+    run("ALIGNMENT Main Road, Two-lane road, 5+00");
+    run("ALIGNMENTADD Main Road, TANGENT, -120, -40, 70, 90");
+    run("ALIGNMENTADD Main Road, CURVE, 80, 75, RIGHT");
+    run("ALIGNMENTADD Main Road, TANGENT, 60");
+    run("ALIGNMENTCHECKSET NEW, Rural");
+    run("ALIGNMENTCHECKSET SET, Rural, RADIUS, 40, 120");
+    run("ALIGNMENTSPEED Main Road, 5+00, 40");
+    run("ALIGNMENTSTYLE NEW, Wide");
+    run("ALIGNMENTSTYLE SET, Wide, CHECKSET, Rural");
+    run("ALIGNMENTSTYLE ASSIGN, Main Road, Wide");
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    run("ZOOMEXTENTS");
+    window.Refresh();
+    window.m_Viewport->update();
+    QTRY_VERIFY_WITH_TIMEOUT(!window.State().pendingZoomExtents, 10000);
+    QTest::qWait(250);
+
+    {  // The flag is drawn from these lookups: the effective criteria (the style's, as the alignment has none), then the findings.
+      const alignment::Alignment& flagged = window.State().alignments[0];
+      const std::string criteria = AlignmentStyles::EffectiveCheckSetName(window.State().alignmentStyles, flagged);
+      QCOMPARE(QString::fromStdString(criteria), QString("Rural"));
+      const alignment::AlignmentCheckSet* set = alignment::FindCheckSet(window.State().alignmentCheckSets, criteria);
+      QVERIFY(set != nullptr);
+      QVERIFY(!alignment::CheckDesign(flagged, *set, window.State().displayLinearPrecision).empty());
+    }
+    // The viewport is a GL widget: the framebuffer holds the painter overlay (the flag), a plain window grab does not.
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-502-viewport-flag.png")));
+
+    bool layoutChecked = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentLayoutDialog");
+      QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* table = dialog->findChild<QTableWidget*>("alignmentLayoutTable");
+      QVERIFY(table);
+      // The Design check column names the failing curve (entity 2) and nothing else.
+      QCOMPARE(table->columnCount(), 12);
+      QVERIFY(table->item(1, 11)->text().contains("below the selected minimum design radius"));
+      QVERIFY(table->item(0, 11)->text().isEmpty());
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-502-layout-design-check.png")));
+      layoutChecked = true;
+      dialog->reject();
+    });
+    window.Submit("EDITALIGNMENT Main Road");
+    QVERIFY(layoutChecked);
+
+    bool styleChecked = false;
+    QTimer::singleShot(0, &window, [&] {
+      auto* dialog = window.findChild<QDialog*>("alignmentStyleDialog");
+      QVERIFY(dialog);
+      QTimer::singleShot(20000, dialog, &QDialog::reject);
+      auto* combo = dialog->findChild<QComboBox*>("alignmentStyleCheckSet");
+      QVERIFY(combo);
+      QCOMPARE(combo->currentText(), QString("Rural"));
+      auto* tabs = dialog->findChild<QTabWidget*>("alignmentStyleTabs");
+      QVERIFY(tabs);
+      for (int i = 0; i < tabs->count(); ++i) {
+        if (tabs->tabText(i) == "Design") tabs->setCurrentIndex(i);
+      }
+      QTest::qWait(150);
+      QVERIFY(dialog->grab().save(Issue914Shot("qt-502-style-design-tab.png")));
+      styleChecked = true;
+      dialog->reject();
+    });
+    window.Submit("EDITALIGNMENTSTYLE Wide");
+    QVERIFY(styleChecked);
   }
 
   void issue121AlignmentPhase1Screenshots() {
