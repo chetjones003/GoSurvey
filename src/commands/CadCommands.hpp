@@ -4443,6 +4443,13 @@ struct AppCommandState {
   /// spline's control points are re-derived on every drag step, so there is no single coordinate to put back).
   CadSpline entityGripOrigSpline;
   alignment::Alignment entityGripOrigAlignment;  ///< REQ-487.1: the alignment as it was when the grip was grabbed
+  /// REQ-492.5: a station label being dragged in the viewport. The label is moved live; the original is kept so a
+  /// cancel restores it and a commit can take its undo snapshot before the move.
+  bool alignLabelDragActive = false;
+  bool alignLabelDragMoved = false;
+  int alignLabelDragAlignment = -1;
+  int alignLabelDragIndex = -1;
+  alignment::StationOffsetLabel alignLabelDragOriginal;
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
@@ -8089,6 +8096,11 @@ void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-492.5 viewport drag of a station label. Begin returns false when no label lies within \p tolWorld of (lx,ly).
+[[nodiscard]] bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld);
+void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly);
+/// Commit (\p commit true) takes one undo step for the whole drag; cancel puts the label back where it was.
+void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std::string>& log);
 void RunAlignmentLabel(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-501.2: "STA 25+42.35  OFF -12.40  N 45d12'30" E" for the alignment nearest the LOCAL point (lx, ly), or an

@@ -811,6 +811,39 @@ private Q_SLOTS:
     QCOMPARE(window.State().alignments[0].Entities()[1].radius, 80.0);  // the edit was one undo step
   }
 
+  void issue121StationLabelDragsInTheViewport() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1200, 800);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    for (const char* line : {"ALIGNMENT DRAG1, , 0+00", "ALIGNMENTADD DRAG1, TANGENT, 0, 0, 90, 1000",
+                             "ALIGNMENTLABEL DRAG1, STATIONLABEL, FIXED, 300, 10"})
+      window.Submit(line);
+    QCOMPARE(window.State().alignments.size(), size_t(1));
+    QCOMPARE(window.State().alignments[0].stationLabels.size(), size_t(1));
+    const alignment::Point2 start = window.State().alignments[0].stationLabels[0].fixedPoint;
+
+    // Where the label is on screen, through the same camera the viewport draws with.
+    const Camera camera = CadViewCamera(window.State());
+    float sx = 0.f, sy = 0.f;
+    QWidget* viewport = window.m_Viewport;
+    camera.WorldToScreen(start.x, start.y, 0.0, static_cast<float>(viewport->width()),
+                         static_cast<float>(viewport->height()), &sx, &sy);
+    const QPoint from(qRound(sx), qRound(sy));
+    QTest::mousePress(viewport, Qt::LeftButton, Qt::NoModifier, from);
+    QTest::mouseMove(viewport, from + QPoint(60, 0));
+    QTest::mouseMove(viewport, from + QPoint(120, 0));
+    QTest::mouseRelease(viewport, Qt::LeftButton, Qt::NoModifier, from + QPoint(120, 0));
+    QTest::qWait(50);
+
+    const alignment::Point2 moved = window.State().alignments[0].stationLabels[0].fixedPoint;
+    QVERIFY2(std::fabs(moved.x - start.x) > 1.0, "dragging the label in the viewport moved it");
+    QVERIFY(!window.State().alignLabelDragActive);
+    window.Submit("UNDO");  // the drag was one undo step
+    QCOMPARE(window.State().alignments[0].stationLabels[0].fixedPoint.x, start.x);
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

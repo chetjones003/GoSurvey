@@ -223,3 +223,42 @@ TEST_CASE("ALIGNMENTLABEL LIST and MOVE work by label number and undo in one ste
   Submit(st, "ALIGNMENTLABEL SL3, STATIONLABEL, MOVE, 7, 1, 1", log);
   CHECK(LogHas(log, "needs a label number"));
 }
+
+TEST_CASE("A station label dragged in the viewport moves live, commits in one undo step, and cancels back",
+          "[req492][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  Submit(st, "ALIGNMENT DR1", log);
+  Submit(st, "ALIGNMENTADD DR1, TANGENT, 0, 0, 90, 1000", log);
+  Submit(st, "ALIGNMENTLABEL DR1, STATIONLABEL, FIXED, 300, 10", log);
+  const alignment::Point2 before = st.alignments[0].stationLabels[0].fixedPoint;
+
+  // A press well away from the label does not grab it.
+  CHECK_FALSE(TryBeginAlignmentLabelDrag(st, 800.0f, -50.0f, 2.0f));
+  CHECK_FALSE(st.alignLabelDragActive);
+
+  // A press on the label (its stored local point) grabs it.
+  REQUIRE(TryBeginAlignmentLabelDrag(st, static_cast<float>(before.x), static_cast<float>(before.y), 2.0f));
+  ApplyAlignmentLabelDrag(st, 450.0f, 25.0f);  // live move
+  ApplyAlignmentLabelDrag(st, 500.0f, 30.0f);
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.x == Approx(500.0));
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.y == Approx(30.0));
+
+  // Commit: one undo step, which puts the label back where it was before the drag.
+  log.clear();
+  FinishAlignmentLabelDrag(st, true, log);
+  CHECK_FALSE(st.alignLabelDragActive);
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.x == Approx(500.0));
+  CHECK(LogHas(log, "moved"));
+  Submit(st, "UNDO", log);
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.x == Approx(before.x));
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.y == Approx(before.y));
+
+  // Cancel: a drag that is abandoned puts the label back without an undo step.
+  REQUIRE(TryBeginAlignmentLabelDrag(st, static_cast<float>(before.x), static_cast<float>(before.y), 2.0f));
+  ApplyAlignmentLabelDrag(st, 700.0f, 70.0f);
+  log.clear();
+  FinishAlignmentLabelDrag(st, false, log);
+  CHECK(st.alignments[0].stationLabels[0].fixedPoint.x == Approx(before.x));
+  CHECK_FALSE(st.alignLabelDragActive);
+}

@@ -237,6 +237,11 @@ void EditorViewport::CancelSelectionBox() {
 // Escape or right-click during a grip drag puts the object back exactly as it was. Returns whether a grip
 // edit was in progress, so the caller can stop there rather than also cancelling the command.
 bool EditorViewport::CancelGripEdit() {
+  if (m_State.alignLabelDragActive) {  // REQ-492.5: put a dragged station label back where it was
+    std::vector<std::string> cancelLog;
+    FinishAlignmentLabelDrag(m_State, false, cancelLog);
+    return true;
+  }
   if (m_State.entityGripMoveActive) {
     RestoreEntityGripOriginal(m_State);
     ClearEntityGripInteraction(m_State);
@@ -1361,6 +1366,15 @@ void EditorViewport::mousePressEvent(QMouseEvent* event) {
         }
       }
     }
+    if (m_State.active == AppCommandState::Kind::None && !(event->modifiers() & Qt::ShiftModifier) &&
+        !projectReadOnly() &&
+        TryBeginAlignmentLabelDrag(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y),
+                                   camera.orthoHalfH * 12.f / static_cast<float>(std::max(1, height())))) {
+      m_GripMovedWithButton = false;  // REQ-492.5: a station label was grabbed, so the drag moves it
+      if (changed) changed();
+      update();
+      return;
+    }
     if (m_State.active == AppCommandState::Kind::None && !m_State.selection.empty() &&
         !(event->modifiers() & Qt::ShiftModifier)) {
       const bool readOnly = projectReadOnly();
@@ -1837,6 +1851,10 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
                            static_cast<float>(m_Cursor.z));
       BumpCadGpuCache(m_State);
     }
+    if (m_State.alignLabelDragActive) {  // REQ-492.5: the label follows the cursor
+      if (event->buttons() & Qt::LeftButton) m_GripMovedWithButton = true;
+      ApplyAlignmentLabelDrag(m_State, static_cast<float>(m_Cursor.x), static_cast<float>(m_Cursor.y));
+    }
     if (m_State.mtextGripMoveActive && m_State.mtextGripAnnotationIndex >= 0 &&
         static_cast<std::size_t>(m_State.mtextGripAnnotationIndex) < m_State.cadAnnotations.size()) {
       CadAnnotation& ann = m_State.cadAnnotations[static_cast<std::size_t>(m_State.mtextGripAnnotationIndex)];
@@ -1882,6 +1900,14 @@ void EditorViewport::mouseMoveEvent(QMouseEvent* event) {
 void EditorViewport::mouseReleaseEvent(QMouseEvent* event) {
   if (m_CubePressed && event->button() != Qt::MiddleButton) {  // the press was the ViewCube's
     m_CubePressed = false;
+    event->accept();
+    return;
+  }
+  if (event->button() == Qt::LeftButton && m_State.alignLabelDragActive) {  // REQ-492.5
+    FinishAlignmentLabelDrag(m_State, m_GripMovedWithButton, m_Log);
+    m_GripMovedWithButton = false;
+    if (changed) changed();
+    update();
     event->accept();
     return;
   }

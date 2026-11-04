@@ -1927,3 +1927,72 @@ void RunAlignmentStationLabel(AppCommandState& st, const std::string& args, std:
   log.push_back("ALIGNMENTLABEL - " + std::string(label.fixed ? "fixed" : "relative") + " station label on \"" + a->name + "\": " + p.text +
                 (p.onAlignment ? "" : " (off the alignment)") + ".");
 }
+
+// ======================================================================================================
+// REQ-492.5: dragging a station label in the viewport. Same shape as the entity grip drag: press arms it, move updates
+// it live, release commits one undo step, Esc or a cancel puts it back.
+// ======================================================================================================
+
+bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld) {
+  float bestD2 = tolWorld * tolWorld;
+  int bestA = -1, bestL = -1;
+  for (size_t ai = 0; ai < st.alignments.size(); ++ai) {
+    const alignment::Alignment& a = st.alignments[ai];
+    for (size_t li = 0; li < a.stationLabels.size(); ++li) {
+      const alignment::StationOffsetLabelPlacement p =
+          alignment::PlaceStationOffsetLabel(a, a.stationLabels[li], st.displayLinearPrecision);
+      if (!p.onAlignment) continue;
+      const double dx = lx - p.point.x, dy = ly - p.point.y;
+      const float d2 = static_cast<float>(dx * dx + dy * dy);
+      if (d2 <= bestD2) {
+        bestD2 = d2;
+        bestA = static_cast<int>(ai);
+        bestL = static_cast<int>(li);
+      }
+    }
+  }
+  if (bestA < 0) return false;
+  st.alignLabelDragActive = true;
+  st.alignLabelDragMoved = false;
+  st.alignLabelDragAlignment = bestA;
+  st.alignLabelDragIndex = bestL;
+  st.alignLabelDragOriginal = st.alignments[static_cast<size_t>(bestA)].stationLabels[static_cast<size_t>(bestL)];
+  return true;
+}
+
+void ApplyAlignmentLabelDrag(AppCommandState& st, float lx, float ly) {
+  if (!st.alignLabelDragActive) return;
+  if (st.alignLabelDragAlignment < 0 || static_cast<size_t>(st.alignLabelDragAlignment) >= st.alignments.size()) return;
+  alignment::Alignment& a = st.alignments[static_cast<size_t>(st.alignLabelDragAlignment)];
+  if (st.alignLabelDragIndex < 0 || static_cast<size_t>(st.alignLabelDragIndex) >= a.stationLabels.size()) return;
+  alignment::StationOffsetLabel& label = a.stationLabels[static_cast<size_t>(st.alignLabelDragIndex)];
+  if (alignment::MoveStationOffsetLabelTo(a, &label, {static_cast<double>(lx), static_cast<double>(ly)})) {
+    st.alignLabelDragMoved = true;
+    BumpCadGpuCache(st);
+  }
+}
+
+void FinishAlignmentLabelDrag(AppCommandState& st, bool commit, std::vector<std::string>& log) {
+  if (!st.alignLabelDragActive) return;
+  const int ai = st.alignLabelDragAlignment, li = st.alignLabelDragIndex;
+  const bool valid = ai >= 0 && static_cast<size_t>(ai) < st.alignments.size() && li >= 0 &&
+                     static_cast<size_t>(li) < st.alignments[static_cast<size_t>(ai)].stationLabels.size();
+  st.alignLabelDragActive = false;
+  if (!valid) return;
+  alignment::Alignment& a = st.alignments[static_cast<size_t>(ai)];
+  auto& label = a.stationLabels[static_cast<size_t>(li)];
+  if (!commit || !st.alignLabelDragMoved) {  // cancel, or a click that did not move: nothing to record
+    label = st.alignLabelDragOriginal;
+    BumpCadGpuCache(st);
+    return;
+  }
+  // One undo step for the whole drag: restore the original, take the snapshot, then put the moved label back.
+  const alignment::StationOffsetLabel moved = label;
+  label = st.alignLabelDragOriginal;
+  PushUndoSnapshot(st, "Move alignment station label");
+  st.alignments[static_cast<size_t>(ai)].stationLabels[static_cast<size_t>(li)] = moved;
+  BumpCadGpuCache(st);
+  const alignment::StationOffsetLabelPlacement p = alignment::PlaceStationOffsetLabel(
+      st.alignments[static_cast<size_t>(ai)], moved, st.displayLinearPrecision);
+  log.push_back("ALIGNMENTLABEL - label " + std::to_string(li + 1) + " moved: " + p.text + ".");
+}
