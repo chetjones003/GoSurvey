@@ -8099,6 +8099,11 @@ void RunAlignmentDetach(AppCommandState& st, const std::string& args, std::vecto
 void RunAlignmentIntersect(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
+/// REQ-498.2: rebuilds the feature lines made from alignments and logs any link it drops.
+void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log);
+/// Offsets and dynamic tables only: the form the erase path uses, so feature links are checked (and logged) once.
+void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log);
 void RunAlignmentSurface(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 /// REQ-492.5 viewport drag of a station label. Begin returns false when no label lies within \p tolWorld of (lx,ly).
 [[nodiscard]] bool TryBeginAlignmentLabelDrag(AppCommandState& st, float lx, float ly, float tolWorld);

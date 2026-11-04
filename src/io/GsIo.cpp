@@ -1794,6 +1794,16 @@ json BuildRoot(const AppCommandState& st) {
     json o;
     o["name"] = i.name;
     o["description"] = i.description;
+    if (i.sourceAlignmentId != 0) {  // REQ-498.2: the link, so a refresh can rebuild the line from its alignment
+      json link;
+      link["alignmentId"] = i.sourceAlignmentId;
+      link["interval"] = i.sampleInterval;
+      link["tolerance"] = i.chordTolerance;
+      link["hasSurface"] = i.hasSurface;
+      link["surface"] = i.surfaceName;
+      link["z"] = i.constantZ;
+      o["alignmentLink"] = std::move(link);
+    }
     if (i.grading) {  // REQ-398 / issue #997: written only on grading results
       json g;
       g["baselineId"] = i.grading->baselineId;
@@ -3700,6 +3710,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.is_object()) {
         i.name = o.value("name", std::string());
         i.description = o.value("description", std::string());
+        const auto link = o.find("alignmentLink");  // REQ-498.2; a line saved before links read as ordinary
+        if (link != o.end() && link->is_object()) {
+          i.sourceAlignmentId = link->value("alignmentId", std::uint64_t{0});
+          i.sampleInterval = link->value("interval", 10.0);
+          i.chordTolerance = link->value("tolerance", 0.01);
+          i.hasSurface = link->value("hasSurface", false);
+          i.surfaceName = link->value("surface", std::string());
+          i.constantZ = link->value("z", 0.0);
+          if (!(i.sampleInterval >= 0.0) || !(i.chordTolerance > 0.0)) i.sourceAlignmentId = 0;
+        }
         // Issue #997. A definition without a usable baseline or slope is dropped, leaving an
         // ordinary feature line, rather than one that can never be rebuilt.
         const auto g = o.find("grading");

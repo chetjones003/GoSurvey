@@ -654,6 +654,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentReport.cpp
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentGround.cpp
+  src/alignment/AlignmentFeatureLine.cpp
   src/alignment/AlignmentTables.cpp
   src/alignment/Clothoid.cpp
   # Geometry math (util)
@@ -1228,6 +1229,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentTableTests.cpp
     tests/AlignmentLabelOffsetTests.cpp
     tests/AlignmentStyleFieldTests.cpp
+    tests/AlignmentFeatureLineTests.cpp
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/SurfaceStatsTests.cpp

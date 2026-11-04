@@ -7218,6 +7218,7 @@ const CmdEntry kRegistry[] = {
     {"editalignment", "", "Open the Alignment Layout table: EDITALIGNMENT [<name>]"},
     {"alignmentsurface", "", "Ground elevation along an alignment: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] | INTERVAL=<n>"},
     {"alignmentlabel", "", "Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS | CLEAR"},
+    {"featurelinefromalignment", "", "Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>]"},
     {"editalignmentstyle", "", "Open the Alignment Style editor: EDITALIGNMENTSTYLE [<style>]"},
     {"alignmenttable", "", "Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE|CURVE|SEGMENT|EQUATIONS[, STATIC|DYNAMIC][, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
@@ -28573,7 +28574,7 @@ static void EraseSelectedSolidsAndPipeRuns(AppCommandState& st) {
       st.alignments.erase(st.alignments.begin() + static_cast<std::ptrdiff_t>(*it));
     if (!alignIx.empty()) {
       std::vector<std::string> quiet;
-      RefreshAlignmentOffsets(st, quiet);
+      RefreshAlignmentOffsetsOnly(st, quiet);  // feature links are checked by ExecuteDeleteSelection, which logs drops
     }
   }
 }
@@ -28764,6 +28765,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   EraseSelectedSolidsAndPipeRuns(st);  // REQ-313 / issue #486; shared with MIRROR's erase-source
+  RefreshFeatureLineLinks(st, log);    // REQ-498.2: a feature line whose alignment was just erased says so here
 
 
   // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
@@ -47087,7 +47089,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "alignmentdetach" ||
         plotTok == "alignmentintersect" ||
         plotTok == "editalignment" || plotTok == "alignmentsurface" || plotTok == "alignmentlabel" ||
-        plotTok == "alignmenttable" || plotTok == "editalignmentstyle" ||
+        plotTok == "alignmenttable" || plotTok == "editalignmentstyle" || plotTok == "featurelinefromalignment" ||
         plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
@@ -47164,6 +47166,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunAlignmentTable(st, rest, log);
       else if (plotTok == "editalignmentstyle")
         RunEditAlignmentStyle(st, rest, log);
+      else if (plotTok == "featurelinefromalignment")
+        RunFeatureLineFromAlignment(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, rest, log);
       else if (plotTok == "voltable")

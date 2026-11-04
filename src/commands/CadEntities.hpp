@@ -1322,6 +1322,13 @@ struct CadFeatureLineInfo {
   /// Present only on a GRADING result. Absent means an ordinary feature line, which is what every
   /// drawing saved before issue #997 loads as.
   std::optional<CadGradingDefinition> grading;
+  /// REQ-498.2: the alignment this line was made from, and how it was sampled and given elevations. Zero id = an ordinary line.
+  std::uint64_t sourceAlignmentId = 0;
+  double sampleInterval = 10.0;   ///< Drawing units between stations along the alignment (REQ-498.1).
+  double chordTolerance = 0.01;   ///< Largest allowed chord sagitta on a curve, drawing units.
+  bool hasSurface = false;        ///< True: Z comes from surfaceName (REQ-497). False: Z is constantZ.
+  std::string surfaceName;
+  double constantZ = 0.0;
 };
 
 /// One row of a feature line's elevation table (REQ-088).

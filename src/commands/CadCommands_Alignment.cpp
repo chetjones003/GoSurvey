@@ -15,6 +15,8 @@
 #include "AlignmentLabelSet.hpp"
 #include "alignment/AlignmentReport.hpp"
 #include "alignment/AlignmentGround.hpp"
+#include "alignment/AlignmentFeatureLine.hpp"
+#include <memory>
 #include "alignment/AlignmentTables.hpp"
 #include "alignment/AlignmentLabels.hpp"
 #include "util/cadtable.hpp"
@@ -478,6 +480,18 @@ void RunCreateAlignmentFromObjects(AppCommandState& st, const std::string& args,
       s.endAngle = s.startAngle + std::fabs(sw);
       s.sourceIndex = srcNo;
       segs.push_back(s);
+    } else if (se.type == T::FeatureLine) {  // REQ-498.3: a feature line is a valid source; its Z is ignored
+      if (ix + 1 >= st.featureLineOffsets.size()) continue;
+      const int v0 = st.featureLineOffsets[ix], v1 = st.featureLineOffsets[ix + 1];
+      for (int k = 0; k + 1 < v1 - v0; ++k) {
+        const size_t i0 = static_cast<size_t>(v0 + k) * 3, i1 = static_cast<size_t>(v0 + k + 1) * 3;
+        if (i1 + 1 >= st.featureLineVerts.size()) break;
+        alignment::SourceSegment seg;
+        seg.a = {st.featureLineVerts[i0], st.featureLineVerts[i0 + 1]};
+        seg.b = {st.featureLineVerts[i1], st.featureLineVerts[i1 + 1]};
+        seg.sourceIndex = srcNo;
+        segs.push_back(seg);
+      }
     } else if (se.type == T::Polyline) {
       if (ix + 1 >= st.userPolylineOffsets.size()) continue;
       const int v0 = st.userPolylineOffsets[ix], v1 = st.userPolylineOffsets[ix + 1];
@@ -854,9 +868,14 @@ void RunAlignmentTable(AppCommandState& st, const std::string& args, std::vector
                 " row(s)).");
 }
 
-void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
+void RefreshAlignmentOffsetsOnly(AppCommandState& st, std::vector<std::string>& log) {
   RefreshLinkedOffsetsImpl(st, log);
   RefreshDynamicTables(st, log);  // REQ-493.2: dynamic tables follow the geometry
+}
+
+void RefreshAlignmentOffsets(AppCommandState& st, std::vector<std::string>& log) {
+  RefreshAlignmentOffsetsOnly(st, log);
+  RefreshFeatureLineLinks(st, log);  // REQ-498.2: feature lines made from an alignment follow it
 }
 
 // ALIGNMENTEDIT <name>, <entity#>, BEARING|LENGTH|RADIUS|DELTA|DIRECTION|CONSTRAINT, <value>
@@ -2059,4 +2078,173 @@ void RunEditAlignmentStyle(AppCommandState& st, const std::string& args, std::ve
   st.alignmentStyleEditorRequested = true;
   st.alignmentStyleEditorName = name;
   RunAlignmentStyle(st, "LIST", log);  // the same list, for a window-less run
+}
+
+// ======================================================================================================
+// REQ-498: feature lines made from an alignment (issue #121 Phase 5).
+// ======================================================================================================
+
+namespace {
+
+int AlignmentIndexById(const AppCommandState& st, std::uint64_t id) {
+  for (size_t i = 0; i < st.alignments.size(); ++i) {
+    if (st.alignments[i].id == id) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+// Plan vertices for one feature line, with Z from its surface or its constant (REQ-498.1). Fails with the reason when a
+// station has no ground on the surface, rather than writing a zero elevation (REQ-497.1).
+bool BuildFeatureLineVerts(const AppCommandState& st, const alignment::Alignment& a, const CadFeatureLineInfo& info,
+                           std::vector<double>* xyz, std::string* why) {
+  const std::vector<double> stations = alignment::FeatureLineStations(a, info.sampleInterval, info.chordTolerance);
+  if (stations.size() < 2) {
+    if (why) *why = "the alignment has too little geometry to sample";
+    return false;
+  }
+  std::unique_ptr<ISurfaceQuery> ground;
+  if (info.hasSurface) {
+    const int si = FindSurfaceIndex(st, info.surfaceName);
+    if (si < 0) {
+      if (why) *why = "the surface \"" + info.surfaceName + "\" is not in the drawing";
+      return false;
+    }
+    ground = MakeSurfaceQueryForCommands(st, st.cadSurfaces[static_cast<size_t>(si)]);
+    if (!ground) {
+      if (why) *why = "the surface \"" + info.surfaceName + "\" is not a built surface";
+      return false;
+    }
+  }
+  xyz->clear();
+  for (const double s : stations) {
+    const double internal = a.StartStation() + s;
+    const alignment::Point2 p = a.GetPointAtStation(internal);
+    double z = info.constantZ;
+    if (ground) {
+      const alignment::GroundPoint g = alignment::GroundAt(a, *ground, internal, 0.0);
+      if (!g.hasGround) {
+        if (why) {
+          *why = "there is no ground on \"" + info.surfaceName + "\" at station " +
+                 alignment::FormatStation(a.DisplayedStation(internal, true));
+        }
+        return false;
+      }
+      z = g.ground;
+    }
+    xyz->push_back(p.x);
+    xyz->push_back(p.y);
+    xyz->push_back(z);
+  }
+  return true;
+}
+
+// Replaces the vertices of feature line `index` in place, shifting every later line's offsets by the change in count.
+void ReplaceFeatureLineVerts(AppCommandState& st, size_t index, const std::vector<double>& xyz) {
+  if (index + 1 >= st.featureLineOffsets.size()) return;
+  const int a = st.featureLineOffsets[index], b = st.featureLineOffsets[index + 1];
+  const int oldCount = b - a, newCount = static_cast<int>(xyz.size() / 3);
+  const bool flagsMatch = st.featureLineElevPt.size() == st.featureLineVerts.size() / 3;
+  st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3,
+                            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(b) * 3);
+  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(a) * 3, xyz.begin(), xyz.end());
+  if (flagsMatch) {  // the vertices are elevation points, the flag FEATURELINE gives a typed elevation
+    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + a, st.featureLineElevPt.begin() + b);
+    st.featureLineElevPt.insert(st.featureLineElevPt.begin() + a, static_cast<size_t>(newCount), static_cast<uint8_t>(1));
+  }
+  const int delta = newCount - oldCount;
+  for (size_t j = index + 1; j < st.featureLineOffsets.size(); ++j) st.featureLineOffsets[j] += delta;
+}
+
+}  // namespace
+
+// REQ-498.2: rebuilds every feature line that names an alignment, and drops the link (with a log line) when that alignment
+// is gone. A line whose surface or ground can no longer be read keeps its last vertices and says why.
+void RefreshFeatureLineLinks(AppCommandState& st, std::vector<std::string>& log) {
+  bool changed = false;
+  for (size_t i = 0; i < st.featureLineInfo.size(); ++i) {
+    CadFeatureLineInfo& info = st.featureLineInfo[i];
+    if (info.sourceAlignmentId == 0) continue;
+    const int ai = AlignmentIndexById(st, info.sourceAlignmentId);
+    if (ai < 0) {
+      log.push_back("  Feature line \"" + info.name + "\" lost its alignment and is now an ordinary feature line.");
+      info.sourceAlignmentId = 0;
+      continue;
+    }
+    std::vector<double> xyz;
+    std::string why;
+    if (!BuildFeatureLineVerts(st, st.alignments[static_cast<size_t>(ai)], info, &xyz, &why)) {
+      log.push_back("  Feature line \"" + info.name + "\" was not updated: " + why + ".");
+      continue;
+    }
+    ReplaceFeatureLineVerts(st, i, xyz);
+    changed = true;
+  }
+  if (changed) BumpCadGpuCache(st);
+}
+
+// FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>]   (REQ-498.1)
+void RunFeatureLineFromAlignment(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitFields(args);
+  const char* usage =
+      "FEATURELINEFROMALIGNMENT - usage: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> | Z=<value>].";
+  if (f.empty() || f[0].empty()) {
+    log.push_back(usage);
+    return;
+  }
+  alignment::Alignment* a = Resolve(st, "FEATURELINEFROMALIGNMENT", f[0], log);
+  if (a == nullptr) return;
+  if (a->Empty()) {
+    log.push_back("FEATURELINEFROMALIGNMENT - \"" + a->name + "\" has no geometry.");
+    return;
+  }
+  CadFeatureLineInfo info;
+  info.name = a->name;
+  info.description = "From alignment " + a->name;
+  info.sourceAlignmentId = a->id;
+  for (size_t i = 1; i < f.size(); ++i) {
+    const size_t eq = f[i].find('=');
+    const std::string key = Lower(f[i].substr(0, eq));
+    const std::string value = eq == std::string::npos ? "" : Trim(f[i].substr(eq + 1));
+    double v = 0.0;
+    if (key == "interval" && ParseNum(value, &v) && v > 0.0) {
+      info.sampleInterval = v;
+    } else if (key == "tol" && ParseNum(value, &v) && v > 0.0) {
+      info.chordTolerance = v;
+    } else if (key == "surface" && !value.empty()) {
+      if (FindSurfaceIndex(st, value) < 0) {
+        log.push_back("FEATURELINEFROMALIGNMENT - no surface named \"" + value + "\".");
+        return;
+      }
+      info.hasSurface = true;
+      info.surfaceName = value;
+    } else if (key == "z" && ParseNum(value, &v)) {
+      info.hasSurface = false;
+      info.constantZ = v;
+    } else {
+      log.push_back(usage);
+      return;
+    }
+  }
+  std::vector<double> xyz;
+  std::string why;
+  if (!BuildFeatureLineVerts(st, *a, info, &xyz, &why)) {
+    log.push_back("FEATURELINEFROMALIGNMENT - " + why + ". No feature line was made.");
+    return;
+  }
+  PushUndoSnapshot(st, "Feature line from alignment");
+  if (st.featureLineOffsets.empty()) st.featureLineOffsets.push_back(0);
+  const int base = st.featureLineOffsets.back();
+  st.featureLineVerts.insert(st.featureLineVerts.end(), xyz.begin(), xyz.end());
+  st.featureLineElevPt.resize(st.featureLineVerts.size() / 3, static_cast<uint8_t>(1));
+  st.featureLineOffsets.push_back(base + static_cast<int>(xyz.size() / 3));
+  st.featureLineClosed.push_back(0);
+  const std::string zText = info.hasSurface ? "Z from \"" + info.surfaceName + "\"" : std::string("constant Z");
+  const size_t count = xyz.size() / 3;
+  st.featureLineInfo.push_back(std::move(info));
+  AppendNewObjectAttrs(st, st.featureLineAttrs, st.featureLineInfo.size(), ObjectLayerKind::FeatureLine,
+                       st.featureLineInfo.back().name);  // REQ-361
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+  log.push_back("FEATURELINEFROMALIGNMENT - feature line \"" + a->name + "\" made from the alignment: " +
+                std::to_string(count) + " vertices, " + zText + ".");
 }

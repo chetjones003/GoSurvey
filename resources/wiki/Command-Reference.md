@@ -186,6 +186,7 @@ for a compact list inside the program.
 | `ALIGNMENTSURFACE` | — | Ground elevation along an alignment from a surface: ALIGNMENTSURFACE <alignment>, <surface>, STATION=<sta>[, OFFSET=<off>] \| INTERVAL=<n> | [[Commands/alignmentsurface]] |
 | `ALIGNMENTLABEL` | — | Label an alignment's segments (needed for tables): ALIGNMENTLABEL <name>, SEGMENTS \| CLEAR | [[Commands/alignmentlabel]] |
 | `ALIGNMENTTABLE` | — | Insert a line, curve, segment or equation table: ALIGNMENTTABLE <name>, LINE\|CURVE\|SEGMENT\|EQUATIONS[, STATIC\|DYNAMIC][, <x>, <y>] | [[Commands/alignmenttable]] |
+| `FEATURELINEFROMALIGNMENT` | — | Feature line from an alignment: FEATURELINEFROMALIGNMENT <alignment>[, INTERVAL=<n>][, TOL=<n>][, SURFACE=<name> \| Z=<value>] | [[Commands/featurelinefromalignment]] |
 
 ### Surfaces and volumes
 
@@ -374,6 +375,7 @@ for a compact list inside the program.
 | `EXTRACT` | — | [[Commands/extract]] |
 | `EXTRUDE` | `EXT` | [[Commands/extrude]] |
 | `FEATURELINE` | `FL` | [[Commands/featureline]] |
+| `FEATURELINEFROMALIGNMENT` | — | [[Commands/featurelinefromalignment]] |
 | `FEATURELINELIST` | `FLLIST` | [[Commands/featurelinelist]] |
 | `FILLET` | `F` | [[Commands/fillet]] |
 | `FLELEV` | — | [[Commands/flelev]] |
