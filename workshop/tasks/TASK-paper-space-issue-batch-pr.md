@@ -40,7 +40,7 @@
 
 ## PR evidence
 
-- GoSurvey screenshots to attach with `gh pr create --attach`:
+- GoSurvey screenshots attached to PR #1159 with `gh --attach`:
   - `qt-1007-viewport-controls.png`
   - `qt-1015-layout-duplicate-context-menu.png`
   - `qt-1017-viewport-scale-dropdown.png`
@@ -61,6 +61,5 @@
 - `.\build.bat`: PASS on the merged current-`beta` tree (Release; both frontends and all test/helpers).
 - `ctest --preset ninja-release --output-on-failure`: PASS, 194/194.
 - `git diff --check`: PASS after the merge and again before push.
-- Issues requested for closure after PR creation: #780, #781, #1005, #1007, #1009, #1015, #1016,
-  and #1017. #810 remains open for its remaining Output controls.
-- PR URL, final head SHA, and resulting issue states: pending PR creation.
+- Issues #780, #781, #1005, #1007, #1009, #1015, #1016, and #1017 are closed. #810 remains open for its remaining Output controls. #1016 is closed with the AutoCAD UI and Civil 3D visual verification limitations disclosed in the PR.
+- PR: https://github.com/chetjones003/GoSurvey/pull/1159 (open against `beta`). The final head includes the SPEC ID collision corrections; see GitHub for its current SHA.
