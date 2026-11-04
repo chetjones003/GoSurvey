@@ -493,7 +493,7 @@ struct CadMultileader {
   /// Additional arrow branches sharing the same landing / label (Add Leader).
   std::vector<std::vector<float>> extraLeaderPaths;
   /// Arrowhead length in drawing units, read from the active DWG MLeader context.
-  float arrowSizeWorld = 0.18f;
+  float arrowSizeWorld = 0.f;
   /// Associated MTEXT reference rectangle, measured in its text coordinate system (before rotation).
   /// Zero means derive the dimensions from the embedded annotation's existing world-space bounds.
   float labelWidthWorld = 0.f;

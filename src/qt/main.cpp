@@ -44,7 +44,8 @@ BOOL CALLBACK FindGoSurveyWindow(HWND hwnd, LPARAM parameter) {
   auto* search = reinterpret_cast<WindowSearch*>(parameter);
   wchar_t title[256]{};
   const int titleLength = GetWindowTextW(hwnd, title, static_cast<int>(std::size(title)));
-  if (titleLength < 8 || LowerPath(std::wstring(title, static_cast<size_t>(titleLength))).rfind(L"gosurvey", 0) != 0)
+  const std::wstring windowTitle = LowerPath(std::wstring(title, static_cast<size_t>(titleLength)));
+  if (windowTitle != L"gosurvey" && windowTitle.rfind(L"gosurvey — ", 0) != 0)
     return TRUE;
   DWORD processId = 0;
   GetWindowThreadProcessId(hwnd, &processId);
@@ -92,27 +93,31 @@ bool ForwardDrawingToExistingInstance(const QString& drawingPath) {
   if (length == 0 || length >= std::size(module))
     return false;
   WindowSearch search{LowerPath(std::wstring(module, length)), nullptr};
-  for (int attempt = 0; attempt < 40 && search.window == nullptr; ++attempt) {
+  const ULONGLONG deadline = GetTickCount64() + 30000;
+  while (GetTickCount64() < deadline) {
     EnumWindows(FindGoSurveyWindow, reinterpret_cast<LPARAM>(&search));
-    if (search.window == nullptr)
-      Sleep(50);
+    if (search.window != nullptr) {
+      const std::wstring path = drawingPath.toStdWString();
+      COPYDATASTRUCT data{};
+      data.dwData = kOpenDrawingCopyData;
+      data.cbData = static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t));
+      data.lpData = const_cast<wchar_t*>(path.c_str());
+      DWORD_PTR result = 0;
+      const LRESULT sent = SendMessageTimeoutW(search.window, WM_COPYDATA, 0,
+                                               reinterpret_cast<LPARAM>(&data),
+                                               SMTO_ABORTIFHUNG | SMTO_BLOCK, 1000, &result);
+      if (sent != 0 && result != 0) {
+        ShowWindow(search.window, SW_RESTORE);
+        SetForegroundWindow(search.window);
+        return true;
+      }
+      // A matching process can still be initializing. Re-enumerate and retry once
+      // its editor window is ready to receive the handoff.
+      search.window = nullptr;
+    }
+    Sleep(50);
   }
-  if (search.window == nullptr)
-    return false;
-  const std::wstring path = drawingPath.toStdWString();
-  COPYDATASTRUCT data{};
-  data.dwData = kOpenDrawingCopyData;
-  data.cbData = static_cast<DWORD>((path.size() + 1) * sizeof(wchar_t));
-  data.lpData = const_cast<wchar_t*>(path.c_str());
-  DWORD_PTR result = 0;
-  const LRESULT sent = SendMessageTimeoutW(search.window, WM_COPYDATA, 0,
-                                           reinterpret_cast<LPARAM>(&data),
-                                           SMTO_ABORTIFHUNG | SMTO_BLOCK, 5000, &result);
-  if (sent == 0 || result == 0)
-    return false;
-  ShowWindow(search.window, SW_RESTORE);
-  SetForegroundWindow(search.window);
-  return true;
+  return false;
 }
 } // namespace
 #endif

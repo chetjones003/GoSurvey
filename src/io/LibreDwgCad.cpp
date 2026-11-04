@@ -5232,6 +5232,7 @@ static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
     if (dictShell == nullptr || error != 0)
       return false;
   }
+  const std::uint64_t dictHandleValue = dictShell->handle.value;
 
   // Replace the existing value in place when present.
   for (BITCODE_BL i = 0; i < dict->numitems; ++i) {
@@ -5266,6 +5267,13 @@ static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
     classNumber = dwg_add_class(dwg, "DICTIONARYVAR", "AcDbDictionaryVar", "ObjectDBX Classes", false);
   if (classNumber < 0)
     return false;
+  // dwg_add_object (and handle resolution) may move dwg->object, invalidating the
+  // dictionary shell and its embedded dictionary pointer. Re-resolve by value.
+  dictShell = dwg_resolve_handle_silent(dwg, dictHandleValue);
+  if (dictShell == nullptr || dictShell->fixedtype != DWG_TYPE_DICTIONARY || dictShell->tio.object == nullptr ||
+      dictShell->tio.object->tio.DICTIONARY == nullptr)
+    return false;
+  dict = dictShell->tio.object->tio.DICTIONARY;
   Dwg_Object* obj = &dwg->object[idxObj];
   obj->supertype = DWG_SUPERTYPE_OBJECT;
   obj->fixedtype = DWG_TYPE_DICTIONARYVAR;
@@ -5279,9 +5287,14 @@ static bool WriteNativeCannoscale(const AppCommandState& st, Dwg_Data* dwg) {
   var->schema = 0;
   var->strvalue = dwg_add_u8_input(dwg, scaleName.c_str());
   dwg_set_next_objhandle(obj);
-  obj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictShell->handle.value, nullptr);
+  obj->tio.object->ownerhandle = dwg_add_handleref(dwg, 4, dictHandleValue, nullptr);
   if (var->strvalue == nullptr || obj->handle.value == 0)
     return false;
+  dictShell = dwg_resolve_handle_silent(dwg, dictHandleValue);
+  if (dictShell == nullptr || dictShell->fixedtype != DWG_TYPE_DICTIONARY || dictShell->tio.object == nullptr ||
+      dictShell->tio.object->tio.DICTIONARY == nullptr)
+    return false;
+  dict = dictShell->tio.object->tio.DICTIONARY;
   return dwg_add_DICTIONARY_item(dict, "CANNOSCALE", obj->handle.value) != nullptr;
 }
 

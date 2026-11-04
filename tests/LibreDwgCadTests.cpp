@@ -1586,6 +1586,12 @@ TEST_CASE("Multileader annotative flag persists through GsIo (issue #622)", "[is
   CHECK(back.cadMultileaders[0].labelHeightWorld == Catch::Approx(1.f));
 }
 
+TEST_CASE("Multileader without an imported arrow override inherits its style size (REQ-367)",
+          "[dwg][issue619]") {
+  const CadMultileader multileader{};
+  CHECK(multileader.arrowSizeWorld == 0.f);
+}
+
 TEST_CASE("annotativeVisibleScaleNames persist through GsIo for block, hatch, and multileader (issue #622)",
           "[issue622][gsio]") {
   AppCommandState src;
