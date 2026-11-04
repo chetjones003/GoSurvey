@@ -120,12 +120,16 @@ void EditorWindow::RefreshProperties() {
   auto fmt = [precision](double v) { return QString::fromStdString(FormatLinear(v, precision)); };
 
   // --- selection summary ------------------------------------------------------------------------
-  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0;
+  int nLine = 0, nCirc = 0, nText = 0, nOther = 0, nSurface = 0, nAlignment = 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) ++nLine;
     else if (e.type == SelectedEntity::Type::Circle) ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nText;
-    else { ++nOther; if (e.type == SelectedEntity::Type::Surface) ++nSurface; }
+    else {
+      ++nOther;
+      if (e.type == SelectedEntity::Type::Surface) ++nSurface;
+      if (e.type == SelectedEntity::Type::Alignment) ++nAlignment;
+    }
   }
   const int total = static_cast<int>(st.selection.size());
   QString summary;
@@ -144,7 +148,9 @@ void EditorWindow::RefreshProperties() {
     else if (nLine) what = nLine == 1 ? "Line" : QString("%1 lines").arg(nLine);
     else if (nCirc) what = nCirc == 1 ? "Circle" : QString("%1 circles").arg(nCirc);
     else if (nText) what = nText == 1 ? "Text" : QString("%1 annotations").arg(nText);
-    else what = nSurface == nOther ? (nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface)) : QString("Other objects");
+    else if (nSurface == nOther) what = nSurface == 1 ? QString("TIN Surface") : QString("%1 surfaces").arg(nSurface);
+    else if (nAlignment == nOther) what = nAlignment == 1 ? QString("Alignment") : QString("%1 alignments").arg(nAlignment);
+    else what = "Other objects";
     summary = QString("Selected: %1 object%2 — %3").arg(total).arg(total == 1 ? "" : "s").arg(what);
   }
   auto* header = new QLabel(summary, body);
@@ -449,6 +455,11 @@ void EditorWindow::RefreshProperties() {
       dash->setEnabled(false);
       addRow(geometryRows, label, dash);
     }
+  } else if (nAlignment > 0 && nAlignment == total) {  // REQ-487: an alignment's geometry is edited with grips and its table
+    auto* note = new QLabel("Alignment geometry: see the Alignment section below, drag its grips, or open the Alignment Layout table (EDITALIGNMENT).", body);
+    note->setObjectName("propertiesAlignmentGeometryNote");
+    note->setWordWrap(true);
+    geometryRows->addWidget(note);
   } else if (!pure) {
     auto* mixed = new QLabel("Mixed object types — geometry is read-only here. Edit General above, or select only lines, circles, or text.", body);
     mixed->setObjectName("propertiesMixedNote");

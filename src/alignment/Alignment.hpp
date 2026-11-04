@@ -243,6 +243,15 @@ class Alignment {
                          std::string* whyNot = nullptr);
   /// Deletes entity `i`; a following floating entity re-attaches to the one before it.
   bool DeleteEntity(int i, std::string* whyNot = nullptr);
+  /// REQ-487.1 PI grip: moves the PI at the end of Fixed tangent `line` (a corner with the next tangent, or across the
+  /// Free curve after it) to `to`. Both tangents keep the PIs at their far ends; a Free curve keeps its radius.
+  bool MovePi(int line, Point2 to, std::string* whyNot = nullptr);
+  /// REQ-487.1 tangent midpoint grip: moves Fixed tangent `line` across its bearing by the part of (dx, dy) that is
+  /// perpendicular to it. Corners slide along the neighbouring tangents; Free curves re-fit.
+  bool MoveTangent(int line, double dx, double dy, std::string* whyNot = nullptr);
+  /// The PI at the end of tangent `line`: its end at a corner with the next tangent, or the intersection with the
+  /// tangent after a Free curve (`nextLine` gets that tangent). False when its end is not a PI.
+  [[nodiscard]] bool PiAfterTangent(int line, Point2* pi, int* nextLine = nullptr) const;
   /// Whole-object transforms (REQ-487.1). Rotate is clockwise radians, like azimuths. Mirror reflects across the line
   /// through (ax,ay)-(bx,by) and swaps curve handedness. Scale refuses a non-positive factor.
   void Translate(double dx, double dy);
@@ -437,13 +446,25 @@ struct CurveSettings {
 [[nodiscard]] bool BuildFromPis(const std::vector<Point2>& pis, const CurveSettings& s, Alignment* out,
                                 std::string* error, std::vector<std::string>* warnings = nullptr);
 
-// --- REQ-487.1 grips ---
-/// One grip on a selected alignment. `which` is stable across a drag: 0 = the start point (moves the whole alignment),
-/// 1 + 2*i = the END of tangent i (sets its length, and its bearing when it is Fixed), 2 + 2*i = the radius grip at the
-/// MIDDLE of curve i (sets its radius).
+// --- REQ-487.1 grips, placed and behaving like Civil 3D's ---
+enum class GripKind {
+  Start,        ///< The start point: moves the whole alignment.
+  TangentEnd,   ///< A tangent end that is not a PC or a PI: its length, and its bearing when Fixed.
+  TangentMid,   ///< A Fixed tangent's midpoint: moves the tangent, keeping its bearing.
+  Pi,           ///< A PI (a corner, or the tangents' intersection over a Free curve): moves the PI.
+  CurvePc,      ///< A Free curve's start: slides along the back tangent, changing the radius.
+  CurvePt,      ///< A curve's end: a Free curve slides along the ahead tangent; another curve changes its length.
+  CurveMid,     ///< A curve's middle: a Free curve passes through the point; another curve takes it as the radius.
+  CurveCentre,  ///< A curve's centre: moves along the bisector (Free) or the start radius, setting the radius.
+  SpiralEnd,    ///< A spiral's end: its length.
+  SpiralMid     ///< A spiral's middle: its end radius.
+};
+/// One grip on a selected alignment. `which` is stable across a drag: 0 = the start, otherwise 1 + 10 * entity + kind.
 struct Grip {
   Point2 point;
   int which = 0;
+  GripKind kind = GripKind::Start;
+  int entity = -1;
 };
 [[nodiscard]] std::vector<Grip> GripPoints(const Alignment& a);
 /// Applies a drag of grip `which` to `to`, starting from the unmodified `orig`. Goes through the same solver as the layout

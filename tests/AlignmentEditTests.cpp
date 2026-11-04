@@ -61,6 +61,13 @@ AppCommandState Drawing() {
   st.activeDrawingIdx = 1;
   return st;
 }
+
+/// The id of the grip of this kind on this entity, or -1 when the alignment offers none.
+int GripWhich(const Alignment& a, alignment::GripKind kind, int entity) {
+  for (const alignment::Grip& g : alignment::GripPoints(a))
+    if (g.kind == kind && g.entity == entity) return g.which;
+  return -1;
+}
 }  // namespace
 
 TEST_CASE("Continuing entities float on what precedes them", "[req486][alignment]") {
@@ -632,11 +639,18 @@ TEST_CASE("MOVE and ERASE act on alignments and keep linked offsets consistent",
 TEST_CASE("Grips: start moves the alignment, tangent ends set bearing and length, curve grips set the radius", "[req487][alignment]") {
   const Alignment a = Chain();
   const auto grips = alignment::GripPoints(a);
-  REQUIRE(grips.size() == 4);  // start + tangent end + curve + tangent end
+  using K = alignment::GripKind;
+  // Start; the Fixed tangent's end and midpoint; the floating curve's PT, midpoint and centre; the last tangent's end.
+  REQUIRE(grips.size() == 7);
   CHECK(grips[0].which == 0);
-  CHECK(grips[1].which == 1);
-  CHECK(grips[2].which == 4);  // curve entity index 1 -> 2 + 2*1
-  CHECK(grips[3].which == 5);  // tangent entity index 2 -> 1 + 2*2
+  const int tangentEnd = GripWhich(a, K::TangentEnd, 0);
+  const int curveMid = GripWhich(a, K::CurveMid, 1);
+  const int lastEnd = GripWhich(a, K::TangentEnd, 2);
+  REQUIRE(tangentEnd > 0);
+  REQUIRE(curveMid > 0);
+  REQUIRE(lastEnd > 0);
+  CHECK(GripWhich(a, K::TangentMid, 2) < 0);  // a floating tangent has no move grip
+  CHECK(GripWhich(a, K::CurvePc, 1) < 0);     // nor a floating curve a PC grip
 
   Alignment out;
   // Start grip: the whole alignment follows.
@@ -645,7 +659,7 @@ TEST_CASE("Grips: start moves the alignment, tangent ends set bearing and length
   CHECK(out.EndPoint().y == Approx(a.EndPoint().y + 5.0).margin(kEps));
 
   // First (Fixed) tangent end: bearing AND length follow the cursor; the curve and last tangent float along.
-  REQUIRE(alignment::DragGrip(a, 1, {1000.0, 2400.0}, &out));  // due north, 400 long
+  REQUIRE(alignment::DragGrip(a, tangentEnd, {1000.0, 2400.0}, &out));  // due north, 400 long
   CHECK(out.Entities()[0].startAzimuth == Approx(0.0).margin(1e-9));
   CHECK(out.Entities()[0].length == Approx(400.0).margin(1e-9));
   CHECK(out.Entities()[1].start.x == Approx(1000.0).margin(kEps));
@@ -654,20 +668,20 @@ TEST_CASE("Grips: start moves the alignment, tangent ends set bearing and length
 
   // A floating tangent keeps its bearing and slides its length along it.
   const Point2 pt = a.GetPointAtStation(a.EntityStartStation(2) + 100.0);
-  REQUIRE(alignment::DragGrip(a, 5, {pt.x + 0.0, pt.y + 0.0}, &out));
+  REQUIRE(alignment::DragGrip(a, lastEnd, {pt.x + 0.0, pt.y + 0.0}, &out));
   CHECK(out.Entities()[2].length == Approx(100.0).margin(1e-6));
 
   // The curve's mid grip sets the radius from the distance to its centre.
   alignment::CurveData cd;
   REQUIRE(a.CurveDataFor(1, &cd));
-  REQUIRE(alignment::DragGrip(a, 4, {cd.center.x + 350.0, cd.center.y}, &out));
+  REQUIRE(alignment::DragGrip(a, curveMid, {cd.center.x + 350.0, cd.center.y}, &out));
   CHECK(out.Entities()[1].radius == Approx(350.0).margin(1e-6));
   CheckTangentContinuous(out);
 
   // A locked bearing slides along the existing bearing instead of turning.
   Alignment locked = a;
   REQUIRE(locked.EditEntity(0, EditParam::Locks, Entity::kLockBearing));
-  REQUIRE(alignment::DragGrip(locked, 1, {1000.0, 2400.0}, &out));
+  REQUIRE(alignment::DragGrip(locked, tangentEnd, {1000.0, 2400.0}, &out));
   CHECK(out.Entities()[0].startAzimuth == Approx(45.0 * kDeg).margin(1e-9));
   CHECK_FALSE(alignment::DragGrip(a, 99, {0, 0}, &out));
   CHECK(out.Entities().size() == a.Entities().size());  // always a valid alignment, even when nothing applies

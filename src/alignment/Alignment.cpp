@@ -196,9 +196,28 @@ bool Alignment::Reverse(std::string* note) {
   }
   entities_ = std::move(rev);
   Rebuild();
-  if (!equations.empty() && note != nullptr)
-    *note = std::to_string(equations.size()) + " station equation(s) cleared by the reversal";
+  std::string said;
+  if (!equations.empty()) said = std::to_string(equations.size()) + " station equation(s) cleared by the reversal";
   equations.clear();
+  // REQ-487.2: what hangs off the stationing follows it. A station S becomes start + L - (S - start); right is left.
+  const double flipAbout = 2.0 * startingStation + length_;
+  for (StationOffsetLabel& l : stationLabels) {
+    if (l.fixed) continue;  // a fixed label keeps its plan point and re-reads its station
+    l.internalStation = flipAbout - l.internalStation;
+    l.offset = -l.offset;
+  }
+  if (!designSpeeds.empty()) {  // each speed applied from its station to the next; reversed, from the other end
+    std::vector<DesignSpeed> flipped;
+    flipped.reserve(designSpeeds.size());
+    for (size_t k = 0; k < designSpeeds.size(); ++k) {
+      const double to = k + 1 < designSpeeds.size() ? designSpeeds[k + 1].internalStation : EndStation();
+      flipped.push_back({flipAbout - to, designSpeeds[k].speed});
+    }
+    if (designSpeeds.front().internalStation > startingStation + 1e-9)
+      said += std::string(said.empty() ? "" : "; ") + "the stretch that had no design speed now takes the speed before it";
+    designSpeeds.assign(flipped.rbegin(), flipped.rend());
+  }
+  if (note != nullptr) *note = said;
   return true;
 }
 

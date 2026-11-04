@@ -411,6 +411,15 @@ void RunGetPointFromStationOffset(AppCommandState& st, const std::string& args, 
 }
 
 std::string AlignmentCursorReadout(const AppCommandState& st, double lx, double ly, double maxOffset) {
+  // REQ-487.1: while a grip drags an alignment, the readout follows the cursor on that alignment as it was grabbed,
+  // however far away, so the station, offset and bearing say where the grip is being taken.
+  if (st.entityGripMoveActive && st.entityGripType == SelectedEntity::Type::Alignment &&
+      !st.entityGripOrigAlignment.Empty()) {
+    const alignment::Alignment& g = st.entityGripOrigAlignment;
+    const alignment::StationOffset so = g.GetStationOffset(lx, ly);
+    return g.name + "  STA " + alignment::FormatStation(g.DisplayedStation(so.internalStation, true)) + "  OFF " +
+           FormatLinear(so.offset, st.displayLinearPrecision) + "  " + Brg(st, so.azimuth);
+  }
   const alignment::Alignment* best = nullptr;
   alignment::StationOffset bestSo;
   double bestAbs = maxOffset;
@@ -993,8 +1002,17 @@ void RunReverseAlignment(AppCommandState& st, const std::string& args, std::vect
   PushUndoSnapshot(st, "Reverse alignment");
   alignment::Alignment* target = Resolve(st, "REVERSEALIGNMENT", name, log);
   *target = std::move(trial);
+  const std::uint64_t parentId = target->id;
   log.push_back("REVERSEALIGNMENT - \"" + target->name + "\" now runs from " + Sta(*target, target->StartStation()) + " (was the end) to " +
                 Sta(*target, target->EndStation()) + "." + (note.empty() ? "" : " " + note + "."));
+  // REQ-487.2: a linked offset keeps its side on the ground; facing the other way, right becomes left.
+  int followed = 0;
+  for (alignment::Alignment& child : st.alignments) {
+    if (child.parentId != parentId || parentId == 0) continue;
+    child.offsetDistance = -child.offsetDistance;
+    ++followed;
+  }
+  if (followed > 0) log.push_back("REVERSEALIGNMENT - " + std::to_string(followed) + " offset alignment(s) reversed with it.");
   RefreshAlignmentOffsets(st, log);
 }
 

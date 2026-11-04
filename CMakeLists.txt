@@ -654,6 +654,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/alignment/AlignmentReport.cpp
   src/alignment/AlignmentEdit.cpp
   src/alignment/AlignmentLayout.cpp
+  src/alignment/AlignmentGrips.cpp
   src/alignment/AlignmentGround.cpp
   src/alignment/AlignmentFeatureLine.cpp
   src/alignment/AlignmentDesign.cpp
@@ -1238,6 +1239,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AlignmentSpiralCommandTests.cpp
     tests/AlignmentEditTests.cpp
     tests/AlignmentCreateTests.cpp
+    tests/AlignmentGripTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp

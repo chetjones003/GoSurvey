@@ -127,7 +127,11 @@ TEST_CASE("Spiral end grip adjusts length", "[req487][req481][alignment]") {
   REQUIRE(grips.size() >= 2);
   Alignment out;
   const alignment::Point2 spStart = a.Entities()[1].start;
-  REQUIRE(alignment::DragGrip(a, 3, {spStart.x, spStart.y + 119.9}, &out));
+  int spiralEnd = -1;
+  for (const alignment::Grip& g : grips)
+    if (g.kind == alignment::GripKind::SpiralEnd && g.entity == 1) spiralEnd = g.which;
+  REQUIRE(spiralEnd > 0);
+  REQUIRE(alignment::DragGrip(a, spiralEnd, {spStart.x, spStart.y + 119.9}, &out));
   CHECK(out.Entities()[1].length == Approx(119.9).margin(0.05));
   CHECK(out.Entities()[1].length > a.Entities()[1].length);
 }
@@ -140,7 +144,11 @@ TEST_CASE("Spiral mid grip adjusts end radius", "[req487][req481][alignment]") {
   const double staMid = a.EntityStartStation(1) + 50.0;
   const alignment::Point2 pMid = a.GetPointAtStation(staMid);
   Alignment out;
-  REQUIRE(alignment::DragGrip(a, 4, {pMid.x + 15.0, pMid.y + 5.0}, &out));
+  int spiralMid = -1;
+  for (const alignment::Grip& g : alignment::GripPoints(a))
+    if (g.kind == alignment::GripKind::SpiralMid && g.entity == 1) spiralMid = g.which;
+  REQUIRE(spiralMid > 0);
+  REQUIRE(alignment::DragGrip(a, spiralMid, {pMid.x + 15.0, pMid.y + 5.0}, &out));
   CHECK(out.Entities()[1].radius != Approx(r0).margin(1e-9));
   CHECK(out.Entities()[1].radius > 0.0);
 }

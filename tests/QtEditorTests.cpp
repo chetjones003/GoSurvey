@@ -1246,6 +1246,55 @@ private Q_SLOTS:
     QCOMPARE(ribbonAlignment->menu()->actions().size(), 2);
   }
 
+  /// REQ-487: the grips on a selected tangent / curve / tangent road, and a PI drag with the readout - captured for the
+  /// Civil 3D comparison.
+  void issue121AlignmentGripsShowAndDrag() {
+    EditorWindow window;
+    window.CreateDrawingFromTemplate();
+    window.resize(1440, 900);
+    window.show();
+    QTRY_VERIFY_WITH_TIMEOUT(window.m_Viewport->IsRendererReady(), 10000);
+    AppCommandState& st = window.State();
+    for (const char* line : {"ALIGNMENT Main Road", "ALIGNMENTCURVESETTINGS RADIUS=200", "ALIGNMENTLAYOUT Main Road, CURVES",
+                             "0,0", "0,500", "400,800", "900,800", ""})
+      window.Submit(line);
+    QCOMPARE(st.alignments.size(), size_t(1));
+    QCOMPARE(st.alignments[0].Entities().size(), size_t(5));
+    window.findChild<QWidget*>("alignmentLayoutTools")->close();
+    window.Submit("ZOOMEXTENTS");
+    window.Refresh();
+    QTRY_VERIFY_WITH_TIMEOUT(!st.pendingZoomExtents, 10000);
+    st.selection = {{SelectedEntity::Type::Alignment, 0}};
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QCOMPARE(alignment::GripPoints(st.alignments[0]).size(), size_t(15));
+    QCOMPARE(window.findChild<QLabel*>("propertiesSummary")->text(), QString("Selected: 1 object — Alignment"));
+    QVERIFY(window.findChild<QLabel*>("propertiesAlignmentGeometryNote"));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-487-grips.png")));
+
+    // Drag PI 1 west: the curves keep R 200, and the status bar reads station / offset / bearing on the road.
+    QVERIFY(TryBeginEntityGripAtLocal(st, 0.0f, 500.0f, 2.0f));
+    QCOMPARE(st.entityGripType, SelectedEntity::Type::Alignment);
+    ApplyEntityGripPoint(st, -100.0f, 500.0f, 0.f);
+    st.alignmentCursorReadout = AlignmentCursorReadout(st, -100.0, 500.0, 10.0);  // as the mouse-move handler does
+    window.m_Viewport->cursorChanged(-100.0, 500.0, 0.0);
+    window.Refresh();
+    window.m_Viewport->update();
+    QTest::qWait(250);
+    QCOMPARE(st.alignments[0].Entities()[1].radius, 200.0);
+    QVERIFY(window.m_Coordinates->text().contains("Main Road  STA "));
+    QVERIFY(window.m_Viewport->grabFramebuffer().save(Issue914Shot("qt-487-drag-pi.png")));
+    QPixmap shot = window.grab();
+    {
+      QPainter painter(&shot);
+      painter.drawImage(window.m_Viewport->mapTo(&window, QPoint(0, 0)), window.m_Viewport->grabFramebuffer());
+    }
+    QVERIFY(shot.save(Issue914Shot("qt-487-window-drag-pi.png")));
+    RestoreEntityGripOriginal(st);
+    QCOMPARE(st.alignments[0].Entities()[0].length, 400.0);
+  }
+
   void blockEditorPickerUsesQtDialog() {
     EditorWindow window;
     window.CreateDrawingFromTemplate();

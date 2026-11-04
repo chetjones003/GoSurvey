@@ -16280,6 +16280,15 @@ capability that does not exist. They are recorded here rather than quietly dropp
 - Owner-layer: Commands, Domain, Qt UI.
 - Status: accepted (2026-11-02, user approval)
 - Revisions: Phase 2 delivered 2026-11-02: grips (start, tangent end, curve radius), MOVE/COPY/ROTATE/SCALE/MIRROR, REVERSEALIGNMENT, ALIGNMENTSTATION. Reverse clears station equations.
+  2026-11-04, **Decision D-2026-11-04-j (grips and reverse):** grips follow Civil 3D's on a tangent / Free curve /
+  tangent alignment — a triangle at each PI (a corner, or the tangents' intersection over a Free curve) moves it and
+  the curve keeps its radius; circles at a Free curve's PC and PT slide along the tangents and its midpoint is a
+  pass-through point (all set the radius, keeping tangency); a square at a Fixed tangent's midpoint moves it keeping
+  its bearing. GoSurvey adds a centre grip (statement 1) that moves along the bisector (Free) or the start radius. On
+  a curve that follows the one before it, the PT changes its length and the midpoint its radius. Spiral grips stay at
+  the spiral's end (length) and middle (end radius). During a drag the readout reports station / offset / bearing on
+  the alignment as it was grabbed. Reverse also flips station labels (station and side), design speeds and linked
+  offsets (their side), so each stays on the ground.
 
 ### REQ-488 — Offset alignments
 

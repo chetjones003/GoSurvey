@@ -396,6 +396,150 @@ bool Alignment::DeleteEntity(int i, std::string* whyNot) {
   return true;
 }
 
+// ---------------------------------------------------------------- PI and tangent grips (REQ-487.1)
+
+namespace {
+
+/// Where the line through `p` along `az1` meets the line through `q` along `az2`; false when they are parallel.
+bool LinesMeet(Point2 p, double az1, Point2 q, double az2, Point2* at) {
+  assert(at != nullptr);
+  const double d1x = std::sin(az1), d1y = std::cos(az1), d2x = std::sin(az2), d2y = std::cos(az2);
+  const double cross = d1x * d2y - d1y * d2x;
+  if (std::fabs(cross) < 1e-12) return false;
+  const double t = ((q.x - p.x) * d2y - (q.y - p.y) * d2x) / cross;
+  *at = {p.x + t * d1x, p.y + t * d1y};
+  assert(std::isfinite(at->x) && std::isfinite(at->y));
+  return true;
+}
+
+double AzimuthTo(Point2 a, Point2 b) { return NormAz(std::atan2(b.x - a.x, b.y - a.y)); }
+
+double Distance(Point2 a, Point2 b) { return std::hypot(b.x - a.x, b.y - a.y); }
+
+}  // namespace
+
+bool Alignment::PiAfterTangent(int line, Point2* pi, int* nextLine) const {
+  assert(pi != nullptr);
+  const int n = static_cast<int>(entities_.size());
+  if (line < 0 || line >= n || entities_[static_cast<size_t>(line)].kind != EntityKind::Line) return false;
+  const Entity& l = entities_[static_cast<size_t>(line)];
+  if (line + 1 < n && entities_[static_cast<size_t>(line) + 1].kind == EntityKind::Line) {
+    const Entity& m = entities_[static_cast<size_t>(line) + 1];
+    const double turn = std::fabs(std::remainder(m.startAzimuth - l.startAzimuth, kTwoPi));
+    if (Distance(EndOf(l), m.start) > 1e-6 || turn < 1e-9) return false;  // a gap, or straight on: no corner
+    *pi = m.start;
+    if (nextLine != nullptr) *nextLine = line + 1;
+    return true;
+  }
+  if (line + 2 < n && entities_[static_cast<size_t>(line) + 1].kind == EntityKind::Arc &&
+      entities_[static_cast<size_t>(line) + 1].constraint == Entity::Constraint::Free &&
+      entities_[static_cast<size_t>(line) + 2].kind == EntityKind::Line) {
+    const Entity& m = entities_[static_cast<size_t>(line) + 2];
+    if (!LinesMeet(l.start, l.startAzimuth, m.start, m.startAzimuth, pi)) return false;
+    if (nextLine != nullptr) *nextLine = line + 2;
+    return true;
+  }
+  assert(line < n);
+  return false;
+}
+
+bool Alignment::MovePi(int line, Point2 to, std::string* whyNot) {
+  auto fail = [&](const std::string& m) {
+    if (whyNot != nullptr) *whyNot = m;
+    return false;
+  };
+  assert(std::isfinite(to.x) && std::isfinite(to.y));
+  Point2 pi;
+  int next = -1;
+  if (!PiAfterTangent(line, &pi, &next)) return fail(Row(line) + " does not end at a PI");
+  const Entity& a = entities_[static_cast<size_t>(line)];
+  const Entity& b = entities_[static_cast<size_t>(next)];
+  if (a.constraint != Entity::Constraint::Fixed || b.constraint != Entity::Constraint::Fixed)
+    return fail(Row(line) + " and " + Row(next) + " must be Fixed tangents to move the PI between them");
+  if (((a.locks | b.locks) & (Entity::kLockBearing | Entity::kLockLength)) != 0)
+    return fail(Row(line) + " or " + Row(next) + " has a fixed bearing or length");
+  // The far PIs stay: the one before `a` (its start, or the PI over a Free curve before it) and the one after `b`.
+  Point2 from = a.start, far = EndOf(b);
+  Point2 p;
+  int k = -1;
+  if (PiAfterTangent(line - 2, &p, &k) && k == line) from = p;
+  if (PiAfterTangent(next, &p)) far = p;
+  if (Distance(from, to) < 1e-9 || Distance(to, far) < 1e-9) return fail("the PI cannot sit on the next PI");
+  Alignment work = *this;
+  Entity& wa = work.entities_[static_cast<size_t>(line)];
+  Entity& wb = work.entities_[static_cast<size_t>(next)];
+  wa.start = from;
+  wa.startAzimuth = AzimuthTo(from, to);
+  wa.length = Distance(from, to);
+  wb.start = to;
+  wb.startAzimuth = AzimuthTo(to, far);
+  wb.length = Distance(to, far);
+  std::string why;
+  if (!work.Resolve(&why)) return fail(why);
+  work.Rebuild();
+  if (!work.StationLocksHold(*this, -1, -1, &why)) return fail(why);
+  *this = std::move(work);
+  PruneOrphanEquations();
+  assert(!entities_.empty());
+  return true;
+}
+
+bool Alignment::MoveTangent(int line, double dx, double dy, std::string* whyNot) {
+  auto fail = [&](const std::string& m) {
+    if (whyNot != nullptr) *whyNot = m;
+    return false;
+  };
+  assert(std::isfinite(dx) && std::isfinite(dy));
+  const int n = static_cast<int>(entities_.size());
+  if (line < 0 || line >= n || entities_[static_cast<size_t>(line)].kind != EntityKind::Line) return fail("no such tangent");
+  const Entity& l = entities_[static_cast<size_t>(line)];
+  if (l.constraint != Entity::Constraint::Fixed) return fail(Row(line) + " follows its neighbour; make it Fixed to move it");
+  if ((l.locks & Entity::kLockLength) != 0) return fail(Row(line) + " has a fixed length");
+  const Point2 dir{std::sin(l.startAzimuth), std::cos(l.startAzimuth)};
+  const double across = dx * dir.y - dy * dir.x;  // right of travel is (cos az, -sin az)
+  const Point2 shift{across * dir.y, -across * dir.x};
+  Alignment work = *this;
+  Entity& w = work.entities_[static_cast<size_t>(line)];
+  const Point2 end = EndOf(l);
+  w.start = {l.start.x + shift.x, l.start.y + shift.y};
+  Point2 newEnd{end.x + shift.x, end.y + shift.y};
+  Point2 at;
+  int k = -1;
+  // A corner before: the previous tangent keeps its start and bearing and runs to the moved line.
+  if (PiAfterTangent(line - 1, &at, &k) && k == line) {
+    Entity& prev = work.entities_[static_cast<size_t>(line) - 1];
+    if (!LinesMeet(prev.start, prev.startAzimuth, w.start, w.startAzimuth, &at)) return fail("the tangents are parallel");
+    prev.length = (at.x - prev.start.x) * std::sin(prev.startAzimuth) + (at.y - prev.start.y) * std::cos(prev.startAzimuth);
+    w.start = at;
+  } else if (line > 0) {  // otherwise the neighbour must re-fit (Free) or follow (FloatOnNext)
+    const Entity::Constraint c = entities_[static_cast<size_t>(line) - 1].constraint;
+    if (c != Entity::Constraint::Free && c != Entity::Constraint::FloatOnNext)
+      return fail(Row(line) + " is attached to " + Row(line - 1) + ", which cannot follow a moved tangent");
+  }
+  // A corner after: the next tangent keeps its end and bearing and starts at the moved line.
+  if (PiAfterTangent(line, &at, &k) && k == line + 1) {
+    Entity& nx = work.entities_[static_cast<size_t>(line) + 1];
+    const Point2 nxEnd = EndOf(nx);
+    if (!LinesMeet(w.start, w.startAzimuth, nx.start, nx.startAzimuth, &at)) return fail("the tangents are parallel");
+    nx.start = at;
+    nx.length = Distance(at, nxEnd);
+    newEnd = at;
+  } else if (line + 1 < n) {
+    const Entity::Constraint c = entities_[static_cast<size_t>(line) + 1].constraint;
+    if (c != Entity::Constraint::Free && c != Entity::Constraint::FloatOnPrev)
+      return fail(Row(line) + " is attached to " + Row(line + 1) + ", which cannot follow a moved tangent");
+  }
+  w.length = (newEnd.x - w.start.x) * dir.x + (newEnd.y - w.start.y) * dir.y;
+  std::string why;
+  if (!work.Resolve(&why)) return fail(why);
+  work.Rebuild();
+  if (!work.StationLocksHold(*this, -1, -1, &why)) return fail(why);
+  *this = std::move(work);
+  PruneOrphanEquations();
+  assert(!entities_.empty());
+  return true;
+}
+
 int Alignment::PruneOrphanEquations() {
   int removed = 0;
   for (auto it = equations.begin(); it != equations.end();) {
@@ -470,97 +614,6 @@ bool Alignment::Mirror(double ax, double ay, double bx, double by) {
   return true;
 }
 
-
-// ---------------------------------------------------------------- grips (REQ-487.1)
-
-std::vector<Grip> GripPoints(const Alignment& a) {
-  std::vector<Grip> g;
-  if (a.Empty()) return g;
-  g.push_back({a.StartPoint(), 0});
-  for (size_t i = 0; i < a.Entities().size(); ++i) {
-    const Entity& e = a.Entities()[i];
-    const int ii = static_cast<int>(i);
-    if (e.kind == EntityKind::Line || e.kind == EntityKind::Spiral) {
-      g.push_back({a.GetPointAtStation(a.EntityEndStation(ii)), 1 + 2 * static_cast<int>(i)});
-    }
-    if (e.kind == EntityKind::Arc || e.kind == EntityKind::Spiral) {
-      g.push_back({a.GetPointAtStation(a.EntityStartStation(ii) + e.length * 0.5), 2 + 2 * static_cast<int>(i)});
-    }
-  }
-  return g;
-}
-
-bool DragGrip(const Alignment& orig, int which, Point2 to, Alignment* out) {
-  if (out == nullptr) return false;
-  *out = orig;
-  if (orig.Empty() || which < 0) return false;
-  if (which == 0) {
-    const Point2 s = orig.StartPoint();
-    out->Translate(to.x - s.x, to.y - s.y);
-    return true;
-  }
-  const int i = (which - 1) / 2;
-  if (i < 0 || static_cast<size_t>(i) >= orig.Entities().size()) return false;
-  const Entity& e = orig.Entities()[static_cast<size_t>(i)];
-  const bool isEnd = (which % 2) == 1;
-  if (isEnd && e.kind == EntityKind::Line) {
-    const double dx = to.x - e.start.x, dy = to.y - e.start.y;
-    Alignment w = orig;
-    if (e.constraint == Entity::Constraint::Fixed) {
-      const double len = std::hypot(dx, dy);
-      if (!(len > 1e-9)) return true;
-      if (w.EditEntity(i, EditParam::LineAzimuth, std::atan2(dx, dy))) {
-        if (w.EditEntity(i, EditParam::LineLength, len)) *out = w;
-      } else {
-        // Bearing locked or underivable: slide along the existing bearing instead.
-        const double along = dx * std::sin(e.startAzimuth) + dy * std::cos(e.startAzimuth);
-        Alignment s = orig;
-        if (along > 1e-9 && s.EditEntity(i, EditParam::LineLength, along)) *out = s;
-      }
-    } else {
-      const double along = dx * std::sin(e.startAzimuth) + dy * std::cos(e.startAzimuth);  // a floating tangent keeps its bearing
-      Alignment s = orig;
-      if (along > 1e-9 && s.EditEntity(i, EditParam::LineLength, along)) *out = s;
-    }
-    return true;
-  }
-  if (isEnd && e.kind == EntityKind::Spiral) {
-    const double along = (to.x - e.start.x) * std::sin(e.startAzimuth) + (to.y - e.start.y) * std::cos(e.startAzimuth);
-    Alignment w = orig;
-    if (along > 1e-9 && w.EditEntity(i, EditParam::CurveLength, along)) *out = w;
-    return true;
-  }
-  if (!isEnd && e.kind == EntityKind::Spiral) {
-    const double sMid = e.length * 0.5;
-    const double staMid = orig.EntityStartStation(i) + sMid;
-    const Point2 pMid = orig.GetPointAtStation(staMid);
-    const double az = orig.GetBearingAtStation(staMid);
-    const double kMidCur = SpiralKappaAt(e, sMid);
-    if (!(std::fabs(kMidCur) > 1e-14)) return true;
-    const double rInst = 1.0 / std::fabs(kMidCur);
-    const double rx = std::cos(az);
-    const double ry = -std::sin(az);
-    const Point2 center =
-        e.right ? Point2{pMid.x + rInst * rx, pMid.y + rInst * ry} : Point2{pMid.x - rInst * rx, pMid.y + rInst * ry};
-    const double rNew = std::hypot(to.x - center.x, to.y - center.y);
-    if (!(rNew > 1e-6)) return true;
-    const double sign = e.right ? 1.0 : -1.0;
-    const double kEnd = 2.0 * (sign / rNew) - EntityStartCurvature(e);
-    if (!(std::fabs(kEnd) > 1e-14)) return true;
-    Alignment w = orig;
-    if (w.EditEntity(i, EditParam::CurveRadius, 1.0 / std::fabs(kEnd))) *out = w;
-    return true;
-  }
-  if (!isEnd && e.kind == EntityKind::Arc) {
-    CurveData cd;
-    (void)orig.CurveDataFor(i, &cd);
-    const double r = std::hypot(to.x - cd.center.x, to.y - cd.center.y);
-    Alignment w = orig;
-    if (r > 1e-6 && w.EditEntity(i, EditParam::CurveRadius, r)) *out = w;
-    return true;
-  }
-  return false;
-}
 
 // ---------------------------------------------------------------- offsets (REQ-488)
 

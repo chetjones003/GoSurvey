@@ -17,6 +17,8 @@
 #include "RecentDrawings.hpp"
 #include "ThumbnailCache.hpp"
 #include "MapTileService.hpp"
+#include <array>
+
 #include <QDateTime>
 #include <QKeyEvent>
 #include <QLineF>
@@ -892,6 +894,9 @@ void EditorViewport::paintGL() {
     const Camera gripCamera = CadViewCamera(m_State);
     for (const SelectedEntity& selected : m_State.selection) {
       std::vector<ray3d::Vec3> grips;
+      // REQ-487.1: alignment grips carry their own id and Civil 3D's shape (0 square, 1 circle, 2 triangle).
+      std::vector<int> gripIds;
+      std::vector<int> gripShapes;
       switch (selected.type) {
         case SelectedEntity::Type::LineSeg: {
           const std::size_t k = static_cast<std::size_t>(selected.index) * 6;
@@ -963,8 +968,14 @@ void EditorViewport::paintGL() {
         }
         case SelectedEntity::Type::Alignment: {  // REQ-487.1
           if (selected.index >= 0 && static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
-            for (const alignment::Grip& g : alignment::GripPoints(m_State.alignments[static_cast<std::size_t>(selected.index)]))
+            for (const alignment::Grip& g : alignment::GripPoints(m_State.alignments[static_cast<std::size_t>(selected.index)])) {
               grips.push_back({g.point.x, g.point.y, 0.0});
+              gripIds.push_back(g.which);
+              using GK = alignment::GripKind;
+              const bool circle = g.kind == GK::CurvePc || g.kind == GK::CurvePt || g.kind == GK::CurveMid ||
+                                  g.kind == GK::CurveCentre || g.kind == GK::SpiralMid;
+              gripShapes.push_back(g.kind == GK::Pi ? 2 : circle ? 1 : 0);
+            }
           }
           break;
         }
@@ -1004,13 +1015,36 @@ void EditorViewport::paintGL() {
         }
         default: break;
       }
+      if (selected.type == SelectedEntity::Type::Alignment && selected.index >= 0 &&
+          static_cast<std::size_t>(selected.index) < m_State.alignments.size()) {
+        // Like Civil 3D: dashed tangent extensions from each Free curve's PC and PT to its PI.
+        const alignment::Alignment& al = m_State.alignments[static_cast<std::size_t>(selected.index)];
+        painter.setPen(QPen(QColor("#3b82f6"), 1, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        for (std::size_t e = 0; e < al.Entities().size(); ++e) {
+          alignment::CurveData cd;
+          if (al.Entities()[e].constraint != alignment::Entity::Constraint::Free ||
+              !al.CurveDataFor(static_cast<int>(e), &cd) || !cd.hasPI)
+            continue;
+          std::array<QPointF, 3> s{};
+          const std::array<alignment::Point2, 3> w{cd.pc, cd.pi, cd.pt};
+          for (std::size_t k = 0; k < w.size(); ++k) {
+            float sx = 0.f, sy = 0.f;
+            gripCamera.WorldToScreen(w[k].x, w[k].y, 0.0, static_cast<float>(width()), static_cast<float>(height()), &sx, &sy);
+            s[k] = QPointF(sx, sy);
+          }
+          painter.drawPolyline(s.data(), static_cast<int>(s.size()));
+        }
+      }
       for (std::size_t i = 0; i < grips.size(); ++i) {
         float x = 0.f, y = 0.f;
         gripCamera.WorldToScreen(grips[i].x, grips[i].y, grips[i].z,
             static_cast<float>(width()), static_cast<float>(height()), &x, &y);
         if (!std::isfinite(x) || !std::isfinite(y)) continue;
+        const int gripId = i < gripIds.size() ? gripIds[i] : static_cast<int>(i);
+        const int shape = i < gripShapes.size() ? gripShapes[i] : 0;
         const bool entityHot = m_State.entityGripMoveActive && m_State.entityGripType == selected.type &&
-            m_State.entityGripEntityIndex == selected.index && m_State.entityGripWhich == static_cast<int>(i);
+            m_State.entityGripEntityIndex == selected.index && m_State.entityGripWhich == gripId;
         const bool dimHot = selected.type == SelectedEntity::Type::Annotation && m_State.dimGripMoveActive &&
             m_State.dimGripAnnotationIndex == selected.index && m_State.dimGripWhich == static_cast<int>(i);
         const bool mtextHot = selected.type == SelectedEntity::Type::Annotation && m_State.mtextGripMoveActive &&
@@ -1018,7 +1052,14 @@ void EditorViewport::paintGL() {
         const bool hot = entityHot || dimHot || mtextHot;
         painter.setPen(QPen(Qt::white, 1));
         painter.setBrush(hot ? QColor("#f57842") : QColor("#3b82f6"));
-        painter.drawRect(QRectF(x - 4, y - 4, 8, 8));
+        if (shape == 1) {
+          painter.drawEllipse(QPointF(x, y), 4.5, 4.5);
+        } else if (shape == 2) {
+          const std::array<QPointF, 3> tri{QPointF(x, y - 6), QPointF(x - 5.5, y + 4), QPointF(x + 5.5, y + 4)};
+          painter.drawPolygon(tri.data(), static_cast<int>(tri.size()));
+        } else {
+          painter.drawRect(QRectF(x - 4, y - 4, 8, 8));
+        }
       }
     }
   }

@@ -40,7 +40,7 @@ offset and a curve's radius are always exact.
 | `ALIGNMENTLOCK <name>, <entity#>, RADIUS\|LENGTH\|BEARING\|STATION, ON\|OFF` | A locked value refuses any edit that would change it. **STATION** keeps the entity's start where it is along the alignment: an edit, insert or delete that would move it is refused, naming every locked entity that would move. Changing the starting station only relabels and is allowed. |
 | `ALIGNMENTINSERT <name>, <after entity#>, TANGENT, <length>` / `CURVE, <radius>, <delta°>, LEFT\|RIGHT` / `SPIRAL, <length>, <end radius>, LEFT\|RIGHT` (optional start radius) | Inserts a tangent, curve or clothoid spiral that continues smoothly; what follows moves with it. |
 | `ALIGNMENTREMOVE <name>, <entity#>` | Removes an entity; a following floating entity re-attaches to the one before. A remaining gap is reported. |
-| `REVERSEALIGNMENT <name>` | Reverses direction and stationing of a continuous alignment (twice gives back the original). Station equations are cleared. |
+| `REVERSEALIGNMENT <name>` | Reverses direction and stationing of a continuous alignment (twice gives back the original). Station equations are cleared. Station labels, design speeds and linked offset alignments follow, so each stays where it was on the ground. |
 | `ALIGNMENTSTATION <name>, START, <station>[, CLEAR]` / `EQ, ADD, ...` | Starting station and station equations. |
 | `ALIGNMENTCONTINUITY <name>, C0\|C1\|C2` / `LIST` | Sets which continuity level is checked at junctions (default **C1**). **LIST** reports warnings at that level. |
 | `OFFSETALIGNMENT <parent>, R12, L12` | Creates real **offset alignments** (right/left of the parent, facing its end). They follow the parent when it is edited or moved. Refused where the offset would collapse a curve, at a kink in the parent, or when the parent contains a **spiral**. |
@@ -62,8 +62,20 @@ offset and a curve's radius are always exact.
   curve segments), **Nearest** to the closest point on the true curve, **Intersection** where an
   alignment meets another alignment or a line or arc, and **Station** when you type
   `STATION 12+45.32` at a point prompt (or enable Station OSNAP after a station value is latched).
-- **Grips.** Select an alignment: the start point moves the whole alignment; the end of a tangent sets its
-  length (and bearing, if Fixed); the middle of a curve sets its radius. Esc cancels a drag.
+- **Grips.** Select an alignment to see grips like Civil 3D's. Each drag goes through the same rules as the
+  Alignment Layout table, so a locked value does not move, and Esc cancels a drag.
+  - **Triangle at a PI** (a corner, or where the tangents meet over a curve): moves the PI. Both tangents turn to it;
+    a curve between them keeps its radius and stays tangent. Dashed lines show each curve's tangents to its PI.
+  - **Circles at a curve's start (PC) and end (PT):** slide along the tangent; the radius changes so the curve
+    stays tangent. On a curve that follows the one before it, the end changes the curve's length.
+  - **Circle at a curve's middle:** the curve passes through the point (its radius changes, its tangents stay).
+  - **Circle at a curve's centre:** moves the centre along the line from the PI; the radius follows.
+  - **Square at a tangent's middle:** moves the tangent sideways, keeping its bearing; corners slide along the
+    tangents next to it and curves re-fit.
+  - **Squares at the ends:** the start moves the whole alignment; the end of a tangent sets its length (and bearing,
+    if Fixed). Spirals have grips at the end (length) and middle (end radius).
+  - While you drag, the status bar shows the cursor's station, offset and bearing on the alignment as it was when
+    you picked the grip.
 - **MOVE, COPY, ROTATE, SCALE, MIRROR, ERASE** work on alignments (rotation and mirroring in plan). A copy is a new
   independent alignment named `<name> (2)`.
 - **Constraints.** A new tangent or curve is *Float (prev)*: it stays tangent to what precedes it. *Fixed* keeps its
@@ -82,7 +94,8 @@ offset and a curve's radius are always exact.
 
 ## Limits so far
 
-- Geometry is built from typed commands, the layout table, grips or selected objects; there is no on-screen layout toolbar yet.
+- Geometry is built from typed commands, the Alignment Layout Tools (Tangent-Tangent), the layout table, grips or
+  selected objects; Civil 3D's other sub-entity layout tools are not built.
 - No widening yet.
 - Offsets are not built at a corner where the parent changes direction without a curve, and not when the parent has spirals.
 
