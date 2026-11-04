@@ -71,10 +71,19 @@ Still open:
    column still shows the tangency constraint only.
 2. **Per-entity meets/violates marking in the report (REQ-494).** The report lists findings but does not mark each entity as
    meeting or violating. CSV is unchanged (adding a column would change the 18-column contract).
-3. **Civil 3D visual comparison (CLAUDE.md §3.6).** The flag, the layout column and the Design tab combo are visible Qt surfaces.
-   The three-reviewer panel was not run; the result is **not** recorded as a pass.
-4. **Flag size.** Fixed at 4 drawing units; it does not scale with the style's marker size.
+3. **Flag size.** Fixed at 4 drawing units; it does not scale with the style's marker size.
+4. **Panel follow-ups (non-blocking, cited by two or more reviewers).** The layout table's Design check text is cut
+   off before the required minimum, and Civil 3D shows the minimum in its own column; the red flag reads less clearly
+   than Civil 3D's amber "!" triangle; the style Design tab is mostly empty below its one combo box.
+
+Closed: **Civil 3D visual comparison (CLAUDE.md §3.6)** — panel run 2026-11-04, result **PASS** (see §7).
 ## 7. Completion record
 - Requirements: REQ-502 statement items, except §6 items 1–4.
 - Tests: `[req502]` and `[alignment]` pass (Release). Full ctest: pending the run recorded below.
-- Panel: not run (§6.5). Visible-UI completion gate is **open**.
+- Panel: **PASS** (2026-11-04). Three pairs (plan-view marker, entity table, check-set choice) against Civil 3D 2026;
+  every rubric item's median is 1 or 2 and no reviewer reported a blocker. The Civil 3D side was built in a new
+  drawing inside the user's running session (Imperial NCS template, AASHTO 2011 criteria, 30 mi/h) and closed unsaved
+  afterwards. Unmatched settings, the three score sheets, medians and the decision are under
+  `build/artifacts/panel-502/` (`TASK-AND-SETTINGS.md`, `reviewer-A/B/C.md`, `RESULT.md`).
+  Session note: an earlier mis-click in the user's MESSER drawing left a pending selection window; it was cancelled
+  with Escape and nothing in that drawing was selected or changed.
