@@ -172,3 +172,44 @@ TEST_CASE("ALIGNMENTCHECKSET SET rejects bad values and leaves the set unchanged
   CHECK(st.alignmentCheckSets[0].radiusTable.empty());
   CHECK(st.alignmentCheckSets[0].minA == 0.0);
 }
+
+TEST_CASE("FindCheckSet matches names without regard to capitalisation (REQ-502)", "[req502][alignment]") {
+  std::vector<alignment::AlignmentCheckSet> sets(1);
+  sets[0].name = "Rural";
+  CHECK(alignment::FindCheckSet(sets, "rural") == &sets[0]);
+  CHECK(alignment::FindCheckSet(sets, "Urban") == nullptr);
+  CHECK(alignment::FindCheckSet(sets, "") == nullptr);
+}
+
+TEST_CASE("ALIGNMENTLIST warns about design failures and the report shows the stubs (REQ-502)", "[req502][alignment]") {
+  AppCommandState st = Drawing();
+  std::vector<std::string> log;
+  MakeRoadWithCurve(st, log);
+  Submit(st, "ALIGNMENTCHECKSET NEW, Rural", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, RADIUS, 40, 400", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SUPERELEVATION, 0.06", log);
+  Submit(st, "ALIGNMENTCHECKSET SET, Rural, SIGHT, 300", log);
+  Submit(st, "ALIGNMENTSPEED CR1, 0+00, 40", log);
+  Submit(st, "ALIGNMENTCRITERIA CR1, Rural", log);
+
+  log.clear();
+  Submit(st, "ALIGNMENTLIST CR1", log);
+  CHECK(LogHas(log, "WARNING: design check, entity 2: Curve radius 250.00' is below the selected minimum design radius of 400.00'."));
+
+  log.clear();
+  Submit(st, "ALIGNMENTREPORT CR1", log);
+  CHECK(LogHas(log, "Superelevation: not calculated (stub, REQ-502)."));
+  CHECK(LogHas(log, "Sight distance: not calculated (stub, REQ-502)."));
+
+  REQUIRE(st.alignmentCheckSets.size() == 1);
+  CHECK(st.alignmentCheckSets[0].maxSuperelevation == 0.06);
+  CHECK(st.alignmentCheckSets[0].minSightDistance == 300.0);
+
+  // The stubs survive a save and reload, as the check set does.
+  const std::string json = SerializeGoSurveyJson(st);
+  AppCommandState back = Drawing();
+  std::vector<std::string> loadLog;
+  REQUIRE(LoadGoSurveyFromJsonUtf8(back, json, loadLog));
+  REQUIRE(back.alignmentCheckSets.size() == 1);
+  CHECK(back.alignmentCheckSets[0] == st.alignmentCheckSets[0]);
+}

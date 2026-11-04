@@ -176,6 +176,8 @@ void BuildAlignmentReportLines(const Alignment& a, const AlignmentReportFormat& 
     for (const DesignFinding& f : findings)
       lines->push_back("  Entity " + std::to_string(f.entity) + ": " + f.text);
   }
+  lines->push_back("Superelevation: not calculated (stub, REQ-502).");
+  lines->push_back("Sight distance: not calculated (stub, REQ-502).");
   if (a.Empty()) {
     lines->push_back("");
     lines->push_back("(no entities)");

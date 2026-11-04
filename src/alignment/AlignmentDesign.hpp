@@ -28,10 +28,13 @@ struct AlignmentCheckSet {
   double minSpiralLength = 0.0;  ///< Shortest single spiral (not part of a compound).
   double minA = 0.0;             ///< Smallest spiral A parameter.
   double maxA = 0.0;             ///< Largest spiral A parameter.
+  double maxSuperelevation = 0.0;  ///< Stub (REQ-502): stored and reported, not checked in this epic.
+  double minSightDistance = 0.0;   ///< Stub (REQ-502): stored and reported, not checked in this epic.
 
   bool operator==(const AlignmentCheckSet& o) const {
     return name == o.name && kind == o.kind && minTangent == o.minTangent && minSpiralLength == o.minSpiralLength &&
-           minA == o.minA && maxA == o.maxA && radiusTable.size() == o.radiusTable.size() &&
+           minA == o.minA && maxA == o.maxA && maxSuperelevation == o.maxSuperelevation &&
+           minSightDistance == o.minSightDistance && radiusTable.size() == o.radiusTable.size() &&
            std::equal(radiusTable.begin(), radiusTable.end(), o.radiusTable.begin(),
                       [](const RadiusRequirement& x, const RadiusRequirement& y) {
                         return x.speed == y.speed && x.minRadius == y.minRadius;
@@ -45,6 +48,9 @@ struct DesignFinding {
   int entity = 0;
   std::string text;
 };
+
+/// The check set with this name (case-insensitive), or null. Shared by the commands, the layout table and the viewport.
+[[nodiscard]] const AlignmentCheckSet* FindCheckSet(const std::vector<AlignmentCheckSet>& sets, const std::string& name);
 
 /// The design speed in force at an internal station: the last speed set at or before it (REQ-502). Zero when none is set.
 [[nodiscard]] double DesignSpeedAt(const Alignment& a, double internalStation);

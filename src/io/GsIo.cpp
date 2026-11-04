@@ -1335,6 +1335,8 @@ json BuildRoot(const AppCommandState& st) {
         o["minSpiralLength"] = s.minSpiralLength;
         o["minA"] = s.minA;
         o["maxA"] = s.maxA;
+        o["maxSuperelevation"] = s.maxSuperelevation;  // REQ-502 stub
+        o["minSightDistance"] = s.minSightDistance;    // REQ-502 stub
         sets.push_back(std::move(o));
       }
       doc["alignmentCheckSets"] = std::move(sets);
@@ -3495,6 +3497,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("minSpiralLength") && o["minSpiralLength"].is_number()) s.minSpiralLength = o["minSpiralLength"].get<double>();
       if (o.contains("minA") && o["minA"].is_number()) s.minA = o["minA"].get<double>();
       if (o.contains("maxA") && o["maxA"].is_number()) s.maxA = o["maxA"].get<double>();
+      if (o.contains("maxSuperelevation") && o["maxSuperelevation"].is_number())
+        s.maxSuperelevation = o["maxSuperelevation"].get<double>();
+      if (o.contains("minSightDistance") && o["minSightDistance"].is_number())
+        s.minSightDistance = o["minSightDistance"].get<double>();
       st.alignmentCheckSets.push_back(std::move(s));
     }
   }

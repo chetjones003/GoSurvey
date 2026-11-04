@@ -3,10 +3,16 @@
 #include "util/NumFormat.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 namespace alignment {
 namespace {
+
+std::string Folded(std::string s) {
+  for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
 
 std::string Lin(int precision, double v) { return FormatLinear(v, precision) + "'"; }
 
@@ -21,6 +27,14 @@ const DesignSpeed* LastSpeedAtOrBefore(const Alignment& a, double s) {
 }
 
 }  // namespace
+
+const AlignmentCheckSet* FindCheckSet(const std::vector<AlignmentCheckSet>& sets, const std::string& name) {
+  if (name.empty()) return nullptr;
+  for (const AlignmentCheckSet& s : sets) {
+    if (Folded(s.name) == Folded(name)) return &s;
+  }
+  return nullptr;
+}
 
 double DesignSpeedAt(const Alignment& a, double internalStation) {
   const DesignSpeed* d = LastSpeedAtOrBefore(a, internalStation);

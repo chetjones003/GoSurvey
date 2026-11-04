@@ -331,6 +331,12 @@ void RunAlignmentList(AppCommandState& st, const std::string& args, std::vector<
       }
       log.push_back(row);
     }
+    if (!a.checkSetName.empty()) {  // REQ-502: design warnings in the list, as the spec asks
+      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(st.alignmentCheckSets, a.checkSetName)) {
+        for (const alignment::DesignFinding& fd : alignment::CheckDesign(a, *checkSet, st.displayLinearPrecision))
+          log.push_back("  WARNING: design check, entity " + std::to_string(fd.entity) + ": " + fd.text);
+      }
+    }
     for (const alignment::ContinuityIssue& c : a.CheckContinuity()) {
       if (c.FailsRequirement(a.continuityRequirement)) {
         if (!c.c0)
@@ -2440,12 +2446,12 @@ int FindCheckSetIndex(const AppCommandState& st, const std::string& name) {
 // ALIGNMENTCHECKSET DELETE, <name>
 // ALIGNMENTCHECKSET LIST
 // ALIGNMENTCHECKSET SET, <name>, RADIUS, <speed>, <minRadius>   (minRadius 0 removes the row for that speed)
-// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA, <value>   (0 switches the check off)
+// ALIGNMENTCHECKSET SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|SUPERELEVATION|SIGHT, <value>   (0 switches the check off)
 void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitFields(args);
   const char* usage =
       "ALIGNMENTCHECKSET - usage: ALIGNMENTCHECKSET NEW, <name>[, ROAD|RAIL] | DELETE, <name> | LIST | "
-      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA, <value>.";
+      "SET, <name>, RADIUS, <speed>, <minRadius> | SET, <name>, MINTANGENT|MINSPIRAL|MINA|MAXA|SUPERELEVATION|SIGHT, <value>.";
   if (f.empty()) {
     log.push_back(usage);
     return;
@@ -2542,7 +2548,8 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       if (minRadius > 0.0) table.push_back({speed, minRadius});
       std::sort(table.begin(), table.end(),
                 [](const alignment::RadiusRequirement& x, const alignment::RadiusRequirement& y) { return x.speed < y.speed; });
-    } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa") {
+    } else if (what == "mintangent" || what == "minspiral" || what == "mina" || what == "maxa" ||
+               what == "superelevation" || what == "sight") {
       double value = 0.0;
       if (f.size() != 4 || !ParseNum(f[3], &value) || value < 0.0) {
         log.push_back("ALIGNMENTCHECKSET - " + what + " takes one value, zero or more.");
@@ -2551,7 +2558,9 @@ void RunAlignmentCheckSet(AppCommandState& st, const std::string& args, std::vec
       if (what == "mintangent") edited.minTangent = value;
       else if (what == "minspiral") edited.minSpiralLength = value;
       else if (what == "mina") edited.minA = value;
-      else edited.maxA = value;
+      else if (what == "maxa") edited.maxA = value;
+      else if (what == "superelevation") edited.maxSuperelevation = value;  // REQ-502 stub
+      else edited.minSightDistance = value;  // REQ-502 stub
     } else {
       log.push_back(usage);
       return;

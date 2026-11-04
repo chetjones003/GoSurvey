@@ -82,7 +82,7 @@ void ShowAlignmentStyleDialog(QWidget* parent, AppCommandState& state, std::vect
   // Design: placeholder until REQ-502.
   auto* design = new QWidget(&dialog);
   auto* designLayout = new QVBoxLayout(design);
-  auto* designNote = new QLabel("Design checks are not configured yet. They arrive with design criteria (REQ-502).", design);
+  auto* designNote = new QLabel("Design checks are set with ALIGNMENTCHECKSET and ALIGNMENTCRITERIA. This tab does not edit them yet.", design);
   designNote->setWordWrap(true);
   designLayout->addWidget(designNote);
   designLayout->addStretch(1);

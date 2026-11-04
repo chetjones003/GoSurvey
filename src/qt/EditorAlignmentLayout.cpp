@@ -1,9 +1,12 @@
 #include "EditorAlignmentLayout.hpp"
 
 #include "CadCommands.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "util/NumFormat.hpp"
 
+#include <QColor>
 #include <QComboBox>
+#include <QStringList>
 #include <QDialog>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -22,7 +25,7 @@ namespace {
 
 constexpr double kRadToDeg = 180.0 / alignment::kPi;
 
-enum Column { ColNo, ColType, ColStart, ColEnd, ColLength, ColRadius, ColDelta, ColBearing, ColDirection, ColConstraint, ColStatus, ColCount };
+enum Column { ColNo, ColType, ColStart, ColEnd, ColLength, ColRadius, ColDelta, ColBearing, ColDirection, ColConstraint, ColStatus, ColDesign, ColCount };
 
 const char* const kTypeNames[] = {"", "Centerline", "Offset", "Curb Return", "Miscellaneous", "Rail"};
 
@@ -71,7 +74,7 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
   table->setObjectName("alignmentLayoutTable");
   table->setColumnCount(ColCount);
   table->setHorizontalHeaderLabels({"#", "Type", "Start station", "End station", "Length", "Radius", "Delta (deg)", "Bearing (deg)",
-                                    "Direction", "Constraint", "Continuity"});
+                                    "Direction", "Constraint", "Continuity", "Design check"});
   table->verticalHeader()->setVisible(false);
   table->horizontalHeader()->setStretchLastSection(true);
   table->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -120,6 +123,10 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
                          .arg(lin(a->Length()))
                          .arg(a->equations.empty() ? QString() : QString("   |   %1 station equation(s)").arg(a->equations.size())));
     const std::vector<alignment::ContinuityIssue> issues = a->CheckContinuity();
+    // REQ-502: the failed checks, computed once for the table
+    std::vector<alignment::DesignFinding> designFindings;
+    if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(state.alignmentCheckSets, a->checkSetName))
+      designFindings = alignment::CheckDesign(*a, *checkSet, prec);
     table->setRowCount(static_cast<int>(a->Entities().size()));
     for (size_t i = 0; i < a->Entities().size(); ++i) {
       const alignment::Entity& e = a->Entities()[i];
@@ -159,6 +166,12 @@ void ShowAlignmentLayoutDialog(QWidget* parent, AppCommandState& state, std::vec
           cont = iss.c2 ? "C0 C1 C2" : "C0 C1";
       }
       set(ColStatus, cont, false);
+      QStringList found;
+      for (const alignment::DesignFinding& fd : designFindings) {
+        if (fd.entity == row + 1) found << Q(fd.text);
+      }
+      set(ColDesign, found.join(" "), false);
+      if (!found.isEmpty()) table->item(row, ColDesign)->setForeground(QColor("#c0392b"));
     }
     table->resizeColumnsToContents();
   };

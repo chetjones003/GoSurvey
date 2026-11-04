@@ -9,6 +9,7 @@
 #include "AlignmentLabelSet.hpp"
 #include "AlignmentStyle.hpp"
 #include "alignment/AlignmentLabels.hpp"
+#include "alignment/AlignmentDesign.hpp"
 #include "font/CadFontName.hpp"
 #include "font/ShxFont.hpp"
 #include "MtextRichFormat.hpp"
@@ -892,6 +893,21 @@ void DrawQtModelAnnotations(QPainter& painter, const AppCommandState& state, flo
           const double by = -tx * sn - ty * c;
           painter.drawLine(project(tip.x, tip.y, 0.0), project(tip.x + 0.25 * L * bx, tip.y + 0.25 * L * by, 0.0));
         }
+      }
+      if (const alignment::AlignmentCheckSet* checkSet = alignment::FindCheckSet(state.alignmentCheckSets, al.checkSetName)) {
+        // REQ-502: a red flag stands on each entity that fails its design check, whatever the style shows.
+        painter.setPen(QPen(QColor("#c0392b"), 1.5));
+        painter.setBrush(QColor("#c0392b"));
+        for (const alignment::DesignFinding& fd : alignment::CheckDesign(al, *checkSet, state.displayLinearPrecision)) {
+          const int idx = fd.entity - 1;
+          const double mid = 0.5 * (al.EntityStartStation(idx) + al.EntityEndStation(idx));
+          const alignment::Point2 p = al.GetPointAtStation(mid);
+          const double h = 4.0;  // flag height, in drawing units
+          painter.drawLine(project(p.x, p.y, 0.0), project(p.x, p.y + h, 0.0));
+          painter.drawPolygon(QPolygonF({project(p.x, p.y + h, 0.0), project(p.x + 0.7 * h, p.y + 0.8 * h, 0.0),
+                                         project(p.x, p.y + 0.6 * h, 0.0)}));
+        }
+        painter.setBrush(Qt::NoBrush);
       }
     }
   }
